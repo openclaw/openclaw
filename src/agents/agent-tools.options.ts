@@ -22,7 +22,7 @@ import type { OpenClawCodingToolConstructionPlan } from "./core-tool-factory-des
 import type { DelegationCapability } from "./delegation-capability.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import type { ModelAwareToolContext } from "./openclaw-tools.model-context.js";
-import type { OpenClawSharedToolsOptions } from "./openclaw-tools.types.js";
+import type { OpenClawSharedToolsOptions, OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { SandboxContext } from "./sandbox.js";
 import type { ScheduledToolPolicyContext } from "./scheduled-tool-policy.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
@@ -147,6 +147,7 @@ export type OpenClawCodingToolsOptions = {
   AgentRunChannelContext;
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
+  readDelegationConfig?: OpenClawToolsOptions["readDelegationConfig"];
   /** External tool construction cannot certify the final Gateway execution policy. */
   unverifiedExecutionPolicy?: true;
   awaitSessionDiffBaseline?: () => Promise<void>;

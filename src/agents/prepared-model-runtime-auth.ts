@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isOAuthRefreshFence } from "./auth-profiles/oauth-refresh-marker.js";
@@ -127,6 +128,8 @@ export type PreparedAccountCatalogAccess = {
 
 /** Private auth facts owned by an immutable prepared model generation. */
 type RuntimeAuthBinding = {
+  /** Host-only policy selection; public snapshots carry no callable policy authority. */
+  readPolicyConfig?: () => OpenClawConfig;
   store?: AuthProfileStore;
   readUsage?: (store: AuthProfileStore) => AuthProfileStore;
   labels?: ModelCatalogAuthLabels;
@@ -145,6 +148,12 @@ const authByFullCatalog = new WeakMap<
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function bindPreparedModelRuntimeAuth(snapshot: object, binding: RuntimeAuthBinding): void {
   runtimeAuth.set(snapshot, { ...runtimeAuth.get(snapshot), ...binding });
+}
+
+export function getPreparedModelRuntimePolicyConfigReader(
+  snapshot: object | undefined,
+): (() => OpenClawConfig) | undefined {
+  return snapshot ? runtimeAuth.get(snapshot)?.readPolicyConfig : undefined;
 }
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {

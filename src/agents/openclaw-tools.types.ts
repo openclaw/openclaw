@@ -114,6 +114,8 @@ export type OpenClawSharedToolsOptions = {
 };
 
 export type OpenClawToolsOptions = {
+  /** Host-owned policy binding; used only by the delegation authority reader. */
+  readDelegationConfig?: () => OpenClawConfig;
   /** Host-projected default sandbox surface; cannot execute other session actions. */
   sandboxSessionRenameOnly?: boolean;
   /** Host-issued source for session-control schema projection; execution rechecks the caller. */

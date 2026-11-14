@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import { acquirePreparedModelRuntimeLeaseFromOwners } from "./prepared-model-runtime-lease.js";
 import * as runtimeBuild from "./prepared-model-runtime.build.js";
 import {
@@ -361,7 +362,21 @@ describe("prepared model runtime automatic selections", () => {
         },
         options,
       );
-      expect(nested.snapshot).toBe(outer.snapshot);
+      // Independent admissions share the selected generation, not the policy reader.
+      expect(nested.snapshot).not.toBe(outer.snapshot);
+      expect(nested.pluginGeneration).toBe(outer.pluginGeneration);
+      expect(nested.snapshot.config).toBe(outer.snapshot.config);
+      expect(nested.snapshot.observationConfig).toBe(outer.snapshot.observationConfig);
+      expect(nested.snapshot.modelCatalog).toBe(outer.snapshot.modelCatalog);
+      expect(nested.snapshot.metadataSnapshot).toBe(outer.snapshot.metadataSnapshot);
+      expect(nested.snapshot.pluginRegistry).toBe(outer.snapshot.pluginRegistry);
+      expect(nested.snapshot.createStores).toBe(outer.snapshot.createStores);
+      expect(nested.snapshot.isCurrent).toBe(outer.snapshot.isCurrent);
+      expect(getPreparedModelRuntimePolicyConfigReader(nested.snapshot)).not.toBe(
+        getPreparedModelRuntimePolicyConfigReader(outer.snapshot),
+      );
+      expect(getPreparedModelRuntimePolicyConfigReader(nested.snapshot)!()).toBe(config);
+      expect(getPreparedModelRuntimePolicyConfigReader(outer.snapshot)!()).toBe(config);
       expect(nested.snapshot.isCurrent()).toBe(true);
     } finally {
       guard.mockRestore();

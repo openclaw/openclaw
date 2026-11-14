@@ -14,9 +14,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import type {
-  markStartupOrphanedMainSessionsForRecovery as MarkStartupOrphans,
-} from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
+import type { markStartupOrphanedMainSessionsForRecovery as MarkStartupOrphans } from "../agents/main-session-recovery/main-session-restart-recovery-marking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { currentUpdateCheckLifecycle } from "../infra/update-check-lifecycle.js";
 import type { PluginHookGatewayContext } from "../plugins/hook-gateway.types.js";

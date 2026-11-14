@@ -31,6 +31,7 @@ import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cach
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
@@ -317,7 +318,20 @@ it("retains a replaced RUN generation without letting its release retire the rep
     await expect.poll(() => old.disposals).toBe(1);
     expect(readAnswer(replacement)).toBe(42);
     const third = await acquire();
-    expect(third.snapshot === second.snapshot).toBe(true);
+    expect(third.snapshot).not.toBe(second.snapshot);
+    expect(third.pluginGeneration).toBe(second.pluginGeneration);
+    expect(third.snapshot.config).toBe(second.snapshot.config);
+    expect(third.snapshot.observationConfig).toBe(second.snapshot.observationConfig);
+    expect(third.snapshot.modelCatalog).toBe(second.snapshot.modelCatalog);
+    expect(third.snapshot.metadataSnapshot).toBe(second.snapshot.metadataSnapshot);
+    expect(third.snapshot.pluginRegistry).toBe(second.snapshot.pluginRegistry);
+    expect(third.snapshot.createStores).toBe(second.snapshot.createStores);
+    expect(third.snapshot.isCurrent).toBe(second.snapshot.isCurrent);
+    expect(getPreparedModelRuntimePolicyConfigReader(third.snapshot)).not.toBe(
+      getPreparedModelRuntimePolicyConfigReader(second.snapshot),
+    );
+    expect(getPreparedModelRuntimePolicyConfigReader(third.snapshot)!()).toBe(input.config);
+    expect(getPreparedModelRuntimePolicyConfigReader(second.snapshot)!()).toBe(input.config);
     await second[Symbol.asyncDispose]();
     expect(readAnswer(replacement)).toBe(42);
     expect(replacement.disposals).toBe(0);

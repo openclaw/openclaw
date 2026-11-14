@@ -301,9 +301,10 @@ export async function readSessionEntrySummariesInWorker(
   if (memory) {
     return memory
       .entries("list")
-      .filter(({ sessionKey, entry }) =>
-        matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
-        (!input.mainSessionRecovery || hasOrphanedMainSessionWork(entry, sessionKey)),
+      .filter(
+        ({ sessionKey, entry }) =>
+          matchesPluginHostCleanupSession(sessionKey, entry, input.cleanupSession) &&
+          (!input.mainSessionRecovery || hasOrphanedMainSessionWork(entry, sessionKey)),
       );
   }
   const { scope } = captureSessionEntryReadScope({ ...input, sessionKey: "" });

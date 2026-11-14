@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
+  createRuntimeConfigReader,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
@@ -309,14 +310,19 @@ it.each([true, undefined])(
   },
 );
 
-it.each(["before publication", "after publication", "foreign scope"] as const)(
+it.each(["before publication", "after publication", "foreign scope", "owner reader"] as const)(
   "rechecks captured delegation authority constructed %s",
   async (construction) => {
     const config = { tools: { openclaw: { autoApproveChanges: true } } };
     setRuntimeConfigSnapshot(config);
     try {
-      const captured = captureRuntimeConfig(construction === "foreign scope" ? {} : config);
-      const construct = () => delegate({ config: captured });
+      const readDelegationConfig =
+        construction === "owner reader" ? createRuntimeConfigReader(config) : undefined;
+      const captured =
+        construction === "owner reader"
+          ? config
+          : captureRuntimeConfig(construction === "foreign scope" ? {} : config);
+      const construct = () => delegate({ config: captured, readDelegationConfig });
       const early = construction === "before publication" ? construct() : undefined;
       setRuntimeConfigSnapshot({ ...config, logging: { level: "debug" } });
       const tool = early ?? construct();

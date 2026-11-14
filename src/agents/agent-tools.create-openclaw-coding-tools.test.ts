@@ -26,7 +26,12 @@ import { createPluginToolAllowlist } from "../plugins/tool-grant-allowlist.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { registerPluginOnlyCallerIdentityCase } from "./agent-tools.caller-identity.test-support.js";
-import { createOpenClawCodingTools } from "./agent-tools.js";
+import {
+  createOpenClawCodingTools,
+  createOpenClawCodingToolsAsync,
+  createOpenClawCodingToolsInternal,
+  createOpenClawCodingToolsInternalAsync,
+} from "./agent-tools.js";
 import {
   createOpenClawReadTool,
   createSandboxedReadTool,
@@ -149,6 +154,65 @@ function expectListIncludes(
 }
 
 describe("createOpenClawCodingTools", () => {
+  it.each([
+    { name: "sync", create: createOpenClawCodingToolsInternal },
+    { name: "async", create: createOpenClawCodingToolsInternalAsync },
+  ])("preserves the admitted policy reader through internal $name assembly", async ({ create }) => {
+    const config: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: true } } };
+    let current: OpenClawConfig = { ...config, ui: { seamColor: "#123456" } };
+    const readDelegationConfig = vi.fn(() => current);
+    const options = {
+      config,
+      readDelegationConfig,
+      toolConstructionPlan: openClawOnlyPlan,
+      conversationCapabilityProfile: await prepareConversationCapabilityProfile({ config }),
+    };
+    vi.mocked(createOpenClawTools).mockClear();
+    await create(options);
+    const forwarded = latestCreateOpenClawToolsOptions();
+    expect(forwarded.readDelegationConfig).toBe(readDelegationConfig);
+    current = { tools: { openclaw: { autoApproveChanges: false } } };
+    expect(forwarded.readDelegationConfig!()).toBe(current);
+    expect(forwarded.config?.tools?.openclaw?.autoApproveChanges).toBe(true);
+  });
+
+  it.each([
+    { name: "sync", create: createOpenClawCodingTools },
+    { name: "async", create: createOpenClawCodingToolsAsync },
+  ])(
+    "does not forward a private policy reader through the public $name factory",
+    async ({ create }) => {
+      const config: OpenClawConfig = { tools: { openclaw: { autoApproveChanges: false } } };
+      const readDelegationConfig = vi.fn(() => ({
+        tools: { openclaw: { autoApproveChanges: true } },
+      }));
+      // A variable models JavaScript callers or accidentally forwarded internal options;
+      // omitting a field from the public type does not remove it at runtime.
+      const options = {
+        config,
+        readDelegationConfig,
+        toolConstructionPlan: openClawOnlyPlan,
+        conversationCapabilityProfile: await prepareConversationCapabilityProfile({ config }),
+      };
+      vi.mocked(createOpenClawTools).mockClear();
+      const tools = await create(options);
+      expect(toolNameList(tools)).toContain("openclaw");
+      expect(vi.mocked(createOpenClawTools)).toHaveBeenCalledOnce();
+      expect(latestCreateOpenClawToolsOptions().readDelegationConfig).not.toBe(
+        readDelegationConfig,
+      );
+      expect(
+        latestCreateOpenClawToolsOptions().readDelegationConfig!().tools?.openclaw
+          ?.autoApproveChanges,
+      ).toBe(false);
+      expect(latestCreateOpenClawToolsOptions().config?.tools?.openclaw?.autoApproveChanges).toBe(
+        false,
+      );
+      expect(readDelegationConfig).not.toHaveBeenCalled();
+      expect(options.readDelegationConfig).toBe(readDelegationConfig);
+    },
+  );
+
   it.each([
     {
       name: "multi-page node",

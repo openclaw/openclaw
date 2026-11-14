@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { createRuntimeConfigReader } from "../../config/runtime-snapshot.js";
 import { buildActiveNodeContextText } from "../../infra/active-node-context.js";
 import { emitAgentRunOutputTokens } from "../../infra/agent-events.js";
 import { getActiveDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
@@ -35,6 +36,7 @@ import { log } from "../embedded-agent-runner/logger.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runBestEffortCallback } from "../embedded-agent-subscribe.callback.js";
 import { createCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../prepared-model-runtime-auth.js";
 import { throwAgentRunRestartAbortReason } from "../run-termination.js";
 import { resolveToolLoopDetectionConfig } from "../tool-loop-detection-config.js";
 import { isToolExecutionAllowed } from "../tool-policy-shared.js";
@@ -101,6 +103,10 @@ export function createAgentHarnessHostCapabilities(params: {
   runWithScope: <T>(run: () => Promise<T>) => Promise<T>;
 } {
   const attempt = params.attempt;
+  const policyConfig = attempt.config;
+  const readPolicyConfig =
+    getPreparedModelRuntimePolicyConfigReader(attempt.preparedModelRuntime) ??
+    (policyConfig ? createRuntimeConfigReader(policyConfig) : undefined);
   const requestCustody = captureExecRequestCustody(attempt);
   // Capture authority by value before any plugin handoff can mutate the attempt.
   const runtimePluginToolGrant = attempt.runtimePluginToolGrant
@@ -404,16 +410,23 @@ export function createAgentHarnessHostCapabilities(params: {
     options?.toolConstructionPlan?.includeBaseCodingTools !== false
       ? skillsSnapshot
       : undefined;
+  const readToolPolicyConfig = (options: HostToolSurfaceOptions) =>
+    requiredWorkspace || !options.config || options.config === policyConfig
+      ? readPolicyConfig
+      : createRuntimeConfigReader(options.config);
   const toolConstructionInputs = (
     options: HostToolSurfaceOptions,
     libraryEntries: readonly SkillEntry[],
     assertCurrent: () => void = assertActive,
+    readDelegationConfig = readToolPolicyConfig(options),
   ) => {
     assertCurrent();
     const effectiveOptions = { ...options, ...requiredWorkspace?.apply(options) };
     return {
       options: {
         ...effectiveOptions,
+        // Plugins may request a scoped config; that must not inherit the host's live binding.
+        readDelegationConfig,
         unverifiedExecutionPolicy: true as const,
         // Availability belongs to this prepared host, not mutable plugin inputs.
         githubPublicationAvailable,
@@ -516,6 +529,7 @@ export function createAgentHarnessHostCapabilities(params: {
       );
     },
     createToolSurfaceAsync: async (options, bindingOptions) => {
+      const readDelegationConfig = readToolPolicyConfig(options);
       const librarySelections = skillResourceSnapshot(options)?.librarySelections ?? [];
       const library = librarySelections.length
         ? await prepareHostSkillLibraryResources(librarySelections, assertActive)
@@ -524,6 +538,7 @@ export function createAgentHarnessHostCapabilities(params: {
         options,
         library?.entries ?? [],
         library?.assertCurrent,
+        readDelegationConfig,
       );
       const sourceTools = await withToolConstructionScope(() =>
         createOpenClawCodingToolsInternalAsync(

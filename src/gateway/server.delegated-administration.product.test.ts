@@ -6,6 +6,9 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import * as agentTools from "../agents/agent-tools.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../agents/prepared-model-runtime-auth.js";
+import * as preparedModelRuntime from "../agents/prepared-model-runtime.js";
 import * as configRunner from "../cli/config-cli-runner.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -110,6 +113,53 @@ it(
     // missing authority check.
     const runConfigOperations = configRunner.runConfigOperations;
     for (const revoke of [false, true]) {
+      const acquired =
+        createDeferred<
+          Awaited<ReturnType<typeof preparedModelRuntime.acquireAgentRunPreparedModelRuntime>>
+        >();
+      const resumeConstruction = createDeferred();
+      const acquireRuntime = preparedModelRuntime.acquireAgentRunPreparedModelRuntime;
+      let held = false;
+      let retainedSnapshot: Awaited<ReturnType<typeof acquireRuntime>>["snapshot"] | undefined;
+      let builtRetained = false;
+      const createTools = agentTools.createOpenClawCodingToolsInternalAsync;
+      using construction = vi
+        .spyOn(agentTools, "createOpenClawCodingToolsInternalAsync")
+        .mockImplementation((options, ...args) => {
+          if (options?.agentId === "main" && retainedSnapshot) {
+            expect(options.preparedModelRuntime?.config).toBe(retainedSnapshot.config);
+            expect(options.preparedModelRuntime?.observationConfig).toBe(
+              retainedSnapshot.observationConfig,
+            );
+            expect(options.config).toBe(retainedSnapshot.config);
+            const reader = getPreparedModelRuntimePolicyConfigReader(retainedSnapshot);
+            expect(reader).toBeTypeOf("function");
+            expect(getPreparedModelRuntimePolicyConfigReader(options.preparedModelRuntime)).toBe(
+              reader,
+            );
+            expect(options.readDelegationConfig).toBe(reader);
+            builtRetained = true;
+          }
+          return createTools(options, ...args);
+        });
+      using acquisition = vi
+        .spyOn(preparedModelRuntime, "acquireAgentRunPreparedModelRuntime")
+        .mockImplementation(async (input, options) => {
+          const lease = await acquireRuntime(input, options);
+          // This option is supplied at the final run-orchestrator boundary, not reply preparation.
+          if (
+            revoke &&
+            !held &&
+            input.agentId === "main" &&
+            Object.hasOwn(options ?? {}, "retainIdleRunOwner")
+          ) {
+            held = true;
+            retainedSnapshot = lease.snapshot;
+            acquired.resolve(lease);
+            await resumeConstruction.promise;
+          }
+          return lease;
+        });
       const entered = createDeferred();
       const resume = createDeferred();
       value = revoke ? "error" : "warn";
@@ -125,7 +175,7 @@ it(
         }
         return runConfigOperations(params);
       });
-      const before = await readConfig();
+      let before = await readConfig();
       const run = await client.request<{ runId: string }>("chat.send", {
         sessionKey: `agent:main:delegation-revoke-${randomUUID()}`,
         message: `Set logging.level to ${value}.`,
@@ -138,11 +188,36 @@ it(
         { timeoutMs: 65_000 },
       );
       try {
+        if (revoke) {
+          const lease = await awaitGateBeforeSettlement(
+            acquired.promise,
+            terminal,
+            "final model lease admission was not reached",
+          );
+          const retained = lease.snapshot;
+          const configStamp = retained.config;
+          const observation = retained.observationConfig;
+          const current = await client.request<{ hash: string }>("config.get", {});
+          await client.request("config.patch", {
+            baseHash: current.hash,
+            raw: JSON.stringify({ ui: { seamColor: "#123456" } }),
+          });
+          await vi.waitFor(() => {
+            expect(selectLiveRuntimeConfig()?.ui?.seamColor).toBe("#123456");
+            expect(selectLiveRuntimeConfig()).not.toBe(configStamp);
+          });
+          expect(retained.config).toBe(configStamp);
+          expect(retained.observationConfig).toBe(observation);
+          before = await readConfig();
+          resumeConstruction.resolve();
+        }
         await awaitGateBeforeSettlement(
           entered.promise,
           terminal,
           "write preparation was not reached",
         );
+        expect(acquisition).toHaveBeenCalled();
+        expect(construction).toHaveBeenCalled();
         expect(await readConfig()).toEqual(before);
         if (revoke) {
           const current = await client.request<{ hash: string }>("config.get", {});
@@ -165,6 +240,7 @@ it(
         expect(hotReloadRecovery).not.toHaveBeenCalled();
         expect(errors).toEqual([]);
         if (revoke) {
+          expect(builtRetained).toBe(true);
           expect((await readConfig()).logging?.level).toBe("warn");
           expect(replies.at(-1)).toContain("effective autoApproveChanges policy is false");
           expect(replies.at(-1)).not.toContain("Updated logging.level");
@@ -174,6 +250,7 @@ it(
           expect((await readConfig()).logging?.level).toBe("warn");
         }
       } finally {
+        resumeConstruction.resolve();
         resume.resolve();
         await terminal;
       }

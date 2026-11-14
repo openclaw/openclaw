@@ -3,6 +3,7 @@ import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-sig
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolvePublishedModelCatalogOwner } from "./prepared-model-catalog-owner.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import { readCapturedPreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type {
@@ -31,6 +32,7 @@ function createReplyDispatchRuntime(
     agentDir: owner.agentDir,
     workspaceDir: owner.workspaceDir,
     config: owner.config,
+    readPolicyConfig: getPreparedModelRuntimePolicyConfigReader(snapshot),
     modelCatalog: owner.modelCatalog,
     readFullModelCatalog: snapshot.readFullModelCatalog,
     inboundPluginRegistry,

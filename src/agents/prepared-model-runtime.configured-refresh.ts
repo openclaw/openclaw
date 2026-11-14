@@ -1,3 +1,4 @@
+import { createRuntimeConfigReader, readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { prepareModelPricingContext } from "../model-catalog/pricing.js";
@@ -184,6 +185,12 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     progress?: Parameters<typeof publishPreparedModelRuntimeOwnerBatch>[0]["progress"];
   },
 ): Promise<void> {
+  // Configured Gateway publication can precede runtime-config publication. Its authority is
+  // explicit; identity matching against the previous live config would misclassify it as scoped.
+  // Standalone configured refreshes do not acquire Gateway authority merely by being configured.
+  const readPolicyConfig = context.gatewayLifecycleActive
+    ? readRuntimeConfig
+    : createRuntimeConfigReader(config);
   await prepareSharedAuthStoreOwnership();
   const { owners, agentBuildCompletions, gatewayLifecycleActive, isPublicationCurrent, progress } =
     context;
@@ -206,7 +213,7 @@ export async function refreshPreparedModelRuntimeSnapshotsNow(
     }
     knownKeys.add(key);
     const owner = owners.get(key);
-    entries.push({ owner, input });
+    entries.push({ owner, input: { ...input, readPolicyConfig } });
   }
   for (const [key, owner] of owners) {
     if (!isPreparedModelRuntimeOwnerInRefreshScope(owner, options.agentIds)) {

@@ -269,7 +269,13 @@ function findArtifact(request, runId, name, { retained = false } = {}) {
   return metadata;
 }
 
-async function readArtifact(request, runId, name, fileName, { retained = false } = {}) {
+async function readArtifact(
+  request,
+  runId,
+  name,
+  fileName,
+  { retained = false, retryMetadataNotFound = false, deadlineMs } = {},
+) {
   const metadata = findArtifact(request, runId, name, { retained });
   if (!metadata) {
     return undefined;
@@ -287,6 +293,8 @@ async function readArtifact(request, runId, name, fileName, { retained = false }
     },
     maxArchiveBytes: MAX_ARCHIVE_BYTES,
     token: process.env.GH_TOKEN,
+    retryMetadataNotFound: !retained && retryMetadataNotFound,
+    outerDeadlineMs: deadlineMs,
   }).catch((/** @type {unknown} */ error) => {
     if (
       retained &&
@@ -793,6 +801,7 @@ async function waitForArtifact(request, env) {
           runId,
           name,
           raw ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+          { retryMetadataNotFound: raw, deadlineMs: deadline },
         )
       )?.value;
       if (receipt && raw) {

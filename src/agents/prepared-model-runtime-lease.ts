@@ -1,4 +1,5 @@
 /** Agent-run lease admission for lifecycle-owned prepared model runtimes. */
+import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import { createAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
@@ -9,12 +10,16 @@ import {
   prepareSharedAuthStoreOwnership,
 } from "./auth-profiles/path-resolve.js";
 import { assertPreparedModelRuntimeAdmissionCanWait } from "./prepared-model-runtime-admission.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
   runOutsidePreparedModelRuntimePluginGenerationScope,
 } from "./prepared-model-runtime-generation-scope.js";
-import { capturePreparedModelRuntimeCatalog } from "./prepared-model-runtime.capture.js";
+import {
+  capturePreparedModelRuntimeCatalog,
+  withPreparedModelRuntimePolicyConfig,
+} from "./prepared-model-runtime.capture.js";
 import { isPreparedModelRuntimeMissingOwnerError } from "./prepared-model-runtime.errors.js";
 import {
   PreparedModelRuntimeOwnerNotPublishedError,
@@ -98,6 +103,19 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   options: PreparedModelRuntimeLeaseOptions = {},
 ): Promise<PreparedModelRuntimeLease> {
   const assertLifetime = context.captureLifetime();
+  const generation = options.pluginGeneration ?? getPreparedModelRuntimePluginGeneration();
+  const borrowed = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
+  // Capture before auth/plugin preparation can yield. A nested exact-config lease carries its
+  // parent's policy reader; unrelated/read-only projections retain their own scoped binding.
+  const input = {
+    ...rawInput,
+    readPolicyConfig:
+      rawInput.readPolicyConfig ??
+      (borrowed?.config === rawInput.config
+        ? getPreparedModelRuntimePolicyConfigReader(borrowed)
+        : undefined) ??
+      createRuntimeConfigReader(rawInput.config),
+  };
   const assertAdmission = () => {
     assertLifetime();
     if (options.abortSignal?.aborted) {
@@ -107,13 +125,7 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
     }
   };
   const acquire = () =>
-    acquirePreparedModelRuntimeLeaseAttempt(
-      rawInput,
-      provenance,
-      context,
-      options,
-      assertAdmission,
-    );
+    acquirePreparedModelRuntimeLeaseAttempt(input, provenance, context, options, assertAdmission);
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await (attempt === 0
@@ -255,7 +267,10 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
       ) {
         // Nested work borrows its still-open parent; it cannot publish or widen that authority.
         assertAdmission();
-        return createPreparedModelRuntimeLease(borrowed, options.pluginGeneration);
+        return createPreparedModelRuntimeLease(
+          withPreparedModelRuntimePolicyConfig(borrowed, input.readPolicyConfig),
+          options.pluginGeneration,
+        );
       }
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
@@ -363,6 +378,9 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
         ? configuredOwner
         : owner;
     snapshot = capturePreparedModelRuntimeCatalog(snapshot, catalogOwner.snapshot);
+    // Model-key equality does not establish policy authority. Keep the owner cache shared,
+    // but project each admitted reader onto an immutable lease-local snapshot.
+    snapshot = withPreparedModelRuntimePolicyConfig(snapshot, input.readPolicyConfig);
     const pluginGeneration = owner.pluginGeneration!;
     if (owner.provenance !== provenance) {
       return createPreparedModelRuntimeLease(snapshot, pluginGeneration);

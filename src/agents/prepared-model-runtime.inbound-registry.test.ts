@@ -26,6 +26,7 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "./prepared-model-runtime-auth.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -273,9 +274,31 @@ describe("prepared reply dispatch runtime", () => {
       expect(lease.pluginGeneration.inboundPluginRegistry).toBe(published.inboundPluginRegistry);
       expect(Object.isFrozen(lease.pluginGeneration)).toBe(true);
       const repeated = await acquireAgentRunPreparedModelRuntime(input(runtime), options);
-      expect(repeated.snapshot === lease.snapshot).toBe(true);
+      expect(repeated.snapshot).not.toBe(lease.snapshot);
+      expect(repeated.snapshot.config).toBe(lease.snapshot.config);
+      expect(repeated.snapshot.observationConfig).toBe(lease.snapshot.observationConfig);
+      expect(repeated.snapshot.modelCatalog).toBe(lease.snapshot.modelCatalog);
+      expect(repeated.snapshot.metadataSnapshot).toBe(lease.snapshot.metadataSnapshot);
+      expect(repeated.snapshot.pluginRegistry).toBe(lease.snapshot.pluginRegistry);
+      expect(repeated.snapshot.createStores).toBe(lease.snapshot.createStores);
+      expect(repeated.snapshot.isCurrent).toBe(lease.snapshot.isCurrent);
+      expect(getPreparedModelRuntimePolicyConfigReader(repeated.snapshot)).not.toBe(
+        getPreparedModelRuntimePolicyConfigReader(lease.snapshot),
+      );
+      expect(getPreparedModelRuntimePolicyConfigReader(repeated.snapshot)!()).toBe(config);
       expect(repeated.pluginGeneration === lease.pluginGeneration).toBe(true);
       await repeated[Symbol.asyncDispose]();
+      // An explicitly reused admission reader does not require another projection.
+      const sameReader = await acquireAgentRunPreparedModelRuntime(
+        {
+          ...input(runtime),
+          readPolicyConfig: getPreparedModelRuntimePolicyConfigReader(lease.snapshot),
+        },
+        options,
+      );
+      expect(sameReader.snapshot).toBe(lease.snapshot);
+      expect(sameReader.pluginGeneration).toBe(lease.pluginGeneration);
+      await sameReader[Symbol.asyncDispose]();
       let active = true;
       await withPreparedModelRuntimePluginGenerationScope(
         lease.pluginGeneration,

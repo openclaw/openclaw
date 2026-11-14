@@ -1,6 +1,11 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
-import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
+import {
+  bindPreparedModelRuntimeAuth,
+  copyPreparedModelRuntimeAuthBindings,
+  getPreparedModelRuntimePolicyConfigReader,
+} from "./prepared-model-runtime-auth.js";
 import { mergePreparedNativeCatalog } from "./prepared-model-runtime.catalog-publication.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
@@ -96,4 +101,34 @@ export function capturePreparedModelRuntimeCatalog(
   admittedCatalogs.set(captured, cached.admittedCatalog);
   admittedPublishedCatalogs.set(captured, cached.catalog ?? snapshot.modelCatalog);
   return captured;
+}
+
+/** Equal model inputs can share inventory, never the caller's live-versus-scoped policy binding. */
+export function withPreparedModelRuntimePolicyConfig(
+  snapshot: PreparedModelRuntimeSnapshot,
+  readPolicyConfig: (() => OpenClawConfig) | undefined,
+): PreparedModelRuntimeSnapshot {
+  if (getPreparedModelRuntimePolicyConfigReader(snapshot) === readPolicyConfig) {
+    return snapshot;
+  }
+  const captured = Object.freeze({ ...snapshot });
+  copyPreparedModelRuntimeSnapshotBindings(snapshot, captured);
+  bindPreparedModelRuntimeAuth(captured, { readPolicyConfig });
+  return captured;
+}
+
+/** Preserve admission facts when a host adds run-local fields to a snapshot. */
+export function copyPreparedModelRuntimeSnapshotBindings(
+  snapshot: PreparedModelRuntimeSnapshot,
+  target: PreparedModelRuntimeSnapshot,
+): void {
+  copyPreparedModelRuntimeAuthBindings(snapshot, target);
+  const catalog = admittedCatalogs.get(snapshot);
+  if (catalog) {
+    admittedCatalogs.set(target, catalog);
+  }
+  const published = admittedPublishedCatalogs.get(snapshot);
+  if (published) {
+    admittedPublishedCatalogs.set(target, published);
+  }
 }

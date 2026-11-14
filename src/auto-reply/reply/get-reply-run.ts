@@ -39,6 +39,7 @@ export async function runPreparedReply(
     acquireAgentRunPreparedModelRuntime(
       {
         config: dispatchRuntime.config,
+        readPolicyConfig: dispatchRuntime.readPolicyConfig,
         agentId: dispatchRuntime.agentId,
         agentDir: dispatchRuntime.agentDir,
         allowGatewaySubagentBinding: true,

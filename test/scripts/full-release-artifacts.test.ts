@@ -141,12 +141,25 @@ process.stdout.write(JSON.stringify(response));
 const { responses, downloads } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
 if (process.env.FIXTURE_STOP_ON_WAIT === "true") {
   globalThis.setTimeout = () => { throw new Error("Fixture reached another artifact poll"); };
+} else if (process.env.FIXTURE_ADVANCE_RETRY_CLOCK === "true") {
+  let now = Date.now();
+  Date.now = () => now;
+  globalThis.setTimeout = (callback, delay) => { now += delay; queueMicrotask(callback); };
 }
 globalThis.fetch = async (input) => {
   const url = new URL(input instanceof Request ? input.url : String(input));
   if (url.origin !== "https://api.github.com") throw new Error("Unexpected fetch origin");
   const endpoint = url.pathname.slice(1) + url.search;
   appendFileSync(process.env.FIXTURE_CALLS, JSON.stringify(["fetch", endpoint]) + "\\n");
+  const statuses = responses[endpoint]?.fixtureHttpStatuses;
+  const status = statuses?.shift();
+  if (status && status !== 200) {
+    if (process.env.FIXTURE_EXPIRE_ON_HTTP_ERROR === "true") {
+      const expired = Date.now() + 350 * 60_000 + 1;
+      Date.now = () => expired;
+    }
+    return new Response("fixture unavailable", { status });
+  }
   if (Object.hasOwn(downloads, endpoint)) {
     if (process.env.FIXTURE_RERUN_DURING_DOWNLOAD === "true") {
       const current = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
@@ -494,6 +507,7 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     "retained",
     "expired payload",
     "deleted archive",
+    "retained metadata 404",
     "expired SDK archive",
     "missing SDK archive",
     "wrong SDK attempt",
@@ -512,6 +526,9 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
     if (scenario === "deleted archive") {
       test.api("actions/artifacts/402", { fixtureError: "gh: Not Found (HTTP 404)" });
     }
+    if (scenario === "retained metadata 404") {
+      test.api("actions/artifacts/501", { fixtureHttpStatuses: [404, 200] });
+    }
     if (scenario === "expired SDK archive") {
       test.sdk.expired = true;
     }
@@ -525,6 +542,17 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       test.sdk.name = "plugin-sdk-api-release-diff-81-2";
     }
     const result = test.run("reuse", test.env);
+    if (scenario === "retained metadata 404") {
+      expect(
+        result.calls.filter(
+          ([kind, endpoint]) =>
+            kind === "fetch" && endpoint === `repos/${REPOSITORY}/actions/artifacts/501`,
+        ),
+      ).toHaveLength(1);
+      expect(
+        result.calls.some(([kind, endpoint]) => kind === "fetch" && endpoint?.endsWith("/zip")),
+      ).toBe(false);
+    }
     if (scenario === "changed receipt" || scenario === "changed digest") {
       expectRejected(
         result,
@@ -910,6 +938,85 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
             : "receipt does not match its exact request and producer attempt",
       );
     }
+  });
+
+  it.each([
+    { label: "brief visibility lag", output: "raw", statuses: [404, 200], reads: 2, ok: true },
+    {
+      label: "persistent missing metadata",
+      output: "raw",
+      statuses: [404, 404, 404, 200],
+      reads: 3,
+    },
+    { label: "missing archive", output: "raw", statuses: [404, 200], reads: 1, archive: true },
+    { label: "unauthorized metadata", output: "raw", statuses: [401, 200], reads: 1 },
+    { label: "forbidden metadata", output: "raw", statuses: [403, 200], reads: 1 },
+    { label: "missing sealed receipt", output: "receipt", statuses: [404, 200], reads: 1 },
+    {
+      label: "changed immutable ID",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 2,
+      changedId: true,
+    },
+    {
+      label: "expired acquisition deadline",
+      output: "raw",
+      statuses: [404, 200],
+      reads: 1,
+      expire: true,
+    },
+  ])("bounds fresh artifact metadata recovery: $label", (scenario) => {
+    const test = fixture();
+    if (scenario.output === "receipt") {
+      test.api("actions/runs/81", workflowRun({ status: "completed", conclusion: "success" }));
+      test.api(
+        "actions/runs/81/attempts/1",
+        workflowRun({ status: "completed", conclusion: "success" }),
+      );
+    }
+    const archive = test.artifact(
+      scenario.output === "raw"
+        ? "openclaw-npm-package-descriptor-81-1"
+        : "full-release-artifact-receipt-81-1",
+      scenario.output === "raw" ? "prepared-npm-bundle.json" : "artifact-receipt.json",
+      test.raw,
+    );
+    const endpoint = "actions/artifacts/" + archive.metadata.id + (scenario.archive ? "/zip" : "");
+    test.api(endpoint, {
+      ...archive.metadata,
+      ...(scenario.changedId ? { id: archive.metadata.id + 1 } : {}),
+      fixtureHttpStatuses: scenario.statuses,
+    });
+    const result = test.run("wait", {
+      ARTIFACT_OUTPUT: scenario.output,
+      FIXTURE_ADVANCE_RETRY_CLOCK: "true",
+      FIXTURE_EXPIRE_ON_HTTP_ERROR: String(scenario.expire === true),
+    });
+    if (scenario.ok) {
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.outputs.prepared_bundle_json!)).toEqual(test.raw);
+    } else {
+      expect(result.status, result.stderr).not.toBe(0);
+      expect(result.outputs).toEqual({});
+    }
+    if (!scenario.ok) {
+      expect(result.stderr).toContain(
+        scenario.changedId
+          ? "metadata does not match"
+          : scenario.expire
+            ? "deadline exceeded"
+            : "HTTP " + scenario.statuses[0],
+      );
+    }
+    expect(
+      result.calls.filter(
+        ([kind, path]) => kind === "fetch" && path === "repos/" + REPOSITORY + "/" + endpoint,
+      ),
+    ).toHaveLength(scenario.reads);
+    expect(
+      result.calls.filter(([kind, , path]) => kind === "gh" && path?.includes("/artifacts?name=")),
+    ).toHaveLength(1);
   });
 
   it.each(["digest changed", "malformed ZIP", "producer failed"] as const)(

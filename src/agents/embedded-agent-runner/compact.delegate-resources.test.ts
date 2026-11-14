@@ -41,6 +41,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
+import { getPreparedModelRuntimePolicyConfigReader } from "../prepared-model-runtime-auth.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   refreshPreparedModelRuntimeSnapshots,
@@ -155,7 +156,20 @@ vi.mock("../prepared-model-runtime.js", async (importOriginal) => {
       try {
         expect(current.registrations.length).toBe(1);
         if (current.mode === "raw") {
-          expect(lease.snapshot === standalone).toBe(true);
+          const published = expectDefined(standalone, "raw standalone publication");
+          expect(lease.snapshot).not.toBe(published);
+          expect(lease.snapshot.config).toBe(published.config);
+          expect(lease.snapshot.observationConfig).toBe(published.observationConfig);
+          expect(lease.snapshot.modelCatalog).toBe(published.modelCatalog);
+          expect(lease.snapshot.metadataSnapshot).toBe(published.metadataSnapshot);
+          expect(lease.snapshot.pluginRegistry).toBe(published.pluginRegistry);
+          expect(lease.snapshot.createStores).toBe(published.createStores);
+          expect(lease.snapshot.isCurrent).toBe(published.isCurrent);
+          expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)).not.toBe(
+            getPreparedModelRuntimePolicyConfigReader(published),
+          );
+          expect(getPreparedModelRuntimePolicyConfigReader(lease.snapshot)!()).toBe(input.config);
+          expect(getPreparedModelRuntimePolicyConfigReader(published)!()).toBe(input.config);
         }
         if (current.mode === "before_compaction" || current.mode === "after_compaction") {
           expect(

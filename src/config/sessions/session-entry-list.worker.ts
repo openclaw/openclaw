@@ -55,8 +55,9 @@ export function readSessionEntryList(
               .where("archived_at", "is", null)
               .where((eb) =>
                 // Malformed legacy payloads still reach the canonical reader's skip/reject policy.
-                eb.case()
-                  .when(jsonValid(database.db, eb.ref("entry_json")), "=", false)
+                eb
+                  .case()
+                  .when(jsonValid(database.db, eb.ref("entry_json")), "is", false)
                   .then(true)
                   .else(
                     eb.or([

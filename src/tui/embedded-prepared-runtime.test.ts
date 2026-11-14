@@ -7,6 +7,7 @@ import {
 } from "../agents/prepared-model-runtime.test-harness.js";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { getPreparedModelRuntimePolicyConfigReader } from "../agents/prepared-model-runtime-auth.js";
 import { acquireAgentRunPreparedModelRuntime } from "../agents/prepared-model-runtime.js";
 import {
   createOpenClawTestState,
@@ -73,7 +74,20 @@ describe("EmbeddedPreparedModelRuntimeHost", () => {
     const second = await acquireAgentRunPreparedModelRuntime(input);
     await second[Symbol.asyncDispose]();
 
-    expect(second.snapshot).toBe(first.snapshot);
+    expect(second.snapshot).not.toBe(first.snapshot);
+    expect(second.pluginGeneration).toBe(first.pluginGeneration);
+    expect(second.snapshot.config).toBe(first.snapshot.config);
+    expect(second.snapshot.observationConfig).toBe(first.snapshot.observationConfig);
+    expect(second.snapshot.modelCatalog).toBe(first.snapshot.modelCatalog);
+    expect(second.snapshot.metadataSnapshot).toBe(first.snapshot.metadataSnapshot);
+    expect(second.snapshot.pluginRegistry).toBe(first.snapshot.pluginRegistry);
+    expect(second.snapshot.createStores).toBe(first.snapshot.createStores);
+    expect(second.snapshot.isCurrent).toBe(first.snapshot.isCurrent);
+    expect(getPreparedModelRuntimePolicyConfigReader(second.snapshot)).not.toBe(
+      getPreparedModelRuntimePolicyConfigReader(first.snapshot),
+    );
+    expect(getPreparedModelRuntimePolicyConfigReader(second.snapshot)!()).toBe(config);
+    expect(getPreparedModelRuntimePolicyConfigReader(first.snapshot)!()).toBe(config);
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
   });
 });

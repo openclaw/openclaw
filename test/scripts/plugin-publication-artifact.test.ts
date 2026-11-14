@@ -865,6 +865,40 @@ describe("plugin publication artifact", () => {
     }
   });
 
+  it.each([
+    { label: "short outer deadline caps explicit phase deadline", phaseMs: 480_000, outerMs: 500 },
+    { label: "long outer deadline preserves default phase deadline", outerMs: 600_000 },
+  ])("bounds artifact transfer phases: $label", async (scenario) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const fixture = createDownloadFixture();
+      const urls: string[] = [];
+      const result = downloadExactActionsArtifactArchive({
+        expected: fixture.expected,
+        deadlineMs: scenario.phaseMs === undefined ? undefined : Date.now() + scenario.phaseMs,
+        outerDeadlineMs: Date.now() + scenario.outerMs,
+        fetchImpl: async (input: string | URL | Request) => {
+          urls.push(String(input));
+          return urls.length === 1
+            ? new Response("rate limited", { status: 429, headers: { "retry-after": "300" } })
+            : fixture.fetchImpl(input);
+        },
+        token: "test-token",
+      });
+      const assertion = expect(result).rejects.toThrow(
+        "deadline would be exceeded before the permitted retry",
+      );
+      await vi.advanceTimersByTimeAsync(300_000);
+      await assertion;
+      expect(urls).toEqual([
+        "https://api.github.com/repos/" + REPOSITORY + "/actions/artifacts/" + ARTIFACT_ID,
+      ]);
+    } finally {
+      vi.clearAllTimers();
+      vi.useRealTimers();
+    }
+  });
+
   it.each([403])("does not retry permanent HTTP %i artifact failures", async (status) => {
     const { expected } = createDownloadFixture();
     let requests = 0;
