@@ -394,16 +394,31 @@ export function createFollowupRunner(
       }
     } catch (error) {
       let operatorAuthorityLost = false;
+      let authorityLostError: unknown;
       try {
         queued.operatorAuthority?.assertCurrent();
-      } catch {
+      } catch (authorityError) {
         operatorAuthorityLost = true;
+        authorityLostError = authorityError;
       }
       if (operatorAuthorityLost) {
         // Revoked input is terminal; retrying it would hold the queue indefinitely.
+        // Preserve the original failure (and any distinct secondary authority refusal)
+        // through the existing session-event outcome so a denied continuation records a
+        // safe, actionable cause instead of a generic abandonment, while keeping the
+        // terminal denial settlement-once semantics.
         disposition = { kind: "consumed" };
-        completion = { kind: "aborted" };
-        defaultRuntime.error?.("followup queue: canceled input after loss of operator authority");
+        const authorityReason = formatErrorMessage(authorityLostError);
+        const originalReason = formatErrorMessage(error);
+        const combinedReason =
+          authorityLostError != null && authorityReason && authorityReason !== originalReason
+            ? `${originalReason}; authority check: ${authorityReason}`
+            : originalReason;
+        queued.run.internalEventExecution?.onFailed?.(new Error(combinedReason, { cause: error }));
+        completion = { kind: "failed", error: combinedReason };
+        defaultRuntime.error?.(
+          `followup queue: canceled input after loss of operator authority: ${combinedReason}`,
+        );
       } else if (
         (queued.run.internalEventExecution &&
           (executionEntered ||
