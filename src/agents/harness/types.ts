@@ -212,6 +212,8 @@ type AgentHarnessIsolatedCompletionParams = {
     maxTokens?: number;
     temperature?: number;
   };
+  /** Internal defaults may be omitted when the selected auth route cannot honor them. */
+  streamParamsMode?: "preferred";
 };
 export type AgentHarnessIsolatedCompletionAuthorization =
   | {
