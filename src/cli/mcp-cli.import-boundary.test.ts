@@ -77,6 +77,7 @@ it.each<[string, RegExp, string]>([
   ],
   [
     "registry reads",
+
     /\/src\/agents\/agent-bundle-mcp-materialize\.(?:ts|js)(?:[?#].*)?$/u,
     String.raw`
       ${registerCli}
