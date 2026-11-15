@@ -2223,7 +2223,7 @@ struct OnboardingAISetupTests {
 
     @Test(arguments: [
         (choiceID: "test-provider-login", label: "Test provider", stepType: "text"),
-        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT (Beta)", stepType: "note"),
+        (choiceID: "openai-token-sharing", label: "Sign in with ChatGPT", stepType: "note"),
     ])
     func `advertised browser auth preserves its choice and session after a pre-dispatch disconnect`(
         choice: (choiceID: String, label: String, stepType: String)
