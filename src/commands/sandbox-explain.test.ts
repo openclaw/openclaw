@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -192,11 +193,13 @@ describe("sandbox explain command", () => {
       "unknown",
       "nope-agent",
       'Unknown agent id "nope-agent". Run openclaw agents list to see configured agents.',
+      Error,
     ],
-    ["blank", "", "--agent must not be blank"],
-  ])("rejects an explicit %s agent", async (_label, agent, message) => {
+    ["blank", "", "--agent must not be blank", ExpectedCliError],
+  ])("rejects an explicit %s agent", async (_label, agent, message, ErrClass) => {
     mockCfg = config({ mode: "off" }, { main: {} });
     await expect(explain({ agent })).rejects.toThrow(message);
+    await expect(explain({ agent }).catch((err) => err)).resolves.toBeInstanceOf(ErrClass);
   });
 
   it("reads a missing session without creating or registering an agent database", async () => {
