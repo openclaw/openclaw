@@ -1,0 +1,5 @@
+# Regression tests for the after_tool_call `rejected` flag: the capped-run refusal is marked, and
+# five controls stay unmarked (offered native tool that failed, offered discovery tool, external MCP
+# tool on an uncapped run, unknown offered set, a tool whose own output imitates the refusal text),
+# plus the offered-tool-set predicate's contract. Exact net growth for this change.
+247
