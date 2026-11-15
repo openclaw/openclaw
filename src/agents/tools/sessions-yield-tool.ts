@@ -134,6 +134,18 @@ export function createSessionsYieldTool(opts?: {
         waitFor ? { waitFor, ...(acknowledgment ? { acknowledgment } : {}) } : undefined,
       );
       if (typeof claim === "object" && "pendingChildren" in claim) {
+        if (
+          acknowledgment &&
+          claim.pendingChildren.some((child) => child.wakeArmed && child.state !== "paused")
+        ) {
+          // Keep the existing wake owner; only end this turn with its waiting reply.
+          await opts.onYield(message, acknowledgment, undefined);
+          return jsonResult({
+            status: "yielded",
+            acknowledgment,
+            pendingChildren: claim.pendingChildren,
+          });
+        }
         // Not an error: the session already waits for these children through
         // durable registry state, so the model only needs to end the turn.
         return jsonResult({

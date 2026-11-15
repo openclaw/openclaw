@@ -330,6 +330,12 @@ The native subagent registry retains the completion obligation and wakes the
 requester through its accepted completion path; progress text is not proof that
 a child finished or that its result was delivered.
 
+A later turn can supply an explicit waiting acknowledgment while an earlier
+turn's active child completion is already armed. The acknowledgment ends only
+the current turn; it does not claim the child again or rearm its completion.
+Without an acknowledgment, or when the earlier children are paused or have no
+armed wake, `sessions_yield` reports the pending work and leaves the turn active.
+
 When settlement resumes a top-level parent with automatic channel delivery,
 OpenClaw keeps the channel's typing indicator active while that continuation
 executes. The indicator starts after execution begins, not while admission is
