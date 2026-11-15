@@ -135,8 +135,8 @@ it("retries a refused request with the session grant the Gateway reports", async
   await callGatewayCli({ method: "sessions.list", sharedStateMode: "read-only" });
 
   expect(state.requestedScopes).toEqual([["operator.read"], ["operator.sessions.write"]]);
-  // The retry stores the device token it receives, so later calls fit the grant.
-  expect(state.sharedStateModes).toEqual(["read-only", undefined]);
+  // A read-only call stays read-only: the retry stores no device token.
+  expect(state.sharedStateModes).toEqual(["read-only", "read-only"]);
 });
 
 it("does not retry when the approved grant cannot serve the method", async () => {

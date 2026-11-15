@@ -82,8 +82,9 @@ export async function resolveCliScopeRetry(params: {
   // A device approved before it ever connected has no stored grant, so its
   // first request can exceed it. The scope-upgrade refusal reports the approved
   // scopes; when they serve this method through its session scope, retry with
-  // that grant and store the device token it returns, so later calls fit the
-  // grant without another refusal.
+  // that grant. The retry keeps the caller's storage mode: a read-only call
+  // stores no device token, so it is refused again until a writable client
+  // stores the grant.
   const pairing = readPairingConnectErrorDetails(
     isRecord(params.error) ? params.error.details : undefined,
   );
@@ -92,7 +93,5 @@ export async function resolveCliScopeRetry(params: {
   }
   const grantedScopes = pairing.approvedScopes.filter(isOperatorScope);
   const fitted = await fitScopesToGrant(opts, params.scopes, grantedScopes);
-  return fitted === params.scopes
-    ? undefined
-    : { opts: { ...opts, sharedStateMode: undefined }, scopes: grantedScopes };
+  return fitted === params.scopes ? undefined : { opts, scopes: grantedScopes };
 }
