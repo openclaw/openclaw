@@ -617,7 +617,7 @@ export function createControlUiE2eSuite(options: ControlUiE2eSuiteOptions): Cont
                   ],
                   executablePath: chromiumExecutablePath,
                 });
-          const finishPhase = beginUiE2ePhase("suite-setup", true);
+          const finishPhase = beginUiE2ePhase("suite-setup");
           setupPromise = Promise.resolve()
             .then(async () => {
               if (options.startServerBeforeBrowser) {
