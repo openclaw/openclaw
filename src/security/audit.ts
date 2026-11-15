@@ -10,11 +10,9 @@ import {
 } from "../agents/agent-scope-config.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
-import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { copyConfigResolutionFacts } from "../config/resolution-facts.js";
-import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { SecurityAuditSuppression } from "../config/types.openclaw.js";
 import {
   canMaterializeGatewayAuthSecretRefsWithoutExec,
@@ -47,6 +45,7 @@ import { listConfiguredOpenInboundPolicyPaths } from "./audit-open-inbound.js";
 import { collectElevatedFindings, collectNodeRuntimeSecurityFindings } from "./audit-runtime.js";
 import type {
   SecurityAuditFinding,
+  SecurityAuditOptions,
   SecurityAuditReport,
   SecurityAuditSummary,
   SecurityAuditSuppressedFinding,
@@ -54,13 +53,6 @@ import type {
 import { collectEnabledInsecureOrDangerousFlags } from "./dangerous-config-flags.js";
 import { collectExecFilesystemPolicyDriftHits } from "./exec-filesystem-policy.js";
 
-type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
-type ProbeGatewayFn = typeof import("../gateway/probe.js").probeGateway;
-type SecurityAuditExplicitGatewayAuth = {
-  token?: string;
-  password?: string;
-};
-type SecurityAuditGatewayAuthOverride = Pick<GatewayAuthConfig, "mode" | "token" | "password">;
 type McpServerSourceSummary = {
   label: string;
   names: string[];
@@ -77,39 +69,6 @@ type AgentSkillMcpBoundaryCandidate =
   | { kind: "agent"; id: string; skillSource: string; agentId: string };
 
 export type { SecurityAuditReport } from "./audit.types.js";
-
-type SecurityAuditOptions = {
-  config: OpenClawConfig;
-  sourceConfig?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  platform?: NodeJS.Platform;
-  deep?: boolean;
-  includeFilesystem?: boolean;
-  /** Override where to check state (default: resolveStateDir()). */
-  stateDir?: string;
-  /** Override config path check (default: resolveConfigPath()). */
-  configPath?: string;
-  /** Time limit for deep gateway probe. */
-  deepTimeoutMs?: number;
-  /** Dependency injection for tests. */
-  plugins?: ChannelPlugin[];
-  /** Whether to import plugin modules to discover plugin security audit collectors. */
-  loadPluginSecurityCollectors?: boolean;
-  /** Dependency injection for tests (Windows ACL checks). */
-  execIcacls?: ExecFn;
-  /** Dependency injection for tests (Docker label checks). */
-  execDockerRawFn?: ExecDockerRawFn;
-  /** Optional preloaded config snapshot to skip audit-time config file reads. */
-  configSnapshot?: ConfigFileSnapshot | null;
-  /** Optional explicit auth for deep gateway probe. */
-  deepProbeAuth?: SecurityAuditExplicitGatewayAuth;
-  /** Optional explicit Gateway auth mode/secret for config-only audit checks. */
-  auditGatewayAuthOverride?: SecurityAuditGatewayAuthOverride;
-  /** Override workspace used for workspace plugin discovery. */
-  workspaceDir?: string;
-  /** Dependency injection for tests. */
-  probeGatewayFn?: ProbeGatewayFn;
-};
 
 type AuditExecutionContext = Omit<SecurityAuditOptions, "config"> & {
   cfg: OpenClawConfig;
@@ -963,6 +922,7 @@ async function createAuditExecutionContext(
     loadPluginSecurityCollectors: opts.loadPluginSecurityCollectors ?? deep,
     workspaceDir,
     configSnapshot,
+    signal: opts.signal,
     deepProbeAuth: opts.deepProbeAuth,
     auditGatewayAuthOverride: opts.auditGatewayAuthOverride,
   };
@@ -971,6 +931,7 @@ async function createAuditExecutionContext(
 export async function runSecurityAuditCore(
   opts: SecurityAuditOptions,
 ): Promise<SecurityAuditReport> {
+  opts.signal?.throwIfAborted();
   const findings: SecurityAuditFinding[] = [];
   const context = await createAuditExecutionContext(opts);
   const { cfg, env, platform, stateDir, configPath } = context;
@@ -1110,6 +1071,7 @@ export async function runSecurityAuditCore(
     );
   }
 
+  context.signal?.throwIfAborted();
   const deepProbeResult = context.deep
     ? await (
         await import("./audit-gateway-probe.js")
@@ -1119,8 +1081,10 @@ export async function runSecurityAuditCore(
         timeoutMs: context.deepTimeoutMs,
         probe: context.probeGatewayFn,
         explicitAuth: context.deepProbeAuth,
+        ...(context.signal ? { signal: context.signal } : {}),
       })
     : undefined;
+  context.signal?.throwIfAborted();
   const deep = deepProbeResult?.deep;
   findings.push(...collectDeepProbeFindings({ deep, authWarning: deepProbeResult?.authWarning }));
 

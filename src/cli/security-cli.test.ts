@@ -1,6 +1,8 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as terminalTheme from "../../packages/terminal-core/src/theme.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { registerSecurityCli } from "./security-cli.js";
 
 const mocks = await vi.hoisted(async () => {
@@ -128,6 +130,57 @@ describe("security CLI", () => {
     });
     const payload = JSON.parse(String(runtimeLogs.at(-1)));
     expect(payload.secretDiagnostics).toEqual([diagnostic]);
+  });
+
+  it.each([false, true])(
+    "stops a read-only audit but retains a repair receipt (fix=%s)",
+    async (fix) => {
+      const scope = new AsyncWorkScope();
+      const entered = createDeferred();
+      const response = createDeferred<ReturnType<typeof auditReport>>();
+      let observed: AbortSignal | undefined;
+      runSecurityAuditCore.mockImplementationOnce((options) => {
+        observed = options.signal;
+        entered.resolve();
+        return response.promise;
+      });
+      const command = scope.run(() => run("--deep", "--json", ...(fix ? ["--fix"] : [])));
+      try {
+        await entered.promise;
+        expect(observed).toBe(fix ? undefined : scope.signal);
+        scope.beginClose(new Error("test command interrupted"));
+        response.resolve(auditReport());
+        await command;
+        if (fix) {
+          expect(JSON.parse(String(runtimeLogs.at(-1)))).toHaveProperty("fix");
+          expect(fixSecurityFootguns).toHaveBeenCalledExactlyOnceWith();
+        } else {
+          expect(runtimeLogs).toEqual([]);
+          expect(fixSecurityFootguns).not.toHaveBeenCalled();
+        }
+      } finally {
+        response.resolve(auditReport());
+        await command;
+        await scope.drain();
+      }
+    },
+  );
+
+  it("suppresses an interrupted audit rejection without swallowing an ordinary failure", async () => {
+    const scope = new AsyncWorkScope();
+    const failure = new Error("test probe stopped");
+    runSecurityAuditCore.mockImplementationOnce(
+      ({ signal }) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => reject(failure), { once: true });
+          scope.beginClose(failure);
+        }),
+    );
+    await scope.run(() => run("--deep", "--json"));
+    expect(runtimeLogs).toEqual([]);
+    runSecurityAuditCore.mockRejectedValueOnce(failure);
+    await expect(run("--deep", "--json")).rejects.toBe(failure);
+    await scope.drain();
   });
 
   it("prints the audit counts in the human summary", async () => {

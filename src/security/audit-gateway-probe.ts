@@ -10,12 +10,14 @@ export async function probeSecurityAuditGateway(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
+  signal?: AbortSignal;
   probe?: typeof probeGateway;
   explicitAuth?: { token?: string; password?: string };
 }): Promise<{
   deep: SecurityAuditReport["deep"];
   authWarning?: string;
 }> {
+  params.signal?.throwIfAborted();
   const connection = buildGatewayConnectionDetails({ config: params.cfg });
   const url = connection.url;
   const probeTarget = resolveGatewayProbeTarget(params.cfg);
@@ -35,12 +37,14 @@ export async function probeSecurityAuditGateway(params: {
       probeTarget.mode === "remote" || Boolean(process.env.OPENCLAW_GATEWAY_URL?.trim()),
     auth: authResolution.auth,
     timeoutMs: params.timeoutMs,
+    ...(params.signal ? { signal: params.signal } : {}),
   }).catch((err: unknown) => ({
     ok: false,
     error: String(err),
     close: null,
   }));
 
+  params.signal?.throwIfAborted();
   if (authResolution.warning && !res.ok) {
     res.error = res.error ? `${res.error}; ${authResolution.warning}` : authResolution.warning;
   }

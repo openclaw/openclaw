@@ -8,6 +8,7 @@ import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { runSecurityAuditCore } from "../security/audit.js";
 import { fixSecurityFootguns } from "../security/fix.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
 import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js";
@@ -92,6 +93,8 @@ export function registerSecurityCli(program: Command) {
       >[0]["auditGatewayAuthOverride"] = authMode
         ? { mode: authMode, ...(token ? { token } : {}), ...(password ? { password } : {}) }
         : undefined;
+      // A repair retains its mutation receipt; a read-only audit stops with the command.
+      const signal = opts.fix ? undefined : getAsyncWorkSignal();
       const fixResult = opts.fix ? await fixSecurityFootguns() : null;
 
       const sourceConfig = await captureRuntimeConfigAsyncReader()();
@@ -102,20 +105,35 @@ export function registerSecurityCli(program: Command) {
           targetIds: getSecurityAuditCommandSecretTargetIds(),
           mode: "read_only_status",
         });
-      const report = await runSecurityAuditCore({
-        config: cfg,
-        sourceConfig,
-        deep: Boolean(opts.deep),
-        includeFilesystem: true,
-        deepProbeAuth:
-          token || password
-            ? {
-                ...(token ? { token } : {}),
-                ...(password ? { password } : {}),
-              }
-            : undefined,
-        auditGatewayAuthOverride,
-      });
+      if (signal?.aborted) {
+        return;
+      }
+      let report: Awaited<ReturnType<typeof runSecurityAuditCore>>;
+      try {
+        report = await runSecurityAuditCore({
+          config: cfg,
+          sourceConfig,
+          deep: Boolean(opts.deep),
+          includeFilesystem: true,
+          deepProbeAuth:
+            token || password
+              ? {
+                  ...(token ? { token } : {}),
+                  ...(password ? { password } : {}),
+                }
+              : undefined,
+          auditGatewayAuthOverride,
+          ...(signal ? { signal } : {}),
+        });
+      } catch (error) {
+        if (signal?.aborted) {
+          return;
+        }
+        throw error;
+      }
+      if (signal?.aborted) {
+        return;
+      }
 
       if (opts.json) {
         defaultRuntime.writeJson(

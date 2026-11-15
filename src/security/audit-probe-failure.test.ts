@@ -1,8 +1,11 @@
 // Verifies probe failure audit reporting.
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { collectDeepProbeFindings } from "./audit-deep-probe-findings.js";
 import { runSecurityAuditCore } from "./audit.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("security audit deep probe failure", () => {
   it("redacts gateway URL credentials from the deep audit report", async () => {
@@ -46,6 +49,42 @@ describe("security audit deep probe failure", () => {
     expect(serialized).not.toContain(user);
     expect(serialized).not.toContain(password);
     expect(serialized).not.toContain(querySecret);
+  });
+
+  it("cancels the owned deep probe before it becomes a failed finding", async () => {
+    const stateDir = tempDirs.make("audit-probe-cancel-");
+    const controller = new AbortController();
+    const reason = new Error("audit interrupted");
+    let observed: AbortSignal | undefined;
+    const audit = runSecurityAuditCore({
+      config: {},
+      sourceConfig: {},
+      env: {},
+      deep: true,
+      includeFilesystem: false,
+      loadPluginSecurityCollectors: false,
+      plugins: [],
+      stateDir,
+      signal: controller.signal,
+      probeGatewayFn: async ({ url, signal }) => {
+        observed = signal;
+        controller.abort(reason);
+        return {
+          ok: false,
+          url,
+          connectLatencyMs: null,
+          error: "aborted",
+          close: null,
+          auth: { role: null, scopes: [], capability: "unknown" },
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        };
+      },
+    });
+    await expect(audit).rejects.toBe(reason);
+    expect(observed).toBe(controller.signal);
   });
 
   it("adds a probe_failed warning with the reported error", () => {
