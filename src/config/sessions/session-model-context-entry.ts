@@ -34,3 +34,19 @@ export function projectSessionModelContextEntry(
   }
   return projected;
 }
+
+export function hydrateSessionModelContextEntry(
+  eventJson: string,
+  entry: SessionTreeEntry,
+): SessionTreeEntry {
+  // SAFETY: This fresh payload and its navigation row belong to the same snapshot.
+  const hydrated = JSON.parse(eventJson) as SessionTreeEntry;
+  hydrated.parentId = entry.parentId;
+  if (
+    (entry.type === "compaction" || entry.type === "reset") &&
+    entry.firstKeptEntryId !== undefined
+  ) {
+    Object.assign(hydrated, { firstKeptEntryId: entry.firstKeptEntryId });
+  }
+  return hydrated;
+}

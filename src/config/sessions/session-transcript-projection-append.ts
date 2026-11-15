@@ -74,7 +74,9 @@ export function extractTranscriptIndexEntry(
   if (!id || (role !== "user" && role !== "assistant")) {
     return undefined;
   }
-  const text = readMessageText(message);
+  // PostgreSQL text cannot store NUL. Only the derived search text is normalized;
+  // the canonical transcript keeps the original payload and token boundaries.
+  const text = readMessageText(message)?.replaceAll("\0", "\ufffd");
   if (!text) {
     return undefined;
   }

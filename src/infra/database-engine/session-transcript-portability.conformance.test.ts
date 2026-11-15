@@ -8,6 +8,7 @@ import {
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptContextSeed,
+  readSessionTranscriptModelContext,
 } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { CurrentTranscriptProjection } from "../../config/sessions/session-accessor.sqlite-projection-read.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
@@ -17,9 +18,11 @@ import {
   ensureTranscriptSessionRoot,
 } from "../../config/sessions/session-accessor.sqlite-transcript-state.js";
 import { prepareIncrementalSuffixIdempotencyMutation } from "../../config/sessions/session-accessor.sqlite-transcript-suffix-idempotency.js";
+import { selectSessionTranscriptFtsRows } from "../../config/sessions/session-transcript-fts.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../../config/sessions/session-transcript-index.js";
 import { createTranscriptEventInserter } from "../../config/sessions/transcript-payload.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { executeSqliteQuerySync } from "../kysely-sync.js";
 import { runSqliteImmediateTransactionSync } from "../sqlite-transaction.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
@@ -327,7 +330,7 @@ for (const engine of ["sqlite", "postgres"] as const) {
                   parentId: "summary",
                   message: {
                     role: "user",
-                    content: "admitted request \udc00 \u0000",
+                    content: "admitted request \udc00 \u0000 after-null",
                     idempotencyKey: "seed:user",
                     timestamp: 1,
                   },
@@ -347,10 +350,33 @@ for (const engine of ["sqlite", "postgres"] as const) {
           ]);
           expect(seed.seed?.admittedUser).toMatchObject({
             role: "user",
-            content: "admitted request \udc00 \u0000",
+            content: "admitted request \udc00 \u0000 after-null",
             idempotencyKey: "seed:user",
           });
+          const searchRows = executeSqliteQuerySync(
+            fixture.database.db,
+            selectSessionTranscriptFtsRows(fixture.database.db, fixture.scope.sessionId),
+          ).rows;
+          expect(searchRows).toHaveLength(1);
+          expect(searchRows[0]?.text).not.toContain("\0");
+          expect(searchRows[0]?.text).toContain("after-null");
           expect(seed.seed?.retainedInputTokens).toBeGreaterThan(0);
+          expect(readSessionTranscriptModelContext(fixture.scope).events).toMatchObject([
+            { type: "branch_summary", summary: "retained summary \ud800" },
+            {
+              type: "message",
+              message: { role: "user", content: "admitted request \udc00 \u0000 after-null" },
+            },
+          ]);
+          expect(
+            readSessionTranscriptContextMessages(fixture.scope, (messages) => [...messages]),
+          ).toEqual([
+            expect.objectContaining({ role: "branchSummary", summary: "retained summary \ud800" }),
+            expect.objectContaining({
+              role: "user",
+              content: "admitted request \udc00 \u0000 after-null",
+            }),
+          ]);
         }));
 
       it("advances mutation time beyond both prior mutation and observation with nullable fields", () =>

@@ -8,7 +8,6 @@ import {
 import {
   jsonNativeFieldsValid,
   jsonLastStringValue,
-  jsonValid,
 } from "../../infra/database-engine/json-values.js";
 import {
   executeSqliteQueryTakeFirstSync,
@@ -40,6 +39,11 @@ import type {
   SessionTranscriptContextSnapshot,
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
+import {
+  hydrateSessionModelContextEntry,
+  projectSessionModelContextEntry,
+} from "./session-model-context-entry.js";
+import { projectSessionModelContextNavigation } from "./session-model-context-navigation.js";
 import { readModelContextNavigationPages } from "./session-model-context-pages.js";
 import {
   projectModelContextEventSql,
@@ -388,7 +392,7 @@ export function prepareTranscriptContextSnapshot(
 ): TranscriptContextSnapshot {
   const db = getSessionKysely(database.db);
   // Compressed rows were validated before encoding; inspect raw identity only.
-  const nativeJsonValid = jsonValid(database.db, sql`coalesce(event_json, '{}')`);
+  const nativeJsonValid = jsonNativeFieldsValid(database.db, sql`coalesce(event_json, '{}')`);
   const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
   const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
   if (through) {
@@ -432,6 +436,17 @@ export function prepareTranscriptContextSnapshot(
     ),
     *readRows(after, end) {
       const page = base.where("seq", ">", after).where("seq", "<=", end);
+      const exceptional = isPostgresSqlConnection(database.db)
+        ? Array.from(
+            iterateSqliteQuerySync(
+              database.db,
+              page
+                .select(["seq", "event_json"])
+                .where("navigation_json", "is", null)
+                .where((eb) => eb.not(jsonNativeFieldsValid(database.db, eb.ref("event_json")))),
+            ),
+          )
+        : [];
       const query = isPostgresSqlConnection(database.db)
         ? db
             .selectFrom(
@@ -448,14 +463,31 @@ export function prepareTranscriptContextSnapshot(
               transcriptEventModelBytesSql(database.db, sql.lit(1)).as("retained_bytes"),
             ])
             .orderBy("seq", "asc");
+      // JSONB rejects valid canonical escapes. Hydrate only those exceptional rows
+      // inside the same bounded page and snapshot, using the shared model projector.
+      const exceptionalBySeq = new Map(exceptional.map((row) => [row.seq, row.event_json]));
       for (const row of iterateSqliteQuerySync(database.db, query)) {
-        // SAFETY: SQL preserves entry discriminants; this fresh object has no other owner.
-        const entry = JSON.parse(row.navigation_json) as ContextEntry;
+        const raw = exceptionalBySeq.get(row.seq);
+        // SAFETY: Both native navigation and canonical rows belong to this snapshot.
+        const original = raw ? (JSON.parse(raw) as SessionTreeEntry) : undefined;
+        const entry = (
+          original
+            ? projectSessionModelContextNavigation(original)
+            : JSON.parse(row.navigation_json)
+        ) as ContextEntry;
+        const model =
+          original &&
+          projectSessionModelContextEntry(original, { entry: original, omitCheckpoint: false });
+        const retained =
+          original &&
+          projectSessionModelContextEntry(original, { entry: original, omitCheckpoint: true });
         entry.seq = row.seq;
         yield {
           entry,
-          bytes: row.model_bytes,
-          withoutCheckpointBytes: row.retained_bytes,
+          bytes: model ? Buffer.byteLength(JSON.stringify(model), "utf8") : row.model_bytes,
+          withoutCheckpointBytes: retained
+            ? Buffer.byteLength(JSON.stringify(retained), "utf8")
+            : row.retained_bytes,
         };
       }
     },
@@ -501,7 +533,7 @@ export function prepareTranscriptContextSnapshot(
         if (entry?.type === "message") {
           const full = row.native
             ? undefined
-            : hydrateContextEntry(readPayload(entry).rows[0]!.event_json, entry);
+            : hydrateSessionModelContextEntry(readPayload(entry).rows[0]!.event_json, entry);
           if (
             row.native ||
             (full?.type === "message" &&
@@ -540,7 +572,7 @@ export function prepareTranscriptContextSnapshot(
         const entry = batch.find((candidate) => candidate.seq === row.seq)!;
         const full = row.native
           ? undefined
-          : hydrateContextEntry(readPayload(entry).rows[0]!.event_json, entry);
+          : hydrateSessionModelContextEntry(readPayload(entry).rows[0]!.event_json, entry);
         if (row.native || (full?.type === "branch_summary" && full.summary)) {
           summaries.add(row.seq);
         }
@@ -559,7 +591,7 @@ export function prepareTranscriptContextSnapshot(
     version,
     readEntry: (entry) => {
       const row = readPayload(entry).rows[0];
-      return hydrateContextEntry(row!.event_json, entry);
+      return hydrateSessionModelContextEntry(row!.event_json, entry);
     },
     readModelEntrySizes: (requests) => {
       const sizes = new Map<ContextEntry, number>();
@@ -577,6 +609,12 @@ export function prepareTranscriptContextSnapshot(
         const query = base
           .select((eb) => [
             "seq",
+            /* kysely-allow-raw: Only native-invalid canonical rows need bounded JavaScript projection. */
+            sql<
+              string | null
+            >`CASE WHEN NOT ${nativeJsonValid} THEN ${transcriptEventJsonSql(database.db)} END`.as(
+              "exceptional_json",
+            ),
             eb
               .fn<number>("octet_length", [
                 projectModelContextEventSql(
@@ -592,7 +630,17 @@ export function prepareTranscriptContextSnapshot(
           ])
           .where("seq", "in", [...bySeq.keys()]);
         for (const row of iterateSqliteQuerySync(database.db, query)) {
-          sizes.set(bySeq.get(row.seq)!, row.bytes);
+          const request = batch.find(({ entry }) => entry.seq === row.seq)!;
+          const projected =
+            row.exceptional_json &&
+            projectSessionModelContextEntry(
+              hydrateSessionModelContextEntry(row.exceptional_json, request.entry),
+              request,
+            );
+          sizes.set(
+            request.entry,
+            projected ? Buffer.byteLength(JSON.stringify(projected), "utf8") : row.bytes,
+          );
         }
       }
       return sizes;
@@ -606,6 +654,7 @@ export function prepareTranscriptContextSnapshot(
         const query = base
           .select([
             "seq",
+            nativeJsonValid.as("native"),
             projectModelContextEventSql(
               database.db,
               transcriptEventJsonSql(database.db),
@@ -618,7 +667,13 @@ export function prepareTranscriptContextSnapshot(
           .where("seq", "in", [...bySeq.keys()]);
         for (const row of iterateSqliteQuerySync(database.db, query)) {
           const entry = bySeq.get(row.seq)!;
-          const hydrated = hydrateContextEntry(row.event_json, entry);
+          let hydrated = hydrateSessionModelContextEntry(row.event_json, entry);
+          if (!row.native) {
+            hydrated = projectSessionModelContextEntry(
+              hydrated,
+              batch.find((request) => request.entry.seq === row.seq)!,
+            );
+          }
           if (
             entry.type === "message" &&
             entry.message.role === "toolResult" &&
@@ -635,17 +690,4 @@ export function prepareTranscriptContextSnapshot(
       return payloads;
     },
   };
-}
-
-function hydrateContextEntry(eventJson: string, entry: ContextEntry): SessionTreeEntry {
-  // SAFETY: This fresh payload and its navigation row belong to the same snapshot.
-  const hydrated = JSON.parse(eventJson) as SessionTreeEntry;
-  hydrated.parentId = entry.parentId;
-  if (
-    (entry.type === "compaction" || entry.type === "reset") &&
-    entry.firstKeptEntryId !== undefined
-  ) {
-    Object.assign(hydrated, { firstKeptEntryId: entry.firstKeptEntryId });
-  }
-  return hydrated;
 }

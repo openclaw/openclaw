@@ -7,6 +7,7 @@ import {
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   jsonArrayValue,
+  jsonNativeFieldsValid,
   jsonObjectValue,
   jsonPathValue,
   jsonPickObject,
@@ -82,8 +83,8 @@ export function projectModelContextEventSql(
           THEN jsonb_set(${model}, '{message,content}', jsonb_build_array(jsonb_build_object('type', 'text', 'text', ${toolResultOmission}::text)))
           ELSE ${model} END`
       : model;
-    return /* kysely-allow-raw: Serialize once at the model payload boundary. */ sql<string>`(CASE WHEN ${omitCheckpoint} = 1
-      THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text`;
+    return /* kysely-allow-raw: Exceptional canonical text is projected by the bounded reader, never cast to JSONB. */ sql<string>`CASE WHEN ${jsonNativeFieldsValid(db, event)} THEN (CASE WHEN ${omitCheckpoint} = 1
+      THEN ${bounded} #- '{message,providerReplay}' ELSE ${bounded} END)::text ELSE ${event}::text END`;
   }
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = jsonRemovePaths(
@@ -312,7 +313,8 @@ export function projectPostgresModelContextRowsSql(
   );
   return /* kysely-allow-raw: One bounded read shares parsed JSONB and native model bytes across its projections. */ sql`(
     WITH context_input AS MATERIALIZED (
-      SELECT seq, CASE WHEN navigation_json IS NULL THEN event_json::jsonb END AS event,
+      SELECT seq, CASE WHEN navigation_json IS NULL AND pg_input_is_valid(event_json, 'jsonb')
+        THEN event_json::jsonb END AS event,
         navigation_json::jsonb AS metadata FROM (${rows}) AS selected
     ), context_parts AS MATERIALIZED (
       SELECT *, event -> 'message' AS message, event #> '{message,content}' AS content FROM context_input
