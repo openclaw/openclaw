@@ -34,6 +34,7 @@ import {
   buildScopeUpgradeInboxEntry,
   buildSidebarInboxEntries,
   type SidebarInboxEntry,
+  type SidebarAttentionItem,
 } from "./sidebar-attention-entries.ts";
 import {
   type CronAttentionJob,
@@ -107,6 +108,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   private readonly stopSubscriptions: Array<() => void>;
   private outboxRuntime: typeof import("../lib/chat/outbox-attention.ts") | null = null;
   private disposed = false;
+  private keyAttention: SidebarAttentionItem | null = null;
+  private keyReadGeneration = 0;
 
   constructor(
     private readonly sources: SidebarAttentionStoreSources,
@@ -120,8 +123,11 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     // Reconcile owner scope and publish aggregate attention synchronously for downstream consumers.
     this.stopSubscriptions = [
       sources.gateway.subscribe(() => this.synchronizeGateway()),
+      sources.config.subscribe(() => this.refreshOpenClawId()),
       sources.gateway.subscribeEvents((event) => {
-        if (event.event === "cron") {
+        if (event.event === "openclawId.people.changed") {
+          this.refreshOpenClawId();
+        } else if (event.event === "cron") {
           if (
             !this.applyCronEvent(event.payload) &&
             !hasCronInventoryEvents(sources.gateway.snapshot)
@@ -190,6 +196,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
   }
 
   private clearHealth(): void {
+    this.keyReadGeneration += 1;
+    this.keyAttention = null;
     this.cronJobs = [];
     this.cronSchedulerEnabled = null;
     this.cronRetryAt = undefined;
@@ -305,7 +313,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     });
     return buildSidebarInboxEntries({
       approvals: overlay.approvalQueue,
-      attention,
+      attention: this.keyAttention ? [...attention, this.keyAttention] : attention,
       outbox,
       mentions: this.mentions.snapshot.items,
       scopeUpgrade,
@@ -539,6 +547,42 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     this.scheduleHealthRefresh();
   }
 
+  refreshOpenClawId(): void {
+    const generation = ++this.keyReadGeneration;
+    const snapshot = this.sources.gateway.snapshot;
+    const client = snapshot.client;
+    const revision = this.sources.gateway.connectionRevision;
+    const scope = gatewayPresentationScope(this.sources.gateway);
+    const current = () =>
+      !this.disposed &&
+      generation === this.keyReadGeneration &&
+      this.sources.config.current.openclawIdEnabled === true &&
+      this.sources.gateway.snapshot.phase === "connected" &&
+      this.sources.gateway.snapshot.client === client &&
+      this.sources.gateway.connectionRevision === revision &&
+      gatewayPresentationScope(this.sources.gateway) === scope;
+    if (!client || !current() || !hasOperatorReadAccess(snapshot.hello?.auth ?? null)) {
+      if (this.keyAttention !== null) {
+        this.keyAttention = null;
+        this.onChange();
+      }
+      return;
+    }
+    void (async () => {
+      const { readOpenClawIdKeyAttention } = await import("./sidebar-attention-openclaw-id.ts");
+      if (!current()) {
+        return;
+      }
+      const attention = await readOpenClawIdKeyAttention(client, current);
+      if (current()) {
+        this.keyAttention = attention;
+        this.onChange();
+      }
+    })().catch(() => {
+      // A failed read is not evidence that a known key problem was repaired.
+    });
+  }
+
   private synchronizeGateway(): void {
     const snapshot = this.sources.gateway.snapshot;
     const scope = gatewayPresentationScope(this.sources.gateway);
@@ -566,6 +610,8 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     ) {
       this.loadGeneration += 1;
       this.loadedClient = null;
+      this.keyReadGeneration += 1;
+      this.keyAttention = null;
       this.scheduleHealthRefresh();
       this.onChange();
       return;
@@ -634,11 +680,13 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
     this.cronRetryAt = undefined;
     this.scheduleHealthRefresh();
     this.load();
+    this.refreshOpenClawId();
   }
 
   private readonly refreshDeferred = () => {
     this.scheduleHealthRefresh();
     if (document.visibilityState === "visible") {
+      this.refreshOpenClawId();
       this.onChange();
       if (this.cronRefreshNeeded) {
         // Catch up hidden changes or failed reads without reloading unchanged inventory.

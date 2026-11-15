@@ -9,6 +9,7 @@ import { getUpdateRun } from "../infra/update-run-reader.js";
 import type { UpdateStepResult } from "../infra/update-step-result.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireOwnedSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import { isVerifiedSuccessfulUpdate } from "./update-capture-cleanup.js";
 
 /** Called only inside the selected state owner's lifetime, after durable completion. */
 export async function cleanupCompletedUpdateRecovery(
@@ -44,8 +45,8 @@ export async function cleanupCompletedUpdateRecovery(
         ...(detail ? { diagnostics: [detail] } : {}),
       };
     }
-    // A failure that never activated releases its own capture along with superseded recovery.
-    const ownCaptureReleased = isNeverActivatedFailedUpdate(run);
+    // A failure that never activated, or a verified healthy success, releases its own capture.
+    const ownCaptureReleased = isNeverActivatedFailedUpdate(run) || isVerifiedSuccessfulUpdate(run);
     const io = createConfigIO({ env, observe: false, pluginValidation: "core-only" });
     const readConfig = () => io.readSourceConfigBestEffort();
     const preview = await inspectSessionSqliteRecovery({ cfg: await readConfig(), env });

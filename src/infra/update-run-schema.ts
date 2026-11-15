@@ -184,7 +184,7 @@ const version = z.object({
   buildId: text.nullable().optional(),
 });
 
-const UpdateRunStepSchema = z.object({
+export const UpdateRunStepSchema = z.object({
   step: text,
   status: z.enum(UPDATE_RUN_STEP_STATUSES),
   startedAtMs: timestamp.optional(),

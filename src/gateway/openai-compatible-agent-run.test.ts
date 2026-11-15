@@ -28,6 +28,7 @@ import {
   resolveOpenAiCompatibleAgentError,
   runOpenAiCompatibleAgentCommand,
 } from "./openai-compatible-agent-run.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdTunnelPrincipalResolver,
@@ -129,8 +130,10 @@ describe("OpenAI-compatible operator run authority", () => {
           default: "reader",
           definitions: {
             reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            operator: structuredClone(MEMBER_ROLE_PRESETS.operator),
           },
         };
+        setRuntimeConfigSnapshot(fixture.cfg);
         const principal: OpenClawIdTunnelPrincipal = {
           ...(kind === "member"
             ? { kind, accountId: "acct_compat_operator", role: "operator" as const }
@@ -567,7 +570,7 @@ describe("OpenAI-compatible agent error envelopes", () => {
       status: 502,
       error: {
         message:
-          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+          "Couldn't connect securely to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
         type: "api_error",
         code: "CERT_REVOKED",
       },

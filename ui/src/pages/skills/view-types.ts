@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
+import type { ConfigSnapshot, SkillStatusEntry, SkillStatusReport } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
   ClawHubSkillDetail,
@@ -69,7 +69,17 @@ export type SkillsProps = {
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
-  onSaveKey: (skillKey: string) => void;
+  /** `replaceable` tells, from a config snapshot, whether the stored key may be typed over. */
+  onSaveKey: (
+    skillKey: string,
+    replaceable: (snapshot: ConfigSnapshot | null, skillKey: string) => boolean | undefined,
+  ) => void;
+  /** The config the skill dialog reads to tell how a stored API key is held. */
+  apiKeyConfig: {
+    snapshot: () => ConfigSnapshot | null;
+    error: () => string | null;
+    retry: () => void;
+  };
   onInstall: (skillKey: string, name: string, installId: string) => void;
   onDetailOpen: (skillKey: string) => void;
   onDetailClose: () => void;

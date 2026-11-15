@@ -78,8 +78,11 @@ struct CommandCenterTabSessionFilterTests {
         ] + (qualifiedMain ? [OpenClawChatSessionEntry(key: base)] : [])
         // The configured canonical row wins over its bare alias when both are present.
         let resolvedMain = ChatSessionSidebarModel.selectedSessionKey(
-            sessions: sessions, currentSessionKey: configuredMain, mainSessionKey: configuredMain,
-            activeAgentID: "one", sessionRoutingContract: "per-sender|\(base)|one")
+            sessions: sessions,
+            currentSessionKey: configuredMain,
+            mainSessionKey: configuredMain,
+            activeAgentID: "one",
+            sessionRoutingContract: "per-sender|\(base)|one")
         let listed = sessions.filter {
             CommandCenterTab.isListedChatSession(
                 $0.key, mainSessionKey: resolvedMain, defaultSessionKey: configuredMain)
@@ -110,8 +113,13 @@ struct CommandCenterTabSessionFilterTests {
         }
         #expect(listed.map(\.key) == (mainPresent ? [main.key, other.key] : [other.key]))
         let sidebar = RootSidebarModel.sections(
-            sessions: sessions, query: "", currentSessionKey: other.key, mainSessionKey: main.key,
-            activeAgentID: "one", groups: [], rosterIsComplete: mainPresent)
+            sessions: sessions,
+            query: "",
+            currentSessionKey: other.key,
+            mainSessionKey: main.key,
+            activeAgentID: "one",
+            groups: [],
+            rosterIsComplete: mainPresent)
         #expect(!sidebar.flatMap(\.nodes).contains { $0.session.key == main.key })
     }
 

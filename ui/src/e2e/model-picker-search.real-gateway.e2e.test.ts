@@ -150,7 +150,6 @@ suite.define(() => {
         expect(await pickerValue(picker)).toBe("fixture/not-in-catalog");
 
         await trigger.click();
-        await picker.locator(".header-search__toggle").click();
         await search.fill("granite");
         expect(await picker.locator('[data-value="fixture/granite"]').count()).toBe(1);
         await publish(models.filter((model) => model.id !== "granite"));

@@ -1,6 +1,6 @@
 import { supportsClaudeAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
 import { expect, it } from "vitest";
-import { makeModel } from "./model-contract-cases.test-support.js";
+import { createModelRegistry, makeModel } from "./model-contract-cases.test-support.js";
 import { buildAnthropicProvider } from "./register.runtime.js";
 
 function resolveModel(modelId: string, provider = "anthropic", compat?: { codeMode: "capable" }) {
@@ -9,10 +9,8 @@ function resolveModel(modelId: string, provider = "anthropic", compat?: { codeMo
     modelId,
     config: {},
     // Empty registry exercises generation rather than catalog cloning.
-    modelRegistry: { find: () => compat && { compat } },
-  } as unknown as Parameters<
-    NonNullable<ReturnType<typeof buildAnthropicProvider>["resolveDynamicModel"]>
-  >[0]);
+    modelRegistry: createModelRegistry(compat ? [makeModel(modelId, { provider, compat })] : []),
+  });
 }
 
 it.each([
@@ -22,6 +20,7 @@ it.each([
 ] as const)("resolves %s onto the newest known contract", (modelId, canonicalModelId) => {
   const model = resolveModel(modelId);
   expect(model).toBeDefined();
+  expect(model?.family).toBe("anthropic");
   expect(model?.params?.canonicalModelId).toBe(canonicalModelId);
   expect(model?.thinkingLevelMap).toEqual({ minimal: "low", xhigh: "xhigh", max: "max" });
   // Missing stamps fall back to pre-4.6 request shaping, rejected by these models.
@@ -47,6 +46,7 @@ it.each([
 ] as const)("preserves the released %s contract on %s", (id, provider, codeMode) => {
   const model = resolveModel(id, provider);
   expect(model?.id).toBe(id);
+  expect(model?.family).toBe("anthropic");
   expect(model?.params?.canonicalModelId).toBeUndefined();
   expect(model?.compat).toEqual(codeMode ? { codeMode } : undefined);
   if (provider === "anthropic") {
@@ -61,12 +61,24 @@ it.each([
   }
 });
 
+it("carries native family metadata for Fable outside the shipped manifest", () => {
+  const model = resolveModel("claude-fable-5-2");
+  expect(model).toMatchObject({
+    id: "claude-fable-5-2",
+    provider: "anthropic",
+    family: "anthropic",
+    contextWindow: 1_000_000,
+    thinkingLevelMap: { minimal: "low", xhigh: "xhigh", max: "max" },
+  });
+  expect(model?.params?.canonicalModelId).toBeUndefined();
+});
+
 it("prefers registry compat over the manifest index", () => {
   const model = resolveModel("claude-opus-5", "anthropic", { codeMode: "capable" });
   expect(model?.compat).toEqual({ codeMode: "capable" });
 });
 
-it("does not claim non-Claude ids", () => {
-  // Third-party models reach the Anthropic-compatible transport too.
-  expect(resolveModel("mimo-v2-flash")).toBeUndefined();
+it.each(["mimo-v2-flash", "opaque-deployment"])("does not claim unknown model %s", (id) => {
+  // Third-party and opaque models reach the Anthropic-compatible transport too.
+  expect(resolveModel(id)).toBeUndefined();
 });

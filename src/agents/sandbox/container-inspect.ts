@@ -105,14 +105,15 @@ export async function dockerContainerState(name: string) {
 export async function containerState(
   engine: SandboxContainerEngine,
   name: string,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; includePaused?: boolean } = {},
 ) {
   const result = await execContainer(
     engine,
     [
       "inspect",
       "-f",
-      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}',
+      '{{.Id}}\n{{.State.Running}}\n{{.HostConfig.ReadonlyRootfs}}\n{{ index .Config.Labels "openclaw.configHash" }}' +
+        (options.includePaused ? "\n{{.State.Paused}}" : ""),
       name,
     ],
     { allowFailure: true },
@@ -134,10 +135,12 @@ export async function containerState(
   if (!id || !/^[a-f0-9]{64}$/u.test(id)) {
     throw new Error("Container inspect did not return an immutable container ID.");
   }
+  const paused = options.includePaused ? label.pop() === "true" : undefined;
   const configHash = label.join("\n").trim();
   return {
     exists: true as const,
     running: running === "true",
+    ...(options.includePaused ? { paused } : {}),
     id,
     readOnlyRoot: readOnlyRoot === "true",
     configHash: configHash && configHash !== "<no value>" ? configHash : null,

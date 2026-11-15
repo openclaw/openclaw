@@ -27,7 +27,7 @@ import type {
   SessionStoreTargetReadResult,
 } from "./session-store-target-inventory.js";
 import {
-  targetDiscoveryLane,
+  sessionStoreLane,
   prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
@@ -184,7 +184,7 @@ export function prepareSessionStoreTargetInventoryRead(
           }
           return operation(inventory, assertCurrent);
         },
-        targetDiscoveryLane,
+        sessionStoreLane,
         signal,
       );
     },
@@ -262,7 +262,7 @@ export async function withSessionStoreTarget<T>(
         },
       });
     },
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }
 

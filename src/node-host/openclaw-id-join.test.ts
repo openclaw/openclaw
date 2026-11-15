@@ -5,6 +5,7 @@ import { runNodeJoin } from "./openclaw-id-join.js";
 
 const mocks = vi.hoisted(() => ({
   load: vi.fn(),
+  refresh: vi.fn(),
   prepare: vi.fn(),
   enroll: vi.fn(),
   run: vi.fn(),
@@ -12,7 +13,10 @@ const mocks = vi.hoisted(() => ({
   key: vi.fn(),
 }));
 // mock-isolation: join orchestration only; enrollment, runner, service and state owners have their own suites.
-vi.mock("./config.js", () => ({ loadNodeHostConfig: mocks.load }));
+vi.mock("./config.js", () => ({
+  loadNodeHostConfig: mocks.load,
+  refreshNodeHostOpenClawIdTarget: mocks.refresh,
+}));
 // mock-isolation: the prepared manifest is an input here, not the behavior under test.
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: mocks.prepare }));
 // mock-isolation: the runner's connection and persistence are covered by runner.test.ts.
@@ -53,6 +57,7 @@ const prepared = { manifest: { commands: ["system.run"], caps: ["system"] } };
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.load.mockResolvedValue({
+    nodeId: "fixture-node",
     gateway: { kind: "openclaw-id", openclawId: target },
     commands: ["system.run"],
   });
@@ -74,7 +79,7 @@ test("signs the actual selected surface, saves after verification, and shares pr
   expect(mocks.enroll).toHaveBeenCalledWith(
     expect.objectContaining({
       discoveryUrl: "https://override.example",
-      previousPin: target.pin,
+      previous: { target, persist: expect.any(Function) },
       description: {
         display_name: "selected",
         platform: process.platform,

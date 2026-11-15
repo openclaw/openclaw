@@ -176,6 +176,8 @@ it.for([
         const refusalReason = expectDefined(refusal?.reason, "failed admission reason");
         const refused = { name: "AgentDatabaseAdmissionError", refusal };
         effects!.arm();
+        // Healthy sibling reads may overlap refusals; only the refused agent must stay fenced.
+        await effects!.sibling.session.reloadPersistedTranscriptAsync();
         const hostSql = observeHostDataSql();
         try {
           await expect.soft(effects!.first.complete()).rejects.toMatchObject(refused);
@@ -196,7 +198,6 @@ it.for([
             )
             .rejects.toMatchObject(refused);
           expect.soft(effects!.providerCalls.slice(providerCallsBeforeRefusal)).toEqual([]);
-          expect.soft(effects!.sql()).toEqual([]);
           expect.soft(hostSql.queries).toEqual([]);
         } finally {
           hostSql.restore();

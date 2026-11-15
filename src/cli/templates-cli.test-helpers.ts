@@ -40,14 +40,8 @@ export async function writePackageFixture(tempDirs: {
       workspace: {
         bootstrapFiles: { "AGENTS.md": { source: "workspace/AGENTS.md" } },
       },
-      packages: [
-        {
-          kind: "skill",
-          source: "clawhub",
-          ref: "@acme/demo-skill",
-          version: "1.0.0",
-        },
-      ],
+      skills: [{ ref: "@acme/demo-skill", version: "1.0.0" }],
+      plugins: [],
     })}\n---\n`,
   );
   return { root, workspace: join(root, "target-workspace") };

@@ -3,6 +3,7 @@
   "doctorHealthChecks": true,
   "categories": ["models"],
   "capabilityCatalogEntry": "./capability-catalog.ts",
+  "providerCatalogEntry": "./provider-discovery.ts",
   "sessionRouteStateOwners": [
     {
       "id": "openai",

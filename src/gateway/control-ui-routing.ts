@@ -46,6 +46,24 @@ export function isControlUiApprovalDocumentPath(params: {
   return encodedId.length > 0 && !encodedId.includes("/");
 }
 
+/** Classify the current request URL before loading optional Control UI handlers. */
+export function isControlUiHttpRequest(
+  req: { url?: string; method?: string; headers: { accept?: string } },
+  basePath: string,
+): boolean {
+  const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+  return (
+    url !== undefined &&
+    classifyControlUiRequest({
+      basePath,
+      pathname: url.pathname,
+      search: url.search,
+      method: req.method,
+      accept: req.headers.accept,
+    }).kind !== "not-control-ui"
+  );
+}
+
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
   basePath: string;

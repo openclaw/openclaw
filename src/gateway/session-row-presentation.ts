@@ -80,6 +80,8 @@ type PresentationOptions = Readonly<
 
 const DEFAULT_PRESENTATION_OPTIONS: PresentationOptions = {};
 
+type ActiveRunStates = Map<records.Row["generation"], ReturnType<VisibleActiveSessionRunProjector>>;
+
 function sameFacts(previous: readonly unknown[] | undefined, current: readonly unknown[]) {
   if (previous?.length !== current.length) {
     return false;
@@ -156,6 +158,7 @@ export function prepareSessionRowPublication(
   read: SessionRowReadView = projection,
 ) {
   const view = prepareSessionRowPublicationView(projection);
+  let activeRuns: Map<VisibleActiveSessionRunProjector, ActiveRunStates> | undefined;
   return (client?: GatewayClient | null, projectRun?: VisibleActiveSessionRunProjector) => {
     const recipient = prepareSessionRowRecipient(read, client, view);
     let presentation: ReturnType<typeof prepareProjectedSessionPresentation> | undefined;
@@ -166,12 +169,18 @@ export function prepareSessionRowPublication(
       },
       // Event fanout needs display structures only on an audience miss, after live authority.
       getPresentation() {
+        let runStates = projectRun && activeRuns?.get(projectRun);
+        if (projectRun && !runStates) {
+          runStates = new Map();
+          (activeRuns ??= new Map()).set(projectRun, runStates);
+        }
         return (presentation ??= prepareProjectedSessionPresentation(
           read,
           client,
           now,
           projectRun,
           recipient,
+          runStates,
         ));
       },
     };
@@ -208,7 +217,9 @@ export function prepareProjectedSessionPresentation(
   now = Date.now(),
   projectRun?: VisibleActiveSessionRunProjector,
   recipient = prepareSessionRowRecipient(projection, client),
+  sharedActiveRuns?: ActiveRunStates,
 ) {
+  let activeRuns = sharedActiveRuns;
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
   const entryFilter = client === undefined ? undefined : sharing.entryFilter;
   const models =
@@ -224,9 +235,20 @@ export function prepareProjectedSessionPresentation(
     source: Pick<records.MaterializedRow["materialized"]["source"], "entry" | "parsedKey">,
   ) => projectPreparedSessionRunState(key, source, now, preparedRowContext);
   const active = (
-    record: Pick<records.MaterializedRow, "key" | "entry" | "agentId" | "storeTarget">,
-  ) =>
-    projectRun?.({
+    record: Pick<
+      records.MaterializedRow,
+      "key" | "entry" | "agentId" | "storeTarget" | "generation"
+    >,
+  ) => {
+    if (!projectRun) {
+      return undefined;
+    }
+    const previous = activeRuns?.get(record.generation);
+    if (previous) {
+      return previous;
+    }
+    // A row generation owns its exact store/agent/incarnation; display facts share one publication.
+    const state = projectRun({
       storePath: record.storeTarget.storePath,
       requestedKey: record.key,
       canonicalKey: record.key,
@@ -234,6 +256,9 @@ export function prepareProjectedSessionPresentation(
       agentId: record.agentId,
       defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, record.key),
     });
+    (activeRuns ??= new Map()).set(record.generation, state);
+    return state;
+  };
   const target = (query: records.Lookup) => {
     const record = projection.describe(query);
     return record ? toProjectedSessionSharingTarget(record) : null;

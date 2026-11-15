@@ -153,7 +153,7 @@ export function registerGoalAutomaticContinuationCases(
     const caller = { agentId, sessionKey, requesterOrigin };
     await withGatewayToolCallerIdentity(
       silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-      () => prepareExecExitNotification(process, false),
+      () => prepareExecExitNotification(process, false, false),
     );
     addSession(process);
     try {
@@ -352,7 +352,7 @@ export function registerGoalAutomaticContinuationCases(
     const stoppedEntry = loadSessionEntry(scope());
     expect(stoppedEntry?.goal).toMatchObject({
       status: "paused",
-      lastStatusNote: "Paused after Stop. Resume to continue.",
+      lastStatusNote: "Paused after an interruption. Resume to continue.",
     });
     expect(stoppedEntry?.abortedLastRun).toBe(true);
     const goal = stoppedEntry?.goal;

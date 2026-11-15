@@ -281,7 +281,6 @@ suite.define(() => {
         await page.locator(".data-table-bulk-bar").getByText("1 selected").waitFor();
         await page.getByRole("button", { name: "Filters", exact: true }).click();
         const filters = page.locator(".sessions-filter-popover:popover-open");
-        await filters.locator(".header-search__toggle").click();
         await filters.getByRole("searchbox").fill("Bravo");
 
         await expectCount(rowFor("Alpha"), 0);

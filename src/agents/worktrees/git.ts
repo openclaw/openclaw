@@ -31,6 +31,7 @@ export { findGitCheckoutRoot, insideGitCheckout } from "../workspace-git.js";
 // Materializing checkout objects gets extra time without extending other Git commands or setup.
 export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 const REPAIRABLE_FETCH_FLAGS = new Set([
+  "--quiet",
   "--no-auto-maintenance",
   "--refetch",
   "--no-tags",

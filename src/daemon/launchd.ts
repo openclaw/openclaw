@@ -1,4 +1,3 @@
-export { isLaunchctlNotLoaded } from "./launchd-exec.js";
 export { installLaunchAgent, stageLaunchAgent, uninstallLaunchAgent } from "./launchd-install.js";
 export {
   repairLaunchAgentBootstrap,
@@ -11,11 +10,9 @@ export {
   isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   launchAgentPlistExists,
-  parseLaunchAgentEnabled,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
 } from "./launchd-runtime.js";
-export { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 export { parkCurrentLaunchAgentForMaintenance, stopLaunchAgent } from "./launchd-stop.js";
 export {
   disableCurrentOpenClawUpdateLaunchdJob,

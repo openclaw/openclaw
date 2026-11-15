@@ -57,15 +57,10 @@ import { createSessionEntryReadScope } from "./session-entry-cohort.worker.js";
 import { prepareSessionEntryInspectionSnapshot } from "./session-entry-inspection-snapshot.worker.js";
 import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import type {
-  SessionEntryReadWorkerInput,
-  SessionEntryReadWorkerResult,
   SessionExactEntriesWorkerInput,
   SessionExactEntriesWorkerResult,
-  SessionRuntimeTargetWorkerInput,
-  SessionRuntimeTargetWorkerResult,
 } from "./session-entry-read.types.js";
 import type { SessionRowDatabaseFacts } from "./session-row-facts.types.js";
-import { readSessionRuntimeTargetWorkerRequest } from "./session-runtime-target-read.worker.js";
 import { listSessionMembersInDatabase } from "./session-sharing-store.kernel.js";
 import { readSessionSourceChecks } from "./session-source-predicate.worker.js";
 import type { SessionStoreProjectionWorkerInput } from "./session-store-projection.types.js";
@@ -116,18 +111,6 @@ export function readSessionStoreProjection(
     { ...request.database, env },
   );
   return { kind: "session-store-projection", ...(result.found ? result.value : { entries: [] }) };
-}
-
-/** Private entry and transcript-target reads share the same admitted reader and error codec. */
-export async function readSessionEntryWorkerRequest(
-  request: SessionEntryReadWorkerInput | SessionRuntimeTargetWorkerInput,
-): Promise<SessionEntryReadWorkerResult | SessionRuntimeTargetWorkerResult> {
-  if (request.kind === "session-runtime-target") {
-    return readSessionRuntimeTargetWorkerRequest(request);
-  }
-  // Keep the exact-read owner off the lazy reader import graph.
-  const { readSessionEntryResult } = await import("./session-entry-read-result.worker.js");
-  return readSessionEntryResult(request);
 }
 
 function selectsChildEntries(

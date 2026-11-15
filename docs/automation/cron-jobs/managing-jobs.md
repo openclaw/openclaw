@@ -105,9 +105,12 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
-Automations created before owner attribution have no recorded owner. Chat can
-still enable, disable, reschedule or remove them, but only a Gateway owner or an
-operator can change their prompt or tools.
+Automations created before owner attribution have no recorded owner. An
+authenticated administrator or configured channel owner can edit them through
+chat, including their prompt, model, and tool cap. Management keeps an
+operator automation’s execution authority and attribution; it does not adopt
+the administrator’s conversation as a new owner. Ordinary caller-scoped turns
+cannot edit ownerless operator automations.
 
 Operator-created automations that name an owner conversation run with operator
 authority. That conversation can list, enable, disable, reschedule, run
@@ -116,7 +119,7 @@ schedule or timing changes keep operator authority. Any other change
 from the owner conversation, such as the name, prompt, tools, trigger, delivery,
 failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
 changes need a Gateway owner or an operator, or a new automation. Only a Gateway
-owner or an operator can write its scratch.
+owner, an operator or the automation's own runs can write its scratch.
 
 ```bash
 # List enabled jobs

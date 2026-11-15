@@ -1,5 +1,6 @@
+/* Header tools sit on the 32px control height, like the toolbar icons on Sessions and Usage. */
 .dashboards-header .hub-page-header__actions {
-  min-height: max(36px, var(--settings-control-height));
+  min-height: var(--settings-control-height);
 }
 
 .dashboards-gallery {
@@ -34,7 +35,7 @@
   display: flex;
   align-items: center;
   width: min(280px, calc(100vw - 140px));
-  height: 36px;
+  height: 32px;
   padding-inline-end: 4px;
   border-radius: var(--field-radius);
   background: var(--field-bg);
@@ -45,27 +46,33 @@
 .dashboards-search__icon {
   display: grid;
   flex: none;
-  width: 36px;
+  width: 32px;
   place-items: center;
 }
 
-.dashboards-search__icon svg {
+.dashboards-search__icon svg,
+.dashboards-authors__search svg {
   width: 14px;
   height: 14px;
 }
 
-.dashboards-search .header-search__input {
-  flex: 1 1 auto;
+.dashboards-search .header-search__input,
+.dashboards-authors__search input {
   min-width: 0;
   padding: 0;
   border: 0;
   outline: 0;
   background: transparent;
   color: var(--text-strong);
+}
+
+.dashboards-search .header-search__input {
+  flex: 1 1 auto;
   font-size: var(--control-ui-text-md);
 }
 
-.dashboards-search .header-search__input::-webkit-search-cancel-button {
+.dashboards-search .header-search__input::-webkit-search-cancel-button,
+.dashboards-authors__search input::-webkit-search-cancel-button {
   display: none;
 }
 
@@ -102,24 +109,9 @@
   display: inline-flex;
 }
 
-.dashboards-authors__search svg {
-  width: 14px;
-  height: 14px;
-}
-
 .dashboards-authors__search input {
   flex: 1;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  outline: 0;
-  background: transparent;
-  color: var(--text-strong);
   font: inherit;
-}
-
-.dashboards-authors__search input::-webkit-search-cancel-button {
-  display: none;
 }
 
 .dashboards-authors__clear {

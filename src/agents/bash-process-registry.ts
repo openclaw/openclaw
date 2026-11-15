@@ -150,6 +150,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Runtime selected by the sandbox owner, including detached command cleanup. */
+  sandboxContainerName?: string;
   /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
@@ -169,6 +171,10 @@ export interface ProcessSession {
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
   assertExitNotificationAcceptanceCurrent?: () => void;
+  /** One-shot run (hidden subagent, cron run): the exit continues it only after sessions_yield. */
+  exitWakeAfterYield?: true;
+  /** sessions_yield awaits this command, so its exit resumes the yielded origin run. */
+  resumesYieldedRun?: true;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;

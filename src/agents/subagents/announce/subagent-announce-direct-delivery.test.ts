@@ -8,6 +8,14 @@ import { createLifecycleTypingManager } from "../../../gateway/lifecycle-typing.
 import { registerGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
+import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../../plugins/runtime.js";
+import { getPluginRegistryForContext } from "../../../plugins/runtime/gateway-request-scope.js";
 import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
@@ -19,6 +27,7 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -104,7 +113,7 @@ function setup(sourceTool = "subagent_settle") {
     sourceTool,
     requesterIsSubagent: false,
     expectsCompletionMessage: sourceTool !== "subagent_settle",
-    requireVisibleReply: true,
+    requireVisibleReply: sourceTool !== "agent_harness_completion",
     directIdempotencyKey: sourceRunId,
     isSourceSessionEffectsAllowed: () => state.allowed,
     signal: controller.signal,
@@ -160,12 +169,74 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
-it("preserves the direct completion phase without replacing controller custody", async () => {
+it("delivers a text fallback on the current generation after its producer releases", async ({
+  signal,
+}) => {
   const fixture = setup("subagent_announce");
-  const expected = { delivered: true, path: "direct" };
-  const { queueMessage, input } = steering(fixture, async () => {
-    throw new Error("Required direct delivery must not steer");
+  fixture.params.directOrigin = { channel: "discord", to: "dm:U123" };
+  fixture.params.sourceSessionKey = "agent:worker:subagent:child";
+  fixture.params.internalEvents = taskCompletionEvents({ childSessionId: "child-session-id" });
+  const predecessor = createOwnedTestInstance("announce-predecessor");
+  const successor = createOwnedTestInstance("announce-successor");
+  const shared = createOwnedTestInstance("announce-shared");
+  const currentRegistry = successor.owner!.registry!;
+  const invocations = new PluginInvocationScope(
+    predecessor.owner!.registry!,
+    [predecessor, shared],
+    { retained: true },
+  );
+  const oldCallback = invocations.wrap(predecessor.wrap(() => "previous"));
+  const sharedCallback = shared.wrap(() => "shared");
+  fixture.send.mockImplementation(async () => {
+    expect(getPluginRegistryForContext()).toBe(currentRegistry);
+    expect(sharedCallback()).toBe("shared");
+    return {
+      channel: "discord",
+      to: "dm:U123",
+      via: "direct",
+      mediaUrl: null,
+      result: { messageId: "completion-message" },
+    };
   });
+  const original = captureActivePluginRegistrySnapshot();
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    setActivePluginRegistry(currentRegistry);
+    delivery = invocations.run(() => fixture.startDelivery());
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Missed requester dispatch",
+      ),
+      signal,
+    );
+    invocations.release();
+    expect(() => oldCallback()).toThrow("Plugin announce-predecessor consumer is closed");
+    fixture.dispatchDone.resolve(response([{ text: "unsent parent completion" }]));
+    const result = await withinTest(delivery, signal);
+    expect(fixture.send).toHaveBeenCalledOnce();
+    await expect(fixture.send.mock.results[0]!.value).resolves.toMatchObject({
+      result: { messageId: "completion-message" },
+    });
+    expect(result).toMatchObject({ delivered: true, path: "direct" });
+    expect(fixture.dispatch).toHaveBeenCalledOnce();
+    expect(fixture.dispatch.mock.calls[0]?.[1]).toMatchObject({ idempotencyKey: sourceRunId });
+    expect(fixture.send).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ idempotencyKey: `${sourceRunId}:text-direct` }),
+    );
+  } finally {
+    invocations.release();
+    fixture.dispatchDone.resolve(response());
+    await Promise.allSettled(delivery ? [delivery] : []);
+    restoreActivePluginRegistrySnapshot(original);
+  }
+});
+
+it("preserves the direct completion phase without replacing controller custody", async () => {
+  const fixture = setup("agent_harness_completion");
+  const expected = { delivered: true, path: "direct" };
+  const { queueMessage, input } = steering(fixture, vi.fn());
   fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
   const result = await deliverSubagentAnnouncement({
     ...fixture.params,
@@ -183,7 +254,8 @@ it("preserves the direct completion phase without replacing controller custody",
     },
   ]);
   expect(queueMessage).not.toHaveBeenCalled();
-  expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+  const options = fixture.dispatch.mock.calls[0]?.[2];
+  expect(options).toMatchObject({ controllerInput: input, replyExpectation: "optional" });
 });
 
 it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({

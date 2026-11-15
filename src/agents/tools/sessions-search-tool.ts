@@ -1,8 +1,11 @@
 import { Type, type Static } from "typebox";
 import { GatewayProtocolRequestTimeoutError } from "../../../packages/gateway-client/src/protocol-request.js";
+import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { isGatewayClientRequestError } from "../../gateway/call.js";
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
@@ -49,6 +52,57 @@ const SESSIONS_SEARCH_MAX_BYTES = 32 * 1024;
 const SESSIONS_SEARCH_SNIPPET_MAX_CHARS = 300;
 const SESSIONS_SEARCH_INDEXING_WARNING =
   "Search completeness could not be confirmed; results may be incomplete. Retry sessions_search shortly.";
+
+const log = createSubsystemLogger("agents/sessions-search");
+
+async function measureSessionsSearch<T>(
+  callGateway: GatewayCaller,
+  run: (gatewayCall: GatewayCaller, counts: { candidates: number; agents: number }) => Promise<T>,
+): Promise<T> {
+  const started = performance.now();
+  const counts = { candidates: 0, agents: 0 };
+  let listPages = 0;
+  let listMs = 0;
+  let searchChunks = 0;
+  let searchMs = 0;
+  let maxChunkMs = 0;
+  const measuredCall: GatewayCaller = async (request) => {
+    const before = performance.now();
+    try {
+      return await callGateway(request);
+    } finally {
+      const elapsed = performance.now() - before;
+      if (request.method === "sessions.list") {
+        listPages++;
+        listMs += elapsed;
+      } else if (request.method === "sessions.search") {
+        searchChunks++;
+        searchMs += elapsed;
+        maxChunkMs = Math.max(maxChunkMs, elapsed);
+      }
+    }
+  };
+  try {
+    return await run(measuredCall, counts);
+  } finally {
+    const elapsedMs = performance.now() - started;
+    if (elapsedMs >= 5_000) {
+      try {
+        log.warn("slow sessions search", {
+          elapsedMs: Math.round(elapsedMs),
+          listPages,
+          listMs: Math.round(listMs),
+          ...counts,
+          searchChunks,
+          searchMs: Math.round(searchMs),
+          maxChunkMs: Math.round(maxChunkMs),
+        });
+      } catch {
+        // Diagnostics cannot replace the tool result or its original error.
+      }
+    }
+  }
+}
 
 const SessionsSearchToolSchema = Type.Object({
   user: requesterProfileSchema({ defaultToTurnOwner: true }),
@@ -160,6 +214,7 @@ function capSearchHits(items: SanitizedSearchHit[]): {
 }
 
 async function listVisibleSearchSessions(params: {
+  cfg: OpenClawConfig;
   unscopedAgentId: string;
   effectiveRequesterAgentId?: string;
   effectiveRequesterKey: string;
@@ -184,81 +239,74 @@ async function listVisibleSearchSessions(params: {
     } satisfies SearchSessionCandidate;
     candidates.set(candidateId(requesterCandidate), requesterCandidate);
   }
-  const listPages = async (agentId?: string) => {
-    for (const archived of [false, true]) {
-      let offset = 0;
-      while (true) {
-        const page = await params.gatewayCall<{
-          sessions?: Array<{
-            key?: unknown;
-            agentId?: unknown;
-            ownerSessionKey?: unknown;
-            parentSessionKey?: unknown;
-            spawnedBy?: unknown;
-            childOwnerSessionKeys?: string[];
-          }>;
-          hasMore?: boolean;
-          nextOffset?: number;
-        }>({
-          method: "sessions.list",
-          params: {
-            limit: 200,
-            offset,
-            archived,
-            includeGlobal: !params.restrictToSpawned,
-            includeUnknown: false,
-            ...(agentId ? { agentId } : {}),
-            ...(params.restrictToSpawned ? { spawnedBy: params.effectiveRequesterKey } : {}),
-          },
-        });
-        for (const row of Array.isArray(page.sessions) ? page.sessions : []) {
-          if (typeof row.key !== "string" || (!agentId && parseAgentSessionKey(row.key) === null)) {
-            continue;
-          }
-          const visibilityRow = {
-            key: row.key,
-            childOwnerSessionKeys: row.childOwnerSessionKeys,
-            ...(typeof row.agentId === "string"
-              ? { agentId: row.agentId }
-              : agentId
-                ? { agentId }
-                : {}),
-            ...(typeof row.ownerSessionKey === "string"
-              ? { ownerSessionKey: row.ownerSessionKey }
-              : {}),
-            ...(typeof row.parentSessionKey === "string"
-              ? { parentSessionKey: row.parentSessionKey }
-              : {}),
-            ...(typeof row.spawnedBy === "string"
-              ? { spawnedBy: row.spawnedBy }
-              : params.restrictToSpawned
-                ? { spawnedBy: params.effectiveRequesterKey }
-                : {}),
-          };
-          if (params.rowGuard.check(visibilityRow).allowed) {
-            const id = candidateId(visibilityRow);
-            candidates.set(id, {
-              key: visibilityRow.key,
-              agentId: visibilityRow.agentId,
-            });
-          }
-        }
-        if (
-          page.hasMore !== true ||
-          typeof page.nextOffset !== "number" ||
-          page.nextOffset <= offset
-        ) {
-          break;
-        }
-        offset = page.nextOffset;
-      }
+  type VisibilityRow = Parameters<typeof params.rowGuard.check>[0];
+  const add = (row: VisibilityRow) => {
+    if (params.rowGuard.check(row).allowed) {
+      candidates.set(candidateId(row), { key: row.key, agentId: row.agentId });
     }
   };
-  await listPages();
-  if (!params.restrictToSpawned) {
-    // Unscoped keys cannot encode a foreign owner for a follow-up sessions_history call. Only the
-    // requester's agent-scoped listing may contribute them; combined rows supply scoped keys.
-    await listPages(params.unscopedAgentId);
+  let offset = 0;
+  while (true) {
+    const page = await params.gatewayCall<{
+      sessions: VisibilityRow[];
+      hasMore?: boolean;
+      nextOffset?: number;
+    }>({
+      method: "sessions.list",
+      params: {
+        source: "sessions-search",
+        rowMode: "dashboard",
+        limit: 200,
+        offset,
+        archived: "all",
+        includeGlobal: !params.restrictToSpawned,
+        includeUnknown: false,
+        ...(params.restrictToSpawned ? { spawnedBy: params.effectiveRequesterKey } : {}),
+      },
+    });
+    for (const row of page.sessions) {
+      if (parseAgentSessionKey(row.key) || row.agentId === params.unscopedAgentId) {
+        add(row);
+      }
+    }
+    if (page.hasMore !== true || typeof page.nextOffset !== "number" || page.nextOffset <= offset) {
+      break;
+    }
+    offset = page.nextOffset;
+  }
+  const globalOwner = resolvePersistedSessionStoreOwnerForKey(params.cfg, "global");
+  if (
+    !params.restrictToSpawned &&
+    !candidates.has(candidateId({ key: "global", agentId: params.unscopedAgentId })) &&
+    (globalOwner.kind === "none" ||
+      (globalOwner.kind === "configured" && globalOwner.agentId === params.unscopedAgentId))
+  ) {
+    // Canonical stores contain only scoped keys and global/unknown sentinels. A foreign
+    // global may win the combined listing; resolve ours exactly instead of rescanning it.
+    const { session } = await params
+      .gatewayCall<{ session: VisibilityRow | null }>({
+        method: "sessions.describe",
+        params: {
+          key: "global",
+          agentId: params.unscopedAgentId,
+          includeDerivedTitles: false,
+          includeLastMessage: false,
+        },
+      })
+      .catch((error: unknown) => {
+        // Describe hides an unreadable sentinel as not-found; listing simply omits it.
+        if (
+          isGatewayClientRequestError(error) &&
+          error.gatewayCode === "INVALID_REQUEST" &&
+          error.message === 'Session "global" was not found.'
+        ) {
+          return { session: null };
+        }
+        throw error;
+      });
+    if (session) {
+      add(session);
+    }
   }
   return [...candidates.values()].toSorted((left, right) => left.key.localeCompare(right.key));
 }
@@ -305,7 +353,7 @@ export function createSessionsSearchTool(opts?: {
   callGateway?: GatewayCaller;
   sessionLinkBase?: string;
 }): AnyAgentTool {
-  const gatewayCall = opts?.callGateway ?? callAgentToolGatewayRequest;
+  const callGateway = opts?.callGateway ?? callAgentToolGatewayRequest;
   return {
     label: "Sessions Search",
     name: "sessions_search",
@@ -313,285 +361,290 @@ export function createSessionsSearchTool(opts?: {
     description: describeSessionsSearchTool({ sessionLinkBase: opts?.sessionLinkBase }),
     parameters: SessionsSearchToolSchema,
     outputSchema: SessionsSearchOutputSchema,
-    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) => {
-      const params = args as Record<string, unknown>;
-      const query = readToolStringParam(params, "query") ?? "";
-      if (!query) {
-        throw new ToolInputError(
-          "query must not be empty; retry with non-empty keywords to match in past session text",
-        );
-      }
-      if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
-        throw new ToolInputError(
-          `query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`,
-        );
-      }
-      const limit =
-        readPositiveIntegerParam(params, "limit", {
-          max: SESSIONS_SEARCH_MAX_LIMIT,
-        }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
-      // The host-bound scope is already the complete search universe. Reuse the
-      // targeted authorization path instead of listing every session to filter it back down.
-      const requestedSessionKey =
-        readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
-      const {
-        cfg,
-        mainKey,
-        alias,
-        effectiveRequesterKey,
-        mainSessionKey,
-        restrictToSpawned,
-        sessionVisibility: visibility,
-        a2aPolicy,
-      } = resolveSessionToolContext(opts);
-      const requesterAgentId = resolveSessionAgentId({
-        sessionKey: effectiveRequesterKey,
-        config: cfg,
-        agentId: opts?.agentId,
-      });
-
-      let sessionTarget:
-        | {
-            agentId: string;
-            key: string;
-            requesterOwned: boolean;
-            expectedSessionId?: string;
-          }
-        | undefined;
-      if (requestedSessionKey) {
-        const normalizedRequestedKey = requestedSessionKey.trim();
-        const semanticTargetAgentId =
-          normalizedRequestedKey === "current"
-            ? requesterAgentId
-            : isSessionToolMainAlias(normalizedRequestedKey, { mainKey, alias }) ||
-                Boolean(parseAgentSessionKey(normalizedRequestedKey))
-              ? resolveSessionToolTargetAgentId({
-                  cfg,
-                  targetSessionKey: normalizedRequestedKey,
-                  requesterAgentId,
-                })
-              : undefined;
-        const resolved = await resolveSessionReference({
-          action: "search",
-          sessionKey: requestedSessionKey,
-          keyAgentId: semanticTargetAgentId ?? requesterAgentId,
-          alias,
+    execute: wrapGatewayPersonalToolExecution(async (_toolCallId, args) =>
+      measureSessionsSearch(callGateway, async (gatewayCall, counts) => {
+        const params = args as Record<string, unknown>;
+        const query = readToolStringParam(params, "query") ?? "";
+        if (!query) {
+          throw new ToolInputError(
+            "query must not be empty; retry with non-empty keywords to match in past session text",
+          );
+        }
+        if (query.length > SESSIONS_SEARCH_MAX_QUERY_CHARS) {
+          throw new ToolInputError(
+            `query must not exceed ${SESSIONS_SEARCH_MAX_QUERY_CHARS} characters`,
+          );
+        }
+        const limit =
+          readPositiveIntegerParam(params, "limit", {
+            max: SESSIONS_SEARCH_MAX_LIMIT,
+          }) ?? SESSIONS_SEARCH_DEFAULT_LIMIT;
+        // The host-bound scope is already the complete search universe. Reuse the
+        // targeted authorization path instead of listing every session to filter it back down.
+        const requestedSessionKey =
+          readToolStringParam(params, "sessionKey") || opts?.sessionReadScopeKey;
+        const {
+          cfg,
           mainKey,
-          requesterInternalKey: effectiveRequesterKey,
-          restrictToSpawned,
-          callGateway: gatewayCall,
-        });
-        if (!resolved.ok) {
-          return jsonResult({ status: resolved.status, error: resolved.error });
-        }
-        const visible = await resolveVisibleSessionReference({
-          action: "search",
-          resolvedSession: resolved,
-          requesterSessionKey: effectiveRequesterKey,
-          requesterAgentId,
-          restrictToSpawned,
-          visibilitySessionKey: requestedSessionKey,
-          callGateway: gatewayCall,
-        });
-        if (!visible.ok) {
-          return jsonResult({ status: visible.status, error: visible.error });
-        }
-        sessionTarget = {
-          key: visible.key,
-          agentId: resolveSessionToolTargetAgentId({
-            cfg,
-            targetSessionKey: visible.key,
-            resolvedAgentId: visible.agentId ?? semanticTargetAgentId,
-            requesterAgentId,
-          }),
-          requesterOwned: visible.requesterOwned,
-        };
-      }
-
-      const rowGuard = createSessionVisibilityRowChecker({
-        action: "history",
-        defaultAgentId: requesterAgentId,
-        requesterAgentId,
-        requesterSessionKey: effectiveRequesterKey,
-        mainSessionKey,
-        visibility,
-        a2aPolicy,
-      });
-      if (sessionTarget) {
-        const { agentId, key, requesterOwned } = sessionTarget;
-        const authorizationTargetSessionKey =
-          agentId !== requesterAgentId && !parseAgentSessionKey(key)
-            ? `agent:${agentId}:${key}`
-            : key;
-        const access = await resolveSessionToolAccess({
-          action: "history",
-          displayAction: "search",
-          requesterAgentId,
-          requesterSessionKey: effectiveRequesterKey,
-          sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+          alias,
+          effectiveRequesterKey,
           mainSessionKey,
-          authorizationTargetSessionKey,
-          targetAgentId: agentId,
-          targetSessionKey: key,
-          requesterOwned,
+          restrictToSpawned,
+          sessionVisibility: visibility,
+          a2aPolicy,
+        } = resolveSessionToolContext(opts);
+        const requesterAgentId = resolveSessionAgentId({
+          sessionKey: effectiveRequesterKey,
+          config: cfg,
+          agentId: opts?.agentId,
+        });
+
+        let sessionTarget:
+          | {
+              agentId: string;
+              key: string;
+              requesterOwned: boolean;
+              expectedSessionId?: string;
+            }
+          | undefined;
+        if (requestedSessionKey) {
+          const normalizedRequestedKey = requestedSessionKey.trim();
+          const semanticTargetAgentId =
+            normalizedRequestedKey === "current"
+              ? requesterAgentId
+              : isSessionToolMainAlias(normalizedRequestedKey, { mainKey, alias }) ||
+                  Boolean(parseAgentSessionKey(normalizedRequestedKey))
+                ? resolveSessionToolTargetAgentId({
+                    cfg,
+                    targetSessionKey: normalizedRequestedKey,
+                    requesterAgentId,
+                  })
+                : undefined;
+          const resolved = await resolveSessionReference({
+            action: "search",
+            sessionKey: requestedSessionKey,
+            keyAgentId: semanticTargetAgentId ?? requesterAgentId,
+            alias,
+            mainKey,
+            requesterInternalKey: effectiveRequesterKey,
+            restrictToSpawned,
+            callGateway: gatewayCall,
+          });
+          if (!resolved.ok) {
+            return jsonResult({ status: resolved.status, error: resolved.error });
+          }
+          const visible = await resolveVisibleSessionReference({
+            action: "search",
+            resolvedSession: resolved,
+            requesterSessionKey: effectiveRequesterKey,
+            requesterAgentId,
+            restrictToSpawned,
+            visibilitySessionKey: requestedSessionKey,
+            callGateway: gatewayCall,
+          });
+          if (!visible.ok) {
+            return jsonResult({ status: visible.status, error: visible.error });
+          }
+          sessionTarget = {
+            key: visible.key,
+            agentId: resolveSessionToolTargetAgentId({
+              cfg,
+              targetSessionKey: visible.key,
+              resolvedAgentId: visible.agentId ?? semanticTargetAgentId,
+              requesterAgentId,
+            }),
+            requesterOwned: visible.requesterOwned,
+          };
+        }
+
+        const rowGuard = createSessionVisibilityRowChecker({
+          action: "history",
+          defaultAgentId: requesterAgentId,
+          requesterAgentId,
+          requesterSessionKey: effectiveRequesterKey,
+          mainSessionKey,
           visibility,
           a2aPolicy,
-          callGateway: gatewayCall,
         });
-        if (!access.allowed) {
-          return jsonResult({
-            status: access.status,
-            error: formatSessionToolAccessDenial(access, {
-              action: "search",
-              targetSessionKey: key,
-            }),
+        if (sessionTarget) {
+          const { agentId, key, requesterOwned } = sessionTarget;
+          const authorizationTargetSessionKey =
+            agentId !== requesterAgentId && !parseAgentSessionKey(key)
+              ? `agent:${agentId}:${key}`
+              : key;
+          const access = await resolveSessionToolAccess({
+            action: "history",
+            displayAction: "search",
+            requesterAgentId,
+            requesterSessionKey: effectiveRequesterKey,
+            sessionReadScopeKey: opts?.sessionReadScopeKey ? effectiveRequesterKey : undefined,
+            mainSessionKey,
+            authorizationTargetSessionKey,
+            targetAgentId: agentId,
+            targetSessionKey: key,
+            requesterOwned,
+            visibility,
+            a2aPolicy,
+            callGateway: gatewayCall,
           });
-        }
-        if (access.expectedSessionId) {
-          sessionTarget.expectedSessionId = access.expectedSessionId;
-        }
-      }
-      const searchSessions = (
-        sessionTarget
-          ? [
-              {
-                key: sessionTarget.key,
-                ...(sessionTarget.expectedSessionId
-                  ? { expectedSessionId: sessionTarget.expectedSessionId }
-                  : {}),
-                ...(!parseAgentSessionKey(sessionTarget.key)
-                  ? { agentId: sessionTarget.agentId }
-                  : {}),
-              },
-            ]
-          : await listVisibleSearchSessions({
-              unscopedAgentId: requesterAgentId,
-              effectiveRequesterAgentId: opts?.agentId,
-              effectiveRequesterKey,
-              gatewayCall,
-              rowGuard,
-              restrictToSpawned,
-            })
-      )
-        // Search excerpts are re-persisted in the caller transcript; incognito
-        // sessions therefore stay absent even when the caller could otherwise see them.
-        .filter((candidate) => !isIncognitoSessionKey(candidate.key));
-      const visibleHits: SanitizedSearchHit[] = [];
-      let indexing = false;
-      let archivedTranscriptsExcluded = 0;
-      let backendTruncated = false;
-      const sessionsByAgent = new Map<string, SearchSessionCandidate[]>();
-      for (const candidate of searchSessions) {
-        const agentId = resolveSessionAgentId({
-          sessionKey: candidate.key,
-          config: cfg,
-          agentId: parseAgentSessionKey(candidate.key) ? undefined : candidate.agentId,
-        });
-        const candidates = sessionsByAgent.get(agentId) ?? [];
-        candidates.push(candidate);
-        sessionsByAgent.set(agentId, candidates);
-      }
-      // Visibility filtering precedes result/byte caps so hidden hit counts never affect output.
-      for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
-        left.localeCompare(right),
-      )) {
-        for (
-          let offset = 0;
-          offset < candidates.length;
-          offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
-        ) {
-          const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
-          const runSearch = () =>
-            gatewayCall<{
-              results?: GatewaySearchHit[];
-              indexing?: boolean;
-              archivedTranscriptsExcluded?: number;
-              truncated?: boolean;
-            }>({
-              method: "sessions.search",
-              // Leave dispatch and authorization headroom around the reader's 60-second budget.
-              timeoutMs: 90_000,
-              params: {
-                agentId,
-                query,
-                limit: SESSIONS_SEARCH_MAX_LIMIT,
-                sessionKeys: chunk.map((candidate) => candidate.key),
-              },
+          if (!access.allowed) {
+            return jsonResult({
+              status: access.status,
+              error: formatSessionToolAccessDenial(access, {
+                action: "search",
+                targetSessionKey: key,
+              }),
             });
-          const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
-          let result: Awaited<ReturnType<typeof runSearch>>;
-          try {
-            result = scopedCandidate?.expectedSessionId
-              ? await runWithScopedSessionAccess({
-                  cfg,
+          }
+          if (access.expectedSessionId) {
+            sessionTarget.expectedSessionId = access.expectedSessionId;
+          }
+        }
+        const searchSessions = (
+          sessionTarget
+            ? [
+                {
+                  key: sessionTarget.key,
+                  ...(sessionTarget.expectedSessionId
+                    ? { expectedSessionId: sessionTarget.expectedSessionId }
+                    : {}),
+                  ...(!parseAgentSessionKey(sessionTarget.key)
+                    ? { agentId: sessionTarget.agentId }
+                    : {}),
+                },
+              ]
+            : await listVisibleSearchSessions({
+                cfg,
+                unscopedAgentId: requesterAgentId,
+                effectiveRequesterAgentId: opts?.agentId,
+                effectiveRequesterKey,
+                gatewayCall,
+                rowGuard,
+                restrictToSpawned,
+              })
+        )
+          // Search excerpts are re-persisted in the caller transcript; incognito
+          // sessions therefore stay absent even when the caller could otherwise see them.
+          .filter((candidate) => !isIncognitoSessionKey(candidate.key));
+        const visibleHits: SanitizedSearchHit[] = [];
+        let indexing = false;
+        let archivedTranscriptsExcluded = 0;
+        let backendTruncated = false;
+        const sessionsByAgent = new Map<string, SearchSessionCandidate[]>();
+        for (const candidate of searchSessions) {
+          const agentId = resolveSessionAgentId({
+            sessionKey: candidate.key,
+            config: cfg,
+            agentId: parseAgentSessionKey(candidate.key) ? undefined : candidate.agentId,
+          });
+          const candidates = sessionsByAgent.get(agentId) ?? [];
+          candidates.push(candidate);
+          sessionsByAgent.set(agentId, candidates);
+        }
+        counts.candidates = searchSessions.length;
+        counts.agents = sessionsByAgent.size;
+        // Visibility filtering precedes result/byte caps so hidden hit counts never affect output.
+        for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
+          left.localeCompare(right),
+        )) {
+          for (
+            let offset = 0;
+            offset < candidates.length;
+            offset += SESSIONS_SEARCH_MAX_SESSION_KEYS
+          ) {
+            const chunk = candidates.slice(offset, offset + SESSIONS_SEARCH_MAX_SESSION_KEYS);
+            const runSearch = () =>
+              gatewayCall<{
+                results?: GatewaySearchHit[];
+                indexing?: boolean;
+                archivedTranscriptsExcluded?: number;
+                truncated?: boolean;
+              }>({
+                method: "sessions.search",
+                // Leave dispatch and authorization headroom around the reader's 60-second budget.
+                timeoutMs: 90_000,
+                params: {
                   agentId,
-                  expectedSessionId: scopedCandidate.expectedSessionId,
-                  targetSessionKey: scopedCandidate.key,
-                  run: runSearch,
-                })
-              : await runSearch();
-          } catch (error) {
-            if (
-              error instanceof GatewayProtocolRequestTimeoutError ||
-              (isGatewayTransportError(error) &&
-                error.kind === "timeout" &&
-                error.requestDispatched === true)
-            ) {
-              throw new Error(
-                "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
-                { cause: error },
-              );
+                  query,
+                  limit: SESSIONS_SEARCH_MAX_LIMIT,
+                  sessionKeys: chunk.map((candidate) => candidate.key),
+                },
+              });
+            const scopedCandidate = chunk.length === 1 ? chunk[0] : undefined;
+            let result: Awaited<ReturnType<typeof runSearch>>;
+            try {
+              result = scopedCandidate?.expectedSessionId
+                ? await runWithScopedSessionAccess({
+                    cfg,
+                    agentId,
+                    expectedSessionId: scopedCandidate.expectedSessionId,
+                    targetSessionKey: scopedCandidate.key,
+                    run: runSearch,
+                  })
+                : await runSearch();
+            } catch (error) {
+              if (
+                error instanceof GatewayProtocolRequestTimeoutError ||
+                (isGatewayTransportError(error) &&
+                  error.kind === "timeout" &&
+                  error.requestDispatched === true)
+              ) {
+                throw new Error(
+                  "Session transcript search timed out. Retry sessions_search with a sessionKey to search one session or more specific query keywords. A timeout does not mean that no matching conversation exists.",
+                  { cause: error },
+                );
+              }
+              throw error;
             }
-            throw error;
-          }
-          indexing ||= result.indexing === true;
-          archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
-          backendTruncated ||= result.truncated === true;
-          const hits = Array.isArray(result.results) ? result.results : [];
-          if (hits.length === 0) {
-            continue;
-          }
-          const matchHit = createSearchHitMatcher(agentId, chunk);
-          for (const hit of hits) {
-            if (typeof hit.sessionKey !== "string") {
+            indexing ||= result.indexing === true;
+            archivedTranscriptsExcluded += result.archivedTranscriptsExcluded ?? 0;
+            backendTruncated ||= result.truncated === true;
+            const hits = Array.isArray(result.results) ? result.results : [];
+            if (hits.length === 0) {
               continue;
             }
-            const candidate = matchHit(hit.sessionKey);
-            if (!candidate) {
-              continue;
-            }
-            const sanitized = sanitizeHit({
-              alias,
-              hit: { ...hit, sessionKey: candidate.key },
-              mainKey,
-            });
-            if (sanitized) {
-              visibleHits.push(sanitized);
+            const matchHit = createSearchHitMatcher(agentId, chunk);
+            for (const hit of hits) {
+              if (typeof hit.sessionKey !== "string") {
+                continue;
+              }
+              const candidate = matchHit(hit.sessionKey);
+              if (!candidate) {
+                continue;
+              }
+              const sanitized = sanitizeHit({
+                alias,
+                hit: { ...hit, sessionKey: candidate.key },
+                mainKey,
+              });
+              if (sanitized) {
+                visibleHits.push(sanitized);
+              }
             }
           }
         }
-      }
-      visibleHits.sort(compareSearchHits);
-      const limited = visibleHits.slice(0, limit);
-      const capped = capSearchHits(limited);
-      const warnings = [
-        indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
-        archivedTranscriptsExcluded > 0
-          ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
-          : undefined,
-      ].filter(Boolean);
-      return jsonResult({
-        results: capped.items,
-        ...(opts?.sessionLinkBase
-          ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
-          : {}),
-        ...(indexing ? { indexing: true } : {}),
-        ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
-        ...(warnings.length ? { warning: warnings.join(" ") } : {}),
-        ...(backendTruncated || visibleHits.length > limit || capped.truncated
-          ? { truncated: true }
-          : {}),
-      });
-    }),
+        visibleHits.sort(compareSearchHits);
+        const limited = visibleHits.slice(0, limit);
+        const capped = capSearchHits(limited);
+        const warnings = [
+          indexing ? SESSIONS_SEARCH_INDEXING_WARNING : undefined,
+          archivedTranscriptsExcluded > 0
+            ? `Search excludes ${archivedTranscriptsExcluded} archived transcripts. Restore a transcript to include it in search.`
+            : undefined,
+        ].filter(Boolean);
+        return jsonResult({
+          results: capped.items,
+          ...(opts?.sessionLinkBase
+            ? { sessionLinkRule: describeSessionLinkRule(opts.sessionLinkBase) }
+            : {}),
+          ...(indexing ? { indexing: true } : {}),
+          ...(archivedTranscriptsExcluded > 0 ? { archivedTranscriptsExcluded } : {}),
+          ...(warnings.length ? { warning: warnings.join(" ") } : {}),
+          ...(backendTruncated || visibleHits.length > limit || capped.truncated
+            ? { truncated: true }
+            : {}),
+        });
+      }),
+    ),
   };
 }

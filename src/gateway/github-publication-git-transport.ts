@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { githubRepositoryUrl } from "../agents/github-host.js";
 import type { WorktreeGitPolicy } from "../agents/worktrees/checkout-git-config.js";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -18,6 +19,7 @@ import {
   githubPublicationUnsafeConfigArgs,
   parseGitHubPublicationBaseRef,
 } from "./github-publication-base.js";
+import { GitHubPublicationApiError } from "./github-publication-failure.js";
 import { createGitHubPublicationGitError } from "./github-publication-git-error.js";
 
 type GitCommandOptions = {
@@ -86,6 +88,9 @@ export async function requirePublicationCommand(
 ): Promise<string> {
   const result = await runPublicationCommand(argv, options);
   if (result.code !== 0 || result.error) {
+    if (argv[0] === "gh") {
+      throw new GitHubPublicationApiError(result, options.timeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS);
+    }
     throw createCommandError(
       argv[0] ?? "command",
       { ...result, stdout: Buffer.alloc(0) },
@@ -160,6 +165,7 @@ export async function requireGitHubPublicationCommit(
   failure: string,
   options: { contents?: boolean; commitPresent?: boolean; baseBranch?: string } = {},
 ) {
+  const promisor = `remote.${githubRepositoryUrl(repository, host)}.promisor`;
   const fetch = async (missing?: string[], tips = [sha]) => {
     const command = async (directory: string, argv: string[], gitEnv = env, input?: string) => {
       const result = await run(argv, { cwd: directory, env: gitEnv, input });
@@ -186,6 +192,7 @@ export async function requireGitHubPublicationCommit(
           "-c",
           "core.fsmonitor=false",
           ...(directory === cwd ? [] : ["-c", "core.alternateRefsCommand=true"]),
+          ...(missing ? ["-c", "fetch.negotiationAlgorithm=noop"] : []),
           "fetch",
           "--no-auto-maintenance",
           "--no-tags",
@@ -193,11 +200,12 @@ export async function requireGitHubPublicationCommit(
           "--recurse-submodules=no",
           // Match managed base refresh: omit unrelated session histories from negotiation.
           ...tips.map((tip) => `--negotiation-tip=${tip}`),
-          // Keep ancestry and tree metadata; callers request file contents below.
-          ...(missing ? ["--refetch", "--stdin"] : ["--filter=blob:none"]),
+          // Explicit blob wants still hydrate; retain promisor packs for both fetch paths.
+          "--filter=blob:none",
+          ...(missing ? ["--quiet", "--stdin"] : []),
           "--",
           githubRepositoryUrl(repository, host),
-          ...(missing ? [] : [sha]),
+          ...(missing ? [] : [`${sha}:refs/openclaw/fetched/${sha}`]),
         ],
         gitEnv,
         missing ? `${missing.join("\n")}\n` : undefined,
@@ -205,20 +213,16 @@ export async function requireGitHubPublicationCommit(
     // Git must register a new URL's promisor in the source repository before
     // temporary metadata can borrow its object store without losing lazy hydration.
     const registered =
-      !missing && tips.length > 0
-        ? await command(cwd, [
-            "git",
-            "config",
-            "--type=bool",
-            "--default=false",
-            "--get",
-            `remote.${githubRepositoryUrl(repository, host)}.promisor`,
-          ])
+      tips.length > 0
+        ? await command(cwd, ["git", "config", "--type=bool", "--default=false", "--get", promisor])
         : "false";
     // Without a cached base, retain Git's ordinary discovery of common history.
-    if (registered !== "true") {
+    if (registered !== "true" && !missing) {
       await acquire(cwd, env);
     } else {
+      if (missing && registered !== "true") {
+        await command(cwd, ["git", "config", promisor, "true"]);
+      }
       const isolatedEnv = {
         ...env,
         GIT_DIR: undefined,
@@ -231,6 +235,10 @@ export async function requireGitHubPublicationCommit(
         (directory, objects) =>
           acquire(directory, { ...isolatedEnv, GIT_OBJECT_DIRECTORY: objects }),
       );
+    }
+    if (!missing && registered === "true") {
+      // Temporary transport metadata is discarded; retain successful acquisition in the owner.
+      await command(cwd, ["git", "update-ref", `refs/openclaw/fetched/${sha}`, sha]);
     }
   };
   if (!options.commitPresent) {
@@ -295,16 +303,17 @@ export async function requireGitHubPublicationCommit(
       .filter((line) => line.startsWith("?"))
       .map((line) => line.slice(1));
   };
-  const missing = await missingObjects();
-  if (missing.length) {
-    // A known partial-clone commit can still lack its tree contents after fetch.
-    // Hydrate through the selected authenticated URL before any offline snapshots.
+  let missing = await missingObjects();
+  // A missing tree reveals its blobs after the first filtered fetch; explicit
+  // blob wants complete the snapshot in at most one further batch.
+  for (let round = 0; missing.length && round < 2; round++) {
     await fetch(missing);
-    if ((await missingObjects("content verification")).length) {
-      throw new Error(
-        `${failure} Git content verification failed: required objects are still missing after fetching.`,
-      );
-    }
+    missing = await missingObjects("content verification");
+  }
+  if (missing.length) {
+    throw new Error(
+      `${failure} Git content verification failed: required objects are still missing after fetching.`,
+    );
   }
 }
 
@@ -740,4 +749,11 @@ export function githubPublicationUpdateRefArgs(
     commit,
     previousHead,
   ];
+}
+
+export function gitHubPublicationObjectSha(value: unknown): string {
+  if (!isRecord(value) || typeof value.sha !== "string" || !/^[a-f0-9]{40}$/u.test(value.sha)) {
+    throw new Error("GitHub returned an invalid Git object identity.");
+  }
+  return value.sha;
 }

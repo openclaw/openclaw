@@ -458,18 +458,16 @@ export function AgentFiles(
                                       </span>
                                     </button>
                                   </openclaw-tooltip>
-                                  <openclaw-tooltip prop:content={t("agents.files.closePreview")}>
-                                    <button
-                                      type="button"
-                                      class="oc-icon-button oc-icon-button--28 oc-dialog__close"
-                                      aria-label={t("agents.files.closePreview")}
-                                      onClick={() => closePreview()}
-                                    >
-                                      <span aria-hidden="true">
-                                        <Icon name="x" />
-                                      </span>
-                                    </button>
-                                  </openclaw-tooltip>
+                                  <button
+                                    type="button"
+                                    class="oc-icon-button oc-icon-button--28 oc-dialog__close"
+                                    aria-label={t("agents.files.closePreview")}
+                                    onClick={() => closePreview()}
+                                  >
+                                    <span aria-hidden="true">
+                                      <Icon name="x" />
+                                    </span>
+                                  </button>
                                 </div>
                                 {preview().activePathLabel !== preview().activeName ? (
                                   <div

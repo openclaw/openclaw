@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   createMemo,
   createSignal,
@@ -31,7 +32,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import "../../styles/agents-home.css";
+import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import {
@@ -63,10 +64,18 @@ const SECTION_SIZE = 8;
 type TemplateCategory = (typeof templateCategories)[number];
 type TemplateSection = { category: TemplateCategory; entries: TemplateCatalogEntry[] };
 
-function TemplateCard(props: {
-  entry: TemplateCatalogEntry;
-  onSelect?: (entry: TemplateCatalogEntry) => void;
-}) {
+type TemplateAddProps = {
+  onAdd: (entry: TemplateCatalogEntry) => void;
+  addingPackageName: string | null;
+  addDisabled: boolean;
+};
+
+function TemplateCard(
+  props: TemplateAddProps & {
+    entry: TemplateCatalogEntry;
+    onSelect?: (entry: TemplateCatalogEntry) => void;
+  },
+) {
   return (
     <article class="agents-home__template-card oc-card" data-templates-entry>
       <button
@@ -88,10 +97,21 @@ function TemplateCard(props: {
           type="button"
           class="btn btn--sm agents-home__template-add oc-action oc-action-secondary"
           aria-label={t("templatesCatalog.addNamed", { name: props.entry.displayName })}
-          disabled={!props.entry.latestVersion}
-          onClick={() => props.onSelect?.(props.entry)}
+          disabled={!props.entry.latestVersion || props.addDisabled}
+          aria-busy={props.addingPackageName === props.entry.packageName ? "true" : undefined}
+          onClick={(event) => {
+            event.stopPropagation();
+            props.onAdd(props.entry);
+          }}
         >
-          {t("templatesCatalog.add")}
+          <Show when={props.addingPackageName === props.entry.packageName}>
+            <span class="btn__spinner" aria-hidden="true" />
+          </Show>
+          {t(
+            props.addingPackageName === props.entry.packageName
+              ? "templatesCatalog.adding"
+              : "templatesCatalog.add",
+          )}
         </button>
       </div>
       <Show when={props.entry.summary}>
@@ -135,7 +155,12 @@ function TemplateCatalogSkeleton() {
   );
 }
 
-export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntry) => void }) {
+export function TemplatesExplore(
+  props: TemplateAddProps & {
+    onSelect?: (entry: TemplateCatalogEntry) => void;
+    feedback?: JSX.Element;
+  },
+) {
   const context = useApplication();
   const [view, setView] = createStore({ query: "", category: "" });
   const [request, setRequest] = createSignal<{
@@ -248,6 +273,7 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                 )}
               </For>
             </CatalogDiscoveryChips>
+            {props.feedback}
             <div class="plugin-catalog-results__body">
               <Show when={unavailable()}>
                 <InlineAlert tone="warning" role="status">
@@ -358,7 +384,13 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             <div class="plugin-catalog-grid" data-templates-featured>
                               <For each={result().featured} keyed={(entry) => entry.packageName}>
                                 {(entry) => (
-                                  <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                  <TemplateCard
+                                    entry={entry()}
+                                    onSelect={props.onSelect}
+                                    onAdd={props.onAdd}
+                                    addingPackageName={props.addingPackageName}
+                                    addDisabled={props.addDisabled}
+                                  />
                                 )}
                               </For>
                             </div>
@@ -382,7 +414,13 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                                     keyed={(entry) => entry.packageName}
                                   >
                                     {(entry) => (
-                                      <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                      <TemplateCard
+                                        entry={entry()}
+                                        onSelect={props.onSelect}
+                                        onAdd={props.onAdd}
+                                        addingPackageName={props.addingPackageName}
+                                        addDisabled={props.addDisabled}
+                                      />
                                     )}
                                   </For>
                                 </div>
@@ -406,7 +444,13 @@ export function TemplatesExplore(props: { onSelect?: (entry: TemplateCatalogEntr
                             <div class="plugin-catalog-grid" data-templates-results>
                               <For each={result().entries} keyed={(entry) => entry.packageName}>
                                 {(entry) => (
-                                  <TemplateCard entry={entry()} onSelect={props.onSelect} />
+                                  <TemplateCard
+                                    entry={entry()}
+                                    onSelect={props.onSelect}
+                                    onAdd={props.onAdd}
+                                    addingPackageName={props.addingPackageName}
+                                    addDisabled={props.addDisabled}
+                                  />
                                 )}
                               </For>
                             </div>

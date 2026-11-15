@@ -10,6 +10,7 @@ import type {
 import type { SessionTranscriptMessageEvent } from "./session-accessor.sqlite-projection-read.js";
 import type { ResolvedTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
 import type { SessionTranscriptRuntimeTarget } from "./session-accessor.types.js";
+import type { SessionCompactionSourceRequest } from "./session-compaction-source.types.js";
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import type {
   PreparedSessionTranscriptHydration,
@@ -69,7 +70,21 @@ export type SessionTranscriptHydrationWorkerResult =
       version: SessionTranscriptReadSnapshot["version"];
       eventCount: number;
     }
-  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>;
+  | Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>
+  | SessionTranscriptStreamedBoundedResult;
+
+export type SessionTranscriptStreamedBoundedResult = Omit<
+  Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>,
+  "kind" | "snapshot"
+> & {
+  kind: "streamed-bounded";
+  snapshot: Omit<
+    Extract<PreparedSessionTranscriptHydration, { kind: "bounded" }>["snapshot"],
+    "events"
+  >;
+  sequences: number[];
+  eventCount: number;
+};
 
 export type SessionTranscriptHydrationChunk = {
   kind: "transcript-hydration-chunk";
@@ -131,6 +146,7 @@ export type SessionTranscriptMaintenanceWorkerInput = SessionTranscriptRuntimeHy
 };
 
 export type SessionTranscriptHydrationWorkerRequest =
+  | SessionCompactionSourceRequest
   | SessionTranscriptHydrationWorkerInput
   | SessionTranscriptMaintenanceWorkerInput
   | SessionTranscriptCurrentTurnEntryWorkerInput

@@ -467,7 +467,9 @@ export function createRuntimeConfigReader(inputConfig: OpenClawConfig): () => Op
   const followsRuntimeConfig =
     runtimeConfigSnapshot === origin ||
     (runtimeConfigSourceSnapshot !== null &&
-      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot));
+      configSnapshotsMatch(inputConfig, runtimeConfigSourceSnapshot)) ||
+    // Preparation can retain an equivalent runtime copy after its origin is republished.
+    (runtimeConfigSnapshot !== null && configSnapshotsMatch(inputConfig, runtimeConfigSnapshot));
   return () => (followsRuntimeConfig ? runtimeConfigSnapshot : null) ?? inputConfig;
 }
 

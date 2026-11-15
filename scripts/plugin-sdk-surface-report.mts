@@ -315,7 +315,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +2: channel display-mention and mention-adapter types (#192473).
       // +1: shared plugin-owned Control UI message translation.
       // +1: GatewayIngressPrincipalRecovery on gateway-ingress (#193098).
-      3865,
+      // +2: appendReplyMediaFailures and ReplyMediaFailure receipts on reply-payload (#186751).
+      3867,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -369,7 +370,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same plugin-command continuation classifier.
       // +2: the same settled execution lifecycle classifiers (#192413).
       // +1: the same Control UI message translator.
-      2235,
+      // +1: the same appendReplyMediaFailures receipt formatter (#186751).
+      2236,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

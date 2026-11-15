@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
-import { readPostgresPortCapabilities } from "./port.worker.js";
+import { readPostgresPortCapabilities } from "./postgres-port-capabilities.js";
 import { workboardPortProvider } from "./workboard-port.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");

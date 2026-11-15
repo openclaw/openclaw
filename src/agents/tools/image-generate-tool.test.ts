@@ -1,6 +1,7 @@
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
 import { observeSettlement } from "../promise-settlement.test-support.js";
+import { defineImageGenerationIdentityTests } from "./image-generate-identity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -977,7 +978,7 @@ describe("createImageGenerateTool", () => {
     ],
   });
 
-  it("does not acquire image providers when the caller aborts a pending duplicate lookup", async () => {
+  it("does not start image work when the caller aborts a prepared duplicate lookup", async () => {
     const acquireProviders = vi.mocked(
       mediaGenerationToolProviders.acquireMediaGenerationToolProviders,
     );
@@ -1013,15 +1014,15 @@ describe("createImageGenerateTool", () => {
     await lookupStarted.promise;
     expect(findDuplicate).toHaveBeenCalledWith(agentSessionKey, {
       prompt: "an image",
-      requestKey: undefined,
+      requestKey: expect.stringMatching(/^[a-f0-9]{64}$/),
       agentId: undefined,
     });
-    expect(acquireProviders).not.toHaveBeenCalled();
+    expect(acquireProviders).toHaveBeenCalledOnce();
     controller.abort(abortReason);
     lookup.resolve(undefined);
 
     await expect(pending).rejects.toBe(abortReason);
-    expect(acquireProviders).not.toHaveBeenCalled();
+    expect(acquireProviders).toHaveBeenCalledOnce();
     expect(taskRuntimeMocks.createOperation).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
@@ -1169,42 +1170,25 @@ describe("createImageGenerateTool", () => {
     expect(tasks[1]?.progressSummary).toBe("Queued second image");
   });
 
-  it("returns active status for a duplicate image request with the same prompt", async () => {
-    const acquireProviders = vi.mocked(
-      mediaGenerationToolProviders.acquireMediaGenerationToolProviders,
-    );
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    mediaActivityMocks.listOperations.mockReturnValue([
-      {
-        taskId: "task-existing-image",
-        taskKind: "image_generation",
-        sourceId: "image_generate:openai",
-        requesterSessionKey: "agent:main:discord:direct:123",
-        task: "Same diagram prompt",
-        status: "running",
-        progressSummary: "Generating image",
-      },
-    ]);
-    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
-      agentDir: "/tmp/agent",
-      agentSessionKey: "agent:main:discord:direct:123",
-    });
-
-    const result = await tool.execute("call-duplicate", {
-      prompt: "Same diagram prompt",
-      filename: "same.png",
-      model: "openai/gpt-image-1",
-    });
-
-    expect(taskRuntimeMocks.createOperation).not.toHaveBeenCalled();
-    expect(acquireProviders).not.toHaveBeenCalled();
-    expect(resultText(result)).toContain(
-      "Image generation task task-existing-image is already running",
-    );
-    const details = resultDetails(result);
-    expect(details.duplicateGuard).toBe(true);
-    expect(details.task).toEqual({ taskId: "task-existing-image" });
+  defineImageGenerationIdentityTests({
+    setup(root, firstBytes) {
+      const provider = createOpenAIEditProvider();
+      const generate = vi.fn<ImageGenerationProvider["generateImage"]>().mockResolvedValue({
+        images: [{ buffer: firstBytes, mimeType: "image/png" }],
+      });
+      provider.generateImage = generate;
+      vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+        provider,
+      ]);
+      vi.stubEnv("OPENAI_API_KEY", "openai-test");
+      vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("proof.png", 70));
+      const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
+        workspaceDir: root,
+        agentSessionKey: "agent:main:discord:direct:123",
+      });
+      return { tool, generate, tasks: taskRuntimeMocks };
+    },
+    resultDetails,
   });
 
   it("returns recent status for a repeated image request after fast task completion", async () => {
@@ -1621,7 +1605,7 @@ describe("createImageGenerateTool", () => {
 
     const result = await tool.execute("call-reference-fallback", {
       prompt: "edit the reference image",
-      image: "data:image/png;base64,cmVmZXJlbmNl",
+      image: "DATA:image/png;base64,cmVmZXJlbmNl",
       size: "1024x1024",
     });
 
@@ -1632,6 +1616,14 @@ describe("createImageGenerateTool", () => {
       }),
     );
     expect(resultDetails(result).provider).toBe("fallback-image");
+    expect(resultDetails(result).referenceInputs).toEqual([
+      {
+        sha256: "52367a6622b19f08825e915fad80c542ad4f4c34dbcebad9f5007994b3e39208",
+        bytes: 9,
+        mimeType: "image/png",
+      },
+    ]);
+    expect(JSON.stringify(resultDetails(result))).not.toContain("cmVmZXJlbmNl");
   });
 
   it("passes inferred resolution separately when fallbacks have different capabilities", async () => {

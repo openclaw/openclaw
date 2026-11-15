@@ -32,6 +32,7 @@ import { getModelRegistryRuntime } from "./model-registry-runtime.js";
 import { sessionManagerReadInitialContext } from "./session-manager-current-turn.js";
 import { SessionMetadataCommittedError } from "./session-manager-metadata-error.js";
 import { sessionManagerAppendInitialMetadata } from "./session-manager-metadata.js";
+import { sessionManagerReadTranscriptBranch } from "./session-manager-view-types.js";
 import type { SettingsManager } from "./settings-manager.js";
 import { isInstallTelemetryEnabled } from "./telemetry.js";
 
@@ -212,9 +213,9 @@ export async function createAgentSession(
   const existingSession = await sessionManager[sessionManagerReadInitialContext]();
   assertInitialSessionCurrent();
   const hasExistingSession = existingSession.messages.length > 0;
-  const hasThinkingEntry = sessionManager
-    .getBranch()
-    .some((entry) => entry.type === "thinking_level_change");
+  const hasThinkingEntry = sessionManager[sessionManagerReadTranscriptBranch]().some(
+    (entry) => entry.type === "thinking_level_change",
+  );
 
   const model = options.model;
   const thinkingLevel = clampThinkingLevel(model, options.thinkingLevel) as ThinkingLevel;

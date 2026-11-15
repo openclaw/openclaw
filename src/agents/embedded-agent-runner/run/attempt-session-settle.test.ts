@@ -307,3 +307,150 @@ it.each([1, 16])(
     }
   },
 );
+
+it.each([
+  { label: "an owned manager once its writes drain", owned: true, drained: true },
+  { label: "a caller-supplied manager", owned: false, drained: true },
+])("releases the loaded transcript at turn end only for $label", async ({ owned, drained }) => {
+  const { session, sessionManager } = await createTestSession();
+  await sessionManager.appendMessageAsync({
+    role: "user",
+    content: "Synthetic history",
+    timestamp: 1,
+  });
+  session.agent.state.messages = sessionManager.buildSessionContext().messages;
+  const historyLength = sessionManager.getBranch().length;
+  const history = sessionManager
+    .getBranch()
+    .filter((entry) => entry.type === "message")
+    .map((entry) => new WeakRef(entry));
+  await cleanupEmbeddedAttemptSessionPhase({
+    attempt: { sessionId: sessionManager.getSessionId(), runId: "transcript-release" },
+    session,
+    sessionManager,
+    ownsSessionManager: owned,
+    trajectoryRecorder: null,
+    trajectoryEndRecorded: false,
+    buildAbortSettlePromise: () => null,
+    state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+    transcriptLifecycle: drained
+      ? createEmbeddedAttemptTranscriptLifecycle({})
+      : { beginCleanup: async () => {}, dispose: async () => {} },
+  });
+
+  // The session and manager stay referenced here, as they do from callbacks that outlive a turn.
+  expect(session.messages).toHaveLength(drained ? 0 : 1);
+  expect(sessionManager.getSessionId()).toBeTypeOf("string");
+  if (!owned || !drained) {
+    expect(sessionManager.getBranch()).toHaveLength(historyLength);
+    return;
+  }
+  const released = "Session transcript view was released when its turn ended";
+  expect(() => sessionManager.getBranch()).toThrow(released);
+  expect(() => sessionManager.buildSessionContext()).toThrow(released);
+  expect(() =>
+    sessionManager.appendMessage({ role: "user", content: "Late write", timestamp: 2 }),
+  ).toThrow(released);
+  await expectCollected(...history);
+});
+
+it("releases after an accepted write outlives the cleanup budget without invalidating that write", async () => {
+  const { session, sessionManager } = await createTestSession();
+  const lifecycle = createEmbeddedAttemptTranscriptLifecycle({});
+  const entered = deferred();
+  const finish = deferred();
+  const write = lifecycle.withTranscriptWrite(async () => {
+    entered.resolve();
+    await finish.promise;
+    return await sessionManager.appendMessageAsync({
+      role: "user",
+      content: "Accepted before cleanup",
+      timestamp: 1,
+    });
+  });
+  await entered.promise;
+  vi.useFakeTimers();
+  const cleanup = cleanupEmbeddedAttemptSessionPhase({
+    attempt: { sessionId: sessionManager.getSessionId(), runId: "late-drain" },
+    session,
+    sessionManager,
+    ownsSessionManager: true,
+    trajectoryRecorder: null,
+    trajectoryEndRecorded: false,
+    buildAbortSettlePromise: () => null,
+    state: { terminal: { kind: "ok" }, beforeAgentRunBlockedBy: undefined },
+    transcriptLifecycle: lifecycle,
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(30_000);
+    await cleanup;
+    expect(() => sessionManager.getBranch()).not.toThrow();
+    finish.resolve();
+    await expect(write).resolves.toBeTypeOf("string");
+    // The lifecycle callback runs after the accepted writer's own continuation.
+    await lifecycle.beginCleanup();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(() => sessionManager.getBranch()).toThrow("Session transcript view was released");
+  } finally {
+    finish.resolve();
+    await write;
+    await cleanup;
+    vi.useRealTimers();
+  }
+});
+
+it("keeps the transcript readable through terminal listeners when abort settlement exceeds its budget", async () => {
+  const { session, sessionManager } = await createTestSession();
+  const entered = deferred();
+  let finishStream = () => {};
+  streamMocks.streamSimple.mockImplementation((model) => {
+    const stream = createAssistantMessageEventStream();
+    finishStream = () => {
+      stream.push({ type: "done", reason: "stop", message: createAssistant(model, "Done") });
+      stream.end();
+    };
+    entered.resolve();
+    return stream;
+  });
+  const terminalListener = vi.fn(() => sessionManager.getBranch());
+  const unsubscribe = session.agent.subscribe((event) => {
+    if (event.type === "agent_end") {
+      terminalListener();
+    }
+  });
+  const prompt = session.prompt("Synthetic unsettled terminal probe");
+  await entered.promise;
+  vi.useFakeTimers();
+  const cleanup = cleanupEmbeddedAttemptSessionPhase({
+    attempt: { sessionId: sessionManager.getSessionId(), runId: "late-agent-idle" },
+    session,
+    sessionManager,
+    ownsSessionManager: true,
+    trajectoryRecorder: null,
+    trajectoryEndRecorded: false,
+    buildAbortSettlePromise: () => prompt,
+    state: {
+      terminal: { kind: "aborted", source: "external" },
+      beforeAgentRunBlockedBy: undefined,
+    },
+    transcriptLifecycle: createEmbeddedAttemptTranscriptLifecycle({}),
+  });
+  try {
+    await vi.advanceTimersByTimeAsync(250);
+    await cleanup;
+    expect(session.isStreaming).toBe(true);
+    expect(() => sessionManager.getBranch()).not.toThrow();
+    finishStream();
+    await prompt;
+    await session.agent.waitForIdle();
+    expect(terminalListener).toHaveBeenCalledOnce();
+    expect(() => sessionManager.getBranch()).toThrow("Session transcript view was released");
+    expect(session.agent.state.messages).toEqual([]);
+  } finally {
+    finishStream();
+    await prompt;
+    await cleanup;
+    unsubscribe();
+    vi.useRealTimers();
+  }
+});

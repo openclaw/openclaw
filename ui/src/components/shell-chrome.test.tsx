@@ -107,7 +107,9 @@ describe("Solid shell chrome", () => {
     expect(find(".control-ui-environment-pill")?.textContent).toBe("edge");
     expect(find(".topbar-nav-toggle")).toBe(drawer);
     expect(drawer.getAttribute("aria-expanded")).toBe("true");
-    expect(find('[slot="content"] kbd')?.textContent).toBe("⌘K");
+    expect(
+      search.closest("openclaw-tooltip")?.querySelector('[slot="content"] kbd')?.textContent,
+    ).toBe("⌘K");
 
     await update(() => setEnvironment(null));
     expect(find(".control-ui-environment-pill")).toBeNull();

@@ -43,6 +43,7 @@ import {
 } from "../../state/user-preferences.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { authorizeOperatorScopesForMethod } from "../method-scopes.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "../role-policy.js";
 import { resolveNodePushTransport } from "./node-push-transport.js";
 import { respondError, respondUnavailableOnThrow } from "./response.js";
@@ -290,7 +291,7 @@ export const pushHandlers = {
         return;
       }
       const userProfileId = normalizeOptionalString(client?.authenticatedUserProfile?.profileId);
-      if (context.getRuntimeConfig().gateway?.roles && !userProfileId) {
+      if (isNamedOperatorRoleEnforcementEnabled(context.getRuntimeConfig()) && !userProfileId) {
         respondError(
           respond,
           ErrorCodes.INVALID_REQUEST,

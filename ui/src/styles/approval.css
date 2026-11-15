@@ -346,12 +346,11 @@
 }
 
 .approval-page__spinner {
+  --spinner-art: var(--spinner-mask-large);
   width: 34px;
   height: 34px;
   margin-bottom: 20px;
   color: var(--accent);
-  background: currentColor;
-  mask: var(--spinner-mask-large);
   border-radius: 50%;
   animation: btn-spinner-spin 800ms linear infinite;
 }

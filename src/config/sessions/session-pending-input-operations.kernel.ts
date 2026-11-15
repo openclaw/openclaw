@@ -225,7 +225,7 @@ export function mutatePendingInput(
               "Pending input staging omitted its postimage",
             );
           }
-          if (actor) {
+          if (actor && receipt.stagedInput.consumed_event_id === null) {
             actor.pendingInputs = writableSessionActorMap(actor.pendingInputs);
             actor.pendingInputs.set(input.idempotencyKey, receipt.stagedInput);
           }

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createQueueTestRun } from "../auto-reply/reply/queue.test-helpers.js";
@@ -10,23 +11,36 @@ import {
   retainQueuedAgentRunContext,
 } from "../infra/agent-run-registry.js";
 import {
+  cleanScratch,
+  closeScratchCleanupCursor,
+  type ScratchCleanupCursor,
+} from "../infra/scratch-cleanup.js";
+import {
   bindSessionControllerSource,
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../sessions/session-controller.mailbox.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
+import { SCRATCH_TTL_MS } from "../shared/scratch-expiry.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { prepareScratchMaintenanceTargets } from "./scratch-maintenance-custody.js";
 
 const fixtures = vi.hoisted(() => ({
   release: vi.fn(),
   read: vi.fn(),
   revisions: new Map<string, number>(),
+  projectRoot: "/fixture/project",
+  busyRoot: "/fixture/busy",
+  records: undefined as
+    | { id: string; path: string; createdAt?: number; ownerKind?: string; ownerId?: string }[]
+    | undefined,
 }));
 // mock-isolation: Fixed inventory replaces host database discovery; run custody remains real.
 vi.mock("../agents/worktrees/registry-read.js", () => ({
   readWorktreeCleanupState: async () => ({
-    records: [
+    records: fixtures.records ?? [
+      { id: "busy", path: fixtures.busyRoot, ownerKind: "session", ownerId: "agent:main:busy" },
       { id: "idle", path: "/fixture/idle", ownerKind: "session", ownerId: "agent:main:idle" },
-      { id: "busy", path: "/fixture/busy", ownerKind: "session", ownerId: "agent:main:busy" },
     ],
     leases: { liveScopes: [], staleScopes: [] },
   }),
@@ -49,7 +63,7 @@ vi.mock("../config/sessions/session-accessor.entry-read-runtime.js", () => ({
 }));
 // mock-isolation: No real host project registry is used by this custody integration.
 vi.mock("../projects/project-registry.js", () => ({
-  listProjectRegistry: async () => [{ repoRoot: "/fixture/project" }],
+  listProjectRegistry: async () => [{ repoRoot: fixtures.projectRoot }],
 }));
 // mock-isolation: The fixture has no remote workers; real local run ownership drives protection.
 vi.mock("./session-worker-placement-context.js", () => ({
@@ -65,9 +79,12 @@ vi.mock("./session-worker-placement-context.js", () => ({
 }));
 
 beforeEach(() => {
+  fixtures.records = undefined;
   fixtures.release.mockClear();
   fixtures.read.mockClear();
   fixtures.revisions.clear();
+  fixtures.projectRoot = "/fixture/project";
+  fixtures.busyRoot = "/fixture/busy";
   fixtures.read.mockImplementation(
     async ({ sessionKeys }: { sessionKeys: string[] }) =>
       new Map(
@@ -88,6 +105,75 @@ beforeEach(() => {
 });
 afterEach(() => resetAgentRunRegistryForTest());
 const config = { agents: { entries: { main: { workspace: "/fixture/project" } } } };
+
+it("drains expired base-clone scratch after work moves to a managed workspace", async () => {
+  const tempDirs = createTrackedTempDirs();
+  const root = await fs.realpath(await tempDirs.make("scratch-project-custody-"));
+  fixtures.projectRoot = path.join(root, "project");
+  fixtures.busyRoot = path.join(root, "managed");
+  const now = Date.now();
+  const files = await Promise.all(
+    [fixtures.projectRoot, fixtures.busyRoot].map(async (checkout) => {
+      const file = path.join(checkout, ".openclaw/tmp/old/build.txt");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "scratch");
+      const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+      await fs.utimes(file, expired, expired);
+      return file;
+    }),
+  );
+  const unmanaged = await Promise.all(
+    [".worktrees", ".openclaw/worktrees"].map(async (directory) => {
+      const file = path.join(fixtures.projectRoot, directory, "manual", "source.txt");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, "unowned work");
+      return file;
+    }),
+  );
+  const inputs = [fixtures.projectRoot, fixtures.busyRoot].map((workspaceDir, index) => {
+    const key = `agent:main:cleanup-${index}`;
+    const input = reserveSessionControllerSource(key, { policy: { mode: "followup" } });
+    bindSessionControllerSource(
+      input,
+      createQueueTestRun(
+        { prompt: "synthetic" },
+        { agentId: "main", sessionKey: key, workspaceDir, cwd: workspaceDir },
+      ),
+    );
+    return input;
+  });
+  const prepared = await prepareScratchMaintenanceTargets(config);
+  const cursor: ScratchCleanupCursor = {};
+  const run = () =>
+    cleanScratch({
+      targets: prepared.targets.filter((target) =>
+        [fixtures.projectRoot, fixtures.busyRoot].includes(target.root),
+      ),
+      now,
+      assertCurrent: () => {},
+      pause: async () => {},
+      cursor,
+    });
+  try {
+    expect(await run()).toMatchObject({ skippedLive: 2, entriesRemoved: 0 });
+    retireSessionControllerInput(inputs[0]!);
+    await inputs[0]!.settlement.promise;
+    expect(await run()).toMatchObject({ skippedLive: 1, entriesRemoved: 1, bytesRemoved: 7 });
+    await expect(fs.stat(files[0]!)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(files[1]!, "utf8")).toBe("scratch");
+    for (const file of unmanaged) {
+      expect(await fs.readFile(file, "utf8")).toBe("unowned work");
+    }
+  } finally {
+    for (const input of inputs) {
+      retireSessionControllerInput(input);
+      await input.settlement.promise;
+    }
+    await closeScratchCleanupCursor(cursor);
+    prepared.release();
+    await tempDirs.cleanup();
+  }
+});
 
 it.each(["running", "queued", "mailbox"] as const)(
   "protects only checkouts owned by %s work and releases protection",
@@ -130,7 +216,7 @@ it.each(["running", "queued", "mailbox"] as const)(
   },
 );
 
-it("defers an unmapped newly admitted run instead of deleting from an unknown checkout", async () => {
+it("keeps unrelated roots eligible while a newly admitted run binds its checkout", async () => {
   const prepared = await prepareScratchMaintenanceTargets(config);
   const claim = claimAgentRunContext(
     "new-run",
@@ -139,7 +225,8 @@ it("defers an unmapped newly admitted run instead of deleting from an unknown ch
   );
   try {
     const idle = prepared.targets[0]!;
-    expect(() => idle.isLive()).toThrow("fresh checkout binding");
+    expect(idle.isLive()).toBe(false);
+    expect(prepared.targets[2]!.isLive()).toBe(true);
     await idle.prepare?.();
     expect(idle.isLive()).toBe(true);
     expect(prepared.targets[1]!.isLive()).toBe(false);
@@ -229,6 +316,126 @@ it.each(["unbound", "running"] as const)(
         await input.settlement.promise;
       }
       prepared.release();
+    }
+  },
+);
+
+it("reclaims old scratch across restarts before a newer checkout exhausts the candidate budget", async () => {
+  const tempDirs = createTrackedTempDirs();
+  const root = await fs.realpath(await tempDirs.make("scratch-restart-order-"));
+  const recent = path.join(root, "recent");
+  const older = path.join(root, "older");
+  // The registry publishes newest-created worktrees first.
+  fixtures.records = [
+    { id: "recent", path: recent },
+    { id: "older", path: older },
+  ];
+  const now = Date.now();
+  const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+  for (const checkout of [recent, older]) {
+    const scratch = path.join(checkout, ".openclaw/tmp");
+    await fs.mkdir(scratch, { recursive: true });
+    for (let index = 0; index < 258; index++) {
+      const file = path.join(scratch, String(index));
+      await fs.writeFile(file, "scratch");
+      if (checkout === older) {
+        await fs.utimes(file, expired, expired);
+      }
+    }
+  }
+  try {
+    for (const expected of [256, 2]) {
+      const prepared = await prepareScratchMaintenanceTargets(config);
+      const cursor: ScratchCleanupCursor = {};
+      try {
+        const result = await cleanScratch({
+          targets: prepared.targets,
+          now,
+          cursor,
+          assertCurrent: () => {},
+          pause: async () => {},
+        });
+        expect(result.entriesRemoved).toBe(expected);
+      } finally {
+        await closeScratchCleanupCursor(cursor);
+        prepared.release();
+      }
+    }
+    expect(await fs.readdir(path.join(older, ".openclaw/tmp"))).toEqual([]);
+    expect(await fs.readdir(path.join(recent, ".openclaw/tmp"))).toHaveLength(258);
+  } finally {
+    await tempDirs.cleanup();
+  }
+});
+
+it.each(["missing", "stale", "unmapped"] as const)(
+  "reclaims unrelated old roots under %s live bindings while preserving possible owners",
+  async (binding) => {
+    const tempDirs = createTrackedTempDirs();
+    const root = await fs.realpath(await tempDirs.make("scratch-binding-churn-"));
+    const now = Date.now();
+    const startedAt = now - 1_000;
+    const expired = new Date(now - SCRATCH_TTL_MS - 1_000);
+    const keys = ["old-idle", "busy", "new-idle"];
+    fixtures.records = keys.map((key) => ({
+      id: key,
+      path: path.join(root, key),
+      createdAt: key === "new-idle" ? now : startedAt - 1_000,
+      ownerKind: "session",
+      ownerId: `agent:main:${key}`,
+    }));
+    const files = await Promise.all(
+      fixtures.records.map(async (record) => {
+        const file = path.join(record.path, ".openclaw/tmp/expired/proof");
+        await fs.mkdir(path.dirname(file), { recursive: true });
+        await fs.writeFile(file, "expired scratch");
+        await fs.utimes(file, expired, expired);
+        return file;
+      }),
+    );
+    const claim = claimAgentRunContext(
+      "binding-churn",
+      {
+        ...(binding !== "missing"
+          ? { sessionKey: `agent:main:${binding === "stale" ? "busy" : "unmapped"}` }
+          : {}),
+        registeredAt: startedAt,
+      },
+      { trackOwner: true },
+    );
+    fixtures.read.mockImplementation(async () => {
+      sessionChanges.emit({ sessionKey: "agent:main:busy", scope: "session-entry" });
+      return new Map();
+    });
+    let prepared: Awaited<ReturnType<typeof prepareScratchMaintenanceTargets>> | undefined;
+    const cursor: ScratchCleanupCursor = {};
+    try {
+      prepared = await prepareScratchMaintenanceTargets(config);
+      const result = await cleanScratch({
+        targets: prepared.targets.filter((target) =>
+          keys.some((key) => target.root === path.join(root, key)),
+        ),
+        now,
+        cursor,
+        assertCurrent: () => {},
+        pause: async () => {},
+      });
+      // Missing identity protects only roots newer than its registration. A known
+      // session protects its own old root even while metadata churn stays continuous.
+      expect(result).toMatchObject({ entriesRemoved: 2, skippedLive: 1, deferred: 0, errors: [] });
+      const retained = binding === "stale" ? 1 : 2;
+      for (let index = 0; index < files.length; index++) {
+        if (index === retained) {
+          expect(await fs.readFile(files[index]!, "utf8")).toBe("expired scratch");
+        } else {
+          await expect(fs.stat(files[index]!)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      }
+    } finally {
+      releaseAgentRunContext("binding-churn", claim);
+      await closeScratchCleanupCursor(cursor);
+      prepared?.release();
+      await tempDirs.cleanup();
     }
   },
 );

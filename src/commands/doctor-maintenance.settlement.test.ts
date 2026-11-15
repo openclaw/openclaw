@@ -482,7 +482,7 @@ it.each([
       expectCalls(2, "read", "revalidate");
       expectCalls(1, "repair");
       expect(boundary.log).toHaveBeenCalledWith(
-        "Gateway restarted and verified after Doctor repair.",
+        "Gateway restarted and verified after Doctor maintenance.",
       );
       return;
     }
@@ -503,7 +503,7 @@ it.each([
     expectCalls(releases, "release");
     expectCalls(0, "restart", "health");
     expect(boundary.log).not.toHaveBeenCalledWith(
-      "Gateway restarted and verified after Doctor repair.",
+      "Gateway restarted and verified after Doctor maintenance.",
     );
   },
 );

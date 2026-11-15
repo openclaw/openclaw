@@ -15,13 +15,30 @@ import { isAuthErrorMessage } from "./message-patterns.js";
 
 describe("renderAssistantRequestFailureCopy", () => {
   const runFailure =
-    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
   const live = (fields: Parameters<typeof makeAssistant>[0]) =>
     formatUserFacingAssistantErrorText(makeAssistant(fields));
   const copies = (assistant: ReturnType<typeof makeAssistant>) => [
     formatUserFacingAssistantErrorText(assistant),
     renderRecordedAssistantFailureCopy(assistant),
   ];
+  it("preserves safe expired-key recovery in terminal output and history", () => {
+    const raw = "401 PRIVATE_PROVIDER_DETAIL Authorization: Bearer synthetic-secret-canary";
+    const expiredKeyCopy =
+      "⚠️ This API key has expired. Create a new API key in your provider's console and replace it in OpenClaw or its secret store. Signing in again will not renew this key.";
+    expectBoth(expiredKeyCopy, {
+      provider: "opencode",
+      stopReason: "error",
+      errorCode: "api_key_expired",
+      errorType: "authentication_error",
+      errorMessage: raw,
+      errorBody: JSON.stringify({ error: { code: "api_key_expired", message: raw } }),
+    });
+    expect(renderRecordedAssistantFailureCopy({ errorMessage: expiredKeyCopy })).toBe(
+      expiredKeyCopy,
+    );
+  });
+
   const loading = (fields: Parameters<typeof makeAssistant>[0]) =>
     makeAssistant({
       errorCode: "model_load_failed",
@@ -171,7 +188,7 @@ describe("renderAssistantRequestFailureCopy", () => {
         errorBody,
       }),
     ).toBe(
-      "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.",
+      "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.",
     );
   });
 
@@ -234,4 +251,23 @@ describe("renderAssistantRequestFailureCopy", () => {
   it("handles partial model context", () => {
     expect(renderAssistantRequestFailureCopy({ model: "test-model" })).toBe(runFailure);
   });
+});
+
+it("gives compacted-history recovery guidance for structured and terminal item conflicts", () => {
+  const expected =
+    "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+  for (const message of [
+    {
+      errorCode: "item_conflict",
+      errorType: "invalid_request_error",
+      errorMessage: "An input item conflicts with an existing record.",
+    },
+    { errorMessage: "LLM request rejected: An input item conflicts with an existing record." },
+  ]) {
+    expect(renderRecordedAssistantFailureCopy(message)).toBe(expected);
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistant({ ...message, stopReason: "error" })),
+    ).toBe(expected);
+  }
+  expect(renderRecordedAssistantFailureCopy({ errorMessage: expected })).toBe(expected);
 });

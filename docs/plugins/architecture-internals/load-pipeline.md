@@ -151,7 +151,9 @@ keep their own generation. Mutable setup inputs retain only same-turn deduplicat
 
 Gateway model admission uses the configured agent's workspace and plugin inventory,
 including its published discovery catalog. A session opened in another folder keeps
-that folder as its execution cwd without losing discovered models. Standalone hosts
+that folder as its execution cwd without losing discovered models. Read-only lookups
+from that session, such as `sessions_spawn` model checks, `/models`, reset-model and
+thinking-level lookups, read the same published catalog. Standalone hosts
 continue to scope plugin discovery to their requested workspace.
 
 Setup provider detection loads providers from the metadata snapshot that

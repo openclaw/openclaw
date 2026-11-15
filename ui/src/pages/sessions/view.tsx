@@ -293,12 +293,12 @@ function SessionsTable(props: SessionsProps & { readRoster: () => RosterOutcome 
     });
   });
   function StatusRows() {
+    // Only cold loads consult pending; accepted empty rows use the deferred outcome.
     return (
       <>
-        {isPending(props.readRoster) && !props.result ? (
+        {!props.result && isPending(props.readRoster) ? (
           <SkeletonRows columnCount={sessionsTableColumnCount(props)} />
-        ) : isPending(props.readRoster) ||
-          !props.readRoster().ok ||
+        ) : !props.readRoster().ok ||
           props.error ||
           !props.result ||
           paginated().length > 0 ? undefined : (

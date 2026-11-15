@@ -17,6 +17,42 @@ import { nativeWorktreeFilesystem } from "./filesystem-native.js";
 
 const run = runner.runCommandBuffersWithTimeout;
 
+const removalDirs = useAutoCleanupTempDirTracker(afterEach);
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "removes owned captures with read-only directories without changing linked live workspaces",
+  async () => {
+    const root = removalDirs.make("openclaw-native-removal-");
+    const capture = path.join(root, "capture");
+    const readonly = path.join(capture, "readonly");
+    const ignored = path.join(capture, ".openclaw", "tmp", "ignored");
+    const live = path.join(root, "live-workspace");
+    for (const directory of [readonly, ignored, live]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "payload"), "retained", { mode: 0o400 });
+    }
+    await fs.symlink(live, path.join(ignored, "live-link"), "dir");
+    await fs.chmod(readonly, 0o555);
+    await fs.chmod(ignored, 0);
+    await fs.chmod(live, 0o555);
+    try {
+      await nativeWorktreeFilesystem.remove(capture, { commitGuard: () => {} });
+      await expect(fs.lstat(capture)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(live)).mode & 0o777).toBe(0o555);
+      expect((await fs.stat(path.join(live, "payload"))).mode & 0o777).toBe(0o400);
+      expect(await fs.readFile(path.join(live, "payload"), "utf8")).toBe("retained");
+    } finally {
+      // Restore only fixture-owned permissions if the removal regression fails.
+      for (const directory of [readonly, ignored, live]) {
+        await fs.chmod(directory, 0o700).catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+      }
+    }
+  },
+);
+
 describe.skipIf(process.platform !== "darwin")("isolated native worktree operations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const options: WorktreeFilesystemOptions = { commitGuard: () => {} };

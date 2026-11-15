@@ -70,7 +70,9 @@ final class SessionSnoozeUITests: XCTestCase {
         XCTAssertTrue(home.waitForExistence(timeout: 10))
         XCTAssertEqual(home.label, "Home")
         XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label == %@", "Home")).count, 1)
-        for _ in 0..<5 where !sessions.isHittable { app.swipeUp() }
+        for _ in 0..<5 where !sessions.isHittable {
+            app.swipeUp()
+        }
         sessions.tap()
         XCTAssertTrue(main.waitForExistence(timeout: 10))
         main.tap()
@@ -84,7 +86,9 @@ final class SessionSnoozeUITests: XCTestCase {
                 .contains($0.method)
         })
         app.buttons["RootTabs.Sidebar.Show"].tap()
-        for _ in 0..<5 where !sessions.isHittable { app.swipeUp() }
+        for _ in 0..<5 where !sessions.isHittable {
+            app.swipeUp()
+        }
         sessions.tap()
         XCTAssertTrue(active.waitForExistence(timeout: 10))
         XCTAssertTrue(main.staticTexts["open"].exists)

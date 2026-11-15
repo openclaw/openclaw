@@ -870,19 +870,9 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       },
       { sessionKey: "global", agentId: "writer" },
     );
-    expect(setAgent).toHaveBeenLastCalledWith("writer");
-    expect(setSessionKey).toHaveBeenLastCalledWith("global");
-    expect(pluginPanelEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        detail: {
-          sessionKey: "global",
-          agentId: "writer",
-          pluginId: "review",
-          panelId: "document",
-          open: true,
-        },
-      }),
-    );
+    expect(setAgent).not.toHaveBeenCalledWith("writer");
+    expect(setSessionKey).not.toHaveBeenCalledWith("global");
+    expect(pluginPanelEvent).not.toHaveBeenCalled();
     window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, pluginPanelEvent);
     window.removeEventListener(TERMINAL_PANEL_TOGGLE_EVENT, panelEvent);
     window.removeEventListener(UI_COMMAND_EVENT, uiCommandEvent);

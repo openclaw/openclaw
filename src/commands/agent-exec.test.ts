@@ -496,21 +496,13 @@ describe("agent exec command composition", () => {
 
   it("reports exhaustion of the ordered explicit fallback chain", async () => {
     const fallback = ["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"];
-    const result = await runExec(
-      { model: "openai/gpt-5.6-sol", fallback },
-      async (opts, runtime) => {
-        expect(runtime).toEqual(expect.any(Object));
-        expect(opts).toMatchObject({
-          model: "openai/gpt-5.6-sol",
-          modelFallbacksOverride: fallback,
-        });
-        if (typeof opts.onModelFallbackExhausted !== "function") {
-          throw new Error("Missing fallback outcome callback");
-        }
+    const result = await runExec({ model: "openai/gpt-5.6-sol", fallback }, async (opts) => {
+      expect(opts).toMatchObject({ model: "openai/gpt-5.6-sol", modelFallbacksOverride: fallback });
+      if (typeof opts.onModelFallbackExhausted === "function") {
         opts.onModelFallbackExhausted();
-        return successResult();
-      },
-    );
+      }
+      return successResult();
+    });
     expect(result).toMatchObject({
       exitCode: 1,
       envelope: { ok: false, status: "error", error: { kind: "fallback_exhausted" } },
@@ -560,7 +552,7 @@ describe("agent exec base config resolution", () => {
     ["null", "must be a JSON object"],
     ["[]", "must be a JSON object"],
     ['"text"', "must be a JSON object"],
-    ['{"tools":{"profile":"invalid"}}', "Invalid --config-override"],
+    ['{"sessions":{}}', 'Invalid --config-override: <root>: Unrecognized key: "sessions"'],
   ])("rejects invalid override %s", async (value, message) => {
     await expect(applyExecConfigOverrides({}, [value])).rejects.toThrow(message);
   });

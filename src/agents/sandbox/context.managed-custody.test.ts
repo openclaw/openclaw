@@ -100,7 +100,16 @@ it.skipIf(process.platform === "win32")(
     const run = (cwd: string, command: string, env: Record<string, string> = {}) => {
       const result = spawnSync("/bin/sh", ["-c", command], {
         cwd,
-        env: { PATH: process.env.PATH, HOME: state.root, CI: "1", ...guestEnv(env) },
+        env: {
+          PATH: process.env.PATH,
+          HOME: state.root,
+          CI: "1",
+          // The runner provisions pnpm outside the isolated application HOME.
+          COREPACK_HOME: process.env.COREPACK_HOME,
+          COREPACK_ENABLE_NETWORK: "0",
+          COREPACK_DEFAULT_TO_LATEST: "0",
+          ...guestEnv(env),
+        },
         encoding: "utf8",
         timeout: 30_000,
       });
@@ -109,7 +118,7 @@ it.skipIf(process.platform === "win32")(
     const config = custody.createConfig(
       {
         workspaceRoot: path.join(state.root, "sandboxes"),
-        docker: { user: "1000", network: "bridge" },
+        docker: { user: "1000", network: "none" },
       },
       { skills: { load: { watch: false } } },
     );
@@ -122,7 +131,7 @@ it.skipIf(process.platform === "win32")(
       assertCurrent: owner.assertCurrent,
     });
     assert(identity);
-    run(template, "pnpm install --lockfile-only --ignore-scripts", identity.docker.env);
+    run(template, "pnpm install --offline --lockfile-only --ignore-scripts", identity.docker.env);
     vi.mocked(ensureSandboxContainer).mockResolvedValue({
       containerId: "b".repeat(64),
       containerName: "fixture-builder",

@@ -80,6 +80,8 @@ export async function prepareDoctorDatabasePreflight(
   options: {
     scope?: "state";
     cfg?: OpenClawConfig;
+    /** Final update verification also admits the schema shape of discovered live stores. */
+    verifyCurrentSchemaShape?: boolean;
     /**
      * Update Doctor compares database generations recorded at snapshot capture. A native
      * open of an idle WAL family rebuilds its WAL index and changes that generation, so
@@ -122,6 +124,7 @@ export async function prepareDoctorDatabasePreflight(
     scope,
     openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
     preserveSourceArtifacts,
+    verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
     ...(cfg
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery

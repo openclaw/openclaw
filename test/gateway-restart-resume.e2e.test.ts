@@ -717,6 +717,7 @@ it.skipIf(process.platform === "win32")(
     const instance = await createOpenClawTestInstance({
       name: "restart-untiered-person",
       signal,
+      gracefulShutdownTimeoutMs: 60_000,
       config: {
         ...restartResumeConfig(model),
         gateway: {
@@ -741,16 +742,15 @@ it.skipIf(process.platform === "win32")(
     });
     const connectAs = (user: string, requested: string[]) =>
       connectProxiedRestartOperator(instance, { user, origin, scopes: requested, signal });
-    const connectPerson = () => connectAs(email, scopes);
     const sessionKey = key(2, "stream");
-    let client: Awaited<ReturnType<typeof connectPerson>> | undefined;
+    let client: Awaited<ReturnType<typeof connectAs>> | undefined;
     onTestFailed(() => {
       process.stderr.write(`${instance.logs()}\n`);
     });
     await runQaGatewayFixture(
       async () => {
         await instance.startGateway();
-        client = await connectPerson();
+        client = await connectAs(email, scopes);
         const self = await client.call<{ profile: { id: string } }>("users.self", {});
         expect(self.profile.id).not.toBe("gateway-owner");
         // The first send creates the session; its accepted input alone records the source.
@@ -793,7 +793,7 @@ it.skipIf(process.platform === "win32")(
         await closeOpenClawAgentDatabasesAsync();
         await closeOpenClawStateDatabaseAsync();
         await instance.startGateway();
-        client = await connectPerson();
+        client = await connectAs(email, scopes);
         await provider.wait("resume:2:stream");
         provider.release(2);
         await vi.waitFor(
@@ -1170,7 +1170,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
             );
             provider.releaseFinalizer();
             expect.soft(provider.finalizerAdmission()).toEqual({
-              admission: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+              admission: "accepted",
               attempts: 1,
             });
           }

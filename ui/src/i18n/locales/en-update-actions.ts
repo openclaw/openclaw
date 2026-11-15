@@ -6,6 +6,7 @@ import { en } from "./en.ts";
 const enUpdateActions = {
   updates: {
     adminRequired: "You need admin access to change update settings or start an update.",
+    adminRequiredTooltip: "Admin access required.",
     refreshUnreachable: "Couldn't reach the server",
     refreshBlocked: "Finish pending work first",
     campaign: en.updates.campaign,
@@ -63,7 +64,7 @@ const enUpdateActions = {
         install: "Installing dependencies",
         update: "Installing OpenClaw",
         build: "Building OpenClaw",
-        buildUi: "Building the Control UI",
+        buildUi: "Building the web app",
         doctor: "Checking configuration and data",
       },
     },
@@ -77,7 +78,7 @@ const enUpdateActions = {
       macMessage:
         "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
       impact:
-        "Running sessions are interrupted and this Control UI disconnects until the Gateway is back.",
+        "Running sessions are interrupted and this page disconnects until the Gateway is back.",
       versions: "Installed {installed} · Available {available}",
       versionsBehind: "Installed {installed} · {available}",
       macAction: "Update Mac app and restart",
@@ -165,6 +166,7 @@ export const registerUpdateActionsEnglish = Object.assign(
       triage,
       report,
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,
@@ -173,6 +175,7 @@ export const registerUpdateActionsEnglish = Object.assign(
     const { phase, ...runLabels } = run;
     Object.assign(en.updates, {
       adminRequired,
+      adminRequiredTooltip,
       refreshUnreachable,
       refreshBlocked,
       holdOneHour,

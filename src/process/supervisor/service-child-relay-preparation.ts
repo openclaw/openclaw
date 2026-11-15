@@ -129,6 +129,7 @@ export function prepareServiceChildRelay(params: ServiceChildRelayParams) {
           ? { parentLineageFds: [lineageFd!, ...parentLineageFds] }
           : { lineageFd, parentLineageFds },
       spawn: {
+        executionIntent: params.executionIntent,
         workerUrl: useLinuxSubreaper
           ? new URL(nativeProcessOwner!)
           : resolveRuntimeProcessEntrypointUrl(

@@ -209,6 +209,9 @@ export function defineMediaGenerationDuplicateTests(
     });
     await withHeldMediaGenerationResult(generate, tasks, async (complete) => {
       await tool.execute("call-model-only-start", testCase.request);
+      const activeRetry = await tool.execute("call-active-retry", testCase.request);
+      expect(activeRetry.details).toMatchObject({ duplicateGuard: true, active: true });
+      expect(tasks.createOperation).toHaveBeenCalledTimes(1);
       await complete();
       const createdTask = tasks.createOperation.mock.calls[0]?.[0];
       params.listTasks.mockReturnValue([

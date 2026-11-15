@@ -5,13 +5,34 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayServiceInstallation,
+  withGatewayServiceInstallation,
+} from "../infra/gateway-service-installation-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { useSpawnBrokerTestFixture } from "../process/spawn-broker/host.test-support.js";
 import { spawnAndWait } from "../process/spawn-utils.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { createScheduledGatewayRunner } from "./scheduled-run-gateway-context.js";
 
 describe.skipIf(process.platform === "win32")("scheduled Gateway broker ownership", () => {
   const createBroker = useSpawnBrokerTestFixture(afterEach);
+  it("retains its service installation when scheduled work detaches", async () => {
+    const installation = {
+      root: "/fixture/service",
+      version: "1",
+      cliVersion: "1",
+      databasePath: "/fixture/state.sqlite",
+    };
+    const runScheduled = withGatewayServiceInstallation({ installation }, () =>
+      createScheduledGatewayRunner(),
+    );
+    await runInDetachedAsyncContext(() =>
+      runScheduled(async () => {
+        expect(getGatewayServiceInstallation()).toEqual(installation);
+      }),
+    );
+  });
   it("restores only its transport and never borrows another Gateway's broker", async () => {
     const firstBroker = expectDefined(await createBroker(), "first broker");
     const secondBroker = expectDefined(await createBroker(), "second broker");

@@ -298,16 +298,17 @@ function DashboardGrid(props: {
     if (!windowed()) {
       return layout().groups;
     }
-    const selected = new Set(
+    const selected =
       view().tracks.length > 0
-        ? [...view().tracks.map((track) => track.index), ...pinned()]
-        : layout()
-            .tracks.slice(0, 12)
-            .map((_, index) => index),
-    );
+        ? new Set([...view().tracks.map((track) => track.index), ...pinned()])
+        : null;
     return layout().groups.flatMap((group) => {
-      const rows = group.rows.filter((row) => selected.has(layout().indexes.get(row.key)!.track));
-      return rows.length > 0 || selected.has(group.start) ? [{ ...group, rows }] : [];
+      const rows = group.rows.filter((row) => {
+        const index = layout().indexes.get(row.key)!;
+        // Before measurement, bound cards rather than tracks containing several cards.
+        return selected ? selected.has(index.track) : index.position < 12;
+      });
+      return rows.length > 0 || selected?.has(group.start) ? [{ ...group, rows }] : [];
     });
   });
   function CardSlot(card: { row: DashboardRow; bodyStart: number }) {

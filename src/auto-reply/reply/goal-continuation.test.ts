@@ -328,6 +328,15 @@ describe("Goal continuation eligibility", () => {
     { meta: { pendingToolCalls: [{ id: "tool-1", name: "exec", arguments: "{}" }] } },
     { meta: { stopReason: "refusal" } },
     { didSendDeterministicApprovalPrompt: true },
+    {
+      acceptedSessionSpawns: [
+        {
+          runId: "child",
+          childSessionKey: "agent:main:subagent:child",
+          expectsCompletionMessage: true,
+        },
+      ],
+    },
     { payloads: [{ text: "failed", isError: true }] },
   ])("preserves an existing continuation, failure or approval owner: %j", async (result) => {
     const f = fixture();

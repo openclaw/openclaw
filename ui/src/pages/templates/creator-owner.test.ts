@@ -80,6 +80,75 @@ async function fixture() {
   };
 }
 
+it("opens a chat-authored draft after lazy loading without creating another draft or model turn", async () => {
+  const f = await fixture();
+  const { openTemplateCreator } = await import("./creator-owner.ts");
+  const target = {
+    agentId: "research",
+    draftId: "draft-request",
+    sessionKey: "agent:research:dashboard:source",
+  };
+  openTemplateCreator(f.context, target);
+  await f.importing;
+  expect(f.request).not.toHaveBeenCalled();
+  f.ready.resolve();
+  await f.settled();
+  expect(f.context.navigate).toHaveBeenCalledWith(
+    "chat",
+    expect.objectContaining({
+      pathname: expect.stringContaining("source"),
+    }),
+  );
+  expect(f.owner.flow?.hasActiveDraft).toBe(true);
+  expect(f.request.mock.calls.every(([method]) => method === "templates.drafts.read")).toBe(true);
+});
+
+it.each(["Labs", "role"])(
+  "explains a chat review blocked by %s without touching its draft",
+  async (reason) => {
+    const f = await fixture();
+    if (reason === "Labs") {
+      Object.assign(f.context.runtimeConfig.state.configSnapshot!, {
+        sourceConfig: { gateway: { controlUi: { experimental: { templates: false } } } },
+      });
+    } else {
+      f.context.gateway.snapshot.hello!.auth!.scopes = ["operator.write"];
+    }
+    const { openTemplateCreator } = await import("./creator-owner.ts");
+    openTemplateCreator(f.context, {
+      agentId: "research",
+      draftId: "draft-request",
+      sessionKey: "agent:research:dashboard:source",
+    });
+    expect(f.owner.loading).toBe(false);
+    expect(f.request).not.toHaveBeenCalled();
+    const notice = toast.mock.calls[0]?.[0];
+    expect(notice?.message).toContain(reason === "Labs" ? "Settings → Labs" : "administrator");
+    expect(notice?.message).toContain("private draft");
+    if (reason === "Labs") {
+      notice!.onAction!();
+      expect(f.context.navigate).toHaveBeenCalledWith("labs");
+    }
+  },
+);
+
+it("drops a chat review handoff when its connection changes during lazy loading", async () => {
+  const f = await fixture();
+  const { openTemplateCreator } = await import("./creator-owner.ts");
+  openTemplateCreator(f.context, {
+    agentId: "research",
+    draftId: "draft-request",
+    sessionKey: "agent:research:dashboard:source",
+  });
+  await f.importing;
+  f.connect();
+  f.ready.resolve();
+  await f.settled();
+  expect(f.context.navigate).not.toHaveBeenCalled();
+  expect(f.owner.flow).toBeNull();
+  expect(f.request).not.toHaveBeenCalled();
+});
+
 function replaceWaitingConnections(f: Awaited<ReturnType<typeof fixture>>) {
   const retired = [];
   for (let index = 0; index < 8; index++) {

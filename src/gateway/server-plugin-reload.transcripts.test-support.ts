@@ -17,6 +17,7 @@ import {
   installGatewaySubagentModuleLoad,
 } from "./server-startup-module-mocks.test-support.js";
 import { startGatewayPostAttachRuntime } from "./server-startup-post-attach.js";
+import { createPreparedReadinessFixture } from "./server/readiness.test-support.js";
 
 export async function startTranscriptReloadFixtureSidecars(
   fixture: Pick<
@@ -67,7 +68,12 @@ export async function startTranscriptReloadFixtureSidecars(
     minimalTestGateway: false,
     cfgAtStart: config,
     getConfig,
-    getReadiness: () => ({ ready: true, coreReady: true, failing: [], uptimeMs: 0 }),
+    getReadiness: createPreparedReadinessFixture(() => ({
+      ready: true,
+      coreReady: true,
+      failing: [],
+      uptimeMs: 0,
+    })),
     port: 0,
     log,
     isNixMode: false,
