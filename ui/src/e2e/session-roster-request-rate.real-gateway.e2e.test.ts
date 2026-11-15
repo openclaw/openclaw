@@ -437,7 +437,10 @@ suite.define(() => {
         expect((await page.goto(url.toString()))?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
         const sidebar = page.locator("openclaw-app-sidebar");
-        const rows = sidebar.locator("[data-session-key]");
+        // The suite-level Gateway retains sessions created by the preceding rate test.
+        const rows = sidebar.locator(
+          [main, research, other].map((key) => `[data-session-key="${key}"]`).join(","),
+        );
         const row = sidebar.locator('[data-session-key="' + main + '"]');
         await row.waitFor();
         await row.locator("a.sidebar-recent-session__link").click();
