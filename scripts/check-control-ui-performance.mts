@@ -58,8 +58,9 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Preserve the previously accepted resident-history absolute ceiling.
-  chatBootJsGzipBytes: 1_303_958,
+  // Owner-approved bounded history residency (#187440): +7,298 B gzip.
+  // Add only that measured growth, preserving the previous budget headroom.
+  chatBootJsGzipBytes: 1_311_256,
   // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
   // Josh approved the #196456 key-warning delta: +2,522 B; inherited debt stays.
   newBootJsGzipBytes: 805_886,
