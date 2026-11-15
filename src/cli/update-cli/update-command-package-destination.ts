@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import {
-  resolveGatewayServiceInstallationRefreshRoot,
-  summarizeGatewayServiceLayout,
-} from "../../daemon/service-layout.js";
+import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
@@ -33,8 +30,7 @@ import {
 export async function inspectNpmGlobalDestination(
   root: string,
   installTarget: ResolvedGlobalInstallTarget,
-  /** `restart: false` skips the Gateway restart, where a service rebind happens. */
-  options: { dryRun?: boolean; restart?: boolean } = {},
+  options: { dryRun?: boolean } = {},
 ) {
   const dryRun = options.dryRun === true;
   const destination: Omit<UpdateDestinationFailure, "ownership" | "cause"> = {
@@ -110,25 +106,18 @@ export async function inspectNpmGlobalDestination(
       (packageRootReal !== null &&
         launcherTarget !== null &&
         isPathStrictlyInside(packageRootReal, launcherTarget));
-    // A service started by a release's real path keeps running that release after
+    // A service started by a release's real path would keep running that release after
     // the link moves; published updaters write such paths when run through the link.
-    // The restart's install-root refresh rebinds it to the package path. Without
-    // that refresh, this update replaces the selected release in place instead.
+    // Replace that release in place, as they do. The restart's service refresh then
+    // installs the service from the package path, and the next update switches releases.
     const releaseSlot =
       ownsPackage && ownsLauncher ? readPackageReleaseSlotSync(packageRoot) : null;
     const releaseLayout = releaseSlot ? await summarizeGatewayServiceLayout(command) : undefined;
     if (
       releaseSlot &&
-      serviceInspection &&
       releaseLayout?.entrypoint &&
       isPathStrictlyInside(releaseSlot.releaseRoot, path.resolve(releaseLayout.entrypoint))
     ) {
-      const rebindAtRestart =
-        options.restart !== false &&
-        (await resolveGatewayServiceInstallationRefreshRoot({
-          root: releaseSlot.releaseRoot,
-          state: serviceInspection,
-        })) !== undefined;
       const rebind = formatCliCommand("openclaw gateway install --force").replace(
         /^openclaw\b/,
         () => `node ${quote(path.join(packageRoot, "openclaw.mjs"))}`,
@@ -138,18 +127,12 @@ export async function inspectNpmGlobalDestination(
         interruptedLink,
         releaseBoundService: {
           releaseRoot: releaseSlot.releaseRoot,
-          inPlace: !rebindAtRestart,
-          // In place, the service keeps starting this release, so the update replaces it there.
-          installTarget: rebindAtRestart
-            ? installTarget
-            : {
-                ...installTarget,
-                globalRoot: path.dirname(releaseSlot.releaseRoot),
-                packageRoot: releaseSlot.releaseRoot,
-              },
-          warning: rebindAtRestart
-            ? `The Gateway service starts ${releaseLayout.entrypoint}, inside the release ${releaseSlot.releaseRoot}; the restart rebinds it to the package path ${packageRoot}.`
-            : `The Gateway service starts ${releaseLayout.entrypoint}, inside the release ${releaseSlot.releaseRoot}, and this update cannot rebind it, so the release is updated in place. Run \`${rebind}\` to bind the service to the package path; the next update then switches releases.`,
+          installTarget: {
+            ...installTarget,
+            globalRoot: path.dirname(releaseSlot.releaseRoot),
+            packageRoot: releaseSlot.releaseRoot,
+          },
+          warning: `The Gateway service starts ${releaseLayout.entrypoint}, inside the release ${releaseSlot.releaseRoot}, so this update replaces that release in place. If the restart does not bind the service to the package path ${packageRoot}, run \`${rebind}\`; the next update then switches releases.`,
         },
       };
     }

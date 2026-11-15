@@ -298,9 +298,11 @@ describe.skipIf(process.platform === "win32")("package release switch", () => {
     fixture.writePlainPackage("2026.11.3", "build-old");
     const params = await stagePackageRelease(fixture, "2026.12.1");
     const mkdir = fsp.mkdir.bind(fsp);
-    // The adoption prefix (labelled with the installed version) cannot be created.
+    // The adoption prefix (labelled with the installed version) is allocated, then its
+    // package directory cannot be created.
     vi.spyOn(fsp, "mkdir").mockImplementation(async (target, options) => {
-      if (path.basename(String(target)).startsWith("2026.11.3-")) {
+      const name = path.relative(path.join(fixture.prefix, "releases"), String(target));
+      if (name.startsWith("2026.11.3-") && name.endsWith(path.join("lib", "node_modules"))) {
         throw Object.assign(new Error("EACCES: permission denied, mkdir"), { code: "EACCES" });
       }
       return await mkdir(target, options);
@@ -317,6 +319,10 @@ describe.skipIf(process.platform === "win32")("package release switch", () => {
     expect(result.status).toBe("committed");
     expect(result.step.advisory?.message).toMatch(/release layout.*EACCES/su);
     expect(recorded).toBe(false);
+    // The allocated adoption prefix is gone; only the candidate's stage remains for cleanup.
+    expect(fs.readdirSync(path.join(fixture.prefix, "releases"))).toEqual([
+      path.basename(params.stage.prefix),
+    ]);
     expect(fs.lstatSync(fixture.slot).isDirectory()).toBe(true);
     expect(
       JSON.parse(fs.readFileSync(path.join(fixture.slot, "package.json"), "utf8")),

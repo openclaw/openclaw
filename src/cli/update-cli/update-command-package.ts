@@ -6,6 +6,7 @@ import {
 import { resolveConfigPath } from "../../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveInstallWorkTimeoutMs } from "../../infra/install-mode-options.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
 import type {
   PackageActivationOptions,
@@ -588,7 +589,11 @@ export async function runPackageInstallUpdate(
           ? "error"
           : "ok",
     mode: installTarget.manager,
-    root: packageUpdate.activePackageRoot ?? undefined,
+    // A release replaced in place behind its link is the installation at the link.
+    root: packageUpdate.activePackageRoot
+      ? (resolvePackageReleaseSlotForRootSync(packageUpdate.activePackageRoot) ??
+        packageUpdate.activePackageRoot)
+      : undefined,
     reason:
       getUpdateDoctorConfigFailureReason(packageUpdate.failedStep?.configWriteRefusal) ??
       packageUpdate.reason ??

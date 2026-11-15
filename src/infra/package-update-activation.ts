@@ -49,6 +49,7 @@ import {
 } from "./package-update-activation-status.js";
 import { createPublicationOwner } from "./package-update-publication-owner.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { resolveUpdateInstallRoot } from "./update-install-root.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
@@ -195,7 +196,10 @@ export async function preparePackageActivation(
     process.platform === "win32" ||
     params.installTarget.manager !== "npm" ||
     params.installTarget.directNodeModulesRoot ||
-    !(await fsp.lstat(params.stageRoot)).isDirectory()
+    !(await fsp.lstat(params.stageRoot)).isDirectory() ||
+    // The journal publishes at the installation key; a release that the package
+    // link selects is replaced in place by the ordinary swap instead.
+    resolveUpdateInstallRoot(params.liveRoot) !== path.resolve(params.liveRoot)
   ) {
     return undefined;
   }

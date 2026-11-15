@@ -199,16 +199,20 @@ link), which OpenClaw owns. `OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP` then runs the
 candidate's own updater once more after the published driver's update:
 `switch` checks adoption of the plain directory and the release switch,
 and `rollback` gives the new release a Doctor that fails after activation and
-checks the link points back. With the linked-root mode, `rebind` starts from
-published `2026.10.9`, whose service install binds the service to a release's
-real path, and checks that the candidate switches releases and its restart
-rebinds the service to the package path. `launcher` gives the candidate an added
-`bin` command, checks that the update takes the swap and records why, then runs
-a second update that adopts the layout again. Run them with
+checks the link points back. `launcher` gives the candidate an added `bin`
+command, checks that the update takes the swap and records why, then runs a
+second update that adopts the layout again. With the linked-root mode, `rebind`
+starts from published `2026.10.9`, whose service install binds the service to a
+release's real path, and checks that the candidate replaces that release in
+place, its restart rebinds the service to the package path, and the next update
+switches releases. `in-place` starts the same way but updates with
+`--no-restart`, and checks that the replaced release serves the new version
+after a service restart. Run them with
 `pnpm test:docker:published-driver-release-adoption`,
 `pnpm test:docker:published-driver-release-rollback`,
-`pnpm test:docker:published-driver-release-launcher`, and
-`pnpm test:docker:published-driver-release-rebind`. No CI workflow selects
+`pnpm test:docker:published-driver-release-launcher`,
+`pnpm test:docker:published-driver-release-rebind`, and
+`pnpm test:docker:published-driver-release-in-place`. No CI workflow selects
 these lanes.
 
 After the Docker cell, the same job reuses its verified candidate tarball for the

@@ -475,14 +475,20 @@ export const mainLanes: DockerE2eLane[] = [
     stateScenario: "empty",
     timeoutMs: 35 * 60 * 1000,
   }),
-  // A linked root from a published updater: an added launcher takes the swap, then the next update
-  // adopts again; a service bound to a release path is rebound by the switch's restart.
+  // An added launcher takes the swap and the next update adopts again (owned prefix). A linked
+  // root whose service a published updater bound to a release has that release replaced in place;
+  // the restart rebinds the service (rebind), or with --no-restart it stays bound (in-place).
   npmLane("published-driver-release-launcher", {
     resources: ["service"],
     stateScenario: "empty",
     timeoutMs: 50 * 60 * 1000,
   }),
   npmLane("published-driver-release-rebind", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 50 * 60 * 1000,
+  }),
+  npmLane("published-driver-release-in-place", {
     resources: ["service"],
     stateScenario: "empty",
     timeoutMs: 35 * 60 * 1000,

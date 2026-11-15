@@ -45,12 +45,13 @@ const ownedPrefix = process.env.OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX === "1";
 // After the published updater's update: the candidate updates itself once more ("switch"),
 // or fails post-switch Doctor and rolls back ("rollback").
 const followUp = process.env.OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP ?? "";
-// "rebind" checks the candidate switches a linked root whose service a published updater bound to
-// a release's real path, and rebinds the service to the package path. "launcher" gives the
+// "rebind" checks the candidate replaces the release that a published updater bound the service
+// to, its restart rebinds the service to the package path, and the next update switches. "launcher" gives the
 // candidate an added `bin` command: the release layout cannot switch to it, so the update takes
-// the swap, and a second update adopts the layout again.
+// the swap, and a second update adopts the layout again. "in-place" starts like "rebind" but
+// updates with --no-restart, so the service cannot be rebound: the selected release is replaced.
 assert(
-  ["", "switch", "rollback", "rebind", "launcher"].includes(followUp),
+  ["", "switch", "rollback", "rebind", "launcher", "in-place"].includes(followUp),
   "Unknown follow-up mode",
 );
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
@@ -646,8 +647,8 @@ process.exitCode = await runCancelableCommand(async (signal) => {
 
     if (followUp) {
       // Each follow-up runs the installed updater, so it exercises the candidate's own code.
-      const updateTo = (name, tag) =>
-        run(name, "openclaw", ["update", "--tag", tag, "--yes", "--json"], true);
+      const updateTo = (name, tag, extra = []) =>
+        run(name, "openclaw", ["update", "--tag", tag, "--yes", "--json", ...extra], true);
       const releaseOf = (version) =>
         Object.entries(describeLinkedRoot().releases ?? {}).find(
           ([name, entry]) => !name.startsWith(".") && entry.version === version,
@@ -662,7 +663,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         // A published updater does not know release directories: its swap leaves a directory.
         assert.equal(before.packageRoot.type, "directory", "Published updater changed the layout");
       }
-      if (followUp === "rebind") {
+      if (followUp === "rebind" || followUp === "in-place") {
         // The state under test: the published updater bound the service to a release path.
         const unitBefore = fs.readFileSync(
           path.join(accountHome, ".config/systemd/user/openclaw-gateway.service"),
@@ -692,7 +693,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
             ? packLauncherChangeUpdateFixture(candidatePackage, second, 1)
             : packFirstHopUpdateFixture(candidatePackage, second, 1);
       writeJson("follow-up-candidate", fixture);
-      const switched = await updateTo("follow-up-update", second);
+      const switched = await updateTo(
+        "follow-up-update",
+        second,
+        followUp === "in-place" ? ["--no-restart"] : [],
+      );
       const after = describeLinkedRoot();
       writeJson("release-layout-after-follow-up", after);
       const serviceUnit = () =>
@@ -700,7 +705,76 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           path.join(accountHome, ".config/systemd/user/openclaw-gateway.service"),
           "utf8",
         );
-      if (followUp === "launcher") {
+      if (followUp === "rebind") {
+        // The release the service starts is replaced in place, and the restart rebinds the
+        // service to the package path.
+        assert.equal(switched.exitCode, 0, "The update of a release-bound service failed");
+        assert.equal(output("follow-up-update").status, "ok");
+        assert.deepEqual(
+          after.packageRoot,
+          before.packageRoot,
+          "The in-place update moved the link",
+        );
+        assert.equal(
+          readJson(path.join(firstReleaseRoot, "package.json")).version,
+          fixture.targetVersion,
+          "The selected release was not updated",
+        );
+        const rebound = serviceUnit();
+        writeJson("follow-up-service-unit", { unit: rebound });
+        assert(
+          !rebound.includes(`${path.sep}releases${path.sep}`),
+          "The restart did not rebind the service to the package path",
+        );
+        await ready("follow-up-ready", port);
+        await probe("follow-up-running-version", fixture.targetVersion);
+        // With the service on the package path, the next update switches releases.
+        const third = path.join(runtime, "openclaw-follow-up-2.tgz");
+        const next = packFirstHopUpdateFixture(candidatePackage, third, 2);
+        writeJson("follow-up-candidate-2", next);
+        const switchedNext = await updateTo("follow-up-switch", third);
+        writeJson("release-layout-after-switch", describeLinkedRoot());
+        assert.equal(switchedNext.exitCode, 0, "The update after the rebind failed");
+        assert.equal(selectedRelease(), releaseOf(next.targetVersion), "The link did not switch");
+        assert(
+          !serviceUnit().includes(`${path.sep}releases${path.sep}`),
+          "The service names a release path after the switch",
+        );
+        assert.deepEqual(temporaryLinks(), [], "The switch left a temporary link");
+        await ready("follow-up-switch-ready", port);
+        await probe("follow-up-switch-running-version", next.targetVersion);
+        followUps.push({ mode: followUp, rebound: true, selected: selectedRelease() });
+      } else if (followUp === "in-place") {
+        // Without a restart the service cannot be rebound; the release it starts is replaced.
+        assert.equal(switched.exitCode, 0, "The in-place update failed");
+        assert.equal(output("follow-up-update").status, "ok");
+        assert.deepEqual(
+          after.packageRoot,
+          before.packageRoot,
+          "The in-place update moved the link",
+        );
+        assert.equal(fs.realpathSync(packageRoot), firstReleaseRoot, "Another release is selected");
+        assert.equal(
+          readJson(path.join(firstReleaseRoot, "package.json")).version,
+          fixture.targetVersion,
+          "The selected release was not updated",
+        );
+        assert.match(
+          fs.readFileSync(path.join(artifacts, "follow-up-update.stdout"), "utf8") +
+            fs.readFileSync(path.join(artifacts, "follow-up-update.stderr"), "utf8"),
+          /gateway install --force/u,
+          "The rebind command was not reported",
+        );
+        assert.deepEqual(temporaryLinks(), [], "The update left a temporary link");
+        await run("follow-up-restart", path.join(bin, "systemctl"), [
+          "--user",
+          "restart",
+          "openclaw-gateway.service",
+        ]);
+        await ready("follow-up-ready", port);
+        await probe("follow-up-running-version", fixture.targetVersion);
+        followUps.push({ mode: followUp, link: after.packageRoot });
+      } else if (followUp === "launcher") {
         // The added launcher rules out a switch; the swap replaces the package path instead.
         assert.equal(switched.exitCode, 0, "The update with an added launcher failed");
         assert.equal(output("follow-up-update").status, "ok");

@@ -9,6 +9,7 @@ import {
 } from "../../infra/package-release-slot.js";
 import { createPackageReleasePrefixFixture } from "../../infra/package-release-slot.test-support.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { reserveUpdateCommandExecutorSlot } from "./update-command-executor-capabilities.js";
 import {
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
@@ -55,5 +56,30 @@ describe.skipIf(process.platform === "win32")("executor admission on a release l
     });
 
     expect(observed).toEqual({ link: "current", release: "absent" });
+  });
+
+  it("reserves the selected release by its real path as the installation, and refuses a deselected one", async () => {
+    const { root } = fixture();
+    const releases = createPackageReleasePrefixFixture(root);
+    const selected = releases.addRelease("r1", "2026.11.3");
+    const deselected = releases.addRelease("r2", "2026.10.9");
+    releases.linkTo("r1");
+    const store = createManagedHandoffLeaseStore();
+    const outcome: { deselected?: string; releaseLease?: string } = {};
+
+    await withUpdateCommandExecutor(randomUUID(), async (executor) => {
+      const fence = await executor.enter(releases.slot);
+      // An update that replaces the selected release in place reserves it by its real path.
+      reserveUpdateCommandExecutorSlot(fence, selected);
+      outcome.releaseLease = store.read(selected).kind;
+      try {
+        reserveUpdateCommandExecutorSlot(fence, deselected);
+      } catch (error) {
+        outcome.deselected = (error as Error).message;
+      }
+    });
+
+    expect(outcome.releaseLease).toBe("absent");
+    expect(outcome.deselected).toMatch(/does not resolve to its original installation/u);
   });
 });

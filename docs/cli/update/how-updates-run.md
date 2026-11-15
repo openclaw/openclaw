@@ -1597,13 +1597,14 @@ carries a warning that names the reason, and the next update tries the release
 layout again.
 
 When the Gateway service starts a path inside a release instead of the package
-path (an older OpenClaw can write that when it reinstalls the service through
-the link), the update switches releases and its restart reinstalls the service
-against the package path. When the update cannot rewrite the service definition,
-or runs with `--no-restart`, it replaces the selected release in place, so the
-Gateway still starts the new version, and warns with the
-`openclaw gateway install --force` command that binds the service to the
-package path. npm global prefixes you
+path (an older OpenClaw writes that when it reinstalls the service through the
+link), switching releases would leave the service on the old one. The update
+replaces the selected release in place instead, so the Gateway starts the new
+version, and its restart reinstalls the service from the package path when the
+service definition can be rewritten. The update warns with the
+`openclaw gateway install --force` command that binds the service to the package
+path if the restart does not. Once the service names the package path, the next
+update switches releases. npm global prefixes you
 manage yourself, pnpm, Bun, Git checkouts, and Windows keep the swap described
 above. A link to a checkout made with `npm link` is not a release and stays on
 the swap. A manual `npm install -g` into an owned prefix replaces the link with
