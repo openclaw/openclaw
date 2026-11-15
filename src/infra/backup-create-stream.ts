@@ -2,11 +2,11 @@ import fsSync, { createWriteStream, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import { compose, Transform } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
-import { createGzip } from "node:zlib";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { createAbortError, isAbortError } from "./abort-signal.js";
+import { gzipInParallel } from "./backup-gzip.js";
 import type { ReportBackupProgress } from "./backup-progress.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -31,7 +31,8 @@ export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManif
       }
       yield createManifest();
     },
-    createGzip(),
+    // compose passes its own options as a second argument; keep the default width.
+    (source: AsyncIterable<Buffer>) => gzipInParallel(source),
   );
 }
 
