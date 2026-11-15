@@ -2985,6 +2985,7 @@ src/shared/widget-media.ts
 src/shared/worker-desktop-descriptor.ts
 src/gateway/worker-environments/local-workspace-cas.ts
 src/gateway/worker-environments/local-workspace-cas.kernel.ts
+src/gateway/worker-environments/local-workspace-manifest-tree.ts
 src/gateway/worker-environments/local-workspace-gc.ts
 src/plugins/installed-plugin-snapshot-candidates.ts
 src/plugins/installed-plugin-snapshot-candidates.kernel.ts
