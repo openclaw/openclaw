@@ -94,7 +94,8 @@ function resolveEntryPath(rootDir: string, entry: string | undefined): string {
   try {
     return fs.realpathSync.native(candidate);
   } catch (error) {
-    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
       throw error;
     }
     return candidate;

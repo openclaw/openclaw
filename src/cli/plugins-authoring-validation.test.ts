@@ -56,6 +56,32 @@ it("keeps missing-root diagnostics actionable for build and validation", async (
   expect(fs.readdirSync(homeDir)).toEqual([]);
 });
 
+it.each(["missing.js", "package.json/index.js"])(
+  "preserves expected missing-entry diagnostics for %s",
+  async (entry) => {
+    const rootDir = tempDirs.make("openclaw-plugin-entry-error-");
+    const files = {
+      "package.json": '{"name":"entry-error"}\n',
+      "openclaw.plugin.json": '{"id":"entry-error","configSchema":{}}\n',
+    };
+    for (const [name, bytes] of Object.entries(files)) {
+      fs.writeFileSync(path.join(rootDir, name), bytes);
+    }
+    const message = `plugin entry not found: ./${entry}`;
+    await expect(runPluginsBuildCommand({ root: rootDir, entry })).rejects.toMatchObject({
+      humanOutput: message,
+    });
+    await expect(runPluginsValidateCommand({ root: rootDir, entry })).rejects.toMatchObject({
+      humanOutput: message,
+    });
+    await expectFailure({ root: rootDir, entry }, {}, message);
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(fs.readFileSync(path.join(rootDir, name), "utf8")).toBe(bytes);
+    }
+    expect(fs.readdirSync(rootDir).toSorted()).toEqual(Object.keys(files).toSorted());
+  },
+);
+
 it.each(
   ["implicit", "explicit"].flatMap((entry) => [false, true].map((debug) => ({ entry, debug }))),
 )(
