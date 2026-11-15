@@ -4,7 +4,7 @@ import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
-import { YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
+import { hasRunContinuationEvidence, YIELD_DIAGNOSTIC_TEXT } from "./incomplete-turn-resolution.js";
 import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 import { attemptResult, prepareAttempt } from "./terminal-preparation.test-support.js";
 import { resolveEmbeddedRunTerminal } from "./terminal-resolution.js";
@@ -19,6 +19,7 @@ type ToolError = NonNullable<Parameters<typeof makeEmbeddedRunnerAttempt>[0]["la
 async function prepareYield(
   input: {
     yieldDetected?: boolean;
+    yieldAcknowledgment?: string;
     assistantTexts?: string[];
     codeModeEngaged?: boolean;
     lastToolError?: ToolError;
@@ -42,6 +43,7 @@ async function prepareYield(
     // The subscriber retains message_end after yield strips the synthetic abort from history.
     currentAttemptCompletedAssistant: assistant,
     yieldDetected: input.yieldDetected ?? true,
+    yieldAcknowledgment: input.yieldAcknowledgment,
     runtimeContinuationStarted: input.continuation ?? true,
     codeModeEngaged: input.codeModeEngaged,
     lastToolError: input.lastToolError ?? { toolName: "exec", error: "Command exited with code 1" },
@@ -63,6 +65,25 @@ async function prepareYield(
 }
 
 const sendError = { toolName: "sessions_send", error: "Gateway delivery is unconfirmed" };
+it.each([undefined, "  ", "The existing task is still running."])(
+  "prefers an explicit waiting acknowledgment %j without inventing continuation evidence",
+  async (yieldAcknowledgment) => {
+    const { attempt, terminal, prepared } = await prepareYield({
+      continuation: false,
+      yieldAcknowledgment,
+    });
+    expect(hasRunContinuationEvidence(attempt)).toBe(false);
+    const result = await resolveEmbeddedRunTerminal({ ...terminal, prepared });
+    expectComplete(result);
+    expect(result.result.payloads ?? []).toEqual(
+      yieldAcknowledgment?.trim() ? [] : [{ text: YIELD_DIAGNOSTIC_TEXT }],
+    );
+    if (yieldAcknowledgment?.trim()) {
+      expect(result.result.meta).toMatchObject({ yielded: true, yieldAcknowledgment });
+    }
+  },
+);
+
 const execError = { toolName: "exec", error: "Command exited with code 1" };
 it.each([
   [[], sendError, true, "Agent run aborted"],
