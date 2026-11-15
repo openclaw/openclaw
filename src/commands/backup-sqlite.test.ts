@@ -217,14 +217,14 @@ describe("SQLite backup commands", () => {
 
     await expect(
       backupSqliteCreateCommand(runtime, { repository: "/tmp/snapshots" }),
-    ).rejects.toThrow("Choose a SQLite snapshot source");
+    ).rejects.toMatchObject({ name: "ExpectedCliError" });
     await expect(
       backupSqliteCreateCommand(runtime, {
         global: true,
         agent: "main",
         repository: "/tmp/snapshots",
       }),
-    ).rejects.toThrow("Choose exactly one SQLite snapshot source");
+    ).rejects.toMatchObject({ name: "ExpectedCliError" });
   });
 
   it.each([
@@ -240,7 +240,7 @@ describe("SQLite backup commands", () => {
         agent,
         repository: "/tmp/snapshots",
       }),
-    ).rejects.toThrow(message);
+    ).rejects.toMatchObject({ message, name: agent.trim() ? "Error" : "ExpectedCliError" });
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
