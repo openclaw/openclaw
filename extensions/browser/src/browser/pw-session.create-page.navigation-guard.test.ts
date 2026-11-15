@@ -554,10 +554,10 @@ describe("pw-session selected-page interaction request guard", () => {
     });
     const { events, onPolicyDenied } = observeDenials();
     const action = vi.fn(async () => "unsafe");
-    const guarded = guard(action, { onPolicyDenied });
+    const rejection = denied(guard(action, { onPolicyDenied }));
     await vi.waitFor(() => expect(events).toEqual(["detected", "handled:false"]));
     expect(action).not.toHaveBeenCalled();
-    await denied(guarded);
+    await rejection;
     expectRouteRetained();
   });
   it("falls through allowed documents and subresources, retaining one handler", async () => {
@@ -651,7 +651,7 @@ describe("pw-session selected-page interaction request guard", () => {
       });
       await vi.waitFor(() => expect(validation).toHaveBeenCalledTimes(1));
       expect(observedPolicyCheck).toBeInstanceOf(Promise);
-      expect(f.pageUnroute).toHaveBeenCalledTimes(1);
+      expectRouteRetained();
       expect(settled).toBe(false);
       pending.resolve();
       await expect(guarded).resolves.toBe("ok");

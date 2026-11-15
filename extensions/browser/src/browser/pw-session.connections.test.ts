@@ -603,9 +603,9 @@ describe("Playwright created-page ownership", () => {
       }),
       title: async () => "",
       url: () => "about:blank",
-      route: vi.fn(),
+      route: vi.fn(async () => {}),
       bringToFront: vi.fn(async () => {}),
-      unroute: vi.fn(),
+      unroute: vi.fn(async () => {}),
     };
     const page = pageMock as unknown as Page;
     const contextMock = {

@@ -367,6 +367,7 @@ export async function gotoPageWithNavigationGuard(
     standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   let blockedError: unknown = null;
+  let requestPolicyError: unknown;
   let routeError: unknown;
 
   const release = await claimPageDocumentPolicy(opts.page, navigationPolicy, {
@@ -392,7 +393,8 @@ export async function gotoPageWithNavigationGuard(
         return true;
       } catch (err) {
         if (isPolicyDenyNavigationError(err) && kind === "top-level") blockedError = err;
-        else if (!isPolicyDenyNavigationError(err)) routeError ??= err;
+        else if (!isPolicyDenyNavigationError(err) && !opts.signal?.aborted)
+          requestPolicyError ??= err;
         await route.abort().catch(() => {});
         return false;
       }
@@ -426,6 +428,8 @@ export async function gotoPageWithNavigationGuard(
     });
     throw toErrorObject(blockedError, "Non-Error thrown");
   }
+  // Preserve the policy-check failure that caused the browser to abort navigation.
+  if (requestPolicyError !== undefined) throw toErrorObject(requestPolicyError, "Non-Error thrown");
   // The original navigation error retains precedence over route transport errors.
   if (navigationFailed) {
     throw navigationError;
