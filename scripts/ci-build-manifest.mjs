@@ -10,6 +10,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -1502,8 +1503,16 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    const auditCliObservations =
+      eventName === "schedule" &&
+      isCanonicalRepository &&
+      !frozenTarget &&
+      !shard.requiresDist &&
+      groups?.some((group) => resolveCiTestAuditConfig(group.configs)) &&
+      !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,
+      audit_cli_observations: auditCliObservations || undefined,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       adaptive_observations:
         (shard.groups ?? [shard]).some((group) =>
@@ -1606,6 +1615,15 @@ const nodeTestShards = targetNodeTestShards
     }
     return row;
   });
+// Vary the single audit capture across runs instead of always observing the first row.
+const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);
+if (auditCliRows.length > 0) {
+  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const auditIndex = /^\d+$/u.test(runId) ? Number(BigInt(runId) % BigInt(auditCliRows.length)) : 0;
+  auditCliRows.forEach((row, index) => {
+    row.audit_cli_observations = index === auditIndex || undefined;
+  });
+}
 const nodeTestGroupPools = {};
 if (
   typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&

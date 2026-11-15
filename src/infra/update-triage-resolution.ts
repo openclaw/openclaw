@@ -48,6 +48,7 @@ const failureFamilies = {
     "preflight-worktree-failed",
     "preflight-no-candidates",
     "preflight-no-good-commit",
+    "preflight-local-replay-conflict",
     "preflight-insufficient-space",
     "preflight-node-runtime-incompatible",
   ],

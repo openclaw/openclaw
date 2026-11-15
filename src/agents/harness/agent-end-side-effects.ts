@@ -13,6 +13,7 @@ import {
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
+  startAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
 import { bindAgentHarnessHookMessages, takeHookMessageLoader } from "./lifecycle-hook-messages.js";
 
@@ -170,11 +171,11 @@ export function runAgentEndSideEffects(params: AgentEndSideEffectsParams): void 
   runAgentHarnessAgentEndHook(withCompletedTurn(prepared, readCompletedTurnNative(prepared)));
 }
 
-/** Keep the turn lease through anchor preparation, then start plugin hooks without waiting. */
+/** Keep the turn lease through anchor and message preparation, then start plugin hooks without waiting. */
 export async function runAgentEndSideEffectsAsync(
   params: AgentEndSideEffectsParams,
 ): Promise<void> {
-  runAgentHarnessAgentEndHook(await prepareWithCompletedTurn(params));
+  await startAgentHarnessAgentEndHook(await prepareWithCompletedTurn(params));
 }
 
 /** Runs agent-end side effects and waits for plugin/core completion. */

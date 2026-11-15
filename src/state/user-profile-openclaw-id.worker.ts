@@ -18,6 +18,7 @@ import {
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectResolvedUserProfileMetadataById,
   toUserProfile,
   userProfilesDb,
 } from "./user-profiles-internal.js";
@@ -118,13 +119,13 @@ export type OpenClawIdLinkResult =
   | { ok: true }
   | {
       ok: false;
-      code: "owner_profile" | "profile_changed" | "linked_elsewhere";
+      code: "owner_profile" | "profile_changed" | "linked_elsewhere" | "profile_linked";
     };
 
 /**
  * Links an OpenClaw ID account to an existing personal profile, as a provider identity.
  * An account belongs to at most one profile (a profile may hold several, as after a merge);
- * the shared owner profile never holds one. The caller proves both sides on one connection; linking grants nothing.
+ * the shared owner profile never holds one. The caller owns authorization; linking grants nothing.
  */
 export function linkOpenClawIdUserProfile(
   input: { profileId: string; accountId: string; email: string | null },
@@ -134,7 +135,10 @@ export function linkOpenClawIdUserProfile(
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const kysely = userProfilesDb(db);
-      const target = requireResolvedUserProfileMetadataById(db, input.profileId);
+      const target = selectResolvedUserProfileMetadataById(db, input.profileId);
+      if (!target) {
+        return { ok: false, code: "profile_changed" };
+      }
       if (target.id === GATEWAY_OWNER_PROFILE_ID) {
         return { ok: false, code: "owner_profile" };
       }
@@ -154,6 +158,18 @@ export function linkOpenClawIdUserProfile(
         return requireResolvedUserProfileMetadataById(db, holder.profile_id).id === target.id
           ? { ok: true }
           : { ok: false, code: "linked_elsewhere" };
+      }
+      // A profile takes a second account only through a merge, never through a link.
+      const held = executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom("user_profile_identities")
+          .select("subject")
+          .where("provider", "=", openClawIdProfileProvider)
+          .where("profile_id", "=", target.id),
+      );
+      if (held) {
+        return { ok: false, code: "profile_linked" };
       }
       options.mutation?.before(db, target.id);
       executeSqliteQuerySync(

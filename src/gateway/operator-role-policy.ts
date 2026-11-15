@@ -15,6 +15,7 @@ import {
   isOpenClawIdTunnelPrincipalCurrent,
   openclawIdTunnelRolePolicy,
 } from "./openclaw-id/tunnel-principal.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
 import type { GatewayClient, GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { prepareSessionCreatorProfile } from "./session-creator.js";
@@ -96,20 +97,27 @@ export function resolveOperatorRoleSelection(
   githubLogin: string | null,
 ): { effectiveRole?: string; roleSource: "assigned" | "githubLogin" | "default" } {
   const roles = cfg.gateway?.roles;
-  if (!roles || !profileId || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    !profileId ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return { roleSource: "default" };
   }
   if (assignedRole && Object.hasOwn(roles.definitions, assignedRole)) {
     return { effectiveRole: assignedRole, roleSource: "assigned" };
   }
   const login = githubLogin?.toLowerCase();
-  if (login) {
-    for (const [configuredLogin, role] of Object.entries(roles.assignments?.byGithubLogin ?? {})) {
+  const assignments = roles.assignments?.byGithubLogin;
+  if (login && assignments) {
+    for (const configuredLogin of Object.keys(assignments)) {
       if (
         configuredLogin.trim().toLowerCase() === login &&
-        Object.hasOwn(roles.definitions, role)
+        // SAFETY: Object.keys enumerates the validated string-valued assignment map.
+        Object.hasOwn(roles.definitions, assignments[configuredLogin]!)
       ) {
-        return { effectiveRole: role, roleSource: "githubLogin" };
+        return { effectiveRole: assignments[configuredLogin], roleSource: "githubLogin" };
       }
     }
   }
@@ -122,7 +130,7 @@ export function resolveOperatorRolePolicyForProfile(
   cfg: OpenClawConfig,
 ): GatewayOperatorRoleDefinition | undefined {
   // The owner attributes the shared-secret system actor; roles govern identified people only.
-  if (!cfg.gateway?.roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (!isNamedOperatorRoleEnforcementEnabled(cfg) || profileId === GATEWAY_OWNER_PROFILE_ID) {
     return undefined;
   }
   const profile = profileId
@@ -144,7 +152,11 @@ export function resolveOperatorRolePolicyForAssignment(
   githubLogin: string | null,
 ): GatewayOperatorRoleDefinition | undefined {
   const roles = cfg.gateway?.roles;
-  if (!roles || profileId === GATEWAY_OWNER_PROFILE_ID) {
+  if (
+    !roles ||
+    !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+    profileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
     return undefined;
   }
   if (!profileId) {
@@ -239,7 +251,10 @@ export function resolveOperatorRolePolicy(
     if (roleFacts?.policy) {
       return roleFacts.policy;
     }
-    if (!cfg.gateway?.roles || authority.profileId === GATEWAY_OWNER_PROFILE_ID) {
+    if (
+      !isNamedOperatorRoleEnforcementEnabled(cfg) ||
+      authority.profileId === GATEWAY_OWNER_PROFILE_ID
+    ) {
       return undefined;
     }
     if (!roleFacts) {
@@ -365,7 +380,7 @@ export function assertOperatorCloudProfileDispatchAllowed(params: {
 }): void {
   const role = resolveOperatorRolePolicy(params.client ?? null, params.config);
   const administrator =
-    (!params.config.gateway?.roles && !params.client) ||
+    (!isNamedOperatorRoleEnforcementEnabled(params.config) && !params.client) ||
     (params.client?.connect?.scopes?.includes(ADMIN_SCOPE) === true &&
       (!role || role.scopes.includes(ADMIN_SCOPE)));
   if (administrator) {

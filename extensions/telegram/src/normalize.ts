@@ -1,4 +1,5 @@
 import { normalizeTelegramLookupTarget, parseTelegramTarget } from "./targets.js";
+import { buildTelegramConversationId, resolveTelegramTargetThread } from "./topic-conversation.js";
 
 const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
 
@@ -10,14 +11,11 @@ export function normalizeTelegramMessagingTarget(raw: string): string | undefine
     return undefined;
   }
 
-  const keepLegacyGroupPrefix = /^group:/i.test(prefixStripped);
-  const hasTopicSuffix = /:topic:\d+$/i.test(prefixStripped);
-  const chatSegment = keepLegacyGroupPrefix ? `group:${identity.chatId}` : identity.chatId;
-  const topicId = identity.directMessagesTopicId ?? identity.messageThreadId;
-  const threadMarker =
-    identity.directMessagesTopicId != null ? ":direct-topic:" : hasTopicSuffix ? ":topic:" : ":";
-  const body = topicId == null ? chatSegment : `${chatSegment}${threadMarker}${topicId}`;
-  return `telegram:${body}`;
+  const body = buildTelegramConversationId({
+    chatId: identity.chatId,
+    thread: resolveTelegramTargetThread(identity),
+  });
+  return `telegram:${/^group:/i.test(prefixStripped) ? "group:" : ""}${body}`;
 }
 
 function resolveTelegramTargetIdentity(raw: string) {

@@ -147,8 +147,26 @@ export async function restoreCronScriptOperatorSource(
   scope: ReturnType<typeof createHeadlessDeadlineScope>,
   deliveryAttemptFence: CronCompletionDeliveryFence | null,
 ) {
+  const source = job.operatorSource?.source;
+  // In-session conditions have the same conversation boundary as their model turn.
+  // Comparing the stored source to itself would let a reset source read or act first.
+  const target =
+    source && source.kind !== "gateway" && job.sessionTarget === `session:${source.sessionKey}`
+      ? {
+          agentId: source.agentId,
+          sessionKey: source.sessionKey,
+          entry: await scope.wait(
+            import("../auto-reply/reply/session-event-target.js").then(
+              ({ captureSessionEventTargetForHost }) =>
+                captureSessionEventTargetForHost(source.agentId, source.sessionKey, {
+                  assertCurrent: () => scope.signal.throwIfAborted(),
+                }),
+            ),
+          ),
+        }
+      : undefined;
   const operator = await scope.wait(
-    restoreCronOperatorSource({ job, context, signal: scope.signal, deliveryAttemptFence }),
+    restoreCronOperatorSource({ job, context, target, signal: scope.signal, deliveryAttemptFence }),
   );
   if (!operator) {
     return undefined;

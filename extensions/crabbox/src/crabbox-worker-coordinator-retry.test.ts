@@ -1,5 +1,9 @@
 import { expect, it, vi } from "vitest";
-import { commandResult } from "./crabbox-worker-provider.test-support.js";
+import {
+  createNodeBootstrapFixture,
+  createWorkerArchiveFixture,
+} from "./crabbox-worker-node-enrollment.test-support.js";
+import { commandResult, nodeEnrollmentFixture } from "./crabbox-worker-provider.test-support.js";
 import {
   createWarmProvider,
   type CommandCall,
@@ -57,11 +61,45 @@ it("retries a profile setup lease conflict using the same fixed lease", async ()
   expectCommands(calls, { warmup: 1, stop: 0 });
 });
 
+it.each(["runtime preparation", "enrollment"] as const)(
+  "retries a pre-script claim conflict during node %s on the same lease",
+  async (phase) => {
+    let enrollmentStarted = false;
+    const attempts: CommandCall[] = [];
+    const { provider, calls } = createWarmProvider((call) => {
+      if (call.argv[1] === "run" && enrollmentStarted === (phase === "enrollment")) {
+        attempts.push(call);
+        if (attempts.length === 1) {
+          return commandResult({ code: 4, stderr: LEASE_CONFLICT });
+        }
+      }
+      return undefined;
+    });
+    await expect(
+      provisionWarmProfile(provider, COLD_PROFILE, undefined, undefined, {
+        prepareNodeRuntime: async () => ({
+          nodeBootstrap: createNodeBootstrapFixture(),
+          workerBundle: createWorkerArchiveFixture(),
+        }),
+        beginNodeEnrollment: async () => {
+          enrollmentStarted = true;
+          return nodeEnrollmentFixture("setup-code", "Cold cloud worker");
+        },
+      }),
+    ).resolves.toMatchObject({ leaseId: LEASE_ID, node: { deviceId: "device-1" } });
+    expect(attempts).toHaveLength(2);
+    expect(attempts[0]!.argv).toEqual(attempts[1]!.argv);
+    expect(attempts[0]!.options.input).toEqual(attempts[1]!.options.input);
+    expect(attempts[0]!.argv).toContain(LEASE_ID);
+    expectCommands(calls, { warmup: 1, run: 3, stop: 0 });
+  },
+);
+
 it.each([
   { name: "coordinator timeout", result: timeoutResult() },
   {
     name: "lease conflict",
-    result: commandResult({ code: 4, stderr: "lease_id_conflict: claim is still changing" }),
+    result: commandResult({ code: 4, stderr: LEASE_CONFLICT }),
   },
 ])("stops the lease after exhausting profile setup retries: $name", async ({ result }) => {
   const setup = "install-node";
@@ -87,6 +125,16 @@ it.each([
   { name: "another exit-4 failure", code: 4, stderr: "lease_unavailable: retry" },
   { name: "a different exit code", code: 1, stderr: LEASE_CONFLICT },
   { name: "a different code token", code: 4, stderr: "lease_id_conflict_other: retry" },
+  {
+    name: "another lease owner",
+    code: 4,
+    stderr: `lease_id_conflict: fixed lease ${LEASE_ID} belongs to another repository`,
+  },
+  {
+    name: "a terminal lease",
+    code: 4,
+    stderr: `lease_id_conflict: fixed lease ${LEASE_ID} is terminal`,
+  },
   { name: "script stdout", code: 4, stderr: LEASE_CONFLICT, stdout: "installing packages" },
   { name: "mixed stderr", code: 4, stderr: `${LEASE_CONFLICT}\ninstallation failed` },
 ])("does not retry profile setup after $name", async ({ name: _name, ...failure }) => {

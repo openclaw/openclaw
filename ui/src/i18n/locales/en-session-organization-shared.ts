@@ -3,6 +3,9 @@ import { en } from "./en.ts";
 
 const enSessionOrganizationShared = {
   sessionsView: {
+    renameSession: "Rename session",
+    verbose: "Verbose",
+    reasoning: "Reasoning",
     personalGroupAdd: "Add to section",
     personalGroupReferenceAdded: "Added to section. Sessions stay in their groups.",
     personalGroups: "Sections",
@@ -27,7 +30,7 @@ const enSessionOrganizationShared = {
     archiveReasonAgeRetention: "Automatically archived by age retention",
     archiveReasonActiveSessionCap:
       "Automatically archived because the active-session limit was reached",
-    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
+    archiveReasonStaleDashboard: "Automatically archived after inactivity",
     archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     goal: "Goal",
     pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",

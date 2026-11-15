@@ -804,6 +804,7 @@ describe("createMediaGenerationTaskLifecycle", () => {
   );
 
   it("includes MEDIA directives in music completion wake prompts for session-only delivery", async () => {
+    setRuntimeConfigSnapshot({});
     const origin = { channel: "webchat", to: "session:dashboard" };
     subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
       delivered: true,

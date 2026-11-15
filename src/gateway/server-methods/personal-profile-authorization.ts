@@ -14,11 +14,16 @@ import {
 } from "./gateway-personal-caller.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 type Request = Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">;
+type PersonalProfileScope =
+  | "operator.read"
+  | "operator.write"
+  | "operator.sessions.read"
+  | "operator.admin";
 
 /** Intersect the live role ceiling with the socket grant, preserving scope implications. */
 export function currentPersonalProfileClient(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read",
+  scope: PersonalProfileScope,
   owner?: string | { profileId: string; role: string | null; githubLogin?: string | null },
 ) {
   const { client, context } = options;
@@ -84,7 +89,7 @@ export function currentPersonalProfileClient(
 /** Prepare canonical role facts off-thread; live checks consume the profile owner's revisions. */
 export async function preparePersonalProfileAction(
   options: Request,
-  scope: "operator.read" | "operator.write" | "operator.sessions.read" = "operator.read",
+  scope: PersonalProfileScope = "operator.read",
   callerSignal?: AbortSignal,
 ): Promise<{ owner: string; signal: AbortSignal; assertCurrent: () => void }> {
   const { client, context } = options;

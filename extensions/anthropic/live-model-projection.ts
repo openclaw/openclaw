@@ -10,6 +10,7 @@ import {
   asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 type ClaudeListedCapabilities = {
   adaptiveThinking: boolean;
@@ -52,18 +53,22 @@ function readClaudeListedCapabilities(capabilities: unknown): ClaudeListedCapabi
 
 export const projectAnthropicLiveModels: LiveModelRowProjection = (rows, fallback) => {
   const listedCapabilities = new Map<string, ClaudeListedCapabilities>();
-  for (const row of rows) {
+  const projectedRows = rows.map((row) => {
     const record = asOptionalRecord(row);
     const id = normalizeOptionalString(record?.id);
     const capabilities = readClaudeListedCapabilities(record?.capabilities);
     if (id && capabilities) {
       listedCapabilities.set(id, capabilities);
+      // The Anthropic thinking/effort tree declares a Messages model. Explicit
+      // negative chat/output facts still take precedence in the shared owner.
+      return { ...record, capabilities: { chat: true, ...asOptionalRecord(record?.capabilities) } };
     }
-  }
+    return row;
+  });
   // The shared projection owns row filtering and what an unknown id inherits from
   // its closest shipped model (compat, thinking map, limits). Without advertised
   // capabilities only a shipped id has a known request contract.
-  const models = buildOpenAICompatibleLiveModels(rows, fallback, ({ id }) =>
+  const models = buildOpenAICompatibleLiveModels(projectedRows, fallback, ({ id }) =>
     listedCapabilities.has(id),
   );
   for (const [index, model] of models.entries()) {
@@ -72,6 +77,8 @@ export const projectAnthropicLiveModels: LiveModelRowProjection = (rows, fallbac
       // Shipped rows are shared catalog objects; replace rather than mutate them.
       models[index] = {
         ...model,
+        // This projection consumes the native Anthropic listing, not a compatible host.
+        family: manifest.modelCatalog.providers.anthropic.family,
         thinkingLevelMap: {
           ...model.thinkingLevelMap,
           xhigh: claudeCapabilities.xhighEffort ? "xhigh" : null,

@@ -470,7 +470,7 @@ describe("operator model policy on plugin completions", () => {
         };
         context.getRuntimeConfig = () => ({
           ...cfg,
-          gateway: { roles: { definitions: { reader } } },
+          gateway: { roles: { default: "reader", definitions: { reader } } },
         });
         const started = createDeferredCore();
         const resume = createDeferredCore();

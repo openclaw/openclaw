@@ -97,7 +97,10 @@ validation, then reconciles per-scope FTS5 projections in the store's
 `state.sqlite`: one for the searched records and one for superseded records
 whose replacement chain reaches a current record. Only records whose content
 hash changed are re-indexed. These tables are not shared with `memory-core` or
-other plugins.
+other plugins. Persistent-index reconciliation commits before filtered search
+builds its connection-local temporary FTS corpus and ranks results. A fresh index
+is read without reserving the database writer; changed records still require an
+index update before results can be returned.
 
 - A complete publication receipt's `indexed: false` (shown by
   `knowledge_mutation` and `knowledge_history`) means indexing is pending until

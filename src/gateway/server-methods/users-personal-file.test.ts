@@ -311,7 +311,7 @@ describe("personal USER.md self-service", () => {
                 : {}),
             }),
           ),
-        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        ).rejects.toThrow(/Ask again yourself with a new message in the OpenClaw app/);
         expect(state.rootCalls).toBe(before);
         expect(await fs.readFile(personalPath(), "utf8")).toBe("Alice's preferences");
       } else {
@@ -321,7 +321,7 @@ describe("personal USER.md self-service", () => {
             action,
             ...(action === "set" ? { content: "Ambiguous", expectedHash: null } : {}),
           }),
-        ).rejects.toThrow(/own.*(turn|Control UI)/);
+        ).rejects.toThrow(/Ask again yourself with a new message in the OpenClaw app/);
         expect(await fs.readdir(workspace)).toEqual(["USER.md"]);
       }
     });
@@ -597,6 +597,7 @@ describe("personal USER.md self-service", () => {
     client.connect.scopes = ["operator.sessions.read"];
     config.gateway = {
       roles: {
+        default: "reader",
         definitions: {
           reader: {
             scopes: ["operator.sessions.read"],

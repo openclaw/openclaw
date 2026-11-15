@@ -22,9 +22,8 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prewarmSessionHistoryWorker,
@@ -49,6 +48,7 @@ import {
 } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prewarmGatewaySessionHistory } from "./server-history-prewarm.js";
 import { readChatHistoryPage } from "./server-methods/chat-history-pages.js";
 import { createArchivedSessionTranscriptSource } from "./session-end-transcript-reader.js";
 import {
@@ -98,7 +98,7 @@ afterEach(async () => {
   memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
+    [historyLane, sessionStoreLane].map(async (lane) => {
       clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
@@ -214,6 +214,30 @@ it("keeps fresh fixture roots isolated while reusing idle reader execution", asy
   }
   await closeOpenClawStateDatabaseAsync();
   expect(previousWorker?.threadId).toBe(-1);
+});
+
+it("prewarms presentation after a lightweight read and reuses that worker", async () => {
+  await withHistoryState(async (state) => {
+    const fixture = await seed(state, "main", "lightweight-before-prewarm");
+    expect(await prepareSessionEntryPresenceRead(fixture.target).read()).toBe(true);
+    const worker = observed.workers.at(-1);
+    expect(worker?.threadId).toBeGreaterThan(0);
+    const prewarms: Worker[] = [];
+    observed.dispatch = (message, dispatchedWorker) => {
+      if (asOptionalRecord(asOptionalRecord(message)?.input)?.kind === "prewarm") {
+        prewarms.push(dispatchedWorker);
+      }
+    };
+    const config = {
+      agents: { entries: { main: {} } },
+      session: { store: fixture.target.storePath },
+    };
+    await prewarmGatewaySessionHistory(config);
+    await prewarmGatewaySessionHistory(config);
+    expect(prewarms).toEqual([worker]);
+    expectMessageIds((await fixture.read()).messages, ["lightweight-before-prewarm-message"]);
+    expect(observed.workers.at(-1)).toBe(worker);
+  });
 });
 
 async function seed(state: OpenClawTestState, agentId: string, sessionId: string) {

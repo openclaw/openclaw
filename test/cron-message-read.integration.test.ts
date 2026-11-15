@@ -37,6 +37,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../src/state/openclaw-state-db.js";
+import { withEnvAsync } from "../src/test-utils/env.js";
 import { createAccountOwnedScheduledJob } from "./helpers/cron/account-owned-scheduled-job.js";
 import { installScheduledMessageReadRuntime } from "./helpers/cron/message-read-runtime.js";
 import {
@@ -654,30 +655,28 @@ describe("scheduled message actions", () => {
         } satisfies CronJobCreate;
         let created: { id: string };
         if (nativeCreator) {
-          vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", JSON.stringify(params));
-          let producerReply: Awaited<ReturnType<typeof getReplyFromConfig>>;
-          try {
-            producerReply = await getReplyFromConfig(
-              {
-                Body: "Schedule these Discord channel topic changes for later.",
-                From: `discord:channel:${channelId}`,
-                To: `channel:${channelId}`,
-                Provider: "discord",
-                Surface: "discord",
-                AccountId: creatorAccountId,
-                SessionKey: creatorSessionKey,
-                ChatType: "channel",
-                NativeChannelId: channelId,
-                GroupSpace: guildId,
-                SenderId: nativeRequesterId,
-                MessageSid: "100000000000000021",
-                WasMentioned: true,
-              },
-              { runId: "native-cron-creator" },
-            );
-          } finally {
-            vi.stubEnv("OPENCLAW_SCHEDULED_CREATE_JOB", undefined);
-          }
+          const producerReply = await withEnvAsync(
+            { OPENCLAW_SCHEDULED_CREATE_JOB: JSON.stringify(params) },
+            () =>
+              getReplyFromConfig(
+                {
+                  Body: "Schedule these Discord channel topic changes for later.",
+                  From: `discord:channel:${channelId}`,
+                  To: `channel:${channelId}`,
+                  Provider: "discord",
+                  Surface: "discord",
+                  AccountId: creatorAccountId,
+                  SessionKey: creatorSessionKey,
+                  ChatType: "channel",
+                  NativeChannelId: channelId,
+                  GroupSpace: guildId,
+                  SenderId: nativeRequesterId,
+                  MessageSid: "100000000000000021",
+                  WasMentioned: true,
+                },
+                { runId: "native-cron-creator" },
+              ),
+          );
           for (const payload of Array.isArray(producerReply) ? producerReply : [producerReply]) {
             expect(payload?.isError).not.toBe(true);
           }

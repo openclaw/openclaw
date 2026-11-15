@@ -495,7 +495,12 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
               const runRequestScope = boundClientGrant?.requestScope;
               const handleAsCaller = () =>
                 withGatewayToolCallerIdentity(callerIdentity, () =>
-                  runWithTrackedCancellation(requestAbort.signal, handleRequest),
+                  runWithTrackedCancellation(
+                    // Runtime shutdown must reach a cooperating tool while it still holds the
+                    // response open; the request signal alone waits for the socket to close.
+                    AbortSignal.any([requestAbort.signal, work.signal]),
+                    handleRequest,
+                  ),
                 );
               response = await (runRequestScope
                 ? withPluginRuntimeGatewayRequestScope(runRequestScope, handleAsCaller)
@@ -623,6 +628,9 @@ async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() =
     // Stop admitting this runtime's child grants before draining accepted
     // requests. A delayed old-server close cannot revoke a successor runtime.
     cleanup();
+    // Abort in-flight request work as soon as shutdown starts; do not wait on
+    // the socket layer to finish draining before signaling cancellation.
+    work.beginClose();
     try {
       await new Promise<void>((resolve, reject) => {
         httpServer.close((error) => (error ? reject(error) : resolve()));

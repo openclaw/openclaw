@@ -38,7 +38,9 @@ import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { createMcpStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
 import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
@@ -60,10 +62,17 @@ const mocks = vi.hoisted(() => ({
   >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
+  readToolUsage: vi.fn<typeof import("../../../config/sessions/tool-usage.js").readAgentToolUsage>(
+    async () => [],
+  ),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: mocks.createAnthropicPayloadLogger,
+}));
+vi.mock("../../../config/sessions/tool-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/tool-usage.js")>()),
+  readAgentToolUsage: mocks.readToolUsage,
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
@@ -480,6 +489,65 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       });
     },
   );
+  it.each([false, true])(
+    "ranks the MCP directory from learned MCP usage only with the lab on (%s)",
+    async (enabled) => {
+      const fixture = createFixture();
+      const config = { tools: { toolSearch: { mode: "tools" as const } } };
+      const catalogRef = {};
+      const mcpTools = Array.from({ length: 400 }, (_, index) =>
+        createMcpStubTool("granola", `op_${index}`, "Reads meeting notes for the caller."),
+      );
+      const controls = createToolSearchTools({ config, runtimeConfig: config, catalogRef });
+      const { tools } = applyToolSearchCatalog({
+        tools: [...controls, ...mcpTools],
+        config,
+        catalogRef,
+      });
+      const searchDescription = (list: { name: string; description: string }[]) =>
+        list.find((tool) => tool.name === "tool_search")!.description;
+      const description = searchDescription(tools);
+      expect(description).toContain("- granola server: 400 tools, names omitted");
+      const usage = (tool: string) => [{ toolId: `mcp:granola:${tool}`, score: 4, updatedAt: 1 }];
+      mocks.readToolUsage.mockReset().mockResolvedValueOnce(usage("granola__op_321"));
+      fixture.input.attempt.config = {
+        ...config,
+        agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
+      };
+      fixture.input.toolBase.toolSearchCatalogRef = catalogRef;
+      const refreshTools = vi.fn();
+      Object.assign(fixture.agentSession, { refreshTools });
+      const runtime = await fixture.prepare();
+      const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
+      const sent = searchDescription(pinTools(tools));
+      if (!enabled) {
+        expect(mocks.readToolUsage).not.toHaveBeenCalled();
+        expect(sent).toBe(description);
+        return;
+      }
+      expect(sent).toContain("- mcp:granola:granola__op_321\n");
+      Object.assign(fixture.sessionManager, {
+        getSessionTarget: () => undefined,
+        getSessionId: () => "history-session",
+        appendCustomEntryAsync: vi.fn(async () => "checkpoint"),
+      });
+      Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).not.toHaveBeenCalled();
+      // Committed compaction refreshes the snapshot; tools re-pin before the next request.
+      Object.assign(fixture.sessionManager, {
+        [sessionManagerReadTranscriptBranch]: () => [{ type: "compaction", id: "compacted" }],
+        getBoundaryCount: () => 1,
+      });
+      mocks.readToolUsage.mockResolvedValueOnce(usage("granola__op_399"));
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).toHaveBeenCalledOnce();
+      const repinned = searchDescription(pinTools(tools));
+      expect(repinned).toContain("- mcp:granola:granola__op_399\n");
+      expect(repinned).not.toContain("- mcp:granola:granola__op_321\n");
+    },
+  );
+
   it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
     const fixture = createFixture();
     const first = await fixture.prepare();

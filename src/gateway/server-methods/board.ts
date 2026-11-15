@@ -57,6 +57,7 @@ import {
 } from "../mcp-app-operations.js";
 import { mintMcpAppViewFromTranscript } from "../mcp-app-reconstruction.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
+import { resolveSandboxView } from "../sandbox-view.js";
 import { resolveRequestedSessionStoreTarget } from "../session-store-key.js";
 import {
   defineBoardMethod,
@@ -85,7 +86,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       authority.assertActive();
       const projectedSnapshot = projectBoardSnapshot(snapshot, boardSession.agentId);
       let sandboxPort = context.getMcpAppSandboxPort?.();
-      let sandboxOrigin: string | undefined | null = null;
       for (const widget of snapshot.widgets) {
         if (widget.grantState !== "none" && widget.grantState !== "granted") {
           continue;
@@ -121,19 +121,15 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         widget.viewTicketTtlMs = BOARD_VIEW_TICKET_TTL_MS;
         widget.viewGeneration = viewMetadata.viewGeneration;
         if (sandboxPort !== undefined) {
-          widget.sandboxUrl = buildBoardWidgetSandboxPath(viewMetadata);
-          if (ingress) {
-            widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
-          }
+          Object.assign(
+            widget,
+            resolveSandboxView(
+              buildBoardWidgetSandboxPath(viewMetadata),
+              client,
+              context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin,
+            ),
+          );
           widget.sandboxPort = sandboxPort;
-          if (sandboxOrigin === null) {
-            const configuredOrigin =
-              ingress?.sandboxOrigin ?? context.getRuntimeConfig?.().mcp?.apps?.sandboxOrigin;
-            sandboxOrigin = configuredOrigin ? new URL(configuredOrigin).origin : undefined;
-          }
-          if (sandboxOrigin) {
-            widget.sandboxOrigin = sandboxOrigin;
-          }
         }
       }
       authority.assertActive();

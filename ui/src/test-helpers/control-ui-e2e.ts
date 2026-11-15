@@ -736,6 +736,7 @@ function installControlUiMockGateway(
     {
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
+      models: scenario.models,
     },
     isRecord,
   );
@@ -2379,9 +2380,7 @@ function installControlUiMockGateway(
       isViteHmr ||
       scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
     ) {
-      return protocols === undefined
-        ? new NativeWebSocket(resolvedUrl)
-        : new NativeWebSocket(resolvedUrl, protocols);
+      return new NativeWebSocket(resolvedUrl, protocols);
     }
     return new MockWebSocket(resolvedUrl);
   };

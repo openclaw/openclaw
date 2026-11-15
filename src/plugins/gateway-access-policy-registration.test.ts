@@ -4,8 +4,49 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { bindPluginGatewayAccessPolicy } from "./gateway-access-policy-registration.js";
 import { createOwnedTestInstance } from "./plugin-instance.test-support.js";
+import { PluginInvocationScope } from "./plugin-invocation-scope.js";
 import { pluginRetentionEntrypoints } from "./retention-runtime.test-support.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
+
+it("admits policy checks independently but never revives a quiesced or retired instance", async () => {
+  const instance = createOwnedTestInstance("visitor-access");
+  const grant = new AbortController();
+  const check = vi.fn(() => grant.signal.throwIfAborted());
+  const source = { grantId: "original", signal: grant.signal, assertCurrent: check };
+  const policy = bindPluginGatewayAccessPolicy(
+    { authorize: () => source, resume: () => source },
+    instance,
+  );
+  const input = {
+    config: {},
+    profile: { profileId: "visitor", emails: [], assignedRole: null },
+    requiredByRole: true,
+  };
+  const authority = policy.authorize(input)!;
+  const scope = new PluginInvocationScope(instance.owner!.registry!, [instance], {
+    retained: true,
+  });
+  await scope.run(async () => {
+    scope.release();
+    await Promise.resolve();
+    expect(() => policy.authorize(input)).not.toThrow();
+    expect(() => policy.resume!({ ...input, grantId: "original" })).not.toThrow();
+    expect(authority.assertCurrent).not.toThrow();
+    expect(instance.ordinaryCallCount).toBe(0);
+    instance.quiesce();
+    check.mockClear();
+    expect(authority.assertCurrent).toThrow("reloaded or disabled");
+    expect(() => policy.authorize(input)).toThrow("reloaded or disabled");
+    expect(check).not.toHaveBeenCalled();
+    instance.resume();
+    expect(authority.assertCurrent).not.toThrow();
+    await instance.dispose();
+    const replacement = createOwnedTestInstance("visitor-access");
+    expect(replacement.acceptingCalls).toBe(true);
+    expect(authority.assertCurrent).toThrow("reloaded or disabled");
+    expect(() => policy.resume!({ ...input, grantId: "original" })).toThrow("reloaded or disabled");
+  });
+});
 
 it("reuses the assertion callback while checking live authority inside each fresh plugin scope", () => {
   const instance = createOwnedTestInstance("access-policy");
