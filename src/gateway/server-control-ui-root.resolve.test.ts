@@ -36,6 +36,7 @@ vi.mock("node:os", async (importOriginal) => ({
   availableParallelism: () => 4,
 }));
 
+import { resolveWorkerHeapLimitMb } from "../infra/worker-pool-sizing.js";
 import type { ControlUiFileSnapshot } from "./control-ui-file.js";
 import {
   createGatewayControlUiRootLifecycle,
@@ -320,7 +321,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
         );
         expect(index).toBeGreaterThanOrEqual(0);
         expect(created.mock.calls[index]?.[1]?.resourceLimits).toMatchObject({
-          maxOldGenerationSizeMb: 512,
+          maxOldGenerationSizeMb: resolveWorkerHeapLimitMb(),
           ...(script === "control-ui-file" ? { maxYoungGenerationSizeMb: 16 } : {}),
         });
       } finally {

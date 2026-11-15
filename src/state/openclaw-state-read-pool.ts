@@ -4,7 +4,10 @@ import {
 } from "../infra/bun-sqlite-library.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { RetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
-import { resolveStateReadWorkerCount } from "../infra/worker-pool-sizing.js";
+import {
+  resolveStateReadWorkerCount,
+  resolveWorkerHeapLimitMb,
+} from "../infra/worker-pool-sizing.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -33,7 +36,7 @@ export function createStateReadPool(
   const pool = createOwnedWorkerTaskPool<OpenClawStateReadRequest, OpenClawStateReadReply>(
     {
       workerUrl,
-      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
+      workerOptions: { resourceLimits: { maxOldGenerationSizeMb: resolveWorkerHeapLimitMb() } },
       maxWorkers: resolveStateReadWorkerCount(),
       idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
       // Keep one reader warm; release surplus isolates after a short idle period.

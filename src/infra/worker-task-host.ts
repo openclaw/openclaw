@@ -28,7 +28,11 @@ import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
-import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
+import {
+  resolveWorkerHeapLimitMb,
+  resolveWorkerPoolSize,
+  type WorkerPoolClass,
+} from "./worker-pool-sizing.js";
 import { captureWorkerStartObserver, trackWorkerRequest } from "./worker-request-diagnostics.js";
 import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
@@ -90,7 +94,7 @@ export function createWorkerTaskHost(
       if (boundedHeap) {
         const limits = workerOptions.resourceLimits;
         workerOptions.resourceLimits = {
-          maxOldGenerationSizeMb: limits?.maxOldGenerationSizeMb ?? 512,
+          maxOldGenerationSizeMb: limits?.maxOldGenerationSizeMb ?? resolveWorkerHeapLimitMb(),
           maxYoungGenerationSizeMb: limits?.maxYoungGenerationSizeMb,
           codeRangeSizeMb: limits?.codeRangeSizeMb,
           stackSizeMb: limits?.stackSizeMb,

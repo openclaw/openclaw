@@ -242,7 +242,7 @@ it.each<[number, WorkerPoolClass, number, boolean?, number?]>([
       if (["reader", "file-reader", "compute"].includes(workerClass)) {
         expect(
           workers.map((worker) => worker.options?.resourceLimits?.maxOldGenerationSizeMb),
-        ).toEqual(Array(count).fill(512));
+        ).toEqual(Array(count).fill(256));
       }
     } finally {
       gate.resolve();
@@ -282,7 +282,7 @@ it.each([undefined, "reader"] as const)(
     const limits = workers[0]?.options?.resourceLimits;
     expect([limits?.stackSizeMb, limits?.maxOldGenerationSizeMb]).toEqual([
       8,
-      selectedClass ? 512 : undefined,
+      selectedClass ? 256 : undefined,
     ]);
     expect(releaseResources).not.toHaveBeenCalled();
     await pool.close();

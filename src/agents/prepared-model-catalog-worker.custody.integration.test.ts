@@ -3,6 +3,7 @@ import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { beforeEach, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { resolveCachedWorkerHeapLimitMb } from "../infra/worker-pool-sizing.js";
 import * as captureDirectory from "../plugins/plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "../plugins/plugin-source-capture-directory.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -96,7 +97,7 @@ it.for([
     );
     expect(worker).toBeDefined();
     expect(worker?.resourceLimits).toMatchObject({
-      maxOldGenerationSizeMb: 512,
+      maxOldGenerationSizeMb: resolveCachedWorkerHeapLimitMb(),
       maxYoungGenerationSizeMb: 32,
     });
     const terminate = worker!.terminate.bind(worker!);

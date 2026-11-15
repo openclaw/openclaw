@@ -6,7 +6,10 @@ import {
 } from "../infra/database-engine/context.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import { resolveWorkerPoolSize } from "../infra/worker-pool-sizing.js";
+import {
+  resolveCachedWorkerHeapLimitMb,
+  resolveWorkerPoolSize,
+} from "../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 
@@ -18,7 +21,12 @@ export type PreparedModelCatalogWorkerData = {
 
 export const GATEWAY_CATALOG_WORKERS = resolveWorkerPoolSize("singleton");
 // Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMITS = { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 };
+// The catalog worker keeps the whole model catalog resident, so it stays on the
+// cached-worker floor rather than the shared per-worker default.
+const CATALOG_WORKER_HEAP_LIMITS = {
+  maxOldGenerationSizeMb: resolveCachedWorkerHeapLimitMb(),
+  maxYoungGenerationSizeMb: 32,
+};
 
 /**
  * Without crash restart, the pool closes itself when its worker fails, exits or times out, even

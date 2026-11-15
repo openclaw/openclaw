@@ -32,6 +32,7 @@ import { SqliteWorkerError, type SqliteWorkerReply } from "./sqlite-worker-contr
 import type { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import { SqliteWorkerSlotCustody } from "./sqlite-worker-request-custody.js";
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
+import { resolveWorkerHeapLimitMb } from "./worker-pool-sizing.js";
 
 function cleanupFailures(results: PromiseSettledResult<unknown>[]): unknown[] {
   return results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []));
@@ -212,7 +213,10 @@ export function createSqliteWorkerLifecycle({
         carrierUrl,
         {
           // V8's default young generation lets each carrier keep ~60 MiB of idle nursery.
-          resourceLimits: { maxOldGenerationSizeMb: 512, maxYoungGenerationSizeMb: 32 },
+          resourceLimits: {
+            maxOldGenerationSizeMb: resolveWorkerHeapLimitMb(),
+            maxYoungGenerationSizeMb: 32,
+          },
           env: resolveNodeCompileCacheEnv(),
           execArgv: resolveRuntimeWorkerThreadExecArgv(carrierUrl),
           workerData: { postgresPool },
