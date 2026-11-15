@@ -4137,11 +4137,12 @@ select.data-table-pagination__size {
   }
 }
 
-/* WebKit can loop forever in style resolution when a closing anchored surface keeps
-   trying position fallbacks while another surface opens (openclaw/openclaw#196820).
-   A closing surface is only fading out, so it may return to its primary side for that
-   exit. !important overrides the surface-specific fallback lists. Kept out of the
-   shadow-inlined overlay.css: its JS-embedded copy would grow the boot bundles. */
-[data-phase="closing"] {
+/* WebKit can loop forever when closing surfaces keep trying position fallbacks
+   (openclaw/openclaw#196820), and hidden popovers still pay for those searches during
+   page restyles. Closing surfaces may fade on their primary side; hidden surfaces
+   need no fallback. !important overrides surface-specific lists until opening.
+   Document styles keep this out of overlay.css's shadow-inlined boot JS copies. */
+[data-phase="closing"],
+[data-phase="hidden"] {
   position-try-fallbacks: none !important;
 }

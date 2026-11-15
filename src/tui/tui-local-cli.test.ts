@@ -58,6 +58,7 @@ function harness(
   const supervisor: ProcessSupervisor = {
     spawn,
     cancel: vi.fn(),
+    release: vi.fn(async () => undefined),
     cancelScope: vi.fn(() => run.cancel()),
     acquireScopeCleanup: vi.fn(() => cleanup),
   };

@@ -1,18 +1,19 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
+import {
+  matchesAgentDatabaseReadCandidatePath,
+  type AgentDatabaseReadCandidate,
+} from "../../infra/agent-database-readers.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
 import {
   assertDatabasePathIdentity,
+  assertExistingDatabaseIdentity,
   type DatabasePathIdentity,
   inspectDatabasePathIdentitySync,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
-import {
-  matchesAgentDatabaseReadCandidatePath,
-  type OpenClawAgentDatabaseReadCandidateResource,
-} from "../../state/openclaw-agent-db-resources.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 
 export type CapturedSessionStorePaths = ReadonlyMap<
@@ -48,10 +49,33 @@ export function resolveCapturedSessionStorePath(
   return captured[kind];
 }
 
-export type SessionStoreReadCandidate = Pick<
-  OpenClawAgentDatabaseReadCandidateResource,
-  "path" | "scope"
-> & { physicalPath: string; identity?: DatabasePathIdentity };
+export type SessionStoreReadCandidate = AgentDatabaseReadCandidate & {
+  physicalPath: string;
+  identity?: DatabasePathIdentity;
+};
+
+export type SessionStoreReadCustody = {
+  sourcePath: string;
+  candidates: readonly SessionStoreReadCandidate[];
+};
+
+/** Registry receipts must retain the captured file generation through every spelling. */
+export function isSessionStoreSourceGenerationCurrent(
+  captured: { path: string; identity: string; birthtime?: string },
+  source: { path: string; physicalPath: string },
+): boolean {
+  if (captured.birthtime === undefined) {
+    return false;
+  }
+  try {
+    for (const pathname of new Set([captured.path, source.path, source.physicalPath])) {
+      assertExistingDatabaseIdentity(pathname, captured.identity, captured.birthtime);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Capture exact candidates before discovery yields; sibling families have no file identity. */
 export function captureSessionStoreCandidateIdentities(
@@ -217,7 +241,7 @@ export function assertSessionStoreReadCandidate(
 }
 
 /** Unlisted siblings inherit absence only from a complete inventory of the original physical family. */
-export function qualifyAbsentSessionStoreReadCandidate(
+function qualifyAbsentSessionStoreReadCandidate(
   pathname: string,
   captured: { candidates: readonly SessionStoreReadCandidate[]; familyListingComplete: boolean },
 ) {
@@ -253,4 +277,24 @@ export function qualifyAbsentSessionStoreReadCandidate(
     throw new Error("Session database appeared after its initial inventory");
   }
   return identity;
+}
+
+export function resolveSessionStoreWriteCandidate(
+  pathname: string,
+  captured: {
+    candidates: readonly SessionStoreReadCandidate[];
+    familyListingComplete: boolean;
+    identities: readonly DatabasePathIdentity[];
+  },
+) {
+  if (!captured.candidates.every(isSessionStoreReadCandidateCurrent)) {
+    throw new Error("Session database selector changed during discovery");
+  }
+  const physicalPath = assertSessionStoreReadCandidate(pathname, captured.candidates);
+  const identity = captured.identities.find((entry) => entry.canonicalPath === physicalPath);
+  if (identity) {
+    assertDatabasePathIdentity(pathname, identity);
+    return identity;
+  }
+  return qualifyAbsentSessionStoreReadCandidate(pathname, captured);
 }

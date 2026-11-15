@@ -1201,6 +1201,8 @@ const enSettings = {
       checking: "Checking…",
       checkFailed:
         "API key saved, but the provider didn’t accept it. {reason} Enter a different key.",
+      checkBillingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then use Test access to try again.",
       checkInconclusive:
         "API key saved, but the check didn’t finish. {reason} Use Test access to try again.",
       checkUnavailable:
@@ -1268,6 +1270,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",
@@ -1334,7 +1338,7 @@ const enSettings = {
       check: "Check again",
       checking: "Checking…",
       empty: "No supported coding apps yet.",
-      note: "Update installed agents from Control UI",
+      note: "Update installed agents from the OpenClaw app",
       enabled: "{name} is enabled.",
       sessionExpired:
         "This setup session ended. Close this dialog and check the installed agent status.",
@@ -1344,7 +1348,7 @@ const enSettings = {
       adminRequired: "You can view Models, but only admins can change them.",
     },
     notes: {
-      defaultModel: "Update defaults from Control UI",
+      defaultModel: "Update defaults from the OpenClaw app",
     },
   },
   updates: {
@@ -1370,7 +1374,7 @@ const enSettings = {
     page: {
       buildTitle: "Current build",
       gatewayVersion: "Gateway version",
-      controlUiCommit: "Control UI commit",
+      controlUiCommit: "Web app commit",
       builtAt: "Built",
       installedAt: "Installed",
       installedAtUnknown: "Unknown",
@@ -1865,7 +1869,7 @@ const enSettings = {
       accountDefaults: "Account defaults",
       installedApp: "This browser or app",
       deliverDevice: "Deliver to this browser or app",
-      notificationLabel: "Notification label",
+      notificationLabel: "Notification title prefix",
       approvalRequested: "Approval requested",
       agentFinished: "Agent finished",
       agentQuestion: "Agent question",
@@ -1882,6 +1886,7 @@ const enSettings = {
       quietHoursEnd: "Quiet hours end",
       timeZone: "Time zone",
       onlyAgents: "Only these agents",
+      onlyAgentsHint: "Enter agent IDs separated by commas. Leave blank for all agents.",
       inherit: "Use account default",
       inheritDetail: "Use account detail level",
       inheritQuietHours: "Use account quiet hours",
@@ -2013,9 +2018,6 @@ const enSettings = {
         title: "Browser tab icon",
         default: "Default",
         agent: "Agent avatar",
-        square: "Square",
-        rounded: "Rounded corners",
-        circle: "Circle",
         lobsterdex: "Lobsterdex",
         lobster: "Lobster",
         empty: "No lobsters unlocked in this browser yet.",
@@ -2051,7 +2053,7 @@ const enSettings = {
       title: "Session observer",
       scope: "Applies to everyone on this Gateway.",
       toggle: "Session observer",
-      toggleHint: "Generate live status digests for subscribed Control UI sessions.",
+      toggleHint: "Generate live status digests for sessions that are open in the app.",
       resolvedModel: "Resolved small model",
       modelAuto: "auto ({model})",
       modelConfigured: "configured ({model})",
@@ -2063,7 +2065,7 @@ const enSettings = {
       modelCatalogUnavailable: "Explicit model catalog unavailable",
       auto: "Auto (provider default)",
       disabled: "Disabled",
-      toggleNote: "Update the Control UI session observer",
+      toggleNote: "Update the session observer",
       modelNote: "Update the default utility model",
     },
     connection: {

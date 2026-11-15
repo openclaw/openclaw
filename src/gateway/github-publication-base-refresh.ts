@@ -9,6 +9,7 @@ import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-id
 import type { SandboxContext } from "../agents/sandbox/types.js";
 import { withWorktreeGitConfig } from "../agents/worktrees/checkout-git-config.js";
 import { resolveGitMetadataPath } from "../agents/worktrees/git.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { gitNullConfigPath } from "../infra/git-exec.js";
 import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
 import {
@@ -76,14 +77,16 @@ export async function integrateManagedWorkspaceSource(
     config: currentGitHubPublicationConfig(),
     excludeAccountId: identity.account.accountId,
   });
-  const assertCurrent = () => {
-    params.signal?.throwIfAborted();
-    owner.assertCurrent();
-    params.assertCurrent();
-    if (!attribution.isCurrent()) {
-      throw new Error(`Contributor credit changed; retry ${action}.`);
-    }
-  };
+  const assertCurrent = composeSessionSourceAssertion(
+    [owner.assertCurrent, params.assertCurrent],
+    (assertSources) => {
+      params.signal?.throwIfAborted();
+      assertSources();
+      if (!attribution.isCurrent()) {
+        throw new Error(`Contributor credit changed; retry ${action}.`);
+      }
+    },
+  );
   const message = (subject: string) =>
     [
       subject,
@@ -166,13 +169,14 @@ export async function integrateManagedWorkspaceSource(
       state.current();
       await state.settle();
       previousBase = state.current().base_commit ?? undefined;
-      const check = () => {
+      const check = composeSessionSourceAssertion([assertCurrent], (assertSource) => {
+        assertSource();
         state.current();
-      };
+      });
       return await withWorktreeGitConfig<SessionGitHubBaseRefreshResult>(
         owner.worktree.path,
         true,
-        { beforeRun: check },
+        { beforeRun: check, stateOwnerPath: state.workerAuthority.stateOwnerPath },
         async (policy) => {
           const cwd = owner.worktree.path;
           const env = {
@@ -212,6 +216,7 @@ export async function integrateManagedWorkspaceSource(
             root: cwd,
             stagedResultRef: stagedRef,
             assertCurrent: check,
+            workerAuthority: state.workerAuthority,
           });
           // A refresh rewrites working files before the guest index is restaged, so a refreshed file
           // stays staged at its pre-refresh entry, which ORIG_HEAD records until the next source is
@@ -392,6 +397,7 @@ export async function integrateManagedWorkspaceSource(
                   branch: "refresh",
                   signal: new AbortController().signal,
                   assertCurrent: check,
+                  workerAuthority: state.workerAuthority,
                 });
               }
               const buildCacheInputs = await state.buildCacheInputs();
@@ -418,6 +424,7 @@ export async function integrateManagedWorkspaceSource(
                 currentManifestRaw: current.rawManifest,
                 buildCacheInputs: current.buildCacheInputs,
                 assertCurrent: check,
+                workerAuthority: state.workerAuthority,
               });
             } finally {
               await fs.rm(temporary, { recursive: true, force: true });

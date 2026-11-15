@@ -590,7 +590,10 @@ it("invalidates retained context for nonactor content and topology writer classe
       } else if (change === "replacement" || change === "suffix-trim") {
         expect(readTranscriptEventRows(f.database, f.scope.sessionId)).toHaveLength(2);
       } else if (change === "rewind") {
-        expect(after.entry?.sessionId).not.toBe(before.entry?.sessionId);
+        // An in-place cut keeps the transcript identity and rotates the incarnation;
+        // retained context is invalidated by the assertions around this branch.
+        expect(after.entry?.sessionId).toBe(before.entry?.sessionId);
+        expect(after.entry?.lifecycleRevision).not.toBe(before.entry?.lifecycleRevision);
       } else if (change === "delete") {
         expect(after.entry).toBeUndefined();
       } else {

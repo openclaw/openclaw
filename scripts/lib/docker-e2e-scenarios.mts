@@ -455,6 +455,13 @@ export const mainLanes: DockerE2eLane[] = [
     "published-driver-update", // Outlives the script's 1125 s envelope; hosted after #162858: p50 521 s, max 659 s.
     { resources: ["service"], stateScenario: "empty", timeoutMs: 20 * 60 * 1000 },
   ),
+  // A published updater behind a linked package path: the layout a downgrade would leave under
+  // the proposed release-directory design. No CI workflow selects this lane yet.
+  npmLane("published-driver-linked-root", {
+    resources: ["service"],
+    stateScenario: "empty",
+    timeoutMs: 20 * 60 * 1000,
+  }),
   npmLane("published-driver-scoped-restore", {
     resources: ["service"],
     stateScenario: "empty",

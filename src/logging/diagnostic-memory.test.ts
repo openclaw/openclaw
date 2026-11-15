@@ -412,12 +412,13 @@ describe("diagnostic memory", () => {
   });
 
   it.each([
-    [1000, 210, false],
-    [1000, 200, true],
-    [4000, 200, false],
+    [1000, 210, false, false],
+    [1000, 200, true, false],
+    [1000, 100, true, true],
+    [4000, 200, false, false],
   ] as const)(
     "reclaims constrained process headroom despite a heap warning: limit=%i available=%i reclaim=%s",
-    (processMemoryLimitBytes, available, reclaim) => {
+    (processMemoryLimitBytes, available, reclaim, critical) => {
       mockProcessPlatform("linux");
       vi.spyOn(process, "availableMemory").mockReturnValue(available);
       const pressure = channel("openclaw.memory.critical");
@@ -434,11 +435,17 @@ describe("diagnostic memory", () => {
         };
         emitDiagnosticMemorySample(options, false);
         expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 1 : 0);
+        if (reclaim) {
+          expect(retireIdle.mock.calls[0]?.[0]).toBe(critical);
+        }
         expect(events).toEqual([]);
         emitDiagnosticMemorySample(options);
         expect(retireIdle).toHaveBeenCalledTimes(reclaim ? 2 : 0);
         expect(events).toEqual([
-          expect.objectContaining({ level: "warning", reason: "heap_threshold" }),
+          expect.objectContaining({
+            level: critical ? "critical" : "warning",
+            reason: critical ? "process_memory_threshold" : "heap_threshold",
+          }),
         ]);
       } finally {
         pressure.unsubscribe(retireIdle);

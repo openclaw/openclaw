@@ -196,7 +196,7 @@ function scheduleExpiry(state: QuestionPromptState): void {
         state.onChange();
       }
       for (const id of expired) {
-        void restoreEngagedQuestion(state, id);
+        void refreshEngagedQuestion(state, id, "question.get");
       }
     },
     resolveTimerTimeoutMs(nextExpiry - Date.now(), 0, 0),
@@ -204,18 +204,23 @@ function scheduleExpiry(state: QuestionPromptState): void {
 }
 
 /** Interaction in another view can stop the Gateway's expiry; ask its owner once. */
-async function restoreEngagedQuestion(state: QuestionPromptState, id: string): Promise<void> {
+async function refreshEngagedQuestion(
+  state: QuestionPromptState,
+  id: string,
+  method: "question.get" | "question.engage",
+): Promise<void> {
   const client = state.client;
   if (!client) {
     return;
   }
   try {
-    const result = await requestQuestionGateway(client, "question.get", { id });
+    const result = await requestQuestionGateway(client, method, { id });
     const record = parseQuestionRecord(result.question);
     const current = state.prompts.get(id);
     if (
       state.client === client &&
-      current?.locallyExpired &&
+      current &&
+      (current.status === "pending" || current.locallyExpired) &&
       record?.status === "pending" &&
       record.expiryStoppedAtMs !== undefined
     ) {
@@ -648,18 +653,7 @@ export async function engageQuestionPrompt(state: QuestionPromptState, id: strin
   }
   // A failed report keeps the original deadline rather than retrying on every keystroke.
   prompt.engaged = true;
-  try {
-    const result = await requestQuestionGateway(client, "question.engage", { id });
-    const record = parseQuestionRecord(result.question);
-    const current = state.prompts.get(id);
-    if (state.client === client && record?.status === "pending" && current?.status === "pending") {
-      storeQuestionRecord(state, id, record, current);
-      scheduleExpiry(state);
-      state.onChange();
-    }
-  } catch {
-    // Terminal outcomes still arrive through question.resolved and refresh.
-  }
+  await refreshEngagedQuestion(state, id, "question.engage");
 }
 
 export function listQuestionPrompts(state: QuestionPromptState): QuestionPrompt[] {

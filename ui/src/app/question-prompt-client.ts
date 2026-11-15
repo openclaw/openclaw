@@ -107,13 +107,8 @@ export function requestQuestionGateway(
 ): Promise<QuestionListResult>;
 export function requestQuestionGateway(
   client: QuestionClient,
-  method: "question.get",
-  params: QuestionGetParams,
-): Promise<QuestionGetResult>;
-export function requestQuestionGateway(
-  client: QuestionClient,
-  method: "question.engage",
-  params: QuestionEngageParams,
+  method: "question.get" | "question.engage",
+  params: QuestionGetParams | QuestionEngageParams,
 ): Promise<QuestionGetResult>;
 export function requestQuestionGateway(
   client: QuestionClient,
