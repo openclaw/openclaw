@@ -40,7 +40,12 @@ async function startLoopbackRelay() {
   const dmSubscriptions: Array<{ since?: number }> = [];
   server.on("connection", (socket) => {
     socket.on("message", (raw) => {
-      const [type, id, ...filters] = JSON.parse(String(raw)) as [string, string, ...unknown[]];
+      const text = Buffer.isBuffer(raw)
+        ? raw.toString("utf8")
+        : Array.isArray(raw)
+          ? Buffer.concat(raw).toString("utf8")
+          : Buffer.from(raw).toString("utf8");
+      const [type, id, ...filters] = JSON.parse(text) as [string, string, ...unknown[]];
       if (type !== "REQ") {
         return;
       }

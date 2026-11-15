@@ -301,7 +301,10 @@ export async function startNostrBus(options: NostrBusOptions) {
     handledEventIds.delete(id);
     handledEventIds.add(id);
     if (handledEventIds.size > MAX_HANDLED_EVENT_IDS) {
-      handledEventIds.delete(handledEventIds.values().next().value as string);
+      const oldest = handledEventIds.values().next();
+      if (!oldest.done) {
+        handledEventIds.delete(oldest.value);
+      }
     }
   };
   const handleRelayEvent = async (event: Event): Promise<void> => {
