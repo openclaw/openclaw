@@ -1,13 +1,15 @@
 import type { HumanMention } from "../chat/chat-types.ts";
 import { HUMAN_MENTION_CLIPBOARD_TYPE, readHumanMentions } from "../chat/human-mentions.ts";
+import { readComposerSkillReferences } from "../chat/skill-references.ts";
+import { registerComposerActivation } from "../composer-input.ts";
 import { createIdleImport } from "../idle-import.ts";
 import { useOptionalApplication } from "./context.ts";
 import { elementRef } from "./element-ref.ts";
 import { listen } from "./listener.ts";
 
 /** One foreign-DOM owner shared by Chat and New Session. Load CM only when a
- * selected person needs inline layout; retain it until this draft unmounts. */
-export function createMentionComposerBinding(
+ * person or skill reference needs inline layout; retain it until this draft unmounts. */
+export function createReferenceComposerBinding(
   getMentions: () => readonly HumanMention[],
   avatarUrls?: ReadonlyMap<string, string>,
 ) {
@@ -15,38 +17,43 @@ export function createMentionComposerBinding(
   return elementRef<HTMLTextAreaElement>((node) => {
     const native = new AbortController();
     let composing = false;
+    let editingSkillValue: string | undefined;
     let entryHistory:
       | import("../../pages/chat/components/composer-editor-mentions.tsx").ComposerMentionSnapshot
       | undefined;
     let mountEditor:
-      | typeof import("../../pages/chat/components/composer-editor-mentions.tsx").mountMentionComposerEditor
+      | typeof import("../../pages/chat/components/composer-editor-references.ts").mountReferenceComposerEditor
       | undefined;
     let editor: ReturnType<NonNullable<typeof mountEditor>> | undefined;
     const mentions = () => readHumanMentions(node.value, getMentions()) ?? [];
+    const hasReferences = () =>
+      mentions().length > 0 ||
+      readComposerSkillReferences(
+        node.value,
+        editingSkillValue === node.value ? node.selectionStart : undefined,
+      ).length > 0;
     // A transfer mounts for its own insertion, which the editor's history then owns.
     function activate(forTransfer = false) {
-      if (
-        !native.signal.aborted &&
-        !composing &&
-        (forTransfer || mentions().length) &&
-        mountEditor
-      ) {
+      if (!native.signal.aborted && !composing && (forTransfer || hasReferences()) && mountEditor) {
         editor = mountEditor(
           node,
           getMentions,
           application,
-          forTransfer ? undefined : entryHistory,
+          forTransfer || (entryHistory?.value === node.value && !mentions().length)
+            ? undefined
+            : entryHistory,
           avatarUrls,
         );
         entryHistory = undefined;
         // Retire only after a successful handoff; a failed mount keeps native editing.
         native.abort();
+        stopActivation();
       }
     }
     const loader = createIdleImport(
-      () => import("../../pages/chat/components/composer-editor-mentions.tsx"),
+      () => import("../../pages/chat/components/composer-editor-references.ts"),
       (module) => {
-        mountEditor = module.mountMentionComposerEditor;
+        mountEditor = module.mountReferenceComposerEditor;
         activate();
       },
     );
@@ -72,26 +79,44 @@ export function createMentionComposerBinding(
     listen(
       node,
       "input",
+      (event) => {
+        if (!composing) {
+          editingSkillValue = event.inputType === "insertText" ? node.value : undefined;
+          // Keep the pre-insertion snapshot for the first skill handoff, just as
+          // a picker selection does. Undo must remove a native paste, not replay it.
+          if (!readComposerSkillReferences(node.value).length) {
+            entryHistory = snapshot();
+          }
+          requestActivation();
+        }
+      },
+      { signal: native.signal },
+    );
+    listen(
+      node,
+      "selectionchange",
       () => {
         if (!composing) {
-          entryHistory = snapshot();
+          requestActivation();
         }
       },
       { signal: native.signal },
     );
     // One observer follows the native port before and after rich-editor activation.
     // Both attributes and feature metadata reconcile through the same owner.
-    const observer = new MutationObserver(() => {
+    function requestActivation() {
       if (editor) {
         editor.sync();
-      } else if (!composing && mentions().length) {
+      } else if (!composing && hasReferences()) {
         // The load callback fires once; a later mention must still activate.
         void loader.load().then(
           () => activate(),
           () => undefined,
         );
       }
-    });
+    }
+    const stopActivation = registerComposerActivation(node, requestActivation);
+    const observer = new MutationObserver(requestActivation);
     observer.observe(node, { attributes: true });
     // Recipient transfers have one owner, the rich editor: mount it, then replay the
     // paste or drop there. DataTransfer is readable only during its event.
@@ -171,7 +196,7 @@ export function createMentionComposerBinding(
       },
       { signal: native.signal },
     );
-    if (mentions().length) {
+    if (hasReferences()) {
       void loader.load().then(
         () => activate(),
         () => undefined,
@@ -179,6 +204,7 @@ export function createMentionComposerBinding(
     }
     return () => {
       native.abort();
+      stopActivation();
       observer.disconnect();
       editor?.destroy();
       loader.dispose();

@@ -10,7 +10,7 @@ import {
 } from "../../lib/composer-input.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import "../../test-helpers/load-styles.ts";
-import { createMentionComposerBinding } from "../../lib/reactive/composer-editor.ts";
+import { createReferenceComposerBinding } from "../../lib/reactive/composer-editor.ts";
 import {
   composerFixture,
   mention,
@@ -452,7 +452,7 @@ it("retires native activation frames after handoff and across ref replacement", 
   let recipients = [mention("alex-one", 0, 5)];
   const getMentions = vi.fn(() => recipients);
   const binding = createRoot((dispose) => ({
-    ref: createMentionComposerBinding(getMentions),
+    ref: createReferenceComposerBinding(getMentions),
     dispose,
   }));
   const container = document.createElement("div");

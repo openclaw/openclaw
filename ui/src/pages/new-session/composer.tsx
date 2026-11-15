@@ -30,7 +30,7 @@ import {
   isComposingKeyboardEvent,
   recordCompositionEnd,
 } from "../../lib/ime.ts";
-import { createMentionComposerBinding } from "../../lib/reactive/composer-editor.ts";
+import { createReferenceComposerBinding } from "../../lib/reactive/composer-editor.ts";
 import { connectedElementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
@@ -312,7 +312,7 @@ function NewSessionComposerInput(props: {
 }) {
   const textarea = useContext(NewSessionComposerTextareaContext);
   const messageValue = createLiveValue(() => props.frame.visibleMessage, syncComposerInput);
-  const editorRef = createMentionComposerBinding(
+  const editorRef = createReferenceComposerBinding(
     () => props.options.getMentions?.() ?? props.options.mentions ?? [],
     textarea.mentionMenu.selectedAvatarUrls,
   );

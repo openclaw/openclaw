@@ -7,7 +7,11 @@ import {
   getSlashCommandDescription,
   type SlashCommandDef,
 } from "../../../lib/chat/commands.ts";
-import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
+import {
+  focusComposerInput,
+  readComposerEditor,
+  selectComposerInput,
+} from "../../../lib/composer-input.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 
 // Display titles may use any script (including NFD combining marks);
@@ -164,7 +168,16 @@ export function createSkillMenu() {
     host: SkillMenuHost,
     opts: { skipRefresh?: boolean } = {},
   ): void {
-    const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
+    let target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
+    const textarea = host.getTextarea();
+    // Navigating a selected chip is not editing another $query.
+    if (
+      target &&
+      textarea &&
+      readComposerEditor(textarea)?.isAtomicRange(target.start, target.end)
+    ) {
+      target = null;
+    }
     if (!target) {
       if (state.skillMenuTarget !== null) {
         resetSkillMenuState(state);

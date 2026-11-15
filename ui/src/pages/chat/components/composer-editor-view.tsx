@@ -459,6 +459,15 @@ export function mountComposerEditor(
     element: view.dom,
     focusElement: view.contentDOM,
     scrollElement: view.scrollDOM,
+    isAtomicRange(from, to) {
+      return view.state.facet(EditorView.atomicRanges).some((ranges) => {
+        let found = false;
+        ranges(view).between(from, to, (start, end) => {
+          found ||= start === from && end === to;
+        });
+        return found;
+      });
+    },
     coordsAtPos(position) {
       return view.coordsAtPos(Math.min(position, view.state.doc.length));
     },

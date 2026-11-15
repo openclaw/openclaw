@@ -58,6 +58,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const active = () =>
+          page.locator(
+            ".agent-chat__composer-combobox textarea:visible, .agent-chat__composer-combobox [data-composer-editor]",
+          );
         const draft = (value: string) => expect.poll(() => composer.inputValue()).toBe(value);
         const screenshot = async (name: string, target: Locator) => {
           if (artifactDir) {
@@ -67,7 +71,7 @@ suite.define(() => {
             );
           }
         };
-        await composer.fill("$");
+        await active().fill("$");
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
         await screenshot("skill-reference-manual-only.png", picker);
@@ -77,19 +81,19 @@ suite.define(() => {
         expect(await picker.getByRole("option").allTextContents()).not.toContainEqual(
           expect.stringContaining("Bundle Review"),
         );
-        await composer.fill("Review this with $m\u00fcnchen");
+        await active().fill("Review this with $m\u00fcnchen");
         await expect
           .poll(() => picker.getByRole("option").allTextContents())
           .toEqual([expect.stringContaining("Mu\u0308nchen")]);
         await screenshot("skill-reference-picker.png", picker);
-        await composer.press("Enter");
+        await active().press("Enter");
         await draft("Review this with $autoreview ");
 
-        await composer.fill(`${await composer.inputValue()}and $cafe\u0301`);
+        await active().fill(`${await composer.inputValue()}and $cafe\u0301`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
-        await composer.press("Tab");
+        await active().press("Tab");
         await draft("Review this with $autoreview and $technical_documentation ");
-        await screenshot("skill-references-selected.png", composer);
+        await screenshot("skill-references-selected.png", active());
 
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
@@ -97,38 +101,38 @@ suite.define(() => {
           message: "Review this with $autoreview and $technical_documentation",
         });
 
-        await composer.fill("Print $HOME");
+        await active().fill("Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
-        await composer.fill("Review this with /bundle_review");
+        await active().fill("Review this with /bundle_review");
         await expect
           .poll(() => page.getByRole("listbox", { name: "Slash commands" }).count())
           .toBe(0);
-        await composer.fill("/bundle_review");
+        await active().fill("/bundle_review");
         await expect
           .poll(() => page.getByRole("option", { name: /bundle_review/u }).count())
           .toBe(1);
-        await composer.fill("Review this with /auto");
+        await active().fill("Review this with /auto");
         const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
         await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
-        await composer.press("Enter");
+        await active().press("Enter");
         await draft("Review this with $autoreview ");
 
-        await composer.fill("/");
+        await active().fill("/");
         await slashPicker.waitFor({ state: "visible" });
         await expect
           .poll(() => page.getByRole("option", { name: /^(?:\/status|Status Report)\b/u }).count())
           .toBe(2);
 
         const slashOptions = slashPicker.getByRole("option");
-        await composer.fill("/sta");
+        await active().fill("/sta");
         await expect
           .poll(async () => {
             const names = await slashOptions.locator(".slash-menu-name").allTextContents();
             return { first: names[0], last: names.at(-1) };
           })
           .toEqual({ first: "/status", last: "Status Report" });
-        await composer.press("Tab");
+        await active().press("Tab");
         await draft("/status");
       },
     );

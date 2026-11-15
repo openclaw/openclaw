@@ -2,7 +2,7 @@ import { createMemo } from "solid-js";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { syncComposerInput } from "../../../lib/composer-input.ts";
 import { clearCompositionEnd } from "../../../lib/ime.ts";
-import { createMentionComposerBinding } from "../../../lib/reactive/composer-editor.ts";
+import { createReferenceComposerBinding } from "../../../lib/reactive/composer-editor.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
@@ -49,7 +49,7 @@ export function renderComposerTextarea(
     // The native IME preview owns the field until composition commits.
     return ownerState.composerComposing && element ? element.value : next;
   }, syncComposerInput);
-  const editorRef = createMentionComposerBinding(
+  const editorRef = createReferenceComposerBinding(
     () => composer.getMentions?.() ?? composer.mentions ?? [],
     ownerState.mentionMenu.selectedAvatarUrls,
   );
