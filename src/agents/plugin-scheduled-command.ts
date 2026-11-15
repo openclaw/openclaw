@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import type { CommandsAllowFromRequester } from "../auto-reply/commands-allow-from.js";
 import { withPluginCommandScheduleCreation } from "../cron/plugin-command-creation.js";
 import {
   currentPluginCommandHostProcessId,
@@ -24,13 +25,15 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
+type LiveCommandSender = Omit<CommandsAllowFromRequester, "channel">;
+
 /**
  * Store-private beside the envelope (whose shape stays released): a Gateway person's live sender
  * inputs, kept only when the live command sender is the stored source's person.
  */
 export function recordScheduledCommandRequester(
   operatorSource: QueuedOperatorRecoverySource,
-  live: { commandSenderId?: string; senderId?: string; accountId?: string } | undefined,
+  live: LiveCommandSender | undefined,
 ): PluginCommandRequester | undefined {
   if (
     operatorSource.kind !== "gateway" ||
@@ -52,7 +55,7 @@ export function preparePluginCommandScheduledTurns(params: {
   pluginId: string;
   channel: string;
   /** The live command's sender inputs, as its commands.allowFrom check read them. */
-  requester?: { commandSenderId?: string; senderId?: string; accountId?: string };
+  requester?: LiveCommandSender;
   assertCurrent: () => void;
   tools: () => Promise<AnyAgentTool[]>;
   withCaller: <T>(run: () => Promise<T>) => Promise<T>;
