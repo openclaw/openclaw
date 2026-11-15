@@ -99,6 +99,7 @@ import {
 } from "../../plugin-sdk/session-store-runtime.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../legacy-sdk-reply-dispatch.js";
 import { pluginInstanceInvocation } from "../plugin-instance-invocation.js";
 import {
   getPluginInstanceOwner,
@@ -114,10 +115,6 @@ import type { PluginRuntime } from "./types.js";
 const dispatchLowLevelChannelReplyFromConfig = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../../auto-reply/reply/dispatch-from-config.js")),
   (runtime) => runtime.dispatchLowLevelChannelReplyFromConfig,
-);
-const dispatchReplyWithBufferedBlockDispatcherCore = createLazyRuntimeMethod(
-  createLazyRuntimeModule(() => import("../../auto-reply/reply/provider-dispatcher.js")),
-  (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,
 );
 const loadChannelTurnLifecycle = createLazyRuntimeModule(
   () => import("../../channels/turn/lifecycle.js"),
@@ -332,8 +329,7 @@ export function createRuntimeChannel(options?: {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher: (params) =>
-        dispatchReplyWithBufferedBlockDispatcherCore(publicChannelTurn(params)),
+      dispatchReplyWithBufferedBlockDispatcher,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,

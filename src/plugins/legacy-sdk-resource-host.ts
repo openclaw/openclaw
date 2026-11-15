@@ -3,6 +3,7 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { LegacyPluginSdkReplyDispatch } from "./legacy-sdk-reply-dispatch.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -29,6 +30,21 @@ export class LegacyPluginSdkResourceHost {
   private readonly failures: unknown[] = [];
   private closing?: Promise<void>;
   private gatewayScheduler?: GatewayScheduler;
+
+  constructor(private readonly replyDispatch?: LegacyPluginSdkReplyDispatch) {}
+
+  /** Admission and execution stay in the same host generation, including lazy native SDK calls. */
+  invokeReplyDispatch<T>(run: (reply: LegacyPluginSdkReplyDispatch) => Promise<T>): Promise<T> {
+    return this.invoke(() =>
+      this.trackSharedStateWork(() => {
+        if (!this.replyDispatch) {
+          throw new Error("Plugin SDK resource host has no reply dispatch runtime");
+        }
+        // The accepted whole operation retains admission across lazy loads while close joins it.
+        return run(this.replyDispatch);
+      }),
+    );
+  }
 
   get scheduler(): GatewayScheduler {
     this.assertOpen();
