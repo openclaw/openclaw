@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
+import { ExpectedCliError } from "../../cli/expected-cli-error.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTestRuntime } from "../test-runtime-config-helpers.js";
@@ -74,18 +75,23 @@ describe("channel dead-letter commands", () => {
   });
 
   it.each(
-    ["", " \t "].flatMap((account) => [
-      { account, command: "list" },
-      { account, command: "resubmit" },
-    ]),
-  )("rejects blank --account '$account' at the $command boundary", async ({ account, command }) => {
+    [
+      { channel: "telegram", account: "" },
+      { channel: "telegram", account: " \t " },
+      { channel: "", account: undefined },
+      { channel: " \t ", account: undefined },
+    ].flatMap((selectors) => ["list", "resubmit"].map((command) => ({ selectors, command }))),
+  )("rejects blank selectors at the $command boundary", async ({ selectors, command }) => {
     await withOpenClawTestState(stateOptions, async () => {
-      const options = { channel: "telegram", account, json: true };
+      const options = { ...selectors, json: true };
       const action =
         command === "list"
           ? channelsDeadLettersListCommand(options)
           : channelsDeadLettersResubmitCommand("event-1", options);
-      await expect(action).rejects.toThrow("--account must not be blank");
+      await expect(action).rejects.toThrow(ExpectedCliError);
+      await expect(action).rejects.toThrow(
+        selectors.channel?.trim() ? "--account must not be blank" : "--channel is required.",
+      );
       expect(runtime.log).not.toHaveBeenCalled();
     });
   });
