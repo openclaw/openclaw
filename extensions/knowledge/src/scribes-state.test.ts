@@ -175,6 +175,14 @@ describe("scribes catalog", () => {
       state: "outdated",
       current,
     });
+    // A custom schedule gets no amounts: its message without them is already current.
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, "5 1 * * 2")).toEqual({
+      state: "current",
+    });
+    expect(checkRunMessage("claim-consolidation", claimsOnly(beforeAmounts), "5 1 * * 2")).toEqual({
+      state: "outdated",
+      current: beforeAmounts,
+    });
     expect(
       repairPrompt("claim-consolidation", {
         schedule: { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE },

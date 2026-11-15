@@ -218,9 +218,10 @@ const GRANOLA_MEETINGS_PER_RUN = 4;
 
 // The settings a scribe's work reads: conversations, Granola meetings, Memory files and how much
 // a scheduled run takes on. Schedules are separate.
-function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING) {
+// `amounts: false` leaves them out, as for a consolidation automation on a custom schedule.
+function workSettings(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const { options } = setup;
-  const scheduled = wording.amounts && setup.mode === "ongoing";
+  const scheduled = amounts && wording.amounts && setup.mode === "ongoing";
   if ("scope" in options) {
     const which = options.scope === "all" ? "active and archived" : "active only";
     return [`Conversations: ${which}, ${SINCE_WORDS[options.since] ?? options.since}.`];
@@ -391,9 +392,9 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING) {
+function runPrompt(setup: ScribeSetup, wording = CURRENT_WORDING, amounts = true) {
   const scribe = scribeById(setup.scribe)!;
-  const settings = workSettings(setup, wording);
+  const settings = workSettings(setup, wording, amounts);
   return [
     `Scheduled run of the Knowledge scribe "${scribe.title}". ${UNATTENDED}`,
     ...(settings.length ? ["", "Settings:", ...settings.map((line) => `- ${line}`)] : []),
@@ -520,8 +521,11 @@ export function checkRunMessage(id: ScribeId, message: string, schedule?: string
   const all = settingsChoices(id);
   const scheduled = all.find((options) => "schedule" in options && options.schedule === schedule);
   const choices = scheduled ? [scheduled, ...all.filter((options) => options !== scheduled)] : all;
+  // A consolidation automation on a schedule the dialog doesn't offer gets no amounts, so the
+  // skill's defaults stay in force instead of another schedule's.
+  const amounts = !(id === "claim-consolidation" && schedule !== undefined && !scheduled);
   const generate = (options: ScribeOptions[ScribeId], wording?: RunWording) =>
-    runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording);
+    runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording, amounts);
   for (const options of choices) {
     if (message === generate(options)) {
       return { state: "current" };
