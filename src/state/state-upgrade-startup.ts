@@ -57,6 +57,32 @@ export async function upgradeStateOnGatewayStart(
       beforeSwap: async () => {
         await closeOpenClawStateDatabaseByPathAsync(statePath);
       },
+      // The start would still refuse an invalid config after the upgrade; publish
+      // nothing, so the previous package keeps reading its own state (#141451).
+      // Accepted edge case: plugin-owned config is validated later, at admission,
+      // because its metadata lives in the upgraded state; a rollback is a rename.
+      admitConfig: async (shadow) => {
+        if (!fs.existsSync(shadow.configPath)) {
+          return undefined;
+        }
+        const { createConfigIO } = await import("../config/io.factory.js");
+        const { configDiagnostics } = await createConfigIO({
+          env: {
+            ...env,
+            OPENCLAW_STATE_DIR: shadow.stateDir,
+            OPENCLAW_CONFIG_PATH: shadow.configPath,
+          },
+          configPath: shadow.configPath,
+          observe: false,
+          pluginValidation: "skip",
+        }).readBestEffortConfigSnapshot();
+        return configDiagnostics === null
+          ? undefined
+          : `the upgraded config is invalid (${configDiagnostics.issues
+              .slice(0, 3)
+              .map((issue) => `${issue.path}: ${issue.message}`)
+              .join("; ")})`;
+      },
     });
   } finally {
     await lock?.release();

@@ -126,7 +126,58 @@ const cases = [
   { release: "2026.10.10", failStep: "injected-step" },
 ];
 
+type Instance = Awaited<ReturnType<typeof createOpenClawTestInstance>>;
+
+function installCorpus(instance: Instance, release: string, gatewayOverride = {}): void {
+  const generated = JSON.parse(fs.readFileSync(instance.configPath, "utf8"));
+  fs.cpSync(path.join(corpusDir, release, "state"), instance.stateDir, {
+    recursive: true,
+    force: true,
+  });
+  restoreCorpusDeviceKeys(instance.stateDir);
+  // The corpus was written in a container as /home/fixture.
+  const corpus = fs
+    .readFileSync(path.join(instance.stateDir, "openclaw.json"), "utf8")
+    .replaceAll("/home/fixture/.openclaw", instance.stateDir)
+    .replaceAll("/home/fixture", instance.homeDir);
+  const config = JSON.parse(corpus);
+  // The corpus plugin was installed from a path that exists only in the generator
+  // container; with it configured, Doctor (in place or here) defers the 7.x session
+  // import until the plugin converges.
+  delete config.plugins?.entries?.["corpus-plugin"];
+  fs.writeFileSync(
+    instance.configPath,
+    JSON.stringify({
+      ...config,
+      gateway: { ...generated.gateway, ...gatewayOverride },
+      hooks: generated.hooks,
+    }),
+  );
+}
+
 describe("Gateway start upgrades prior-release state by copy and swap", () => {
+  it("a start refused for invalid config publishes nothing", async () => {
+    const instance = await createOpenClawTestInstance({
+      name: "upgrade-refused",
+      startTimeoutMs: 300_000,
+    });
+    try {
+      // An invalid combination Doctor cannot repair, so the start is refused.
+      installCorpus(instance, "2026.10.10", { bind: "lan", tailscale: { mode: "serve" } });
+      const files = [instance.configPath, ...sqliteFiles(instance.stateDir)];
+      const before = files.map(sha256);
+      await expect(instance.startGateway()).rejects.toThrow();
+      expect(files.map(sha256)).toEqual(before);
+      expect(
+        listDirectoryTreeStrictSync(instance.stateDir)
+          .map(({ relativePath }) => relativePath)
+          .filter((name) => name.includes(".pre-") || name.startsWith(".upgrade-")),
+      ).toEqual([]);
+    } finally {
+      await instance.cleanup();
+    }
+  }, 600_000);
+
   it.each(cases)(
     "$release (forced chain failure: $failStep)",
     async ({ release, failStep }) => {
@@ -135,26 +186,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         startTimeoutMs: 300_000,
       });
       try {
-        const generated = JSON.parse(fs.readFileSync(instance.configPath, "utf8"));
-        fs.cpSync(path.join(corpusDir, release, "state"), instance.stateDir, {
-          recursive: true,
-          force: true,
-        });
-        restoreCorpusDeviceKeys(instance.stateDir);
-        // The corpus was written in a container as /home/fixture.
-        const corpus = fs
-          .readFileSync(path.join(instance.stateDir, "openclaw.json"), "utf8")
-          .replaceAll("/home/fixture/.openclaw", instance.stateDir)
-          .replaceAll("/home/fixture", instance.homeDir);
-        const config = JSON.parse(corpus);
-        // The corpus plugin was installed from a path that exists only in the generator
-        // container; with it configured, Doctor (in place or here) defers the 7.x session
-        // import until the plugin converges.
-        delete config.plugins?.entries?.["corpus-plugin"];
-        fs.writeFileSync(
-          instance.configPath,
-          JSON.stringify({ ...config, gateway: generated.gateway, hooks: generated.hooks }),
-        );
+        installCorpus(instance, release);
         const before = new Map(sqliteFiles(instance.stateDir).map((file) => [file, sha256(file)]));
 
         if (failStep) {

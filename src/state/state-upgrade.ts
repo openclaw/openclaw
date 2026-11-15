@@ -72,7 +72,8 @@ export type StateUpgradeResult =
       setAside: number;
       warnings: string[];
     }
-  | { status: "resumed" };
+  | { status: "resumed" }
+  | { status: "refused"; reason: string };
 
 export type StateUpgradeChain = (params: {
   stateDir: string;
@@ -328,6 +329,11 @@ export async function upgradeStateDirectory(params: {
   runChain?: StateUpgradeChain;
   /** Release this process's handles on the live files before they are renamed. */
   beforeSwap?: () => Promise<void>;
+  /**
+   * Whether this build would start on the upgraded config. A refusal leaves the live
+   * tree untouched, so the start's own refusal keeps the previous package's state.
+   */
+  admitConfig?: (shadow: { configPath: string; stateDir: string }) => Promise<string | undefined>;
 }): Promise<StateUpgradeResult> {
   const env = params.env;
   const stateDir = path.resolve(resolveStateDir(env));
@@ -534,6 +540,12 @@ export async function upgradeStateDirectory(params: {
       if (op.next && fs.statSync(op.next, { throwIfNoEntry: false })?.isFile()) {
         fsyncPath(op.next);
       }
+    }
+    const refusal = await params.admitConfig?.({ configPath: shadowConfig, stateDir: shadowRoot });
+    if (refusal !== undefined) {
+      fs.rmSync(workDir, { recursive: true, force: true });
+      params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
+      return { status: "refused", reason: refusal };
     }
     await params.beforeSwap?.();
     writePlan(workDir, { appVersion: VERSION, ops });
