@@ -51,13 +51,15 @@ export function resolveCronRunSlots(): number {
 }
 
 /**
- * An estimate of the memory one automation run uses: its agent session, model streams, and the
- * tool processes it starts. Runs that use less let more start; see `cron.drainQueue`.
+ * The least memory one automation run is taken to use: its agent session, model streams, and the
+ * tool processes it starts. Runs that use less let more start; see `cron.drainQueue`. When a
+ * recent exec command held more, that is the figure instead, so a burst of jobs leaves their
+ * commands room before those commands have started and show up as used.
  */
 const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
 
 /**
- * How many more runs the memory free now could hold, at the per-run estimate. Host memory counts
+ * How many more runs the memory free now could hold, at the per-run figure. Host memory counts
  * reclaimable cache as free, and the commands jobs run as used. Under a container or cgroup limit,
  * the Gateway and its watched exec commands count against that limit: the cgroup's own usage
  * includes page cache the kernel would reclaim, so on a long-running Gateway it reads as nearly
@@ -72,7 +74,7 @@ export function resolveCronFreeMemoryRuns(): number {
     limit > 0 ? limit - process.memoryUsage.rss() - commands : Infinity,
     exec ? exec.budgetBytes - commands : Infinity,
   );
-  return Math.max(0, free) / RUN_MEMORY_BYTES;
+  return Math.max(0, free) / Math.max(RUN_MEMORY_BYTES, exec?.largestCommandBytes ?? 0);
 }
 
 /**

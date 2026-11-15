@@ -463,12 +463,17 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     stubFreeMemory(16 * gib);
     const exec = vi
       .spyOn(childMemory, "readHostExecMemory")
-      .mockReturnValue({ budgetBytes: 2 * gib, usedBytes: 2 * gib });
+      .mockReturnValue({ budgetBytes: 2 * gib, usedBytes: 2 * gib, largestCommandBytes: gib });
     await running.wake(state);
     expect(started).toHaveLength(2);
 
-    // The commands end: the rest start, up to the agent limit.
-    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0 });
+    // The commands end, but one held 8 GiB: the next jobs are counted at that, not 256 MiB.
+    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0, largestCommandBytes: 8 * gib });
+    await running.wake(state);
+    expect(started).toHaveLength(2);
+
+    // Commands are small again: the rest start, up to the agent limit.
+    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0, largestCommandBytes: 0 });
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(12));
   } finally {
