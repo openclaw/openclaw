@@ -30,7 +30,7 @@ function createChatComposerState(): ChatComposerState {
     emojiMenu: createComposerEmojiMenu(),
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
-    questionTakeoverActive: false,
+    questionFocusActive: false,
     restoreComposerFocus: false,
     composerInput: null,
     composerTextarea: null,

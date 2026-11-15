@@ -1,9 +1,10 @@
 import { fileURLToPath } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { assert, describe, expect, it } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import { partitionSessionFileEntries } from "../../config/sessions/session-entry-codec.js";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTranscriptSnapshot } from "../../config/sessions/transcript-snapshot.js";
+import { freezeJsonSnapshot, freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   buildSessionContext,
@@ -12,6 +13,7 @@ import {
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
 } from "./session-manager-codec.js";
+import { SessionManagerCore } from "./session-manager-core.js";
 import type { SessionEntry, SessionMessageEntry } from "./session-manager-types.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 import { toolResult as makeToolResult } from "./session-message-fixtures.test-support.js";
@@ -42,6 +44,41 @@ it("shares checkpoint prefixes and releases prepared transcript history", async 
 });
 
 describe("session manager codec compatibility", () => {
+  it.each([true, false])("loads history after freezer memo rotation (owner-sealed=%s)", (owned) => {
+    const entry = messageEntry(makeToolResult("retained"));
+    const snapshot = {
+      events: [sessionHeader("owned-history"), entry],
+      version: { generation: "owned", rawSeq: 1, updatedAt: 1 },
+    };
+    if (owned) {
+      freezeTranscriptSnapshot(snapshot);
+    } else {
+      Object.freeze(snapshot.events);
+    }
+    const before = JSON.stringify(snapshot);
+    // Other sessions rotate the generic memo; the transcript owner's proof must survive.
+    freezeTrustedJsonSnapshot(Array.from({ length: 262_145 }, () => ({})));
+    const inspect = vi.spyOn(Reflect, "ownKeys");
+    let first: SessionManagerCore;
+    let second: SessionManagerCore;
+    try {
+      first = new SessionManagerCore("/tmp", undefined, snapshot.events);
+      second = new SessionManagerCore("/tmp", undefined, snapshot.events);
+      const inspections = inspect.mock.calls.filter(([value]) =>
+        snapshot.events.some((event) => event === value),
+      );
+      expect(inspections.length === 0).toBe(owned);
+    } finally {
+      inspect.mockRestore();
+    }
+    const writable = first.getEntry("entry");
+    assert(writable?.type === "message" && writable.message.role === "toolResult");
+    writable.message.content.push({ type: "text", text: "caller mutation" });
+    writable.parentId = "caller-parent";
+    expect(second.getEntry("entry")).toEqual(entry);
+    expect(JSON.stringify(snapshot)).toBe(before);
+  });
+
   it("selects the new projection only for a genuinely new session", () => {
     expect(SessionManager.inMemory("/tmp").getHeader()?.version).toBe(4);
     for (const version of [1, 2, 3, 4, 99]) {

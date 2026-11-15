@@ -107,6 +107,14 @@ export function createCiTestObservationCapture(options: {
     return undefined;
   }
   const auditOnly = env.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY === "1";
+  const auditConfig = env.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG;
+  if (
+    auditOnly &&
+    auditConfig &&
+    options.configFiles[0] !== path.resolve(options.repositoryRoot, auditConfig)
+  ) {
+    return undefined;
+  }
   const startedAt = new Date().toISOString();
   const launchInputs = readCiTestLaunchInputs(directory);
   const records: string[] = [];

@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,66 +112,61 @@ You triage incidents.
   });
 
   it.each(["directory alias", "source parent", "output parent"])(
-    "matches the cross-platform golden artifact digest through %s",
+    "matches the golden artifact digest through %s under a restrictive umask",
     async (kind) => {
-      const root = tempDirs.make("openclaw-template-golden-");
-      const project = join(root, "project");
+      const directory = tempDirs.make("openclaw-template-golden-");
+      const project = join(directory, "project");
       const target = kind === "source parent" ? join(goldenProject, "references") : goldenProject;
       await symlink(target, project, process.platform === "win32" ? "junction" : "dir");
-      let output = `${project}.tgz`;
+      let output = join(directory, "golden.tgz");
       let expectedOutput = output;
       if (kind === "output parent") {
-        const nested = join(root, "physical", "nested");
+        const nested = join(directory, "physical", "nested");
         await mkdir(nested, { recursive: true });
-        const alias = join(root, "output");
+        const alias = join(directory, "selected");
         await symlink(nested, alias, process.platform === "win32" ? "junction" : "dir");
         output = `${alias}${sep}..${sep}golden.tgz`;
-        expectedOutput = join(root, "physical", "golden.tgz");
+        expectedOutput = join(directory, "physical", "golden.tgz");
       }
       const input = kind === "source parent" ? `${project}${sep}..` : project;
-      const result = await buildTemplateProject(input, output);
-      expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
-      expect(result.artifact).toBe(await fs.realpath(expectedOutput));
+      const projectBuildUrl = resolveRuntimeWorkerUrl(templateProjectBuildEntrypoint);
+      const script = [
+        "process.umask(0o077);",
+        `const { buildTemplateProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
+        `const result = await buildTemplateProject(${JSON.stringify(input)}, ${JSON.stringify(output)});`,
+        "process.stdout.write(JSON.stringify({ integrity: result.integrity, artifact: result.artifact }));",
+      ].join("\n");
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
+          "--input-type=module",
+          "--eval",
+          script,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            NODE_DISABLE_COMPILE_CACHE: "1",
+            NODE_OPTIONS: undefined,
+            VITEST: undefined,
+            VITEST_POOL_ID: undefined,
+            VITEST_WORKER_ID: undefined,
+          },
+          timeout: 60_000,
+        },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout)).toEqual({
+        integrity: GOLDEN_ARTIFACT_INTEGRITY,
+        artifact: await fs.realpath(expectedOutput),
+      });
     },
   );
-
-  it("matches the golden artifact digest under a restrictive umask", () => {
-    const output = join(tempDirs.make("openclaw-template-umask-"), "golden.tgz");
-    const projectBuildUrl = resolveRuntimeWorkerUrl(templateProjectBuildEntrypoint);
-    const script = [
-      "process.umask(0o077);",
-      `const { buildTemplateProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
-      `const result = await buildTemplateProject(${JSON.stringify(goldenProject)}, ${JSON.stringify(output)});`,
-      "process.stdout.write(result.integrity);",
-    ].join("\n");
-
-    const result = spawnSync(
-      process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(projectBuildUrl).slice(0, -1),
-        "--input-type=module",
-        "--eval",
-        script,
-      ],
-      {
-        cwd: process.cwd(),
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          NODE_OPTIONS: undefined,
-          VITEST: undefined,
-          VITEST_POOL_ID: undefined,
-          VITEST_WORKER_ID: undefined,
-        },
-        timeout: 60_000,
-      },
-    );
-
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
-  });
 
   it("refuses to publish and removes staging when a completed file fails to close", async () => {
     const outputDirectory = tempDirs.make("openclaw-template-close-failure-");
@@ -236,6 +232,28 @@ You triage incidents.
     },
   );
 
+  it.each(["package.json", "CLAW.md"])("cleans up a failed %s write before retry", async (file) => {
+    const root = join(tempDirs.make("openclaw-template-create-failed-"), "research-assistant");
+    const original = fs.writeFile;
+    const failed = vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
+      if (typeof data === "string" && data.startsWith(file === "package.json" ? "{" : "---")) {
+        await original(target, data.slice(0, 8), options);
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      return original(target, data, options);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(createTemplateProject(root)).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      failed.mockRestore();
+      syncBuiltinESMExports();
+    }
+    await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+    await createTemplateProject(root);
+    await expect(validateTemplateProject(root)).resolves.toMatchObject({ ok: true });
+  });
+
   it("keeps one concurrent creator's completed project", async () => {
     const root = join(tempDirs.make("openclaw-template-create-race-"), "shared");
     await mkdir(root);
@@ -285,10 +303,10 @@ describe("Template project packages", () => {
     } satisfies Partial<TemplateProjectError>);
   });
 
-  it("builds byte-identical artifacts containing only declared project inputs", async () => {
+  it.each([32, 1_680_008])("builds reproducible selected inputs (%i bytes)", async (size) => {
     const firstPath = output;
     const secondPath = join(dirname(output), "second.tgz");
-
+    await writeFile(join(project, "BOOTSTRAP.md"), Buffer.alloc(size, 0x78));
     const first = await buildTemplateProject(project, firstPath);
     const second = await buildTemplateProject(project, secondPath);
     const validation = await validateTemplateProject(join(project, "workspace", "reference.md"));

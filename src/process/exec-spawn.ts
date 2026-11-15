@@ -540,6 +540,8 @@ type SpawnCommandOptions = CommandSpawnOptions & {
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv; no ambient environment is merged again. */
+  preparedEnv?: NodeJS.ProcessEnv;
   executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
@@ -603,6 +605,7 @@ export function spawnCommandWithInvocation<
   const {
     baseEnv,
     env,
+    preparedEnv,
     windowsVerbatimArguments,
     cancelSignal,
     executionTimeoutMs,
@@ -611,7 +614,7 @@ export function spawnCommandWithInvocation<
     executionScopeKey,
     ...execaOptions
   } = sourceOptions;
-  const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
+  const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
   const invocation = resolveSafeChildProcessInvocation({
     argv,
     cwd: execaOptions.cwd,

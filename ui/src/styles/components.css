@@ -2924,11 +2924,10 @@ select.data-table-pagination__size {
   display: flex;
   flex: 0 0 var(--cmd-palette-dock-height);
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   min-width: 0;
-  /* Inset as far from the side as from the top and bottom, so the tab is concentric with
-     the card; the keys end on the list's own right margin. */
-  padding-inline: 10px 18px;
+  /* Inset as far from the side as from the top and bottom, so the tab sits evenly in the dock. */
+  padding-inline: 6px 14px;
 }
 
 .cmd-palette__mode-tabs {
@@ -2941,15 +2940,15 @@ select.data-table-pagination__size {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  height: 32px;
+  gap: 6px;
+  height: 28px;
   /* The icon lands under the list's row icons and the field's text. */
   padding: 0 11px 0 8px;
   /* Concentric with the card: its radius minus the dock's 10px inset. */
   border-radius: calc(10px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   color: var(--muted);
-  font-size: 13px;
+  font-size: 12px;
   font-weight: var(--control-ui-font-weight-normal);
   white-space: nowrap;
   transition:
@@ -2958,30 +2957,31 @@ select.data-table-pagination__size {
 }
 
 .cmd-palette__mode svg {
-  width: 15px;
-  height: 15px;
+  width: 14px;
+  height: 14px;
 }
 
 .cmd-palette__mode:hover:not([aria-selected="true"], :disabled) {
   color: var(--text-strong);
 }
 
-/* Tabs, not buttons: the selected one is a quiet tint of the dock, with no edge or lift. */
+/* Tabs, not buttons: the selected one is a quiet tint of the dock, with no edge or lift.
+   Its ink sits just above the resting tab, so the mode never outranks the draft or Send. */
 .cmd-palette__mode[aria-selected="true"] {
-  background: color-mix(in srgb, var(--text-strong) 7%, transparent);
-  color: var(--text-strong);
+  background: color-mix(in srgb, var(--text-strong) 3%, transparent);
+  color: color-mix(in srgb, var(--text) 55%, var(--muted));
 }
 
 .cmd-palette__keys {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 18px;
+  gap: 14px;
   min-width: 0;
   margin-inline-start: auto;
   overflow: hidden;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   white-space: nowrap;
 }
 
@@ -2997,26 +2997,26 @@ select.data-table-pagination__size {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
   /* Outlined keycaps, so a key never reads as the filled, selected tab beside it. */
-  border: 1px solid color-mix(in srgb, var(--text) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 10%, transparent);
   border-radius: calc(6px * var(--openclaw-corner-radius-scale));
   background: transparent;
   box-shadow: none;
   color: var(--muted);
   font-family: inherit;
   font-size: 11px;
-  font-weight: var(--control-ui-font-weight-semibold);
+  font-weight: var(--control-ui-font-weight-normal);
   line-height: 1;
 }
 
 /* A phone has no keys to teach; the switch takes the whole dock. */
 @media (max-width: 560px) {
-  /* 8px on every side of the taller tabs keeps them concentric. */
+  /* 4px on every side of the taller tabs keeps them even in the shorter dock. */
   .cmd-palette__dock {
-    padding-inline: 8px;
+    padding-inline: 4px;
   }
 
   .cmd-palette__keys {
@@ -4135,4 +4135,14 @@ select.data-table-pagination__size {
     outline: 1px solid var(--field-focus-border);
     outline-offset: -1px;
   }
+}
+
+/* WebKit can loop forever when closing surfaces keep trying position fallbacks
+   (openclaw/openclaw#196820), and hidden popovers still pay for those searches during
+   page restyles. Closing surfaces may fade on their primary side; hidden surfaces
+   need no fallback. !important overrides surface-specific lists until opening.
+   Document styles keep this out of overlay.css's shadow-inlined boot JS copies. */
+[data-phase="closing"],
+[data-phase="hidden"] {
+  position-try-fallbacks: none !important;
 }

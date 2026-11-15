@@ -535,6 +535,7 @@ async function createGatewaySessionInScope(
       target,
       initialTargetEntry?.sessionId,
       targetLifecycleIdentities,
+      operatorAuthority,
     );
     commitGuard?.();
     if (!targetRead.ok) {
@@ -666,9 +667,11 @@ async function createGatewaySessionInScope(
           const creationError = authorizeGatewaySessionCreation({
             cfg: params.cfg,
             agentId: target.agentId,
-            ...(params.operatorRoleActor
-              ? { actor: params.operatorRoleActor }
-              : { profileId: params.requestingOperatorProfileId }),
+            ...(operatorAuthority
+              ? { authority: operatorAuthority }
+              : params.operatorRoleActor
+                ? { actor: params.operatorRoleActor }
+                : { profileId: params.requestingOperatorProfileId }),
           });
           if (creationError) {
             return { ok: false, error: creationError };

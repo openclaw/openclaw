@@ -807,7 +807,7 @@ export function createOpenClawIdService(params: {
      */
     async registerInvite(
       channel: Channel | undefined,
-      input: { cap: unknown; proofKey: Uint8Array },
+      input: { cap: unknown; proofKey: Uint8Array; existingProfileId?: string },
     ): Promise<AuthorityAccepted | AuthorityRefusal> {
       if (!channel) {
         return refusal("not_direct", "invites are registered from an owner device on this claw");

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { promises as fs } from "node:fs";
 import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
@@ -209,13 +210,12 @@ export async function createTemplateProject(
     root = await realpath(root);
     const packageJsonPath = resolve(root, "package.json");
     const templateMarkdownPath = resolve(root, "CLAW.md");
-    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-    });
+    await using packageFile = await fs.open(packageJsonPath, "wx");
     createdPaths.push(packageJsonPath);
-    await writeFile(templateMarkdownPath, templateMarkdown, { encoding: "utf8", flag: "wx" });
+    await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`, "utf8");
+    await using templateFile = await fs.open(templateMarkdownPath, "wx");
     createdPaths.push(templateMarkdownPath);
+    await writeFile(templateFile, templateMarkdown, "utf8");
   } catch (error) {
     await Promise.allSettled(createdPaths.map((path) => unlink(path)));
     if (initialState === "missing") {

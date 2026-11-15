@@ -333,7 +333,9 @@ vi.mock("../infra/restart-stale-pids.js", () => ({
 }));
 
 vi.mock("node:child_process", async () => {
-  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const actual = await vi.importActual<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >("node:child_process");
   const { SQLITE_READONLY_CHILD_ARG } = await import("../infra/runtime-process-entrypoints.js");
   const { resolveRuntimeProcessEntrypointUrl } = await import("../infra/runtime-process-url.js");
   const { resolveRuntimeWorkerArgv } = await import("../infra/runtime-worker-url.js");
@@ -366,8 +368,7 @@ vi.mock("node:child_process", async () => {
     args[1] = sqliteHostArgv(args[1]);
     return true;
   };
-  return {
-    ...actual,
+  const overrides = {
     // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
       remapSqliteChild(args);
@@ -411,6 +412,7 @@ vi.mock("node:child_process", async () => {
         : spawn(...args);
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 // Synthetic CLI packages omit the candidate worker; native delegation is covered separately.

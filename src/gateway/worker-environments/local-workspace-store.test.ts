@@ -45,7 +45,6 @@ import {
   localWorkspaceManifestRootReference,
   updateLocalWorkspaceManifestTree,
 } from "./local-workspace-manifest-tree.js";
-import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import { withLocalWorkspaceStore } from "./local-workspace-store.js";
 import {
   mutateLocalWorkspaceProjection as mutateProjection,
@@ -253,30 +252,6 @@ it.each(["absent", "same", "distinct"] as const)(
     expect(retained).toThrow();
   },
 );
-
-it("distinguishes committed deletion from unknown or mismatched mutation coverage", () => {
-  const worktreeId = randomUUID();
-  const previous = { ...localWorkspaceProjectionFixture(worktreeId, root), revision: 0 };
-  const mutation = { kind: "delete" as const, revision: 0 };
-  expect(readLocalWorkspaceCommit(null, worktreeId, mutation, previous)).toBeUndefined();
-  expect(() => readLocalWorkspaceCommit(undefined, worktreeId, mutation, previous)).toThrow(
-    "coverage is incomplete",
-  );
-  for (const receipt of [
-    null,
-    { worktree_id: randomUUID(), revision: 1 },
-    { worktree_id: worktreeId, revision: 2 },
-  ]) {
-    expect(() =>
-      readLocalWorkspaceCommit(
-        receipt,
-        worktreeId,
-        { kind: "update", revision: 0, patch: {} },
-        previous,
-      ),
-    ).toThrow("commit identity is invalid");
-  }
-});
 
 it("keeps mutation preconditions and receipts small without trimming stored payloads", () => {
   using cleanup = new DisposableStack();
@@ -604,7 +579,16 @@ it("keeps prepared baseline replacement atomic through GC, rollback, and a lost 
   database.db.exec(`CREATE TABLE manifest_insert_evidence (inserted INTEGER NOT NULL) STRICT;
     CREATE TRIGGER count_manifest_inserts AFTER INSERT ON local_workspace_tree_packs
     BEGIN INSERT INTO manifest_insert_evidence VALUES (1); END;`);
+  let repeatedPreparations = 0;
+  const reused = probe.command(stateWorker, (command, options, scope) => {
+    if (command.type === "localWorkspace.prepare") {
+      repeatedPreparations++;
+    }
+    return scope.execute(command, options);
+  });
   await replace();
+  reused.mockRestore();
+  expect(repeatedPreparations).toBe(0);
   expect(database.db.prepare("SELECT count(*) AS n FROM manifest_insert_evidence").get()!.n).toBe(
     0,
   );
@@ -692,7 +676,15 @@ it("accepts worker-prepared observations without consuming edits or replaying st
   await withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
     const scan = await store.manifest(store.get()!, action);
     assert(scan.kind === "scan" && scan.observation);
+    const preparedMutation = scan.observation.mutation;
+    const forwarded = probe.command(stateWorker, (command, options, scope) => {
+      if (command.type === "localWorkspace.mutate") {
+        expect(command.input).toHaveProperty("mutation", preparedMutation);
+      }
+      return scope.execute(command, options);
+    });
     const observed = await store.accept(scan.observation);
+    forwarded.mockRestore();
     expect(observed).toMatchObject({
       ...pending,
       revision: initial.revision + 2,

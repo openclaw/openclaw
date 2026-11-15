@@ -48,6 +48,8 @@ export function memoryStore() {
   const profiles = new Map<string, Awaited<ReturnType<OpenClawIdMemberProfiles["read"]>>[string]>();
   return {
     profiles: {
+      inviteProfiles: async () => [],
+      link: async () => ({ ok: false, code: "profile_changed" }) as const,
       save: async (input: { accountId: string; name?: string | null; email?: string | null }) => {
         const previous = profiles.get(input.accountId);
         profiles.set(input.accountId, {

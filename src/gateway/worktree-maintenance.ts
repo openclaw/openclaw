@@ -84,6 +84,7 @@ export function startWorktreeMaintenance(params: {
   let manifestSweepPending = true;
   let nextRemovalAt = 0;
   const scratchCursor: ScratchCleanupCursor = {};
+  const scratchDeferred = new Error("host IO pressure");
   const hasIoPressure = createHostIoPressureProbe();
   const isActive = () =>
     !scheduler.signal.aborted &&
@@ -263,7 +264,7 @@ export function startWorktreeMaintenance(params: {
                   const assertScratchCurrent = () => {
                     assertCurrent();
                     if (scratchPressure) {
-                      throw new Error("Scratch cleanup deferred: host IO pressure");
+                      throw scratchDeferred;
                     }
                   };
                   assertScratchCurrent();
@@ -288,10 +289,11 @@ export function startWorktreeMaintenance(params: {
                   }
                 } catch (error) {
                   assertCurrent();
-                  params.onError(`Scratch cleanup failed: ${String(error)}`);
-                }
-                for (const error of current.scratch?.errors ?? []) {
-                  params.onError(`Scratch cleanup deferred: ${error}`);
+                  if (error === scratchDeferred) {
+                    current.scratchDeferred = "io-pressure";
+                  } else {
+                    params.onError(`Scratch cleanup failed: ${String(error)}`);
+                  }
                 }
                 // Scratch consumes fresh commit counters; preserve their backoff for GC admission.
                 if (scratchPressure) {
@@ -334,6 +336,7 @@ export function startWorktreeMaintenance(params: {
                 }
                 assertCurrent();
                 result.scratch = current.scratch;
+                result.scratchDeferred = current.scratchDeferred;
                 Object.assign(current, result);
                 params.onComplete(result);
                 current.state = "completed";
