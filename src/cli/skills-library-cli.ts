@@ -407,7 +407,8 @@ async function readLibraryInput(input: string): Promise<{
   content: string;
   files?: SkillLibraryFile[];
 }> {
-  const root = path.resolve(input);
+  // Resolve the parent physically while retaining the final-entry symlink checks.
+  const root = `${await fs.realpath(path.dirname(input))}${path.sep}${path.basename(input)}`;
   const info = await fs.lstat(root);
   let total = 0;
   let count = 0;

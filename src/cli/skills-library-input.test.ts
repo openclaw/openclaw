@@ -91,12 +91,14 @@ it("preserves hardlinks, ancestor symlinks, and executable metadata", async () =
   const bundle = path.join(directory, "parent", "bundle");
   const alias = path.join(directory, "alias");
   await fs.mkdir(bundle, { recursive: true });
-  await fs.symlink(path.dirname(bundle), alias, "junction");
+  const nested = path.join(directory, "parent", "nested");
+  await fs.mkdir(nested);
+  await fs.symlink(nested, alias, "junction");
   await fs.writeFile(path.join(bundle, "SKILL.md"), "skill\r\n");
   const original = await write("original.bin", Buffer.from([0, 255, 13, 10]), 0o755);
   await fs.link(original, path.join(bundle, "linked.bin"));
 
-  await parseLibraryInput(path.join(alias, "bundle"));
+  await parseLibraryInput(`${alias}${path.sep}..${path.sep}bundle`);
 
   expect(defaultRuntime.error).not.toHaveBeenCalled();
   expect(rpc().mock.calls[0]?.[2]).toHaveProperty("content", "skill\r\n");
@@ -108,6 +110,32 @@ it("preserves hardlinks, ancestor symlinks, and executable metadata", async () =
       executable: ((await fs.stat(original)).mode & 0o111) !== 0,
     },
   ]);
+});
+
+it("reads the selected single file and retains final-symlink refusal", async () => {
+  const { directory } = inputFixture();
+  const physical = path.join(directory, "physical");
+  await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+  const alias = path.join(directory, "alias");
+  await fs.symlink(path.join(physical, "nested"), alias, "junction");
+  await fs.writeFile(path.join(physical, "SKILL.md"), "selected skill");
+  await fs.writeFile(path.join(directory, "SKILL.md"), "decoy skill");
+  await parseLibraryInput(`${alias}${path.sep}..${path.sep}SKILL.md`);
+  expect(rpc().mock.calls[0]?.[2]).toHaveProperty("content", "selected skill");
+  expect(rpc().mock.calls[0]?.[2]).not.toHaveProperty("files");
+  rpc().mockClear();
+  const link = path.join(directory, "linked.md");
+  await fs.symlink(path.join(physical, "SKILL.md"), link);
+  await parseLibraryInput(link);
+  expectRejectedInput(/symlink|regular file/iu);
+});
+
+it.each([".", ".."])('rejects traversal through a regular file ending in "%s"', async (suffix) => {
+  const { write } = inputFixture();
+  await write("SKILL.md", "skill");
+  const file = await write("plain.md", "not a directory");
+  await parseLibraryInput(`${file}${path.sep}${suffix}`);
+  expectRejectedInput(/ENOTDIR|not a directory/iu);
 });
 
 it.each([
