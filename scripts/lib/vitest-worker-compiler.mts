@@ -126,13 +126,19 @@ async function compileVitestWorkerArtifacts(
             runtimeProcessDeclarationEntries["infra/runtime-process-entrypoints"],
           "scripts/script-module-runtime.test-support":
             vitestWorkerDeclarationEntries["scripts/script-module-runtime.test-support"],
+          "test/scripts/tooling-probe-runtime.test-support":
+            vitestWorkerDeclarationEntries["test/scripts/tooling-probe-runtime.test-support"],
         }
       : preset === "runtime"
         ? { ...runtimeProcessBuildEntries, ...runtimeProcessDeclarationEntries }
         : { ...vitestWorkerBuildEntries, ...vitestWorkerDeclarationEntries };
   const preservedSources =
     preset === "tooling"
-      ? ["scripts/lib/vitest-batch-runner.mts", "scripts/test-projects.mts"]
+      ? [
+          "scripts/lib/vitest-batch-runner.mts",
+          "scripts/test-projects.mts",
+          "scripts/ci-refit-test-timings.mts",
+        ]
       : preset === "runtime"
         ? []
         : preservedModuleBuildSources;
@@ -161,7 +167,7 @@ async function compileVitestWorkerArtifacts(
         load(id) {
           recordInput(id);
           // Keep schema loading in this callback instead of crossing into JS twice per input.
-          return schemaPlugin.load.call(
+          return schemaPlugin.load.handler.call(
             {
               addWatchFile: (file) => {
                 recordInput(file);

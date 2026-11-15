@@ -1655,6 +1655,40 @@ AFTER_CD
     ).toBe("${{ steps.docs_scope.outputs.root_prose_only }}");
   });
 
+  it("runs formatting once across lint and docs for current targets", () => {
+    const workflow = readCiWorkflow();
+    const lint = requiredWorkflowStep(workflow.jobs["check-shard"].steps, "Run check shard");
+    const docs = workflow.jobs["check-docs"];
+    const format = requiredWorkflowStep(docs.steps, "Check formatting");
+    for (const enabled of [false, true]) {
+      for (const docsSelected of [false, true]) {
+        for (const frozen of [false, true]) {
+          const context = {
+            eventName: "pull_request" as const,
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            preflightOutputs: {
+              run_format_check: String(enabled),
+              run_check_docs: String(docsSelected),
+              frozen_target: String(frozen),
+            },
+            steps: {
+              node_setup: { outcome: "success" as const, outputs: {} },
+              bun_setup: { outcome: "success" as const, outputs: {} },
+            },
+          };
+          const lintRuns = evaluateWorkflowExpression(lint.env.FORMAT_CHECK, context);
+          const docsRuns =
+            evaluateWorkflowCondition(docs.if, context) &&
+            evaluateWorkflowCondition(format.if, context);
+          expect(Number(lintRuns === true || lintRuns === "true") + Number(docsRuns)).toBe(
+            enabled ? (frozen && docsSelected ? 2 : 1) : 0,
+          );
+        }
+      }
+    }
+  });
+
   it("bounds matrix fan-out for runner-registration pressure", () => {
     const workflow = readCiWorkflow();
 

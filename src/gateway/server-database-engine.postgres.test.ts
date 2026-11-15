@@ -58,7 +58,7 @@ import type { toCronBroadcastEvent } from "./server-cron-plugin-job.js";
 import {
   createDeliveryCrashPreload,
   createDeliveryCrashReader,
-  recoverNoticeAcknowledgementCrash,
+  recoverNoticeCommitCrash,
   readPostgresAnchor,
 } from "./server-database-engine-delivery-crash.test-support.js";
 import { installGatewayDatabaseEngine } from "./server-database-engine.js";
@@ -319,12 +319,13 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     "acceptance-before-receipt",
     "response-lost",
     "notice-ack-reply-lost",
+    "notice-transcript-reply-lost",
   ] as const)(
     "recovers a queued final after its Gateway dies at %s",
     { timeout: 90_000 },
     async (window, { signal }) => {
       const receiptCommitted = window === "receipt-before-ack";
-      const noticeCrash = window === "notice-ack-reply-lost";
+      const noticeCrash = window.startsWith("notice-");
       await using resources = new AsyncDisposableStack();
       type Boundary = { id: string; pid: number };
       const held = createDeferred<Boundary>();
@@ -507,7 +508,8 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
       );
       const { readEntry, readQueue } = reader;
       if (noticeCrash) {
-        await recoverNoticeAcknowledgementCrash({
+        await recoverNoticeCommitCrash({
+          transcriptCommitted: window === "notice-transcript-reply-lost",
           reader,
           instance,
           completion,

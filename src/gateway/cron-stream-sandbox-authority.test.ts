@@ -8,6 +8,7 @@ import {
   captureCronStreamSandboxTarget,
 } from "../agents/sandbox/stream-context.js";
 import type { SandboxContext } from "../agents/sandbox/types.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadTranscriptEvents,
   replaceSessionEntrySync,
@@ -32,11 +33,15 @@ import {
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareCronStreamSandboxAuthority } from "./cron-stream-sandbox-authority.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
 } from "./openclaw-id/tunnel-principal.js";
-import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
+import {
+  invalidateOperatorRolePolicy,
+  publishOperatorRoleConfigChange,
+} from "./operator-role-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 
 const mocks = vi.hoisted(() => ({
@@ -572,9 +577,10 @@ it.each(["grant revocation", "target replacement"] as const)(
   },
 );
 
-it.each(["member", "owner"] as const)(
+it.each(["member", "owner", "definition"] as const)(
   "restores a serialized OCID %s sandbox stream with its original peer dependency",
-  async (kind) => {
+  async (scenario) => {
+    const kind = scenario === "owner" ? "owner" : "member";
     await withAuthorityFixture(async (fixture) => {
       let principal: OpenClawIdTunnelPrincipal | undefined = {
         ...(kind === "member"
@@ -594,11 +600,13 @@ it.each(["member", "owner"] as const)(
           roles: {
             default: "reader",
             definitions: {
+              ...MEMBER_ROLE_PRESETS,
               reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
             },
           },
         };
       }
+      setRuntimeConfigSnapshot(fixture.config);
       const savedTarget = JSON.stringify(fixture.target);
       const serialized = JSON.parse(savedTarget);
       expect(parseCronStreamSandboxTarget(serialized)).toEqual(fixture.target);
@@ -620,6 +628,14 @@ it.each(["member", "owner"] as const)(
           },
         });
         expect(captured.operator?.openclawIdPrincipal).toEqual(principal);
+        if (scenario === "definition") {
+          fixture.config.gateway!.roles!.definitions.operator = MEMBER_ROLE_PRESETS.viewer;
+          setRuntimeConfigSnapshot(fixture.config);
+          publishOperatorRoleConfigChange({});
+          expect(retained.signal.aborted).toBe(true);
+          expect(retained.assertCurrent).toThrow();
+          return;
+        }
         const original = structuredClone(principal);
         principal = undefined;
         setOpenClawIdTunnelPrincipalLookup(() => principal);

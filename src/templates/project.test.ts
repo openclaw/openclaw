@@ -254,10 +254,10 @@ describe("Template project packages", () => {
     } satisfies Partial<TemplateProjectError>);
   });
 
-  it("builds byte-identical artifacts containing only declared project inputs", async () => {
+  it.each([32, 1_680_008])("builds reproducible selected inputs (%i bytes)", async (size) => {
     const firstPath = output;
     const secondPath = join(dirname(output), "second.tgz");
-
+    await writeFile(join(project, "BOOTSTRAP.md"), Buffer.alloc(size, 0x78));
     const first = await buildTemplateProject(project, firstPath);
     const second = await buildTemplateProject(project, secondPath);
     const validation = await validateTemplateProject(join(project, "workspace", "reference.md"));

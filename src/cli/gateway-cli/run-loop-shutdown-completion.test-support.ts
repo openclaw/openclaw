@@ -6,7 +6,6 @@ import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
-import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
@@ -130,7 +129,7 @@ export function registerGracefulGatewayShutdownTests(f: UpdateRespawnFixtures): 
           ).toHaveBeenCalledOnce();
           expectUncalled(f.restartGatewayProcessWithFreshPid, f.respawnGatewayProcessForUpdate);
           // Settled cleanup still bounds a leaked handle that would outlive the loop.
-          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000);
+          expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, undefined);
         }, true);
       } finally {
         closing.release();
@@ -346,19 +345,18 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
     });
   });
 
-  it("retains the deadline after owned log cleanup fails", async () => {
+  it("bounds the exit tail after owned log cleanup rejects", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     f.consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, waitMs: 0 });
     f.restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
-    await withShutdownClock(async ({ captureSignal, close, runtime, exited }) => {
+    await withShutdownClock(async ({ captureSignal, close, loopPromise }) => {
       f.flushLogger.mockRejectedValueOnce(new Error("shutdown cleanup failed"));
       captureSignal("SIGUSR2")();
       await vi.advanceTimersByTimeAsync(0);
       expectCallCount(1, close, f.armShutdownHardExitWatchdog);
-      expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
-      await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_TIMEOUT_MS);
-      await expect(exited).resolves.toBe(1);
-      expect(f.requestSettledExitWatchdog).not.toHaveBeenCalled();
+      await expect(loopPromise).resolves.toBe(1);
+      expect(f.cancelShutdownHardExitWatchdog).toHaveBeenCalledOnce();
+      expect(f.requestSettledExitWatchdog).toHaveBeenCalledExactlyOnceWith(1_000, "SIGUSR2");
     }, true);
   });
 }

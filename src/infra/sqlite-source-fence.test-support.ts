@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { getEnvironmentData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { deferSqlitePostCommitPublication } from "./sqlite-post-commit.js";
 import {
   SOURCE_FENCE_ACCEPTED,
@@ -80,7 +81,7 @@ export function createSqliteWorkerBackend(input: FenceFixtureInput): FixtureBack
   const aliasBinding = alias ? { database: alias, identity: input.source } : undefined;
   let current: FenceFixtureCommand | undefined;
   let sourceRevision = -1;
-  let validatedSource = source;
+  let validatedSource: EngineConnection = source;
   let retryObserved = false;
   const signal = (stage: number) => {
     if (current?.barrier === undefined) {

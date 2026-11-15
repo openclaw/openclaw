@@ -187,6 +187,7 @@ const sourceFiles = [
   "en-model-accounts.ts",
   "en-model-controls.ts",
   "en-model-favorites.ts",
+  "en-model-provider-auth.ts",
   "en-model-setup.ts",
   "en-personal-instructions.ts",
   "en-provider-usage.ts",

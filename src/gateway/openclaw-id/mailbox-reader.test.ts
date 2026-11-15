@@ -10,8 +10,14 @@ import {
   signStatement,
   type MailboxMessage,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
-import { applyMailboxMessage, startMailboxReader } from "./mailbox-reader.js";
-import { linkedClaw, redemptionMail } from "./openclaw-id.test-support.js";
+import { createOpenClawIdAuthority } from "./authority.js";
+import { applyMailboxMessage, startMailboxReader, type MailboxSink } from "./mailbox-reader.js";
+import {
+  linkedClaw,
+  memoryStore,
+  ownerInvite,
+  redemptionMail,
+} from "./openclaw-id.test-support.js";
 
 const rootMail: MailboxMessage = {
   message_id: "m1",
@@ -77,6 +83,91 @@ describe("mailbox reader callbacks", () => {
       detail: "expected seq 3",
     });
     expect(client.ackMail).toHaveBeenCalledWith("c1", "2");
+  });
+
+  it("quietly accepts an approved browser replay after reload and diagnoses new keys", async () => {
+    const store = memoryStore();
+    const write = vi.fn(store.write);
+    const claw = await linkedClaw({ ...store, write });
+    const invite = await ownerInvite(claw, { email: "bob@example.test" });
+    expect(
+      await claw.authority.registerInvite({ cap: invite.cap, proofKey: invite.proofKey }, "tunnel"),
+    ).toMatchObject({ ok: true });
+    const params = {
+      clawId: claw.clawId,
+      inviteId: invite.inviteId,
+      proofKey: invite.proofKey,
+      accountId: "acct-bob",
+      email: "bob@example.test",
+    };
+    const mail = await redemptionMail(params);
+    const sink: Pick<MailboxSink, "submit" | "redeem" | "redeemNode"> = {
+      submit: (statement) => claw.authority.submit(statement, "mailbox"),
+      redeem: (redemption, sender) => claw.authority.redeem(redemption, sender),
+      redeemNode: (redemption) => claw.authority.redeemNode(redemption),
+    };
+    expect(await applyMailboxMessage(mail.message, sink)).toMatchObject([
+      { ok: true, status: "pending" },
+    ]);
+    expect(
+      await claw.authority.submit(
+        await claw.sign({
+          op: "add",
+          account_id: params.accountId,
+          role: "operator",
+          peer_keys: [mail.peerKey],
+          invite_id: invite.inviteId,
+        }),
+        "tunnel",
+      ),
+    ).toMatchObject({ ok: true });
+    const authority = createOpenClawIdAuthority({ ...store, write });
+    await authority.load();
+    const before = authority.current();
+    write.mockClear();
+    const changed = await redemptionMail(params);
+    const log = { info: vi.fn(), warn: vi.fn<(message: string) => void>() };
+    const onRefused = vi.fn(async () => {});
+    const onEffects = vi.fn(async () => {});
+    const settled = Promise.withResolvers<void>();
+    const ackMail = vi.fn(async () => {});
+    reader = startMailboxReader({
+      clawId: claw.clawId,
+      cursor: null,
+      client: {
+        receiveMail: vi
+          .fn()
+          .mockResolvedValueOnce({ messages: [mail.message, changed.message], cursor: "replayed" })
+          .mockImplementation(() => new Promise(() => {})),
+        ackMail,
+      } as never,
+      sink: {
+        ...sink,
+        redeem: (redemption, sender) => authority.redeem(redemption, sender),
+        saveCursor: async () => {
+          settled.resolve();
+        },
+      },
+      onEffects,
+      onRefused,
+      log,
+    });
+    await settled.promise;
+    expect(onEffects).toHaveBeenCalledExactlyOnceWith([]);
+    expect(onRefused).toHaveBeenCalledExactlyOnceWith(
+      changed.message,
+      expect.objectContaining({ ok: false, code: "invite_used" }),
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(authority.current()).toBe(before);
+    expect(ackMail).toHaveBeenCalledExactlyOnceWith(claw.clawId, "replayed");
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    const warning = log.warn.mock.calls[0]?.[0];
+    expect(warning).toContain(`invite_id=${invite.inviteId}`);
+    expect(warning).toContain("already_member=true");
+    expect(warning).toContain("keys_match=false");
+    expect(warning).not.toContain(mail.message.payload.redemption.body.proof);
+    expect(warning).not.toContain(params.email);
   });
 
   it.each(["node_redemption", "enrollment"] as const)(

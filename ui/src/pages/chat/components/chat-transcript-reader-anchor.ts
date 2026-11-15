@@ -54,9 +54,6 @@ export class TranscriptReaderAnchor {
   private landedShift = 0;
   private owedScroll = 0;
   private observer: ResizeObserver | null = null;
-  // A positioning owner can measure and release its anchor before this frame's resize
-  // delivery. Its restoration already accounts for that delivery's rows.
-  private ownedSinceDelivery = false;
 
   constructor(
     private readonly host: ReaderAnchorHost,
@@ -131,20 +128,21 @@ export class TranscriptReaderAnchor {
     const range = virtualizer.calculateRange();
     const overscan = virtualizer.options.overscan;
     const readerTop = element.getBoundingClientRect().top;
-    const compensating = !this.positionOwned() && !this.ownedSinceDelivery;
-    this.ownedSinceDelivery = false;
+    const compensating = !this.positionOwned();
     // Earlier rows in this delivery push later ones; recover each row's pre-change top.
-    const rows = entries
-      .flatMap((entry) => {
-        const row = entry.target;
-        return row instanceof HTMLElement &&
-          row.isConnected &&
-          (row.dataset.preparedRow !== "true" || row.dataset.preparingRow === "true") &&
-          element.contains(row)
-          ? [{ entry, row, top: row.getBoundingClientRect().top }]
-          : [];
-      })
-      .toSorted((left, right) => left.top - right.top);
+    const rows: { entry: ResizeObserverEntry; row: HTMLElement; top: number }[] = [];
+    for (const entry of entries) {
+      const row = entry.target;
+      if (
+        row instanceof HTMLElement &&
+        row.isConnected &&
+        (row.dataset.preparedRow !== "true" || row.dataset.preparingRow === "true") &&
+        element.contains(row)
+      ) {
+        rows.push({ entry, row, top: row.getBoundingClientRect().top });
+      }
+    }
+    rows.sort((left, right) => left.top - right.top);
     // Newly revealed rows can enter inside the viewport ahead of retained content.
     // Their first measurement preserves that content unless the reader reached native zero.
     const retainedIndex =
@@ -223,7 +221,13 @@ export class TranscriptReaderAnchor {
     instance: TranscriptVirtualizer,
   ): boolean => {
     const owned = this.positionOwned();
-    this.ownedSinceDelivery ||= owned;
+    if (owned) {
+      const row = instance.elementsCache.get(item.key);
+      if (row) {
+        // Restoration accounts for this measurement, not other rows in its later delivery.
+        this.heights.set(row, (instance.itemSizeCache.get(item.key) ?? item.size) + delta);
+      }
+    }
     // An estimated initial end is not a native scroll target.
     if (this.host.initialRange.pending) {
       return false;

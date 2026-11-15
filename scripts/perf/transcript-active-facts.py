@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the synthetic schema-40 fixture for transcript-active-facts.ts.
+"""Build synthetic agent fixtures for transcript-active-facts.ts.
 
 Requires Python 3.14+ (compression.zstd) and SQLite with STRICT/FTS5 support.
 Example from the repository root, using a schema exported from the pinned base:
@@ -11,8 +11,16 @@ Never reads live state or overwrites an existing fixture. Full mode allocates an
 frees real SQLite pages before appends to fragment overflow chains. Optional
 file-bytes grows the real allocation high-water with temporary rows, then drops
 those rows; it never truncates a file to a larger size or creates sparse padding.
-Only synthetic-0 is finalized for hydration. Other sessions provide storage and
-index cardinality. Fixture preparation is excluded from measured operations.
+By default only synthetic-0 is finalized for hydration. Use
+--finalize-long-sessions to give all four long paths valid headers, identities,
+and alternating user/assistant messages suitable for synthetic provider replay.
+Other sessions provide storage and index cardinality. Preparation is unmeasured.
+Hybrid mode uses full payloads on the four long paths and compact cardinality
+rows elsewhere. Use --schema-version 41 with the current canonical schema for
+backfill proof; the default remains the predecessor schema 40.
+--activity-epoch-ms captures synthetic activity relative to a supplied epoch:
+long paths are 8/1/6/14 days old, and other paths cycle 1/6/8/14 days. Zero
+preserves the legacy timestamp 1. This fixture option is not runtime configuration.
 """
 
 import argparse
@@ -28,7 +36,8 @@ from pathlib import Path
 
 
 CHUNK = 10_000
-SESSION_ID = "synthetic-0"
+ACTIVITY_AGES_DAYS = (1, 6, 8, 14)
+LONG_ACTIVITY_AGES_DAYS = (8, 1, 6, 14)
 
 
 def emit(value):
@@ -55,8 +64,8 @@ def file_facts(db, filename):
     }
 
 
-def session_sizes(total):
-    longs = [34153, 20000, 50000, 40000] if total >= 150_000 else [min(total, 34153)]
+def session_sizes(total, longest=50000):
+    longs = [34153, 20000, longest, 40000] if total >= 150_000 else [min(total, 34153)]
     remaining = total - sum(longs)
     short_count = max(1, round(remaining / 245)) if remaining else 0
     short = [remaining // short_count] * short_count if short_count else []
@@ -102,18 +111,26 @@ def payload_pool(mode):
     return pool
 
 
-def seed_sessions(db, sizes):
+def activity_timestamp(index, epoch_ms):
+    if epoch_ms == 0:
+        return 1
+    days = LONG_ACTIVITY_AGES_DAYS[index] if index < 4 else ACTIVITY_AGES_DAYS[index % 4]
+    return epoch_ms - days * 86_400_000
+
+
+def seed_sessions(db, sizes, activity_epoch_ms=0):
     sessions = [f"synthetic-{index}" for index in range(len(sizes))]
-    for session_id in sessions:
+    for index, session_id in enumerate(sessions):
         key = "agent:main:" + session_id
+        updated_at = activity_timestamp(index, activity_epoch_ms)
         db.execute(
             "INSERT INTO session_nodes "
             "(session_key,current_session_id,entry_json,updated_at,entry_valid) VALUES(?,?,?,?,1)",
-            (key, session_id, json_text({"sessionId": session_id, "updatedAt": 1}), 1),
+            (key, session_id, json_text({"sessionId": session_id, "updatedAt": updated_at}), updated_at),
         )
         db.execute(
             "INSERT INTO session_windows(session_id,session_key,created_at,updated_at) "
-            "VALUES(?,?,1,1)", (session_id, key),
+            "VALUES(?,?,1,?)", (session_id, key, updated_at),
         )
     db.commit()
     return sessions
@@ -134,7 +151,7 @@ def fragment(db, total, filename, started):
     emit({"phase": "fragmented", "elapsed_s": time.monotonic() - started, **file_facts(db, filename)})
 
 
-def append_rows(db, sizes, sessions, pool, filename, started):
+def append_rows(db, sizes, sessions, pool, filename, started, compact_pool=None, finalized_count=1):
     rows = 0
     # Round robin long tails compete for the scattered free pages.
     for first in range(0, len(sizes), 64):
@@ -149,10 +166,11 @@ def append_rows(db, sizes, sessions, pool, filename, started):
                 kind = "custom" if custom else "message"
                 quantile = ((seq // 200) * 37 + 17) % 100 if kind == "custom" else (seq * 37 + index * 17) % 100
                 session_id = sessions[index]
-                raw_seq = seq + 1 if index == 0 else seq
+                raw_seq = seq + 1 if index < finalized_count else seq
                 db.execute(
                     "INSERT INTO transcript_events VALUES(?,?,NULL,1,?,?,?,?,?,?,?,?,?,?)",
-                    (session_id, raw_seq, *pool[kind, quantile]),
+                    (session_id, raw_seq,
+                     *(compact_pool if compact_pool is not None and index >= 4 else pool)[kind, quantile]),
                 )
                 db.execute(
                     "INSERT INTO transcript_event_identities "
@@ -196,12 +214,12 @@ def grow_highwater(db, filename, target):
     return {"rows": rows, "elapsed_s": time.monotonic() - started, **file_facts(db, filename)}
 
 
-def finalize_measured_session(db, sizes):
+def finalize_session(db, session_id, replay_messages=False):
     """Give the measured path unique identities without changing overflow layout deliberately."""
     started = time.monotonic()
     rows = db.execute(
         "SELECT seq,event_zstd,navigation_json FROM transcript_events WHERE session_id=? AND event_zstd IS NOT NULL ORDER BY seq",
-        (SESSION_ID,),
+        (session_id,),
     ).fetchall()
     messages = 0
     for seq, blob, navigation_json in rows:
@@ -219,33 +237,59 @@ def finalize_measured_session(db, sizes):
                 envelope[key]["data"] = event["data"]
         if event["type"] == "message":
             event["message"]["content"] = [{"type": "text", "text": f"synthetic message {position}"}]
+            if replay_messages:
+                role = "user" if messages % 2 == 0 else "assistant"
+                event["message"]["role"] = role
+                event["message"]["timestamp"] = 1 + position
+                if role == "assistant":
+                    event["message"].update(
+                        api="openai-responses", provider="openai", model="gpt-4.1", stopReason="stop",
+                        usage={"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0,
+                               "totalTokens": 0, "cost": {"input": 0, "output": 0,
+                               "cacheRead": 0, "cacheWrite": 0, "total": 0}},
+                    )
+                for key in ("navigation", "model", "reset"):
+                    envelope[key]["message"]["role"] = role
         raw = json_text(event).encode()
         compressed = zstd.compress(raw, level=3)
         for key in ("modelBytes", "modelWithoutCheckpointBytes", "withoutCustomDataBytes"):
             envelope[key] = len(raw)
         db.execute(
-            "UPDATE transcript_events SET event_zstd=?,event_utf8_bytes=?,navigation_json=? "
+            "UPDATE transcript_events SET event_zstd=?,event_utf8_bytes=?,navigation_json=?,message_role=? "
             "WHERE session_id=? AND seq=?",
-            (compressed, len(raw), json_text(envelope), SESSION_ID, seq),
+            (compressed, len(raw), json_text(envelope),
+             event["message"]["role"] if event["type"] == "message" else None, session_id, seq),
         )
         db.execute(
             "UPDATE session_transcript_active_events SET message_position=? WHERE session_id=? AND event_seq=?",
-            (messages if event["type"] == "message" else None, SESSION_ID, seq),
+            (messages if event["type"] == "message" else None, session_id, seq),
         )
         messages += event["type"] == "message"
         if position % 1000 == 0:
             db.commit()
     db.commit()
+    return {"session_id": session_id, "rows_rewritten": len(rows), "messages": messages,
+            "elapsed_s": time.monotonic() - started}
+
+
+def finalize_measured_sessions(db, sizes, finalized_count=1, replay_messages=False, activity_epoch_ms=0):
+    started = time.monotonic()
+    finalized = [finalize_session(db, f"synthetic-{index}", replay_messages)
+                 for index in range(finalized_count)]
     for index, count in enumerate(sizes):
         session_id = f"synthetic-{index}"
         db.execute("INSERT INTO transcript_rewrite_watermarks VALUES(?,?,1)",
                    (session_id, "synthetic-generation"))
-        db.execute("INSERT INTO session_transcript_index_state VALUES(?,?,?,0,?,?,1)",
-                   (session_id, count if index == 0 else count - 1, f"event-{count - 1}", count, messages if index == 0 else count))
+        db.execute("INSERT INTO session_transcript_index_state VALUES(?,?,?,0,?,?,?)",
+                   (session_id, count if index < finalized_count else count - 1,
+                    f"event-{count - 1}", count,
+                    finalized[index]["messages"] if index < finalized_count else count,
+                    activity_timestamp(index, activity_epoch_ms)))
         db.execute("UPDATE session_windows SET transcript_updated_at=1 WHERE session_id=?", (session_id,))
     db.commit()
     db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    return {"rows_rewritten": len(rows), "elapsed_s": time.monotonic() - started}
+    return {"rows_rewritten": sum(item["rows_rewritten"] for item in finalized),
+            "sessions": finalized, "elapsed_s": time.monotonic() - started}
 
 
 def main():
@@ -254,11 +298,19 @@ def main():
     parser.add_argument("--schema", required=True, type=Path)
     parser.add_argument("--name", required=True)
     parser.add_argument("--rows", required=True, type=int)
-    parser.add_argument("--mode", choices=("compact", "full"), required=True)
+    parser.add_argument("--mode", choices=("compact", "full", "hybrid"), required=True)
+    parser.add_argument("--schema-version", type=int, choices=(40, 41), default=40)
+    parser.add_argument("--longest-session-rows", type=int, default=50000)
+    parser.add_argument("--finalize-long-sessions", action="store_true")
+    parser.add_argument("--activity-epoch-ms", type=int, default=0)
     parser.add_argument("--file-bytes", type=int, default=0)
     args = parser.parse_args()
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", args.name) or args.rows < 1 or args.file_bytes < 0:
         parser.error("name must be lowercase letters/digits/hyphens; rows must be positive; file-bytes nonnegative")
+    if not 1 <= args.longest_session_rows <= 50000:
+        parser.error("longest-session-rows must be between 1 and 50000")
+    if not 0 <= args.activity_epoch_ms <= 2**53 - 1:
+        parser.error("activity-epoch-ms must be a nonnegative safe integer; zero preserves timestamp 1")
     schema = args.schema.read_text()
     args.output.mkdir(parents=True, exist_ok=True)
     filename = args.output / (args.name + ".sqlite")
@@ -273,32 +325,45 @@ def main():
             "PRAGMA synchronous=NORMAL; PRAGMA cache_size=-16384; PRAGMA foreign_keys=ON;"
         )
         db.executescript(schema)
-        if db.execute("SELECT 1 FROM sqlite_schema WHERE name='session_transcript_active_event_facts'").fetchone():
-            raise ValueError("fixture requires the pinned predecessor schema without active facts")
-        db.execute("INSERT INTO schema_meta VALUES ('primary','agent',40,'main','synthetic',1,1)")
-        db.execute("PRAGMA user_version=40")
-        longs, sizes = session_sizes(args.rows)
-        sessions = seed_sessions(db, sizes)
-        header = {"type": "session", "version": 3, "id": SESSION_ID,
-                  "timestamp": "2026-11-05T00:00:00.000Z", "cwd": "/synthetic"}
-        db.execute("INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,0,?,1)",
-                   (SESSION_ID, json_text(header)))
-        db.execute("INSERT INTO transcript_event_identities "
-                   "(session_id,event_id,seq,event_type,parent_id,created_at) VALUES(?,?,0,'session',NULL,1)",
-                   (SESSION_ID, SESSION_ID))
+        has_facts = db.execute("SELECT 1 FROM sqlite_schema WHERE name='session_transcript_active_event_facts'").fetchone() is not None
+        if has_facts != (args.schema_version == 41):
+            raise ValueError("schema-version must match the supplied active-facts table shape")
+        db.execute("INSERT INTO schema_meta VALUES ('primary','agent',?,'main','synthetic',1,1)",
+                   (args.schema_version,))
+        db.execute(f"PRAGMA user_version={args.schema_version}")
+        longs, sizes = session_sizes(args.rows, args.longest_session_rows)
+        finalized_count = len(longs) if args.finalize_long_sessions else 1
+        sessions = seed_sessions(db, sizes, args.activity_epoch_ms)
+        for index in range(finalized_count):
+            session_id = sessions[index]
+            header = {"type": "session", "version": 3, "id": session_id,
+                      "timestamp": "2026-11-05T00:00:00.000Z", "cwd": "/synthetic"}
+            db.execute("INSERT INTO transcript_events(session_id,seq,event_json,created_at) VALUES(?,0,?,1)",
+                       (session_id, json_text(header)))
+            db.execute("INSERT INTO transcript_event_identities "
+                       "(session_id,event_id,seq,event_type,parent_id,created_at) VALUES(?,?,0,'session',NULL,1)",
+                       (session_id, session_id))
         db.commit()
-        if args.mode == "full":
+        if args.mode != "compact":
             fragment(db, args.rows, filename, started)
-        rows = append_rows(db, sizes, sessions, pool, filename, started)
-        if args.mode == "full":
+        rows = append_rows(db, sizes, sessions, pool, filename, started,
+                           payload_pool("compact") if args.mode == "hybrid" else None,
+                           finalized_count=finalized_count)
+        if args.mode != "compact":
             db.execute("DROP TABLE synthetic_fragmentation_ballast")
             db.commit()
         db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         highwater = grow_highwater(db, filename, args.file_bytes) if args.file_bytes else None
-        finalization = finalize_measured_session(db, sizes)
+        finalization = finalize_measured_sessions(db, sizes, finalized_count,
+                                                  replay_messages=args.finalize_long_sessions,
+                                                  activity_epoch_ms=args.activity_epoch_ms)
         report = {
-            "name": args.name, "mode": args.mode, "rows": rows,
+            "name": args.name, "mode": args.mode, "schema_version": args.schema_version, "rows": rows,
             "sessions": len(sizes), "long_sessions": longs,
+            "activity": {"epoch_ms": args.activity_epoch_ms,
+                         "legacy_timestamp": 1 if args.activity_epoch_ms == 0 else None,
+                         "long_path_age_days": LONG_ACTIVITY_AGES_DAYS,
+                         "other_path_age_days_cycle": ACTIVITY_AGES_DAYS},
             "elapsed_s": time.monotonic() - started,
             "historical_custom_markers": sum(
                 0 < position < min(31200, sizes[0] - 512) and position % 200 == 0

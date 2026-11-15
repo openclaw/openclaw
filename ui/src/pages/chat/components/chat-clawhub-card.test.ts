@@ -553,6 +553,10 @@ describe("ClawHub chat recommendations", () => {
     expect(normalizeMessage({ role: "assistant", content: [recommendation] }).content).toEqual([
       recommendation,
     ]);
+    const community = { ...recommendation, official: false };
+    expect(normalizeMessage({ role: "assistant", content: [community] }).content).toEqual([
+      community,
+    ]);
     expect(normalizeMessage({ role: "user", content: [recommendation] }).content).toEqual([]);
     expect(
       normalizeMessage({ role: "assistant", content: [{ ...recommendation, installed: "yes" }] })

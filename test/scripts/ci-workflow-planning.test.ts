@@ -3011,8 +3011,8 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
-    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages", "mlx"]],
+    ["macos-swift", false, "workflow_dispatch", false, ["tests"]],
+    ["macos-swift-packages", false, "workflow_dispatch", false, ["release", "packages", "mlx"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -3180,9 +3180,9 @@ describe("ci workflow guards", () => {
       const appPhases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
-      expect(appPhases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      expect(appPhases).toEqual(["tests"]);
       const packagePhases = evaluateWorkflowExpression(packages.strategy.matrix.phase, context);
-      expect(packagePhases).toEqual(["packages", "mlx"]);
+      expect(packagePhases).toEqual(full ? ["release", "packages", "mlx"] : ["packages", "mlx"]);
       const phases = [...appPhases, ...packagePhases];
       expect(job.strategy["max-parallel"]).toBe(2);
       const env = Object.fromEntries(
@@ -3287,7 +3287,7 @@ describe("ci workflow guards", () => {
         "Restore Swift build directory cache",
         "Validate Swift build cache",
       ]) {
-        expect(selectedPhases(name), name).toEqual(full ? ["release", "tests"] : ["tests"]);
+        expect(selectedPhases(name), name).toEqual(full ? ["tests", "release"] : ["tests"]);
       }
       expect(selectedPhases("Render isolated macOS health fixtures")).toEqual(
         full ? ["tests"] : [],
@@ -7240,7 +7240,12 @@ describe("ci workflow guards", () => {
         'printf "%s\\n" "$*" >> "$SDK_NODE_CALLS"',
         'printf "cache-key=fixture-sdk\\n" >> "$GITHUB_OUTPUT"',
       ]);
-      const steps = { identity: { outputs: {} }, pack: { outputs: {} }, restore: { outputs: {} } };
+      const steps = {
+        identity: { outputs: {} },
+        pack: { outputs: {} },
+        "main-pack": { outputs: {} },
+        restore: { outputs: {} },
+      };
       const run = (id: keyof typeof steps) => {
         const step = action.runs.steps.find((candidate: WorkflowStep) => candidate.id === id);
         const output = path.join(root, `${id}.outputs`);
@@ -7259,14 +7264,20 @@ describe("ci workflow guards", () => {
       };
       run("identity");
       expect(steps.identity.outputs).toMatchObject({ enabled: "true" });
-      if (mode === "publish-run" || mode === "restore-run") {
+      if (mode !== "restore-main") {
         expect(existsSync(calls)).toBe(false);
-        run(mode === "publish-run" ? "pack" : "restore");
+        run(mode === "publish-run" ? "pack" : mode === "save-main" ? "main-pack" : "restore");
       }
       expect(readFileSync(calls, "utf8").trim()).toBe(
-        `scripts/ci-sdk-declarations.mts ${mode === "publish-run" ? "pack" : mode === "restore-run" ? "restore --required" : "key"}`,
+        `scripts/ci-sdk-declarations.mts ${mode === "restore-main" ? "key" : mode === "restore-run" ? "restore --required" : "pack"}`,
       );
       expect(evaluateWorkflow(action.outputs["cache-key"].value, { steps })).toBe("fixture-sdk");
+      if (mode === "save-main") {
+        const save = action.runs.steps.find((step: WorkflowStep) =>
+          step.uses?.startsWith("actions/cache/save@"),
+        );
+        expect(evaluateWorkflow(save.with.key, { steps })).toBe("fixture-sdk");
+      }
     },
   );
 
@@ -13216,13 +13227,15 @@ describe("ci workflow guards", () => {
 
   it.each([
     { eventName: "schedule", runId: "", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "1", selected: ["second-cli"] },
-    { eventName: "schedule", runId: "2", selected: ["first-cli"] },
-    { eventName: "schedule", runId: "9007199254740993", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "1", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "2", selected: ["gateway-methods"] },
+    { eventName: "schedule", runId: "9007199254740993", selected: ["gateway-database"] },
+    { eventName: "schedule", runId: "3", selected: ["second-cli"] },
+    { eventName: "schedule", runId: "4", selected: ["first-cli"] },
     { eventName: "schedule", runId: "invalid", selected: ["first-cli"] },
     { eventName: "pull_request", runId: "1", selected: [] },
   ] as const)(
-    "assigns one separate CLI audit row by run identity ($eventName, $runId)",
+    "assigns one shared CLI/Gateway audit row by run identity ($eventName, $runId)",
     ({ eventName, runId, selected }) => {
       const cli = "test/vitest/vitest.cli-process.config.ts";
       const unit = "test/vitest/vitest.unit-fast.config.ts";
@@ -13230,6 +13243,28 @@ describe("ci workflow guards", () => {
         { name: "first-cli", configs: [cli] },
         { name: "unit", configs: [unit] },
         { name: "mixed", configs: [unit, cli] },
+        {
+          name: "gateway-database",
+          configs: [
+            "test/vitest/vitest.gateway-server-isolated.config.ts",
+            "test/vitest/vitest.gateway-database-workers.config.ts",
+          ],
+        },
+        {
+          name: "gateway-methods",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.gateway-methods-isolated.config.ts",
+          ],
+        },
+        { name: "unknown-gateway", configs: ["test/vitest/vitest.gateway-server.config.ts"] },
+        {
+          name: "unqualified-mixed",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.infra.config.ts",
+          ],
+        },
         { name: "second-cli", configs: [cli] },
       ];
       const manifest = runCiManifestFixture({

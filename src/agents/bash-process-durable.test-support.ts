@@ -45,7 +45,8 @@ import {
   waitForExecSession,
 } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
-import { durableProcessUnitName } from "./bash-process-systemd.js";
+import { systemdDurableSupervisor } from "./bash-process-systemd.js";
+import { hasExitWake } from "./bash-tools.exec-output.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
@@ -239,12 +240,12 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
       updatedBy: "test",
     });
     await initializeDurableProcesses();
-    const { id, content } = await launch(state, false);
+    const { id, content } = await launch(state, true);
     assert.match(JSON.stringify(content), /without 1 secret-store credential/);
     const store = createDurableProcessStore();
     const [record] = await store.list();
     assert.equal(record?.id, id);
-    assert.equal(record?.unitName, durableProcessUnitName(id));
+    assert.equal(record?.unitName, systemdDurableSupervisor.unitName(id));
     assert.doesNotMatch(JSON.stringify(record), /synthetic-/);
     assert.equal(getActiveBackgroundExecSessionCount(), 0);
     const manager: ManagerRecord = JSON.parse(await fs.readFile(managerFile, "utf8"));
@@ -270,6 +271,12 @@ void it("re-adopts persisted work with scoped list/log/poll/kill and restart adm
     const write = await tool.execute("write", { action: "write", sessionId: id, data: "input" });
     assert.match(JSON.stringify(write), /no interactive input/);
     const adopted = getSession(id)!;
+    // Adoption prepares the exit wake, so poll and the Processes rows report it.
+    assert.equal(hasExitWake(adopted), true);
+    const running = await runWithSpawnBroker(undefined, () =>
+      tool.execute("running", { action: "poll", sessionId: id }),
+    );
+    assert.doesNotMatch(JSON.stringify(running.content), /completion wake is unavailable/);
     await tool.execute("kill", { action: "kill", sessionId: id });
     await waitForExecSession(adopted);
     const poll = await runWithSpawnBroker(undefined, () =>
