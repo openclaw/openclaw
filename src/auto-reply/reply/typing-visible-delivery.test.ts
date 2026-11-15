@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { resolveTypingMode } from "./typing-mode.js";
-import { createTypingController, runVisibleDeliveryTypingStart } from "./typing.js";
+import { runVisibleDeliveryTypingStart } from "./typing-visible-delivery.js";
+import { createTypingController } from "./typing.js";
 
 afterEach(() => vi.useRealTimers());
 

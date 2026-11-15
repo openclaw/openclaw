@@ -414,14 +414,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     }
     if (opts?.typingStartPolicy === "visible_delivery") {
       typing.markRunComplete();
-      return {
-        kind: "reply",
-        reply: { text: "I didn't receive any text in your message. Please resend or add a caption." },
-      } as const;
+    } else {
+      typing.cleanup();
     }
-    return finishReplyPreparation(typing, () => ({
-      text: "I didn't receive any text in your message. Please resend or add a caption.",
-    }));
+    return {
+      kind: "reply",
+      reply: { text: "I didn't receive any text in your message. Please resend or add a caption." },
+    } as const;
   }
 
   const requestGitCredit = !isInternalEvent

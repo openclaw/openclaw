@@ -43,6 +43,7 @@ import {
   recoverAcpBlockText,
   shouldTreatDeliveredTextAsVisible,
 } from "./dispatch-acp-payload.js";
+import { createAcpReplyLifecycle } from "./dispatch-acp-reply-lifecycle.js";
 import { normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import {
   resolveRoutedReplyDeliveryOutcome,
@@ -98,7 +99,6 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
       )
     : undefined;
   const state: AcpDispatchDeliveryState = {
-    startedReplyLifecycle: false,
     blockTexts: [],
     accumulatedBlockTtsText: "",
     accumulatedFinalText: "",
@@ -165,30 +165,7 @@ export async function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDe
     );
   };
 
-  const startReplyLifecycleOnce = async () => {
-    // Suppressed generic lifecycle must not consume the visible-delivery start
-    // slot; routed delivery may still start typing at the exact send point.
-    if (params.suppressReplyLifecycle) {
-      return;
-    }
-    if (state.startedReplyLifecycle) {
-      return;
-    }
-    state.startedReplyLifecycle = true;
-    void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
-      logVerbose(`dispatch-acp: reply lifecycle start failed: ${formatErrorMessage(error)}`);
-    });
-  };
-  const startVisibleDeliveryOnce = async () => {
-    if (!params.onVisibleDeliveryStart) {
-      return;
-    }
-    if (state.startedReplyLifecycle) {
-      return;
-    }
-    state.startedReplyLifecycle = true;
-    await params.onVisibleDeliveryStart();
-  };
+  const { startReplyLifecycleOnce, startVisibleDeliveryOnce } = createAcpReplyLifecycle(params);
 
   const tryEditToolMessage = async (
     payload: ReplyPayload,

@@ -80,13 +80,17 @@ describe("channel turn pipeline", () => {
   afterEach(fixture.resetTurnLogger);
 
   it("preserves deferred typing through ordinary direct delivery", async () => {
-    const start = vi.fn();
-    await runDelivery({
-      deliver: async (_payload, info) => {
-        await info.startVisibleDeliveryTyping?.();
-        return { visibleReplySent: true };
+    const start = vi.fn(async () => undefined);
+    await runDelivery(
+      {
+        deliver: async (_payload, info) => {
+          await info.startVisibleDeliveryTyping?.();
+          return { visibleReplySent: true };
+        },
       },
-    }, createDispatch(), { replyOptions: { onVisibleDeliveryStart: start } });
+      createDispatch(),
+      { replyOptions: { onVisibleDeliveryStart: start } },
+    );
     expect(start).toHaveBeenCalledOnce();
   });
 

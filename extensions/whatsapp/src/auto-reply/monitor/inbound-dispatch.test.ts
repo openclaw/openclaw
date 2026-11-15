@@ -249,7 +249,7 @@ describe("prepared WhatsApp inbound boundary", () => {
 
 describe("WhatsApp reply delivery", () => {
   it("passes deferred typing to the durable send without starting it early", async () => {
-    const startVisibleDeliveryTyping = vi.fn();
+    const startVisibleDeliveryTyping = vi.fn(async () => undefined);
     const { plan } = await fixture({
       cfg: { messages: { groupChat: { visibleReplies: "automatic" } } },
       context: { Body: "hi", ChatType: "group", WasMentioned: false, CommandAuthorized: false },
@@ -258,9 +258,13 @@ describe("WhatsApp reply delivery", () => {
     if (typeof plan.delivery.durable !== "function") {
       throw new Error("expected durable delivery policy");
     }
-    const options = await plan.delivery.durable({ text: "reply" }, {
-      kind: "final", startVisibleDeliveryTyping,
-    });
+    const options = await plan.delivery.durable(
+      { text: "reply" },
+      {
+        kind: "final",
+        startVisibleDeliveryTyping,
+      },
+    );
     expect(options).toBeTruthy();
     if (!options) {
       throw new Error("expected durable delivery options");

@@ -41,7 +41,6 @@ export type AcpBlockText = {
 };
 
 export type AcpDispatchDeliveryState = {
-  startedReplyLifecycle: boolean;
   blockTexts: AcpBlockText[];
   accumulatedBlockTtsText: string;
   accumulatedFinalText: string;

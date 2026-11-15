@@ -1,7 +1,6 @@
 import {
   finiteSecondsToTimerSafeMilliseconds,
   MAX_TIMER_TIMEOUT_MS,
-  resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
@@ -9,57 +8,6 @@ import { createTypingKeepaliveLoop } from "../../channels/typing-lifecycle.js";
 const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
 const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
 const MAX_TYPING_INTERVAL_MS = Math.floor(MAX_TIMER_TIMEOUT_MS / 2);
-const VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS = 1000;
-
-export async function runVisibleDeliveryTypingStart(params: {
-  start: () => Promise<void> | void;
-  timeoutMs?: number;
-  onTimeout?: () => void;
-  onLateCompletion?: () => void;
-  log?: (message: string) => void;
-}): Promise<void> {
-  const timeoutMs = resolveTimerTimeoutMs(
-    params.timeoutMs,
-    VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS,
-    0,
-  );
-  const start = Promise.resolve()
-    .then(() => params.start())
-    .catch((error: unknown) => {
-      params.log?.(`visible-delivery typing start failed: ${String(error)}`);
-    });
-  if (timeoutMs <= 0) {
-    await start;
-    return;
-  }
-
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<"timeout">((resolve) => {
-    timer = setTimeout(() => resolve("timeout"), timeoutMs);
-    timer.unref?.();
-  });
-  const result = await Promise.race([start.then(() => "done" as const), timeout]);
-  if (timer) {
-    clearTimeout(timer);
-  }
-  if (result === "timeout") {
-    try {
-      params.onTimeout?.();
-    } catch (error) {
-      params.log?.(`visible-delivery typing timeout cleanup failed: ${String(error)}`);
-    }
-    void start.then(() => {
-      try {
-        params.onLateCompletion?.();
-      } catch (error) {
-        params.log?.(`visible-delivery typing late cleanup failed: ${String(error)}`);
-      }
-    });
-    params.log?.(
-      `visible-delivery typing start timed out after ${timeoutMs}ms; continuing delivery`,
-    );
-  }
-}
 
 export function resolveTypingIntervalMs(seconds: number | undefined): number {
   if (Number.isFinite(seconds) && (seconds ?? 0) <= 0) {
@@ -163,7 +111,10 @@ export function createTypingController(params: {
     }
     triggerInFlight = true;
     try {
-      await onReplyStart?.();
+      const start = onReplyStart?.();
+      if (start) {
+        await start;
+      }
       if (sealed) {
         return;
       }

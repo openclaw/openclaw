@@ -4,6 +4,7 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { installRouteReplyFixture } from "./route-reply.fixture.test-support.js";
 import { routePreparedReply, routeReply } from "./route-reply.js";
 
@@ -87,22 +88,33 @@ describe("prepared reply routing", () => {
   it.each(["raw", "prepared"] as const)(
     "starts typing after producer preparation and before the %s platform send",
     async (operation) => {
-      const order: string[] = [];
+      let prepared = false;
+      const onReplyStart = vi.fn(async () => {
+        expect(prepared).toBe(true);
+        expect(visible).toEqual([]);
+      });
+      const lifecycle = createReplyDispatcherWithTyping({
+        deliver: async () => undefined,
+        typingStartPolicy: "visible_delivery",
+        onReplyStart,
+      });
       const payload = { text: "reply", mediaUrl: "https://example.invalid/clip.ogg" };
       const params = {
         ...destination,
-        beforeDeliver: async () => { order.push("prepared"); },
-        onVisibleDeliveryStart: async () => {
-          expect(visible).toEqual([]);
-          order.push("typing");
+        beforeDeliver: async () => {
+          prepared = true;
         },
+        onVisibleDeliveryStart: lifecycle.replyOptions.onVisibleDeliveryStart,
       };
-      const result = operation === "prepared"
-        ? await routePreparedReply({ ...params, plan: prepare(payload) })
-        : await routeReply({ ...params, payload });
+      const result =
+        operation === "prepared"
+          ? await routePreparedReply({ ...params, plan: prepare(payload) })
+          : await routeReply({ ...params, payload });
       expect(result).toMatchObject({ ok: true, delivered: true });
-      expect(order).toEqual(["prepared", "typing"]);
+      expect(onReplyStart).toHaveBeenCalledOnce();
       expect(visible).toHaveLength(1);
+      lifecycle.dispatcher.markComplete();
+      await lifecycle.dispatcher.waitForIdle();
     },
   );
 

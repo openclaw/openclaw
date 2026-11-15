@@ -49,7 +49,8 @@ import {
   type ReplyDispatcher,
   type ReplyDispatcherOptions,
 } from "./reply-dispatcher.types.js";
-import { runVisibleDeliveryTypingStart, type TypingController } from "./typing.js";
+import { runVisibleDeliveryTypingStart } from "./typing-visible-delivery.js";
+import type { TypingController } from "./typing.js";
 
 export type { ReplyDispatchDeliveryOutcome };
 export type { ReplyDispatcherOptions } from "./reply-dispatcher.types.js";
@@ -711,21 +712,18 @@ export function createReplyDispatcherWithTyping(
       return;
     }
     const visibleDeliveryTypingController = typingController;
+    startedVisibleDeliveryTyping = true;
     if (visibleDeliveryTypingController) {
-      startedVisibleDeliveryTyping = true;
       await runVisibleDeliveryTypingStart({
         start: () => visibleDeliveryTypingController.startTypingForVisibleDelivery(),
         onTimeout: () => visibleDeliveryTypingController.cleanup(),
-        log: (message) => silentReplyLogger.debug(message),
       });
       return;
     }
-    startedVisibleDeliveryTyping = true;
     await runVisibleDeliveryTypingStart({
       start: () => resolvedOnReplyStart?.(),
       onTimeout: () => resolvedOnCleanup?.(),
       onLateCompletion: () => resolvedOnCleanup?.(),
-      log: (message) => silentReplyLogger.debug(message),
     });
   };
   const dispatcher = createReplyDispatcher({
