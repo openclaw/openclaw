@@ -52,7 +52,6 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
@@ -86,7 +85,7 @@ export function resolveScheduledCommandRequester(params: {
   return { channel: INTERNAL_MESSAGE_CHANNEL, commandSenderId: sender };
 }
 
-/** External-origin Gateway requesters keep admission: live used an account the recovery lacks. */
+/** A Gateway person is checked against the list their live command used: the schedule's channel. */
 export function isScheduledOccurrenceCommandAuthorized(
   cfg: OpenClawConfig,
   requester: CommandsAllowFromRequester | undefined,
@@ -96,9 +95,7 @@ export function isScheduledOccurrenceCommandAuthorized(
     return true;
   }
   if (requester.commandSenderId !== undefined) {
-    return isInternalMessageChannel(scheduleChannel)
-      ? isCommandsAllowFromAuthorized(cfg, { ...requester, channel: scheduleChannel })
-      : true;
+    return isCommandsAllowFromAuthorized(cfg, { ...requester, channel: scheduleChannel });
   }
   return isCommandsAllowFromAuthorized(cfg, requester);
 }

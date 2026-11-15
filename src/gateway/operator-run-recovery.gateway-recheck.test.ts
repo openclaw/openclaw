@@ -110,18 +110,47 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     },
   );
 
-  it("keeps a schedule routed with an external origin on its original admission", async () => {
-    await withRecovery(async (fixture, _stateDir, profile) => {
-      expect(fixture.sourceAuthority.commandSenderProfileId).toBe(profile.id);
-      const requester = await restoreRequester(
-        fixture,
-        fixture.sourceAuthority.commandSenderProfileId,
-      );
-      const narrowed = allowFromConfig({ "*": ["other-operator"] });
-      expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester, "webchat")).toBe(false);
-      // Live authorization used that channel's list and account, which the recovery does not carry.
-      expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester, "telegram")).toBe(true);
-    });
+  it("re-checks a schedule routed with an external origin against its live list", async () => {
+    await withRecovery(
+      async (fixture, _stateDir, profile) => {
+        const requester = expectDefined(
+          await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
+          "re-checkable gateway requester",
+        );
+        // A TUI command delivered into a channel session carries that route, account included.
+        const live = Object.assign(
+          resolveChatSendCallerContext(fixture.client, fixture.client.connect.client, "telegram"),
+          { AccountId: "route-account" },
+        );
+        const matrix: Array<Record<string, string[]> | undefined> = [
+          undefined,
+          { "*": [profile.id] },
+          { "*": ["other-operator"] },
+          { telegram: [profile.id] },
+          { telegram: ["123456"], "*": [profile.id] },
+          { telegram: [`telegram:${profile.id}`] },
+          { telegram: ["*"] },
+          { telegram: [] },
+          { "": [profile.id] },
+        ];
+        const outcomes = matrix.map((allowFrom) => {
+          const cfg = allowFromConfig(allowFrom);
+          const liveAuthorized = resolveCommandAuthorization({
+            ctx: live,
+            cfg,
+            commandAuthorized: true,
+          }).isAuthorizedSender;
+          expect(
+            isScheduledOccurrenceCommandAuthorized(cfg, requester, "telegram"),
+            JSON.stringify(allowFrom),
+          ).toBe(liveAuthorized);
+          return liveAuthorized;
+        });
+        expect(outcomes).toContain(true);
+        expect(outcomes).toContain(false);
+      },
+      { clientInfo: { id: GATEWAY_CLIENT_IDS.TUI, mode: "cli" } },
+    );
   });
 
   it("keeps a client without a live command sender on its original admission", async () => {
