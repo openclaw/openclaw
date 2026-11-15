@@ -10,7 +10,7 @@ import {
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Update request state" });
-const waiting = "Waiting for the Gateway to confirm update progress…";
+const waiting = "Starting update…";
 
 suite.define(() => {
   it.each(["settings", "inbox"] as const)(

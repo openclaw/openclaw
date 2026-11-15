@@ -343,7 +343,7 @@ it("keeps a repeated request from stacking a second confirmation or update", asy
   expect(first.startGatewayUpdate).toHaveBeenCalledOnce();
 });
 
-it("waits for owner-reported progress through config drain, request and run lookup", async () => {
+it("shows a simple starting state until the progress report arrives", async () => {
   const drain = createDeferred();
   const accepted = createDeferred<{ runId: string }>();
   const progress = createDeferred<{ run: ReturnType<typeof createUpdateRunFixture> }>();
@@ -375,25 +375,25 @@ it("waits for owner-reported progress through config drain, request and run look
     findButton("Update and restart").click();
     await flushMicrotasks();
     flush();
-    const waiting = "Waiting for the Gateway to confirm update progress…";
-    expect.soft(modal.textContent).toContain(waiting);
+    const starting = "Starting update…";
+    expect.soft(modal.textContent).toContain(starting);
     expect(request.mock.calls.some(([method]) => method === "update.run")).toBe(false);
     drain.resolve();
     await waitForSolid(() =>
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(1),
     );
-    expect.soft(modal.textContent).toContain(waiting);
+    expect.soft(modal.textContent).toContain(starting);
     accepted.resolve({ runId: run.runId });
     await waitForSolid(() =>
       expect(request.mock.calls.some(([method]) => method === "update.runs.get")).toBe(true),
     );
-    expect.soft(modal.textContent).toContain(waiting);
+    expect.soft(modal.textContent).toContain(starting);
     progress.resolve({ run });
     await operation;
     await waitForSolid(() =>
       expect(modal.querySelector("openclaw-update-run-view")).not.toBeNull(),
     );
-    expect(modal.textContent).not.toContain(waiting);
+    expect(modal.textContent).not.toContain(starting);
     expect(modal.querySelector(".update-run-view")?.getAttribute("data-run-id")).toBe(run.runId);
     findButton("Close").click();
     await settled;
@@ -428,16 +428,12 @@ it.each([
   expect(startGatewayUpdate).toHaveBeenCalledOnce();
   const updating = findButton("Updating…");
   expect(updating.disabled).toBe(true);
-  expect(modal.textContent).toContain("Waiting for the Gateway to confirm update progress…");
+  expect(modal.textContent).toContain("Starting update…");
 
-  // No run is confirmed yet. The dialog survives disconnect without inventing progress.
+  // A temporary disconnect stays a quiet progress state, not a troubleshooting notice.
   await stream.push({ busy: true, connected: false });
-  expect(modal.textContent).toContain(
-    "The Gateway disconnected before update progress was confirmed",
-  );
-  expect(modal.textContent).toContain("openclaw triage");
-  expect(modal.textContent).toContain("on the computer running OpenClaw");
-  expect(modal.textContent).toContain("local coding agent");
+  expect(modal.textContent).toContain("Reconnecting…");
+  expect(modal.textContent).not.toContain("openclaw triage");
   expect(document.body.querySelector("openclaw-modal-dialog")).not.toBeNull();
 
   await stream.push({ failure });

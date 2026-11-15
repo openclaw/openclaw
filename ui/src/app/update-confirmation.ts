@@ -9,7 +9,7 @@ import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 /** The live server-owned run and request state shown by the update dialog. */
 export type UpdateProgress = {
   run: UpdateRunRecord | null;
-  /** A request, run, or outcome reconciliation is still pending; not proof of installation. */
+  /** An update request, run, or outcome reconciliation is still pending. */
   busy: boolean;
   connected: boolean;
   /** Set once the update produced a definitive failure. */
