@@ -251,7 +251,7 @@ struct OnboardingOpenClawIDContent: View {
                 }
             }
             self.note("""
-            Look for the notification in \(claw)’s Control UI, or open Account → Your devices → \
+            Look for the notification in \(claw)’s web app, or open Account → Your devices → \
             Approve a new device.
             """)
             if let approvalURL, approvalURL.scheme == "https" {

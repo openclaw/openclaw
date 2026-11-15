@@ -27,7 +27,7 @@ import type { FailoverReason } from "./signal.js";
 export const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
 export const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
-  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.";
 const PROVIDER_OUTPUT_TOKEN_LIMIT_RE =
   /^['"]?max_(?:tokens|output_tokens|completion_tokens|new_tokens)['"]?\s*(?:[:=]\s*)?\(?(\d[\d,]*)\)?\s+exceeds?\b.{0,120}?\b(?:maximum|max|limit)\b(?:\s+(?:output\s+)?tokens?)?(?:\s+(?:is|of)|\s*[:=])?\s*\(?(\d[\d,]*)\)?(?:\D|$)/i;
 const PROVIDER_CACHE_CONTROL_LIMIT_RE =
@@ -43,7 +43,7 @@ type AssistantRequestFailureCopyFacts = {
 };
 
 export const ERROR_DETAILS_HINT =
-  "For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+  "For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
 
 const STORAGE_FAILURE_COPY: Record<GatewayStorageFailure, string> = {
   "storage-worker-memory":
@@ -85,9 +85,9 @@ const ITEM_CONFLICT_USER_TEXT =
   "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
 
 const ASSISTANT_REQUEST_FAILURE_COPY = {
-  auth: "Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.",
+  auth: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   auth_permanent:
-    "The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`.",
+    "The AI service isn't accepting your login. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
   format: PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   rate_limit: "The AI service needs a short break. Please try again in a few minutes.",
   overloaded: "The AI service is busy. Please try again in a moment, or choose another model.",
@@ -100,9 +100,9 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   tls_certificate: `Couldn't connect securely to the AI service. ${ERROR_DETAILS_HINT}`,
   context_overflow: CONTEXT_OVERFLOW_ERROR_MESSAGE,
   model_not_found:
-    "This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+    "This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.",
   session_expired:
-    "Your AI session expired. Start a new conversation with /new. If it happens again, sign in under Models in the Control UI.",
+    "Your AI session expired. Start a new conversation with /new. If it happens again, sign in under Models in the OpenClaw app.",
   empty_response: "The AI service returned an empty reply. Please try again.",
   no_error_details: "",
   unclassified: "",
@@ -190,7 +190,7 @@ export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions)
     return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
   }
   if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
-    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the Control UI.";
+    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.";
   }
   if (isUnsupportedReasoningEffortParameterError(candidate)) {
     return "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
@@ -223,7 +223,7 @@ export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions)
     const bounded = detail.length > 600 ? `${truncateUtf16Safe(detail, 600)}…` : detail;
     return `LLM request rejected: ${escapeMarkdownText(bounded)}`;
   }
-  return "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.";
+  return "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.";
 }
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
