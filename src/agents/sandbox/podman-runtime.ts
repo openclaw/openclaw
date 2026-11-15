@@ -9,10 +9,10 @@ import {
   type SandboxContainerEngine,
   type SandboxContainerEngineTarget,
 } from "./container-engine.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./fs-bridge.types.js";
 import { hashTextSha256 } from "./hash.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
-import type { ReadOnlyWorkspaceSkillMount } from "./workspace-mounts.js";
 
 // Matches the other sandbox engine control calls: on a busy host `podman info` waits on
 // storage locks for several seconds while the engine is still healthy.

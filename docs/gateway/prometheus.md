@@ -276,6 +276,10 @@ classes use `other`; continuation frames and private admission-port commit and
 settlement receipts keep their job's class. Other message kinds and the
 message-count/unmeasured-count metrics retain their existing labels.
 No payload decoding or extra serialization is performed for attribution.
+Local workspace requests use the fixed `localWorkspace.*` operation names, such as
+`localWorkspace.prepare` and `localWorkspace.mutate`, so pack preparation and
+checkpoint publication can be measured separately. Unknown suffixes remain grouped
+under `localWorkspace`; workspace IDs and paths never become labels.
 
 ```promql
 # Known SQLite request payload MB/min by bounded request class

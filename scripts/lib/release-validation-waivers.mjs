@@ -10,11 +10,50 @@ const BETA3_CI_FAILURES = new Map([
   ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
 ]);
 const BETA3_DOCKER_JOB = "Run Docker release-path validation / Docker E2E (package/update OpenAI)";
+const STABLE_114_TARGET_SHA = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+const STABLE_114_CI_FAILURES = new Map([
+  ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
+  ["checks-ui-e2e-real-gateway (1/2)", "checks-ui-e2e-real-gateway"],
+  ["macos-swift (tests)", "macos-swift"],
+]);
 
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...["Native live gateway core", "Native live test harnesses"].map((suite) => ({
+    targetVersion: "2026.11.4",
+    targetSha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
+    childRole: "releaseChecksIndependent",
+    jobName: `Run repo/live E2E validation / Native live suites (${suite})`,
+    reason:
+      "Dallin Romney explicitly authorized these two native-live failures on " +
+      "2026-11-15 at 15:03 UTC for unchanged C/Q e283dccf68ba35ef1af5b3fa31571db7f4b6bc74. " +
+      "Observed child 43719709063/1 failed gateway core and test harnesses; " +
+      "the original failures remain unresolved. Retain raw failures and artifacts. " +
+      "This grant accepts only the named terminal failed jobs on this exact candidate. " +
+      "Ordinary green-only child reuse is unchanged; fresh executions of these jobs " +
+      "on this candidate may use the grant. There is no not-run exemption. Other " +
+      "jobs, versions, candidates, incomplete evidence, identity, integrity and " +
+      "publication approval remain blocking.",
+  })),
+  ...[...STABLE_114_CI_FAILURES.keys()].map((jobName) => ({
+    targetVersion: "2026.11.4",
+    targetSha: STABLE_114_TARGET_SHA,
+    childRole: "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly waived the three remaining failures on " +
+      "2026-11-15 at 04:13 UTC, retaining candidate " +
+      STABLE_114_TARGET_SHA +
+      " for fresh qualification, reseal and publication of 2026.11.4. " +
+      "Diagnostic origin FRV 43641896010/1 tested old candidate " +
+      "005030c3a09843601af3de546dbff77240175a66, not this candidate. " +
+      "This grant accepts only the named terminal failed job on the fixed candidate; " +
+      "retain raw failures. There is no not-run exemption or historical evidence reuse. " +
+      "Other jobs, versions, candidates, skipped, cancelled, timed-out or incomplete " +
+      "evidence, identity, integrity and publication approval remain blocking.",
+  })),
   ...[...BETA3_CI_FAILURES.keys(), BETA3_DOCKER_JOB].map((jobName) => ({
     targetVersion: "2026.11.5-beta.3",
     childRole: jobName === BETA3_DOCKER_JOB ? "releaseChecksCandidate" : "normalCi",
@@ -208,6 +247,23 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (
+    waiver.targetVersion === "2026.11.4" &&
+    waiver.targetSha === STABLE_114_TARGET_SHA &&
+    waiver.childRole === "normalCi" &&
+    STABLE_114_CI_FAILURES.has(waiver.jobName)
+  ) {
+    return [
+      {
+        jobName: "openclaw/ci-gate",
+        stepName: "Verify selected CI lanes",
+        causes: [
+          STABLE_114_CI_FAILURES.get(waiver.jobName) + " finished with failure (selected=true)",
+        ],
+        exactCauses: true,
+      },
+    ];
+  }
   if (waiver.targetVersion === "2026.11.5-beta.3") {
     if (waiver.childRole === "normalCi" && BETA3_CI_FAILURES.has(waiver.jobName)) {
       return [
@@ -270,10 +326,11 @@ function aggregateCauses(waiver) {
 
 // Raw leaf and workflow conclusions are never rewritten. The caller owns the
 // aggregate validation verdict and must also authenticate failed aggregate logs.
-export function evaluateReleaseChildPolicy({ child, targetVersion }) {
+export function evaluateReleaseChildPolicy({ child, targetVersion, targetSha }) {
   const waivers = RELEASE_VALIDATION_WAIVERS.filter(
     (waiver) =>
       waiver.targetVersion === targetVersion &&
+      (waiver.targetSha === undefined || waiver.targetSha === targetSha) &&
       waiver.childRole === child.key &&
       // A reviewed historical failure never grants leniency to a new execution.
       (!waiver.evidence ||
@@ -336,6 +393,27 @@ export function evaluateReleaseChildPolicy({ child, targetVersion }) {
 // not excuse a second failure in that same aggregate job.
 export class ReleaseAggregateValidationError extends Error {}
 
+// Ignore echoed shell source, not error records: only line-leading runner
+// annotations (after a timestamp and optional color) are observed causes.
+function exactAggregateCauses(log) {
+  return log.split(/\r?\n/u).flatMap((line) => {
+    const record = line
+      // eslint-disable-next-line no-control-regex -- Only SGR color is removed; other controls fail closed.
+      .replace(/\u001b\[[0-9;]*m/gu, "")
+      .replace(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z /u, "");
+    const match = /^(?:##\[error\]|::error(?: title=CI job did not succeed)?::)(.*)$/u.exec(record);
+    if (match) {
+      return match[1] === "Process completed with exit code 1." ? [] : [match[1]];
+    }
+    // Malformed error records and remaining control characters fail closed.
+    return /^(?:##\[error|::error)/u.test(record) ||
+      // eslint-disable-next-line no-control-regex -- Reject controls that could conceal an error record.
+      /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/u.test(record)
+      ? [record]
+      : [];
+  });
+}
+
 export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog }) {
   for (const aggregate of policy.aggregates) {
     const matches = jobs.filter((job) => job.name === aggregate.jobName);
@@ -361,14 +439,21 @@ export async function validateReleaseWaiverAggregates({ policy, jobs, getJobLog 
       );
     }
     const log = String(await getJobLog(job.id));
-    const causes = log
-      .split(/\r?\n/u)
-      .filter((line) => !line.includes("\u001b"))
-      .flatMap((line) => {
-        const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
-        return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
-      });
-    if (causes.length === 0 || causes.some((cause) => !aggregate.causes.includes(cause))) {
+    const causes = aggregate.exactCauses
+      ? exactAggregateCauses(log)
+      : log
+          .split(/\r?\n/u)
+          .filter((line) => !line.includes("\u001b"))
+          .flatMap((line) => {
+            const match = /(?:##\[error\]|::error::)(.*)$/u.exec(line);
+            return match && match[1] !== "Process completed with exit code 1." ? [match[1]] : [];
+          });
+    if (
+      causes.length === 0 ||
+      causes.some((cause) => !aggregate.causes.includes(cause)) ||
+      (aggregate.exactCauses &&
+        (causes.length !== aggregate.causes.length || new Set(causes).size !== causes.length))
+    ) {
       throw new ReleaseAggregateValidationError(
         `Release aggregate has an unwaived failure: ${aggregate.jobName}`,
       );

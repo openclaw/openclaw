@@ -414,7 +414,7 @@ async function capacityFixture(mebibytes: number | null, worker = false) {
 
 it.each([
   { space: 100, exitCode: 0, diagnostic: "" },
-  { space: 70, exitCode: 1, diagnostic: "snapshot-capacity-insufficient" },
+  { space: 70, exitCode: 1, diagnostic: "Update refused: no eligible directory has " },
   { space: null, exitCode: 0, diagnostic: "free space unknown" },
 ])(
   "preflights one generation with $space MiB free (exit=$exitCode)",

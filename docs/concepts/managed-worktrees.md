@@ -250,7 +250,9 @@ Local sandbox baselines share immutable directory packs and compressed source pa
 sets in the existing shared-state database. Sessions on the same source tree
 reuse those records. Compact file fingerprints let a restarted Gateway reuse
 unchanged hashes while detecting same-size edits and files moved by directory
-renames. Filesystem discovery still checks for additions and deletions on every
+renames. Initialization retains the identities and timestamp eligibility observed
+while hashing its private checkout, so the first reuse can use those same facts.
+Filesystem discovery still checks for additions and deletions on every
 scan. Existing projections convert one at a time during reconciliation; database
 open does not rewrite their inventories.
 

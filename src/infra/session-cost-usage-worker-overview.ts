@@ -49,7 +49,7 @@ import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 
 const USAGE_AGGREGATE_BOUNDARY_MESSAGE =
-  "Some usage needs transcript details for this date range or time zone. Select a session for exact usage.";
+  "Some usage needs chat history details for this date range or time zone. Select a session for exact usage.";
 
 type QuarterOperation = Extract<UsageCostWorkerOperation, { kind: "overview" | "summary" }>;
 

@@ -412,7 +412,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
+  const capture = vi.spyOn(manifests, "captureInitialLocalWorkspaceManifest");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);

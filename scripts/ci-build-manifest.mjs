@@ -659,6 +659,20 @@ process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
+// Preserve the original policy independently of later execution opt-ins.
+const nodeVolumeContext =
+  runtimePullRequest && changedPaths !== null
+    ? Object.freeze({
+        revision: checkoutRevision,
+        runtimePolicy: testRuntimeMode,
+        environment: Object.freeze({ ...process.env }),
+        eligibility: Object.freeze({
+          changedPaths: Object.freeze([...changedPaths]),
+          includeReleaseOnlyRuntimeTests,
+          includePrExemptRuntimeTests,
+        }),
+      })
+    : undefined;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
     throw new Error("Current PR CI requires complete changed paths for Node test planning");
@@ -923,6 +937,7 @@ if (runtimePullRequest && runNodeFull) {
     throw new Error("Current PR CI target does not export createChangedNodeTestShards");
   }
   changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+    volumeContext: nodeVolumeContext,
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     compactNodeJobCap: compactPlanMode ? nodeMatrixLimit : undefined,
     selectedTestTargets,
@@ -1394,6 +1409,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 }) => ({
   configs,
   env,
@@ -1402,6 +1418,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 });
 const uiTestRuntimePolicy =
   (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
