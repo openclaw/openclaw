@@ -133,7 +133,7 @@ it("finalizes direct Wiki snippets and citations with the real Gateway owner", a
 });
 
 it.each(["route", "policy"] as const)(
-  "fails direct Wiki transcript disclosure closed after %s withdrawal",
+  "applies a %s change at its owning boundary for direct Wiki transcript disclosure",
   async (withdrawal) => {
     await withDirectWikiGateway(async ({ config, search, storePath }) => {
       const prepared = createDeferred<void>();
@@ -163,9 +163,21 @@ it.each(["route", "policy"] as const)(
       }
       release.resolve();
       const results = await execution;
-      expect(results.map(({ snippet, citation }) => ({ snippet, citation }))).toEqual([
-        { snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" },
-      ]);
+      const disclosed = results.map(({ snippet, citation }) => ({ snippet, citation }));
+      expect(disclosed).toEqual(
+        withdrawal === "route"
+          ? [{ snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" }]
+          : [
+              { snippet: "retained-snippet", citation: "sessions/main/retained.jsonl#L3-L4" },
+              { snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" },
+            ],
+      );
+      if (withdrawal === "policy") {
+        const next = await search();
+        expect(next.map(({ snippet, citation }) => ({ snippet, citation }))).toEqual([
+          { snippet: "durable-snippet", citation: "MEMORY.md#L5-L6" },
+        ]);
+      }
     });
   },
 );

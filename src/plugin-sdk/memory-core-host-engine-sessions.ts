@@ -7,6 +7,7 @@ import {
   readSessionResetRecallCutoff as readSessionResetRecallCutoffFromHost,
 } from "../../packages/memory-host-sdk/src/engine-sessions.js";
 import { assertBoundIncognitoMemorySyncAccess } from "../../packages/memory-host-sdk/src/host/session-memory-authority.js";
+import { resolveCanonicalMainSessionKey } from "../config/sessions/main-session-key.js";
 import {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
@@ -26,6 +27,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import { isIncognitoSessionKey, normalizeAgentId } from "../routing/session-key.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.read.js";
 
 export type SessionTranscriptChannelReadTarget = {
   key: string;
@@ -68,13 +73,15 @@ export async function prepareSessionTranscriptChannelRead(params: {
   ]);
   const projection = getSessionRowProjection(getInProcessGatewayToolContext());
   if (!projection) {
+    const standalonePolicy = visibility.createAgentToAgentPolicy(params.cfg, {
+      sandboxed: params.sandboxed,
+    });
     return {
       withCurrentAccess: async (consume) => {
         const allowed = channel.currentSessionChannelReadAccess({
           requesterAgentId: params.requesterAgentId,
           requesterSessionKey: params.requesterSessionKey,
-          sandboxed: params.sandboxed,
-          a2aPolicy: visibility.createAgentToAgentPolicy(params.cfg),
+          a2aPolicy: standalonePolicy,
           targets: params.groups.flat(),
         });
         let offset = 0;
@@ -105,15 +112,54 @@ export async function prepareSessionTranscriptChannelRead(params: {
       if (!requesterRow) {
         throw new Error("The requesting session is no longer available.");
       }
+      const policyConfig = read.state.policyConfig;
+      const a2aPolicy = visibility.createAgentToAgentPolicy(policyConfig, {
+        sandboxed: params.sandboxed,
+      });
+      const admittedChecker = visibility.createSessionVisibilityRowChecker({
+        action: "history",
+        requesterAgentId: params.requesterAgentId,
+        requesterSessionKey: params.requesterSessionKey,
+        mainSessionKey: resolveCanonicalMainSessionKey({
+          agentId: params.requesterAgentId,
+          mainKey: policyConfig.session?.mainKey,
+          sessionScope: policyConfig.session?.scope,
+        }),
+        visibility: visibility.resolveEffectiveSessionToolsVisibility({
+          cfg: policyConfig,
+          sandboxed: params.sandboxed,
+        }),
+        a2aPolicy,
+        requesterChannelRow: {
+          key: requesterRow.key,
+          chatType: requesterRow.entry.chatType,
+          space: requesterRow.entry.space,
+          origin: sessionDeliveryOrigin(requesterRow.entry),
+          deliveryContext: deliveryContextFromSession(requesterRow.entry),
+        },
+      });
       const requesterBinding = {};
       bindSessionListRowRead(requesterBinding, { projection, record: requesterRow });
       const groups = params.groups.map((targets) =>
         targets.map((target) => {
           const record = read.describe(target);
+          if (!record) {
+            return undefined;
+          }
+          const row = {
+            key: record.key,
+            agentId: record.agentId,
+            spawnedBy: record.entry.spawnedBy,
+            parentSessionKey: record.entry.parentSessionKey,
+            chatType: record.entry.chatType,
+            space: record.entry.space,
+            origin: sessionDeliveryOrigin(record.entry),
+            deliveryContext: deliveryContextFromSession(record.entry),
+          };
           if (
-            !record ||
             record.entry.sessionId !== target.expectedSessionId ||
-            record.entry.archivedAt !== undefined
+            record.entry.archivedAt !== undefined ||
+            !admittedChecker.check(row).allowed
           ) {
             return undefined;
           }
@@ -146,8 +192,7 @@ export async function prepareSessionTranscriptChannelRead(params: {
                 {
                   requesterAgentId: params.requesterAgentId,
                   requesterSessionKey: params.requesterSessionKey,
-                  sandboxed: params.sandboxed,
-                  a2aPolicy: visibility.createAgentToAgentPolicy(currentRead.state.policyConfig),
+                  a2aPolicy,
                   targets: captured.map((entry) => entry.target),
                 },
                 currentRead,

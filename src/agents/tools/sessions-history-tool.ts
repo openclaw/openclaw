@@ -575,7 +575,6 @@ export function createSessionsHistoryTool(opts?: {
             {
               requesterAgentId,
               requesterSessionKey: effectiveRequesterKey,
-              sandboxed: opts?.sandboxed === true,
               a2aPolicy,
               targets: [
                 {

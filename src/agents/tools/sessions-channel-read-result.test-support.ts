@@ -18,8 +18,10 @@ type ChannelRow = {
 };
 
 /** Synthetic RPC rows and the production final-disclosure seam share one live row owner. */
-export function createSessionChannelReadFixture(rows: readonly ChannelRow[]) {
-  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+export function createSessionChannelReadFixture(
+  rows: readonly ChannelRow[],
+  cfg: OpenClawConfig = { agents: { entries: { main: {} } } },
+) {
   const entry = (row: ChannelRow): SessionEntry => ({
     sessionId: row.sessionId ?? row.key,
     updatedAt: 1,

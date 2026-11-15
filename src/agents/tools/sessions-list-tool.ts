@@ -379,7 +379,6 @@ export function createSessionsListTool(opts?: {
         mainSessionKey,
         a2aPolicy,
         callGateway: gatewayCall,
-        sandboxed: opts?.sandboxed === true,
         allowArchivedMetadata,
         ...(signal ? { signal } : {}),
       });
@@ -705,7 +704,6 @@ export function createSessionsListTool(opts?: {
         visibility,
         requesterAgentId,
         requesterSessionKey: effectiveRequesterKey,
-        sandboxed: opts?.sandboxed === true,
         a2aPolicy,
         allowArchivedMetadata,
         requireSessionReadOwner,

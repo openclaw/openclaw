@@ -20,7 +20,7 @@ describe("sessions_history channel disclosure", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
   it.each(["retained", "route-withdrawn", "policy-withdrawn"] as const)(
-    "consumes history only while its live channel authorization remains valid (%s)",
+    "retains admitted policy while checking the current channel owner (%s)",
     async (mode) => {
       const requester = "agent:main:slack:channel:c111:thread:200.001";
       const target = "agent:main:slack:channel:c111:thread:200.002";
@@ -93,7 +93,7 @@ describe("sessions_history channel disclosure", () => {
       response.resolve({ messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }] });
       const result = await pending;
 
-      if (mode !== "retained") {
+      if (mode === "route-withdrawn") {
         expect(result.details).toMatchObject({ status: "forbidden" });
         expect(JSON.stringify(result)).not.toContain("BUFFERED HISTORY SECRET");
       } else {
@@ -101,6 +101,14 @@ describe("sessions_history channel disclosure", () => {
           sessionKey: target,
           messages: [{ role: "user", content: "BUFFERED HISTORY SECRET" }],
         });
+      }
+      if (mode === "policy-withdrawn") {
+        const next = await withPluginRuntimeGatewayRequestScope(
+          { context, isWebchatConnect: () => false },
+          () => tool.execute("history-after-policy-reload", { sessionKey: target }),
+        );
+        expect(next.details).toMatchObject({ status: "forbidden" });
+        expect(JSON.stringify(next)).not.toContain("BUFFERED HISTORY SECRET");
       }
     },
   );
