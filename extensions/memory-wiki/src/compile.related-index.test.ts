@@ -106,6 +106,22 @@ describe("compile related blocks", () => {
     );
     expect(blocks).toEqual(EXPECTED_BLOCKS);
   });
+
+  it("resolves a decomposed backlink against a canonically titled page", async () => {
+    const vault = await createVault({
+      initialize: true,
+      config: { vault: { renderMode: "obsidian" } },
+    });
+    await writePages(vault, [
+      ["entities/café.md", "entity.cafe", "Café"],
+      ["entities/note.md", "entity.note", "Note", undefined, ["Cafe\u0301"]],
+    ]);
+
+    await compileMemoryWikiVault(vault.config);
+    expect(await readRelatedBlock(vault.rootDir, "entities/café.md")).toContain(
+      "[[entities/note|Note]]",
+    );
+  });
 });
 
 const EXPECTED_BLOCKS: Record<string, string> = {

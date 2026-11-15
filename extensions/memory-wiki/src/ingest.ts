@@ -6,16 +6,11 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import {
-  decodeWikiPageUtf8,
-  preserveHumanNotesBlock,
-  slugifyWikiPageStem,
-  slugifyWikiSegment,
-} from "./markdown.js";
+import { decodeWikiPageUtf8, parseWikiMarkdown, preserveHumanNotesBlock } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { renderImportedSourcePage } from "./source-page-shared.js";
 import { resolveMemoryWikiTimestamp } from "./time.js";
-import { readExistingWikiPage } from "./vault-page-write.js";
+import { readExistingWikiPage, resolveWikiPageIdentity } from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 async function readIngestFile(filePath: string): Promise<Buffer> {
@@ -63,13 +58,29 @@ export async function ingestMemoryWikiSource(params: {
     const title =
       params.title?.trim() ||
       path.basename(sourcePath, path.extname(sourcePath)).replace(/[-_]+/g, " ").trim();
-    const slug = slugifyWikiSegment(title);
-    const pageStem = slugifyWikiPageStem(title);
-    const pageId = `source.${slug}`;
+    const { slug, stem: pageStem } = await resolveWikiPageIdentity({
+      rootDir: params.config.vault.path,
+      relativeDir: "sources",
+      title,
+      // Direct ingest only claims pages it produced; an imported source keeps its
+      // own identity even when a title looks equivalent.
+      producer: { pageType: "source", sourceType: "local-file" },
+    });
     const pageRelativePath = path.join("sources", `${pageStem}.md`);
     const pagePath = path.join(params.config.vault.path, pageRelativePath);
     const created = !(await pathExists(pagePath));
     const timestamp = resolveMemoryWikiTimestamp(params.nowMs);
+    const existing = created
+      ? ""
+      : await readExistingWikiPage(
+          async () => decodeWikiPageUtf8(await readIngestFile(pagePath), pagePath),
+          (error) => asNullableRecord(error)?.code === "ENOENT",
+        );
+    params.signal?.throwIfAborted();
+    // A released page may carry a decomposed ID; keep it so references survive.
+    const existingId = existing ? parseWikiMarkdown(existing).frontmatter.id : undefined;
+    const pageId =
+      typeof existingId === "string" && existingId.trim() ? existingId.trim() : `source.${slug}`;
 
     const markdown = renderImportedSourcePage({
       frontmatter: {
@@ -93,12 +104,6 @@ export async function ingestMemoryWikiSource(params: {
       language: "text",
     });
 
-    const existing = created
-      ? ""
-      : await readExistingWikiPage(
-          async () => decodeWikiPageUtf8(await readIngestFile(pagePath), pagePath),
-          (error) => asNullableRecord(error)?.code === "ENOENT",
-        );
     params.signal?.throwIfAborted();
     await fs.writeFile(
       pagePath,

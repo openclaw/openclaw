@@ -19,14 +19,16 @@ import {
   parseWikiMarkdown,
   renderWikiMarkdown,
   escapeWikiTitle,
-  slugifyWikiPageStem,
-  slugifyWikiSegment,
   normalizeWikiClaims,
   type WikiClaim,
 } from "./markdown.js";
 import { withMemoryWikiVaultMutation } from "./mutation-coordinator.js";
 import { readMemoryWikiPageByLookup } from "./query.js";
-import { isMissingWikiPageError, readExistingWikiPage } from "./vault-page-write.js";
+import {
+  isMissingWikiPageError,
+  readExistingWikiPage,
+  resolveWikiPageIdentity,
+} from "./vault-page-write.js";
 import { initializeMemoryWikiVault } from "./vault.js";
 
 const GENERATED_START = "<!-- openclaw:wiki:generated:start -->";
@@ -209,8 +211,12 @@ async function applyCreateSynthesisMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: CreateSynthesisMemoryWikiMutation;
 }): Promise<{ changed: boolean; pagePath: string; pageId: string }> {
-  const slug = slugifyWikiSegment(params.mutation.title);
-  const pageStem = slugifyWikiPageStem(params.mutation.title);
+  const { slug, stem: pageStem } = await resolveWikiPageIdentity({
+    rootDir: params.config.vault.path,
+    relativeDir: "syntheses",
+    title: params.mutation.title,
+    producer: { pageType: "synthesis" },
+  });
   const pagePath = path.join("syntheses", `${pageStem}.md`).replace(/\\/g, "/");
   const root = await fsRoot(params.config.vault.path);
   const existing = await readExistingWikiPage(
