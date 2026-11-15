@@ -96,6 +96,11 @@ class CronModelChoiceTest {
     composeRule.onNodeWithText("writing/report-model").performClick()
     assertEquals("writing/report-model", (draft.value.edit.payload as GatewayCronPayloadEdit.AgentTurn).model)
     assertTrue(writes.isEmpty())
+    composeRule.onNodeWithText("Default thinking").performScrollTo().performClick()
+    composeRule.onNodeWithText("Cancel").performScrollTo()
+    capture("thinking")
+    composeRule.onNodeWithText("High").performClick()
+    assertEquals("high", (draft.value.edit.payload as GatewayCronPayloadEdit.AgentTurn).thinking)
     composeRule.onNodeWithText("Save Changes").performScrollTo().performClick()
     assertEquals(
       "\"writing/report-model\"",
@@ -106,8 +111,17 @@ class CronModelChoiceTest {
         .jsonObject["model"]
         .toString(),
     )
+    assertEquals(
+      "\"high\"",
+      Json
+        .parseToJsonElement(writes.single())
+        .jsonObject["patch"]!!
+        .jsonObject["payload"]!!
+        .jsonObject["thinking"]
+        .toString(),
+    )
     composeRule.runOnIdle {
-      val saved = original.copy(payloadModel = "writing/report-model", configRevision = "proof-v2")
+      val saved = original.copy(payloadModel = "writing/report-model", payloadThinking = "high", configRevision = "proof-v2")
       job.value = saved
       draft.value = draft.value.observeSaveNotice(GatewayCronNoticeKind.Success).observeJob(saved)
     }
@@ -145,7 +159,40 @@ class CronModelChoiceTest {
     composeRule.onNodeWithText("another/custom-model").assertIsNotEnabled()
   }
 
-  private fun catalog() = GatewayCronModelChoices(parseGatewayModelCatalog(Json.parseToJsonElement("""{"models":[{"provider":"writing","id":"report-model","name":"Writing model"},{"provider":"review","id":"report-model","name":"Review model"},{"provider":"writing","id":"locked","name":"Unavailable model","available":false},{"provider":"writing","id":"hidden","name":"Hidden model","manualSelectionAllowed":false}]}""").jsonObject).models)
+  @Test fun thinkingChoicesFollowAdvertisedModelWithoutRewritingCustomValues() {
+    val model = mutableStateOf("writing/report-model")
+    val value = mutableStateOf("vendor-special")
+    val enabled = mutableStateOf(true)
+    composeRule.setContent {
+      ClawDesignTheme {
+        Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+          CronThinkingEditor(value.value, model.value, enabled.value, catalog(), {}) { value.value = it }
+        }
+      }
+    }
+    composeRule.onNodeWithText("vendor-special").performClick()
+    composeRule.onNodeWithText("High").performScrollTo().performClick()
+    assertEquals("high", value.value)
+    composeRule.runOnIdle { model.value = "review/report-model" }
+    composeRule.onNodeWithText("high").performClick()
+    composeRule.onNodeWithText("Low").assertDoesNotExist()
+    composeRule.onNodeWithText("Enter another thinking level").performScrollTo().performClick()
+    composeRule.onNodeWithText("Custom thinking level").performScrollTo().performTextReplacement("vendor-other")
+    composeRule.onNodeWithText("Cancel").performScrollTo().performClick()
+    assertEquals("high", value.value)
+    composeRule.onNodeWithText("high").performClick()
+    composeRule.onNodeWithText("Enter another thinking level").performScrollTo().performClick()
+    composeRule.onNodeWithText("Custom thinking level").performScrollTo().performTextReplacement("vendor-other")
+    composeRule.onNodeWithText("Use thinking level").performScrollTo().performClick()
+    assertEquals("vendor-other", value.value)
+    composeRule.onNodeWithText("vendor-other").performClick()
+    composeRule.onNodeWithText("Default thinking").performScrollTo().performClick()
+    assertEquals("", value.value)
+    composeRule.runOnIdle { enabled.value = false }
+    composeRule.onNodeWithText("Default thinking").assertIsNotEnabled()
+  }
+
+  private fun catalog() = GatewayCronModelChoices(parseGatewayModelCatalog(Json.parseToJsonElement("""{"models":[{"provider":"writing","id":"report-model","name":"Writing model","thinkingLevels":[{"id":"low","label":"Low"},{"id":"high","label":"High"}]},{"provider":"review","id":"report-model","name":"Review model"},{"provider":"writing","id":"locked","name":"Unavailable model","available":false},{"provider":"writing","id":"hidden","name":"Hidden model","manualSelectionAllowed":false}]}""").jsonObject).models)
 
   private fun capture(name: String) {
     val directory = File("build/outputs/cron-model-proof", UUID.randomUUID().toString())

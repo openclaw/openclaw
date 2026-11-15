@@ -481,12 +481,13 @@ private fun CronPayloadEditor(
         onRefresh = onRefreshModels,
         onChange = { onChange(payload.copy(model = it)) },
       )
-      ClawTextField(
+      CronThinkingEditor(
         value = payload.thinking,
-        onValueChange = { onChange(payload.copy(thinking = it)) },
-        placeholder = nativeString("Optional override"),
-        label = nativeString("Thinking"),
+        model = payload.model,
         enabled = enabled,
+        catalog = models,
+        onRefresh = onRefreshModels,
+        onChange = { onChange(payload.copy(thinking = it)) },
       )
     }
 
