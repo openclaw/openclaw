@@ -263,6 +263,14 @@ describe("gateway register option collisions", () => {
     expectCliError(expect.stringContaining("Invalid --days"));
   });
 
+  it("rejects usage-cost --days beyond the Gateway's 36600-day ceiling", async () => {
+    await parse("usage-cost", "--days", "99999999", "--json");
+
+    expectCliError(
+      expect.stringContaining('Invalid --days. Use 1-36600 days, e.g. --days 30. Received: "99999999".'),
+    );
+  });
+
   it("rejects combining --url and --port for gateway call", async () => {
     await parse("call", "health", "--url", "ws://127.0.0.1:19084", "--port", "19084", "--json");
 

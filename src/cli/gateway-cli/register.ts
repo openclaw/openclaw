@@ -103,13 +103,23 @@ function parseGatewayCallParams(value = "{}"): unknown {
   }
 }
 
+// Mirrors MAX_USAGE_DAYS in the Gateway's usage-date-range: values beyond it
+// are silently clamped server-side, so the CLI rejects them up front instead
+// of reporting a window the operator did not get.
+const MAX_USAGE_COST_DAYS = 36_600;
+
 function parseDaysOption(raw: unknown): number {
   if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.max(1, Math.floor(raw));
+    return Math.min(MAX_USAGE_COST_DAYS, Math.max(1, Math.floor(raw)));
   }
   if (typeof raw === "string") {
     const parsed = parseStrictPositiveInteger(raw);
     if (parsed !== undefined) {
+      if (parsed > MAX_USAGE_COST_DAYS) {
+        throw new Error(
+          `Invalid --days. Use 1-${MAX_USAGE_COST_DAYS} days, e.g. --days 30. Received: "${raw}".`,
+        );
+      }
       return parsed;
     }
     // A present but malformed value is operator error, like an invalid --timeout.
