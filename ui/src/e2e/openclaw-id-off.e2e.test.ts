@@ -211,7 +211,7 @@ suite.define(() => {
           const pages = await openSidebarPages(page);
           await pages.getByRole("link", { name: "Systems", exact: true }).waitFor();
           expect
-            .soft(await pages.getByRole("link", { name: "Access", exact: true }).count())
+            .soft(await pages.getByRole("link", { name: "Remote access", exact: true }).count())
             .toBe(0);
           expect.soft(await pages.locator('a[href*="openclaw-id-access"]').count()).toBe(0);
           await expectNoIdUi(pages);
