@@ -45,6 +45,8 @@ export type TalkCatalogState =
       providers: readonly TalkRealtimeProviderOption[];
       /** Speech-to-text group of the same catalog read. */
       transcription?: TalkCatalogResult["transcription"];
+      /** Providers Settings → Models can add a key for; absent when unknown. */
+      modelKeyProviders?: readonly string[];
     };
 
 type TalkViewProps = {

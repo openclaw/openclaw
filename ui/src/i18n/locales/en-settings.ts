@@ -460,6 +460,8 @@ const enSettings = {
       providerNotReady: "Not ready",
       providerNotReadyDescription:
         "{provider} can’t transcribe yet. It may need a key, which is added on Settings → Models, or it may not support speech to text.",
+      providerKeyOutsideModels:
+        "{provider} can’t transcribe yet. Models can’t add its key: set it in the Gateway’s environment, or pick another model.",
       openModels: "Open Models",
     },
   },

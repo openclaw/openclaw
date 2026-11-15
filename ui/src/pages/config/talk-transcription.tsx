@@ -18,6 +18,7 @@ import {
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId } from "../../lib/model-auth.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
@@ -68,6 +69,8 @@ function splitModelRef(ref: string): AudioModelEntry | null {
 type TranscriptionProps = {
   configObject: Record<string, unknown>;
   catalog: TalkTranscriptionCatalog | "loading" | "unavailable" | { failed: unknown };
+  /** Providers Settings → Models can add a key for; undefined when unknown. */
+  modelKeyProviders?: readonly string[];
   configBusy: boolean;
 };
 
@@ -261,13 +264,26 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
   const preferredProvider = createMemo(() =>
     preferredProviderEntry(props.catalog, selection().preferredModel),
   );
+  // Media-only providers keep their key in the Gateway's environment or
+  // config, which Models cannot edit, so only listed providers link there.
+  const keyInModels = () => {
+    const provider = preferredProvider();
+    return (
+      provider !== undefined &&
+      (props.modelKeyProviders?.includes(canonicalModelAuthProviderId(provider.id)) ?? true)
+    );
+  };
   const voiceNotesDescription = () => {
     const provider = preferredProvider();
-    return provider && !provider.configured
-      ? t("talkPage.transcription.providerNotReadyDescription", {
-          provider: providerDisplayLabel(provider.id),
-        })
-      : t("talkPage.transcription.voiceNotesDescription");
+    if (!provider || provider.configured) {
+      return t("talkPage.transcription.voiceNotesDescription");
+    }
+    return t(
+      keyInModels()
+        ? "talkPage.transcription.providerNotReadyDescription"
+        : "talkPage.transcription.providerKeyOutsideModels",
+      { provider: providerDisplayLabel(provider.id) },
+    );
   };
   const options = createMemo(() => {
     const { entries, preferredModel } = selection();
@@ -331,7 +347,11 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
                 )
               }
             />
-            <Show when={preferredProvider()?.configured === false && preferredProvider()}>
+            <Show
+              when={
+                preferredProvider()?.configured === false && keyInModels() && preferredProvider()
+              }
+            >
               {(provider) => (
                 <button
                   type="button"

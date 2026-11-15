@@ -9,6 +9,7 @@ import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { UserFacingError } from "../../lib/format-error.ts";
+import { canonicalModelAuthProviderId, loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -411,13 +412,26 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
 
   function loadCatalog(client: GatewayClient, connection: CatalogConnection) {
     const read = (async (): Promise<TalkCatalogState> => {
-      const result = await client.request<TalkCatalogResult>("talk.catalog", {});
+      const agentId = context.gateway.snapshot.assistantAgentId;
+      const [result, modelAuth] = await Promise.all([
+        client.request<TalkCatalogResult>("talk.catalog", {}),
+        // Media-only providers (Deepgram, ElevenLabs) have no Models entry, so
+        // the voice-notes key hint links to Models only for providers it lists.
+        agentId ? loadModelAuthStatus(client, { agentId }).catch(() => null) : null,
+      ]);
       return {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
         transcription: result.transcription,
+        ...(modelAuth?.providerCapabilities
+          ? {
+              modelKeyProviders: modelAuth.providerCapabilities.map(({ provider }) =>
+                canonicalModelAuthProviderId(provider),
+              ),
+            }
+          : {}),
       };
     })();
     catalogState.read = read;
@@ -729,6 +743,10 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
           <TalkTranscriptionSection
             configObject={props.configObject ?? {}}
             catalog={transcriptionCatalog(catalog())}
+            modelKeyProviders={(() => {
+              const current = catalog();
+              return current.kind === "ready" ? current.modelKeyProviders : undefined;
+            })()}
             configBusy={configBusy()}
           />
         )}

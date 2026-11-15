@@ -343,3 +343,63 @@ it("sends the Talk row to AI Agents settings when the voice model chose its prov
   change.click();
   expect(navigate).toHaveBeenCalledWith("ai-agents", { search: "?section=agents" });
 });
+
+it.each([
+  { provider: "deepgram", model: "nova-3", label: "Deepgram", inModels: false },
+  {
+    provider: "openrouter",
+    model: "openai/whisper-large-v3-turbo",
+    label: "OpenRouter",
+    inModels: true,
+  },
+])(
+  "links a voice-notes key to Models only when Models can add it ($provider)",
+  async ({ provider, model, label, inModels }) => {
+    const { page } = createTalkMutationHarness({
+      navigate: vi.fn(),
+      // Models lists model providers only; media-only Deepgram has no entry.
+      modelAuthStatus: {
+        ts: 1,
+        providers: [],
+        providerCapabilities: [
+          { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+          { provider: "openrouter", apiKeySupported: true, quickApiKeySetup: true },
+        ],
+      },
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source: "streaming",
+          ready: true,
+          activeProvider: "openai",
+          providers: [],
+          mediaProviders: [{ id: provider, label: provider, configured: false }],
+        },
+      }),
+    });
+    page.configObject = {
+      ...page.configObject,
+      tools: {
+        media: {
+          models: [{ provider, model, capabilities: ["audio"] }],
+          audio: { preferredModel: `${provider}/${model}` },
+        },
+      },
+    };
+    const voiceNotesRow = () =>
+      [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+        row.textContent?.startsWith(t("talkPage.transcription.voiceNotesTitle")),
+      );
+    const hint = inModels
+      ? "talkPage.transcription.providerNotReadyDescription"
+      : "talkPage.transcription.providerKeyOutsideModels";
+    await waitForSolid(() =>
+      expect(voiceNotesRow()?.textContent).toContain(t(hint, { provider: label })),
+    );
+    expect(
+      [...(voiceNotesRow()?.querySelectorAll("button") ?? [])].some(
+        (button) => button.textContent === t("talkPage.transcription.openModels"),
+      ),
+    ).toBe(inModels);
+  },
+);
