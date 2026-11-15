@@ -134,15 +134,17 @@ export function buildDeepgramRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    // A key saved for Deepgram (the store voice notes read) counts when the
-    // Voice Call config and the environment have none.
+    // A key saved for Deepgram (the store voice notes read) counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
     isConfiguredAsync: async (ctx) =>
       isConfigured(ctx) ||
-      (await isProviderAuthProfileConfiguredAsync({
-        provider: "deepgram",
-        cfg: ctx.cfg,
-        profileTypes: ["api_key"],
-      })),
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "deepgram",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const normalizedConfig = normalizeProviderConfig(req.providerConfig);
       const directApiKey = normalizedConfig.apiKey || process.env.DEEPGRAM_API_KEY;

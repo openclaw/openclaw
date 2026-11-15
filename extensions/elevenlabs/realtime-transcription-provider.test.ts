@@ -185,7 +185,12 @@ describe("buildElevenLabsRealtimeTranscriptionProvider", () => {
     vi.stubEnv("XI_API_KEY", xiKey);
     savedKey.mockResolvedValue("saved-key");
 
-    expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: { apiKey } })).toBe(true);
+    const readiness = { cfg: {}, providerConfig: { apiKey } };
+    // Unnamed, as a candidate of automatic selection, the saved key does not count.
+    expect(await provider.isConfiguredAsync?.(readiness)).toBe(expected !== "saved-key");
+    expect(await provider.isConfiguredAsync?.({ ...readiness, selectedExplicitly: true })).toBe(
+      true,
+    );
     const { session, apiKeys } = await createSession([], { cfg: {}, providerConfig: { apiKey } });
     await session.connect();
     expect(apiKeys).toEqual([expected]);

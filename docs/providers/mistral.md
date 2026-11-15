@@ -127,6 +127,10 @@ The `mistral` plugin registers Voxtral Realtime as a Voice Call streaming STT pr
 | Sample rate  | `...mistral.sampleRate`                                                | `8000`                                                               |
 | Target delay | `...mistral.targetStreamingDelayMs`                                    | `800`                                                                |
 
+The saved auth profile is used only when Mistral is the named provider, for example
+`streaming.provider: "mistral"`. Automatic selection counts only the config and
+environment keys.
+
 ```json5
 {
   plugins: {

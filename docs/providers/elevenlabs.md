@@ -115,6 +115,10 @@ Google Meet agent-mode streaming transcription.
 | Commit strategy | `...elevenlabs.commitStrategy`                                            | `vad`                                                                                     |
 | Language        | `...elevenlabs.languageCode`                                              | (unset)                                                                                   |
 
+The saved auth profile is used only when ElevenLabs is the named provider, for example
+`streaming.provider: "elevenlabs"`. Automatic selection counts only the config and
+environment keys.
+
 ```json5
 {
   plugins: {

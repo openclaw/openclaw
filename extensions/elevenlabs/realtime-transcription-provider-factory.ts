@@ -128,15 +128,17 @@ export function buildElevenLabsRealtimeTranscriptionProvider({
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     // Retained for synchronous SDK consumers through 2026-12-31.
     isConfigured,
-    // A key saved for ElevenLabs (the store voice notes read) counts when the
-    // Voice Call config and the environment have none.
+    // A key saved for ElevenLabs (the store voice notes read) counts when the Voice Call config
+    // and the environment have none, and only for the provider that config or the
+    // request names. Automatic selection ranks providers as it does without one.
     isConfiguredAsync: async (ctx) =>
       isConfigured(ctx) ||
-      (await isProviderAuthProfileConfiguredAsync({
-        provider: "elevenlabs",
-        cfg: ctx.cfg,
-        profileTypes: ["api_key"],
-      })),
+      (ctx.selectedExplicitly === true &&
+        (await isProviderAuthProfileConfiguredAsync({
+          provider: "elevenlabs",
+          cfg: ctx.cfg,
+          profileTypes: ["api_key"],
+        }))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const directApiKey = resolveElevenLabsRealtimeApiKey(config);

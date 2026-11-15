@@ -145,7 +145,10 @@ it.each([
 ])("connects with %s", async (_name, apiKey, envKey, authorization) => {
   vi.stubEnv("MISTRAL_API_KEY", envKey);
   savedKey.mockResolvedValue("saved-key");
-  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig: { apiKey } })).toBe(true);
+  const readiness = { cfg: {}, providerConfig: { apiKey } };
+  // Unnamed, as a candidate of automatic selection, the saved key does not count.
+  expect(await provider.isConfiguredAsync?.(readiness)).toBe(authorization !== "Bearer saved-key");
+  expect(await provider.isConfiguredAsync?.({ ...readiness, selectedExplicitly: true })).toBe(true);
   const { authorizations } = await createRealtimeServer([], { apiKey });
   expect(authorizations).toEqual([authorization]);
   // Only a provider with no other key asks the store, and only for its own API key.

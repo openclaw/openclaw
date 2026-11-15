@@ -102,7 +102,13 @@ it.each([
   savedKey.mockResolvedValue("saved-key");
   const { baseUrl, requests } = await createSocketServer(() => {}, "/deepgram/v1");
   const providerConfig = { ...keyConfig, baseUrl };
-  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig })).toBe(true);
+  // Unnamed, as a candidate of automatic selection, the saved key does not count.
+  expect(await provider.isConfiguredAsync?.({ cfg: {}, providerConfig })).toBe(
+    authorization !== "Token saved-key",
+  );
+  expect(
+    await provider.isConfiguredAsync?.({ cfg: {}, providerConfig, selectedExplicitly: true }),
+  ).toBe(true);
   const session = provider.createSession({ cfg: {}, providerConfig });
   await session.connect();
   session.close();
