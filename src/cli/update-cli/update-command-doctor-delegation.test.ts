@@ -870,7 +870,7 @@ function busyDoctorWriterArgv(identityAvailable: boolean): string[] {
                 import { once } from 'node:events';
                 import { writeFileSync, writeSync } from 'node:fs';
                 import { retainUpdateDoctorProcesses } from ${JSON.stringify(custodyModule.href)};
-                import { withCommandProcessScope, spawnCommand } from ${JSON.stringify(spawnModule.href)};
+                import { withCommandProcessScope, spawnCommand, waitForCommandSpawn } from ${JSON.stringify(spawnModule.href)};
                 process.on('SIGTERM', () => {});
                   let input = '';
                   process.stdin.setEncoding('utf8');
@@ -895,6 +895,7 @@ function busyDoctorWriterArgv(identityAvailable: boolean): string[] {
                       "process.on('SIGTERM', () => {}); require('node:fs').writeSync(1, 'ready'); for (;;) {}"
                     ], { stdio: ['ignore', 'pipe', 'ignore'], buffer: false, reject: false });
                     await once(child.stdout, 'data');
+                    await waitForCommandSpawn(child);
                     writeSync(1, 'Doctor busy ' + child.pid + '\\n');
                     for (;;) {}
                     }, undefined, custody);

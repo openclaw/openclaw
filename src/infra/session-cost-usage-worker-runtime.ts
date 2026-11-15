@@ -52,7 +52,7 @@ import {
 } from "./session-cost-usage-worker.types.js";
 import type { UsageDailyBucket } from "./session-cost-usage.types.js";
 import { withSqliteWorkerCleanupFailure } from "./sqlite-worker-broker-reply.js";
-import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
+import { readDatabasePathIdentity } from "./sqlite-worker-identity.js";
 
 const USAGE_COST_WORKER_TIMEOUT_MS = 5 * 60_000;
 const logger = createSubsystemLogger("usage-cost-cache");
@@ -276,33 +276,41 @@ async function runPreparedUsageCostWorker(
       capturedOperation.kind === "refresh" &&
       !capturedOperation.sessionFiles &&
       !capturedOperation.rebuildRows?.length &&
-      !getDatabaseEngineInput("agent") &&
-      prepared.databases.every((database) =>
-        readDatabasePathIdentitySync(database.path).key.startsWith("path:"),
-      )
+      !getDatabaseEngineInput("agent")
     ) {
-      // An absent database has neither rollups to prune nor SQLite transcripts to scan.
-      // File-backed archives still need the normal refresh even without a database.
-      const entries = await fs
-        .readdir(
-          capturedOperation.sessionsDir ?? resolveSessionArtifactDirectory(location.storePath),
-          {
-            withFileTypes: true,
-          },
-        )
-        .catch(ignoreMissingPath);
-      assertCurrent();
-      if (
-        !entries?.some(
-          (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
-        )
-      ) {
-        return { kind: "refresh", changed: false };
+      let allDatabasesAbsent = true;
+      for (const database of prepared.databases) {
+        const identity = await readDatabasePathIdentity(database.path);
+        assertCurrent();
+        if (!identity.key.startsWith("path:")) {
+          allDatabasesAbsent = false;
+          break;
+        }
+      }
+      if (allDatabasesAbsent) {
+        // An absent database has neither rollups to prune nor SQLite transcripts to scan.
+        // File-backed archives still need the normal refresh even without a database.
+        const entries = await fs
+          .readdir(
+            capturedOperation.sessionsDir ?? resolveSessionArtifactDirectory(location.storePath),
+            {
+              withFileTypes: true,
+            },
+          )
+          .catch(ignoreMissingPath);
+        assertCurrent();
+        if (
+          !entries?.some(
+            (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
+          )
+        ) {
+          return { kind: "refresh", changed: false };
+        }
       }
     }
     const lock =
       capturedOperation.kind === "refresh"
-        ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
+        ? await prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
             env: location.env,
             assertCurrent,
           })
