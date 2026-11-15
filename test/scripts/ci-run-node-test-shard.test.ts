@@ -866,12 +866,16 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         ],
         nextConfigs: ["test/vitest/vitest.cli-process.config.ts"],
       },
-    ].map((test) => ({
-      configs: ["test/vitest/vitest.cli-process.config.ts"],
-      nextConfigs: undefined as string[] | undefined,
-      policy: "bun-all",
-      ...test,
-    })),
+    ].map((test) =>
+      Object.assign(
+        {
+          configs: ["test/vitest/vitest.cli-process.config.ts"],
+          nextConfigs: undefined as string[] | undefined,
+          policy: "bun-all",
+        },
+        test,
+      ),
+    ),
   )("bounds shared audit capture ($event/$attempt, $configs, $policy)", async (test) => {
     const configs = test.configs;
     const runChild = vi.fn<NonNullable<RunOptions["runChild"]>>().mockResolvedValue(0);
