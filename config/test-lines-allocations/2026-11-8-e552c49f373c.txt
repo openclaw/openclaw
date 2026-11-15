@@ -1,0 +1,5 @@
+23
+# LOCAL 2026.11.8 row 85; source e552c49f373cdb6b7490d197f7eef3462846f288.
+# SQLite sidecars represented by database image consistently in capture and reuse, retaining mutation and ownership checks.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
