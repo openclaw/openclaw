@@ -26,8 +26,8 @@ import {
   type NativeMessageGroupOptions,
   prepareGroupMessage,
   prepareMessageGroupFrame,
-  resolveFileLinkOwnerOptions,
 } from "./chat-message-group-frame.ts";
+import { resolveFileLinkOwnerOptions } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
@@ -113,25 +113,14 @@ function PreparedMessage(props: {
       };
     }
     const entryId = persistedMessageEntryId(props.item.message) ?? undefined;
-    const openFile = props.options.onOpenWorkspaceFile;
     return {
-      ...props.options,
+      ...resolveFileLinkOwnerOptions(props.group, props.options, entryId),
       firstBubbleKey:
         props.options.firstBubbleKey !== undefined
           ? props.options.firstBubbleKey
           : (props.group.messages.find((message) => message.hasVisibleContent)?.key ?? null),
       isStreaming: isStreaming(),
       entryId,
-      // Tool-row file links carry their message like rendered markdown links, so earlier
-      // messages keep reading their original source; sender-owned links stay session-scoped.
-      ...(entryId && openFile && !props.group.senderSession?.sessionKey
-        ? {
-            onOpenWorkspaceFile: (target: { path: string; line?: number | null }) => {
-              const owned = { ...target, messageEntryId: entryId };
-              openFile(owned);
-            },
-          }
-        : {}),
       showToolCalls: props.options.showToolCalls ?? true,
       assistantMessageDisclosure,
       messageActions: actionDetails,

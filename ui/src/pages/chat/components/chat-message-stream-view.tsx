@@ -59,6 +59,8 @@ export type StreamGroupOptions = MessageRenderOptions & {
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
   onGatewayQuestionChange?: () => void;
+  isQuestionCollapsed?: (id: string) => boolean;
+  onQuestionCollapsedChange?: (id: string, collapsed: boolean) => void;
   onGatewayQuestionSubmit?: (id: string, answers: Record<string, string[]>) => void | Promise<void>;
   onGatewayQuestionSkip?: (id: string) => void | Promise<void>;
 };
@@ -128,6 +130,12 @@ export function StreamPartView(props: {
                 >
                   <ChatQuestionPanel
                     props={createGatewayQuestionPanelProps(question()!, {
+                      focusOnCollapse: true,
+                      collapsed: props.options.isQuestionCollapsed?.(prompt().id),
+                      onCollapsedChange: props.options.onQuestionCollapsedChange
+                        ? (collapsed) =>
+                            props.options.onQuestionCollapsedChange?.(prompt().id, collapsed)
+                        : undefined,
                       onChange: props.options.onGatewayQuestionChange,
                       onSubmit: props.options.onGatewayQuestionSubmit
                         ? (answers) => props.options.onGatewayQuestionSubmit?.(prompt().id, answers)

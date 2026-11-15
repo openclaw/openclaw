@@ -500,6 +500,8 @@ describe("transcript projection", () => {
     expect(liveLabels()).toEqual([]);
     props.runId = "peer";
     view.draw();
+    // A new run has its own initial presentation hold.
+    await vi.advanceTimersByTimeAsync(200);
     expect(liveLabels()).toEqual(["Reading Latest operation.txt…"]);
     props.runActive = false;
     view.draw();

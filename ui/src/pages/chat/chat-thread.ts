@@ -27,6 +27,7 @@ import type { ChatInputOrderState } from "./chat-thread-inputs.ts";
 import { sanitizeStreamText } from "./chat-thread-items.ts";
 import type { PrependFacts } from "./chat-thread-prepend.ts";
 import { carryMovedDisclosures } from "./chat-tool-activity-coalesce.ts";
+import { activityDisclosureCalls } from "./components/chat-activity-projection.ts";
 import { getOrCreateSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 
 type CachedChatItems = {
@@ -649,14 +650,15 @@ export function syncToolCardExpansionState(
       }
       retainDisclosure(`toolmsg:${entry.key}`, cards[0]?.callId, "message");
     }
-    if (groupCallId && (!inlineCommands || !transcriptItems)) {
+    if (groupCallId && !transcriptItems) {
       calls.set(`activity:${item.key}`, `activity:${groupCallId}`);
     }
   }
-  if (inlineCommands && transcriptItems) {
-    for (const [id, call] of inlineCommands.inlineActivityDisclosureCalls(
+  if (transcriptItems) {
+    for (const [id, call] of activityDisclosureCalls(
       transcriptItems,
       bubbleMode,
+      Boolean(inlineCommands),
     )) {
       calls.set(id, call);
     }

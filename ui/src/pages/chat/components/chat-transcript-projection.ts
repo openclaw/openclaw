@@ -195,7 +195,7 @@ export function projectChatTranscript(
     Boolean(props.autoExpandToolCalls),
     searchFiltering || !props.showToolCalls,
     props.inlineCommands,
-    props.inlineCommands ? transcriptItems : undefined,
+    transcriptItems,
     props.chatBubbleMode === true,
   );
   const replyNavigationId = props.replyMessageAccess?.navigationId;
@@ -326,6 +326,9 @@ export function projectChatTranscript(
     onOpenSubagents: subagents.listed ? actions.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
+    isQuestionCollapsed: (id) => expandedToolCards.get(`question:${id}`) === false,
+    onQuestionCollapsedChange: (id, collapsed) =>
+      setExpansionState(expandedToolCards, `question:${id}`, !collapsed),
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
     onGatewayQuestionSkip: props.onGatewayQuestionSkip,

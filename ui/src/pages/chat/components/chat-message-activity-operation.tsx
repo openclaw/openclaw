@@ -1,138 +1,15 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { createMemo, For, Show } from "solid-js";
-import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
-import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
-import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
-import type {
-  ActivityOperationGroup,
-  ActivityOperationProps,
-} from "./chat-message-bubble-options.ts";
+import { descendantCards } from "./chat-activity-operations.ts";
+import type { ActivityOperationProps } from "./chat-message-bubble-options.ts";
 import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
-
-export function isStandaloneActivity(card: ToolCard): boolean {
-  return (
-    resolveSessionLaunchPresentation(card) !== null ||
-    Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
-  );
-}
-
-export function descendantCards(group: ToolCallGroup<ToolCard>) {
-  const cards: ToolCard[] = [];
-  const pending = [...group.children];
-  for (const child of pending) {
-    cards.push(child.card);
-    pending.push(...child.children);
-  }
-  return cards;
-}
-
-function retainsOwnOutcome(card: ToolCard, activity: AgentActivityItem | undefined): boolean {
-  return (
-    Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing)) ||
-    card.isError === true ||
-    activity?.status === "failed" ||
-    activity?.status === "blocked" ||
-    activity?.status === "skipped"
-  );
-}
-
-/** Presentation follows recorded children; execution containers remain inspector evidence. */
-export function projectActivityOperations(
-  roots: readonly ToolCallGroup<ToolCard>[],
-  prepared: ReadonlyMap<ToolCard, AgentActivityItem>,
-  suppressed: ReadonlySet<ToolCard>,
-) {
-  const groups: ActivityOperationGroup[] = [];
-  const hidden = new Set<ToolCard>();
-  const tree = [...roots];
-  for (const group of tree) {
-    tree.push(...group.children);
-  }
-  const visible = new Set<ToolCallGroup<ToolCard>>();
-  for (const group of tree.toReversed()) {
-    const activity = prepared.get(group.card);
-    if (
-      (!suppressed.has(group.card) &&
-        !activity?.hideFromChannelProgress &&
-        !activity?.suppressChannelProgress) ||
-      group.children.some((child) => visible.has(child))
-    ) {
-      visible.add(group);
-    }
-  }
-  const pending: {
-    group: ToolCallGroup<ToolCard>;
-    target: ActivityOperationGroup[];
-    executionCards: ToolCard[];
-  }[] = roots.toReversed().map((group) => ({
-    group,
-    target: groups,
-    executionCards: [],
-  }));
-  while (pending.length) {
-    const { group, target, executionCards } = pending.pop()!;
-    const call = unwrapToolCallForDisplay(group.card);
-    const args = asNullableRecord(call.args);
-    const activity = prepared.get(group.card);
-    const showOutcome = retainsOwnOutcome(group.card, activity);
-    const execution =
-      call.name.trim().toLowerCase() === "exec" &&
-      !(typeof args?.command === "string" && args.command.trim());
-    const visibleChildren = group.children.some((child) => visible.has(child));
-    if (
-      !showOutcome &&
-      ((execution && group.children.length > 0 && !visibleChildren) ||
-        (target === groups && !visible.has(group)))
-    ) {
-      const children = descendantCards(group);
-      if (!children.some((card) => retainsOwnOutcome(card, prepared.get(card)))) {
-        // Routine work stays hidden even after its wrapper is retired. Include every
-        // card so the ordinary message renderer cannot restore the subtree.
-        hidden.add(group.card);
-        for (const card of children) {
-          hidden.add(card);
-        }
-        continue;
-      }
-    }
-    const container =
-      execution &&
-      (visibleChildren ||
-        (!showOutcome &&
-          (suppressed.has(group.card) ||
-            activity?.hideFromChannelProgress === true ||
-            activity?.suppressChannelProgress === true)));
-    if (container && !showOutcome) {
-      hidden.add(group.card);
-    }
-    const operation: ActivityOperationGroup = {
-      card: group.card,
-      children: [],
-      ...(executionCards.length ? { executionCards } : {}),
-    };
-    if (!container || showOutcome) {
-      target.push(operation);
-    }
-    for (const child of group.children.toReversed()) {
-      pending.push({
-        group: child,
-        target: container ? target : operation.children,
-        executionCards: container ? [...executionCards, group.card] : executionCards,
-      });
-    }
-  }
-  return { groups, hidden };
-}
 
 export function ActivityOperation(props: ActivityOperationProps) {
   const context = () => props.contexts.get(props.group.card)!;
@@ -145,6 +22,7 @@ export function ActivityOperation(props: ActivityOperationProps) {
       options={{
         ...props.options,
         messageKey: context().messageKey,
+        onOpenWorkspaceFile: context().onOpenWorkspaceFile,
         expanded: expanded(),
         onToggleExpanded: () =>
           props.options.onToggleToolExpanded?.(context().disclosureId, expanded()),

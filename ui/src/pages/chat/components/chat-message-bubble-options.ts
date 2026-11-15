@@ -22,11 +22,18 @@ export type ActivityOperationGroup = Omit<ToolCallGroup<ToolCard>, "children"> &
   executionCards?: readonly ToolCard[];
 };
 
+export type ActivityOperationContext = {
+  messageKey: string;
+  runId?: string;
+  disclosureId: string;
+  onOpenWorkspaceFile?: ToolRenderOptions["onOpenWorkspaceFile"];
+};
+
 export type ActivityOperationProps = {
   group: ActivityOperationGroup;
   options: Omit<ToolRenderOptions, "messageKey"> &
     Pick<GroupedMessageOptions, "isToolExpanded" | "onToggleToolExpanded">;
-  contexts: ReadonlyMap<ToolCard, { messageKey: string; disclosureId: string }>;
+  contexts: ReadonlyMap<ToolCard, ActivityOperationContext>;
 };
 
 export type MessageRenderOptions = {

@@ -587,6 +587,45 @@ it("preserves prepared-only outcomes and an open group when a permission row arr
   ).toBeTruthy();
 });
 
+it("keeps review outcomes with their segment, including a hidden execution container", async () => {
+  const group = createToolGroup("review-segments", [
+    createMessageEntry(
+      "approved",
+      createAssistantMessage([
+        createToolCall(
+          "wrapper",
+          "exec",
+          { code: "await read({path: 'source.ts'})" },
+          {
+            details: { approvalReviewOutcome: "approved" },
+          },
+        ),
+        read("source", { parentToolCallId: "wrapper" }),
+      ]),
+    ),
+    createMessageEntry(
+      "launch",
+      createAssistantMessage([
+        createToolCall("launch", "sessions_spawn", { label: "Helper", task: "Read only" }),
+      ]),
+    ),
+    createMessageEntry(
+      "denied",
+      createAssistantMessage([
+        read("restricted", { details: { approvalReviewOutcome: "denied" } }),
+      ]),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  await settleToolBridges(summaryContainer);
+  const outcomes = [
+    ...summaryContainer.querySelectorAll(
+      ".chat-activity-group__summary .chat-activity-group__review-status",
+    ),
+  ].map((badge) => badge.getAttribute("data-outcome"));
+  expect(outcomes).toEqual(["approved", "denied"]);
+});
+
 it("keeps expanded historical launches readable when a new launch refreshes activity", async () => {
   const launch = (id: string, label: string, completed: boolean) =>
     createAssistantMessage(

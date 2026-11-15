@@ -30,24 +30,27 @@ export function selectActivityHeadline(
   // The latest prepared outcome owns the headline even when the raw card lags.
   const callId = operation.toolCallId;
   let operationLabel: string | undefined;
+  let hasRawCard = false;
   if (callId) {
     for (const [card, recorded] of preparedByCard) {
+      if (recorded !== operation) {
+        continue;
+      }
+      hasRawCard = true;
       const addressed = addressedSession(card, subagentSessions);
       const toolName = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
       operationLabel =
-        recorded === operation
-          ? addressed &&
-            !addressed.name &&
-            toolName !== "sessions_history" &&
-            toolName !== "agents_wait"
-            ? operation.title
-            : resolveToolOperationLabel(
-                card,
-                operation.status === "completed" ? "succeeded" : (operation.status ?? "unknown"),
-                addressed,
-                operation.meta,
-              )
-          : undefined;
+        addressed &&
+        !addressed.name &&
+        toolName !== "sessions_history" &&
+        toolName !== "agents_wait"
+          ? operation.title
+          : resolveToolOperationLabel(
+              card,
+              operation.status === "completed" ? "succeeded" : (operation.status ?? "unknown"),
+              addressed,
+              operation.meta,
+            );
       if (operationLabel) {
         break;
       }
@@ -58,7 +61,7 @@ export function selectActivityHeadline(
         key: operation.toolCallId ?? operation.itemId,
         title:
           operationLabel ??
-          (operation.name === "exec" ? operation.meta : undefined) ??
+          (operation.name === "exec" || !hasRawCard ? operation.meta : undefined) ??
           (operation.status && operation.title === resolveToolDisplayIdentity(operation.name).label
             ? ""
             : operation.title),

@@ -380,6 +380,29 @@ it.each([true, false])(
     const input = other()!;
     input.value = "New contributors";
     input.dispatchEvent(new Event("input", { bubbles: true }));
+    if (blocking) {
+      const collapse = container.querySelector<HTMLButtonElement>(
+        ".chat-question-panel__collapse",
+      )!;
+      collapse.focus();
+      collapse.click();
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull(),
+      );
+      expect(document.activeElement).toBe(
+        container.querySelector(".chat-question-panel__collapsed-button"),
+      );
+      props.gatewayQuestionPrompts = [];
+      renderChatPropsInto(container, props);
+      await waitForSolid(() => expect(container.querySelector(".chat-question-panel")).toBeNull());
+      props.gatewayQuestionPrompts = [question];
+      renderChatPropsInto(container, props);
+      await waitForSolid(() =>
+        expect(container.querySelector(".chat-question-panel--collapsed")).not.toBeNull(),
+      );
+      container.querySelector<HTMLButtonElement>(".chat-question-panel__collapsed-button")!.click();
+      await waitForSolid(() => expect(other()?.value).toBe("New contributors"));
+    }
     await waitForSolid(() =>
       expect(
         container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.disabled,

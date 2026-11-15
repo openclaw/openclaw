@@ -5,6 +5,7 @@ import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts
 import type { PendingSteer } from "../chat-pending-inputs.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
@@ -57,3 +58,48 @@ export type RenderMessageGroupOptions = Omit<
     latestAssistant?: boolean;
     pendingSteer?: (message: unknown) => PendingSteer | undefined;
   } & MessageReactionOptions;
+
+export function resolveFileLinkOwnerOptions(
+  group: MessageGroup,
+  options: NativeMessageGroupOptions,
+  entryId?: string,
+) {
+  const sourceSessionKey = group.senderSession?.sessionKey;
+  const owned: NativeMessageGroupOptions = sourceSessionKey
+    ? {
+        ...options,
+        fileLinkSessionKey: sourceSessionKey,
+        onOpenWorkspaceFile:
+          options.onOpenWorkspaceFile &&
+          ((target) => {
+            const ownedTarget = { ...target, sessionKey: sourceSessionKey };
+            options.onOpenWorkspaceFile?.(ownedTarget);
+          }),
+        onOpenSidebar:
+          options.onOpenSidebar &&
+          ((content) =>
+            options.onOpenSidebar?.(
+              content.kind === "markdown"
+                ? { ...content, fileLinkSessionKey: sourceSessionKey }
+                : content,
+            )),
+      }
+    : entryId && options.onOpenWorkspaceFile
+      ? {
+          ...options,
+          onOpenWorkspaceFile: (target) => {
+            const ownedTarget = { ...target, messageEntryId: entryId };
+            options.onOpenWorkspaceFile?.(ownedTarget);
+          },
+        }
+      : options;
+  if (
+    group.senderSession &&
+    (sourceSessionKey !== options.sessionKey ||
+      (group.senderSession.agentId && group.senderSession.agentId !== options.agentId))
+  ) {
+    // Files search belongs to the current pane, unlike source-bound direct file references.
+    return { ...owned, onFindWorkspaceFile: undefined };
+  }
+  return owned;
+}

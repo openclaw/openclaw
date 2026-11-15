@@ -134,6 +134,84 @@ describe("transcript expansion", () => {
     },
   );
 
+  it.each([false, true])(
+    "keeps a later activity segment open through hydration (bubbles=%s)",
+    async (chatBubbleMode) => {
+      const runId = "segmented-run";
+      const prompt = {
+        role: "user",
+        content: "Read and delegate",
+        timestamp: 1_000,
+        __openclaw: { id: "segmented-request", seq: 1, idempotencyKey: runId },
+      };
+      const calls = ["first", "second", "launch", "third", "fourth"].map((id, index) => ({
+        id,
+        name: id === "launch" ? "sessions_spawn" : "read",
+        args: id === "launch" ? { label: "Helper", task: "Read only" } : { path: `${id}.ts` },
+        timestamp: 2_000 + index,
+      }));
+      const live = calls.map(({ id, name, args, timestamp }) => {
+        const entry: ToolStreamEntry = {
+          runId,
+          toolCallId: id,
+          name,
+          args,
+          startedAt: timestamp,
+          receivedAt: timestamp,
+          message: {},
+          activity: [
+            projectAgentToolActivity({
+              phase: "start",
+              name,
+              toolCallId: id,
+              args,
+            }),
+          ],
+        };
+        refreshToolStreamMessage(entry);
+        return entry.message;
+      });
+      const props = threadProps("segmented", "agent:main:dashboard:segmented", [prompt], {
+        showToolCalls: true,
+        runId,
+        runActive: true,
+        runWorking: true,
+        chatBubbleMode,
+        toolMessages: live,
+      });
+      const transcript = createTestTranscript(props.paneId);
+      const container = document.body.appendChild(document.createElement("div"));
+      onTestFinished(() => {
+        render(null, container);
+        transcript.dispose();
+      });
+      const draw = () => render(renderChatThread({ ...props }, transcript), container);
+      const summaries = () => [
+        ...container.querySelectorAll<HTMLButtonElement>(".chat-activity-group__summary"),
+      ];
+      draw();
+      await waitForSolid(() => expect(summaries()).toHaveLength(2));
+      summaries()[1]!.click();
+      await waitForSolid(() => expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true"));
+      props.messages = [
+        prompt,
+        ...calls.map(({ id, name, args, timestamp }, index) => ({
+          role: "assistant",
+          runId,
+          timestamp,
+          __openclaw: { id: `stored-${id}`, seq: index + 2, runId },
+          content: [{ type: "toolCall", id, name, arguments: args }],
+        })),
+      ];
+      props.toolMessages = [];
+      draw();
+      await settleToolBridges(container);
+      expect(summaries()).toHaveLength(2);
+      expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true");
+      expect(summaries()[0]!.getAttribute("aria-expanded")).toBe("false");
+    },
+  );
+
   it("shares explicit disclosures across panes with different loaded history", async () => {
     const messages = [
       { role: "user", content: "Check the older result.", timestamp: 1 },

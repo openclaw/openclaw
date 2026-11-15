@@ -389,32 +389,38 @@ describe("Subagents panel data ownership", () => {
     expect(view(f)).toMatchObject({ callCount: { count: 1, exact: false }, activity: READING });
   });
 
-  it("prefers public progress and tool purpose over the observer digest while hiding routine calls", async () => {
-    const row = runningChild("tool-only", {
-      observerDigest: {
-        runId: "run-1",
-        headline: "Reviewing the benchmark results",
-        health: "on-track",
-        revision: 1,
-        updatedAt: 1,
-      },
-    });
-    const f = rowFixture(() => row);
-    await ready(f, () => view(f)?.callCount !== undefined);
-    expect(view(f)?.activity).toBe(row.observerDigest?.headline);
-    const item = execItem("exec-item", "Retry failed benchmark targets");
-    const publish = (data: Record<string, unknown>) => f.publish(row, data);
-    publish(item);
-    expect(view(f)?.activity).toBe(item.meta);
-    for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
-      publish(execItem(flag, "Hidden purpose", { toolCallId: flag, [flag]: true }));
+  it.each([
+    { name: "exec", title: "Exec", meta: "Retry failed benchmark targets" },
+    { name: "read", title: "Read", meta: "src/benchmark.ts" },
+  ])(
+    "prefers public progress and $name detail over the observer digest while hiding routine calls",
+    async ({ name, title, meta }) => {
+      const row = runningChild("tool-only", {
+        observerDigest: {
+          runId: "run-1",
+          headline: "Reviewing the benchmark results",
+          health: "on-track",
+          revision: 1,
+          updatedAt: 1,
+        },
+      });
+      const f = rowFixture(() => row);
+      await ready(f, () => view(f)?.callCount !== undefined);
+      expect(view(f)?.activity).toBe(row.observerDigest?.headline);
+      const item = execItem("exec-item", meta, { name, title });
+      const publish = (data: Record<string, unknown>) => f.publish(row, data);
+      publish(item);
       expect(view(f)?.activity).toBe(item.meta);
-    }
-    publish({ ...item, progressText: "Public progress" });
-    expect(view(f)?.activity).toBe("Public progress");
-    publish({ ...item, itemId: "next-item", toolCallId: "next-call", meta: "Next tool purpose" });
-    expect(view(f)?.activity).toBe("Next tool purpose");
-  });
+      for (const flag of ["hideFromChannelProgress", "suppressChannelProgress"]) {
+        publish(execItem(flag, "Hidden purpose", { toolCallId: flag, [flag]: true }));
+        expect(view(f)?.activity).toBe(item.meta);
+      }
+      publish({ ...item, progressText: "Public progress" });
+      expect(view(f)?.activity).toBe("Public progress");
+      publish({ ...item, itemId: "next-item", toolCallId: "next-call", meta: "Next tool purpose" });
+      expect(view(f)?.activity).toBe("Next tool purpose");
+    },
+  );
 
   it("keeps previous-run steps out of a continuation headline while counting the whole session", async () => {
     const row = runningChild("continuation", { activeRunIds: ["continuation-run"] });

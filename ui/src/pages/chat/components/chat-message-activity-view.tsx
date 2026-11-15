@@ -2,14 +2,10 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
-import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
-import {
-  isStandaloneToolMessageForDisplay,
-  normalizeMessage,
-} from "../../../lib/chat/message-normalizer.ts";
+import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
 import {
   readToolApprovalReviewOutcome,
@@ -17,15 +13,14 @@ import {
   resolveToolApprovalReviewOutcome,
 } from "../../../lib/chat/tool-approval-reviews.ts";
 import {
-  describeToolGroup,
   summarizeToolGroup,
   readPreparedActivity,
+  describeToolGroup,
 } from "../../../lib/chat/tool-call-grouping.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
-import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { activityEntryGroupKey, isInlineCommandCard } from "../chat-activity-segments.ts";
 import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
@@ -33,108 +28,67 @@ import {
   ChatActivityHeadline,
   createActivityHeadlinePresentation,
 } from "./chat-activity-headline.solid.tsx";
+import { descendantCards } from "./chat-activity-operations.ts";
 import {
-  ActivityOperation,
-  PreparedActivityRow,
-  descendantCards,
-  isStandaloneActivity,
-  projectActivityOperations,
-} from "./chat-message-activity-operation.tsx";
+  segmentActivityGroup,
+  collectActivityGroup,
+  type ActivityGroupData,
+} from "./chat-activity-projection.ts";
+import { ActivityOperation, PreparedActivityRow } from "./chat-message-activity-operation.tsx";
 import type {
-  ActivityOperationGroup,
   ActivityOperationProps,
+  ActivityOperationGroup,
 } from "./chat-message-bubble-options.ts";
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
-export function prepareActivityGroup(
+function prepareActivityGroup(
   groups: readonly MessageGroupData[],
   opts: NativeMessageGroupOptions,
   source?: {
-    rootGroups: ReadonlyMap<ToolCard, ActivityOperationGroup>;
+    data: ActivityGroupData;
+    cardGroups: ActivityOperationGroup[];
     toolCardOverrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
     currentRunActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
     activeGroup: boolean;
-    visibleActivity?: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
-    key?: string;
+    visibleActivity: ReadonlySet<ReturnType<typeof readPreparedActivity>[number]>;
+    key: string;
   },
 ) {
-  const firstGroup = groups[0];
-  if (!firstGroup || opts.showToolCalls === false) {
+  const data = source?.data ?? collectActivityGroup(groups, opts);
+  if (!data) {
     return undefined;
   }
-  const entries = groups.flatMap((group) => group.messages);
-  const cards: ToolCard[] = [];
-  const toolContexts = new Map<ToolCard, { messageKey: string; disclosureId: string }>();
-  const preparedByCard = new Map<ToolCard, ReturnType<typeof readPreparedActivity>[number]>();
-  const currentRunActivity = new Set<ReturnType<typeof readPreparedActivity>[number]>();
-  const preparedByCall = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
-  const cardRuns = new Map<ToolCard, string | undefined>();
-  const suppressedCards = new Set<ToolCard>();
-  const activityKeys = new Map<ReturnType<typeof readPreparedActivity>[number], string>();
-  const activity = entries.flatMap((entry) => {
-    const prepared = readPreparedActivity(entry.message);
-    if (
-      !source &&
-      opts.runActive &&
-      opts.activityRunId &&
-      (opts.activityGroupKey === undefined ||
-        groups.some((group) => group.key === opts.activityGroupKey)) &&
-      transcriptRunId(entry.message) === opts.activityRunId
-    ) {
-      prepared.forEach((item) => currentRunActivity.add(item));
-    }
-    const runId = transcriptRunId(entry.message);
-    const localPrepared = new Map(prepared.map((item) => [item.toolCallId, item]));
-    for (const item of prepared) {
-      activityKeys.set(item, JSON.stringify([runId ?? entry.key, item.toolCallId ?? item.itemId]));
-      if (item.toolCallId) {
-        preparedByCall.set(JSON.stringify([runId, item.toolCallId]), item);
+  const { firstGroup, entries, toolContexts, activityKeys, activity, representedActivity } = data;
+  const cardGroups = source?.cardGroups ?? data.cardGroups;
+  const selectedCards = new Set<ToolCard>();
+  if (source) {
+    const pending = [...cardGroups];
+    for (const group of pending) {
+      selectedCards.add(group.card);
+      for (const card of group.executionCards ?? []) {
+        selectedCards.add(card);
       }
-    }
-    for (const [index, card] of extractToolCardsCached(entry.message).entries()) {
-      cards.push(card);
-      toolContexts.set(card, {
-        messageKey: entry.key,
-        disclosureId: `${entry.key}:toolcard:${index}`,
-      });
-      cardRuns.set(card, card.runId ?? runId);
-      const local = card.callId ? localPrepared.get(card.callId) : undefined;
-      if (local) {
-        preparedByCard.set(card, local);
-      } else if (Array.isArray(asNullableRecord(entry.message)?.activity)) {
-        suppressedCards.add(card);
-      }
-    }
-    return prepared;
-  });
-  for (const card of cards) {
-    const item = card.callId
-      ? preparedByCall.get(JSON.stringify([cardRuns.get(card), card.callId]))
-      : undefined;
-    if (item) {
-      preparedByCard.set(card, item);
+      pending.push(...group.children);
     }
   }
-  const projection = source
-    ? undefined
-    : projectActivityOperations(groupToolCalls(cards), preparedByCard, suppressedCards);
-  const hiddenActivity = new Set(
-    [...(projection?.hidden ?? [])].flatMap((card) => {
-      const item = preparedByCard.get(card);
-      return item && item.status !== "failed" && item.status !== "blocked" ? [item] : [];
-    }),
-  );
-  const visibleActivity = activity.filter(
-    (item) =>
-      (!source?.visibleActivity || source.visibleActivity.has(item)) &&
-      !hiddenActivity.has(item) &&
-      !item.hideFromChannelProgress &&
-      !item.suppressChannelProgress,
-  );
+  const cards = source ? [...selectedCards] : data.cards;
+  const preparedByCard = source
+    ? new Map(
+        cards.flatMap((card) => {
+          const item = data.preparedByCard.get(card);
+          return item ? [[card, item] as const] : [];
+        }),
+      )
+    : data.preparedByCard;
+  const visibleActivity = source
+    ? [...source.visibleActivity]
+        .filter((item) => !item.hideFromChannelProgress && !item.suppressChannelProgress)
+        .toSorted((left, right) => data.activityOrder.get(left)! - data.activityOrder.get(right)!)
+    : data.visibleActivity;
   // Segments have unique disclosure keys; the original group owns run membership.
-  const activeRunActivity = source?.currentRunActivity ?? currentRunActivity;
+  const activeRunActivity = source?.currentRunActivity ?? data.currentRunActivity;
   const currentActivity = [
     ...new Map(
       visibleActivity
@@ -142,14 +96,6 @@ export function prepareActivityGroup(
         .map((item) => [activityKeys.get(item)!, item]),
     ).values(),
   ];
-  const cardGroups = source
-    ? cards.flatMap((card) => {
-        const root = source.rootGroups.get(card);
-        return root ? [root] : [];
-      })
-    : projection!.groups;
-  const order = new Map(cards.map((card, index) => [card, index]));
-  cardGroups.sort((left, right) => order.get(left.card)! - order.get(right.card)!);
   const headline = selectActivityHeadline(
     currentActivity,
     preparedByCard,
@@ -183,7 +129,10 @@ export function prepareActivityGroup(
         };
         activityKeys.set(
           item,
-          JSON.stringify([cardRuns.get(card), card.callId ?? toolContexts.get(card)!.disclosureId]),
+          JSON.stringify([
+            toolContexts.get(card)!.runId,
+            card.callId ?? toolContexts.get(card)!.disclosureId,
+          ]),
         );
         summaryByCard.set(card, item);
         return item;
@@ -258,7 +207,6 @@ export function prepareActivityGroup(
     codeExecutions,
     continuingExecutions,
   });
-  const toolCardOverrides = new Map<ToolCard, ActivityOperationProps | null>();
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {
     const outcome = readToolApprovalReviewOutcome(card.details);
@@ -298,24 +246,9 @@ export function prepareActivityGroup(
         visibleCalls.size === 1 &&
         (stepActivity?.status === "completed" || stepActivity?.status === "failed") &&
         visibleCalls.has(stepActivity.toolCallId ?? stepActivity.itemId)));
-  for (const card of projection?.hidden ?? []) {
-    toolCardOverrides.set(card, null);
-  }
-  if (!source) {
-    for (const group of cardGroups) {
-      for (const card of descendantCards(group)) {
-        toolCardOverrides.set(card, null);
-      }
-      if (group.children.length > 0 || group.executionCards?.length) {
-        toolCardOverrides.set(group.card, { group, options: opts, contexts: toolContexts });
-      }
-    }
-  }
 
-  const representedActivity = new Set(
-    [...preparedByCard.values()].map((item) => activityKeys.get(item)),
-  );
   return {
+    data,
     firstGroup,
     toolContexts,
     preparedByCard,
@@ -349,13 +282,13 @@ export function prepareActivityGroup(
     activityExpanded,
     activeGroup,
     soleStep,
-    toolCardOverrides: source?.toolCardOverrides ?? toolCardOverrides,
+    toolCardOverrides: source?.toolCardOverrides ?? data.toolCardOverrides,
     cardGroups,
     currentRunActivity: activeRunActivity,
   };
 }
 
-export type ActivityState = NonNullable<ReturnType<typeof prepareActivityGroup>>;
+type ActivityState = NonNullable<ReturnType<typeof prepareActivityGroup>>;
 type ActivityEntries = (
   overrides: () => ReadonlyMap<ToolCard, ActivityOperationProps | null>,
   groups: () => readonly MessageGroupData[],
@@ -470,139 +403,8 @@ export type ActivityGroupContentProps = {
   renderEntries: ActivityEntries;
 };
 
-type ActivityEntry = { key: string } & (
-  | { operation: ActivityOperationProps; activity?: never; message?: never }
-  | {
-      activity: ReturnType<typeof readPreparedActivity>[number];
-      operation?: never;
-      message?: never;
-    }
-  | {
-      message: {
-        group: MessageGroupData;
-        overrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
-        operations: ActivityOperationGroup[];
-      };
-      operation?: never;
-      activity?: never;
-    }
-);
-
 function ActivityOperationSegments(props: ActivityGroupContentProps & { state: ActivityState }) {
-  const segments = createMemo(() => {
-    // Keyed entries can still render the previous snapshot while their parent updates.
-    // Operations and their object-keyed maps belong to the same projection.
-    const context = { state: props.state, groups: props.groups, options: props.options };
-    const result: Array<{
-      key: string;
-      standalone: boolean;
-      inline?: boolean;
-      entries: ActivityEntry[];
-      context: typeof context;
-    }> = [];
-    const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
-      const previous = result.at(-1);
-      if (!standalone && previous && !previous.standalone && previous.inline === inline) {
-        previous.entries.push(item);
-      } else {
-        result.push({ key, context, standalone, inline, entries: [item] });
-      }
-    };
-    const byMessage = new Map<string, ActivityOperationGroup[]>();
-    for (const operation of context.state.cardGroups) {
-      const key = context.state.toolContexts.get(operation.card)!.messageKey;
-      const operations = byMessage.get(key) ?? [];
-      operations.push(operation);
-      byMessage.set(key, operations);
-    }
-    const unmatched = new Set(context.state.unmatchedActivity);
-    for (const group of context.groups) {
-      for (const entry of group.messages) {
-        const operations = byMessage.get(entry.key) ?? [];
-        // A mixed command/edit envelope keeps its native inline presentation.
-        const inline =
-          Boolean(context.options.inlineCommands) &&
-          operations.some((operation) => isInlineCommandCard(operation.card));
-        const nativeMessage =
-          operations.length > 0 && isStandaloneToolMessageForDisplay(entry.message);
-        if (nativeMessage) {
-          const standalone = operations.some((operation) => isStandaloneActivity(operation.card));
-          append(
-            {
-              key: entry.key,
-              message: {
-                group: { ...group, messages: [entry] },
-                overrides: context.state.toolCardOverrides,
-                operations,
-              },
-            },
-            standalone,
-            inline,
-            standalone ? entry.key : activityEntryGroupKey(group, entry),
-          );
-        } else {
-          for (const [index, operation] of operations.entries()) {
-            const standalone = isStandaloneActivity(operation.card);
-            const key = context.state.toolContexts.get(operation.card)!.disclosureId;
-            append(
-              {
-                key,
-                operation: {
-                  group: operation,
-                  options: context.options,
-                  contexts: context.state.toolContexts,
-                },
-              },
-              standalone,
-              inline,
-              standalone || index > 0 ? key : activityEntryGroupKey(group, entry),
-            );
-          }
-        }
-        for (const activity of readPreparedActivity(entry.message).filter((item) =>
-          unmatched.has(item),
-        )) {
-          append(
-            { key: context.state.activityKeys.get(activity)!, activity },
-            false,
-            false,
-            `${entry.key}:activity`,
-          );
-        }
-        const visibleContent = nativeMessage
-          ? null
-          : resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message));
-        if (
-          !nativeMessage &&
-          (visibleContent === "non-text" ||
-            (visibleContent === "text" && !isStandaloneToolMessageForDisplay(entry.message)))
-        ) {
-          result.push({
-            key: `${entry.key}:output`,
-            context,
-            standalone: true,
-            entries: [
-              {
-                key: `${entry.key}:output`,
-                message: {
-                  group: { ...group, messages: [entry] },
-                  overrides: new Map(
-                    [...context.state.toolContexts.keys()].map((card) => [card, null]),
-                  ),
-                  operations: [],
-                },
-              },
-            ],
-          });
-        }
-      }
-    }
-    // Appending a lifecycle card must not close the activity the reader already opened.
-    if (result[0] && !result[0].standalone) {
-      result[0].key = context.state.firstGroup.key;
-    }
-    return result;
-  });
+  const segments = createMemo(() => segmentActivityGroup(props.groups, props.options, props.state));
 
   return (
     <>
@@ -624,7 +426,8 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
               ),
             ]);
             return prepareActivityGroup(context.groups, context.options, {
-              rootGroups: new Map(operations.map((operation) => [operation.card, operation])),
+              data: context.state.data,
+              cardGroups: operations,
               toolCardOverrides: context.state.toolCardOverrides,
               currentRunActivity: isTail() ? context.state.currentRunActivity : new Set(),
               activeGroup: isTail() && context.state.activeGroup,
