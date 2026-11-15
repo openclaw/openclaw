@@ -32,11 +32,10 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildZaloNameIndex } from "./directory-index.js";
+import { buildZaloNameIndex, normalizeZaloNameKey } from "./directory-index.js";
 import {
   buildZalouserGroupCandidates,
   findZalouserGroupEntry,
@@ -133,7 +132,7 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
             additions.push(entry);
             continue;
           }
-          const matches = byName.get(normalizeLowercaseStringOrEmpty(entry)) ?? [];
+          const matches = byName.get(normalizeZaloNameKey(entry)) ?? [];
           const match = matches[0];
           const id = match?.userId;
           if (id) {
@@ -160,7 +159,7 @@ export async function monitorZalouserProvider(options: ZalouserMonitorOptions) {
         const cleaned = normalizeZalouserAllowEntry(entry);
         const id = /^\d+$/.test(cleaned)
           ? cleaned
-          : byName.get(normalizeLowercaseStringOrEmpty(cleaned))?.[0]?.groupId;
+          : byName.get(normalizeZaloNameKey(cleaned))?.[0]?.groupId;
         if (!id) {
           unresolved.push(entry);
           continue;
