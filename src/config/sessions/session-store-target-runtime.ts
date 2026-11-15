@@ -39,6 +39,8 @@ export function prepareSessionStoreTargetInventoryRead(
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
   registeredDatabases?: SessionStoreRegistryRead,
   registry = prepareOpenClawAgentDatabaseRegistrySnapshotRead({ env: request.env }, unchangedBy),
+  /** Access checks use the worker pool's reserved class-0 lane. */
+  pointRead?: true,
 ) {
   const { candidates, ...prepared } = request;
   // Security-scoped inventories can supply a stricter witness. Ordinary discovery
@@ -83,6 +85,7 @@ export function prepareSessionStoreTargetInventoryRead(
         },
         sessionStoreLane,
         signal,
+        pointRead,
       );
     },
   };
@@ -95,6 +98,7 @@ export async function withSessionStoreTarget<T>(
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
   signal?: AbortSignal,
   lane: SessionHistoryWorkerLane = sessionStoreLane,
+  pointRead?: true,
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = {
@@ -142,19 +146,23 @@ export async function withSessionStoreTarget<T>(
           assertCurrent();
         },
         async revalidateTarget() {
-          await prepareSessionStoreCandidatesInWorker({
-            validate: {
-              readCustody: [{ sourcePath: target.sourcePath, candidates }],
-              candidates: [],
-              sources: [],
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              validate: {
+                readCustody: [{ sourcePath: target.sourcePath, candidates }],
+                candidates: [],
+                sources: [],
+              },
             },
-          });
+            pointRead,
+          );
           assertCurrent();
         },
       });
     },
     lane,
     signal,
+    pointRead,
   );
 }
 
@@ -164,6 +172,7 @@ export async function prepareSessionStoreReaderCandidates(
   options: {
     inspection: boolean;
     allowDirect: boolean;
+    pointRead?: true;
     preparedSource?: SessionStoreWorkerReadScope["preparedSource"];
   },
 ) {
@@ -196,10 +205,13 @@ export async function prepareSessionStoreReaderCandidates(
           },
         ]
       : (
-          await prepareSessionStoreCandidatesInWorker({
-            storePath,
-            ...(!options.inspection ? { captureIdentity: false as const } : {}),
-          })
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              storePath,
+              ...(!options.inspection ? { captureIdentity: false as const } : {}),
+            },
+            options.pointRead,
+          )
         ).candidates;
   const direct =
     !options.inspection && options.allowDirect && target.agentId

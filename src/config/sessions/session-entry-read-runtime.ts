@@ -96,8 +96,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
 ): Promise<T> {
   const memory = captureMemoryExactSessionReader(input, assertCallerCurrent);
   if (memory) {
-    const entry = memory.read(input.sessionKey, input.projection);
-    return consume(ok(entry), {
+    return consume(ok(memory.read(input.sessionKey, input.projection)), {
       kind: "incognito",
       assertCurrent: () => memory.assertCurrent(),
       source: memory.source,
@@ -329,9 +328,12 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     custody.length > 0
       ? async () => {
           await prepareCaller?.();
-          await prepareSessionStoreCandidatesInWorker({
-            validate: { readCustody: custody, candidates: [], sources: [] },
-          });
+          await prepareSessionStoreCandidatesInWorker(
+            {
+              validate: { readCustody: custody, candidates: [], sources: [] },
+            },
+            capturedInputs.every((input) => input.pointRead) ? true : undefined,
+          );
         }
       : prepareCaller;
   const originalInputs = [...inputs];
@@ -559,6 +561,7 @@ export async function withSessionStoreReaderInWorker<T>(
       inspection,
       preparedSource,
       allowDirect: !preparedSource && !logical,
+      pointRead: input.pointRead,
     });
     preparedSource?.assertCurrent();
     logical?.assertCurrent?.();
@@ -707,6 +710,9 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
+        undefined,
+        undefined,
+        input.pointRead,
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

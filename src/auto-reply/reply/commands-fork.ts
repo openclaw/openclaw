@@ -224,6 +224,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
         sessionKey: parentKey,
         sessionId: parent.sessionId,
         lifecycleRevision: parent.lifecycleRevision ?? null,
+        exactTranscript: true,
       });
       assertCurrent();
       const commandId = scopeCommandTranscriptId(

@@ -364,11 +364,14 @@ export async function prepareSessionMutationFacts(
         }),
       );
     }
-    const preparedInventory = await prepareSessionStoreCandidatesInWorker({
-      config: environment.config,
-      agentIds,
-      env: environment.serialized,
-    });
+    const preparedInventory = await prepareSessionStoreCandidatesInWorker(
+      {
+        config: environment.config,
+        agentIds,
+        env: environment.serialized,
+      },
+      true,
+    );
     assertActive();
     assertRoutingCurrent(params.cfg);
     const discoveryInventory = {
@@ -454,11 +457,14 @@ export async function prepareSessionMutationFacts(
       const refreshed =
         inspection && missingCandidates.length > 0
           ? (
-              await prepareSessionStoreCandidatesInWorker({
-                config: environment.config,
-                agentIds,
-                env: environment.serialized,
-              })
+              await prepareSessionStoreCandidatesInWorker(
+                {
+                  config: environment.config,
+                  agentIds,
+                  env: environment.serialized,
+                },
+                true,
+              )
             ).candidates
           : undefined;
       for (const captured of missingCandidates) {
@@ -503,6 +509,7 @@ export async function prepareSessionMutationFacts(
       registryFilter,
       undefined,
       registry,
+      true,
     );
     followRegistration = inventoryRead.followRegistration;
     assertRegistryPublication = inventoryRead.assertRegistryCurrent;

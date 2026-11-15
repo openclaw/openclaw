@@ -387,8 +387,11 @@ export type SessionHistoryWorkerRequestRunner = <
   receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  timeoutMs?: number,
+  options?: SessionHistoryWorkerRequestOptions,
 ) => Promise<TResult>;
+
+/** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
+export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
 
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;

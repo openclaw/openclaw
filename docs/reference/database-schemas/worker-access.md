@@ -134,6 +134,11 @@ synchronous deletion, even when several retained generations need a new owner.
 Those reference lists expire with the deletion; direct current-generation matches
 and the first matching successor in session-key order retain their existing behavior.
 
+Empty-transcript lifecycle deletion prepares retained-window successors before
+opening its write transaction. The commit checks the existing database revision
+before using those request-local facts; intervening writes require a fresh scan.
+Surviving reference rows protect retained history and are not deletion candidates.
+
 Refused ordered session reads include the conflicting admission's shortened,
 bounded database path, operation, thread, age, and any recorded caller or worker
 operation labels in the error itself. They never include request payloads.

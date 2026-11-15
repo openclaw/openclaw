@@ -18,6 +18,8 @@ export type SessionStoreWorkerReadScope = {
   storePath: string;
   env?: NodeJS.ProcessEnv;
   readCustody?: readonly SessionStoreReadCustody[];
+  /** Access checks use the worker pool's reserved class-0 lane. */
+  pointRead?: true;
   /** Borrow physical selection from its live owner; rows still come from a fresh read. */
   preparedSource?: CapturedSessionEntryReadSource & {
     databaseIdentity: string;

@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canonicalPluginTabLocation,
-  INTERNAL_PLUGIN_PATH_PARAM,
   pluginTabLocation,
   pluginSlugCandidate,
   pluginTabSlugFromPath,
@@ -26,7 +25,7 @@ describe("plugin tab addresses", () => {
     expect(pluginTabSlugFromPath("/ui/reports/nested", "/ui")).toBeNull();
     expect(pluginTabRefFromSearch("?p.range=week", "/ui/reports", "/ui")).toEqual(ref);
     expect(
-      pluginTabRefFromSearch(`?${INTERNAL_PLUGIN_PATH_PARAM}=%2Fui%2Freports`, "/ui/plugin", "/ui"),
+      pluginTabRefFromSearch("?__openclawPluginPath=%2Fui%2Freports", "/ui/plugin", "/ui"),
     ).toEqual(ref);
     setPluginTabSlugs([]);
     expect(routeIdFromPath("/ui/reports", "/ui")).toBeNull();
