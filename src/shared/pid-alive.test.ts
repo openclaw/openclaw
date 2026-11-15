@@ -253,7 +253,9 @@ describe("native process identity policy", () => {
     const { settleCommandProcessGroups } = await import("../process/command-process-custody.js");
     const groups = await import("../process/child-process-tree.js");
     const termination = await import("../process/kill-tree.js");
-    vi.spyOn(groups, "isChildProcessTreeAlive").mockReturnValueOnce(true).mockReturnValue(false);
+    vi.spyOn(groups, "isChildProcessTreeAliveAsync")
+      .mockResolvedValueOnce(true)
+      .mockResolvedValue(false);
     const kill = vi.spyOn(termination, "killProcessTree").mockReturnValue(undefined);
     const pid = process.pid + 1;
     const startedAt = getProcessInstanceStartTime(pid);

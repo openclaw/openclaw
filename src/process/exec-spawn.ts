@@ -185,11 +185,11 @@ export const COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS = 10_000;
 /** The single owner for confirming that a force-killed command group is gone. */
 export async function waitForCommandProcessGroupExit(
   pid: number,
-  isOriginalProcess: () => boolean,
+  isOriginalProcess: () => boolean | Promise<boolean>,
 ): Promise<"exited" | "replaced" | "alive"> {
   const deadline = performance.now() + COMMAND_PROCESS_GROUP_EXIT_CONFIRMATION_MS;
   while (await isChildProcessTreeAliveAsync({ pid })) {
-    if (!isOriginalProcess()) {
+    if (!(await isOriginalProcess())) {
       return "replaced";
     }
     const remaining = deadline - performance.now();
