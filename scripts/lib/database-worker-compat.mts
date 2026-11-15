@@ -835,6 +835,7 @@ export function inspectDatabaseWorkerBoundaries(
       pending.push(operation);
     }
   }
+  session.checkpoint?.("closure-expansion");
   const aliases: [string, string][] = [];
   const namespaces: (ts.Identifier | ts.StringLiteral)[] = [];
   const bindings: ts.VariableDeclaration[] = [];
@@ -960,6 +961,7 @@ export function inspectDatabaseWorkerBoundaries(
       handledImports.add(dynamicImport);
     }
   }
+  session.checkpoint?.("binding-forwarding");
   const edges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const callerEdges = new Map<BoundaryOperation, Set<BoundaryOperation>>();
   const runtimeReferences = new Set<BoundaryOperation>();
@@ -1015,6 +1017,7 @@ export function inspectDatabaseWorkerBoundaries(
         ts.isStringLiteral(expression.parent.argumentExpression))
     );
   };
+  const bindingMembers = new Map<ts.Node, Symbol>();
   const sourceReferences = sources.map(({ file, source }) => {
     const references: ts.Node[] = [];
     const visit = (node: ts.Node) => {
@@ -1053,16 +1056,8 @@ export function inspectDatabaseWorkerBoundaries(
       node.forEachChild(visit);
     };
     source.forEachChild(visit);
-    return { file, source, references };
-  });
-  // Reference discovery is independent across files in this immutable snapshot.
-  // Resolve the full batch before classifying callers instead of one RPC per file.
-  symbolsAt(sourceReferences.flatMap(({ references }) => references));
-  for (const { file, source, references } of sourceReferences) {
-    const symbols = symbolsAt(references);
-    const pendingAccesses = new Set<ts.Expression>();
-    const receiverBindings = new Map<ts.Node, ts.ObjectBindingPattern>();
-    for (const [index, node] of references.entries()) {
+    const receiverBindings = new Map<ts.Identifier, ts.ObjectBindingPattern>();
+    for (const node of references) {
       if (
         ts.isIdentifier(node) &&
         ts.isBindingElement(node.parent) &&
@@ -1072,7 +1067,38 @@ export function inspectDatabaseWorkerBoundaries(
       ) {
         receiverBindings.set(node, node.parent.parent);
       }
-      if (symbols[index]) {
+    }
+    // Members of one destructuring share a receiver type; query each pattern once.
+    const patterns = [...new Set(receiverBindings.values())];
+    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
+    const bindingTypes = new Map(
+      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
+    );
+    for (const [node, pattern] of receiverBindings) {
+      const member = bindingTypes.get(pattern)!.getProperty(node.text);
+      if (member) {
+        bindingMembers.set(node, member);
+      }
+    }
+    return { file, source, references };
+  });
+  // Reference discovery is independent across files in this immutable snapshot.
+  // Resolved receiver members do not need the raw binding symbol.
+  // Shorthand properties use their value-symbol query during caller classification.
+  symbolsAt(
+    sourceReferences.flatMap(({ references }) =>
+      references.filter(
+        (node) => !bindingMembers.has(node) && !ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ),
+  );
+  session.checkpoint?.("reference-prefetch");
+  // Pack immutable fallback lookups across files without retaining another full inventory.
+  const accessBatch: ts.Expression[] = [];
+  for (const { references } of sourceReferences) {
+    const pendingAccesses = new Set<ts.Expression>();
+    for (const node of references) {
+      if (compilerSymbols.get(node)) {
         continue;
       }
       const parent = node.parent;
@@ -1084,6 +1110,13 @@ export function inspectDatabaseWorkerBoundaries(
             : undefined;
       while (receiver && !pendingAccesses.has(receiver)) {
         pendingAccesses.add(receiver);
+        if (!compilerSymbols.has(receiver)) {
+          accessBatch.push(receiver);
+          if (accessBatch.length === 256) {
+            symbolsAt(accessBatch);
+            accessBatch.length = 0;
+          }
+        }
         receiver =
           ts.isAwaitExpression(receiver) ||
           ts.isParenthesizedExpression(receiver) ||
@@ -1095,23 +1128,13 @@ export function inspectDatabaseWorkerBoundaries(
               : undefined;
       }
     }
-    // Query the same receiver nodes as the fallback, without a round trip per access.
-    const accessLocations = [...pendingAccesses];
-    symbolsAt(accessLocations);
-    // Members of one destructuring share a receiver type; query each pattern once.
-    const patterns = [...new Set(receiverBindings.values())];
-    const receiverTypes = patterns.length ? checker.getTypeAtLocation(patterns) : [];
-    const bindingTypes = new Map(
-      patterns.map((pattern, index) => [pattern, receiverTypes[index]!]),
-    );
+  }
+  symbolsAt(accessBatch);
+  for (const { file, source, references } of sourceReferences) {
+    const symbols = references.map((node) => compilerSymbols.get(node));
     for (const [index, node] of references.entries()) {
-      const pattern = receiverBindings.get(node);
-      const bindingMember =
-        pattern && ts.isIdentifier(node)
-          ? bindingTypes.get(pattern)!.getProperty(node.text)
-          : undefined;
       let symbol = resolveSymbol(
-        bindingMember ??
+        bindingMembers.get(node) ??
           (ts.isShorthandPropertyAssignment(node.parent)
             ? checker.getShorthandAssignmentValueSymbol(node.parent)
             : symbols[index]),
@@ -1242,6 +1265,7 @@ export function inspectDatabaseWorkerBoundaries(
       }
     }
   }
+  session.checkpoint?.("caller-classification");
   const compatibilityReachable = new Set(
     [...registered.values()].filter((operation) => operation.reviewed && !operation.candidate),
   );

@@ -15,6 +15,7 @@ import {
   createPublicationSourceFact,
   normalizePublicationIntent,
   publicationSourceJson,
+  validatePublicationVersionSelection,
 } from "./full-release-publication-contract.mjs";
 import {
   assertPluginReleaseVersionFloors,
@@ -25,11 +26,7 @@ import {
 import { collectExtensionPackageJsonCandidates } from "./lib/plugin-publication-candidates.ts";
 import { collectPublishablePluginPackagesFromCandidates } from "./lib/plugin-publication-collector.ts";
 import { publicationSourceToolingPaths as toolingPaths } from "./lib/publication-source-paths.mjs";
-import {
-  classifyReleaseTrain,
-  parsePinnedReleaseVersion,
-  parseReleaseVersion,
-} from "./lib/release-version.mjs";
+import { classifyReleaseTrain, parsePinnedReleaseVersion } from "./lib/release-version.mjs";
 import { produceVerifiedReleaseInventory } from "./release-plan-producer.mts";
 
 const executionRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -175,33 +172,9 @@ function projectSource(
   if (!selection) {
     throw new Error("publication source selection required");
   }
-  const parsed = parseReleaseVersion(plan.version);
-  if (!parsed) {
-    throw new Error("invalid publication source version");
-  }
-  if (parsed.channel === "alpha") {
-    throw new Error("Alpha releases are retired; use a beta prerelease instead.");
-  }
+  const parsed = validatePublicationVersionSelection(plan.version, selection);
   const train = classifyReleaseTrain(parsed);
-  if (train === "unsupported-extended-stable-correction") {
-    throw new Error("unsupported extended-stable correction");
-  }
   const extended = selection.route === "extended-stable";
-  const allowedTags =
-    train === "stable"
-      ? ["beta", "latest"]
-      : train === "extended-stable"
-        ? ["extended-stable"]
-        : [parsed.channel];
-  if (!allowedTags.includes(selection.npmDistTag) || (train === "extended-stable") !== extended) {
-    throw new Error("publication selection does not match the committed release version");
-  }
-  if (selection.route === "prepared" && !["beta", "stable"].includes(train)) {
-    throw new Error("prepared publication requires a regular beta/stable candidate");
-  }
-  if (selection.windowsNodeTag && train !== "stable") {
-    throw new Error("Windows assets require a stable publication");
-  }
   const mode = parsePluginReleaseSelectionMode(selection.pluginPublishScope);
   const names = parsePluginReleaseSelection(selection.plugins.join(","));
   if ((mode === "selected") !== names.length > 0) {

@@ -488,7 +488,16 @@ describe("backupVerifyCommand", () => {
       `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. path is required. Choose another archive or create a new one with \`openclaw backup create\`.`,
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(runtime.log).not.toHaveBeenCalled();
+    const progress = runtime.log.mock.calls.map(([line]) => {
+      if (typeof line !== "string") {
+        throw new Error("Backup progress must be a string");
+      }
+      return line;
+    });
+    expect(progress).toHaveLength(4);
+    expect(progress.every((line) => line.startsWith("Backup progress: "))).toBe(true);
+    expect(progress.some((line) => line.includes("phase=summary"))).toBe(true);
+    expect(progress.join("\n")).not.toContain(archivePath);
   });
 
   it("verifies the declared agent owner beneath a standalone agent asset", async () => {

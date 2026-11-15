@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import { release, version } from "node:os";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 let wslCached: boolean | null = null;
@@ -15,8 +15,8 @@ export function isWSL2Sync(): boolean {
     return false;
   }
   try {
-    const version = normalizeLowercaseStringOrEmpty(readFileSync("/proc/version", "utf8"));
-    return version.includes("wsl2") || version.includes("microsoft-standard");
+    const kernel = normalizeLowercaseStringOrEmpty(`${release()} ${version()}`);
+    return kernel.includes("wsl2") || kernel.includes("microsoft-standard");
   } catch {
     return false;
   }
@@ -32,10 +32,10 @@ export async function isWSL(): Promise<boolean> {
     detected = isWSLEnv();
     if (!detected) {
       try {
-        const release = normalizeLowercaseStringOrEmpty(
+        const kernelRelease = normalizeLowercaseStringOrEmpty(
           await fs.readFile("/proc/sys/kernel/osrelease", "utf8"),
         );
-        detected = release.includes("microsoft") || release.includes("wsl");
+        detected = kernelRelease.includes("microsoft") || kernelRelease.includes("wsl");
       } catch {
         // Missing release information leaves the environment undetected.
       }

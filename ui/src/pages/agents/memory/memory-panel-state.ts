@@ -478,11 +478,14 @@ export function createAgentMemory(
 
   function read() {
     const configState = context.runtimeConfig.state;
-    const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
+    const configObject = currentConfigObject(configState);
+    const configuredDreaming = resolveConfiguredDreaming(configObject);
     // The status RPC can complete after config switches the engine Off. Keep the
     // cached payload for a future refresh, but never present it as current runtime state.
     const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
-    const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    // Defaults apply to an accepted config, not an unavailable or stale snapshot.
+    const dreamingOn =
+      dreamingStatus?.enabled ?? (configObject !== null && configuredDreaming.enabled);
     const owner = resolveDreamingOwner({
       status: dreamingStatus,
       pluginId: configuredDreaming.pluginId,
@@ -687,10 +690,12 @@ export function createAgentMemory(
   };
   const statusDataRead = createMemo(() => {
     config.read();
-    const status = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
+    const result = resolveConfiguredDreaming(currentConfigObject(context.runtimeConfig.state))
       .engineOff
-      ? null
-      : resourceReads.dreamingStatus().value;
+      ? { value: null }
+      : resourceReads.dreamingStatus();
+    // Retain accepted status after refresh failures, not invented empty lists after a first failure.
+    const status = result.value ?? readResource(result);
     return {
       shortTermCount: status?.shortTermCount ?? 0,
       promotedCount: statusPromotedCount(status ?? null),

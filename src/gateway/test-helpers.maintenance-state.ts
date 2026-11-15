@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import { WorktreeGcProgress } from "../agents/worktrees/gc-progress.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as hostIoPressure from "../infra/host-io-pressure.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createSnapshotManager } from "./channel-health-monitor.test-support.js";
 import type { HealthSummary } from "./health/types.js";
@@ -23,7 +24,10 @@ export function createGatewayMaintenanceStateForTest(params?: {
   const chatRunState = createChatRunState();
   const worktreeGcResult = new WorktreeGcProgress().result;
   const worktreeGc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(worktreeGcResult);
+  // Fake-clock timer tests must not wait for real Linux kernel-counter IO.
+  vi.spyOn(hostIoPressure, "createHostIoPressureProbe").mockReturnValue(async () => false);
   // Timer fixtures keep worktree cleanup inventories out of shared-state workers.
+  vi.spyOn(managedWorktrees, "maintainGit").mockResolvedValue(undefined);
   vi.spyOn(localWorkspaceGc, "sweepLocalWorkspaceManifests").mockResolvedValue(undefined);
   vi.spyOn(scratchMaintenance, "prepareScratchMaintenanceTargets").mockResolvedValue({
     targets: [],

@@ -1,4 +1,4 @@
-import fsSync, { existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,9 +11,13 @@ import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = { existsSync: vi.fn(actual.existsSync) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
+const { existsSync: nativeExistsSync } = await vi.importActual<typeof import("node:fs")>("node:fs");
 
 const mocks = vi.hoisted(() => ({
   createGitBackup: vi.fn(),
@@ -97,7 +101,7 @@ describe("Git backup command agent selection", () => {
     const databasePath = resolveOpenClawStateSqlitePath();
     vi.mocked(existsSync)
       .mockReset()
-      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
+      .mockImplementation((value) => value === databasePath || nativeExistsSync(value));
     mocks.restoreGitBackupRef.mockReset().mockResolvedValue({
       commit: "backup-commit",
       excludedTables: [],

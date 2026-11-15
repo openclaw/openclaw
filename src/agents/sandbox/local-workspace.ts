@@ -26,6 +26,7 @@ import {
   getSandboxPersistentExecCapability,
 } from "./persistent-exec.types.js";
 import { acquireSandboxRuntimeUse } from "./registry-lifecycle.js";
+import type { SandboxStateOwnerPath } from "./state-owner-path.js";
 import type { SandboxConfig, SandboxContext } from "./types.js";
 
 export function assertLocalSandboxWorkspaceBackend(backend: SandboxConfig["backend"]) {
@@ -46,6 +47,7 @@ export async function prepareLocalSandboxWorkspace(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   assertHost?: () => void;
+  stateOwnerPath?: SandboxStateOwnerPath;
 }) {
   using phases = observeDiagnosticsTimelinePhases(
     "attempt.setup.sandbox.workspace_selection.owner",
@@ -89,11 +91,12 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
-  const checkpoint = () => checkpointLocalWorkspace(owner);
+  const checkpoint = (options?: { knownMutation?: true }) =>
+    checkpointLocalWorkspace(owner, options);
   try {
-    lifetime.use(
-      await acquireSandboxRuntimeUse({ workspaceDir: localWorkspaceProjectionPath(owner) }),
-    );
+    const projectionPath = await localWorkspaceProjectionPath(owner);
+    assertCurrent();
+    lifetime.use(await acquireSandboxRuntimeUse({ workspaceDir: projectionPath }));
     assertCurrent();
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);

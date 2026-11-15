@@ -111,7 +111,7 @@ describe("native login history owner at execution", () => {
     { provider: "google-gemini-cli", plugin: false },
     { provider: "claude-cli", plugin: true },
   ] as const)(
-    "keeps $provider catch-up private and out of fresh, foreign, and forked attempts (plugin=$plugin)",
+    "keeps $provider catch-up private and out of fresh, foreign, and forked attempts, which all get engine context (plugin=$plugin)",
     async ({ provider, plugin }) => {
       const prompts: string[] = [];
       const privateContexts: Array<CliBackendExecuteContext["promptContext"]> = [];
@@ -131,6 +131,7 @@ describe("native login history owner at execution", () => {
         },
       });
       context.resumeContext = "SAME_CONVERSATION_HANDOFF";
+      context.contextEngineSystemPromptAddition = "ENGINE_CONTEXT";
       context.openClawHistoryPrompt = "FRESH_REQUEST";
       context.reusableCliSession = { mode: "reuse", sessionId: "bound-native" };
       if (plugin) {
@@ -172,20 +173,21 @@ describe("native login history owner at execution", () => {
       context.params.claimCliSessionFork = async () => true;
       context.params.persistCliSessionForkSuccessor = async () => {};
       await executePreparedCliRun(context, "bound-native");
+      const engine = plugin ? "" : "ENGINE_CONTEXT\n\n";
       expect(prompts).toEqual([
-        plugin ? "CURRENT_REQUEST" : "SAME_CONVERSATION_HANDOFF\n\nCURRENT_REQUEST",
-        "FRESH_REQUEST",
-        "CURRENT_REQUEST",
-        "CURRENT_REQUEST",
+        plugin ? "CURRENT_REQUEST" : `${engine}SAME_CONVERSATION_HANDOFF\n\nCURRENT_REQUEST`,
+        `${engine}FRESH_REQUEST`,
+        `${engine}CURRENT_REQUEST`,
+        `${engine}CURRENT_REQUEST`,
       ]);
       if (plugin) {
         expect(privateContexts).toEqual([
           {
-            prependContext: "PRIVATE_CONTEXT\n\nSAME_CONVERSATION_HANDOFF",
+            prependContext: "ENGINE_CONTEXT\n\nPRIVATE_CONTEXT\n\nSAME_CONVERSATION_HANDOFF",
             appendContext: "PRIVATE_TAIL",
           },
           ...Array.from({ length: 3 }, () => ({
-            prependContext: "PRIVATE_CONTEXT",
+            prependContext: "ENGINE_CONTEXT\n\nPRIVATE_CONTEXT",
             appendContext: "PRIVATE_TAIL",
           })),
         ]);

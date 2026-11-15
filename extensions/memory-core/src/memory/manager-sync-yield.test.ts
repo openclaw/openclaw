@@ -21,8 +21,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-sessions", async (importOri
   const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
     ...actual,
-    buildSessionEntry: buildSessionEntryMock,
-    buildSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
+    streamSessionEntry: buildSessionEntryMock,
+    streamSessionEntries: (inputs: Array<{ absPath: string; options?: unknown }>) =>
       Promise.all(inputs.map(({ absPath, options }) => buildSessionEntryMock(absPath, options))),
     isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
     isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
@@ -139,7 +139,9 @@ describe("session sync responsiveness", () => {
           mtimeMs: 1,
           size: 1,
           hash: `hash-${name}`,
-          content: `user message for ${name}`,
+          lineCount: 1,
+          lineOriginClasses: ["untrusted"],
+          sessionKind: "unknown",
         };
       });
       const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);

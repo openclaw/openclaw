@@ -262,6 +262,21 @@ function resolveManagedTailscaleIngress(params: {
   return { ...attributed("tailscale-serve", clientIp), verifyIdentity };
 }
 
+/** Proxy identity headers can disqualify locality without authenticating the caller. */
+export function hasGatewayProxyIdentityHeaders(
+  req: IncomingMessage,
+  trustedProxy?: Pick<GatewayTrustedProxyConfig, "userHeader" | "requiredHeaders">,
+): boolean {
+  return [
+    "cf-access-authenticated-user-email",
+    "cf-access-jwt-assertion",
+    "remote-user",
+    "x-remote-user",
+    trustedProxy?.userHeader,
+    ...(trustedProxy?.requiredHeaders ?? []),
+  ].some((name) => name && req.headers[name.trim().toLowerCase()] !== undefined);
+}
+
 function resolveGatewayIngressAttribution(params: {
   req: IncomingMessage;
   trustedProxies?: string[];
@@ -321,14 +336,7 @@ function resolveGatewayIngressAttribution(params: {
   // Header presence can deny locality, never establish it. Off, nothing changes.
   const hasIdentityHeaders =
     isOpenClawIdEnabled(getRuntimeConfigSnapshot()?.gateway?.openclawId) &&
-    [
-      "cf-access-authenticated-user-email",
-      "cf-access-jwt-assertion",
-      "remote-user",
-      "x-remote-user",
-      params.trustedProxy?.userHeader,
-      ...(params.trustedProxy?.requiredHeaders ?? []),
-    ].some((name) => name && req.headers[name.trim().toLowerCase()] !== undefined);
+    hasGatewayProxyIdentityHeaders(req, params.trustedProxy);
   if (
     isLoopbackAddress(remoteAddress) &&
     !hasProxyHeaders &&

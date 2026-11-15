@@ -13,7 +13,15 @@
 
 import MarkdownIt, { type MarkdownIt as MarkdownItParser } from "markdown-it";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { isMap, isScalar, LineCounter, parseDocument, stringify } from "yaml";
+import {
+  isCollection,
+  isMap,
+  isScalar,
+  LineCounter,
+  parseDocument,
+  stringify,
+  type Scalar,
+} from "yaml";
 import type { AstBlock, AstItem, FrontmatterEntry, MdAst } from "./ast.js";
 import { slugify } from "./slug.js";
 
@@ -80,7 +88,8 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
   const frontmatter = lines.slice(1, closeIndex);
   const lineCounter = new LineCounter();
   // Keep the final newline so YAML owns multiline folding and chomping.
-  const doc = parseDocument(frontmatter.join("\n") + "\n", {
+  const frontmatterSource = frontmatter.join("\n") + "\n";
+  const doc = parseDocument(frontmatterSource, {
     prettyErrors: false,
     lineCounter,
   });
@@ -97,11 +106,15 @@ function detectFrontmatter(lines: readonly string[]): FrontmatterRange | null {
         const capture = expectDefined(match[2], "frontmatter value capture").trim();
         entries.push({
           key: expectDefined(match[1], "frontmatter key capture"),
-          value:
-            isScalar(value) && typeof value.value === "string"
-              ? value.value
+          value: isScalar(value)
+            ? scalarText(value)
+            : isCollection(value) && value.flow && value.range
+              ? frontmatterSource
+                  .slice(key.range[1], value.range[1])
+                  .replace(/^\s*:\s*/, "")
+                  .trimEnd()
               : // capture is empty (block value starts below); out-of-scope anchors stay alias text
-                capture === "" && !isScalar(value)
+                capture === ""
                 ? stringify(value, { verifyAliasOrder: false }).trimEnd()
                 : unquote(capture),
           line: keyLine + 1,
@@ -138,7 +151,7 @@ function readIndentedValue(lines: readonly string[], keyIndex: number): string |
   const value =
     doc.errors.length === 0 && isMap(doc.contents) ? doc.contents.items[0]?.value : null;
   if (isScalar(value)) {
-    return typeof value.value === "string" ? value.value : "";
+    return scalarText(value);
   }
   // The reparsed slice cannot see anchors on sibling keys; keep alias text.
   return value === null || value === undefined
@@ -146,10 +159,20 @@ function readIndentedValue(lines: readonly string[], keyIndex: number): string |
     : stringify(value, { verifyAliasOrder: false }).trimEnd();
 }
 
+function scalarText(value: Scalar): string {
+  return typeof value.value === "string" ? value.value : (value.source ?? "");
+}
+
 function unquote(value: string): string {
   const doc = parseDocument(value, { prettyErrors: false });
-  if (doc.errors.length === 0 && isScalar(doc.contents) && typeof doc.contents.value === "string") {
-    return doc.contents.value;
+  if (doc.errors.length === 0 && isScalar(doc.contents)) {
+    // Standalone document markers parse as synthetic null scalars, not their inline text.
+    return doc.contents.value === null && doc.contents.source === ""
+      ? value
+      : scalarText(doc.contents);
+  }
+  if (doc.errors.length === 0 && doc.contents === null && value.startsWith("#")) {
+    return "";
   }
   if (value.length >= 2) {
     const f = value.charCodeAt(0);

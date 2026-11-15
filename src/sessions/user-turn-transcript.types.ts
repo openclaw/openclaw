@@ -13,6 +13,7 @@ import type {
 } from "../config/sessions/goals-operations.types.js";
 import type { SessionInputLifecycleAdmission } from "../config/sessions/session-input-lifecycle.js";
 import type { SessionMessageRewriteResult } from "../config/sessions/session-message-rewrite.types.js";
+import type { PreparedSessionMentionInvitation } from "../config/sessions/session-sharing-authority.types.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type {
   SessionTranscriptTurnExpectedState,
@@ -54,6 +55,8 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
     humanMentions?: readonly HumanMention[];
+    /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
+    humanAddressed?: true;
     /** Accepted delivery intent; readmission still checks the sender's current authority. */
     chatSendDelivery?: {
       deliver?: boolean;
@@ -81,6 +84,8 @@ export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeF
   workContext?: AttachedChatWorkContext;
   /** Explicit human selections bound to UTF-16 offsets in text. */
   mentions?: readonly HumanMention[];
+  /** The selected people are the recipients; no agent turn runs for this input. */
+  humanAddressed?: true;
   media?: readonly PersistedUserTurnMediaInput[] | null;
   /** Restart-safe native image placement; model-visible prompt bytes remain separate. */
   mediaImageLayout?: {
@@ -186,6 +191,9 @@ export type UserTurnTranscriptTargetResolver =
   | (() => UserTurnTranscriptTarget | undefined | Promise<UserTurnTranscriptTarget | undefined>);
 
 export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
+  prepareMentionInvitation?: (
+    message: PersistedUserTurnMessage,
+  ) => PreparedSessionMentionInvitation | undefined;
   beforeFreshMessageCommit?: SessionSourceAssertion;
   sessionTurnMutation?: SessionTranscriptTurnMutation;
   input?: UserTurnInput;
@@ -200,6 +208,9 @@ export type PersistUserTurnTranscriptParams = UserTurnTranscriptTarget & {
 type UserTurnInputResolver = () => UserTurnInput | undefined | Promise<UserTurnInput | undefined>;
 
 export type CreateUserTurnTranscriptRecorderParams = {
+  prepareMentionInvitation?: (
+    message: PersistedUserTurnMessage,
+  ) => PreparedSessionMentionInvitation | undefined;
   /** Authenticated input identity independent of prepared media paths. */
   pendingInputRequestFingerprint?: string;
   /** Durable channel source turns may reopen their own cancelled, unconsumed attempt. */
@@ -251,6 +262,7 @@ export type UserTurnTranscriptRecorder = {
   /** Durable input custody leaves the active transcript unchanged until execution owns it. */
   stageApproved?: (options: {
     runId: string;
+    recoverySource?: import("../gateway/operator-run-recovery-source.codec.js").QueuedOperatorRecoverySource;
     retryCancelled?: boolean;
     storageTarget?: UserTurnPersistenceOptions["storageTarget"];
     lifecycleAdmission?: SessionInputLifecycleAdmission;

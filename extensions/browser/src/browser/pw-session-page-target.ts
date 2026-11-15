@@ -9,20 +9,35 @@ type PageTargetInfo = { targetId: string; title: string };
 // A Page owns one bounded target-info read at a time so concurrent enumerations share its
 // temporary CDP session. Settled reads evict themselves so later calls observe fresh metadata.
 const targetInfoReads = new WeakMap<Page, Promise<PageTargetInfo | null>>();
+// The native target belongs to the Page, not its document. Navigations replace
+// loaders, not targets; reconnects create new Pages and connection namespaces.
+// Keep mutable metadata (title) and document identities out of this map.
+const pageTargetIds = new WeakMap<Page, string>();
 
 // Ephemeral engines reuse native target IDs after disconnect. Never let a ref
 // from one connection select a replacement page on the next connection.
 const connectionNamespaces = new WeakMap<BrowserContext, string>();
+const connectionClosingContexts = new WeakSet<BrowserContext>();
 
-export function markConnectionScopedBrowser(browser: Browser): void {
+export function markConnectionScopedBrowser(
+  browser: Browser,
+  closePageClosesConnection: boolean,
+): void {
   const namespace = randomUUID();
   for (const context of browser.contexts()) {
     connectionNamespaces.set(context, namespace);
+    if (closePageClosesConnection) {
+      connectionClosingContexts.add(context);
+    }
   }
 }
 
 export function isConnectionScopedPage(page: Page): boolean {
   return connectionNamespaces.has(page.context());
+}
+
+export function pageCloseClosesConnection(page: Page): boolean {
+  return connectionClosingContexts.has(page.context());
 }
 
 export function isConnectionScopedTargetId(targetId: string | undefined): boolean {
@@ -54,10 +69,9 @@ async function readPageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
           return null;
         }
         const namespace = connectionNamespaces.get(page.context());
-        return {
-          targetId: namespace ? `connection:${namespace}:${targetId}` : targetId,
-          title: targetInfo.title,
-        };
+        const scopedTargetId = namespace ? `connection:${namespace}:${targetId}` : targetId;
+        pageTargetIds.set(page, scopedTargetId);
+        return { targetId: scopedTargetId, title: targetInfo.title };
       } finally {
         detach();
       }
@@ -84,4 +98,9 @@ export function pageTargetInfo(page: Page): Promise<PageTargetInfo | null> {
   };
   void pending.then(evict, evict);
   return pending;
+}
+
+/** Resolve only the immutable page identity, without refreshing tab metadata. */
+export async function pageTargetId(page: Page): Promise<string | null> {
+  return pageTargetIds.get(page) ?? (await pageTargetInfo(page))?.targetId ?? null;
 }

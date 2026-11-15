@@ -334,6 +334,33 @@ describe("stuck session diagnostics threshold", () => {
     },
   );
 
+  it("publishes a stalled session as an event only, without a log line", async () => {
+    startGatewayDiagnosticHeartbeat(
+      createTestGatewayScheduler("fake-timers"),
+      { diagnostics: { enabled: true } },
+      {
+        recoverStuckSession,
+        testTimings: { stuckSessionWarnMs: 30_000, stuckSessionAbortMs: 90_000 },
+      },
+    );
+    logSessionStateChange({ ...session, state: "processing" });
+    markDiagnosticEmbeddedRunStarted(session);
+    const debugSpy = vi.spyOn(diagnosticLogger, "debug").mockImplementation(() => undefined);
+    startModel();
+    await vi.advanceTimersByTimeAsync(60_000);
+    // The same log path still reports the long-running phase before the stall.
+    await vi.waitFor(() => expectLoggerMessageContaining(debugSpy, "long-running session"));
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lastEvent("session.stalled")).toMatchObject({
+      reason: "active_work_without_progress",
+      activeWorkKind: "model_call",
+    });
+    expectStability({ type: "session.stalled" });
+    await vi.advanceTimersByTimeAsync(0);
+    expectLoggerMessageContaining(warnSpy, "stalled session", false);
+    expectLoggerMessageContaining(debugSpy, "stalled session", false);
+  });
+
   it.each(["blocked", "progressing", "ended"] as const)(
     "uses the owned-work clock for a %s tool while inbound keeps arriving",
     (phase) => {

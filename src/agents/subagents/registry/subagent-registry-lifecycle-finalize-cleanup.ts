@@ -278,9 +278,12 @@ export const finalizeSubagentCleanup = async (
       ? ANNOUNCE_COMPLETION_HARD_EXPIRY_MS
       : ANNOUNCE_EXPIRY_MS;
   const expired = Date.now() >= resolveAnnounceDeliveryDeadline(entry, Date.now(), expiryMs);
+  // A suspended descendant has settled its own delivery, so it cannot hold this completion.
   const activeDescendantRuns = expired
     ? 0
-    : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent);
+    : await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
+        excludeSuspendedDelivery: true,
+      });
   assertCurrent();
   const now = Date.now();
   const decision: {
@@ -352,6 +355,15 @@ export const finalizeSubagentCleanup = async (
       completedAt: now,
       stateContext,
     });
+  } else if (
+    // Descendants may settle while this attempt still owns the deferred-state write.
+    decision.value?.kind === "defer-descendants" &&
+    (await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
+      excludeSuspendedDelivery: true,
+    })) === 0
+  ) {
+    assertCurrent();
+    params.resumeSubagentRun(entry.runId);
   } else if (resumeDelayMs != null) {
     scheduleResumeSubagentRun(context, entry, resumeDelayMs, cleanupGeneration, stateContext);
   }

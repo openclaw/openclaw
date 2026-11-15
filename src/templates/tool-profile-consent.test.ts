@@ -10,10 +10,8 @@ import { parseTemplateManifest } from "./schema.js";
 import { materializeTemplateToolProfile } from "./tool-profile-consent.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const materialize = (
-  tools: Parameters<typeof materializeTemplateToolProfile>[0]["tools"],
-  options?: Parameters<typeof materializeTemplateToolProfile>[1],
-) => materializeTemplateToolProfile({ tools }, options).tools;
+const materialize = (tools: Parameters<typeof materializeTemplateToolProfile>[0]["tools"]) =>
+  materializeTemplateToolProfile({ tools }).tools;
 
 describe("Template tool profile consent", () => {
   it("materializes a built-in profile into the consented agent config", async () => {
@@ -24,10 +22,10 @@ describe("Template tool profile consent", () => {
     const parsed = parseTemplateManifest({ schemaVersion: 1, agent: { id: "profile-worker" } });
     assert(parsed.ok, JSON.stringify(parsed.diagnostics));
     const plan = await buildTemplateAddPlan({
-      manifest: parsed.manifest,
-      openClawProfile: {
-        schemaVersion: 1,
+      manifest: {
+        ...parsed.manifest,
         agent: {
+          ...parsed.manifest.agent,
           tools: {
             profile: "minimal",
             alsoAllow: ["tts"],
@@ -95,18 +93,6 @@ describe("Template tool profile consent", () => {
     });
   });
 
-  it("freezes the bounded portion of a legacy dynamic profile for update", () => {
-    const tools = materialize(
-      { profile: "coding", deny: ["exec"] },
-      { allowLegacyDynamicProfile: true },
-    );
-    expect(tools).toMatchObject({
-      profile: "full",
-      allow: expect.arrayContaining(["read", "write", "apply_patch"]),
-      deny: ["exec"],
-    });
-    expect(tools?.allow).not.toContain("bundle-mcp");
-  });
   it("fails closed for an empty explicit profile intersection", () => {
     expect(() => materialize({ profile: "coding", allow: ["tts"] })).toThrow("does not overlap");
   });

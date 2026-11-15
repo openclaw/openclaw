@@ -114,6 +114,8 @@ const rawSqliteAllowPathGroups = {
     "src/state/openclaw-state-db-schema-repair.ts",
     "src/state/openclaw-state-db-schema-v12-foldin.ts",
     "src/state/openclaw-state-db-schema-v13-widerow.ts",
+    // Versioned migration backfills legacy pending creation evidence during admission.
+    "src/state/openclaw-state-db-schema-v40-worker-provision-source.ts",
     "src/state/openclaw-state-db-startup-checkpoint.ts",
     "src/state/openclaw-state-db-table-retirements.ts",
     "src/state/openclaw-state-db-fast-path.ts",
@@ -132,6 +134,14 @@ const rawSqliteAllowPathGroups = {
     "src/infra/sqlite-migration-scoped-snapshot.ts",
     "src/snapshot/git-backup-codec.ts",
     "src/snapshot/local-repository.ts",
+  ],
+  "startup copy-and-swap upgrade copies, rebuilds and verifies private shadow databases": [
+    "src/state/openclaw-agent-db-swap.ts",
+    "src/state/openclaw-state-db-swap.ts",
+    "src/state/sqlite-copy-swap.ts",
+    "src/state/state-upgrade-tree.ts",
+    "src/state/state-upgrade-validate.ts",
+    "src/state/state-upgrade.ts",
   ],
   "read-only shared state database access": [
     "src/state/openclaw-agent-db-readonly.ts",

@@ -310,3 +310,24 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
     }
   },
 );
+
+it.each([false, true])(
+  "warns about the unchanged invoking CLI before a redirected update (json=%s)",
+  async (json) => {
+    const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation()!;
+    vi.mocked(commandRun.prepareUpdateCommand).mockImplementation(async (opts) => ({
+      ...(await prepare(opts)),
+      servicePlan: {
+        rootRedirect: { root: fixture.root, previousRoot: "/other-node/lib/node_modules/openclaw" },
+      },
+    }));
+    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    await updateCommand({ tag: targetMetadata.version, yes: true, dryRun: true, json });
+    const output = json ? JSON.stringify(lastJson()) : log.mock.calls.flat().join("\n");
+    expect(output).toContain("will remain unchanged");
+    expect(output).toContain("incompatible with shared config and plugins");
+    expect(output).toContain(`Use the CLI from ${fixture.root}`);
+    expect(output).toContain("/other-node/lib/node_modules/openclaw");
+    expectUnstaged();
+  },
+);

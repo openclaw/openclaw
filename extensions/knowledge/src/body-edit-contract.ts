@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { ExpectedHash } from "./hash-fence.js";
 import { BODY_INPUT_MAX_CHARS } from "./limits.js";
 import { id } from "./model.js";
 import { requestId } from "./mutation-contract.js";
@@ -9,7 +10,7 @@ export const EditBodyInput = Type.Object(
     id,
     expectedVaultId: requestId,
     expectedRevision: Type.Integer({ minimum: 1 }),
-    expectedHash: Type.String({ pattern: "^[a-f0-9]{64}$" }),
+    expectedHash: ExpectedHash,
     expectedOntologyFingerprint: Type.String({ pattern: "^[a-f0-9]{64}$" }),
     start: Type.Integer({ minimum: 0 }),
     end: Type.Integer({ minimum: 0 }),

@@ -809,7 +809,10 @@ use measured Blacksmith files with the existing hosted factor. Unmeasured files 
 the remaining cold hints or the positive two-second default.
 
 Only successful complete tooling invocations contribute. Native file summaries
-include suite hooks; older verbose-only logs supply summed case durations.
+include suite hooks. Without native file time, a single-file group recording
+exactly one successful tooling process uses its complete begin-to-end span,
+even if reporters duplicate their summaries. Multiple processes and older
+verbose-only logs retain the existing summary or summed-case fallback.
 Those case costs exclude import/setup and can exceed wall time for concurrent
 cases, so they are packing weights rather than claims of per-file wall time.
 Retries contribute one median per file, profile and run. Ordinary refits require

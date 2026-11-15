@@ -103,7 +103,7 @@ export function readTranscriptParams(value: unknown) {
   if (!threadId || !/^[A-Za-z0-9._:-]+$/.test(threadId)) {
     throw new ClaudeCatalogParamsError("threadId is invalid");
   }
-  const cursor = readOptionalCursor(params.cursor, "transcript");
+  const cursor = readOptionalCursor(params.cursor, "chat history");
   return {
     threadId,
     limit: readLimit(params.limit, DEFAULT_TRANSCRIPT_LIMIT, MAX_TRANSCRIPT_LIMIT),

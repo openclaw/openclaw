@@ -1,7 +1,55 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import { describe, expect, it, vi } from "vitest";
 import { clickClackPlugin, parseClickClackTarget } from "../api.js";
 
 describe("ClickClack channel capabilities", () => {
+  it("inspects configured accounts and routing policy without reading credential files", () => {
+    const cfg = {
+      channels: {
+        clickclack: {
+          baseUrl: "https://clickclack.example.test",
+          workspace: "synthetic-workspace",
+          tokenFile: "/unavailable/synthetic-clickclack-token",
+          accounts: { disabled: { enabled: false } },
+        },
+      },
+    };
+    const probes = (
+      [
+        "accessSync",
+        "openSync",
+        "readFileSync",
+        "statSync",
+        "lstatSync",
+        "readdirSync",
+        "realpathSync",
+      ] as const
+    ).map((name) => vi.spyOn(fs, name));
+    try {
+      for (const accountId of ["default", "disabled"]) {
+        const account = clickClackPlugin.config.inspectAccount
+          ? clickClackPlugin.config.inspectAccount(cfg, accountId)
+          : clickClackPlugin.config.resolveAccount(cfg, accountId);
+        expect(account).toMatchObject({
+          configured: true,
+          enabled: accountId === "default",
+          tokenSource: "tokenFile",
+        });
+        expect(clickClackPlugin.config.resolveAllowFrom?.({ cfg, accountId })).toEqual(["*"]);
+        expect(clickClackPlugin.config.resolveDefaultTo?.({ cfg, accountId })).toBe(
+          "channel:general",
+        );
+      }
+      for (const probe of probes) {
+        expect(probe).not.toHaveBeenCalled();
+      }
+    } finally {
+      for (const probe of probes) {
+        probe.mockRestore();
+      }
+    }
+  });
+
   it("parses channel targets", () => {
     expect(parseClickClackTarget("channel:general")).toEqual({
       chatType: "group",

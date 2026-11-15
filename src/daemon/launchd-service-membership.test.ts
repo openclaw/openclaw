@@ -29,6 +29,8 @@ import {
   launchAgentControlFixture,
 } from "./launchd-install.test-support.js";
 import { LAUNCH_AGENT_ENV_WRAPPER_SHELL } from "./launchd-plist.js";
+import { parseLaunchAgentEnabled } from "./launchd-runtime.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
 import {
   disableCurrentOpenClawUpdateLaunchdJob,
@@ -36,10 +38,8 @@ import {
   isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   parkCurrentLaunchAgentForMaintenance,
-  parseLaunchAgentEnabled,
   readLaunchAgentRuntime,
   restartLaunchAgent,
-  resolveLaunchAgentPlistPath,
   stopLaunchAgent,
   uninstallLaunchAgent,
 } from "./launchd.js";

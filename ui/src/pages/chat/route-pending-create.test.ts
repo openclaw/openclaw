@@ -15,7 +15,7 @@ it.each([
   { mainKey: "main", bridged: true },
   { mainKey: "workspace", bridged: true },
 ])(
-  "opens an unadmitted agent's $mainKey chat synchronously without Gateway discovery (bridged: $bridged)",
+  "opens an unadmitted agent's $mainKey chat after pending-view preload without Gateway discovery (bridged: $bridged)",
   async ({ mainKey, bridged }) => {
     const { context, request, list } = createSessionRouteContext();
     context.agents.state.agentsList!.mainKey = mainKey;
@@ -51,7 +51,6 @@ it.each([
       createRouteLoaderOptions(location, route.loaderDeps!(context, location)),
     );
 
-    expect(loaded).not.toBeInstanceOf(Promise);
     expect(await loaded).toMatchObject({ kind: "session", sessionKey, face: "chat", creation });
     expect(request).not.toHaveBeenCalled();
     expect(list).not.toHaveBeenCalled();

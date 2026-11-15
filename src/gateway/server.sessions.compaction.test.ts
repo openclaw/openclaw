@@ -103,6 +103,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     totalLines: 1,
     entry: {
       spawnedCwd: "/tmp/task-repo",
+      contextTokens: 32_000,
       thinkingLevel: "medium",
       reasoningLevel: "stream",
       cliSessionIds: { "claude-cli": "claude-session", "codex-cli": "codex-session" },
@@ -217,6 +218,7 @@ test("sessions.compact without maxLines runs embedded manual compaction without 
     },
     workspaceDir: "/tmp/task-repo",
     cwd: "/tmp/task-repo",
+    contextTokenBudget: 32_000,
     config: {
       agents: {
         defaults: {
@@ -961,7 +963,7 @@ test("sessions.compact maxLines does not interrupt an active run when no transcr
 
     expect(compacted.ok).toBe(true);
     expect(compacted.payload?.compacted).toBe(false);
-    expect(compacted.payload?.reason).toBe("no transcript");
+    expect(compacted.payload?.reason).toBe("No chat history to compact.");
     expect(operation.abortSignal.aborted).toBe(false);
     expect(isSessionControllerWorkActive(scope.storePath, [scope.sessionId])).toBe(true);
     expect(embeddedRunMock.abortCalls).toEqual([]);

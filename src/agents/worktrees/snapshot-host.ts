@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { lstatSync } from "node:fs";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
+import { formatErrorMessage, hasErrnoCode } from "../../infra/errors.js";
 import { withContentGitSlot } from "../../infra/git-content-budget.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
 import {
@@ -20,6 +22,7 @@ import {
   prepareWorktreeRegistryGuard,
   readRegistryWorktree,
 } from "./registry-read.js";
+import { deferWorktreeCleanup } from "./registry-retirement.js";
 import { deleteRegistryWorktree, createWorktreeRemovalClaimsGuard } from "./registry.js";
 import { assertExactStateSourceIdentity } from "./removal-git.js";
 import { resolveRepository } from "./repository-paths.js";
@@ -243,8 +246,9 @@ export async function retireExpiredManagedWorktreeSnapshot(input: {
   env: NodeJS.ProcessEnv;
   id: string;
   expiresBefore: number;
+  retryDeferred?: boolean;
   guard: WorktreeAllocationGuard;
-}): Promise<boolean> {
+}): Promise<boolean | string> {
   const context = captureWorktreeRunEndContext(input.env);
   const params = { ...input, env: { ...input.env, ...context.environment } };
   return await withWorktreeMutationLease(
@@ -257,6 +261,31 @@ export async function retireExpiredManagedWorktreeSnapshot(input: {
         return false;
       }
       const assertRecordCurrent = accept(record);
+      if (!record.snapshotRef?.startsWith("refs/openclaw/snapshots/exact-")) {
+        if (record.gcProtection && !params.retryDeferred) {
+          return record.gcProtection;
+        }
+        try {
+          const leftover = await fs.lstat(record.path);
+          if (!leftover.isDirectory()) {
+            throw new Error("Retired checkout path is not a directory");
+          }
+          guard.commitGuard();
+          // Empty leftovers contain no recovery data; never recurse or follow links.
+          await fs.rmdir(record.path);
+        } catch (error) {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            const reason = `Retired checkout retained; recovery and branch preserved: ${formatErrorMessage(error)}`;
+            return (await deferWorktreeCleanup(
+              params.env,
+              { observed: record, reason },
+              guard.commitGuard,
+            ))
+              ? reason
+              : false;
+          }
+        }
+      }
       await retireManagedWorktreeSnapshot({
         record,
         env: params.env,
@@ -498,11 +527,6 @@ async function retireManagedWorktreeSnapshot(params: {
     claimed = true;
   }
   try {
-    if (!exactRecord && (await worktreePathExists(record.path))) {
-      throw new Error(
-        `Retired checkout files remain at ${record.path}; recovery and branch preserved`,
-      );
-    }
     const { expireLocalWorkspaceProjection } =
       await import("../../gateway/worker-environments/local-workspace-projection.js");
     await expireLocalWorkspaceProjection({

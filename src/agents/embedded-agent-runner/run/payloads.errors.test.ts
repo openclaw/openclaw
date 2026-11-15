@@ -16,11 +16,13 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveCronPayloadOutcome } from "../../../cron/isolated-agent/helpers.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { captureAgentTerminalSnapshot } from "./attempt-terminal-snapshot.js";
 import {
   buildPayloads,
   makePayloadAssistant as makeAssistant,
@@ -104,10 +106,37 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 });
 
 describe("buildEmbeddedRunPayloads", () => {
+  it.each(["selected", "earlier", "aborted"] as const)(
+    "binds provider-error observations only to the selected assistant (%s)",
+    (source) => {
+      const assistant = makeAssistant({
+        content: [],
+        stopReason: "error",
+        errorMessage: "400 invalid request schema",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: false,
+      });
+      const payloads = buildPayloads({
+        lastAssistant: assistant,
+        currentAssistant: source === "earlier" ? null : assistant,
+        agentTerminal,
+        runAborted: source === "aborted",
+        isCronTrigger: true,
+      });
+      const outcome = resolveCronPayloadOutcome({ payloads });
+      expect(outcome.hasFatalStructuredErrorPayload).toBe(true);
+      expect(outcome.agentTerminal).toEqual(source === "selected" ? agentTerminal : undefined);
+    },
+  );
+
   const OVERLOADED_FALLBACK_TEXT =
     "The AI service is temporarily overloaded. Please try again in a moment.";
   const REDACTED_TEST_MODEL_FAILURE_TEXT =
-    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.";
+    "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow` in your terminal.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -296,7 +325,7 @@ describe("buildEmbeddedRunPayloads", () => {
         errorMessage:
           "400 max_tokens (384000) exceeds model's maximum output tokens (65536) for model deepseek-v4-flash:0731",
       }),
-      text: "The reply length is set too high for this model. Lower its reply limit in the Control UI settings, or choose another model.",
+      text: "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.",
       absent: ["deepseek-v4-flash:0731"],
     },
     {
@@ -336,7 +365,7 @@ describe("buildEmbeddedRunPayloads", () => {
           '{"code":"400","message":"Param Incorrect","param":"Not supported model some-model-id"}',
         content: [],
       }),
-      text: "This model was not found. Choose another model in the Control UI.",
+      text: "This model was not found. Choose another model in the OpenClaw app.",
       absent: ["some-model-id", "Param Incorrect"],
     },
     {

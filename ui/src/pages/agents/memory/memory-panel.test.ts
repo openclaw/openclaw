@@ -240,6 +240,28 @@ it.each(["dreams", "insights", "wiki"] as const)(
   },
 );
 
+it("does not invent review lists after the first status read fails", async () => {
+  let fail = true;
+  const page = await createPage({
+    [STATUS]: async () => {
+      if (fail) {
+        throw new Error("Status read failed");
+      }
+      return memoryStatus(0);
+    },
+  });
+  await page.waitText(".dreams__controls-error", "Status read failed");
+  for (const panel of ["waiting", "promotions", "dailyLog"]) {
+    expect(page.query(`button[aria-controls="dreams-review-${panel}"]`)).toBeNull();
+  }
+  fail = false;
+  await page.state.loadResources("dreamingStatus", false);
+  await waitForSolid(() => {
+    expect(page.query(".dreams__controls-error")).toBeNull();
+    expect(page.query('button[aria-controls="dreams-review-waiting"]')).not.toBeNull();
+  });
+});
+
 it("retains accepted scene status and its DOM when the status refresh fails", async () => {
   const failure = deferred<unknown>();
   let fail = false;

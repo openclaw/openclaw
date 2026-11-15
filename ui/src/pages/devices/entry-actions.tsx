@@ -60,7 +60,7 @@ export function DeviceEntryActions(props: {
     props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const deniedTitle = () =>
     props.devices.connected && !props.devices.canManagePairing
-      ? t("devices.readOnly.pairingRequired")
+      ? t("devices.readOnly.pairingRequiredTooltip")
       : undefined;
   return (
     <Show when={props.desktopEnvironment || props.onEditAlias || props.onRemove}>
@@ -72,7 +72,7 @@ export function DeviceEntryActions(props: {
             <button
               class="btn btn--sm device-entry__desktop"
               data-device-action="desktop"
-              title={t("devices.inventory.desktopOpenWindow")}
+              title={t("devices.inventory.desktopOpenWindowTooltip")}
               onClick={() => openDesktopFocus(props.devices.basePath, environmentId())}
             >
               {t("devices.inventory.openDesktop")}

@@ -21,6 +21,8 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
 } from "../../../logging/diagnostic-run-activity.js";
+import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controller.watchdog-state.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import {
   clearToolActivityRun,
@@ -31,6 +33,7 @@ import type { StreamFn } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 
 function openStream(
   baseFn: StreamFn,
@@ -293,17 +296,60 @@ describe("streamWithIdleTimeout", () => {
     const baseFn: StreamFn = vi.fn((_model, _context, options) => {
       const stream = createAssistantMessageEventStream();
       notifyLlmRequestActivity(options?.signal, false);
-      setTimeout(() => stream.push(textDelta("done")), 120);
+      setTimeout(() => stream.push(textDelta("done")), 90);
       return stream;
     });
     const stream = await openStream(baseFn, undefined, { runId: TEST_RUN });
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 
-    setTimeout(() => notifyToolActivity(TEST_RUN), 40);
-    setTimeout(() => notifyToolActivity(TEST_RUN), 80);
-    await expectDelta(next, 120, "done");
+    setTimeout(() => notifyToolActivity(TEST_RUN), 30);
+    setTimeout(() => notifyToolActivity(TEST_RUN), 60);
+    await expectDelta(next, 90, "done");
     await iterator.return?.();
+  });
+
+  it("bounds a silent model stream while an unresolved tool keeps sending heartbeats", async () => {
+    const source = createAssistantMessageEventStream();
+    const operation = createDeferred();
+    const onTimeout = vi.fn();
+    const beginRequest = vi.fn<SessionControllerWatchdogAttempt["beginRequest"]>(() => () => {});
+    let requestSignal: AbortSignal | undefined;
+    const startedAt = Date.now();
+    const stream = await streamWithIdleTimeout(
+      (_model, _context, options) => {
+        requestSignal = options?.signal;
+        notifyLlmRequestActivity(requestSignal, false);
+        return source;
+      },
+      120_000,
+      onTimeout,
+      { runId: TEST_RUN, watchdogAttempt: { beginRequest } },
+    )({} as Parameters<StreamFn>[0], { messages: [] });
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next().catch((error: unknown) => error);
+    const tool = withEmbeddedAttemptToolActivity(TEST_RUN, () => operation.promise);
+    try {
+      await vi.advanceTimersByTimeAsync(239_999);
+      expect(onTimeout).not.toHaveBeenCalled();
+      const watchdogDeadline = beginRequest.mock.calls[0]?.[0].deadlineAtMs;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onTimeout).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          name: "LlmNoProgressError",
+          message: "LLM idle timeout (240s): no model progress",
+        }),
+      );
+      expect(watchdogDeadline).toBe(startedAt + 240_000 + SESSION_WATCHDOG_WARNING_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(await next).toBe(onTimeout.mock.calls[0]?.[0]);
+    } finally {
+      operation.resolve();
+      await tool;
+      source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+      await next;
+      await iterator.return?.();
+    }
   });
 
   it.each(["structural", "notified", "skew"] as const)(

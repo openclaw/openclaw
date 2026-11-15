@@ -14,6 +14,7 @@ suite.define(() => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const gateway = await installMockGateway(page, scenario());
       const { palette, input } = await openFromForeground(page, suite.server.baseUrl);
+      await input.press("Tab");
       const prompt = "Fix the weird timing for automations.\nThen land the PR.";
       await input.fill(prompt);
       const start = palette.getByRole("button", {

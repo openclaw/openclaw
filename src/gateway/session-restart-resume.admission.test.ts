@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import type { SessionEventReceipt } from "../auto-reply/reply/session-event-contract.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.js";
@@ -9,6 +10,10 @@ import {
   completeGatewayBootLifecycle,
 } from "../infra/gateway-boot-lifecycle.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import {
+  markGatewayRestartDraining,
+  resetGatewayWorkAdmission,
+} from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   readAgentDatabaseAdmissionRefusal,
@@ -20,6 +25,78 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { prepareAgentRestartRecovery, resumeMarkedSessions } from "./session-restart-resume.js";
+
+it.for(["aborted", "draining"] as const)(
+  "retains restart custody while admission is %s by another restart",
+  (mode, test) =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(cfg);
+      const target = { agentId: "main", sessionKey: "agent:main:pending-resume" };
+      replaceSessionEntrySync(target, {
+        sessionId: "pending-resume",
+        updatedAt: 110,
+        lifecycleRunId: "predecessor",
+        startedAt: 110,
+      });
+      const controller = new AbortController();
+      const entered = createDeferredCore();
+      const accepted = createDeferredCore<Awaited<SessionEventReceipt["accepted"]>>();
+      const enqueue = vi
+        .spyOn(sessionEvents, "enqueueSessionEventForHost")
+        .mockImplementation(() => {
+          entered.resolve();
+          return {
+            id: "pending-resume-input",
+            accepted: accepted.promise,
+            settled: Promise.resolve({
+              status: "completed",
+              executionStarted: true,
+              delivered: false,
+            }),
+            cancel: () => false,
+          };
+        });
+      const recovery = resumeMarkedSessions({
+        context: {
+          ...createContext([], () => cfg),
+          restartResumeWindows: { main: [{ startedAt: 100, endedAt: 200 }] },
+        },
+        signal: controller.signal,
+        log: { warn() {} },
+      });
+      void recovery.catch(() => {});
+      try {
+        await withinTest(entered.promise, test.signal);
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+          queuedInputIds: [],
+        });
+        if (mode === "aborted") {
+          const error = new Error("Another restart interrupted admission");
+          controller.abort(error);
+          accepted.resolve({ ok: false, error: error.message, cause: error });
+          await expect(recovery).rejects.toBe(error);
+        } else {
+          markGatewayRestartDraining();
+          replaceSessionEntrySync(target, {
+            ...loadExactSessionEntry(target)!.entry,
+            resumeAfterRestart: { queuedInputIds: ["next-shutdown-input"] },
+          });
+          accepted.resolve({ ok: true });
+          await recovery;
+        }
+        expect(loadExactSessionEntry(target)?.entry.resumeAfterRestart).toEqual({
+          queuedInputIds: mode === "draining" ? ["next-shutdown-input"] : [],
+        });
+        expect(enqueue).toHaveBeenCalledOnce();
+      } finally {
+        accepted.resolve({ ok: true });
+        await Promise.allSettled([recovery]);
+        resetGatewayWorkAdmission();
+        enqueue.mockRestore();
+      }
+    }),
+);
 
 it("retains crash recovery across failed admission and a clean intermediate boot", async (test) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

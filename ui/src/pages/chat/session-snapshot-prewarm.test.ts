@@ -43,12 +43,27 @@ beforeEach(() => {
   vi.stubGlobal("localStorage", createStorageMock());
 });
 afterEach(async () => {
+  document.documentElement.removeAttribute("data-openclaw-warm-frame");
   vi.restoreAllMocks();
   await clearStoredChatSnapshots();
   vi.unstubAllGlobals();
 });
 
 describe("routed transcript prewarm", () => {
+  it.each(["missing", "read-error"] as const)(
+    "releases the warm frame when the transcript cache is unavailable: %s",
+    async (failure) => {
+      if (failure === "read-error") {
+        vi.spyOn(database, "readStoredChatSnapshotRecord").mockRejectedValueOnce(
+          new Error("Cache read failed"),
+        );
+      }
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
+      await prewarmChatSnapshot(key);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
+    },
+  );
+
   it.each([
     { viewport: 1000, wide: true, details: true, loads: 0 },
     { viewport: 2200, wide: true, details: true, loads: 1 },
@@ -103,6 +118,7 @@ describe("routed transcript prewarm", () => {
     });
     const read = vi.spyOn(database, "readStoredChatSnapshotRecord");
     const open = vi.spyOn(indexedDB, "open");
+    document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
     const warming = prewarmChatSnapshot(key);
     try {
       expect(open).toHaveBeenCalledOnce();
@@ -116,6 +132,7 @@ describe("routed transcript prewarm", () => {
       releasePreparation.resolve();
       await warming;
     }
+    expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
   });
 
   it("starts before consumption and reuses the matching read only once", async () => {
@@ -144,9 +161,11 @@ describe("routed transcript prewarm", () => {
     async (scope) => {
       const { open, reader } = await prewarm();
       await vi.dynamicImportSettled();
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       await (scope === "clear"
         ? clearStoredChatSnapshots()
         : publishSnapshotInvalidation(scope === "session" ? { sessionKey: key } : {}));
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
       expect(open).toHaveBeenCalledOnce();
       expect(await reader.read(key)).toEqual(scope === "clear" ? null : stored);
       expect(open).toHaveBeenCalledTimes(2);

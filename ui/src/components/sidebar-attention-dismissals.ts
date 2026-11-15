@@ -13,6 +13,8 @@ const SIDEBAR_ATTENTION_DISMISSAL_KINDS = [
   "cronFailed",
   "cronOverdue",
   "modelAuthExpired",
+  "openClawIdKeys",
+  "openClawIdRequest",
   "scopeUpgrade",
   "updateAvailable",
 ] as const;

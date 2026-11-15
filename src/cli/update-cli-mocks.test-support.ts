@@ -196,6 +196,11 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
+// The activated-release boot is a process boundary like the canary above.
+vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
+  ...(await original()),
+  checkActivatedGatewayStartup: async ({ result }) => result,
+}));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({
@@ -361,7 +366,7 @@ vi.mock("node:child_process", async () => {
     args[1] = sqliteHostArgv(args[1]);
     return true;
   };
-  return {
+  const mocked = {
     ...actual,
     // SQLite and directory-watch helpers need real IPC; updater/service children stay simulated.
     spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
@@ -406,6 +411,7 @@ vi.mock("node:child_process", async () => {
         : spawn(...args);
     },
   };
+  return { ...mocked, default: mocked };
 });
 
 // Synthetic CLI packages omit the candidate worker; native delegation is covered separately.

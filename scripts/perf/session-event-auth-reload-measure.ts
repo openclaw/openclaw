@@ -103,7 +103,7 @@ registerHooks({
     return { format: loaded.format, source: loaded.source, shortCircuit: true };
   },
 });
-const { captureScheduledSessionEventConfigPolicy } =
+const { captureSessionEventConfigRelevance } =
   await import("../../src/auto-reply/reply/session-event-policy.js");
 const original: OpenClawConfig = {
   ...JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8")),
@@ -144,7 +144,7 @@ const prepareConsumer = (sessionKey: string, index: number) => {
     payload: { kind: "agentTurn", message: "Synthetic scheduled work" },
     state: {},
   };
-  return captureScheduledSessionEventConfigPolicy(original, "main", job, selected);
+  return captureSessionEventConfigRelevance(original, "main", job, selected);
 };
 const consumers = sessionKeys.map(prepareConsumer);
 const check = (config: OpenClawConfig, policies = consumers) => {

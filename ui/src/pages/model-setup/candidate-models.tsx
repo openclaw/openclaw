@@ -1,5 +1,6 @@
 import { For, Show, createMemo } from "solid-js";
 import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import { SettingsSectionHeader } from "../../components/solid/settings-ui.tsx";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -48,9 +49,7 @@ export function CandidateRows(
   return (
     <Show when={candidates().length > 0}>
       <section class="settings-section">
-        <div class="settings-section__header">
-          <h2>{t("modelSetup.candidates.title")}</h2>
-        </div>
+        <SettingsSectionHeader title={t("modelSetup.candidates.title")} />
         <div class="model-setup__rows">
           <For
             each={candidates()}

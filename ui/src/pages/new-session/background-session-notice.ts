@@ -8,11 +8,14 @@ import {
   shouldAutoPromptNotificationsOnSend,
 } from "../../app/notifications-auto-prompt.ts";
 import { t } from "../../i18n/index.ts";
+import { registerCommandPaletteEnglish } from "../../i18n/locales/en-command-palette.ts";
 import { normalizeAgentTargetLabel, resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -22,6 +25,41 @@ import { showToast } from "../../lib/toast.ts";
 import { captureSessionNoticeOwner, openSessionNoticeTarget } from "./session-notice-owner.ts";
 
 const RETRY_DELAY_MS = 1_000;
+
+/** Both launchers use the same accepted-session notice and recovery destination. */
+export function showBackgroundSessionCreated(
+  readContext: () => ApplicationContext | undefined,
+  result: SessionCreateOutcome & { agentId: string },
+  onOpen?: () => void,
+) {
+  const context = readContext();
+  if (!context) {
+    return;
+  }
+  registerCommandPaletteEnglish();
+  const isCurrentOwner = captureSessionNoticeOwner(context);
+  const message =
+    result.initialRun.status === "rejected"
+      ? t("palette.sessionCreatedWithError", { error: formatUiError(result.initialRun.error) })
+      : t(
+          result.initialRun.status === "started"
+            ? "palette.sessionStarted"
+            : "palette.sessionCreated",
+        );
+  showToast({
+    message,
+    dedupeKey: `session-create:${result.agentId}:${result.key}`,
+    severity: result.initialRun.status === "rejected" ? "error" : "success",
+    actionLabel: t("sessionsView.openSession"),
+    onAction: () => {
+      if (readContext() !== context || !isCurrentOwner()) {
+        return;
+      }
+      openSessionNoticeTarget(context, result.key, result.agentId);
+      onOpen?.();
+    },
+  });
+}
 
 export function prepareBackgroundSessionCompletion(params: {
   enabled: boolean;

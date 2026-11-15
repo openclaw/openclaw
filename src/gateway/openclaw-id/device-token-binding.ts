@@ -22,6 +22,8 @@ export type DeviceTokenBindingOwner = {
   lookup(deviceId: string, role: string): string | undefined;
   /** Records that a token was issued to `peerKey` (write-through to the claw record). */
   record(deviceId: string, role: string, peerKey: string): Promise<void>;
+  /** Drops the bindings of a deleted device's tokens, so a reused identity starts unbound. */
+  forget(tokens: ReadonlyArray<{ deviceId: string; role: string; peerKey: string }>): Promise<void>;
   /** Reports a refused token for the security log. */
   reportMismatch(event: {
     deviceId: string;
@@ -97,6 +99,62 @@ export async function checkDeviceTokenPeer(params: {
     presentedFrom: params.peerKey,
   });
   return { ok: false, reason: "device-token-peer-mismatch" };
+}
+
+/**
+ * Whether this device's operator token was issued over the tunnel. Such a browser is
+ * managed by OpenClaw ID membership (the Access page), not as a device. Unknown or
+ * unreadable bindings answer false, keeping ordinary device management.
+ */
+export function hasOpenClawIdOperatorBinding(deviceId: string): boolean {
+  if (!owner || owner === "unreadable") {
+    return false;
+  }
+  try {
+    return owner.lookup(deviceId, "operator") !== undefined;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Binds a relayed operator that was delivered no device token (trusted-proxy auth mode,
+ * configured operator roles) to its OpenClaw ID peer, without minting a credential.
+ * Any token approval persisted for it then follows the membership lifecycle. Best effort:
+ * an unavailable owner or failed write leaves the browser an ordinary device.
+ */
+export async function recordTokenlessOpenClawIdOperator(
+  deviceId: string,
+  peerKey: string,
+): Promise<void> {
+  if (!owner || owner === "unreadable") {
+    return;
+  }
+  try {
+    if (owner.lookup(deviceId, "operator") !== peerKey) {
+      await owner.record(deviceId, "operator", peerKey);
+    }
+  } catch {
+    // Best effort: a failed claw write leaves this browser removable as a device.
+  }
+}
+
+/** Forgets the bindings of a deleted pairing. Best effort: the pairing is already gone. */
+export async function forgetDeviceTokenBindings(
+  deviceId: string,
+  roles: readonly string[],
+): Promise<void> {
+  if (!owner || owner === "unreadable") {
+    return;
+  }
+  const current = owner;
+  const tokens = roles.flatMap((role) => {
+    const peerKey = current.lookup(deviceId, role);
+    return peerKey ? [{ deviceId, role, peerKey }] : [];
+  });
+  if (tokens.length > 0) {
+    await current.forget(tokens);
+  }
 }
 
 /** Records the binding of a token just issued to a relayed connection; no binding, no token. */

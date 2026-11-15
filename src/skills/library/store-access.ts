@@ -43,6 +43,7 @@ export function captureSkillLibraryAccess(
     profileId: authority.profileId,
     namespace: authority.namespace,
     scopes: [...authority.scopes],
+    ownerDevice: authority.ownerDevice,
     config: { gateway: { roles } },
   };
   const pinned = { path: context.admission.databasePath, env: { ...env, ...context.environment } };
@@ -53,6 +54,7 @@ export function captureSkillLibraryAccess(
       !isDeepStrictEqual(roles, authority.getConfig().gateway?.roles) ||
       !isDeepStrictEqual(input.scopes, authority.scopes) ||
       input.profileId !== authority.profileId ||
+      input.ownerDevice !== authority.ownerDevice ||
       input.namespace !== authority.namespace
     ) {
       throw new SkillLibraryError(

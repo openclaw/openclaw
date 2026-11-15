@@ -65,7 +65,7 @@ export function* finishPluginPreparations(
     const failures: unknown[] = [error];
     for (const { steps } of batch.slice(completed)) {
       try {
-        steps.throw(new PluginInventoryRetiredError());
+        runCandidate(() => steps.throw(new PluginInventoryRetiredError()));
       } catch (cleanupError) {
         failures.push(cleanupError);
       }

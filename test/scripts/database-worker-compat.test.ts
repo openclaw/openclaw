@@ -336,8 +336,28 @@ it.each([
 
 it("batches shorthand receiver types while rejecting typed receiver and parameter escapes", () => {
   const queries: (ts.Node | readonly ts.Node[])[] = [];
+  const symbolNodes: ts.Node[] = [];
   const descriptor = Object.getOwnPropertyDescriptor(Checker.prototype, "getTypeAtLocation")!;
+  const symbolDescriptor = Object.getOwnPropertyDescriptor(
+    Checker.prototype,
+    "getSymbolAtLocation",
+  )!;
   try {
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", {
+      ...symbolDescriptor,
+      get(this: Checker) {
+        const query: Checker["getSymbolAtLocation"] = symbolDescriptor.get!.call(this);
+        const observed = Object.assign(
+          ((input: ts.Node | readonly ts.Node[]) => {
+            symbolNodes.push(...(Array.isArray(input) ? input : [input as ts.Node]));
+            return Array.isArray(input) ? query(input) : query(input as ts.Node);
+          }) as Checker["getSymbolAtLocation"],
+          { gen: query.gen.bind(query) },
+        );
+        Object.defineProperty(this, "getSymbolAtLocation", { configurable: true, value: observed });
+        return observed;
+      },
+    });
     Object.defineProperty(Checker.prototype, "getTypeAtLocation", {
       ...descriptor,
       get(this: Checker) {
@@ -374,8 +394,17 @@ it("batches shorthand receiver types while rejecting typed receiver and paramete
     expect(patterns).toHaveLength(2);
     expect(new Set(patterns).size).toBe(2);
     expect(patterns.every(ts.isObjectBindingPattern)).toBe(true);
+    const members = patterns
+      .filter(ts.isObjectBindingPattern)
+      .flatMap((pattern) =>
+        pattern.elements.flatMap((element) => (element.name ? [element.name] : [])),
+      );
+    expect(members).toHaveLength(6);
+    const memberNodes = new Set<ts.Node>(members);
+    expect(symbolNodes.filter((node) => memberNodes.has(node))).toEqual([]);
   } finally {
     Object.defineProperty(Checker.prototype, "getTypeAtLocation", descriptor);
+    Object.defineProperty(Checker.prototype, "getSymbolAtLocation", symbolDescriptor);
   }
 });
 
@@ -767,7 +796,7 @@ it("reuses raw compiler symbols across graph phases without freezing forwarded b
         return observed;
       },
     });
-    const scan = (body: string) =>
+    const scan = (body: string, observer?: InspectOptions[5]) =>
       inspectDatabaseWorkerBoundaries(
         process.cwd(),
         new Map(
@@ -786,11 +815,34 @@ export function ${first}() { return read(); }`,
         undefined,
         undefined,
         false,
+        observer,
       );
-    expectClosed(scan("readKernel(); return readKernel();"));
-    expect(scan("readKernel(); missing(() => readKernel());").operations.has(kernelFile)).toBe(
+    const phases: string[] = [];
+    expectClosed(
+      scan("readKernel(); return readKernel();", (phase) => {
+        phases.push(phase);
+        throw new Error("observer failed");
+      }),
+    );
+    expect(phases).toEqual([
+      "inputs",
+      "project",
+      "sources-registration",
+      "closure-expansion",
+      "binding-forwarding",
+      "reference-prefetch",
+      "caller-classification",
+      "graph-classification",
+      "close",
+    ]);
+    expect(scan("readKernel(); missing(() => ({ readKernel }));").operations.has(kernelFile)).toBe(
       false,
     );
+    expect(
+      [...counts.keys()].some(
+        (node) => node.parent && ts.isShorthandPropertyAssignment(node.parent),
+      ),
+    ).toBe(false);
     expect(
       [...counts.keys()].filter((node) => node.getText() === "readKernel").length,
     ).toBeGreaterThan(1);
@@ -802,7 +854,7 @@ export function ${first}() { return read(); }`,
         [legacyFile, legacy],
         ...consumers.map((file): [string, string] => [
           file,
-          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}();`,
+          `import { ${first} } from './plugin-sdk/sqlite-runtime-legacy.js'; ${first}(); missing.${first}();`,
         ]),
       ]),
       undefined,
@@ -822,9 +874,25 @@ export function ${first}() { return read(); }`,
     ]);
     expect(batches.every((nodes) => nodes.length <= 256)).toBe(true);
     expect(
-      batches.some((nodes) => new Set(nodes.map((node) => node.getSourceFile().fileName)).size > 1),
+      batches.some(
+        (nodes) =>
+          new Set(
+            nodes
+              .filter(ts.isPropertyAccessExpression)
+              .map((node) => node.getSourceFile().fileName),
+          ).size > 1,
+      ),
     ).toBe(true);
     expect([...counts.values()]).toEqual([...counts.values()].map(() => 1));
+    expect(
+      inspectStore(`declare const store: {}; const { consume } = store; consume(1);`).violations,
+    ).toEqual([]);
+    expect(
+      [...counts.keys()].filter(
+        (node) =>
+          ts.isIdentifier(node) && node.text === "consume" && ts.isBindingElement(node.parent),
+      ),
+    ).toHaveLength(1);
   } finally {
     Object.defineProperty(Checker.prototype, "getSymbolAtLocation", descriptor);
   }

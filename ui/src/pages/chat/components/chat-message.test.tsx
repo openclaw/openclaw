@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-inputs.ts";
+import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-input-display.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
@@ -94,20 +94,28 @@ describe("grouped chat rendering", () => {
     { tools: [], canSteer: true, reason: "on the next model turn" },
     { tools: ["upload"], canSteer: true, reason: "when the current step finishes" },
     { tools: [], canSteer: false, reason: "when the current step finishes", available: true },
+    { tools: [], canSteer: true, reason: "on the next model turn", queued: true },
   ])(
     "labels the newest waiting steer in its footer slot (%j)",
-    ({ tools, canSteer, reason, available }) => {
+    ({ tools, canSteer, reason, available, queued }) => {
       const status = available ? "available" : "blocked";
       renderSteer(
-        { ...steerInput({ status, tools }), newest: true, sendNow: available || undefined },
+        {
+          ...steerInput({ status, tools }),
+          queued: queued || undefined,
+          newest: true,
+          sendNow: available || undefined,
+        },
         canSteer,
       );
       const label = requireElement(
         ".chat-group-footer .chat-steer-now [role=status]",
         HTMLSpanElement,
       );
-      expect(label.textContent).toBe("Steering…");
-      expect(label.getAttribute("aria-label")).toBe(`Steering — sends ${reason}.`);
+      expect(label.textContent).toBe(queued ? "Queued" : "Steering…");
+      expect(label.getAttribute("aria-label")).toBe(
+        queued ? "Queued" : `Steering — sends ${reason}.`,
+      );
       expect(label.title).toBe(label.getAttribute("aria-label"));
       expectAbsent(".chat-steer-now button");
       // Identity, time and actions follow delivery.
@@ -442,7 +450,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-group--reply")).not.toBeNull();
   });
 
-  it("morphs one assistant turn from working status to its terminal recap", () => {
+  it("settles one assistant turn without a token recap", () => {
     const message = createAssistantMessage("First result is ready.", { timestamp: 1_000 });
 
     renderAssistantMessage(message, {
@@ -459,19 +467,11 @@ describe("grouped chat rendering", () => {
     // The footer row is reserved but empty until the turn settles.
     expect(element(".chat-group-footer")?.childElementCount).toBe(0);
 
-    renderAssistantMessage(message, {
-      turnRecap: { runtimeMs: 4 * 3_600_000 + 2 * 60_000, outputTokens: 1 },
-    });
+    renderAssistantMessage(message);
 
     expectCount(".chat-group.assistant", 1);
     expectAbsent(".chat-working-indicator");
-    // Run duration belongs to the Worked summary, so the recap carries usage only.
-    expect(
-      Array.from(element(".chat-turn-recap--continuation")!.children, (child) =>
-        child.textContent?.trim(),
-      ),
-    ).toEqual(["1 output token"]);
-    expectAbsent(".chat-turn-recap__claw");
+    expectAbsent(".chat-turn-recap");
     expectPresent(".chat-group-footer");
   });
 

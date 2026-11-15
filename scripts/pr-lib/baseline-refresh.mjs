@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import {
   baselineProofContinuation,
@@ -363,11 +364,11 @@ function bindingAt(anchor, suppliedBytes) {
     ...(Object.hasOwn(record, "sourceAdmission") ? ["sourceAdmission"] : []),
     ...(Object.hasOwn(record, "incomingSource") ? ["incomingSource"] : []),
     ...(record.version === 2 ? ["purpose", "proofSource"] : []),
+    ...(Object.hasOwn(record, "coauthors") ? ["coauthors"] : []),
   ]);
   if (
     ![1, 2].includes(record.version) ||
-    (record.version === 2 &&
-      (record.purpose !== "proof" || record.incomingSource || record.sourceAdmission)) ||
+    (record.version === 2 && (record.purpose !== "proof" || record.incomingSource)) ||
     (Object.hasOwn(record, "incomingSource") &&
       (record.incomingSource !== true ||
         Object.hasOwn(record, "sourceAdmission") ||
@@ -387,11 +388,28 @@ function bindingAt(anchor, suppliedBytes) {
   ) {
     throw new Error("Invalid baseline refresh binding.");
   }
+  if (Object.hasOwn(record, "coauthors")) {
+    const coauthors = additionalCoauthors(record.coauthors);
+    if (
+      record.version !== 2 ||
+      !coauthors.length ||
+      JSON.stringify(coauthors) !== JSON.stringify(record.coauthors)
+    ) {
+      throw new Error("Invalid baseline co-author metadata.");
+    }
+  }
   if (text("show", "-s", "--format=%P", anchor) !== `${record.sourceHead} ${record.baselineHead}`) {
     throw new Error("Refreshed candidate lost its ordered source and baseline parents.");
   }
   git(["verify-commit", anchor]);
   git(["verify-commit", record.sourceHead]);
+  if (
+    Object.hasOwn(record, "coauthors") &&
+    JSON.stringify(sourceCoauthors(anchor)) !==
+      JSON.stringify(baselineCoauthors(record.sourceHead, record.coauthors))
+  ) {
+    throw new Error("Baseline candidate co-author credit differs from its signed binding.");
+  }
   git(["merge-base", "--is-ancestor", record.incomingHead, record.sourceHead]);
   git(["merge-base", "--is-ancestor", record.baselineHead, record.capturedMain]);
   const replay = materialize(record.sourceHead, record.baselineHead, record.resolutions);
@@ -496,13 +514,13 @@ function publicationLineage(pr, head, anchor, bindingOid, retained) {
   );
 }
 
-function incomingSourceAuthority(pr, source, reviewOid, contextPath) {
-  const { prMeta } = incomingReview(pr, source, reviewOid);
+function incomingSourceAuthority(pr, source, reviewOid, contextPath, directory = ".local") {
+  const { prMeta } = incomingReview(pr, source, reviewOid, directory);
   // Preparation env files belong to the shell owner, including its quoting rules.
   execFileSync("bash", [
     "-c",
     `set -euo pipefail
-source .local/pr-meta.env
+source "$6/pr-meta.env"
 [ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
 source "$1"
 [ "$PR_NUMBER" = "$2" ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PR_HEAD" = "$5" ] || exit 1
@@ -515,6 +533,7 @@ source "$1"
     source,
     reviewOid,
     prMeta.headRefName,
+    directory,
   ]);
 }
 
@@ -563,7 +582,31 @@ function requireProofMain(record, main) {
   git(["merge-base", "--is-ancestor", record.baselineHead, main]);
 }
 
-function validateProofSource(record) {
+function proofHostedHead(pr, source, archive) {
+  // Replay the publication owner's native receipt contract. prep.env alone
+  // cannot advance the lease once baseline installation retires that file.
+  return execFileSync(
+    "/bin/bash",
+    [
+      "-c",
+      `set -euo pipefail
+source "$1/prepare-core.sh"
+source "$1/push.sh"
+pr_git() { "\${OPENCLAW_PR_GIT:-\${GIT_EXEC:-git}}" "$@"; }
+source "$2/prep-context.env"
+resolve_baseline_publication_target "$3" "$4" "$2"
+printf '%s' "$PREP_PUBLICATION_LEASE_SHA"`,
+      "baseline-proof-publication",
+      dirname(fileURLToPath(import.meta.url)),
+      archive,
+      String(pr),
+      source,
+    ],
+    { encoding: "utf8" },
+  );
+}
+
+function validateProofSource(record, scope) {
   const proof = record.proofSource;
   exactKeys(proof, [
     "sourceTree",
@@ -582,7 +625,11 @@ function validateProofSource(record) {
       proof.expectedHostedHead,
     ].every((value) => oidPattern.test(value)) ||
     proof.sourceTree !== text("rev-parse", record.sourceHead + "^{tree}") ||
-    proof.expectedHostedHead !== record.incomingHead ||
+    (record.sourceAdmission && proof.continuation) ||
+    proof.expectedHostedHead !==
+      (record.sourceAdmission
+        ? proofHostedHead(record.pr, record.sourceHead, record.archive)
+        : record.incomingHead) ||
     hash(readRegular(join(record.archive, "baseline-source-review.json"))) !== proof.sourceReviewOid
   ) {
     throw new Error("Proof baseline source identity changed.");
@@ -599,12 +646,9 @@ function validateProofSource(record) {
     prMeta: {
       ...prMeta,
       headRefOid: record.sourceHead,
-      files: [
-        ...new Set([
-          ...prMeta.files.map((file) => file.path),
-          ...paths(record.incomingHead, record.sourceHead),
-        ]),
-      ].map((path) => ({ path })),
+      files: [...new Set([...prMeta.files.map((file) => file.path), ...scope])].map((path) => ({
+        path,
+      })),
     },
     findings,
     incoming: record.incomingHead,
@@ -642,13 +686,15 @@ function validateProofSource(record) {
     context = readRegular(join(record.archive, "prep-context.env"));
     execFileSync("bash", [
       "-c",
-      'set -eu; source "$1"; [ "$PR_NUMBER" = "$2" ] && [ "$PREP_BRANCH" = "pr-$2-prep" ] && [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PREP_INCOMING_JSON_OID" = "$4" ] && [ "$PR_HEAD" = "$5" ] && [ -z "${PREP_BASELINE_REFRESH_HEAD:-}${PREP_BASELINE_REFRESH_OID:-}" ]',
+      'set -eu; source "$1"; [ "$PR_NUMBER" = "$2" ] && [ "$PREP_BRANCH" = "pr-$2-prep" ] && [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_HEAD_SHA_BEFORE" = "$3" ] && [ "$PREP_INCOMING_JSON_OID" = "$4" ] && [ "$PR_HEAD" = "$5" ] && [ "${PREP_BASELINE_REFRESH_HEAD:-}" = "$6" ] && [ "${PREP_BASELINE_REFRESH_OID:-}" = "$7" ]',
       "proof-baseline-context",
       join(record.archive, "prep-context.env"),
       String(record.pr),
       record.incomingHead,
       record.incomingReviewOid,
       prMeta.headRefName,
+      record.sourceAdmission?.predecessorHead ?? "",
+      record.sourceAdmission?.predecessorBinding ?? "",
     ]);
     const commits = text(
       "rev-list",
@@ -662,12 +708,23 @@ function validateProofSource(record) {
   return context;
 }
 
-function completedProof(pr, source, baseline, sourceTree, sourceReviewOid, continuationJson, main) {
+function completedProof(
+  pr,
+  source,
+  baseline,
+  sourceTree,
+  sourceReviewOid,
+  continuationJson,
+  main,
+  coauthorsJson,
+  predecessorJson,
+) {
   const anchor = text("rev-parse", "HEAD");
   const binding = { ...bindingAt(anchor), anchor };
   const { record } = binding;
   const request = JSON.parse(continuationJson);
   const selected = record.proofSource?.continuation;
+  const predecessor = JSON.parse(predecessorJson);
   if (
     record.version !== 2 ||
     record.pr !== pr ||
@@ -675,6 +732,11 @@ function completedProof(pr, source, baseline, sourceTree, sourceReviewOid, conti
     record.baselineHead !== baseline ||
     record.proofSource.sourceTree !== sourceTree ||
     record.proofSource.sourceReviewOid !== sourceReviewOid ||
+    JSON.stringify(record.coauthors ?? []) !== coauthorsJson ||
+    (predecessor === null
+      ? record.sourceAdmission !== undefined
+      : record.sourceAdmission?.predecessorHead !== predecessor.head ||
+        record.sourceAdmission?.predecessorBinding !== predecessor.binding) ||
     (request === null
       ? selected !== null
       : !selected ||
@@ -728,10 +790,12 @@ function prepareProofSource(
   workflowSource,
   workflowBinding,
   continuationJson,
+  predecessorJson,
 ) {
-  if (present(bindingPath) || present(".local/review-transition.json")) {
+  const predecessor = JSON.parse(predecessorJson);
+  if (present(bindingPath) !== Boolean(predecessor) || present(".local/review-transition.json")) {
     throw new Error(
-      "Proof baseline admission requires an unbound source and no retained transition.",
+      "Proof baseline admission requires its exact predecessor selection and no retained transition.",
     );
   }
   const bytes = readRegular(reviewPath);
@@ -771,22 +835,44 @@ function prepareProofSource(
     sourceReviewOid: reviewOid,
     workflowSource,
     workflowBinding,
-    expectedHostedHead: meta.headRefOid,
+    expectedHostedHead: predecessor ? proofHostedHead(pr, source, archive) : meta.headRefOid,
     continuation,
   };
   const authority = Object.fromEntries(
     authorityPaths.map((path) => [path, present(path) ? hash(readRegular(path)) : "absent"]),
   );
-  validateProofSource({
+  // Reconstructed product and fixup scope excludes main changes already
+  // admitted by the predecessor; those changes do not belong to this review.
+  const scope = baselineRefreshCandidate({
     pr,
-    sourceHead: source,
-    baselineHead: baseline,
-    capturedMain: main,
-    archive,
-    incomingHead: meta.headRefOid,
+    incoming: meta.headRefOid,
     incomingReviewOid,
-    proofSource,
-  });
+    head: source,
+    anchor: predecessor?.head,
+    bindingOid: predecessor?.binding,
+    main,
+  }).paths;
+  validateProofSource(
+    {
+      pr,
+      sourceHead: source,
+      baselineHead: baseline,
+      capturedMain: main,
+      archive,
+      incomingHead: meta.headRefOid,
+      incomingReviewOid,
+      proofSource,
+      ...(predecessor
+        ? {
+            sourceAdmission: {
+              predecessorHead: predecessor.head,
+              predecessorBinding: predecessor.binding,
+            },
+          }
+        : {}),
+    },
+    scope,
+  );
   git(["verify-commit", source]);
   git(["merge-base", "--is-ancestor", baseline, main]);
   process.stdout.write(
@@ -799,7 +885,7 @@ function prepareProofSource(
   );
 }
 
-function retainedAuthority(binding) {
+function retainedAuthority(binding, metadataDirectory = ".local") {
   const { record, oid } = binding;
   exactKeys(record.authority, authorityPaths);
   if (!fs.lstatSync(record.archive).isDirectory()) {
@@ -826,7 +912,10 @@ function retainedAuthority(binding) {
         admission.sourceTree,
       ].every((value) => oidPattern.test(value)) ||
       admission.predecessorBinding !== record.authority[bindingPath] ||
-      admission.sourceReviewOid !== record.authority[".local/correction-review.json"] ||
+      admission.sourceReviewOid !==
+        (record.version === 2
+          ? record.proofSource.sourceReviewOid
+          : record.authority[".local/correction-review.json"]) ||
       admission.sourceTree !== text("rev-parse", `${record.sourceHead}^{tree}`)
     ) {
       throw new Error("Successor source admission identity changed.");
@@ -844,7 +933,12 @@ function retainedAuthority(binding) {
     ) {
       throw new Error("Successor predecessor authority changed.");
     }
-    prior = retainedAuthority(predecessor);
+    // A proof successor inventories the original incoming metadata beside its
+    // predecessor. Later continuation must replay that parent, not live metadata.
+    prior = retainedAuthority(
+      predecessor,
+      record.version === 2 ? record.archive : metadataDirectory,
+    );
     if (!context.equals(prior.boundContext)) {
       throw new Error("Successor source context does not retain its predecessor binding.");
     }
@@ -874,7 +968,13 @@ function retainedAuthority(binding) {
       }
     }
     if ([".local/pr-meta.json", ".local/pr-meta.env", ".local/review.json"].includes(path)) {
-      if (hash(record.version === 2 ? retained(path) : readRegular(path)) !== expected) {
+      if (
+        hash(
+          record.version === 2
+            ? retained(path)
+            : readRegular(join(metadataDirectory, path.slice(".local/".length))),
+        ) !== expected
+      ) {
         throw new Error(`Incoming authority changed: ${path}`);
       }
     } else if (expected !== "absent" && hash(retained(path)) !== expected) {
@@ -882,10 +982,14 @@ function retainedAuthority(binding) {
     }
   }
   const meta = JSON.parse(
-    record.version === 2 ? retained(".local/pr-meta.json") : readRegular(".local/pr-meta.json"),
+    record.version === 2
+      ? retained(".local/pr-meta.json")
+      : readRegular(join(metadataDirectory, "pr-meta.json")),
   );
   const incoming = JSON.parse(
-    record.version === 2 ? retained(".local/review.json") : readRegular(".local/review.json"),
+    record.version === 2
+      ? retained(".local/review.json")
+      : readRegular(join(metadataDirectory, "review.json")),
   );
   const required = incoming.findings.filter((finding) =>
     ["BLOCKER", "IMPORTANT"].includes(finding.severity),
@@ -898,13 +1002,14 @@ function retainedAuthority(binding) {
   ]);
   let proofContext;
   if (record.version === 2) {
-    proofContext = validateProofSource(record);
+    proofContext = validateProofSource(record, scope);
   } else if (record.incomingSource) {
     incomingSourceAuthority(
       record.pr,
       record.sourceHead,
       record.incomingReviewOid,
       join(record.archive, "prep-context.env"),
+      metadataDirectory,
     );
   } else {
     const review = JSON.parse(retained(".local/correction-review.json"));
@@ -1232,7 +1337,82 @@ export function baselineRefreshCandidate({
   return {
     paths: [...retained.scope, ...paths(anchor, head)],
     baselineHead: binding.record.baselineHead,
+    pendingFindings:
+      binding.record.version === 2
+        ? JSON.parse(
+            readRegular(join(binding.record.archive, "baseline-source-review.json")),
+          ).findings.filter(({ severity }) => severity === "IMPORTANT")
+        : [],
   };
+}
+
+function additionalCoauthors(value) {
+  if (!Array.isArray(value)) {
+    throw new Error("Expected a JSON array of co-authors in Name <email> format.");
+  }
+  const seen = new Set();
+  return value.filter((identity) => {
+    const match =
+      typeof identity === "string" &&
+      /^([^\p{Cc}\p{Zl}\p{Zp}<>]+) <([^<>\s@\p{Cc}\p{Zl}\p{Zp}]+@[^<>\s@\p{Cc}\p{Zl}\p{Zp}]+)>$/u.exec(
+        identity,
+      );
+    if (!match || match[1] !== match[1].trim()) {
+      throw new Error(
+        "Invalid co-author: expected one Name <email> without control or line separators.",
+      );
+    }
+    const email = match[2].toLowerCase();
+    if (seen.has(email)) {
+      return false;
+    }
+    seen.add(email);
+    return true;
+  });
+}
+
+function sourceCoauthors(source) {
+  // Git owns trailer parsing/unfolding; this read-only format cannot execute
+  // configured trailer commands. Copy only source credit, never binding markers.
+  const coauthors = decoder
+    .decode(
+      git([
+        "-c",
+        "trailer.separators=:",
+        "-c",
+        "trailer.co-authored-by.key=Co-authored-by",
+        "show",
+        "-s",
+        "--no-show-signature",
+        "--no-notes",
+        "--no-color",
+        "--no-decorate",
+        "--encoding=UTF-8",
+        "--format=%(trailers:key=Co-authored-by,only,unfold)",
+        source,
+      ]),
+    )
+    .split("\n")
+    .filter(Boolean);
+  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
+    throw new Error(
+      "Cannot preserve source co-author credit containing control or line separators.",
+    );
+  }
+  return coauthors;
+}
+
+function baselineCoauthors(source, requested) {
+  const coauthors = sourceCoauthors(source);
+  const emails = new Set(coauthors.map((line) => /<([^<>]+)>$/u.exec(line)?.[1].toLowerCase()));
+  for (const identity of requested) {
+    const email = /<([^<>]+)>$/u.exec(identity)[1].toLowerCase();
+    if (!emails.has(email)) {
+      coauthors.push("Co-authored-by: " + identity);
+      emails.add(email);
+    }
+  }
+  return coauthors;
 }
 
 function create(
@@ -1246,7 +1426,9 @@ function create(
   successor,
   signer,
   proofSource,
+  requestedCoauthors = [],
 ) {
+  const coauthors = additionalCoauthors(requestedCoauthors);
   if (
     ![source, baseline, main].every((value) => oidPattern.test(value)) ||
     (!successor && present(bindingPath))
@@ -1269,7 +1451,8 @@ function create(
     if (
       predecessor.oid !== predecessorBinding ||
       authority[bindingPath] !== predecessorBinding ||
-      authority[".local/correction-review.json"] !== sourceReviewOid ||
+      (proofSource ? proofSource.sourceReviewOid : authority[".local/correction-review.json"]) !==
+        sourceReviewOid ||
       text("rev-parse", `${source}^{tree}`) !== sourceTree ||
       !readRegular(".local/prep-context.env").equals(prior.boundContext)
     ) {
@@ -1311,6 +1494,7 @@ function create(
   const record = {
     version: proofSource ? 2 : 1,
     ...(proofSource ? { purpose: "proof", proofSource } : {}),
+    ...(coauthors.length ? { coauthors } : {}),
     pr,
     sourceHead: source,
     baselineHead: baseline,
@@ -1327,38 +1511,11 @@ function create(
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
-  // Git owns trailer parsing/unfolding; this read-only format cannot execute
-  // configured trailer commands. Copy only source credit, never binding markers.
-  const coauthors = decoder
-    .decode(
-      git([
-        "-c",
-        "trailer.separators=:",
-        "-c",
-        "trailer.co-authored-by.key=Co-authored-by",
-        "show",
-        "-s",
-        "--no-show-signature",
-        "--no-notes",
-        "--no-color",
-        "--no-decorate",
-        "--encoding=UTF-8",
-        "--format=%(trailers:key=Co-authored-by,only,unfold)",
-        source,
-      ]),
-    )
-    .split("\n")
-    .filter(Boolean);
-  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
-    throw new Error(
-      "Cannot preserve source co-author credit containing control or line separators.",
-    );
-  }
   const message = [
     "fix: refresh the reviewed correction baseline",
     "",
     `Baseline-Refresh: ${oid}`,
-    ...coauthors,
+    ...baselineCoauthors(source, coauthors),
     "",
   ].join("\n");
   const anchor = decoder
@@ -1570,18 +1727,33 @@ function checkSigning(pr, root, lockRef, lockOid) {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "continuation-baseline" && args.length === 8) {
+    if (command === "coauthors" && args.length === 1) {
+      process.stdout.write(
+        JSON.stringify(additionalCoauthors(JSON.parse(decoder.decode(readRegular(args[0]))))),
+      );
+    } else if (command === "continuation-baseline" && args.length === 8) {
       process.stdout.write(continuationBaseline(Number(args[0]), ...args.slice(1)));
     } else if (command === "publication-lineage" && args.length === 5) {
       publicationLineage(Number(args[0]), ...args.slice(1));
     } else if (command === "incoming-source-snapshot" && args.length === 3) {
       incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
-    } else if (command === "completed-proof" && args.length === 7) {
+    } else if (command === "completed-proof" && args.length === 9) {
       completedProof(Number(args[0]), ...args.slice(1));
-    } else if (command === "proof-source" && args.length === 10) {
+    } else if (command === "proof-source" && args.length === 11) {
       prepareProofSource(Number(args[0]), ...args.slice(1));
-    } else if (command === "create-proof" && args.length === 8) {
-      create(Number(args[0]), ...args.slice(1, 7), undefined, undefined, JSON.parse(args[7]));
+    } else if (command === "create-proof" && args.length === 10) {
+      const predecessor = JSON.parse(args[9]);
+      const proof = JSON.parse(args[7]);
+      create(
+        Number(args[0]),
+        ...args.slice(1, 7),
+        predecessor
+          ? [predecessor.head, predecessor.binding, proof.sourceReviewOid, proof.sourceTree]
+          : undefined,
+        undefined,
+        proof,
+        JSON.parse(args[8]),
+      );
     } else if (command === "create" && args.length === 7) {
       create(Number(args[0]), ...args.slice(1));
     } else if (command === "create-successor" && args.length === 11) {

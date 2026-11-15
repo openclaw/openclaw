@@ -28,6 +28,7 @@ import {
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
 import { isDefaultChatLanding } from "../pages/model-setup/first-run.ts";
 import { newSessionLocationFromSearch } from "../pages/new-session/location.ts";
+import { finishBootFrame } from "./boot-composer.ts";
 import type {
   ApplicationContext,
   ApplicationGateway,
@@ -323,6 +324,7 @@ export function subscribeForegroundChatBootstrap({
   initialChatRoute: boolean;
 }): () => void {
   connectionBootstrap.setForegroundRoute(initialChatRoute ? undefined : null);
+  const bootPath = window.location.pathname;
   const synchronizeRoute = (state: ReturnType<ApplicationRouter["getState"]>) => {
     const match = state.pendingMatches[0] ?? state.matches[0];
     if (!match && state.status === "idle") {
@@ -333,10 +335,10 @@ export function subscribeForegroundChatBootstrap({
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
     // Admission previews have no transcript controller and cannot claim its
     // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
-    connectionBootstrap.setForegroundRoute(
+    const foregroundRoute =
       !isSessionRouteId(match?.routeId) ||
-        chatSubmissions.creation ||
-        (key !== null && chatSubmissions.creationFor(key)?.admitted === false)
+      chatSubmissions.creation ||
+      (key !== null && chatSubmissions.creationFor(key)?.admitted === false)
         ? null
         : match.status === "pending"
           ? undefined
@@ -354,8 +356,11 @@ export function subscribeForegroundChatBootstrap({
                   agentId: typeof data?.agentId === "string" ? data.agentId : undefined,
                 },
               )
-            : null,
-    );
+            : null;
+    connectionBootstrap.setForegroundRoute(foregroundRoute);
+    if (window.location.pathname !== bootPath || foregroundRoute === null) {
+      finishBootFrame();
+    }
   };
   const synchronize = () => synchronizeRoute(router.getState());
   const stopConnection = gateway.subscribe((snapshot) => {

@@ -106,7 +106,7 @@ export function registerSessionsSpawnInputTests({
     [
       "hidden cloud placement",
       { placement: { kind: "profile", profileId: "build" } },
-      "Cloud placement requires visible=true and worktree=true. Corrected call: sessions_spawn(",
+      "Cloud and device placement require visible=true and worktree=true. Corrected call: sessions_spawn(",
     ],
   ] as const)("%s is rejected before dispatch", async (_name, input, error) => {
     registerAcpBackendForTest();
