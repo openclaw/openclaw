@@ -1564,7 +1564,7 @@ describe("Codex app-server dynamic tool build", () => {
       messageTool.description,
       heartbeatTool.description,
     ]);
-    expect(hoisted.resolveWebSearchToolPolicy).not.toHaveBeenCalled();
+    expect(hoisted.resolveWebSearchToolPolicyAsync).not.toHaveBeenCalled();
   });
 
   it("enables gateway subagent binding for forced private QA Codex runs", async () => {
