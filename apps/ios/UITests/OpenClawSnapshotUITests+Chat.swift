@@ -395,7 +395,7 @@ extension OpenClawSnapshotUITests {
         self.attachScreenshot(named: "keyboard-transcript-visible-after-send")
 
         // Keep repeated typing and reader positioning on the real editor with deterministic history.
-        // A multiline turn still follows the live edge; only a reader drag releases following.
+        // With the keyboard closed, keep the question and start of its answer in view.
         let anchoredPrompt = String(
             repeating: "Reader context keeps the question anchored as the reply arrives.\n",
             count: 9) + "Keep this reply anchored."
@@ -419,15 +419,20 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts["Writing"].waitForNonExistence(timeout: 5))
 
         let jumpToLatest = app.buttons["Jump to latest reply"]
-        // Pin-only policy: sending follows the reply, not the submitted question.
-        XCTAssertTrue(jumpToLatest.waitForNonExistence(timeout: 3))
-        let finalReply = app.staticTexts.matching(NSPredicate(
-            format: "label CONTAINS %@ AND label CONTAINS %@",
-            "I can help with",
-            "Keep this reply anchored.")).firstMatch
-        XCTAssertTrue(finalReply.exists)
-        self.assertElementHasRenderedContent(finalReply, named: "multiline reply at live edge")
-        self.attachScreenshot(named: "multiline-reply-at-live-edge")
+        let questionAndReplyStartVisible = XCTNSPredicateExpectation(
+            predicate: NSPredicate { _, _ in
+                let viewport = transcript.frame
+                return submitted.exists && response.exists &&
+                    submitted.frame.minY >= viewport.minY && submitted.frame.minY < viewport.midY &&
+                    response.frame.minY >= viewport.minY && response.frame.minY < viewport.maxY
+            },
+            object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [questionAndReplyStartVisible], timeout: 5), .completed)
+        XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))
+        let finalReply = response
+        self.assertElementHasRenderedContent(submitted, named: "anchored question with keyboard closed")
+        self.assertElementHasRenderedContent(finalReply, named: "start of anchored reply")
+        self.attachScreenshot(named: "keyboard-closed-question-and-reply-start")
 
         transcript.swipeDown()
         XCTAssertTrue(jumpToLatest.waitForExistence(timeout: 3))

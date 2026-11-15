@@ -2,20 +2,25 @@
 import SwiftUI
 import UIKit
 
+@MainActor
 func chatTranscriptBottomOffset(_ scroll: UIScrollView) -> CGFloat {
     max(
         -scroll.adjustedContentInset.top,
         scroll.contentSize.height - scroll.bounds.height + scroll.adjustedContentInset.bottom)
 }
 
-/// Same-transaction live-edge owner. No timer, queue or display-link correction.
+/// Positions the live edge or requested turn in the layout transaction, without timers or queued correction.
 struct ChatSynchronousFollowProbe: UIViewRepresentable {
     let scroll: ChatScrollFollowState
+    var target: ScrollFollowTarget = .latest
+    var anchor: UnitPoint = .bottom
 
     final class Probe: UIView {
         weak var scroller: UIScrollView?
         var observations: [NSKeyValueObservation] = []
         var followState: ChatScrollFollowState?
+        var target: ScrollFollowTarget = .latest
+        var anchor: UnitPoint = .bottom
         var reconciling = false
         var keyboardObservers: [NSObjectProtocol] = []
 
@@ -78,11 +83,24 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
         func reconcile() {
             guard !self.reconciling,
                   let state = self.followState,
-                  state.followTarget == .latest, !state.isUserScrolling,
+                  state.followTarget == self.target, !state.isUserScrolling,
                   let scroll = self.scroller, scroll.window != nil,
                   !scroll.isTracking, !scroll.isDragging, !scroll.isDecelerating,
                   scroll.bounds.height > 0 else { return }
-            let y = chatTranscriptBottomOffset(scroll)
+            let bottom = chatTranscriptBottomOffset(scroll)
+            let y: CGFloat
+            switch self.target {
+            case .latest:
+                y = bottom
+            case .turn:
+                guard ChatReaderRunAnchor.isPositioned(self, in: scroll) else { return }
+                let frame = self.convert(self.bounds, to: scroll)
+                let viewportHeight = scroll.bounds.height - scroll.adjustedContentInset.top -
+                    scroll.adjustedContentInset.bottom
+                let desired = frame.minY - (viewportHeight - frame.height) * self.anchor.y -
+                    scroll.adjustedContentInset.top
+                y = min(bottom, max(-scroll.adjustedContentInset.top, desired))
+            }
             guard y.isFinite, abs(scroll.contentOffset.y - y) > 0.5 else { return }
             self.reconciling = true
             defer { self.reconciling = false }
@@ -93,12 +111,16 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
     func makeUIView(context: Context) -> Probe {
         let probe = Probe()
         probe.followState = self.scroll
+        probe.target = self.target
+        probe.anchor = self.anchor
         probe.isUserInteractionEnabled = false
         return probe
     }
 
     func updateUIView(_ probe: Probe, context: Context) {
         probe.followState = self.scroll
+        probe.target = self.target
+        probe.anchor = self.anchor
         probe.attach()
         probe.reconcile()
     }
@@ -111,6 +133,19 @@ struct ChatSynchronousFollowProbe: UIViewRepresentable {
         probe.observations.removeAll()
         probe.scroller = nil
         probe.followState = nil
+    }
+}
+
+/// Only the locally admitted turn observes its follow target; message content stays independent.
+struct ChatTurnFollowProbe: View {
+    let scroll: ChatScrollFollowState
+    let messageID: UUID?
+    let anchor: UnitPoint
+
+    var body: some View {
+        if let messageID, self.scroll.followTarget == .turn(messageID) {
+            ChatSynchronousFollowProbe(scroll: self.scroll, target: .turn(messageID), anchor: self.anchor)
+        }
     }
 }
 
