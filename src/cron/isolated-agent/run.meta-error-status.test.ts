@@ -163,11 +163,10 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
-  it("preserves a run-level error with partial text when delivery is pending", async () => {
+  it("publishes a failed recovery's error over the precheck's overflow and keeps it as the run error when delivery is pending", async () => {
     harness.mockRunCronFallbackPassthrough();
     const message = "Auto-compaction could not reach the model provider.";
     harness.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
-      // A failed recovery's cause replaces the precheck's tentative overflow.
       const errorObservation = { failoverReason: "context_overflow" };
       const data = { phase: "finishing", error: "context length exceeded", errorObservation };
       params.onAgentEvent({ stream: "lifecycle", data });
