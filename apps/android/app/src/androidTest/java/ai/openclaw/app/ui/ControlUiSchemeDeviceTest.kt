@@ -20,7 +20,6 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.UiDevice
-import okio.ByteString.Companion.toByteString
 import org.bouncycastle.asn1.ASN1Integer
 import org.bouncycastle.asn1.DERBitString
 import org.bouncycastle.asn1.DERNull
@@ -89,7 +88,7 @@ class ControlUiSchemeDeviceTest {
     servers += server
     val routed = endpoint.copy(port = server.port)
     val url = gatewayControlPageBaseUrl(routed, tls)
-    val text = loadControlPage(routed, url, certificateFingerprint())
+    val text = loadControlPage(routed, url, fingerprint = null)
     File(proofDirectory(), "https-discovered.txt").writeText("url=$url\npage=$text\n")
     assertTrue(text, text.startsWith("https://$host:${server.port}") && text.contains("wss://$host:${server.port}") && showsInstalledNativeAuth(text))
   }
@@ -228,12 +227,6 @@ class ControlUiSchemeDeviceTest {
 
   private val proofIdentity: ProofIdentity by lazy { generateProofIdentity() }
 
-  private fun certificateFingerprint(): String =
-    proofIdentity.certificate.encoded
-      .toByteString()
-      .sha256()
-      .hex()
-
   private fun proofSslContext(): SSLContext = proofIdentity.context
 
   private fun bitmapHasInk(bitmap: android.graphics.Bitmap): Boolean {
@@ -309,7 +302,6 @@ class ControlUiSchemeDeviceTest {
   }
 
   private data class ProofIdentity(
-    val certificate: X509Certificate,
     val context: SSLContext,
   )
 
@@ -344,7 +336,7 @@ class ControlUiSchemeDeviceTest {
         }
       val keys = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm()).apply { init(store, password) }
       val context = SSLContext.getInstance("TLS").apply { init(keys.keyManagers, null, null) }
-      return ProofIdentity(certificate, context)
+      return ProofIdentity(context)
     }
 
     private const val PAGE =

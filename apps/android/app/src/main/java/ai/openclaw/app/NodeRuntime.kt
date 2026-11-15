@@ -8723,21 +8723,6 @@ internal fun gatewayRegistryEntry(
   )
 }
 
-/**
- * Control UI origin for an endpoint with no stored certificate pin.
- * Callers that already resolved the socket must pass that decision.
- */
-internal fun gatewayControlPageBaseUrl(endpoint: GatewayEndpoint): String =
-  gatewayControlPageBaseUrl(
-    endpoint,
-    tls =
-      ConnectionManager.resolveTlsParamsForEndpoint(
-        endpoint,
-        storedFingerprint = null,
-        manualTlsEnabled = endpoint.tlsEnabled,
-      ),
-  )
-
 /** Control UI origin. A null TLS decision is cleartext; any socket TLS decision is HTTPS. */
 internal fun gatewayControlPageBaseUrl(
   endpoint: GatewayEndpoint,
