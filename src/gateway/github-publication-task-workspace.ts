@@ -2,12 +2,15 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
 import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
-import { requireGit } from "../agents/worktrees/git.js";
+import { commandError, requireGit, runGit } from "../agents/worktrees/git.js";
 import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
+import {
+  prepareGitHubPublicationTaskRequester,
+  type GitHubPublicationRequesterV2,
+} from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -57,28 +60,26 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   const hash = createHash("sha256").update(`${origin.sessionKey}\0${source}`).digest("hex");
   const label = `github-publication-${hash.slice(0, 32)}`;
   const incognito = parent.entry.incognito === true || isIncognitoSessionKey(parent.canonicalKey);
-  let key: string | undefined = `agent:${parent.agentId}:dashboard:${label}`;
-  if (incognito) {
-    const children = await listSessionChildEntriesReadOnly({
-      agentId: parent.agentId,
-      sessionKey: parent.canonicalKey,
-      storePath: parent.storePath,
-    });
-    assertPreparationCurrent();
-    key = children.find(({ entry }) => entry.label === label)?.sessionKey;
-  }
+  // Accepted retries retain their original task, including renamed and older tasks.
+  const receipt = await readSharedGitHubPublication(origin, {
+    idempotencyKey: params.idempotencyKey,
+  });
+  assertPreparationCurrent();
+  let key =
+    receipt?.session_key ?? (incognito ? undefined : `agent:${parent.agentId}:dashboard:${label}`);
   const assertTask = (entry: InternalSessionEntry | undefined) => {
     if (
       !entry ||
       entry.parentSessionKey !== origin.sessionKey ||
       entry.createdVia !== "spawn" ||
       entry.projectId !== parent.entry.projectId ||
+      (receipt && entry.sessionId !== receipt.session_id) ||
       entry.worktree?.canonicalWorkspaceDir !== source
     ) {
       throw new Error("The local publication task changed; its saved checkout was preserved.");
     }
   };
-  const existing = key
+  let existing = key
     ? await loadGatewaySessionEntryReadOnlyInWorker({
         cfg: getConfig(),
         agentId: parent.agentId,
@@ -87,18 +88,45 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
         projection: "full",
       })
     : undefined;
-  // A retry must not republish an accepted request whose task was deleted.
-  const receipt = existing?.entry
-    ? undefined
-    : await readSharedGitHubPublication(origin, { idempotencyKey: params.idempotencyKey });
   assertPreparationCurrent();
-  if (receipt) {
+  // A retry must not republish an accepted request whose task was deleted.
+  if (receipt && !existing?.entry) {
     throw new Error("The original publication task is unavailable; inspect its existing receipt.");
   }
-  const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
-  if (await requireGit(source, ["status", "--porcelain"], gitOptions)) {
-    throw new Error("Commit the task changes before publishing this checkout.");
+  if (!existing?.entry) {
+    // Earlier versions keyed tasks by invocation. Reuse their recorded checkout
+    // custody instead of opening another PR after an upgrade.
+    const children = await listSessionChildEntriesReadOnly({
+      agentId: parent.agentId,
+      sessionKey: parent.canonicalKey,
+      storePath: parent.storePath,
+    });
+    assertPreparationCurrent();
+    const matches = children.filter(
+      ({ entry }) =>
+        entry.createdVia === "spawn" &&
+        entry.label?.startsWith("github-publication-") &&
+        entry.worktree?.canonicalWorkspaceDir === source,
+    );
+    if (matches.length > 1) {
+      throw new Error(
+        `Multiple publication tasks already use this checkout: ${matches.map((child) => child.sessionKey).join(", ")}. Inspect each with github_publish(action: "readiness", publishingSessionKey: <task key>), then continue in the intended task session. No new PR was created.`,
+      );
+    }
+    if (matches[0]) {
+      key = matches[0].sessionKey;
+      existing = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getConfig(),
+        agentId: parent.agentId,
+        key,
+        assertActive: assertPreparationCurrent,
+        projection: "full",
+      });
+      assertPreparationCurrent();
+      assertTask(existing.entry);
+    }
   }
+  const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (parent.entry.projectId) {
     const project = await resolveRequesterProject(
       getConfig(),
@@ -124,6 +152,24 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   }
   if (existing?.entry) {
     assertTask(existing.entry);
+    if (receipt) {
+      return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
+    }
+  }
+  if (await requireGit(source, ["status", "--porcelain"], gitOptions)) {
+    throw new Error("Commit the task changes before publishing this checkout.");
+  }
+  if (existing?.entry) {
+    // Access to the conversation does not imply access to a task created by
+    // another requester. Authorize its mutation before synchronizing the checkout.
+    const prepared = await prepareGitHubPublicationTaskRequester(
+      requester,
+      { agentId: parent.agentId, sessionKey: existing.canonicalKey },
+      origin,
+      getConfig,
+    );
+    using _ = { [Symbol.dispose]: prepared.release };
+    prepared.requester.assertCurrent();
     // Merge the source commit with its exact tree: the task branch fast-forwards and
     // its PR shows the source's changes even after a rebase or amend.
     const cwd = existing.entry.spawnedCwd!;
@@ -131,7 +177,16 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     const [head, tree, an, ae, cn, ce] = (
       await requireGit(source, ["log", "-1", format], gitOptions)
     ).split("\n");
-    if (tree !== (await requireGit(cwd, ["rev-parse", "HEAD^{tree}"], gitOptions))) {
+    const ancestry = await runGit(cwd, ["merge-base", "--is-ancestor", head!, "HEAD"], gitOptions);
+    if (ancestry.termination !== "exit" || (ancestry.code !== 0 && ancestry.code !== 1)) {
+      throw commandError("git merge-base --is-ancestor", ancestry);
+    }
+    // A rebase can change ancestry without changing a single file. Retain that
+    // ancestry too, so GitHub's merge-base diff excludes changes already upstream.
+    if (
+      ancestry.code === 1 ||
+      tree !== (await requireGit(cwd, ["rev-parse", "HEAD^{tree}"], gitOptions))
+    ) {
       const env = {
         GIT_AUTHOR_NAME: an,
         GIT_AUTHOR_EMAIL: ae,
