@@ -42,7 +42,7 @@ export async function updateGitRelease(params: {
   timeoutMs: number;
   startedAt: number;
 }): Promise<UpdateRunResult> {
-  const { opts, gitRoot, timeoutMs, startedAt, runCommand } = params;
+  const { opts, timeoutMs, startedAt, runCommand } = params;
   const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);
   const channel: UpdateChannel = opts.channel ?? "dev";
   const steps: UpdateStepResult[] = [];
@@ -66,22 +66,29 @@ export async function updateGitRelease(params: {
     });
   const step = forRunner(timeoutMs);
   const workStep = forRunner(opts.timeoutMs);
-  const head = await runCommand(["git", "-C", gitRoot, "rev-parse", "HEAD"], {
-    cwd: gitRoot,
-    timeoutMs,
-  });
+  // A release is a worktree of the developer's checkout; Git work happens there.
+  const running = params.gitRoot;
+  const git = (root: string, ...args: string[]) =>
+    runCommand(["git", "-C", root, ...args], { cwd: root, timeoutMs });
+  const commonDir = (
+    await git(running, "rev-parse", "--path-format=absolute", "--git-common-dir")
+  ).stdout.trim();
+  const gitRoot = path.basename(commonDir) === ".git" ? path.dirname(commonDir) : params.gitRoot;
+  const runningHead = await git(running, "rev-parse", "HEAD");
+  const head = await git(gitRoot, "rev-parse", "HEAD");
+  const runningSha = runningHead.stdout.trim() || null;
   const beforeSha = head.stdout.trim() || null;
   const [beforeVersion, beforeBuildId] = await Promise.all([
-    readPackageVersion(gitRoot),
-    readBuiltGatewayBuildId(gitRoot),
+    readPackageVersion(running),
+    readBuiltGatewayBuildId(running),
   ]);
   const before = {
-    sha: beforeSha,
+    sha: runningSha,
     version: beforeVersion,
     ...(beforeBuildId ? { buildId: beforeBuildId } : {}),
   };
   // The running release and the checkout stay untouched until the link moves.
-  const recovery = await verifyGitUpdateRecovery({ root: gitRoot, sha: beforeSha });
+  const recovery = await verifyGitUpdateRecovery({ root: running, sha: runningSha });
   const result = (status: UpdateRunResult["status"], reason?: string): UpdateRunResult => ({
     status,
     mode: "git",
@@ -95,7 +102,7 @@ export async function updateGitRelease(params: {
   if (channel === "extended-stable") {
     return result("error", "unsupported_git_channel");
   }
-  if (head.code !== 0 || !beforeSha) {
+  if (head.code !== 0 || !beforeSha || !runningSha) {
     return result("error", "git-root-unresolved");
   }
   const fetched = await fetchGitUpdateTarget({
@@ -157,6 +164,16 @@ export async function updateGitRelease(params: {
       await cleanup?.();
       return built;
     }
+    // Replayed local commits get new IDs on every rebuild; the same tree is the same release.
+    const [builtTree, runningTree] = await Promise.all(
+      [built.candidateSha, runningSha].map(
+        async (sha) => (await git(gitRoot, "rev-parse", `${sha}^{tree}`)).stdout.trim() || sha,
+      ),
+    );
+    if (!converting && builtTree === runningTree) {
+      await cleanup?.();
+      return { status: "skipped" as const, reason: "already-current" as const };
+    }
     const moved = await runStep(
       step(
         "git-release-place",
@@ -200,7 +217,7 @@ export async function updateGitRelease(params: {
       retainCleanup,
       channel,
       devTarget: opts.devTarget,
-      beforeRuntimeVerified: true,
+      beforeRuntimeVerified: converting || beforeSha === runningSha,
       beforeGitStaging: opts.beforeGitStaging,
       validateCandidate: opts.validateCandidate,
       needsCheckoutMain: channel === "dev" && !opts.devTarget && branch !== DEV_BRANCH,

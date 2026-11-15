@@ -417,7 +417,8 @@ export async function executeMutableUpdate(
       throw error;
     }
   };
-  let servicePrepared = false;
+  // A Git release never stops or verifies the serving Gateway before activation.
+  let servicePrepared = gitRelease;
   // Activation-window timing the install runners cannot observe.
   const activationSteps: UpdateStepResult[] = [];
   const beforeActivate = async (roots: readonly string[] = [params.root]) => {
@@ -449,7 +450,6 @@ export async function executeMutableUpdate(
     if (
       preManagedServiceStop?.running &&
       !servicePrepared &&
-      !gitRelease &&
       preManagedServiceStop.serviceUpdateVerdict?.kind === "owned"
     ) {
       await verifyPreviousManagedGatewayForUpdate({
@@ -467,7 +467,7 @@ export async function executeMutableUpdate(
     }
     // A separate serving runtime needs complete compensation evidence before
     // its stop. --no-restart neither needs nor acquires restart authority.
-    if (params.shouldRestart && !servicePrepared && !gitRelease) {
+    if (params.shouldRestart && !servicePrepared) {
       originalManagedServiceRuntime = await observeOriginalManagedServiceRuntime(
         params,
         preManagedServiceStop,
@@ -480,6 +480,11 @@ export async function executeMutableUpdate(
     assertExecutionCurrent();
     await recordPhase("activating");
     assertExecutionCurrent();
+    if (gitRelease) {
+      // Every consumer keeps the release it started from; only the link moves.
+      mutationStarted = true;
+      return params.onActivation?.();
+    }
     const publication = {
       roots,
       env,
@@ -487,10 +492,10 @@ export async function executeMutableUpdate(
       assertCurrent: assertExecutionCurrent,
       updateInstallKind: params.updateInstallKind,
       shouldRestart: params.shouldRestart,
-      selected: gitRelease ? undefined : preManagedServiceStop,
+      selected: preManagedServiceStop,
     };
     await assertManagedGatewayArtifactPublication({ ...publication, phase: "before-stop" });
-    if (!servicePrepared && !gitRelease) {
+    if (!servicePrepared) {
       await waitForCurrent();
       await stopManagedServiceBeforeMutableUpdate(roots);
       // Preparation can hold Windows recovery custody without stopping a process.

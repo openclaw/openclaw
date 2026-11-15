@@ -77,6 +77,7 @@ type InstallationObserver = {
   onReplacement: (fact: GatewayInstallationReplacement) => void;
   replacement?: GatewayInstallationReplacement;
   check?: Promise<void>;
+  trialSettled?: boolean;
 };
 
 // SDK chunks and the Gateway share one process owner without loading restart machinery.
@@ -125,15 +126,6 @@ export function registerGatewayInstallationReplacementHandler(
       installationState.observer = undefined;
     }
   };
-}
-
-/** A ready Gateway ends the trial of the Git release it runs; the launcher stops counting. */
-export async function settleGatewayReleaseTrial(): Promise<void> {
-  const root = installationState.observer?.installationRoot;
-  if (root) {
-    const { settleGitReleaseTrial } = await import("../infra/git-release.js");
-    await settleGitReleaseTrial(root);
-  }
 }
 
 export function getGatewayInstallationReplacement(): GatewayInstallationReplacement | undefined {
@@ -191,6 +183,15 @@ async function readInstallationMetadata(file: string): Promise<unknown> {
 /** The existing maintenance tick owns disk reads; requests only consume recorded facts. */
 export function checkGatewayInstallationReplacement(): Promise<void> {
   const observer = installationState.observer;
+  // A serving Gateway ends the trial of the Git release it runs; the launcher stops counting.
+  if (observer?.installationRoot && !observer.trialSettled) {
+    observer.trialSettled = true;
+    void import("../infra/git-release.js")
+      .then(({ settleGitReleaseTrial }) => settleGitReleaseTrial(observer.installationRoot))
+      .catch(() => {
+        observer.trialSettled = false;
+      });
+  }
   const root = observer?.installationRoot;
   if (
     !observer ||
