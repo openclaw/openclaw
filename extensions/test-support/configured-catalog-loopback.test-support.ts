@@ -85,21 +85,24 @@ export async function withConfiguredCatalogLoopback(
               const reader = getReader(...args);
               void track(reader.closed);
               const read = reader.read.bind(reader);
-              vi.spyOn(reader, "read").mockImplementation((...readArgs) => {
-                const reading = track(read(...readArgs));
-                void track(
-                  reading.then((chunk) => {
-                    if (
-                      params.url === `${origin}/held/models` &&
-                      !chunk.done &&
-                      chunk.value.length
-                    ) {
-                      firstChunk.resolve();
-                    }
-                  }),
-                );
-                return reading;
-              });
+              vi.spyOn(reader, "read").mockImplementation(
+                (...readArgs: Parameters<typeof read>) => {
+                  const reading = Reflect.apply(read, reader, readArgs) as ReturnType<typeof read>;
+                  const observed = track<Awaited<ReturnType<typeof read>>>(reading);
+                  void track(
+                    observed.then((chunk) => {
+                      if (
+                        params.url === `${origin}/held/models` &&
+                        !chunk.done &&
+                        (chunk.value as typeof chunk.value & { readonly length?: unknown }).length
+                      ) {
+                        firstChunk.resolve();
+                      }
+                    }),
+                  );
+                  return reading;
+                },
+              );
               return reader;
             });
             const release = result.release.bind(result);
