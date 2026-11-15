@@ -939,8 +939,18 @@ production and shared helper code are unchanged.
 
 A direct execution of the existing setup block with `mkfifo` unavailable
 reproduces `ENOENT` and leaves the allocated directory present while preserving
-the original setup error. The observation precedes emergency cleanup. Full
-Vitest failure-path and clean-suite qualification remain pending.
+the original setup error. The same fault inside the existing Vitest case leaves
+the directory present on the baseline and removes it with the candidate. Both
+preserve the exact setup error and never invoke the apply handler. Observations
+precede emergency cleanup; temporary instrumentation was restored byte for byte.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+65.27 seconds including cold worker compilation; the warm candidate took 10.93
+seconds (7.58 seconds reported by Vitest). These are not speed-comparison data.
+The shared temporary-directory helper passes 11 cases with its Windows-only
+case skipped on macOS. Independent preservation and local ClawSweeper review
+found no lost contract or actionable finding. This closes the earlier FIFO
+setup cleanup follow-up; no production change is claimed.
 
 ## Pending qualification and proof repairs
 
