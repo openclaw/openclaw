@@ -3,12 +3,17 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import * as cliRunner from "../agents/cli-runner.js";
+import { createSteeredCliMessageInjection } from "../agents/cli-runner/execute-plugin.steered-transcript.js";
+import { attachCliReplyBackend } from "../agents/cli-runner/execution-target.js";
+import { captureCliRunToolAuthority } from "../agents/cli-runner/tool-authority.js";
+import { runWithCliTurn } from "../agents/cli-runner/turn-admission.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createOrResumeClientVoiceSession } from "../talk/client-voice-session.js";
 import { clientVoiceSessionTesting } from "../talk/client-voice-session.test-support.js";
@@ -18,6 +23,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import { gatewayConnect, gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
+import { retainTalkClientRunAuthority } from "./talk/client-run-authority.js";
 import { resolveTalkAgentConsultAuthority } from "./talk/client-tool-authority.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 import {
@@ -321,3 +327,93 @@ it("routes a locked native Codex chat's consult to its pinned harness instead of
   );
   expect(runCliAgent).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "settles CLI steering without an embedded registration (injection=%s)",
+  async (injectable) => {
+    await prepare({});
+    let nativeWrites = 0;
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    runCliAgent.mockImplementation(async (input) =>
+      runWithCliTurn(input, async (params) => {
+        using policy = captureCliRunToolAuthority(params, {
+          agentId: "main",
+          workspaceDir: params.workspaceDir!,
+          cwd: params.cwd ?? params.workspaceDir!,
+        });
+        const { fingerprint } = await policy.bindQuestions(
+          { provider: "anthropic", model: params.model! },
+          () => undefined,
+        );
+        const detach = attachCliReplyBackend(
+          { ...params, toolAuthorityFingerprint: fingerprint },
+          () => {},
+          injectable
+            ? {
+                supportsTranscriptCommitWait: true,
+                messageInjectionV2: createSteeredCliMessageInjection({
+                  signal: params.abortSignal ?? new AbortController().signal,
+                  assertCurrent: () => params.abortSignal?.throwIfAborted(),
+                  cwd: process.cwd(),
+                  getInjection: () => ({
+                    isAvailable: () => true,
+                    queueMessage: async (_text, admitInput) => {
+                      await admitInput(() => {
+                        nativeWrites++;
+                      });
+                    },
+                  }),
+                }),
+              }
+            : undefined,
+        );
+        started.resolve();
+        try {
+          await finish.promise;
+          return answer("CLI_FIRST_ANSWER", "claude-cli");
+        } finally {
+          detach?.();
+        }
+      }),
+    );
+    const runAuthority = await retainTalkClientRunAuthority({ client, context });
+    const runner = createTalkClientAgentConsultRunner({
+      runAuthority,
+      config: getRuntimeConfig(),
+      context,
+      sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
+      ownerConnId: connectionId,
+      authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
+      getVoiceSessionId: () => voiceSessionId,
+      initialItems: [],
+      runIdPrefix: "talk-realtime-relay-consult",
+    });
+    runner.runPrompt.adoptCompletionClaims();
+    const first = runner.runPrompt({ prompt: "First spoken request" });
+    await started.promise;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      // A plain CLI backend cannot inject. It must reject promptly, not deadlock
+      // the provider's steeringPromise and prevent delivery of the first answer.
+      const steering = Promise.race([
+        runner.runPrompt.steer!({ prompt: "Second spoken request" }),
+        new Promise((_, reject) => {
+          timeout = setTimeout(() => reject(new Error("STEERING_DEADLOCK")), 2000);
+        }),
+      ]);
+      if (injectable) {
+        await expect(steering).resolves.toEqual({ text: "" });
+      } else {
+        await expect(steering).rejects.not.toThrow("STEERING_DEADLOCK");
+      }
+      expect(nativeWrites).toBe(injectable ? 1 : 0);
+    } finally {
+      clearTimeout(timeout);
+      finish.resolve();
+      await first;
+      expect(runner.runPrompt.claimAppend()).toBe(true);
+      runAuthority.release();
+    }
+  },
+);

@@ -13,11 +13,14 @@ import {
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { getCurrentSessionControllerOwner } from "../../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session-write.js";
 import { createConsultRunner } from "../talk/client-gateway-control.agent-consult-fixture.test-support.js";
 import {
   coreParams,
   type ConsultParams,
 } from "../talk/client-gateway-control.agent-consult.test-support.js";
+import { useRelayFixtures } from "../talk/relay/fixture.test-support.js";
+import { registerTalkRealtimeRelayAgentRun } from "../talk/relay/operations.js";
 
 const mocks = vi.hoisted(() => ({
   createOperationalRunInstanceRef: vi.fn<() => OperationalRunInstanceRef>(),
@@ -187,3 +190,53 @@ it.each([
     expect(runner.runPrompt.claimAppend()).toBe(false);
   },
 );
+
+const createRealRelay = useRelayFixtures();
+it("claims successor speech through the real relay registration composition", async () => {
+  await ensureClientVoiceAgentSessionEntry({ agentId, sessionKey });
+  const { relay } = await createRealRelay({
+    key: sessionKey,
+    connId: "real-successor-owner",
+    cfg: { agents: { entries: { researcher: {} } } },
+  });
+  const instance = { instanceId: "real-successor-instance", runId: "run-talk" };
+  mocks.createOperationalRunInstanceRef.mockReturnValueOnce(instance);
+  mocks.runEmbeddedAgentCore.mockImplementationOnce(async (params) => {
+    getCurrentSessionControllerOwner()?.updateSessionId("session-successor");
+    params.onSessionIdChanged?.("session-successor");
+    return {
+      payloads: [{ text: "answer" }],
+      meta: {
+        durationMs: 0,
+        terminalReply: { disposition: "visible", text: "answer" },
+        agentMeta: { terminalReceipt: { runId: "run-talk", sessionId: "session-successor" } },
+      },
+    };
+  });
+  mocks.consultRealtimeVoiceAgent.mockImplementationOnce(async (params) => {
+    await params.onRunStarted?.({ runId: "run-talk", sessionId, timeoutMs: 60000 });
+    await params.agentRuntime.runEmbeddedAgent({
+      ...coreParams,
+      sessionTarget: { agentId, sessionKey, sessionId, storePath: relay.sessionTarget.storePath },
+    });
+    return { text: "done" };
+  });
+  const runner = createConsultRunner({
+    sessionTarget: relay.sessionTarget,
+    context: relay.context,
+    ownerConnId: relay.connId,
+    getVoiceSessionId: () => relay.id,
+    registerRun: ({ runId, assertCurrent }) =>
+      registerTalkRealtimeRelayAgentRun({
+        relaySessionId: relay.id,
+        connId: relay.connId,
+        sessionKey,
+        runId,
+        assertCurrent,
+      }),
+  });
+  runner.runPrompt.adoptCompletionClaims();
+  await runner.runPrompt({ prompt: "compact then answer" });
+  expect(runner.runPrompt.claimAppend()).toBe(true);
+  expect(runner.runPrompt.claimAppend()).toBe(false);
+});

@@ -1,9 +1,9 @@
-import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
 import type { OperationalRunInstanceRef } from "../../agents/operational-run-instance.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -14,12 +14,20 @@ import {
   GatewayDrainingError,
   tryBeginGatewayIndependentRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
+import {
+  captureSessionTarget,
+  getCurrentSessionControllerOwner,
+} from "../../sessions/session-controller.lifecycle.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceLifecycleGeneration,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  isCurrentSessionControllerOperation,
+  waitForReplyOperationBackend,
+} from "../../sessions/session-controller.state.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -102,6 +110,7 @@ export function createTalkClientAgentConsultRunner(params: {
   registerRun?: (params: { runId: string; assertCurrent: () => void }) => Promise<{
     release: () => void;
     isCurrent: (phase?: "active" | "completion") => boolean;
+    onSessionIdChanged?: (sessionId: string) => void;
   }>;
 }) {
   const { agentId, sessionKey, canonicalKey, storePath } = params.sessionTarget;
@@ -123,15 +132,16 @@ export function createTalkClientAgentConsultRunner(params: {
     completionClaim?: ReturnType<typeof prepareEmbeddedAgentRunCompletionClaim>;
     commandInstance?: OperationalRunInstanceRef;
     commandCompleted?: true;
+    operation?: ReplyOperation;
+    backendOwnerReady: Promise<void>;
+    resolveBackendOwner: () => void;
     cleanup?: () => void;
     identity?: { runId: string; sessionId: string };
     isCurrent?: (sessionId?: string, phase?: "active" | "completion") => boolean;
     lifecycleGeneration: string;
-    registered: Promise<EmbeddedRunCompletionRegistration | undefined>;
     requestSignal?: AbortSignal;
     requesterFinal?: TalkRequesterFinalBinding;
     requesterFinalRegistration?: TalkRequesterFinalRegistration;
-    resolveRegistration: (registration: EmbeddedRunCompletionRegistration | undefined) => void;
     signal?: AbortSignal;
     voiceSessionId?: string;
     source: TalkAgentConsultSource;
@@ -183,11 +193,13 @@ export function createTalkClientAgentConsultRunner(params: {
     let preparedSessionEntry: SessionEntry | undefined;
     let currentSessionId: string | undefined;
     let registeredSource: RpcSourceRef | undefined;
+    let advanceRelaySession: ((sessionId: string) => void) | undefined;
     const resolveGatewayContext = params.context.resolveGatewayContext;
     const runtime = createTalkClientAgentRuntime({
       config,
       getPreparedSessionEntry: () => preparedSessionEntry,
       onSessionIdChanged: (sessionId) => {
+        advanceRelaySession?.(sessionId);
         currentSessionId = sessionId;
         if (owner?.identity) {
           owner.identity = { ...owner.identity, sessionId };
@@ -216,6 +228,15 @@ export function createTalkClientAgentConsultRunner(params: {
                 throw new Error("The active Talk consult admission is no longer current");
               }
               owner.commandInstance = instance;
+              const operation = getCurrentSessionControllerOwner();
+              if (
+                operation?.key === canonicalKey &&
+                operation.sessionId === identity.sessionId &&
+                (!registeredSource || registeredSource.input.claim?.operation === operation)
+              ) {
+                owner.operation = operation;
+              }
+              owner.resolveBackendOwner();
             },
             onCommandCompleted: (instance) => {
               if (
@@ -296,6 +317,7 @@ export function createTalkClientAgentConsultRunner(params: {
               | {
                   release: () => void;
                   isCurrent: (phase?: "active" | "completion") => boolean;
+                  onSessionIdChanged?: (sessionId: string) => void;
                 }
               | undefined;
             const assertRunCurrent = () => {
@@ -365,6 +387,7 @@ export function createTalkClientAgentConsultRunner(params: {
                   assertCurrent: assertConsultCurrent,
                 });
                 releaseVoice = registeredRun.release;
+                advanceRelaySession = registeredRun.onSessionIdChanged;
               } else {
                 releaseVoice = await registerClientVoiceConsultRun({
                   agentId,
@@ -398,7 +421,6 @@ export function createTalkClientAgentConsultRunner(params: {
                   owner.requesterFinalRegistration = finalRegistration;
                   requesterFinalRegistration = finalRegistration;
                 }
-                void owner.completionClaim.registered.then(owner.resolveRegistration);
               }
               if (owner) {
                 owner.cleanup = () => {
@@ -450,6 +472,7 @@ export function createTalkClientAgentConsultRunner(params: {
     if (promptOwner === owner) {
       promptOwner = undefined;
     }
+    owner.resolveBackendOwner();
     owner.cleanup?.();
   };
   const clearRequesterFinalRegistration = (
@@ -501,7 +524,6 @@ export function createTalkClientAgentConsultRunner(params: {
       : identity === undefined &&
         owner.voiceSessionId !== undefined &&
         isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration);
-    owner.resolveRegistration(undefined);
     clearRequesterFinalRegistration(owner, "revoke");
     clearOwner(owner);
     return current && claimed;
@@ -519,18 +541,19 @@ export function createTalkClientAgentConsultRunner(params: {
     if (!owner) {
       throw new Error("No active Talk consult is available to steer");
     }
-    await owner.registered;
+    await racePromiseWithAbortSignal(owner.backendOwnerReady, signal);
     signal?.throwIfAborted();
     const identity = owner.identity;
     const ownerSignal = owner.signal;
-    const completionClaim = owner.completionClaim;
+    const operation = owner.operation;
+    if (!operation || !identity || !ownerSignal || !isOwnerCurrent(owner, identity.sessionId)) {
+      throw new Error("The active Talk consult is no longer current");
+    }
     if (
-      !completionClaim ||
-      !identity ||
-      !ownerSignal ||
+      !(await waitForReplyOperationBackend(operation, signal)) ||
       !isOwnerCurrent(owner, identity.sessionId)
     ) {
-      throw new Error("The active Talk consult is no longer current");
+      throw new Error("The active Talk consult backend is no longer current");
     }
     const result = await controlRealtimeVoiceAgentRun({
       sessionKey: canonicalKey,
@@ -539,38 +562,24 @@ export function createTalkClientAgentConsultRunner(params: {
         signal: ownerSignal,
         isCurrent: (sessionId) =>
           isOwnerCurrent(owner, sessionId) &&
-          completionClaim.resolveCurrentRegistration() !== undefined,
+          owner.operation === operation &&
+          isCurrentSessionControllerOperation(operation) &&
+          !operation.result,
       },
       getToolAuthorityOverlay: () => {
         if (!isOwnerCurrent(owner, identity.sessionId)) {
           throw new Error("The active Talk consult is no longer current");
         }
-        const registration = completionClaim.resolveCurrentRegistration();
-        if (!registration) {
-          throw new Error("The active Talk consult backend is no longer current");
-        }
         return prepareTalkClientControlAuthority({
           config: getConfig(),
           sessionTarget: params.sessionTarget,
           authority,
-          source: registration.toolAuthority.source,
+          source: "reply",
           agentRuntime: getAgentRuntime(),
         });
       },
-      prepareToolAuthorityOverlay: async (overlay) => {
-        const registration = completionClaim.resolveCurrentRegistration();
-        if (!registration) {
-          throw new Error("The active Talk consult backend is no longer current");
-        }
-        const projected = await registration.toolAuthority.projectAsync(overlay);
-        if (
-          !projected ||
-          !isOwnerCurrent(owner, identity.sessionId) ||
-          completionClaim.resolveCurrentRegistration()?.toolAuthority !== registration.toolAuthority
-        ) {
-          throw new Error("The active Talk consult caller authority no longer matches");
-        }
-      },
+      // The controller owns fresh caller projection (including collaborative input)
+      // and the source-bound authority fence at the backend write.
       text: prompt,
       createUserTurnTranscriptRecorder:
         owner.source === "native-delegation"
@@ -607,24 +616,22 @@ export function createTalkClientAgentConsultRunner(params: {
     if (promptOwner) {
       throw new Error("A Talk consult is already active");
     }
-    const { promise: registered, resolve: resolveRegistration } = createDeferredCore<
-      EmbeddedRunCompletionRegistration | undefined
-    >();
+    const backendOwner = createDeferredCore();
     const owner: PromptOwner = {
+      backendOwnerReady: backendOwner.promise,
+      resolveBackendOwner: () => backendOwner.resolve(),
       lifecycleGeneration: getAgentEventLifecycleGeneration(),
-      registered,
       requestSignal: signal,
       requesterFinal,
       source,
-      resolveRegistration,
     };
-    const revokeRegistrationOnAbort = () => resolveRegistration(undefined);
+    const revokeRegistrationOnAbort = () => owner.resolveBackendOwner();
     promptOwner = owner;
     signal?.addEventListener("abort", revokeRegistrationOnAbort, { once: true });
     try {
       return await runArgs(args, signal, owner, ready, assertCurrent, source);
     } catch (error) {
-      resolveRegistration(undefined);
+      owner.resolveBackendOwner();
       throw error;
     } finally {
       signal?.removeEventListener("abort", revokeRegistrationOnAbort);
