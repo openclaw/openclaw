@@ -170,6 +170,7 @@ async function consult(
   question: string,
   adoptCompletionClaims = false,
   invalidate?: "abort" | "voice",
+  expectedClaim = !invalidate,
 ) {
   const callId = expectDefined(voiceSessionId, "voice session");
   let currentCallId: string | undefined = callId;
@@ -196,7 +197,7 @@ async function consult(
       expect(
         runner.runPrompt.claimAppend(),
         "completed CLI consultation owns its spoken result",
-      ).toBe(!invalidate);
+      ).toBe(expectedClaim);
       expect(runner.runPrompt.claimAppend(), "completion is claimed once").toBe(false);
       return result;
     }
@@ -277,6 +278,22 @@ it.each([false, true])(
     expect(runEmbeddedAgent).not.toHaveBeenCalled();
   },
 );
+
+it("does not claim a visible CLI snapshot after incomplete settlement", async () => {
+  await prepare({});
+  runCliAgent.mockImplementation(async () => {
+    const result = answer("CLI_VISIBLE_SNAPSHOT", "claude-cli");
+    return {
+      ...result,
+      meta: {
+        ...result.meta,
+        stopReason: "error",
+        error: { kind: "incomplete_turn" as const, message: "CLI stopped" },
+      },
+    };
+  });
+  await consult("CLI_INCOMPLETE_QUESTION", true, undefined, false);
+});
 
 it.each(["abort", "voice"] as const)(
   "rejects completed CLI speech after %s invalidation",

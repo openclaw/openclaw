@@ -263,6 +263,8 @@ export function createTalkClientAgentRuntime(params: {
             if (
               !result.meta.aborted &&
               !result.meta.yielded &&
+              !result.meta.error &&
+              result.meta.stopReason !== "error" &&
               result.meta.terminalReply?.disposition === "visible" &&
               (!receipt ||
                 (receipt.runId === operationalRunInstance.runId && receipt.sessionId === sessionId))
