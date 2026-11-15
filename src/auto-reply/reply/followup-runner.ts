@@ -226,7 +226,9 @@ export function createFollowupRunner(
           );
       }
       const initialSessionEntry = turn.session.current();
-      const initialGoalId = initialSessionEntry?.goal?.id;
+      const initialGoal = initialSessionEntry?.goal;
+      // Queued user input can explicitly start the next goal after completion.
+      const initialGoalId = initialGoal?.status === "complete" ? undefined : initialGoal?.id;
       const runWithGoalReturn = createGoalContinuationReturn(
         turn.session.kind === "session" &&
           turn.session.storePath &&

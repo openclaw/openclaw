@@ -39,7 +39,9 @@ import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 export async function finalizeReplyAgentRun(
   context: FinalizeReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const initialGoalId = context.activeSessionEntry?.goal?.id;
+  const initialGoal = context.activeSessionEntry?.goal;
+  // A completed predecessor must not fence a new goal created by this user turn.
+  const initialGoalId = initialGoal?.status === "complete" ? undefined : initialGoal?.id;
   const { result, accounting: completedAccounting } = await withAgentTurnCompletion(
     {
       agentId: context.followupRun.run.agentId,
