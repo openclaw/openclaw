@@ -191,6 +191,12 @@ suite.define(() => {
         };
         const navigate = async (path: string) => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          if (path === "activity") {
+            // Activity heads the Users section; on a phone People only opens its list.
+            await page.locator('[data-navigation-view="online"]').click();
+            await page.locator(".sidebar-online__overview a").click();
+            return;
+          }
           await page.locator("[data-rail-more]").click();
           await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
         };
@@ -214,8 +220,9 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
-        // The drawer opens on Sessions; tapping its avatar there would open the agent menu.
+        // Activity left the drawer on Users; its avatar switches back to Sessions.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await page.locator('[data-navigation-view="sessions"]').click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();
         expect(await inset()).toBe("0px");
@@ -698,10 +705,6 @@ suite.define(() => {
           // The middle column no longer includes the navigation stack: overflow its own roster.
           await installSystemsGateway(page, 40);
           await page.goto(suite.server.baseUrl + route);
-          // Another rail view replaces the route's own sidebar until Sessions returns.
-          await page.locator('[data-navigation-view="online"]').click();
-          await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-          await page.locator('[data-navigation-view="sessions"]').click();
           const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
           const scroller = page.locator(".sidebar-shell__body");
           const railControls = page.locator(

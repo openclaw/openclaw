@@ -96,7 +96,14 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   // "More" carries the current-item fill while the open page has no item of its own on the rail.
   const moreCurrent = createMemo(() => {
     const route = host.activeRouteId;
-    if (!route || route === "chat" || route === "new-session" || isSettingsTakeover(route)) {
+    if (
+      !route ||
+      route === "chat" ||
+      route === "new-session" ||
+      isSettingsTakeover(route) ||
+      // People is Activity's own rail item.
+      sidebarSectionForRoute(route) === "online"
+    ) {
       return false;
     }
     if (route === "plugin") {
@@ -134,11 +141,16 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             aria-label={t("presence.usersTitle")}
             aria-pressed={peoplePressed() ? "true" : "false"}
             onClick={() => {
+              // People is the Users section: Activity in the content, people in the sidebar.
               host.navigationView = "online";
               if (host.onExitSettings) {
                 host.onExitSettings();
               } else if (!isMobileNavLayout() && host.navigationCollapsed) {
                 host.onToggleSidebar?.();
+              }
+              // The mobile drawer closes on navigation, so there People only opens the list.
+              if (!isMobileNavLayout()) {
+                host.onNavigate?.("activity");
               }
               host.invalidate();
             }}

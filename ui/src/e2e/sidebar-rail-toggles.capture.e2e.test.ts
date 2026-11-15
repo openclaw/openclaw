@@ -31,7 +31,7 @@ suite.define(() => {
         const frame = await takeControlUiScreenshotFrame(
           page,
           page.locator(".shell"),
-          [page.locator(".sidebar-rail"), page.locator(".new-session-page__message")],
+          [page.locator(".sidebar-rail")],
           { animations: "disabled" },
         );
         await writeFile(path.join(suite.artifactDir, "collapsed-sidebar.png"), frame.png);

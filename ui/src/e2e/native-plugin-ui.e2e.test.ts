@@ -728,7 +728,7 @@ suite.define(() => {
         expect(await page.locator("openclaw-router-outlet").getAttribute("inert")).toBeNull();
       }
       // A rail view control stays usable and reopens the panel while reconnecting.
-      await page.locator('[data-navigation-view="online"]').click();
+      await page.locator('[data-navigation-view="sessions"]').click();
       await expectPluginLoading(page);
       await gateway.resolveDeferred("connect");
       const reconnected = await gateway.waitForRequest("plugins.controlUi.report", {

@@ -16,7 +16,8 @@ type NavigationPresentation = readonly [icon: IconName, titleKey: string, subtit
 // pins reference the catalog without changing its availability. Chat has the
 // Sessions view; Settings/Docs remain in the profile menu.
 // Skills, Skill Workshop and Templates are reached from the Customize workspace, not sidebar items.
-// Apps is reached from the profile menu and the command palette.
+// Apps is reached from the profile menu and the command palette; Activity is the
+// rail's People section.
 // Worktrees is a tab of the Sessions hub, so it is not listed either.
 // Workboard is plugin-owned and enters the zone through its Control UI descriptor.
 export const SIDEBAR_NAV_ROUTES = [
@@ -25,7 +26,6 @@ export const SIDEBAR_NAV_ROUTES = [
   "cron",
   "sessions",
   "systems",
-  "activity",
   "meetings",
   "plugins",
   "portals",
@@ -43,8 +43,10 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
 }
 
 /** Section pages own a sidebar of their own; other pages run full width. */
-export function sidebarSectionForRoute(route: NavigationRouteId): "dashboards" | undefined {
-  return route === "dashboards" ? "dashboards" : undefined;
+export function sidebarSectionForRoute(
+  route: NavigationRouteId,
+): "dashboards" | "online" | undefined {
+  return route === "dashboards" ? "dashboards" : route === "activity" ? "online" : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the

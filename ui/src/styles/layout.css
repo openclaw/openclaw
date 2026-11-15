@@ -2301,6 +2301,11 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
+/* Activity heads the Users section above its people. */
+.sidebar-online__overview {
+  margin-block-end: 6px;
+}
+
 /* Share the counter track so missing or shorter counts never move person actions. */
 .sidebar-online__list {
   display: grid;

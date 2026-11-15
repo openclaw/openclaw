@@ -49,6 +49,8 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
           {t("presence.directoryFailed")}
         </button>
       )}
+      {/* The Users section opens on Activity, its overview, above the people. */}
+      <div class="sidebar-online__overview">{host.sidebarMenus.renderRoute("activity", host)}</div>
       <div class="sidebar-online__list">
         {listUsers().length === 0 ? (
           <span class="sidebar-session-empty-hint">

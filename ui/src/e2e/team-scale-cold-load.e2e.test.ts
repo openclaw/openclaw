@@ -247,6 +247,8 @@ suite.define(() => {
       expect(await sidebar.locator("[data-online-user-id]").count()).toBe(120);
       await onlineWrite.evaluate(({ done }) => done);
       await onlineWrite.dispose();
+      // People opened Activity; return to the deep-linked dashboard.
+      await page.goBack();
 
       const dashboard = page
         .frameLocator("openclaw-board-view mcp-app-view iframe")
@@ -304,6 +306,8 @@ suite.define(() => {
       await navigateToControlUiSession(page, fixture.selectedSessionKey);
       await sidebar.locator('[data-navigation-view="online"]').click();
       await sidebar.locator('[data-online-user-id="team-person-120"]').waitFor();
+      // People opened Activity; return to the session.
+      await page.goBack();
       const details = await openChatDetails(page);
       const sectionSelector = '[data-details-group], [data-progress-card-placement="details"]';
       const sections = details.locator(sectionSelector);
