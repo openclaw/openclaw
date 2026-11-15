@@ -87,6 +87,27 @@ describe("goal tools", () => {
     expect(readGoal()?.status).toBe("active");
   });
 
+  it.each(["blocked", "paused", "complete", "budget_limited", "usage_limited"] as const)(
+    "keeps an inactive %s goal separate from current-turn authority",
+    async (status) => {
+      const { options, readGoal } = await createStoreConfig("global", {
+        goal: makeGoal({ status, lastStatusNote: "Waiting on an earlier prerequisite" }),
+      });
+      const before = readGoal();
+      const result = await createGetGoalTool(options).execute("call-inactive-goal", {});
+
+      expect(result.details).toMatchObject({
+        goal: { status },
+        nextAction: expect.stringContaining("Goal Resume is not a prerequisite for this turn"),
+      });
+      expect(result.details).toHaveProperty(
+        "nextAction",
+        expect.stringContaining("within its actual permissions"),
+      );
+      expect(readGoal()).toEqual(before);
+    },
+  );
+
   it.each([
     { sessionKey: "global", budget: 100, otherAgent: "main" },
     { sessionKey: "agent:ops:main", budget: undefined, otherAgent: "research" },

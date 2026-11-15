@@ -14,6 +14,7 @@
 // callback with --plugins 40 --access-policies 1 --iterations 5000 --samples 5.
 // Set OPENCLAW_STATE_DIR to an isolated synthetic scratch directory for this scenario.
 // Admission and effects still check the plugin; progress only owns run liveness.
+// --root reuses an offline synthetic state fixture for recovery-source; it is never removed.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -79,6 +80,7 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string", default: "unspecified" },
+    root: { type: "string" },
   },
 });
 function positiveInteger(value: string, label: string): number {
@@ -329,7 +331,9 @@ let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefin
 let recoveryStateDir: string | undefined;
 let recoveryConfig = config;
 if (values.scenario === "all" || values.scenario === "recovery-source") {
-  recoveryStateDir = await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
+  recoveryStateDir = values.root
+    ? path.resolve(values.root)
+    : await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
   process.env.OPENCLAW_STATE_DIR = recoveryStateDir;
   const person = ensureProfileForEmail("recovery@authority.example.test");
   allowedProfiles.add(person.id);
@@ -342,8 +346,8 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
       { requireLivePolicySet: true },
     );
     assert(recoveredAccess?.gatewayAccessGrant);
-    // Decode the persisted shape so this is never an already-issued policy identity.
-    const source = decodeQueuedOperatorRecoverySource({
+    // Decode persisted bytes, including JSON omission of undefined fields.
+    const persistedSource = JSON.stringify({
       kind: "gateway",
       snapshot: {
         profileId: person.id,
@@ -367,6 +371,7 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
         sourceIngress: "control-ui",
       },
     });
+    const source = decodeQueuedOperatorRecoverySource(JSON.parse(persistedSource));
     assert(source.kind === "gateway");
     // Recovery only consumes the config reader and optional owner identities.
     const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
@@ -692,6 +697,8 @@ try {
   recovery?.release();
   if (recoveryStateDir) {
     await closeOpenClawStateDatabaseByPathAsync(profileCatalogPath({}));
-    await rm(recoveryStateDir, { recursive: true, force: true });
+    if (!values.root) {
+      await rm(recoveryStateDir, { recursive: true, force: true });
+    }
   }
 }

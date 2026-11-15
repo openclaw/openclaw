@@ -325,7 +325,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
           include: ["src/gateway/server-methods/**/*.test.ts"],
           exclude: [...databaseWorkerCoreTestFiles, ...gatewayDatabaseWorkerTestFiles],
         }),
-        ...gatewayPluginTestFiles.filter((file) => !gatewayDatabaseWorkerTestFiles.includes(file)),
+        ...gatewayPluginTestFiles.filter((file) => !gatewayMethodsTestExclude.includes(file)),
       ],
     },
   ],

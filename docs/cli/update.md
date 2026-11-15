@@ -649,6 +649,13 @@ size, mode, and content must match the inventory. A mismatch discards that runti
 as a rollback source and logs the path and failed check; the update continues
 without using the unverified tree. Writes through the same inode remain best effort.
 
+When the filesystem refuses a hard link, the updater warns once with the number
+of affected files and the first error code, and the `updater-runtime-retention`
+diagnostics carry the same `linkFallback` count and code. `EXDEV` means the
+updater temporary directory and the installation are on different filesystems
+or subvolumes, which an explicit `TMPDIR` can cause. `copied` counts every file
+published without a hard link; it does not separate clones from byte copies.
+
 SQLite read-only workers use that retained generation through post-install
 verification, even after the package manager removes the previous package path.
 The updater joins those workers before returning. It records completed runtime

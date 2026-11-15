@@ -4,7 +4,7 @@ import type {
 } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import type { FailoverReason } from "../../agents/failover/signal.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";

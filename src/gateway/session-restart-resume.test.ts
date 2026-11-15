@@ -579,11 +579,18 @@ it("marks completed reply settlement only when accepted inputs remain queued", (
     }
   }));
 
-it("marks ordinary conversations without inheriting cron or external execution ownership", () =>
+it("marks ordinary conversations without inheriting cron, external execution or durable processes", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
-    const cases: Array<{ sessionKey: string; resumable?: true; entry?: Partial<SessionEntry> }> = [
+    const cases: Array<{
+      sessionKey: string;
+      resumable?: true;
+      durable?: true;
+      entry?: Partial<SessionEntry>;
+    }> = [
       { sessionKey: "agent:other:main", resumable: true },
+      // A durable process survives restart; the registry adopts it and wakes on exit.
+      { sessionKey: "agent:main:durable-waiter", durable: true },
       { sessionKey: "agent:other:main:thread:123.456", resumable: true },
       { sessionKey: "agent:main:cron:scheduled:run:occurrence" },
       { sessionKey: "agent:main:acp:external" },
@@ -603,7 +610,7 @@ it("marks ordinary conversations without inheriting cron or external execution o
       { sessionKey: "agent:main:external-harness", entry: { modelSelectionLocked: true } },
     ];
     try {
-      for (const { sessionKey, entry, resumable } of cases) {
+      for (const { sessionKey, entry, resumable, durable } of cases) {
         const agentId = resumable ? "other" : "main";
         replaceSessionEntrySync(
           { agentId, sessionKey },
@@ -624,6 +631,16 @@ it("marks ordinary conversations without inheriting cron or external execution o
         const process = createProcessSessionFixture({ id: sessionKey, backgrounded: true });
         process.agentId = agentId;
         process.sessionKey = sessionKey;
+        if (durable) {
+          const settled = async () => {};
+          process.durable = {
+            observe: settled,
+            cancel() {},
+            remove() {},
+            finalize: settled,
+            drain: settled,
+          };
+        }
         addSession(process);
       }
       await persistRunningSessionsForRestart({ cfg: {} });

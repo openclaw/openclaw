@@ -118,6 +118,12 @@ still emits `VERIFICATION_FAILED`. Readiness waits and RPC retries never renew t
 deadline. The 60-second marker RPC timeout bounds a transport exchange; it is
 not the whole startup acceptance window.
 
+Convergence samples HTTP health, readiness, then startup after the status/channel
+RPCs. This prevents an earlier `startup-sidecars` response from contradicting a
+later ready response when startup settles during an RPC. The probes remain
+snapshots; persistent startup or channel recovery still fails at the original
+deadline, and malformed or terminal evidence still fails verification.
+
 Before the marker, the owner waits for native `/startupz` to report that critical
 initial startup has settled, `/readyz` to report readiness without a refusal for
 the configured `modelAgent`, and a sampled main-thread delay below one second.

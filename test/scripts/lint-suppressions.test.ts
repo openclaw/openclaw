@@ -170,6 +170,8 @@ describe("production lint suppressions", () => {
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // Node MessagePort and Worker postMessage have no Window target-origin parameter.
         "scripts/diagnostics/windows-link-service.mjs|unicorn/require-post-message-target-origin|5",
+        // The retained-runtime observer calls captured native Set.forEach with its real receiver.
+        "scripts/e2e/lib/upgrade-survivor/installed-terminal-directory-watch.mjs|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -453,8 +455,6 @@ describe("production lint suppressions", () => {
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
-        // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
-        "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
         // Browser preview selection reverses only freshly collected private arrays.
         "ui/src/pages/chat/components/chat-tool-cards.ts|unicorn/no-array-reverse|2",
         // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.

@@ -8,6 +8,7 @@ import { runtimeConfigPublication } from "../config/runtime-config-publication.j
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPairedDeviceTokenIdentityCurrent } from "../infra/device-pairing-identity.js";
 import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pairing-store-readonly.js";
+import { isOperatorAuthorityUnavailable } from "../infra/operator-authority-error.js";
 import { GatewayOperatorRecoveryAuthorizationError } from "../infra/restart-recovery-errors.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
@@ -258,7 +259,9 @@ async function restoreGatewayOperatorSnapshot(params: {
         try {
           assertPolicy();
         } catch (error) {
-          revoke(error);
+          if (!isOperatorAuthorityUnavailable(error)) {
+            revoke(error);
+          }
         }
       }
     };
@@ -359,7 +362,9 @@ async function restoreGatewayOperatorSnapshot(params: {
             : error instanceof GatewayOperatorAccessDeniedError
               ? new GatewayOperatorRecoveryAuthorizationError(error.message, { cause: error })
               : error;
-        revoke(failure);
+        if (!isOperatorAuthorityUnavailable(failure)) {
+          revoke(failure);
+        }
         throw failure;
       }
     };

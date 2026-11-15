@@ -78,15 +78,8 @@ import {
   isExplicitGatewayConnection,
   resolveGatewayConnectionAuth,
 } from "./explicit-connection-policy.js";
-import {
-  CLI_DEFAULT_OPERATOR_SCOPES,
-  ADMIN_SCOPE,
-  WRITE_SCOPE,
-  isGatewayMethodClassified,
-  resolveLeastPrivilegeOperatorScopesForMethod,
-  type OperatorScope,
-} from "./method-scopes.js";
 import { assertGatewayCliMessageContext } from "./operator-cli-message-input.js";
+import { ADMIN_SCOPE, WRITE_SCOPE, type OperatorScope } from "./operator-scopes.js";
 import {
   type GatewayTransportErrorKind,
   createGatewayCloseTransportError,
@@ -941,6 +934,11 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   if (Array.isArray(opts.scopes)) {
     return await callGatewayWithScopes(opts, opts.scopes);
   }
+  const {
+    CLI_DEFAULT_OPERATOR_SCOPES,
+    isGatewayMethodClassified,
+    resolveLeastPrivilegeOperatorScopesForMethod,
+  } = await import("./method-scopes.js");
   const scopes = isGatewayMethodClassified(opts.method)
     ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
     : CLI_DEFAULT_OPERATOR_SCOPES;
@@ -953,6 +951,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
+  const { resolveLeastPrivilegeOperatorScopesForMethod } = await import("./method-scopes.js");
   const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
   return await callGatewayWithScopeEscalation(opts, scopes);
 }

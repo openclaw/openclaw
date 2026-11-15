@@ -22,7 +22,7 @@ import {
   resolveOpenClawIdSignInRoute,
 } from "../openclaw-id/channel.js";
 import type { OpenClawIdAccount } from "../openclaw-id/claw-store.js";
-import { decodeInviteProofKey } from "../openclaw-id/invites-view.js";
+import { decodeInviteProfile, decodeInviteProofKey } from "../openclaw-id/invites-view.js";
 import { resolveOpenClawIdOwnerAccount } from "../openclaw-id/owner-account.js";
 import type { OpenClawIdService } from "../openclaw-id/service.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
@@ -700,25 +700,28 @@ export const openclawIdHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    if (params.action === "register_invite" || params.action === "register_node_invite") {
+    const isMemberInvite = params.action === "register_invite";
+    if (isMemberInvite || params.action === "register_node_invite") {
       const proofKey = decodeInviteProofKey(params.proofKey);
       if (!params.cap || !proofKey) {
         refuse(opts, { code: "malformed", detail: "cap and a 32-byte proofKey are required" });
         return;
       }
-      const input = { cap: params.cap, proofKey };
-      const result =
-        params.action === "register_node_invite"
-          ? await service.registerNodeInvite(channel, input)
-          : await service.registerInvite(channel, input);
+      const profile = decodeInviteProfile(isMemberInvite ? params.existingProfileId : undefined);
+      if ("ok" in profile) {
+        return refuse(opts, profile);
+      }
+      const input = { cap: params.cap, proofKey, ...profile };
+      const result = isMemberInvite
+        ? await service.registerInvite(channel, input)
+        : await service.registerNodeInvite(channel, input);
       if (!result.ok) {
-        refuse(opts, result);
-        return;
+        return refuse(opts, result);
       }
       opts.respond(true, {
         status: result.status,
         link: await linkAfterWrite(service, opts),
-        ...(params.action === "register_node_invite"
+        ...(!isMemberInvite
           ? {
               discoveryUrl:
                 opts.context.getRuntimeConfig().gateway?.openclawId?.discoveryUrl ?? null,

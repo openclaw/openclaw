@@ -268,7 +268,6 @@ export function createUsageControls(
   const hasAppliedFilters = () =>
     queryTerms().length > 0 ||
     props.filters.selectedDays.length > 0 ||
-    props.filters.selectedHours.length > 0 ||
     props.filters.selectedSessions.length > 0;
   const showPhoneCount = () =>
     ctx.hasOverviewData() && (hasQuery() || totalSessions() !== ctx.displaySessionCount());

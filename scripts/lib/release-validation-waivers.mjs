@@ -1,10 +1,34 @@
 import { isDeepStrictEqual } from "node:util";
 import { compareAscii } from "./canonical-json.mjs";
 
+// The beta.3 owner accepted these observed failures on 2026-11-14 at 13:30 UTC.
+// CI aggregate causes use workflow job keys, not displayed shard names.
+const BETA3_CI_FAILURES = new Map([
+  ["checks-ui (3/3)", "checks-ui"],
+  ["android-screenshots", "android-screenshots"],
+  ["checks-node-agentic-agents-core-runtime", "checks-node-core-test-nondist-shard"],
+  ["checks-node-agentic-control-plane-runtime-state", "checks-node-core-test-nondist-shard"],
+]);
+const BETA3_DOCKER_JOB = "Run Docker release-path validation / Docker E2E (package/update OpenAI)";
+
 // Reviewed release-tooling policy, loaded from P, never the candidate checkout.
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...[...BETA3_CI_FAILURES.keys(), BETA3_DOCKER_JOB].map((jobName) => ({
+    targetVersion: "2026.11.5-beta.3",
+    childRole: jobName === BETA3_DOCKER_JOB ? "releaseChecksCandidate" : "normalCi",
+    jobName,
+    reason:
+      "Dallin Romney explicitly accepted the remaining beta.3 failures on " +
+      "2026-11-14 at 13:30 UTC and requested beta-profile qualification at 13:31 UTC. " +
+      "Observed in FRV 43594812558/1: UI reply navigation, Android Overview startup, " +
+      "Google Decision deadline, Gateway RPC timeouts, and Docker Codex followthrough " +
+      "without a configured message channel. This grant matches only this version, " +
+      "child role and named failed job; it accepts that job's failures, not a test pass. " +
+      "Retain raw evidence. Missing, cancelled, other jobs, package identity, " +
+      "artifact integrity and publication authorization remain blocking.",
+  })),
   {
     targetVersion: "2026.11.5-beta.3",
     childRole: "productPerformance",
@@ -184,6 +208,28 @@ export function releaseChildAdvisories(child) {
 const KOVA_PERFORMANCE_JOB = "Kova mock provider performance";
 
 function aggregateCauses(waiver) {
+  if (waiver.targetVersion === "2026.11.5-beta.3") {
+    if (waiver.childRole === "normalCi" && BETA3_CI_FAILURES.has(waiver.jobName)) {
+      return [
+        {
+          jobName: "openclaw/ci-gate",
+          stepName: "Verify selected CI lanes",
+          causes: [
+            `${BETA3_CI_FAILURES.get(waiver.jobName)} finished with failure (selected=true)`,
+          ],
+        },
+      ];
+    }
+    if (waiver.childRole === "releaseChecksCandidate" && waiver.jobName === BETA3_DOCKER_JOB) {
+      return [
+        {
+          jobName: "Verify release checks",
+          stepName: "Verify release check results",
+          causes: ["docker_e2e_release_checks ended with failure"],
+        },
+      ];
+    }
+  }
   if (waiver.childRole === "npmTelegram" && waiver.jobName === "Run package Telegram E2E") {
     return [];
   }

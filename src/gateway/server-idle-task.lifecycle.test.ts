@@ -69,9 +69,14 @@ it.each(["complete", "shutdown"] as const)(
     vi.spyOn(agentRuns, "getActiveAgentRunContextCount").mockReturnValue(1);
     const recoveryReady = createDeferred();
     let recovering = false;
-    vi.spyOn(commandQueue, "getQueueSize").mockImplementation((lane) =>
-      lane === CommandLane.RestartRecovery ? Number(recovering) : 1,
-    );
+    // A resumed turn stays active for hours; only recovery still waiting for a slot gates.
+    vi.spyOn(commandQueue, "getQueueSize").mockReturnValue(1);
+    const snapshot = commandQueue.getCommandLaneSnapshot;
+    vi.spyOn(commandQueue, "getCommandLaneSnapshot").mockImplementation((lane) => ({
+      ...snapshot(lane),
+      queuedCount: lane === CommandLane.RestartRecovery ? Number(recovering) : 1,
+      activeCount: 1,
+    }));
     const entered = createDeferred();
     let passSignal: AbortSignal;
     const runBatch = vi.fn(async () => {
@@ -93,11 +98,12 @@ it.each(["complete", "shutdown"] as const)(
     });
     const foreground = tryBeginGatewayIndependentRootWorkAdmission("test:foreground");
     expect(foreground).not.toBeNull();
+    const log = { info: vi.fn(), warn: vi.fn() };
     createGatewaySessionFactsBackfillScheduler({
       scheduler,
       signal: scheduler.signal,
       waitForReady: () => recoveryReady.promise,
-      log: { info: vi.fn(), warn: vi.fn() },
+      log,
     })([{ database: { agentId: "main", path: "/synthetic/agent.sqlite" }, assertCurrent() {} }]);
     const initialTick = clock.advanceBy(250);
     await nextTurn();
@@ -106,6 +112,13 @@ it.each(["complete", "shutdown"] as const)(
     recoveryReady.resolve();
     await initialTick;
     expect(runBatch).not.toHaveBeenCalled();
+    for (let second = 0; second < 120; second++) {
+      await clock.advanceBy(1_000);
+    }
+    expect(runBatch).not.toHaveBeenCalled();
+    expect(log.info).toHaveBeenCalledExactlyOnceWith(
+      "session: transcript facts backfill waiting for 1 queued restart-recovery turn(s)",
+    );
     recovering = false;
     await clock.advanceBy(1_000);
     expect(runBatch).toHaveBeenCalledOnce();

@@ -39,7 +39,7 @@ struct MacSidebarIdentityMenu: ViewModifier {
                         Button("Manage Gateways…") { AppNavigationActions.openConnection(tab: .gateways) }
                     }
                     Section {
-                        Button("Open Dashboard") { self.openRoute("/", target: target) }
+                        Button("Open OpenClaw") { self.openRoute("/", target: target) }
                         Button("Settings…") { self.openRoute(DashboardRouteMap.appearanceSettingsPath, target: target) }
                         Button("Usage") { self.openRoute(DashboardRouteMap.usagePagePath, target: target) }
                     }

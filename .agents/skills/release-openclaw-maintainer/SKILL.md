@@ -128,7 +128,9 @@ Follow the [FRV wall-time loop](../release-openclaw-ci/SKILL.md#keep-frv-off-the
 start remote validation promptly, repair failures as diagnostics drain, and
 minimize downtime between cycles. Include every known non-flake fix affecting
 the next run rather than knowingly carrying failures forward; overlap useful
-local checks with remote validation. This guides scheduling, not new gates.
+local checks with remote validation. Consider [broad CI discovery alongside initial FRV](../release-openclaw-ci/SKILL.md#optional-broad-ci-discovery-alongside-initial-frv)
+to reuse existing failures and batch repairs without delaying the initial run.
+This guides scheduling, not new gates.
 
 The operating objectives are approximately 20 minutes to seal validation and
 publication within an hour, not measured guarantees. Source-only children start
