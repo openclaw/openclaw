@@ -4,7 +4,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { classify, originalTooling, plans, sources } from "./goal24-billing-proof-plan.mjs";
+import {
+  classify,
+  originalTooling,
+  plans,
+  sources,
+  withSequencer,
+} from "./goal24-billing-proof-plan.mjs";
 
 assert.equal(process.env.GITHUB_ACTIONS, "true");
 assert.equal(process.env.RUNNER_ENVIRONMENT, "github-hosted");
@@ -133,7 +139,7 @@ try {
   }
   // A fixed sequencer and one worker make ordering common to both source pins.
   // This is intentionally not a replay of the original parallel shard load.
-  const sequencer = path.join(source, "scripts/goal24-billing-sequencer.mjs");
+  const sequencer = path.join(source, "test/vitest/goal24-billing-sequencer.mjs");
   fs.writeFileSync(
     sequencer,
     'import { BaseSequencer } from "vitest/node";\n' +
@@ -142,6 +148,11 @@ try {
       ";\n" +
       "export default class extends BaseSequencer { async sort(specs) { return [...specs].sort((a,b) => files.findIndex(f => a.moduleId.endsWith(f)) - files.findIndex(f => b.moduleId.endsWith(f))); } }\n",
   );
+  // Vitest 5 requires a constructor in config; a CLI path remains a string.
+  // Keep the original config path and all preparation/selection policies.
+  const configPath = path.join(source, plan.config);
+  const configText = fs.readFileSync(configPath, "utf8");
+  fs.writeFileSync(configPath, withSequencer(configText));
   env.OPENCLAW_NODE_TEST_GROUPS_JSON = JSON.stringify([
     { configs: [plan.config], includePatterns: plan.files, shard_name: "goal24-" + group },
   ]);
@@ -154,7 +165,6 @@ try {
     env.OPENCLAW_NODE_TEST_VITEST_ARGS_JSON = JSON.stringify([
       "--maxWorkers=1",
       "--no-file-parallelism",
-      "--sequence.sequencer=" + sequencer,
       "--reporter=json",
       "--outputFile=" + report,
     ]);

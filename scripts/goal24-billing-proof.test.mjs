@@ -1,7 +1,7 @@
 // Exercise evidence admission only; no contributor modules execute locally.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classify, plans } from "./goal24-billing-proof-plan.mjs";
+import { classify, plans, withSequencer } from "./goal24-billing-proof-plan.mjs";
 const plan = plans.compaction;
 for (const scenario of [
   "pass",
@@ -113,4 +113,20 @@ test("sessions.create wrapper preserves Error timeout signature", () => {
     ],
   };
   assert.equal(classify(selected, report, 1).failures[0].originalSignature, true);
+});
+
+test("sequencer config carries a constructor, preserving original policies", async () => {
+  const source = withSequencer(
+    'export default { test: { pool: "forks", sequence: { groupOrder: 2 } } };',
+  );
+  const fixture = source.replace(
+    'import Goal24Sequencer from "./goal24-billing-sequencer.mjs";',
+    "class Goal24Sequencer {}",
+  );
+  const { default: config } = await import("data:text/javascript," + encodeURIComponent(fixture));
+  assert.equal(typeof config.test.sequence.sequencer, "function");
+  assert.ok(new config.test.sequence.sequencer());
+  assert.equal(config.test.sequence.groupOrder, 2);
+  assert.equal(config.test.pool, "forks");
+  assert.throws(() => withSequencer("const config = {};"));
 });

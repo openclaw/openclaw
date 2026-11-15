@@ -131,6 +131,14 @@ export const plans = {
 for (const plan of Object.values(plans)) {
   plan.required = Object.keys(plan.signatures);
 }
+export function withSequencer(configText) {
+  assert.equal(configText.split("export default ").length, 2);
+  return (
+    'import Goal24Sequencer from "./goal24-billing-sequencer.mjs";\n' +
+    configText.replace("export default ", "const goal24Config = ") +
+    "\ngoal24Config.test.sequence = { ...goal24Config.test.sequence, sequencer: Goal24Sequencer };\nexport default goal24Config;\n"
+  );
+}
 export function classify(plan, report, exitCode, runtime = "node") {
   const tests = report.testResults.flatMap((suite) => suite.assertionResults);
   const executed = tests.filter((test) => ["passed", "failed"].includes(test.status));
