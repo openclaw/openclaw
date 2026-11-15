@@ -116,7 +116,19 @@ void describe("plugin artifact authoring", () => {
     const jsonOutput: unknown[] = [];
     defaultRuntime.writeJson = (value) => jsonOutput.push(value);
     const archive = path.join(await fs.realpath(rootDir), "draft-review.tgz");
-    await runPluginsPackCommand({ root: rootDir, json: true });
+    const nested = path.join(rootDir, "nested");
+    await fs.mkdir(nested);
+    const alias = path.join(parent, "selected");
+    await fs.symlink(nested, alias, "junction");
+    await runPluginsPackCommand({
+      root: `${alias}${path.sep}..`,
+      out: `${alias}${path.sep}..${path.sep}draft-review.tgz`,
+      json: true,
+    });
+    assert.equal(
+      await fs.stat(path.join(parent, "draft-review.tgz")).catch(() => undefined),
+      undefined,
+    );
     const bytes = await fs.readFile(archive);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     assert.deepEqual(jsonOutput, [

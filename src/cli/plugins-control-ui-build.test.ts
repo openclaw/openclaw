@@ -140,13 +140,23 @@ describe("native plugin browser builds", () => {
       };
       const original = `// Authored native manifest\n${JSON.stringify(authored, null, 2)}\n`;
       await fs.writeFile(manifestPath, original);
+      let selectedRoot = project.rootDir;
+      if (authoredUi === "settings-only") {
+        const nested = path.join(project.rootDir, "nested");
+        await fs.mkdir(nested);
+        const aliasParent = await fs.mkdtemp(path.join(os.tmpdir(), "plugin-control-ui-alias-"));
+        directories.push(aliasParent);
+        const alias = path.join(aliasParent, "selected");
+        await fs.symlink(nested, alias, "junction");
+        selectedRoot = `${alias}${path.sep}..`;
+      }
       execFileSync(
         process.execPath,
         [
           "--import",
           path.resolve("scripts/tsx.mjs"),
           path.resolve("scripts/build-plugin-control-ui.mts"),
-          project.rootDir,
+          selectedRoot,
         ],
         { timeout: 10_000 },
       );

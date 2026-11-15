@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { sanitizeTerminalText, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { collectInstalledRuntimePackageGraph } from "../plugins/installed-package-runtime-graph.js";
@@ -15,9 +16,10 @@ export type PluginsRuntimeLintOptions = {
 
 /** Static author diagnostics do not import or activate the inspected plugin. */
 export async function runPluginsRuntimeLintCommand(opts: PluginsRuntimeLintOptions): Promise<void> {
-  const packageDir = path.resolve(opts.root ?? process.cwd());
+  let packageDir = path.resolve(opts.root ?? process.cwd());
   let report: PluginRuntimeCompatibilityReport;
   try {
+    packageDir = await fs.realpath(opts.root ?? process.cwd());
     const graph = await collectInstalledRuntimePackageGraph({ packageDir });
     report = await scanPluginRuntimeCompatibility(graph);
   } catch (error) {

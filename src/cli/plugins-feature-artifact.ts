@@ -25,7 +25,7 @@ export type PluginsPackOptions = { root?: string; out?: string; json?: boolean }
 
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
 async function packFeaturePlugin(opts: PluginsPackOptions) {
-  const rootDir = await fs.realpath(path.resolve(opts.root ?? process.cwd()));
+  const rootDir = await fs.realpath(opts.root ?? process.cwd());
   const validation = await collectPluginsValidationResult({ root: rootDir });
   if (!validation.valid) {
     throwExpectedCliError(validation.errors.join("\n"));
@@ -70,8 +70,11 @@ async function packFeaturePlugin(opts: PluginsPackOptions) {
     throwExpectedCliError(loaded.error);
   }
   const pluginId = loaded.manifest.id;
-  const outputPath = path.resolve(
-    opts.out ?? path.join(rootDir, `${safePluginInstallFileName(pluginId)}.tgz`),
+  const requestedOutput =
+    opts.out ?? path.join(rootDir, `${safePluginInstallFileName(pluginId)}.tgz`);
+  const outputPath = path.join(
+    await fs.realpath(path.dirname(requestedOutput)),
+    path.basename(requestedOutput),
   );
   if (!/\.(?:tgz|tar\.gz)$/u.test(outputPath)) {
     throwExpectedCliError("Plugin artifact output must end in .tgz or .tar.gz.");

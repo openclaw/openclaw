@@ -549,45 +549,66 @@ describe("plugin authoring commands", () => {
     expect(cwdRemoved).toBe(true);
   });
 
-  it("builds and checks metadata through a symlink project root", async () => {
-    const tmpDir = tempDirs.make("openclaw-plugin-symlink-root-");
-    const projectDir = path.join(tmpDir, "project");
-    fs.mkdirSync(projectDir);
-    sourceProject("symlink-root", projectDir);
-    const linkedRoot = path.join(tmpDir, "linked-project");
-    fs.symlinkSync(projectDir, linkedRoot, process.platform === "win32" ? "junction" : "dir");
-    const manifestPath = path.join(projectDir, "openclaw.plugin.json");
-    fs.writeFileSync(manifestPath, '{"id":"previous"}\n');
-    if (process.platform !== "win32") {
-      fs.chmodSync(manifestPath, 0o640);
-      fs.chmodSync(projectDir, 0o3770);
-    }
-    const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-    const opts = { root: linkedRoot, entry: path.join(linkedRoot, "src", "index.ts") };
-
-    try {
-      await runPluginsBuildCommand(opts);
-      expect(readJson(projectDir, "package.json")).toMatchObject({
-        openclaw: { extensions: ["./src/index.ts"] },
-      });
-      expect(readJson(projectDir, "openclaw.plugin.json")).toMatchObject({
-        id: "symlink-root",
-        contracts: { tools: ["symlink_root_echo"] },
-      });
-      const manifestBeforeCheck = fs.readFileSync(manifestPath);
-      const packageBeforeCheck = fs.readFileSync(path.join(projectDir, "package.json"));
-      await runPluginsBuildCommand({ ...opts, check: true });
-      expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
-      expect(fs.readFileSync(manifestPath)).toEqual(manifestBeforeCheck);
-      expect(fs.readFileSync(path.join(projectDir, "package.json"))).toEqual(packageBeforeCheck);
+  it.each([false, true])(
+    "builds and checks metadata through a symlink root with parent=%s",
+    async (parent) => {
+      const tmpDir = tempDirs.make("openclaw-plugin-symlink-root-");
+      const projectDir = path.join(tmpDir, "project");
+      fs.mkdirSync(projectDir);
+      sourceProject("symlink-root", projectDir);
+      const linkedRoot = path.join(tmpDir, "linked-project");
+      const nested = path.join(projectDir, "nested");
+      fs.mkdirSync(nested);
+      fs.symlinkSync(
+        parent ? nested : projectDir,
+        linkedRoot,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      const selectedRoot = parent ? `${linkedRoot}${path.sep}..` : linkedRoot;
+      const manifestPath = path.join(projectDir, "openclaw.plugin.json");
+      fs.writeFileSync(manifestPath, '{"id":"previous"}\n');
       if (process.platform !== "win32") {
-        expect(fs.statSync(manifestPath).mode & 0o7777).toBe(0o640);
-        expect(fs.statSync(projectDir).mode & 0o7777).toBe(0o3770);
+        fs.chmodSync(manifestPath, 0o640);
+        fs.chmodSync(projectDir, 0o3770);
       }
-    } finally {
-      log.mockRestore();
-    }
-  });
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const opts = {
+        root: selectedRoot,
+        entry: `${selectedRoot}${path.sep}src${path.sep}index.ts`,
+      };
+
+      try {
+        await runPluginsBuildCommand(opts);
+        expect(readJson(projectDir, "package.json")).toMatchObject({
+          openclaw: { extensions: ["./src/index.ts"] },
+        });
+        expect(readJson(projectDir, "openclaw.plugin.json")).toMatchObject({
+          id: "symlink-root",
+          contracts: { tools: ["symlink_root_echo"] },
+        });
+        const manifestBeforeCheck = fs.readFileSync(manifestPath);
+        const packageBeforeCheck = fs.readFileSync(path.join(projectDir, "package.json"));
+        await expect(
+          runPluginsBuildCommand({
+            root: selectedRoot,
+            entry: `missing${path.sep}..${path.sep}src${path.sep}index.ts`,
+          }),
+        ).rejects.toThrow("plugin entry not found");
+        await runPluginsBuildCommand({ ...opts, check: true });
+        expect(log).toHaveBeenCalledWith("Plugin metadata is up to date.");
+        await runPluginsValidateCommand(opts);
+        expect(log).toHaveBeenCalledWith("Plugin symlink-root is valid.");
+        expect(fs.readFileSync(manifestPath)).toEqual(manifestBeforeCheck);
+        expect(fs.readFileSync(path.join(projectDir, "package.json"))).toEqual(packageBeforeCheck);
+        if (process.platform !== "win32") {
+          expect(fs.statSync(manifestPath).mode & 0o7777).toBe(0o640);
+          expect(fs.statSync(projectDir).mode & 0o7777).toBe(0o3770);
+        }
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 
   it("keeps the project intact when package publication fails during write", async () => {
     const { root: tmpDir, entry: entryPath } = sourceProject("build-failure");
@@ -703,14 +724,30 @@ describe("plugin authoring commands", () => {
   });
 
   it("scaffolds a provider plugin project with ClawHub validation and release metadata", async () => {
-    const projectDir = path.join(tempDirs.make("openclaw-provider-init-"), "plugin-init-test");
+    const parent = tempDirs.make("openclaw-provider-init-");
+    const physical = path.join(parent, "physical");
+    const nested = path.join(physical, "nested");
+    fs.mkdirSync(nested, { recursive: true });
+    const alias = path.join(parent, "alias");
+    fs.symlinkSync(nested, alias, process.platform === "win32" ? "junction" : "dir");
+    const projectDir = path.join(physical, "plugin-init-test");
+    const selected = `${alias}${path.sep}..${path.sep}plugin-init-test`;
 
     await runPluginsInitCommand("@acme/plugin-init-test", {
-      directory: projectDir,
+      directory: selected,
       name: "Plugin Init Test",
       type: "provider",
     });
 
+    expect(fs.existsSync(path.join(parent, "plugin-init-test"))).toBe(false);
+    await expect(
+      runPluginsInitCommand("@acme/plugin-init-test", { directory: selected }),
+    ).rejects.toThrow("Refusing to overwrite existing path");
+    await expect(
+      runPluginsInitCommand("replacement", {
+        directory: `${physical}${path.sep}missing${path.sep}..${path.sep}plugin-init-test`,
+      }),
+    ).rejects.toThrow("Plugin destination traverses a missing directory");
     const packageManifest = readJson(projectDir, "package.json");
     expect(packageManifest).toMatchObject({
       name: "@acme/openclaw-plugin-plugin-init-test",

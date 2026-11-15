@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
@@ -77,17 +78,28 @@ function normalizeRelativePath(rootDir: string, targetPath: string): string {
 }
 
 function resolveEntryPath(rootDir: string, entry: string | undefined): string {
-  if (entry) {
-    return path.resolve(rootDir, entry);
-  }
-  const packagePath = path.join(rootDir, "package.json");
-  if (fs.existsSync(packagePath)) {
-    const extensionResolution = resolvePackageExtensionEntries(readJsonFile(packagePath));
-    if (extensionResolution.status === "ok" && extensionResolution.entries[0]) {
-      return path.resolve(rootDir, extensionResolution.entries[0]);
+  let selected = entry;
+  if (!selected) {
+    const packagePath = path.join(rootDir, "package.json");
+    if (fs.existsSync(packagePath)) {
+      const resolution = resolvePackageExtensionEntries(readJsonFile(packagePath));
+      if (resolution.status === "ok") {
+        selected = resolution.entries[0];
+      }
     }
   }
-  return path.resolve(rootDir, "src/index.ts");
+  selected ??= "src/index.ts";
+  const candidate = path.isAbsolute(selected) ? selected : `${rootDir}${path.sep}${selected}`;
+  try {
+    return fs.realpathSync.native(candidate);
+  } catch (error) {
+    if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
+      throw error;
+    }
+    return throwExpectedCliError(
+      `plugin entry not found: ${normalizeRelativePath(rootDir, candidate)}`,
+    );
+  }
 }
 
 function readPackageManifest(rootDir: string): JsonObject {
@@ -135,7 +147,7 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
 }
 
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
-  const rootDir = path.resolve(opts.root ?? process.cwd());
+  const rootDir = fs.realpathSync.native(opts.root ?? process.cwd());
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packagePath = path.join(rootDir, "package.json");
@@ -184,7 +196,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
     return;
   }
 
-  const realRootDir = fs.realpathSync(rootDir);
+  const realRootDir = fs.realpathSync.native(rootDir);
   await replaceFileAtomic({
     filePath: path.join(realRootDir, "package.json"),
     content: `${JSON.stringify(nextPackageManifest, null, 2)}\n`,
@@ -210,7 +222,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 export async function collectPluginsValidationResult(
   opts: PluginsValidateOptions,
 ): Promise<PluginsValidationResult> {
-  const rootDir = path.resolve(opts.root ?? process.cwd());
+  const rootDir = fs.realpathSync.native(opts.root ?? process.cwd());
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
@@ -314,10 +326,18 @@ export async function runPluginsInitCommand(
   const packageName = id.startsWith("@")
     ? id.replace("/", "/openclaw-plugin-")
     : `openclaw-plugin-${id}`;
-  const rootDir = path.resolve(opts.directory ?? id);
-  if (opts.force !== true && fs.existsSync(rootDir)) {
-    throwExpectedCliError(`Refusing to overwrite existing path: ${rootDir}`);
+  const directory = opts.directory ?? id;
+  if (opts.force !== true && fs.existsSync(directory)) {
+    throwExpectedCliError(`Refusing to overwrite existing path: ${path.resolve(directory)}`);
   }
+  const prefix = resolvePathPrefixSync(directory);
+  if (prefix.unresolvedSegments.includes("..")) {
+    throwExpectedCliError(`Plugin destination traverses a missing directory: ${directory}`);
+  }
+  const rootDir = path.resolve(
+    fs.realpathSync.native(prefix.existingPath),
+    ...prefix.unresolvedSegments,
+  );
   if (type !== "feature") {
     fs.mkdirSync(path.join(rootDir, "src"), { recursive: true });
   }

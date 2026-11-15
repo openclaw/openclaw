@@ -33,7 +33,11 @@ describe("plugins lint", () => {
     await fs.writeFile(path.join(generated, "index.js"), "Buffer.concat = () => null;");
     await fs.symlink(generated, path.join(root, "runtime.assets"), "junction");
     await fs.symlink(generated, path.join(root, "node_modules"), "junction");
-    expect(await lint(root)).toHaveBeenCalledExactlyOnceWith(
+    const nested = path.join(root, "nested");
+    await fs.mkdir(nested);
+    const alias = path.join(tempDirs.make("plugin-runtime-lint-alias-"), "selected");
+    await fs.symlink(nested, alias, "junction");
+    expect(await lint(`${alias}${path.sep}..`)).toHaveBeenCalledExactlyOnceWith(
       incomplete({ file: "runtime.assets" }, { scannedFiles: 0 }),
     );
   });

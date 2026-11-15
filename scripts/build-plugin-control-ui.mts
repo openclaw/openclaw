@@ -8,7 +8,7 @@ async function buildBundledPluginControlUi(
   packageDir: string,
   options: { copy?: boolean; repoRoot?: string } = {},
 ): Promise<void> {
-  const rootDir = path.resolve(packageDir);
+  const rootDir = await fs.realpath(packageDir);
   const packageManifest = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
   if (options.copy) {
     const generatedManifest = JSON.parse(
@@ -88,7 +88,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   if (packageDir === "--prepare-settings") {
     const { withDistArtifactOwnership } = await import("./lib/dist-artifact-ownership.mts");
-    const repoRoot = path.resolve(process.argv[3] ?? ".");
+    const repoRoot = await fs.realpath(process.argv[3] ?? ".");
     await withDistArtifactOwnership(repoRoot, () => prepareBundledSettingsControlUi(repoRoot));
   } else {
     await buildBundledPluginControlUi(packageDir, { copy: process.argv.includes("--copy") });
