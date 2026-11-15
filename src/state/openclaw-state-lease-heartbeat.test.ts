@@ -1,10 +1,14 @@
+import { spawn } from "node:child_process";
 import { once } from "node:events";
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
+import { defaultPayload } from "../infra/gateway-state-owner-record.js";
+import { resolveGatewayStateOwnerPath } from "../infra/gateway-state-owner.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import {
@@ -127,6 +131,62 @@ describe("maintenance lease heartbeat", () => {
         await Promise.allSettled(operations);
       }
       expect(workers[0]?.threadId).toBe(-1);
+    });
+  });
+
+  it("releases a lease refused by offline maintenance during heartbeat startup", async () => {
+    await withOpenClawTestState({ label: "heartbeat-startup-maintenance" }, async (state) => {
+      const database = openOpenClawStateDatabase({ env: state.env });
+      const ownerPath = resolveGatewayStateOwnerPath(database.path);
+      const holder = spawn(process.execPath, ["--eval", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      await once(holder, "spawn");
+      const stopped = once(holder, "exit");
+      let entered = false;
+      heartbeatWorkers.beforeCreate = () => {
+        fs.mkdirSync(path.dirname(ownerPath), { recursive: true });
+        fs.writeFileSync(
+          ownerPath,
+          JSON.stringify({
+            ...defaultPayload(database.path),
+            pid: holder.pid,
+            startTime: undefined,
+          }),
+        );
+      };
+      try {
+        await expect(
+          withOpenClawStateLease({ ...options(state.env), leaseMs: 60_000 }, async () => {
+            entered = true;
+          }),
+        ).rejects.toThrow();
+        expect(entered).toBe(false);
+        // Custody still blocks cleanup: no release or protected callback may bypass it.
+        expect(
+          database.db
+            .prepare("SELECT owner FROM state_leases WHERE scope = ? AND lease_key = ?")
+            .get("core:test-maintenance", "maintenance"),
+        ).toBeDefined();
+        fs.rmSync(ownerPath);
+        heartbeatWorkers.beforeCreate = undefined;
+        // Cleanup must release the original row, not wait for its minute-long expiry.
+        await expect(
+          withOpenClawStateLease(
+            { ...options(state.env), leaseMs: 60_000, waitMs: 2_000 },
+            async (lease) => {
+              lease.assertOwned();
+              return "reacquired";
+            },
+          ),
+        ).resolves.toBe("reacquired");
+        expect(readLease(state.env)).toBeUndefined();
+      } finally {
+        heartbeatWorkers.beforeCreate = undefined;
+        fs.rmSync(ownerPath, { force: true });
+        holder.kill();
+        await stopped;
+      }
     });
   });
 

@@ -767,7 +767,9 @@ describe("standing document policy ownership", () => {
       },
       {
         assertCurrent: () => {
-          if (revoked) throw stale;
+          if (revoked) {
+            throw stale;
+          }
         },
       },
     );
@@ -783,8 +785,11 @@ describe("standing document policy ownership", () => {
 
   it.each(["close", "disconnect"])("retires the standing owner on %s", async (event) => {
     await guard(async () => "done");
-    if (event === "close") await f.page.close();
-    else f.disconnect();
+    if (event === "close") {
+      await f.page.close();
+    } else {
+      f.disconnect();
+    }
     const route = createMockRoute();
     await dispatch({ url: publicUrl, route });
     expect(route.abort).toHaveBeenCalledOnce();

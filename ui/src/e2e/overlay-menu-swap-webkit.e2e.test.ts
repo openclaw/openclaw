@@ -58,6 +58,9 @@ suite.define(() => {
       await waitForControlUiRoute(page, { routeId: "appearance" });
       const fontTrigger = page.locator("#settings-font-ui");
       await fontTrigger.waitFor();
+      const agentTrigger = page.locator(".settings-sidebar .agent-select__trigger");
+      await agentTrigger.waitFor();
+      await expect.poll(() => agentTrigger.isEnabled()).toBe(true);
 
       await page.evaluate(async () => {
         const press = (selector: string) => {
@@ -116,7 +119,10 @@ suite.define(() => {
             trigger?.getAttribute("aria-expanded") === "true" &&
             Boolean(
               menuId &&
-              document.getElementById(menuId)?.matches(':popover-open[data-phase="open"]'),
+              document
+                .getElementById(menuId)
+                ?.closest(".picker-select__menu")
+                ?.matches(':popover-open[data-phase="open"]'),
             )
           );
         },

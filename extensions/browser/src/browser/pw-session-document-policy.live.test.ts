@@ -12,7 +12,9 @@ import { evaluateViaPlaywright } from "./pw-tools-core.interactions.actions.js";
 function waitForDocumentSettled(page: Page, url: string): Promise<void> {
   return new Promise((resolve) => {
     const settled = (request: Request) => {
-      if (request.url() !== url) return;
+      if (request.url() !== url) {
+        return;
+      }
       page.off("requestfinished", settled);
       page.off("requestfailed", settled);
       resolve();
@@ -90,9 +92,13 @@ describe.skipIf(!isLiveTestEnabled())("standing document policy over real CDP", 
     await context?.close();
     for (const server of [source, denied]) {
       server.closeAllConnections();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
-    if (root) await fs.rm(root, { recursive: true, force: true });
+    if (root) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("blocks a document triggered after the production action has returned", async () => {
@@ -136,7 +142,9 @@ describe.skipIf(!isLiveTestEnabled())("standing document policy over real CDP", 
     });
     expect(deniedRequests).toBe(before + 1);
     const frame = page.frames().find((candidate) => candidate.url() === deniedUrl);
-    if (!frame) throw new Error("missing cross-origin fixture frame");
+    if (!frame) {
+      throw new Error("missing cross-origin fixture frame");
+    }
     // The existing frame's own origin remains usable after the grant expires.
     await frame.goto(deniedUrl + "?reload");
     expect(deniedRequests).toBe(before + 2);

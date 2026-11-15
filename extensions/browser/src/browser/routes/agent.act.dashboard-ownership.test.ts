@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { useBrowserDashboardTestHarness } from "../../browser-dashboard.test-harness.js";
@@ -202,20 +203,42 @@ describe("dashboard action ownership", () => {
         currentUrl = url;
         return null;
       });
-      const page = {
-        url: () => currentUrl,
-        isClosed: () => false,
-        goto,
-        route: vi.fn(async () => {
-          preparations += 1;
-          if (preparations === (retry ? 2 : 1)) {
-            preparationEntered.resolve();
-            await releasePreparation.promise;
-          }
-        }),
-        unroute: vi.fn(async () => {}),
+      const route = vi.fn(async () => {
+        preparations += 1;
+        if (preparations === (retry ? 2 : 1)) {
+          preparationEntered.resolve();
+          await releasePreparation.promise;
+        }
+      });
+      const unroute = vi.fn(async () => {});
+      const createPageConnection = () => {
+        const pageEvents = new EventEmitter();
+        const browserEvents = new EventEmitter();
+        return {
+          page: {
+            url: () => currentUrl,
+            isClosed: () => false,
+            context: () => ({ browser: () => browserEvents }),
+            on: pageEvents.on.bind(pageEvents),
+            off: pageEvents.off.bind(pageEvents),
+            goto,
+            route,
+            unroute,
+          },
+          disconnect: () => browserEvents.emit("disconnected"),
+        };
       };
-      setPwToolsCoreCurrentPage(page);
+      let connection = createPageConnection();
+      setPwToolsCoreCurrentPage(connection.page);
+      if (retry) {
+        getPwToolsCoreSessionMocks().forceDisconnectPlaywrightForTarget.mockImplementationOnce(
+          async () => {
+            connection.disconnect();
+            connection = createPageConnection();
+            setPwToolsCoreCurrentPage(connection.page);
+          },
+        );
+      }
       const pwSession = await import("../pw-session.js");
       const gotoGuard = vi
         .mocked(pwSession.gotoPageWithNavigationGuard)
@@ -268,18 +291,21 @@ describe("dashboard action ownership", () => {
           expect(goto).toHaveBeenCalledTimes(retry ? 2 : 1);
           expect(response.statusCode).toBe(200);
           expect(response.body).toMatchObject({ ok: true, targetId, url: requestedUrl });
-          expect(page.url()).toBe(requestedUrl);
+          expect(connection.page.url()).toBe(requestedUrl);
         } else {
           expect(goto).toHaveBeenCalledTimes(retry ? 1 : 0);
           expect(response.statusCode).toBeGreaterThanOrEqual(400);
           expect(response.body).toMatchObject({ error: expect.stringMatching(/dashboard/i) });
-          expect(page.url()).toBe(dashboard.url);
+          expect(connection.page.url()).toBe(dashboard.url);
         }
-        expect(page.unroute).toHaveBeenCalledTimes(retry ? 2 : 1);
+        // Each connection retains its standing policy after invocation cleanup.
+        expect(route).toHaveBeenCalledTimes(retry ? 2 : 1);
+        expect(unroute).not.toHaveBeenCalled();
       } finally {
         releasePreparation.resolve();
         releaseClose.resolve({ status: "closed" });
         await Promise.allSettled([operation, retirement]);
+        connection.disconnect();
         gotoGuard.mockRestore();
       }
     },

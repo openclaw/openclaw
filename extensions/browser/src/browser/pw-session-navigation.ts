@@ -284,7 +284,9 @@ export async function withPageNavigationRequestGuard<T>(
     inFlight,
     assertCurrent: () => {
       const assertion = opts.assertCurrent?.();
-      if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
+      if (assertion) {
+        return assertion.then(() => opts.signal?.throwIfAborted());
+      }
       return opts.signal?.throwIfAborted();
     },
     failed: async (route, request, err) => {
@@ -374,7 +376,9 @@ export async function gotoPageWithNavigationGuard(
     inFlight: new Set(),
     assertCurrent: () => {
       const assertion = opts.assertPageCurrent?.();
-      if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
+      if (assertion) {
+        return assertion.then(() => opts.signal?.throwIfAborted());
+      }
       return opts.signal?.throwIfAborted();
     },
     handle: async (route, request) => {
@@ -383,7 +387,9 @@ export async function gotoPageWithNavigationGuard(
         return false;
       }
       const kind = classifyBrowserDocumentNavigationRequest(opts.page, request);
-      if (!kind) return true;
+      if (!kind) {
+        return true;
+      }
       try {
         await assertBrowserNavigationAllowed({
           url: request.url(),
@@ -392,9 +398,11 @@ export async function gotoPageWithNavigationGuard(
         });
         return true;
       } catch (err) {
-        if (isPolicyDenyNavigationError(err) && kind === "top-level") blockedError = err;
-        else if (!isPolicyDenyNavigationError(err) && !opts.signal?.aborted)
+        if (isPolicyDenyNavigationError(err) && kind === "top-level") {
+          blockedError = err;
+        } else if (!isPolicyDenyNavigationError(err) && !opts.signal?.aborted) {
           requestPolicyError ??= err;
+        }
         await route.abort().catch(() => {});
         return false;
       }
@@ -429,11 +437,15 @@ export async function gotoPageWithNavigationGuard(
     throw toErrorObject(blockedError, "Non-Error thrown");
   }
   // Preserve the policy-check failure that caused the browser to abort navigation.
-  if (requestPolicyError !== undefined) throw toErrorObject(requestPolicyError, "Non-Error thrown");
+  if (requestPolicyError !== undefined) {
+    throw toErrorObject(requestPolicyError, "Non-Error thrown");
+  }
   // The original navigation error retains precedence over route transport errors.
   if (navigationFailed) {
     throw navigationError;
   }
-  if (routeError !== undefined) throw toErrorObject(routeError, "Non-Error thrown");
+  if (routeError !== undefined) {
+    throw toErrorObject(routeError, "Non-Error thrown");
+  }
   return response;
 }

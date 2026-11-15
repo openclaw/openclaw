@@ -99,7 +99,9 @@ export async function ensurePageDocumentPolicy(
           // before releasing the document, not just before native dispatch.
           for (const claim of active) {
             const assertion = claim.assertCurrent?.();
-            if (assertion) await assertion;
+            if (assertion) {
+              await assertion;
+            }
           }
         } else if (isDocument(request)) {
           await checkStandingDocument(page, request, current.policy);

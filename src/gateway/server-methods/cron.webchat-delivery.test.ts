@@ -203,7 +203,7 @@ async function withWebchatTool(
 }
 
 describe("WebChat automation creation through the tool and Gateway", () => {
-  it("previews the retained binding when replaying a declaration after reset", async () => {
+  it("previews the retained conversation when replaying a declaration after reset", async () => {
     await withWebchatTool(
       async ({ tool, cron, creatorStorePath }) => {
         const create = () =>
@@ -219,6 +219,13 @@ describe("WebChat automation creation through the tool and Gateway", () => {
             },
           });
         await create();
+        const original = structuredClone(
+          expectDefined((await cron.list({ includeDisabled: true }))[0], "created job"),
+        );
+        expect(original.sourceConversation).toMatchObject({
+          sessionKey,
+          sessionId: "webchat-source",
+        });
         await resetSessionEntryLifecycle({
           storePath: creatorStorePath,
           target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
@@ -231,9 +238,18 @@ describe("WebChat automation creation through the tool and Gateway", () => {
         const replayed = await create();
         expect(replayed.details).toMatchObject({
           created: false,
-          deliveryPreview: { detail: expect.stringContaining("original session generation") },
+          deliveryPreview: {
+            label: "announce -> creating conversation",
+            detail: "commits to this conversation (no external channel route)",
+          },
         });
-        expect(await cron.list({ includeDisabled: true })).toHaveLength(1);
+        // Replay follows the same conversation without recapturing its replacement generation.
+        expect(await cron.list({ includeDisabled: true })).toEqual([
+          expect.objectContaining({
+            id: original.id,
+            sourceConversation: original.sourceConversation,
+          }),
+        ]);
       },
       undefined,
       false,
