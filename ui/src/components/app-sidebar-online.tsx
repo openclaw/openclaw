@@ -1,6 +1,7 @@
 import { Dynamic } from "@solidjs/web";
 import { createMemo, createUniqueId, For, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { USERS_SECTION_PLUGIN_PAGES } from "../app-navigation.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import {
@@ -50,7 +51,23 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
         </button>
       )}
       {/* The Users section opens on Activity, its overview, above the people. */}
-      <div class="sidebar-online__overview">{host.sidebarMenus.renderRoute("activity", host)}</div>
+      <div class="sidebar-online__overview">
+        {host.sidebarMenus.renderRoute("activity", host)}
+        <For
+          each={host
+            .pluginNavigation()
+            .filter((entry) => USERS_SECTION_PLUGIN_PAGES.has(entry.key))}
+        >
+          {(entry) => (
+            <openclaw-plugin-contributions
+              prop:kind={"navigation"}
+              prop:navigationKey={entry.key}
+              prop:navigationChildren={false}
+              prop:navigationMenus={host.sidebarMenus}
+            />
+          )}
+        </For>
+      </div>
       <div class="sidebar-online__list">
         {listUsers().length === 0 ? (
           <span class="sidebar-session-empty-hint">
