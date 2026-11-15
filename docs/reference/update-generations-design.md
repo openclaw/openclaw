@@ -321,7 +321,8 @@ This section is that record.
 1. Take the install lease and the slot lease at the link's path. Remove stale
    temporary links by their operation-owned name.
 2. Verify the candidate release: fingerprint, version, build, launcher text,
-   and owner. Refuse before any change if its launcher text differs.
+   and owner. If its launcher text differs, this run takes the swap instead
+   (see [the layout never fails an update](#the-layout-never-fails-an-update)).
 3. Capture the link's inode, its target text, and the identity of the
    directory it resolves to.
 4. Write `origin.packageRelease`.
@@ -396,6 +397,33 @@ packaged macOS app already has its own build links and is not updated by
 `openclaw update`. The node host keeps its launcher and gains the shared
 release installer and collection.
 
+#### The layout never fails an update
+
+Release directories make an update faster and its rollback cheaper. They are
+not a condition for updating. When the linked layout cannot be used for a run,
+and that is known before the first change to the installation, the run takes
+today's swap, records a warning that names the reason, and finishes. The next
+update tries the layout again.
+
+This covers every precondition of the switch:
+
+- the candidate's `bin` launchers differ from the ones the prefix has
+- `releases/` cannot be created, or is on another filesystem than the package
+  path
+- the package path or the candidate cannot be captured or read
+- the Gateway service starts a path inside a release. The swap does not help
+  here, because the service would still start the old directory. The update
+  rebinds the service to the package path itself and warns if it cannot.
+
+A refusal remains only where another writer is changing the installation
+during the run: the link or the candidate changed between capture and the
+rename, and a previous release that was rewritten is not a rollback target.
+Those are rechecked immediately before a rename and stop that rename, not the
+layout.
+
+This follows the repository rule that `openclaw update` finishes best effort
+on every installation and refuses only for concrete data at risk.
+
 #### Slice 4 as built
 
 The implementation follows the sections above with these changes, each forced by
@@ -448,16 +476,16 @@ something the source showed.
   the linked-root cell: `ExecStart` named `releases/2026.11.3/.../dist/index.js`).
   After a switch that service would keep starting the old release, and
   post-switch service revalidation correctly calls it another installation.
-  The switch now refuses before any change when the managed service starts a
-  path inside a release, and names `openclaw gateway install --force` from the
-  package path as the fix. This installation's own service writes keep the
-  package path (the adoption cell checks the unit). Treating such a service as
-  an install-root refresh, as pnpm generation changes are, is the follow-up
-  that would make this automatic.
-- **Launchers.** The refusal before any change stays. A future release that
-  adds or renames a `bin` entry cannot switch on an owned prefix until a rule
-  for launcher changes is designed; the refusal names the way out (`npm
-  install -g` into the prefix, after which the next update adopts again).
+  The first version of #198835 refused before any change when the managed
+  service starts a path inside a release, and named `openclaw gateway install
+  --force` from the package path as the fix. Decision 8 replaces that refusal:
+  the update rebinds the service itself, as an install-root refresh like a pnpm
+  generation change. This installation's own service writes keep the package
+  path (the adoption cell checks the unit).
+- **Launchers.** The first version refused before any change when a candidate
+  adds or renames a `bin` entry. Decision 8 replaces that with the swap for
+  that run, which installs the new launchers and leaves a plain directory; the
+  next update adopts again.
 - **Adoption** moves the plain directory into `releases/<label>` and renames
   a prepared temporary link naming it onto the empty package path, then
   switches as usual. Between the two renames the package path is missing.
@@ -466,8 +494,8 @@ something the source showed.
   recovery is manual and documented: the journal cannot hold it, because its
   candidate is a sealed tree, and nothing can run `openclaw` while the
   package path is missing. A failed second rename moves the directory back.
-  Adoption refuses before any change when `releases/` is on another
-  filesystem.
+  The first version refused before any change when `releases/` is on another
+  filesystem; under decision 8 that run takes the swap.
 - **Local overrides** replay into the candidate release before the link names
   it, so a selected release is still written once.
 - **Leases.** A Gateway writes `releases/.leases/<release>/<pid>-<start>-<n>`
@@ -615,17 +643,17 @@ older release, with no download when that release is still retained. See
 
 ## Risks
 
-| Risk                                                     | Severity | Mitigation                                                                                                                                                                                     |
-| -------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, executor and journal identity, and a service definition written by a published updater through the link (observed; the switch refuses it). |
-| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                                                             |
-| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed.                                          |
-| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                                                                    |
-| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                                                          |
-| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                                                                        |
-| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                                                                     |
-| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                                                                   |
-| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                                                           |
+| Risk                                                     | Severity | Mitigation                                                                                                                                                                                                 |
+| -------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Something stores a resolved release path                 | High     | Known holders are plugin links, the agent CLI shim, executor and journal identity, and a service definition written by a published updater through the link (observed; the update rebinds it, decision 8). |
+| Collection deletes a release in use                      | High     | Leases, not a newest-N rule. An unknown reference keeps the files.                                                                                                                                         |
+| A published driver rewrites a release directory in place | High     | Seen in the linked-root cell. Identify a release by its recorded content identity, never by directory name, and adopt again when the content changed.                                                      |
+| The Windows flip is two renames                          | Medium   | The Gateway is stopped, the exposure equals today's swap, and the node host's `.previous` recovery applies.                                                                                                |
+| A process keeps running across a flip                    | Medium   | It stays in its own release, which is safer than today. Its lease keeps that release from collection.                                                                                                      |
+| npm reports the package as a link on an owned prefix     | Medium   | Document it. A manual `npm install -g` restores a plain directory, and the next update adopts it again.                                                                                                    |
+| Several Gateways share one owned prefix                  | Medium   | One flip moves all of them. Each is drained and stopped, and each state directory gets its own Doctor run.                                                                                                 |
+| Disk use                                                 | Medium   | A release measured 591 MB. Bounded by leases and minimum age. Admission checks free space for the candidate.                                                                                               |
+| Nothing in the updater holds the link path               | High     | Root discovery resolves to the release directory. Build the slot resolver first, and land target resolution and the switch together.                                                                       |
 
 ## Review slices
 
@@ -648,8 +676,8 @@ These are proposals, not permission to open them.
    start through the `bin` launcher. With them come the run record field,
    interrupted handoff reading through the link, and target resolution wired
    together with the switch, which is the first change an installation can
-   observe. The switch refuses before any change when the candidate's launcher
-   text differs from the installed one. Release identity, rollback,
+   observe. When the candidate's launcher text differs from the installed
+   one, the run takes the swap instead of the switch. Release identity, rollback,
    leases, and collection. This slice also gives the node host its missing
    collection and a liveness rule for `activation.lock`.
 5. **Retire what a linked root makes unnecessary,** after measuring: the
@@ -661,7 +689,8 @@ B3, route 4, and Windows each need their own proposal.
 
 ## Decisions
 
-A maintainer accepted these answers on November 13, 2026.
+A maintainer accepted answers 1 to 7 on November 13, 2026, and gave answer 8
+on November 15, 2026.
 
 | #   | Decision                                                                   | Answer                                                                                                                                                                                                                                                                                                                                                                                        | Still open                                                                   |
 | --- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
@@ -672,6 +701,7 @@ A maintainer accepted these answers on November 13, 2026.
 | 5   | Whether to accept the B1 package marker.                                   | Yes. It ships with #197922.                                                                                                                                                                                                                                                                                                                                                                   | None.                                                                        |
 | 6   | Whether npm-owned global prefixes take a linked root.                      | Not now. It needs its own proposal.                                                                                                                                                                                                                                                                                                                                                           | That proposal.                                                               |
 | 7   | Whether equal schema versions are enough to skip the state rehearsal.      | Yes for the snapshot and migration rehearsal; no for config validation and plugin planning.                                                                                                                                                                                                                                                                                                   | None.                                                                        |
+| 8   | Whether a condition that prevents the link switch may fail the update.     | No. The run takes the swap, or rebinds the service, with a recorded warning. See [the layout never fails an update](#the-layout-never-fails-an-update).                                                                                                                                                                                                                                       | The change to #198835.                                                       |
 
 ## Not doing
 
