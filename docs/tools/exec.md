@@ -80,6 +80,12 @@ Key/value environment overrides merged on top of the inherited environment.
 Return a running process handle after this delay (ms), at most 120000; larger values are capped and the running result says so. On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
+<ParamField path="awaitResults" type="boolean" default="false">
+Keep the tool call open until the command exits and its terminal result is collected. Use this for bounded tests and builds whose result is needed before continuing, including headless coding runs, instead of a short `yieldMs` followed by polling. It takes precedence over `yieldMs`; Stop and process deadlines still apply. Cannot be combined with `background: true` or `durable: true`.
+
+In [Code Mode](/tools/code-mode/tool-surface#required-results), set `awaitResults: true` on the outer cell to collect ordinary nested shell commands without model polling. Explicit `background: true` commands remain detached.
+</ParamField>
+
 <ParamField path="background" type="boolean" default="false">
 Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
@@ -161,7 +167,7 @@ Notes:
 - Capable nodes receive channel/subagent routing context separately from custom environment overrides and inject the fixed markers themselves. See [node execution context](/nodes/node-exec#channel-and-subagent-context) for capability negotiation and mixed-version behavior.
 - `exec` cannot run `openclaw channels login` or `/approve` shell commands: `openclaw channels login` is an interactive channel-auth flow, and `/approve` needs to go through the approval command handler, not a shell. Run channel login in a terminal on the gateway host, or use a channel-specific login agent tool when one exists (for example `whatsapp_login`).
 - Important: sandboxing is **off by default**. If sandboxing is off, implicit `host=auto` resolves to `gateway`. Explicit `host=sandbox` requests are still rejected instead of silently running on the gateway host. Enable sandboxing or use `host=gateway` with approvals.
-- Python script preflight checks for common shell-syntax mistakes only inspect files inside the effective `workdir` boundary. If a script path resolves outside `workdir`, the file check is skipped. JavaScript source is left to Node, which returns its normal diagnostics and exit code; statements before a runtime error may already have executed. Separate restrictions on ambiguous Python/Node interpreter commands still apply. Preflight skips entirely when `host=gateway` and the effective policy is `security=full` with `ask=off`.
+- Exec does not read or lint script files. Python and Node report their own errors. When a shell chain, pipeline or wrapper starts a Python or Node program from a file or stdin, the command text does not show which program runs. On the Gateway host, approval policy treats such a command as an allowlist miss where it asks (`security=allowlist` with `ask=on-miss`), when it can bind the command for approval. With `security=full`, with `ask=off`, or in a sandbox, the command runs. This fact never refuses a command.
 - For long-running work that starts now, start it once. When enabled, automatic completion wake can happen after the command exits. New output while the command is still running does not start another turn. Use `process` for logs, status, input, or intervention. Do not emulate scheduling with sleep loops, timeout loops, or repeated polling.
 - When the command's exit will start a turn in this conversation, the running result says so, shows the deadline (`times out in 29m59s`) and tells the agent to end the turn if only waiting remains, instead of polling or starting another command for the same result. Every exit wakes the conversation, including a success with no output. To wait for a condition or a time, the agent runs one command that loops until it holds, exits non-zero on failure states and prints the result. An idle `process poll` of such a command repeats the guidance. The running result also lists the other background commands still running in the same conversation, because the turn-start snapshot does not show commands started later in the same turn.
 - The exit wake carries the exit code, the duration and the last 2,000 characters of output, so the woken turn does not need `process log`. Longer output says how much was omitted. `process log` has the rest, up to the retention cap; the wake says when earlier output was discarded.
@@ -363,10 +369,16 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Ordinary work that yields a handle, then poll:
+Bounded tests or builds needed before continuing:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
+{ "tool": "exec", "command": "npm run build", "awaitResults": true, "timeoutSeconds": 120 }
+```
+
+If ordinary work returns a running handle, collect that handle instead of restarting the command:
+
+```json
+{"tool":"exec","command":"npm run build"}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

@@ -95,9 +95,15 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal blocked [note]`                              | Alias for `block`.                                                       |
 | `/goal clear`                                       | Remove the goal from the session.                                        |
 
-Only one goal can exist on a session at a time. In the Control UI, submitting
-a new objective through `/goal <objective>` or the Goal composer asks whether
-to replace the current objective. For an idle or paused goal, confirming uses
+Only one goal can exist on a session at a time. Starting a new goal after the
+current goal is complete replaces it with a fresh active goal, a new identity,
+and fresh token accounting. The conversation history stays intact; no manual
+clear or resume is needed. This applies to the Goal composer, `/goal` creation
+commands, and an explicitly requested `create_goal` call.
+
+For an unfinished goal, submitting a new objective through `/goal <objective>`
+or the Goal composer asks whether to replace the current objective. For an idle
+or paused goal, confirming uses
 **Edit** and preserves its status. For an executing active goal, confirming
 interrupts that exact turn, waits for its work to settle, pauses and edits the
 same goal, then resumes it through normal continuation admission. Its identity,
@@ -116,8 +122,9 @@ explicit controls; replacement never guesses that it is safe to resume. A warnin
 that interrupted output could not be saved also stops replacement before the
 objective is edited or resumed; copy any visible text as the warning instructs.
 
-In textual CLI/TUI commands, starting a second goal still fails with
-`Goal error: goal already exists` until the current one is cleared.
+In textual CLI/TUI commands, starting a second goal while the current one is
+unfinished still fails with `Goal error: goal already exists`. Resume, edit, or
+clear that goal explicitly; completion allows the next goal to start.
 
 `/goal start` does not take a token-budget flag. Only the model-facing `create_goal` tool can set a budget.
 
@@ -141,7 +148,8 @@ In textual CLI/TUI commands, starting a second goal still fails with
   accounting continues unless the budget was reached, in which case resume starts
   a fresh budget window. A later completion records a new completion time; repeating
   completion without resuming preserves the original time, including when you add
-  a status note. Use `/goal clear` before starting a different goal.
+  a status note. Starting a new goal instead replaces the completed goal with a
+  fresh objective and accounting; it does not resume the old one.
 
 Inactive status stops automatic goal pursuit; it is not a permission gate on a
 new user-requested turn. The agent can still do work authorized by that request
@@ -179,16 +187,17 @@ OpenClaw usage and model controls.
 
 OpenClaw exposes three goal tools to agent harnesses:
 
-| Tool          | Purpose                                                                                                                  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `get_goal`    | Read the current session goal: status, objective, token usage, and token budget.                                         |
-| `create_goal` | Create a goal only when the user or system instructions explicitly request one. Fails if the session already has a goal. |
-| `update_goal` | Mark the goal `complete` or `blocked`.                                                                                   |
+| Tool          | Purpose                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------ |
+| `get_goal`    | Read the current session goal: status, objective, token usage, and token budget.                             |
+| `create_goal` | Create a goal only when explicitly requested. Replaces a completed goal; fails if an unfinished goal exists. |
+| `update_goal` | Mark the goal `complete` or `blocked`.                                                                       |
 
-The model cannot silently pause, resume, clear, or replace a goal. Those stay
+The model cannot pause, resume, clear, or replace an unfinished goal. Those stay
 operator/session controls through `/goal` and reset commands, so the agent
-can report achievement or a genuine blocker without quietly moving the
-target.
+cannot quietly move an unfinished target. An explicitly requested `create_goal`
+can replace a completed goal; it must not be used to invent more work after
+achievement.
 
 `update_goal` should mark a goal `complete` only when the objective is
 verified against the full objective with no required work remaining. It should
@@ -424,11 +433,11 @@ a cron schedule or bypass an existing continuation owner.
 
 ## Troubleshooting
 
-| Message                                | Meaning                                                                                                                                      |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Goal error: goal already exists`      | The session already has a goal. Use `/goal` to inspect it, `/goal complete` if done, or `/goal clear` before starting a different objective. |
-| `Goal error: goal not found`           | The session has no goal yet. Start one with `/goal start <objective>`.                                                                       |
-| `Goal error: goal is already complete` | The goal must be explicitly resumed before editing, pausing, or blocking it. Clear it to start a different objective.                        |
+| Message                                | Meaning                                                                                                                                             |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Goal error: goal already exists`      | The session has an unfinished goal. Inspect it with `/goal`, complete it if achieved, or explicitly clear it before starting a different objective. |
+| `Goal error: goal not found`           | The session has no goal yet. Start one with `/goal start <objective>`.                                                                              |
+| `Goal error: goal is already complete` | The goal must be explicitly resumed before editing, pausing, or blocking it. Start a new goal to pursue a different objective.                      |
 
 If token usage shows `0` or looks stale, the active session may not have a
 fresh token snapshot yet. Usage refreshes as OpenClaw records session usage

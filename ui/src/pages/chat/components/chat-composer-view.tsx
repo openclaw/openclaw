@@ -33,12 +33,7 @@ import type { createChatComposerContext } from "./chat-composer-frame.ts";
 import { createComposerMobileInteraction } from "./chat-composer-mobile-interaction.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import { ComposerQuestionDock } from "./chat-composer-question.tsx";
-import {
-  ComposerQueue,
-  ComposerInputScope,
-  ComposerProgress,
-  ComposerWaiters,
-} from "./chat-composer-regions.tsx";
+import { ComposerQueue, ComposerInputScope, ComposerProgress } from "./chat-composer-regions.tsx";
 import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -210,10 +205,7 @@ export function renderChatComposerView(
   const application = useOptionalApplication();
   const memberWelcome = createMemberWelcomeSlot(() => application);
   const showComposerInput = createMemo(
-    () =>
-      !memberWelcome.active() &&
-      context().showComposer &&
-      props.disabledBanner?.kind !== "composer-replacement",
+    () => !memberWelcome.active() && props.disabledBanner?.kind !== "composer-replacement",
   );
   const disabledReasonId = () => paneDomId(props.paneId, "disabled-reason");
   const composerAlerts = createMemo(() =>
@@ -331,7 +323,7 @@ export function renderChatComposerView(
           </div>
           <ComposerQuestionDock panel={context().questionPanelProps} />
           {props.disabledBanner?.kind === "above-composer" ? disabledBanner : undefined}
-          <ComposerProgress composer={props} shown={context().showComposer} />{" "}
+          <ComposerProgress composer={props} shown={context().showComposerProgress} />{" "}
           <Show when={!props.mobileComposer}>
             <ComposerQueue composer={props} showAbortableUi={context().showAbortableUi} />
           </Show>
@@ -375,7 +367,6 @@ export function renderChatComposerView(
               </div>
             )}
           </Show>
-          <ComposerWaiters composer={props} />
           <Show when={props.composerRecovery}>
             {(recovery) => {
               const Recovery = dynamic(() => recovery().component);
@@ -513,7 +504,7 @@ export function renderChatComposerView(
                 {...props}
                 inputHandle={inputHandle}
                 disabled={!context().canCompose}
-                cameraActive={context().showComposer && props.cameraActive !== false}
+                cameraActive={props.cameraActive !== false}
               />
               {props.realtimeTalkVideoStream ? (
                 <div class="agent-chat__video-preview">

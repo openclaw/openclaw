@@ -29,7 +29,6 @@ import { configWithDefaults } from "./media-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
-  withHeldCronMediaGenerationResult,
   withHeldMediaGenerationResult,
 } from "./media-generation-lifecycle.test-support.js";
 
@@ -1025,54 +1024,6 @@ describe("createImageGenerateTool", () => {
     expect(acquireProviders).toHaveBeenCalledOnce();
     expect(taskRuntimeMocks.createOperation).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
-  });
-
-  it("starts run-scoped cron image generation as a tracked async task", async () => {
-    stubImageGenerationProviders();
-    vi.stubEnv("OPENAI_API_KEY", "openai-test");
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
-      sessionId: "run-123",
-      updatedAt: 1,
-      cronRunContinuation: {
-        lifecycleRevision: "revision-1",
-        phase: "running",
-      },
-    });
-    const generateImage = mockGeneratedImage({
-      images: [imageAsset("png-out", "cron.png")],
-    });
-    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue(savedMedia("generated-cron.png", 7));
-    taskRuntimeMocks.createOperation.mockReturnValue({
-      taskId: "task-cron-image",
-    });
-    const tool = createToolWithPrimaryImageModel("openai/gpt-image-1", {
-      agentDir: "/tmp/agent",
-      agentSessionKey: "agent:main:cron:daily-media:run:run-123",
-      requesterOrigin: {
-        channel: "slack",
-        to: "channel:C123",
-      },
-    });
-
-    await withHeldCronMediaGenerationResult(generateImage, taskRuntimeMocks, async (complete) => {
-      const result = await tool.execute("call-cron-inline", {
-        prompt: "Daily proof image",
-        model: "openai/gpt-image-1",
-      });
-
-      expect(taskRuntimeMocks.completeOperation).not.toHaveBeenCalled();
-      expect(resultText(result)).toContain("Background task started for image generation");
-      expect(resultDetails(result).async).toBe(true);
-      expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
-      expect(taskRuntimeMocks.createOperation).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runId: expect.stringMatching(/^tool:image_generate:/),
-          requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
-        }),
-      );
-      await complete();
-      expect(generateImage).toHaveBeenCalledOnce();
-    });
   });
 
   it("starts a distinct image request while another image task is active", async () => {

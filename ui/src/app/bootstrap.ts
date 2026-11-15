@@ -338,7 +338,12 @@ export function bootstrapApplication(
     canPresentBrowserPanel: () => {
       return (
         shell?.element.isConnected === true &&
-        !isSettingsTakeover(selectShellRouteState(router.getState()).routeId)
+        !isSettingsTakeover(
+          selectShellRouteState(router.getState()).routeId,
+          gateway.snapshot.hello?.controlUiTabs,
+          selectShellRouteState(router.getState()).location,
+          basePath,
+        )
       );
     },
     prepareNativeUpdateFallback: () => prepareNativeUpdateFallback(overlays),

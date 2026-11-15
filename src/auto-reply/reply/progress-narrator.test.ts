@@ -157,7 +157,7 @@ afterEach(() => {
   modelMocks.generate.mockReset();
 });
 
-it("stops a pending retry when its plugin visibility scope has closed", async () => {
+it("stops a pending retry when its plugin retires after its visibility scope is released", async () => {
   const instance = new PluginInstance("narrator-test");
   const scope = new PluginInvocationScope(createEmptyPluginRegistry(), [instance]);
   const visible = vi.fn(() => false);
@@ -167,7 +167,8 @@ it("stops a pending retry when its plugin visibility scope has closed", async ()
     await narrator.start("exec");
     expect(vi.getTimerCount()).toBe(1);
     scope.release();
-    expect(() => isProgressDraftVisible()).toThrow("Plugin invocation scope is closed");
+    instance.quiesce();
+    expect(() => isProgressDraftVisible()).toThrow("reloaded or disabled");
 
     await vi.advanceTimersByTimeAsync(1_000);
     await narrator.start("exec");
@@ -213,7 +214,7 @@ it("stops narration when a retried visibility check throws after its scope close
   const { narrator, generate } = narratorHarness({
     isProgressDraftVisible: () => {
       if (scopeClosed) {
-        throw new Error("Plugin invocation scope is closed");
+        throw new Error("Plugin narrator-test was reloaded or disabled");
       }
       return visible;
     },

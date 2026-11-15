@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupEmbeddedAttemptSessionPhase } from "../agents/embedded-agent-runner/run/attempt-session-settle.js";
 import { createEmbeddedAttemptDeferredLifecycleOwner } from "../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
@@ -43,10 +45,10 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
   return {
     ...actual,
-    captureOpenClawAgentDatabaseExecution: (
-      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecution>
-    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecution> => {
-      const owned = actual.captureOpenClawAgentDatabaseExecution(...args);
+    captureOpenClawAgentDatabaseExecutionAsync: async (
+      ...args: Parameters<typeof actual.captureOpenClawAgentDatabaseExecutionAsync>
+    ): ReturnType<typeof actual.captureOpenClawAgentDatabaseExecutionAsync> => {
+      const owned = await actual.captureOpenClawAgentDatabaseExecutionAsync(...args);
       let executingAppend = false;
       return {
         ...owned,
@@ -264,8 +266,36 @@ it("persists repeated events and retains the worker owner without a main-thread 
     expect(sink.describeFlushState()).toBe(
       `pendingRows=2 queuedBytes=${2 * (Buffer.byteLength(line, "utf8") + 1)} activeOperation=sqlite-append`,
     );
-    await sink.flush();
-    await retention.accepted;
+    let syncCalls = 0;
+    const previousStackLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 50;
+    const count = () => {
+      const stack = new Error().stack ?? "";
+      if (/\/trajectory\/runtime-(?:store-writer|retention)\.ts:/.test(stack)) {
+        syncCalls += 1;
+      }
+    };
+    const stat = fs.statSync;
+    const realpath = fs.realpathSync.native;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(stat, fs, args);
+    });
+    const realpathSpy = vi.spyOn(fs.realpathSync, "native").mockImplementation((...args) => {
+      count();
+      return Reflect.apply(realpath, fs.realpathSync, args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await sink.flush();
+      await retention.accepted;
+    } finally {
+      statSpy.mockRestore();
+      realpathSpy.mockRestore();
+      syncBuiltinESMExports();
+      Error.stackTraceLimit = previousStackLimit;
+    }
+    expect(syncCalls).toBe(0);
     expect(sink.describeFlushState()).toBeUndefined();
     expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event]);
     expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();

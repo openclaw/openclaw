@@ -140,9 +140,20 @@ export function environmentImage(environment: CloudEnvironment): SnapshotImage |
   const images = environment.images.toSorted((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0));
   return images.find((image) => image.profileId === environment.defaultProfile) ?? images[0];
 }
+export function environmentReadyAt(environment: CloudEnvironment): number | undefined {
+  const builtAt = environment.images
+    .filter((image) => image.state === "available")
+    .toSorted((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0))[0]?.createdAtMs;
+  const worker = environment.workers.find(
+    (candidate) => candidate.worker?.state === "ready",
+  )?.worker;
+  return builtAt ?? (worker ? Date.now() - worker.ageMs : undefined);
+}
+
 export function environmentState(
   environment: CloudEnvironment,
-): "ready" | "building" | "coldOnly" | "attention" {
+  snapshotsKnown: boolean,
+): ReturnType<typeof snapshotState> | null {
   if (
     environment.images.some((image) => snapshotState(image) === "attention") ||
     environment.workers.some(preparationNeedsAttention)
@@ -163,10 +174,12 @@ export function environmentState(
   ) {
     return "ready";
   }
-  return "coldOnly";
+  return snapshotsKnown ? "coldOnly" : null;
 }
 
-export function snapshotState(image: SnapshotImage): ReturnType<typeof environmentState> {
+export function snapshotState(
+  image: SnapshotImage,
+): "ready" | "building" | "coldOnly" | "attention" {
   if (
     image.recipePreparation?.failure ||
     image.capture?.phase === "uncertain" ||

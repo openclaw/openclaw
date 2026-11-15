@@ -139,6 +139,9 @@ Waivers are code in trusted release tooling **P**, not candidate **C** or its
 qualification harness **Q=C**. The grant list is
 `scripts/lib/release-validation-waivers.mjs` and is empty by default. Add a
 reviewed row with an exact target version, child role, job name, and reason.
+An optional `targetSha` restricts the grant to that exact authenticated candidate;
+a missing or different candidate SHA cannot use it, including through
+changelog-only evidence reuse.
 For example (illustrative only, not an active grant):
 
 ```js
@@ -200,11 +203,37 @@ individual observed assertions. Raw failures remain visible; the CI and release
 aggregates must contain only causes explained by granted jobs. This exception
 does not carry to another release or excuse package/receipt integrity failures.
 
-Only exact terminal **failed** live-provider or Telegram leaves, the beta.3
-operator-accepted jobs, or the Kova threshold exceptions above are eligible.
+On November 15, 2026 at 04:13 UTC, the operator authorized three exact
+`2026.11.4` normal-CI failures for unchanged candidate
+`5eb2d8052ddc363245bea3ca4ec0833815ab6e93`:
+`checks-node-agentic-control-plane-runtime-state`,
+`checks-ui-e2e-real-gateway (1/2)`, and `macos-swift (tests)`. The grants accept
+terminal failures of those named jobs, not a test pass or permission to skip
+them. Their failed `openclaw/ci-gate` must have only the expected failed step
+and the complete set of causes explained by the granted leaves. Other shards,
+Swift phases, and unexplained aggregate failures remain blocking. The existing
+Kova grant is unchanged. FRV `43641896010/1` tested the older `005030` candidate;
+it remains historical evidence, not qualification of `5eb2`. New admission and
+exact-candidate qualification under the reviewed P are required.
+
+On November 15, 2026 at 15:03 UTC, Dallin Romney authorized the two
+`releaseChecksIndependent` native-live failures for unchanged C/Q
+`e283dccf68ba35ef1af5b3fa31571db7f4b6bc74`: `Native live gateway core` and
+`Native live test harnesses`, under `Run repo/live E2E validation / Native live suites`.
+Child `43719709063/1` records the unresolved original failures; preserve its raw
+logs and artifacts. These exact-candidate grants also cover fresh executions of
+those named jobs. They are not bound to the old run because ordinary child reuse
+remains green-only, and they do not authorize skipped tests or evidence reuse.
+The downstream `Verify release checks` failure must contain only the existing
+`live_repo_e2e_release_checks ended with failure` cause. All other grants,
+including the earlier `5eb2` normal-CI grants and Kova, remain unchanged.
+
+Only exact terminal **failed** live-provider or Telegram leaves, the
+operator-accepted beta.3 and candidate-bound `2026.11.4` jobs, or the Kova
+threshold exceptions above are eligible.
 Every other required result must pass. Missing, skipped, cancelled, timed-out,
 incomplete, or mismatched required evidence still blocks. Normal CI outside
-the exact beta.3 grants, npm/Docker artifact production, package integrity,
+those exact grants, npm/Docker artifact production, package integrity,
 install/upgrade outside the named Docker test job, soak, performance outside the
 explicit 2026.9.37 not-run exception, plugin
 prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
