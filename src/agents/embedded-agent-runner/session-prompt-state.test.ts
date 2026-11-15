@@ -471,6 +471,33 @@ describe("session tool surface", () => {
     },
   );
 
+  it("shares published descriptors across sessions without sharing changed or mutable definitions", () => {
+    const parameters = publishRuntimeToolInputSchema({ type: "object", properties: {} }).schema;
+    const pin = (name: string, description: string, schema = parameters) => {
+      fixture.reload();
+      surface([tool(name, description, schema)]);
+      return fixture.state.pendingToolSurface!.tools[0]!;
+    };
+    const first = pin("read", "Read a file 🦞\ud800");
+    expect(pin("read", "Read a file 🦞\ud800")).toBe(first);
+    const renamed = pin("other", first.description);
+    expect(renamed).not.toBe(first);
+    expect(renamed.name).toBe("other");
+    const changed = pin("read", "New description");
+    expect(changed).not.toBe(first);
+    expect(first.description).toBe("Read a file 🦞\ud800");
+    expect(pin("read", "New description")).toBe(changed);
+    const replacement = publishRuntimeToolInputSchema({
+      type: "object",
+      required: ["path"],
+    }).schema;
+    expect(pin("read", "New description", replacement).parameters).toBe(replacement);
+    const mutable = { type: "object", properties: {} };
+    expect(pin("read", "New description", mutable)).not.toBe(
+      pin("read", "New description", mutable),
+    );
+  });
+
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];
     const parameters = publishRuntimeToolInputSchema({

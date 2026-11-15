@@ -22,10 +22,10 @@ import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
-import type { LocalWorkspaceManifestAction } from "./local-workspace-manifest-scan.js";
 import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceBaselineDocument,
+  LocalWorkspaceManifestAction,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
@@ -286,6 +286,8 @@ export function withLocalWorkspaceStore<T>(
                                 mutation: wireMutation!,
                                 preparationEpoch,
                                 predicates,
+                                workspaceEvidence: guard.workspaceEvidence,
+                                stateOwnerPath: guard.stateOwnerPath,
                                 leases: write.identities,
                               },
                             }),

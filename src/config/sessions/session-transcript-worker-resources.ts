@@ -1,6 +1,5 @@
 import { addAbortListener } from "node:events";
 import path from "node:path";
-import type { Result } from "@openclaw/normalization-core/result";
 import { isWorkerIdleForPressure, joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
 import { racePromiseWithAbortSignal } from "../../../packages/retry/src/index.js";
 import { encodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
@@ -19,6 +18,7 @@ import {
   registerOpenClawAgentDatabaseAsyncResource,
   registerOpenClawAgentDatabaseReadCandidateResource,
 } from "../../state/openclaw-agent-db-resources.js";
+import type { captureOpenClawAgentDatabaseReadValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { getPendingOpenClawAgentDatabasePreparation } from "../../state/openclaw-agent-execution.js";
 import {
@@ -27,23 +27,14 @@ import {
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { createStateWorkerMemoryPressureSubscription } from "../../state/openclaw-state-worker-memory-pressure.js";
-import type {
-  CombinedSessionStoreTopologyRequest,
-  CombinedSessionStoreTopologyResult,
-} from "./combined-store.types.js";
 import { unwrapSessionTranscriptWorkerReply } from "./session-history-worker-errors.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import {
   captureSessionStoreReadCandidate,
   type SessionStoreReadCandidate,
+  type SessionStoreReadCustody,
 } from "./session-store-read-candidates.js";
-import type {
-  SessionStoreTargetPreparationRequest,
-  SessionStoreTargetInventoryRequest,
-  SessionStoreTargetReadRequest,
-  SessionStoreTargetReadResult,
-  SessionStoreTargetInventoryResult,
-} from "./session-store-target-inventory.js";
+import type { SessionStoreTargetPreparationRequest } from "./session-store-target-inventory.js";
 import {
   createSessionTranscriptHistoryPool,
   createUsageCostPool,
@@ -53,7 +44,7 @@ import {
 } from "./session-transcript-read-pools.js";
 import {
   createSessionStoreTargetReaders,
-  sessionDiscoveryConfig,
+  prepareSessionStoreTargetDiscovery,
 } from "./session-transcript-worker-readers.js";
 import type {
   SessionHistoryWorkerInput,
@@ -69,8 +60,11 @@ export type SessionHistoryDatabaseTarget = OpenClawAgentDatabaseOptions & {
   requestedPaths?: readonly string[];
   readIdentity?: DatabasePathIdentity;
   readSourcePath?: string;
+  readCustody?: readonly SessionStoreReadCustody[];
   /** Capture a cold physical source after admission and before the row request. */
-  prepareRead?: () => void;
+  prepareRead?: (
+    validation: Awaited<ReturnType<typeof captureOpenClawAgentDatabaseReadValidation>>,
+  ) => void | Promise<void>;
 };
 
 export type HistoryDatabaseResource = {
@@ -335,7 +329,7 @@ export function acquireHistoryDatabaseResource(
   };
   const key = JSON.stringify(database);
   let resource = historyDatabases.get(key);
-  let created = false;
+  const created = !resource;
   if (resource?.revoked) {
     // Failed retirement keeps cleanup custody until the existing close/prune owner settles it.
     assertAgentDatabaseResourceAdmission(resource.database);
@@ -453,7 +447,6 @@ export function acquireHistoryDatabaseResource(
       aliases.clear();
     };
     resource = owned;
-    created = true;
   }
   try {
     resource.observeMaintenance();
@@ -502,9 +495,9 @@ export function acquireSessionTranscriptReadResource(storePath: string): History
 /** Qualification has no database open or content read and precedes physical FIFO admission. */
 export async function prepareSessionStoreCandidatesInWorker(
   request: SessionStoreTargetPreparationRequest,
+  pointRead?: true,
 ) {
-  const prepared =
-    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  const { request: prepared, inputBytes } = prepareSessionStoreTargetDiscovery(request);
   const lane = sessionStoreLane;
   clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
@@ -516,7 +509,8 @@ export async function prepareSessionStoreCandidatesInWorker(
       },
       {
         diagnosticOperation: "session-target-prepare",
-        inputBytes: JSON.stringify(prepared).length * 2,
+        pointRead,
+        inputBytes,
         timeoutMs: 60_000,
       },
     );
@@ -539,21 +533,9 @@ export async function prepareSessionStoreCandidatesInWorker(
 /** Keep captured discovery aliases until the existing history worker retires its readers. */
 export async function withSessionHistoryWorkerReadCandidates<T>(
   candidates: readonly SessionStoreReadCandidate[],
-  operation: (scope: {
-    assertCurrent: () => void;
-    readStoreTarget: (
-      request: Omit<SessionStoreTargetReadRequest, "candidates">,
-    ) => Promise<SessionStoreTargetReadResult>;
-    readStoreTargetResult: (
-      request: Omit<SessionStoreTargetReadRequest, "candidates">,
-    ) => Promise<Result<SessionStoreTargetReadResult, unknown>>;
-    readTargetInventory: (
-      request: Omit<SessionStoreTargetInventoryRequest, "candidates">,
-    ) => Promise<SessionStoreTargetInventoryResult>;
-    readCombinedTopology: (
-      request: Omit<CombinedSessionStoreTopologyRequest, "candidates">,
-    ) => Promise<CombinedSessionStoreTopologyResult>;
-  }) => Promise<T>,
+  operation: (
+    scope: ReturnType<typeof createSessionStoreTargetReaders> & { assertCurrent: () => void },
+  ) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
   signal?: AbortSignal,
   pointRead?: true,
@@ -582,7 +564,6 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   try {
     let revoked = false;
     let dispatched = false;
-    const taskOptions = { timeoutMs: 60_000, signal, pointRead };
     const assertCurrent = () => {
       signal?.throwIfAborted();
       if (revoked) {
@@ -709,7 +690,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.native = true;
                 return input;
               },
-              { ...taskOptions, inputBytes, diagnosticOperation: input.kind },
+              { timeoutMs: 60_000, signal, pointRead, inputBytes, diagnosticOperation: input.kind },
             ),
           admissionFamilies,
           signal,

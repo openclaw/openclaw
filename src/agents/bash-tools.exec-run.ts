@@ -57,10 +57,6 @@ import {
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
-  shouldSkipExecScriptPreflight,
-  validateScriptFileForShellBleed,
-} from "./bash-tools.exec-script-preflight.js";
-import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
@@ -352,7 +348,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       await rejectUnsafeExecControlShellCommand(params.command);
       let workdir: string | undefined;
-      let scriptPreflightCwd: string | null = null;
       let containerWorkdir = sandbox?.containerWorkdir;
       let discardPreparedSandboxWorkdir: (() => void) | null = null;
       const workdirResolution =
@@ -379,7 +374,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       if (workdirResolution.kind === "sandbox") {
         workdir = workdirResolution.hostCwd;
         containerWorkdir = workdirResolution.containerCwd;
-        scriptPreflightCwd = workdirResolution.scriptPreflightCwd;
         if (sandbox?.discardPreparedWorkdir && sandbox.workdirValidation === "backend") {
           const preparedContainerWorkdir = containerWorkdir;
           discardPreparedSandboxWorkdir = () => {
@@ -388,7 +382,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         }
       } else if (workdirResolution.kind === "local") {
         workdir = workdirResolution.hostCwd;
-        scriptPreflightCwd = workdirResolution.hostCwd;
       } else {
         workdir = workdirResolution.remoteCwd;
       }
@@ -539,15 +532,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           warnings.push(
             "Warning: PTY is unavailable in sandbox mode; running without a PTY. Use a noninteractive command.",
           );
-        }
-
-        // Preflight: check Python shell-syntax mistakes and ambiguous interpreter commands
-        // before execution. JavaScript source diagnostics belong to Node.
-        if (scriptPreflightCwd && !shouldSkipExecScriptPreflight({ host, security, ask })) {
-          await validateScriptFileForShellBleed({
-            command: params.command,
-            workdir: scriptPreflightCwd,
-          });
         }
 
         const subagentSession =

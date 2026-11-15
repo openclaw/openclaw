@@ -1,7 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
-import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+  validateWorkspaceFilesystemEvidence,
+} from "../agents/workspace-state-guard.js";
 import { commandError, requireGit, runGit } from "../agents/worktrees/git.js";
 import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.js";
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
@@ -42,13 +46,13 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     params.assertCurrent();
   };
   assertCurrent();
-  const source = await fs.realpath(params.source);
-  assertCurrent();
-  const assertSource = captureWorkspaceStateFilesystemGuard(source, false);
-  const assertPreparationCurrent = () => {
-    assertCurrent();
-    assertSource();
-  };
+  const filesystem = await captureWorkspaceFilesystemEvidence(params.source);
+  if (!filesystem.root[1]) {
+    throw new Error("The publication source is unavailable; restore the checkout before retrying.");
+  }
+  const source = filesystem.canonical;
+  const assertPreparationCurrent = createWorkspaceFilesystemSource(filesystem, assertCurrent);
+  assertPreparationCurrent();
   const origin = {
     agentId: parent.agentId,
     sessionKey: parent.canonicalKey,
@@ -153,6 +157,8 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
   if (existing?.entry) {
     assertTask(existing.entry);
     if (receipt) {
+      await validateWorkspaceFilesystemEvidence(filesystem);
+      assertPreparationCurrent();
       return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
     }
   }
@@ -169,7 +175,10 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
       getConfig,
     );
     using _ = { [Symbol.dispose]: prepared.release };
-    prepared.requester.assertCurrent();
+    gitOptions.beforeRun = createWorkspaceFilesystemSource(filesystem, () => {
+      assertCurrent();
+      prepared.requester.assertCurrent();
+    });
     // Merge the source commit with its exact tree: the task branch fast-forwards and
     // its PR shows the source's changes even after a rebase or amend.
     const cwd = existing.entry.spawnedCwd!;
