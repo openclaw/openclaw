@@ -53,12 +53,36 @@ export const DatabaseConfigSchema = z
           label: "PostgreSQL Recovery Captures",
           help: "Where update and Doctor rollback captures keep PostgreSQL rows (default: portable). portable writes a local SQLite export image. server keeps the rows in a restore_ schema on the same database and writes only the anchor and manifest locally; it saves local disk and export time but does not survive loss of the server. User backups stay portable.",
         }),
+        ownership: z
+          .enum(["state-directory", "installation"])
+          .optional()
+          .register(configUiMetadata, {
+            label: "PostgreSQL Gateway Ownership",
+            help: "Scope of Gateway state ownership (default: state-directory, a local lock file). installation also holds a PostgreSQL session advisory lock keyed by the database and schema prefix, so a second Gateway or maintenance owner for the same installation is refused on any host, and losing that session stops the Gateway. Requires every configurable family to use postgres. Store anchors and other local files are unchanged; see the PostgreSQL operator guide.",
+          }),
       })
       .optional()
       .register(configUiMetadata, {
         label: "PostgreSQL",
         help: "PostgreSQL connection and schema naming. PostgreSQL 16–18 are qualified; other admitted majors remain experimental pending conformance. Back up each store schema together with its local SQLite anchor. See the PostgreSQL operator guide for deployment qualification limits.",
       }),
+  })
+  .superRefine((database, ctx) => {
+    if (database.postgres?.ownership !== "installation") {
+      return;
+    }
+    const families = Object.values(database.families ?? {});
+    if (
+      database.engine !== "postgres" ||
+      families.some((family) => family?.engine !== "postgres")
+    ) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["postgres", "ownership"],
+        message:
+          'database.postgres.ownership "installation" requires database.engine postgres and no family overrides to sqlite.',
+      });
+    }
   })
   .optional()
   .register(configUiMetadata, {

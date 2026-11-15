@@ -34,6 +34,64 @@ function stripCompletedLongOrTildeFences(text: string): string {
   return output + text.slice(cursor);
 }
 
+function splitTableRow(line: string): string[] | undefined {
+  if (
+    !line.includes("|") ||
+    /^(?: {4}| {0,3}\t)/.test(line) ||
+    /^ {0,3}(?:>|#{1,6}(?:\s|$)|(?:[-+*]|\d+[.)])\s)/.test(line)
+  ) {
+    return undefined;
+  }
+  const cells: string[] = [];
+  let start = 0;
+  for (let index = 0; index < line.length; index += 1) {
+    if (line[index] === "\\") {
+      index += 1;
+    } else if (line[index] === "|") {
+      cells.push(line.slice(start, index).trim());
+      start = index + 1;
+    }
+  }
+  if (cells.length === 0) {
+    return undefined;
+  }
+  cells.push(line.slice(start).trim());
+  if (cells[0] === "") {
+    cells.shift();
+  }
+  if (cells.at(-1) === "") {
+    cells.pop();
+  }
+  return cells.length > 0 ? cells : undefined;
+}
+
+function stripTables(text: string): string {
+  if (!text.includes("|")) {
+    return text;
+  }
+  const lines = text.split("\n");
+  const rows = lines.map(splitTableRow);
+  for (let index = 0; index < lines.length - 1; index += 1) {
+    const header = rows[index];
+    const delimiter = rows[index + 1];
+    // Only a matching header and delimiter establish a table; prose pipes stay literal.
+    if (
+      !header ||
+      !delimiter ||
+      header.length !== delimiter.length ||
+      !delimiter.every((cell) => /^:?-+:?$/.test(cell))
+    ) {
+      continue;
+    }
+    lines[index] = header.join(" ").replace(/\\\|/g, "|");
+    lines[++index] = "";
+    for (let row = rows[index + 1]; row; row = rows[index + 1]) {
+      lines[++index] = row.join(" ").replace(/\\\|/g, "|");
+    }
+  }
+  return lines.join("\n");
+}
+
 /**
  * Flattens Markdown into a single line of readable plain text.
  *
@@ -55,7 +113,8 @@ export function flattenMarkdownToPlainText(text: string): string {
       literal === undefined ? "\0\0" : `\0${code.push(literal) - 1}\0`,
   );
   // Quote markers may nest with horizontal whitespace, but must not consume another line.
-  let flattened = withoutCode.replace(
+  // Recognize tables before removing block markers: a following heading or list is not a row.
+  let flattened = stripTables(withoutCode).replace(
     /^[\t ]{0,3}(?:(?:>[\t ]*)+|(?:#{1,6}|[-+*]|\d+[.)])\s+)/gm,
     "",
   );

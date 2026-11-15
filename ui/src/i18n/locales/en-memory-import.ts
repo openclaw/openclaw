@@ -8,7 +8,7 @@ const enMemoryImport = {
       title: en.onboarding.memoryImport.title,
       body: "OpenClaw found memory from other coding agents. Import it into your agent’s workspace?",
       plannedCount: "{count} ready to import",
-      alreadyImported: "Already imported: {count}",
+      alreadyImported: "Conflicts: {count}",
       sourceUnavailable: "Source path unavailable",
       import: "Import",
       skip: "Skip for now",
@@ -30,9 +30,9 @@ const enMemoryImport = {
     claudeCode: "Claude Code",
     fileCountOne: "{count} file",
     fileCount: "{count} files",
-    alreadyImported: "{count} existing",
+    alreadyImported: "Conflicts: {count}",
     ready: "Ready",
-    existing: "Existing",
+    existing: "Conflict",
     importComplete: "Import complete",
     importIncomplete: "Import incomplete",
     importedCount: "{count} files imported",
@@ -70,8 +70,8 @@ const enMemoryImport = {
     subtitle:
       "Review Codex consolidated memory and Claude Code auto-memory before copying it into OpenClaw.",
     agent: "Destination agent",
-    replaceExisting: "Replace existing imports",
-    replaceHint: "Preview conflicts again and preserve item backups before replacement.",
+    replaceExisting: "Replace existing files",
+    replaceHint: "Existing destination files are backed up before replacement.",
     backfill: {
       title: "From past sessions",
       subtitle:

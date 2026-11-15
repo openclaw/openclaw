@@ -83,7 +83,11 @@ export async function runCronSessionTurn(
       try {
         operator = await restoreCronOperatorSource({
           job,
-          target: { agentId: params.agentId, sessionKey: params.sessionKey, entry: expectedTarget },
+          target: {
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+            sessionId: expectedTarget.sessionId,
+          },
           signal: params.abortSignal,
           deliveryAttemptFence: params.deliveryAttemptFence,
         });

@@ -77,6 +77,33 @@ describe("resolveAgentScopedOutboundMediaAccess", () => {
     ).rejects.toThrow(/not under an allowed directory/i);
   });
 
+  it("carries the configured hostname deny list into plugin media downloads", async () => {
+    const cfg = {
+      tools: { web: { fetch: { ssrfPolicy: { blockedHostnames: ["blocked.example"] } } } },
+    } as OpenClawConfig;
+    const fetchMock = vi.fn(async () => new Response("bytes"));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      for (const allowHostWorkspace of [true, false]) {
+        const mediaAccess = resolveAgentScopedOutboundMediaAccess({
+          cfg,
+          allowHostWorkspace,
+          mediaSources: ["https://blocked.example/pic.png"],
+        });
+        expect(mediaAccess.blockedHostnames).toEqual(["blocked.example"]);
+        await expect(
+          loadWebMediaRaw(
+            "https://blocked.example/pic.png",
+            buildOutboundMediaLoadOptions({ maxBytes: 1024, mediaAccess }),
+          ),
+        ).rejects.toThrow(/configured blocklist/);
+      }
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps explicit workspaceDir in localRoots when agent id is unavailable", () => {
     const workspaceDir = "/tmp/openclaw-home/workspace-xiaoqian";
     const result = resolveAgentScopedOutboundMediaAccess({

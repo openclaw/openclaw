@@ -9,7 +9,7 @@ import { runLockedSessionTranscriptRead } from "./session-transcript-execution-r
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -82,7 +82,7 @@ export async function loadSessionTranscriptEvents(
     };
     return (
       runLockedSessionTranscriptRead(options, () =>
-        withSessionHistoryWorkerDatabase(options, read, targetDiscoveryLane),
+        withSessionHistoryWorkerDatabase(options, read, sessionStoreLane),
       ) ?? read(durableSource.owner)
     );
   });

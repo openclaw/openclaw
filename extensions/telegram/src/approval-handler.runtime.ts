@@ -127,9 +127,7 @@ function buildPendingPayload(params: {
     const buttons = decisionButtons.length > 0 ? [decisionButtons] : [];
     return {
       text: lines.join("\n"),
-      buttons: reviewUrl
-        ? [[{ text: "Review in Control UI", url: reviewUrl }], ...buttons]
-        : buttons,
+      buttons: reviewUrl ? [[{ text: "Review in OpenClaw", url: reviewUrl }], ...buttons] : buttons,
     };
   }
   const execView = params.view.approvalKind === "exec" ? params.view : undefined;
@@ -241,7 +239,16 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
         messageId: result.messageId,
       };
     },
-    updateEntry: async ({ cfg, accountId, context, entry, payload, request, approvalKind }) => {
+    updateEntry: async ({
+      cfg,
+      accountId,
+      context,
+      entry,
+      payload,
+      request,
+      approvalKind,
+      remainingEntries,
+    }) => {
       const resolved = resolveHandlerContext({ cfg, accountId, context });
       if (!resolved) {
         return;
@@ -276,21 +283,25 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
             messageThreadId: originThreadId,
             directMessagesTopicId: parsedOrigin?.directMessagesTopicId,
           };
-          // An edit reaches only its own topic; General uses the sender's root normalization.
-          if (
-            (approvalTargetKey(entry) !== approvalTargetKey(origin) || editError !== undefined) &&
-            !terminalizedSystemAgentApprovals.has(request.id)
-          ) {
-            await sendMessageTelegram(originChatId, escapeTelegramHtml(payload.text), {
-              ...resolved.options(),
-              textMode: "html",
-              ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
-              ...(origin.directMessagesTopicId != null
-                ? { directMessagesTopicId: origin.directMessagesTopicId }
-                : {}),
-            });
+          // Wait for a later origin card before deciding whether a fallback is needed.
+          const originKey = approvalTargetKey(origin);
+          const needsFallback = approvalTargetKey(entry) !== originKey || editError !== undefined;
+          const awaitingOrigin =
+            needsFallback &&
+            remainingEntries?.some((pending) => approvalTargetKey(pending) === originKey);
+          if (!awaitingOrigin) {
+            if (needsFallback && !terminalizedSystemAgentApprovals.has(request.id)) {
+              await sendMessageTelegram(originChatId, escapeTelegramHtml(payload.text), {
+                ...resolved.options(),
+                textMode: "html",
+                ...(originThreadId != null ? { messageThreadId: originThreadId } : {}),
+                ...(origin.directMessagesTopicId != null
+                  ? { directMessagesTopicId: origin.directMessagesTopicId }
+                  : {}),
+              });
+            }
+            terminalizedSystemAgentApprovals.add(request.id);
           }
-          terminalizedSystemAgentApprovals.add(request.id);
         }
       }
       if (editError !== undefined) {

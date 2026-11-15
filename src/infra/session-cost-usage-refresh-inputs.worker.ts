@@ -277,7 +277,7 @@ export function createUsageCostCollectionAccess(params: {
                 return { count, bytes, lastSeq };
               });
               if (!page || page.lastSeq <= afterSeq) {
-                throw new Error("Usage transcript changed while reading statistics");
+                throw new Error("Chat history changed while reading usage statistics");
               }
               sizeBytes += page.bytes - (eventCount === 0 ? 1 : 0);
               eventCount += page.count;
@@ -289,7 +289,7 @@ export function createUsageCostCollectionAccess(params: {
           if (!cold) {
             const latest = await read((queries) => queries.header(marker.sessionId));
             if (!latest || latest.generation !== header.generation || latest.coldCount !== null) {
-              throw new Error("Usage transcript changed while reading statistics");
+              throw new Error("Chat history changed while reading usage statistics");
             }
           }
           const facts = {

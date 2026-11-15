@@ -72,7 +72,8 @@ it.each(["missing-auth", "auth-failed"] as const)(
         },
       }),
     ).toBeUndefined();
-    expect(banner(active, { catalogRetired: true })).toBeDefined();
+    expect(banner(active, { catalogRetired: true })).toBeUndefined();
+    expect(banner(active, { catalogRetired: true, catalogError: "Catalog failed" })).toBeDefined();
     expect(
       banner(active, {
         modelSelectionPolicy: { restricted: true, defaultModel: null },

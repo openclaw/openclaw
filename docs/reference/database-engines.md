@@ -667,6 +667,65 @@ privilege to bootstrap namespaces, plus ownership/access to its store objects an
 installations also need a PostgreSQL permission boundary; schema prefixes alone
 do not restrict a role's access.
 
+### Gateway ownership in PostgreSQL
+
+By default, Gateway state ownership is a lock file next to the state directory,
+so it only excludes processes that see the same state directory on the same
+host. When every configurable family uses PostgreSQL, you can also hold
+ownership in PostgreSQL:
+
+```json5
+{
+  database: {
+    engine: "postgres",
+    postgres: {
+      connection: { source: "env", provider: "default", id: "OPENCLAW_DATABASE_DSN" },
+      ownership: "installation",
+    },
+  },
+}
+```
+
+Config validation rejects `ownership: "installation"` unless `database.engine`
+is `postgres` and no family overrides its engine to `sqlite`. The default,
+`state-directory`, keeps today's behavior. The setting only changes Gateway
+ownership: store anchors, `client/credentials.sqlite`,
+`control/services.sqlite`, the local lock files, and the local safety journals
+all stay.
+
+With `installation`, every process that takes Gateway state ownership also takes a
+session-level `pg_try_advisory_lock` on one dedicated connection outside the
+pool. The lock key is derived from `database.postgres.schemaPrefix`, and
+PostgreSQL scopes advisory locks to one database, so the database and schema
+prefix together name the installation. Nothing new is stored: no file and no
+table. Give each installation that shares a database its own schema prefix. A
+second Gateway or maintenance owner with the same database and prefix is
+refused on any host. While a Gateway waits, it logs the holder once, and the
+final error names the schema prefix and the holder's PID, host, and PostgreSQL
+backend PID, read from `pg_locks` and `pg_stat_activity`.
+
+The owner connection must reach PostgreSQL directly or through a pooler in
+session mode. Session advisory locks do not work through a transaction-mode
+pooler such as PgBouncer with `pool_mode = transaction`: the lock would stay on
+a server connection that other clients reuse. Connection startup and every
+heartbeat query time out after 10 seconds, and the connection uses TCP
+keepalive, so an unresponsive server cannot hang startup and a half-open
+session is detected within about 20 seconds.
+
+The owner loses ownership when its session ends (a crash, a terminated backend,
+or a network failure) or when a heartbeat fails. The session is closed, so
+PostgreSQL releases the lock and the next owner can start. The running Gateway
+retires its state ownership at the same moment: new and already queued state
+work is refused, and the Gateway closes (or its in-process restart waits for
+ownership again). Check the PostgreSQL connection, then restart it.
+
+When PostgreSQL ends the session itself, the Gateway is told at once. On a
+silent network failure it finds out from the next heartbeat, within about 20
+seconds. PostgreSQL keeps the lock until it ends that session, so keep
+server-side dead-connection settings (`tcp_keepalives_*`, `tcp_user_timeout`)
+above 20 seconds. Then a successor cannot start while the former Gateway still
+admits work.
+
 ## Isolation and durability
 
 One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,

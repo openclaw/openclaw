@@ -32,6 +32,7 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
 import { executionTitleSchema } from "./schema/typebox.js";
 import { isCoreCodingSurfaceToolName } from "./tool-catalog.js";
+import { describeRequiredHumanActionTool } from "./tool-description-presets.js";
 import { resolveToolResultBudget } from "./tool-result-limits.js";
 import {
   applyToolCatalogCompaction,
@@ -226,11 +227,16 @@ export function buildCodeModeCatalogPrompt(
   const shellGuidance = shellTool
     ? ` Use the shell tool \`${shellTool.callableName}\` for heavier computation.`
     : "";
+  const askUserTool = bindings.find((entry) => entry.id === "openclaw:core:ask_user");
+  const humanActionGuidance = askUserTool
+    ? describeRequiredHumanActionTool(askUserTool.callableName)
+    : "";
   return [
     [shellGuidance, apiGuidance, mcpGuidance, swarmGuidance, nodesGuidance, skillsGuidance]
       .join("")
       .trim(),
     namespacePrompt,
+    humanActionGuidance,
     catalogIndex,
   ]
     .filter(Boolean)

@@ -311,19 +311,20 @@ it.for([true, false])(
   "resolves cwd/state collisions with cwd allowed: %s",
   async (allowedCwd, { base }) => {
     const stateDir = path.join(base, "state");
-    const cwd = path.join(base, "cwd");
-    const relativePath = "media/inbound/photo.jpg";
-    await mediaFile(cwd, relativePath, "cwd-media");
-    await mediaFile(stateDir, relativePath, "state-media");
-    vi.spyOn(process, "cwd").mockReturnValue(cwd);
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const roots = (allowedCwd ? [cwd, stateDir] : [stateDir]).map((root) =>
-        path.join(root, "media"),
-      );
-      const cache = createCache([{ index: 0, path: relativePath }], { localPathRoots: roots });
-      expect((await cache.getBuffer(request)).buffer.toString()).toBe(
-        allowedCwd ? "cwd-media" : "state-media",
-      );
+    // Thread workers cannot chdir; place the fixture beneath the real cwd.
+    await withTestDir({ prefix: "openclaw-media-cwd-", parentDir: process.cwd() }, async (cwd) => {
+      const cwdFile = await mediaFile(cwd, "media/inbound/photo.jpg", "cwd-media");
+      const relativePath = path.relative(process.cwd(), cwdFile);
+      const stateFile = await mediaFile(stateDir, relativePath, "state-media");
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        const roots = (allowedCwd ? [cwdFile, stateFile] : [stateFile]).map((file) =>
+          path.dirname(file),
+        );
+        const cache = createCache([{ index: 0, path: relativePath }], { localPathRoots: roots });
+        expect((await cache.getBuffer(request)).buffer.toString()).toBe(
+          allowedCwd ? "cwd-media" : "state-media",
+        );
+      });
     });
   },
 );

@@ -1451,6 +1451,7 @@
                   {
                     "group": "App platforms",
                     "pages": [
+                      "install/boat",
                       "install/cloudflare",
                       "install/daytona",
                       "install/exe-dev",

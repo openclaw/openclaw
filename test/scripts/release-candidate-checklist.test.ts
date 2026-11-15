@@ -235,6 +235,123 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
+  it.skipIf(process.platform === "win32")(
+    "does not bind a rejected npm child in CLI state, but keeps an accepted parent immutable",
+    () => {
+      const { root, git } = candidateGitFixture({
+        "package.json": '{"version":"2026.7.1"}',
+        "apps/android/version.json": '{"version":"2026.7.1"}',
+      });
+      const base = git("rev-parse", "HEAD");
+      writeFileSync(
+        join(root, "CHANGELOG.md"),
+        candidateChangelog(
+          `This audited record covers the complete ${base}..${base} history: 1 merged PR.`,
+          ["- **PR #123** fix: example."],
+        ),
+      );
+      git("add", "CHANGELOG.md");
+      git("commit", "-m", "test: release notes");
+      const sha = git("rev-parse", "HEAD");
+      git("update-ref", "refs/remotes/origin/main", sha);
+      const toolingRoot = process.cwd();
+      const toolingTag = `release-publish/${sha.slice(0, 12)}-123`;
+      const bin = join(root, "bin");
+      mkdirSync(bin);
+      const realGit = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+      writeFileSync(
+        join(bin, "git"),
+        `#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const args = process.argv.slice(2);
+if (args[0] === "ls-remote") process.exit(2);
+if (process.cwd() === ${JSON.stringify(toolingRoot)}) {
+  if (args[0] === "fetch" || args[0] === "status") process.exit(0);
+  if (args[0] !== "rev-parse") throw new Error("Unexpected tooling Git: " + args);
+  process.stdout.write(args[1] === "--show-toplevel" ? ${JSON.stringify(toolingRoot)} : ${JSON.stringify(sha)});
+} else {
+  const result = spawnSync(${JSON.stringify(realGit)}, args, { stdio: "inherit" });
+  process.exit(result.status ?? 1);
+}
+`,
+        { mode: 0o755 },
+      );
+      writeFileSync(
+        join(bin, "gh"),
+        `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(" ") === "auth token") process.stdout.write("fixture-token");
+else if (args[0] === "api" && args[1] === ${JSON.stringify(`repos/openclaw/openclaw/git/ref/tags/${toolingTag}`)}) {
+  process.stdout.write(JSON.stringify({ref: ${JSON.stringify(`refs/tags/${toolingTag}`)}, object: {type: "commit", sha: ${JSON.stringify(sha)}}}));
+} else if (args[0] === "run" && args[1] === "download") {
+  process.stderr.write("fixture artifact download reached"); process.exit(1);
+} else throw new Error("Unexpected gh command: " + args);
+`,
+        { mode: 0o755 },
+      );
+      const preload = join(root, "fetch.mjs");
+      writeFileSync(
+        preload,
+        `globalThis.fetch = async (input) => {
+const path = new URL(input).pathname;
+if (path.endsWith("/jobs")) return Response.json({jobs: []});
+if (path.endsWith("/pending_deployments")) return Response.json([]);
+const id = Number(path.split("/").at(-1));
+if (![111, 222, 333, 444, 555].includes(id)) throw new Error("Unexpected request: " + input);
+return Response.json({id, run_attempt: 1, repository: {full_name: "openclaw/openclaw"},
+  name: id === 111 ? "Full Release Validation" : id === 222 ? "Full Release Artifacts" : "OpenClaw NPM Release",
+  path: id === 111 ? ".github/workflows/full-release-validation.yml" : id === 222 ? ".github/workflows/full-release-artifacts.yml" : ".github/workflows/openclaw-npm-release.yml",
+  head_branch: id === 555 ? "untrusted" : "main", head_sha: ${JSON.stringify(sha)}, event: "workflow_dispatch",
+  status: "completed", conclusion: "success", html_url: "https://github.com/openclaw/openclaw/actions/runs/" + id});
+};`,
+      );
+      const outputDir = join(root, "evidence");
+      const loader = createRequire(join(toolingRoot, "package.json")).resolve("tsx");
+      const invoke = (npmRun: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--import",
+            loader,
+            "--import",
+            preload,
+            join(toolingRoot, "scripts/release-candidate-checklist.mts"),
+            ...candidateArgs({
+              tag: "v2026.7.1",
+              "full-release-run": "111",
+              "npm-preflight-run": npmRun,
+              "publish-workflow-ref": toolingTag,
+              "plugin-sdk-api-acknowledgement": "deadbeef",
+              "skip-dispatch": true,
+              "skip-local-generated-check": true,
+              "skip-parallels": true,
+              "skip-telegram": true,
+              "output-dir": outputDir,
+            }),
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            timeout: 20_000,
+            env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+          },
+        );
+      const rejected = invoke("222");
+      expect(rejected.stderr).toContain("workflow mismatch: expected OpenClaw NPM Release");
+      const statePath = join(outputDir, "release-candidate-state.json");
+      expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("");
+      const wrongSource = invoke("555");
+      expect(wrongSource.stderr).toContain("npm preflight run 555 workflow ref mismatch");
+      expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("");
+      const accepted = invoke("333");
+      expect(accepted.stderr).toContain("fixture artifact download reached");
+      expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("333");
+      const changed = invoke("444");
+      expect(changed.stderr).toContain("state mismatch for npmPreflightRunId");
+      expect(JSON.parse(readFileSync(statePath, "utf8")).npmPreflightRunId).toBe("333");
+    },
+  );
+
   it("scopes default candidate output by target SHA and honors explicit legacy paths", () => {
     const tag = "v2026.9.1-beta.2";
     const first = "a".repeat(40);
@@ -1962,7 +2079,6 @@ describe("release candidate checklist", () => {
         source?: string;
         separatePackage?: boolean;
         providerMode?: string;
-        waived?: boolean;
         qualificationSha?: string;
         qualificationRef?: string;
         transport?: "missing" | "moved";
@@ -1989,7 +2105,6 @@ describe("release candidate checklist", () => {
       "passed",
     ],
     ["live provider", { coveragePolicy: "npm-stable-v1", providerMode: "live-frontier" }, "passed"],
-    ["waiver", { coveragePolicy: "npm-stable-v1", waived: true }, "waived"],
     ["missing transport", { transport: "missing" }, /qualification ref/],
     ["moved transport", { transport: "moved" }, /qualification ref/],
     [
@@ -2076,16 +2191,7 @@ describe("release candidate checklist", () => {
             current: {
               manifest: {
                 releaseProfile: options.releaseProfile,
-                waivers: scenario.waived
-                  ? [
-                      {
-                        childRole: "releaseChecksCandidate",
-                        jobName:
-                          "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
-                        reason: "reviewed fixture outage",
-                      },
-                    ]
-                  : [],
+                waivers: [],
               },
             },
           },
@@ -2356,6 +2462,38 @@ describe("GitHub API public fallback", () => {
       expect(fetchImpl.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
     },
   );
+});
+
+describe("receipt recovery checklist consumption", () => {
+  it.each([
+    ["Full Release Receipt Recovery", ".github/workflows/full-release-receipt-recovery.yml", true],
+    ["Full Release Receipt Recovery", ".github/workflows/unrelated.yml", false],
+    ["Unrelated workflow", ".github/workflows/full-release-receipt-recovery.yml", false],
+  ])("binds workflow %s to its exact path %s", async (workflowName, workflowPath, accepted) => {
+    const result = runInNewContext(
+      stripNodeTypeScriptTypes(
+        checklistFunctions("waitForSuccessfulRun") +
+          ';waitForSuccessfulRun("fixture/repo", "123", { workflowName: "Full Release Validation", workflowRef: "main" });',
+      ),
+      {
+        runInfo: async () => ({
+          workflowName,
+          workflowPath,
+          headBranch: "main",
+          status: "completed",
+          conclusion: "success",
+        }),
+        summarizePendingDeployments: () => undefined,
+        pendingDeployments: async () => [],
+        console: { log: () => {} },
+      },
+    );
+    if (accepted) {
+      await expect(result).resolves.toMatchObject({ run: { workflowName, workflowPath } });
+    } else {
+      await expect(result).rejects.toThrow("workflow mismatch");
+    }
+  });
 });
 
 describe("release run environment approval diagnostics", () => {

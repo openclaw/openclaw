@@ -111,8 +111,12 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
       config: { skills: { limits: { maxSkillsInPrompt: 1 } } },
     });
 
-    expect(snapshot.resolvedSkills).toEqual([visible]);
-    expect(snapshot.discoverySkills).toEqual([visible, omitted]);
+    const resourceRootIdentity = { error: expect.stringContaining("ENOENT") };
+    expect(snapshot.resolvedSkills).toEqual([{ ...visible, resourceRootIdentity }]);
+    expect(snapshot.discoverySkills).toEqual([
+      { ...visible, resourceRootIdentity },
+      { ...omitted, resourceRootIdentity },
+    ]);
     expect(snapshot.prompt).toContain("<name>alpha</name>");
     expect(snapshot.prompt).not.toContain("<name>zulu</name>");
     expect(snapshot.prompt).not.toContain("<name>hidden</name>");

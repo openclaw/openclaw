@@ -227,8 +227,9 @@ export function createProviderHookRuntime(
     config?: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    runtimeHandle?: ProviderRuntimePluginHandle;
   }): ProviderPlugin | undefined {
-    const runtimePlugin = resolveProviderRuntimePlugin(params);
+    const runtimePlugin = ensureProviderRuntimePluginHandle(params).plugin;
     if (runtimePlugin) {
       return runtimePlugin;
     }
