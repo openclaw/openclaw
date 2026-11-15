@@ -617,7 +617,7 @@ export async function handleChatAbortRequestWithLifecycle(
     onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
-      if (active.adapter.controlUiVisible === false || !text?.trim()) {
+      if (active.adapter.controlUiVisible === false) {
         return undefined;
       }
       snapshot = captureAbortedPartial({
@@ -625,7 +625,7 @@ export async function handleChatAbortRequestWithLifecycle(
         sessionKey,
         sessionId,
         agentId: agentId ?? abortAgentId,
-        text,
+        text: text ?? "",
         abortOrigin: "rpc",
         resolveTerminalProducer: active.adapter.resolveTerminalProducer,
         session: selectedSession,

@@ -121,6 +121,24 @@ export function resolveSessionLaunchPresentation(
   } as const;
 }
 
+/** A cancellation request and its own receipt, independent of later child activity. */
+export function readSubagentCancellation(card: LaunchCard) {
+  const call = unwrapToolCallForDisplay(card);
+  const args = asRecord(call.args);
+  if (call.name.trim().toLowerCase() !== "subagents" || args?.action !== "cancel") {
+    return null;
+  }
+  const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
+  return {
+    runId: text(args.runId),
+    sessionKey: text(result.sessionKey),
+    stopped:
+      result.found === true &&
+      result.killed === true &&
+      asRecord(asRecord(result.targetState)?.task)?.status === "cancelled",
+  };
+}
+
 /** The calls among `cards` that a count of subagents must leave out. */
 export function ownSessionLaunchCalls(cards: readonly ToolCard[]): Set<string> {
   return new Set(
@@ -164,6 +182,20 @@ export function addressedSession(
   rows: readonly GatewaySessionRow[] | undefined,
 ): { name?: string; names?: string[] } | undefined {
   const call = unwrapToolCallForDisplay(card);
+  const cancellation = readSubagentCancellation(card);
+  if (cancellation) {
+    const row = rows?.find((candidate) =>
+      cancellation.sessionKey
+        ? areUiSessionKeysEquivalent(candidate.key, cancellation.sessionKey)
+        : cancellation.runId && candidate.activeRunIds?.includes(cancellation.runId),
+    );
+    return {
+      name:
+        row && (text(row.label) || text(row.displayName) || text(row.derivedTitle))
+          ? resolveSessionDisplayName(row.key, row)
+          : undefined,
+    };
+  }
   if (call.name.trim().toLowerCase() === "agents_wait") {
     const args = asRecord(call.args);
     const ids = Array.isArray(args?.ids)

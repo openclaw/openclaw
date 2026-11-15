@@ -11,7 +11,10 @@ import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
+import {
+  assistantGroupCanOwnActiveRunStatus,
+  explicitlyAbortedRunId,
+} from "../chat-assistant-reply.ts";
 import { isHandoffBoundaryItem } from "../chat-sessions-yield.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { coalesceSystemEvents } from "../chat-system-event-grouping.ts";
@@ -49,6 +52,7 @@ type ChatRenderItem = SystemEventRenderItem;
 
 type TranscriptChain = Readonly<{
   searchActive: boolean;
+  interruptedRunIds: ReadonlySet<string>;
   runDurations: ReadonlyMap<string, number>;
   workGroups: readonly Extract<ChatRenderItem, { kind: "work-group" }>[];
   collapsedItems: readonly ChatRenderItem[];
@@ -250,7 +254,14 @@ export function projectTranscriptChain(
           }
         : undefined;
   }
+  const interruptedRunIds = new Set(
+    (options.messages ?? []).flatMap((message) => {
+      const runId = explicitlyAbortedRunId(message);
+      return runId ? [runId] : [];
+    }),
+  );
   const value: TranscriptChain = {
+    interruptedRunIds,
     runDurations,
     collapsedItems,
     transcriptItems,

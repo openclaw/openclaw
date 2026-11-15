@@ -48,6 +48,7 @@ export type MessageRenderOptions = {
   displayFacts?: import("../../../lib/chat/row-display-facts.ts").ChatDisplayFacts;
   agentId?: string;
   runActive?: boolean;
+  interruptedRunIds?: ReadonlySet<string>;
   asyncQuestions?: AsyncQuestionPresentation;
   mediaOwner?: object;
   toolMessageSource?: ChatToolMessageSource;

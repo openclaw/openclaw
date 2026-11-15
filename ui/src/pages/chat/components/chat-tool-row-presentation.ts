@@ -8,7 +8,10 @@ import type { ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { getLocale, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
+import {
+  readSubagentCancellation,
+  resolveSessionLaunchPresentation,
+} from "../chat-spawned-subagent.ts";
 
 registerChatToolLabelsEnglish();
 
@@ -107,6 +110,16 @@ export function resolveToolOperationLabel(
         : input.path && pathDisplayName(input.path);
   if (verb && target) {
     return `${verb} ${target}`;
+  }
+  const cancellation = readSubagentCancellation(card);
+  if (cancellation) {
+    const action =
+      outcome === "running"
+        ? "stoppingSubagent"
+        : cancellation.stopped
+          ? "stoppedSubagent"
+          : "stopSubagent";
+    return [t("chat.toolCards." + action), addressed?.name].filter(Boolean).join(" ");
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();

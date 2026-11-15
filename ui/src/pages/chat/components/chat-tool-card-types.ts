@@ -5,6 +5,8 @@ import type { ToolRenderOptions } from "./chat-tool-render-model.ts";
 
 export type ToolCardOptions = ToolRenderOptions & {
   expanded: boolean;
+  /** Owning run was cancelled; this does not establish the tool's result. */
+  interrupted?: boolean;
   onToggleExpanded: (id: string) => void;
   showApprovalReviews?: boolean;
   activityCards?: readonly ToolCard[];

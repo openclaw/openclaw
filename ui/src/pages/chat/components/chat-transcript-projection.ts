@@ -267,6 +267,7 @@ export function projectChatTranscript(
     state.transcriptRenderContext,
     {
       resolveLiveStream,
+      interruptedRunIds: transcriptChain.interruptedRunIds,
       resolveReplyPreview: createReplyPreviewResolver(loadedReplySources, props),
       presented,
       handoffSessionLinks: subagents.links,
@@ -435,6 +436,7 @@ export function projectChatTranscript(
     props.inlineCommands,
     props.chatBubbleMode,
     Boolean(props.runActive),
+    [...transcriptChain.interruptedRunIds].join(" "),
     activityRunId,
     activityGroupKey,
     Boolean(props.runWorking),

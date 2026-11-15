@@ -31,7 +31,7 @@ import { formatTimeMs } from "../../../lib/reactive/format.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
-import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
+import { ownSessionLaunchCalls, readSubagentCancellation } from "../chat-spawned-subagent.ts";
 import { buildMessageItems, rawMessageTimestamp } from "../chat-thread-items.ts";
 import { coalesceToolActivityMessages } from "../chat-tool-activity-coalesce.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
@@ -232,10 +232,15 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
     const ownSessionLaunches = new Set<string>();
     const executedCommands = new Set<string>();
     const codeExecutions = new Set<string>();
+    const subagentCancellations = new Map<string, boolean>();
     const activity = props.entry.calls.map(({ key, card }): AgentActivityItem => {
       const call = unwrapToolCallForDisplay(card);
       const args = asNullableRecord(call.args);
       const outcome = resolveToolCardOutcome(card, false);
+      const cancellation = readSubagentCancellation(card);
+      if (cancellation) {
+        subagentCancellations.set(key, cancellation.stopped);
+      }
       if (card.callId && launches.has(card.callId)) {
         ownSessionLaunches.add(key);
       }
@@ -269,7 +274,12 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
         unpairedCall: outcome === "unrecorded",
       };
     });
-    return describeToolGroup(activity, { ownSessionLaunches, executedCommands, codeExecutions });
+    return describeToolGroup(activity, {
+      ownSessionLaunches,
+      executedCommands,
+      codeExecutions,
+      subagentCancellations,
+    });
   });
   return (
     <details class="chat-task-feed__tool-group">

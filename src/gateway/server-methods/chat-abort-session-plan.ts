@@ -349,15 +349,12 @@ export function prepareChatSessionAbort(
             return undefined;
           }
           const text = params.context.chatRunState.resolveBuffer(runId, { final: true }).text;
-          if (!text?.trim()) {
-            return undefined;
-          }
           const snapshot = captureAbortedPartial({
             runId,
             sessionKey: identity.sessionKey,
             sessionId: identity.sessionId,
             agentId: identity.agentId ?? params.agentId,
-            text,
+            text: text ?? "",
             abortOrigin: params.abortOrigin,
             resolveTerminalProducer: entry.adapter.resolveTerminalProducer,
             session: params.session,

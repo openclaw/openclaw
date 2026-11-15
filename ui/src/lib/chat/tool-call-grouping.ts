@@ -18,6 +18,10 @@ type ToolGroupOptions = {
   codeExecutions?: ReadonlySet<string>;
   /** Visible operations whose enclosing execution is still producing children. */
   continuingExecutions?: ReadonlySet<string>;
+  /** True only when the cancellation receipt confirms that its target was cancelled. */
+  subagentCancellations?: ReadonlyMap<string, boolean>;
+  /** Cancelled run context for calls that have no result of their own. */
+  interruptedCalls?: ReadonlySet<string>;
 };
 
 export function describeToolGroup(
@@ -30,14 +34,17 @@ export function describeToolGroup(
         return key ? { ...item, itemId: key, toolCallId: key } : item;
       })
     : items;
-  const current = [
+  const all = [
     ...new Map(
       scoped
         .filter((item) => !item.suppressChannelProgress)
         .map((item) => [item.toolCallId ?? item.itemId, item]),
     ).values(),
   ];
-  const summary = summarizeAgentActivity(current, options);
+  const current = all.filter(
+    (item) => !options.interruptedCalls?.has(item.toolCallId ?? item.itemId),
+  );
+  const summary = summarizeAgentActivity(all, options);
   const code = current.filter(
     (item) =>
       !item.hideFromChannelProgress && options.codeExecutions?.has(item.toolCallId ?? item.itemId),
@@ -55,7 +62,18 @@ export function describeToolGroup(
   const questions = current.filter(
     (item) => !item.hideFromChannelProgress && item.name === "ask_user",
   );
-  const semanticItems = new Set([...skillSearches, ...skillReads, ...waits, ...questions]);
+  const cancellations = current.filter(
+    (item) =>
+      !item.hideFromChannelProgress &&
+      options.subagentCancellations?.has(item.toolCallId ?? item.itemId),
+  );
+  const semanticItems = new Set([
+    ...skillSearches,
+    ...skillReads,
+    ...waits,
+    ...questions,
+    ...cancellations,
+  ]);
   const ordinary = current.filter(
     (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !semanticItems.has(item),
   );
@@ -67,8 +85,10 @@ export function describeToolGroup(
     skillReads: skillReads.length,
     waits: waits.length,
     questions: questions.length,
+    cancellations: cancellations.length,
     other,
     subagents,
+    interrupted: all.length - current.length,
   };
   const completed = summarizeAgentActivity(
     ordinary.filter(
@@ -147,6 +167,19 @@ export function describeToolGroup(
             ? "Summary"
             : "Pending";
         return t(`chat.toolCards.activity.${kind}${phase}${continuation}`);
+      }
+      if (kind === "interrupted") {
+        return t("chat.toolCards.activity.interrupted" + continuation);
+      }
+      if (kind === "cancellations") {
+        const phase = cancellations.some((item) => item.status === "running")
+          ? "Running"
+          : cancellations.some((item) =>
+                options.subagentCancellations?.get(item.toolCallId ?? item.itemId),
+              )
+            ? "Summary"
+            : "Pending";
+        return t("chat.toolCards.activity.cancellations" + phase + continuation);
       }
       if (kind === "code") {
         return t(

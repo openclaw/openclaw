@@ -313,6 +313,9 @@ export function ToolCardRow(props: ToolCardProps) {
           )}
         </span>
       </Show>
+      <Show when={props.options.interrupted && outcome() === "unrecorded"}>
+        <span class="muted">{t("chat.toolCards.interrupted")}</span>
+      </Show>
       <Show when={!props.options.expanded}>
         <ToolOutcomeSummary card={card()} />
       </Show>
@@ -368,6 +371,17 @@ export function ToolMessageSummary(props: {
           detailMode: "explain",
         })
       : null;
+    if (singleToolCard && unwrapToolCallForDisplay(singleToolCard).name === "view_image") {
+      return {
+        singleToolDisplay,
+        toolMessageLabel: resolveToolOperationLabel(
+          singleToolCard,
+          resolveToolCardOutcome(singleToolCard, props.options.runActive),
+        ),
+        toolSummaryLabel: undefined,
+        toolPreview: "",
+      };
+    }
     const singleToolDisplayDetail =
       singleToolCard && singleToolDisplay
         ? resolveCollapsedToolDetail(singleToolCard, singleToolDisplay.detail)

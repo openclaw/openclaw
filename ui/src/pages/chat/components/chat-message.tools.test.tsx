@@ -7,6 +7,7 @@ import { prepareChatHistoryFixture } from "../../../test-helpers/chat-activity-f
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
+import { rememberLiveTerminalRun } from "../terminal-message-identity.ts";
 import {
   createChatMessageHarness,
   type RenderMessageGroupOptions,
@@ -23,6 +24,7 @@ import {
   type TestMessage,
 } from "./chat-message.test-support.ts";
 import { settleToolBridges } from "./chat-tool-render.test-support.ts";
+import { projectTranscriptChain } from "./chat-transcript-message-index.ts";
 
 const harness = createChatMessageHarness();
 const {
@@ -120,11 +122,18 @@ describe("grouped chat rendering", () => {
         paneId: "unknown-historic-outcome",
         messages: history.messages,
       });
+      const { interruptedRunIds } = projectTranscriptChain(items, {
+        sessionKey: "abort-test",
+        messages: history.messages,
+        runWorking: false,
+        searchActive: false,
+      });
       renderActivityGroup(
         items.filter((item) => item.kind === "group"),
         {
           showReasoning: false,
           runActive: false,
+          interruptedRunIds,
           ...expandedTools,
         },
       );
@@ -143,8 +152,29 @@ describe("grouped chat rendering", () => {
     expectAbsent(".chat-tool-row--running");
     expect(harness.view.textContent).toContain("check-workspace");
 
+    for (const disposition of ["timeout", "error", "aborted"] as const) {
+      const terminal = createAssistantMessage([], { stopReason: "aborted" });
+      rememberLiveTerminalRun(terminal, "historic-run", disposition);
+      const chain = projectTranscriptChain([], {
+        sessionKey: "live-abort-test",
+        messages: [terminal],
+        runWorking: false,
+        searchActive: false,
+      });
+      expect(chain.interruptedRunIds.has("historic-run")).toBe(disposition === "aborted");
+    }
+    const abort = createAssistantMessage([], {
+      openclawAbort: { aborted: true, origin: "rpc", runId: "historic-run" },
+      excludeFromContext: true,
+    });
+    await renderHistory([call, abort]);
+    expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
+    expect(harness.view.textContent).toContain("No result available.");
+    await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
+    expect(elementText(".chat-activity-group__label")).toBe("Attempted commands");
     const completed = await renderHistory([
       call,
+      abort,
       createToolResultMessage("orphan", "exec", "Workspace checked.", {
         isError: false,
         __openclaw: { id: "orphan-result", runId: "historic-run" },
@@ -261,7 +291,9 @@ describe("grouped chat rendering", () => {
         mimeType: "image/png",
         alt,
       }));
-      const imageCall = createToolCall("inspect", "view_image", { path: "avatar-previews.png" });
+      const imageCall = createToolCall("inspect", "view_image", {
+        path: "/tmp/avatar-previews.png",
+      });
       const textCall = createToolCall("read", "read_file", { path: "brief.md" });
       const call = createAssistantMessage(
         order === "image only"
@@ -286,7 +318,9 @@ describe("grouped chat rendering", () => {
       for (const expanded of [false, true, false]) {
         await renderToolGroups(groups, { isToolMessageExpanded: () => expanded });
         if (order === "image only") {
-          expect(elementText(".chat-tool-msg-summary")).toContain("avatar-previews.png");
+          expect(elementText(".chat-tool-msg-summary")?.trim()).toBe(
+            "Viewed image avatar-previews.png",
+          );
         }
         expectCount(".chat-group.assistant .chat-message-image", 3);
         expectCount(".chat-tool-msg-body .chat-message-image", expanded ? 3 : 0);

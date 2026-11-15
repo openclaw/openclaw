@@ -21,7 +21,7 @@ import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
 import { resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
+import { ownSessionLaunchCalls, readSubagentCancellation } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import {
@@ -149,14 +149,31 @@ function prepareActivityGroup(
   );
   const codeExecutions = new Set<string>();
   const executedCommands = new Set<string>();
+  const subagentCancellations = new Map<string, boolean>();
+  const interruptedCalls = new Set<string>();
   for (const card of cards) {
     const item = summaryByCard.get(card);
     const call = unwrapToolCallForDisplay(card);
     const args = asNullableRecord(call.args);
-    if (!item || resolveToolCallInput(call.name, args).kind !== "command") {
+    if (!item) {
       continue;
     }
     const key = activityKeys.get(item)!;
+    const runId = toolContexts.get(card)?.runId;
+    if (
+      runId &&
+      opts.interruptedRunIds?.has(runId) &&
+      resolveToolCardOutcome(card, opts.runActive) === "unrecorded"
+    ) {
+      interruptedCalls.add(key);
+    }
+    const cancellation = readSubagentCancellation(card);
+    if (cancellation) {
+      subagentCancellations.set(key, cancellation.stopped);
+    }
+    if (resolveToolCallInput(call.name, args).kind !== "command") {
+      continue;
+    }
     if (
       call.name.trim().toLowerCase() === "exec" &&
       !(typeof args?.command === "string" && args.command.trim()) &&
@@ -207,6 +224,8 @@ function prepareActivityGroup(
     executedCommands,
     codeExecutions,
     continuingExecutions,
+    subagentCancellations,
+    interruptedCalls,
   });
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {

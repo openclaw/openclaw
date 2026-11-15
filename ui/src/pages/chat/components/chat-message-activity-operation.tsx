@@ -22,6 +22,9 @@ export function ActivityOperation(props: ActivityOperationProps) {
       options={{
         ...props.options,
         messageKey: context().messageKey,
+        interrupted: Boolean(
+          context().runId && props.options.interruptedRunIds?.has(context().runId!),
+        ),
         onOpenWorkspaceFile: context().onOpenWorkspaceFile,
         expanded: expanded(),
         onToggleExpanded: () =>

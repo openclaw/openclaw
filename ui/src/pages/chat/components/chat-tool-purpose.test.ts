@@ -126,3 +126,24 @@ it("uses names already available to chat rows without exposing unresolved routin
     );
   }
 });
+
+it.each([
+  [true, "cancelled", "Stopped subagent"],
+  [true, "succeeded", "Stop subagent"],
+  [false, undefined, "Stop subagent"],
+])(
+  "describes cancellation only when the target receipt confirms it",
+  async (killed, status, label) => {
+    const container = await mountCard(
+      {
+        id: "cancel",
+        name: "subagents",
+        args: { action: "cancel", runId: "run-secret" },
+        completed: true,
+        details: { found: true, killed, targetState: { state: "terminal", task: { status } } },
+      },
+      { expanded: false },
+    );
+    expect(text(container, ".chat-tool-disclosure__content")?.trim()).toBe(label);
+  },
+);
