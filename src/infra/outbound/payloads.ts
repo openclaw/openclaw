@@ -294,7 +294,8 @@ export function projectOutboundPayloadPlanForJson(
 ): OutboundPayloadJson[] {
   return plan.map((entry) => {
     const payload = entry.payload;
-    return {
+    // In-process callers (Talk consults) still read private payload metadata; it never serializes.
+    return copyReplyPayloadMetadata(payload, {
       text: entry.parts.text,
       isError: payload.isError,
       mediaUrl: payload.mediaUrl ?? null,
@@ -308,7 +309,7 @@ export function projectOutboundPayloadPlanForJson(
       interactive: payload.interactive,
       channelData: payload.channelData,
       ...(payload.location ? { location: payload.location } : {}),
-    };
+    });
   });
 }
 

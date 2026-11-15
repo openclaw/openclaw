@@ -78,6 +78,8 @@ export type AgentCommandOpts = {
   sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
+  /** Host-owned: treat the thinking request as a machine preference resolved per model, not a command. */
+  normalizeThinkingLevelOverride?: boolean;
   verbose?: string;
   json?: boolean;
   timeout?: string;
@@ -284,6 +286,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   internalDeliverySuppressErrors: undefined,
   operatorDirectRoot: undefined,
   cleanupMemoryOnRunEnd: undefined,
+  normalizeThinkingLevelOverride: undefined,
 } as const satisfies Partial<AgentCommandOpts>;
 
 type AgentCommandGatewayOnlyKey = Exclude<

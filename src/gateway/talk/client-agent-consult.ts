@@ -232,6 +232,8 @@ export function createTalkClientAgentConsultRunner(params: {
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",
+          // The Gateway runtime enters the chat's own typed-turn dispatch.
+          dispatchesInSessionRuntime: true,
           thinkLevel: talkConfig?.consultThinkingLevel,
           fastMode: talkConfig?.consultFastMode,
           senderIsOwner: authority.senderIsOwner,

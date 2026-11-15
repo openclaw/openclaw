@@ -443,6 +443,7 @@ export async function withParkedNativeTask(
   const runAbortController = new AbortController();
   let activeRun: RunEmbeddedAgentParams | undefined;
   let phase = "waiting for delegation";
+  let startReadinessDeadline: (() => void) | undefined;
   let backendAborted = false;
   const abortOwned = vi.fn(() => {
     backendAborted = true;
@@ -456,6 +457,8 @@ export async function withParkedNativeTask(
   upstream.runEmbeddedAgent
     .mockImplementationOnce(async (params) => {
       try {
+        // Session and model preparation precede the backend; the deadline times its registration.
+        startReadinessDeadline?.();
         phase = "admitting backend";
         if (!params.preparedRunAdmission) {
           throw new Error("Expected real Talk admission");
@@ -588,21 +591,27 @@ export async function withParkedNativeTask(
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
     const timeoutMs = 1000;
+    let registrationObserved = false;
+    startReadinessDeadline = () => {
+      if (deadline !== undefined) {
+        return;
+      }
+      deadline = setTimeout(() => {
+        failed.reject(
+          new Error(
+            `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+          ),
+        );
+      }, timeoutMs);
+    };
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId, target) => {
         const claim = prepare(sessionId, runId, target);
-        if (sessionId === SESSION_ID && deadline === undefined) {
-          // Workspace and session preparation precede the registration owner's lifetime.
+        if (sessionId === SESSION_ID && !registrationObserved) {
+          registrationObserved = true;
           phase = "waiting for embedded registration";
-          deadline = setTimeout(() => {
-            failed.reject(
-              new Error(
-                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-              ),
-            );
-          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;

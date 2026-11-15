@@ -14,10 +14,15 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { extractText } from "../../ui/src/lib/chat/message-extract.ts";
 import { buildChatMarkdown } from "../../ui/src/pages/chat/export.ts";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import * as embeddedAgent from "../agents/embedded-agent.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
+import {
+  deleteWorkspaceState,
+  prepareWorkspaceStateDeletion,
+} from "../agents/workspace-state-store.js";
 import { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
 import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -147,6 +152,11 @@ beforeEach(async () => {
     entries: { main: { sessionId, updatedAt: Date.now(), status: "done" } },
   });
   await prepareGatewayReplyRuntimeForTest({ force: true });
+  // The suite reset deletes the workspace directory between cases; retire its durable identity
+  // too, as real deletion does, so command-owned consults do not read it as a vanished workspace.
+  await deleteWorkspaceState(
+    prepareWorkspaceStateDeletion(resolveAgentWorkspaceDir(getRuntimeConfig(), "main")),
+  );
   context = createDirectChatContext({ getRuntimeConfig });
   const rowProjection = await createSessionRowProjection({
     cfg: getRuntimeConfig(),

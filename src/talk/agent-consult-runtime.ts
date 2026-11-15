@@ -84,8 +84,11 @@ export function assertRealtimeVoiceAgentConsultModelSelectionUnlocked(
 
 /** Gateway consults read lock state through the worker-backed session reader. */
 async function assertConsultModelSelectionUnlocked(
-  params: RealtimeVoiceAgentConsultModelLockParams,
+  params: RealtimeVoiceAgentConsultModelLockParams & { skip?: boolean },
 ): Promise<void> {
+  if (params.skip) {
+    return;
+  }
   for (const candidate of collectModelSelectionLockCandidates(params)) {
     assertModelSelectionUnlocked(
       await params.agentRuntime.session.getSessionEntryAsync({
@@ -134,6 +137,44 @@ function collectModelSelectionLockCandidates(params: RealtimeVoiceAgentConsultMo
   }
 
   return candidates.values();
+}
+
+/**
+ * A session-runtime consult hands the turn to the typed-turn owner, which prepares the agent
+ * workspace with its bootstrap policy. Preparing that same directory here under another policy
+ * would leave it unseeded but attested, and the typed turn would then refuse it as vanished.
+ */
+async function resolveSessionRuntimeWorkspacePreparation(params: {
+  dispatchesInSessionRuntime?: true;
+  cfg: OpenClawConfig;
+  agentRuntime: RealtimeVoiceAgentConsultRuntime;
+  agentId: string;
+  sessionKey: string;
+  workspaceDir: string;
+  cwd?: string;
+  sessionEntry?: SessionEntry;
+}) {
+  if (
+    !params.dispatchesInSessionRuntime ||
+    params.workspaceDir !== params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, params.agentId)
+  ) {
+    return {};
+  }
+  const { resolveAcpAgentWorkspaceProvisioningForTurn } =
+    await import("../agents/acp-workspace-provisioning.js");
+  const defaults = params.cfg.agents?.defaults;
+  return {
+    ensureBootstrapFiles: !defaults?.skipBootstrap,
+    skipOptionalBootstrapFiles: defaults?.skipOptionalBootstrapFiles,
+    provisioning: await resolveAcpAgentWorkspaceProvisioningForTurn({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      cwd: params.cwd,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
+    }),
+  };
 }
 
 function resolveRealtimeVoiceAgentSandboxSessionKey(agentId: string, sessionKey: string): string {
@@ -222,6 +263,11 @@ export async function consultRealtimeVoiceAgent(params: {
   /** Trusted owner bit established by the caller's ingress authorization boundary. */
   senderIsOwner?: boolean;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
+  /**
+   * The caller's runtime dispatches through the session's own typed-turn runtime and model
+   * selection, so a locked native transcript is never crossed. Such callers own the lock.
+   */
+  dispatchesInSessionRuntime?: true;
   provider?: RunEmbeddedAgentParams["provider"];
   model?: RunEmbeddedAgentParams["model"];
   thinkLevel?: RunEmbeddedAgentParams["thinkLevel"];
@@ -336,7 +382,11 @@ export async function consultRealtimeVoiceAgent(params: {
   const cwd =
     normalizeOptionalString(initialSessionEntry?.spawnedCwd) ??
     resolveAgentRunCwd(params.cfg, agentId);
+  if (params.dispatchesInSessionRuntime && (params.provider || params.model)) {
+    throw new Error("Session-runtime consults use the session's own model selection");
+  }
   const modelLockParams = {
+    skip: params.dispatchesInSessionRuntime === true,
     cfg: params.cfg,
     agentRuntime: params.agentRuntime,
     agentId,
@@ -385,6 +435,13 @@ export async function consultRealtimeVoiceAgent(params: {
     return await sessionWorkAdmission.run(async () => {
       await params.agentRuntime.ensureAgentWorkspace({
         dir: workspaceDir,
+        ...(await resolveSessionRuntimeWorkspacePreparation({
+          ...params,
+          agentId,
+          workspaceDir,
+          cwd,
+          sessionEntry: initialSessionEntry,
+        })),
         guard: {
           assertHost: () => {
             lifecycleAbortController.signal.throwIfAborted();
@@ -556,7 +613,9 @@ export async function consultRealtimeVoiceAgent(params: {
           prompt: buildRealtimeVoiceAgentConsultPrompt(params),
           provider: params.provider,
           model: params.model,
-          thinkLevel: params.thinkLevel ?? "high",
+          // A session-runtime consult thinks like the chat's typed turns unless voice config pins it;
+          // the typed-turn owner rejects levels the chat's model does not support.
+          thinkLevel: params.thinkLevel ?? (params.dispatchesInSessionRuntime ? undefined : "high"),
           fastMode: params.fastMode,
           verboseLevel: "off",
           reasoningLevel: "off",

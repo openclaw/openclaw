@@ -95,11 +95,12 @@ vi.mock("../../../shared/lazy-runtime.js", async (importOriginal) => {
       return Object.assign(
         async () => {
           const runtime = await load();
+          // Gate only the Talk consult execution loader, which enters the typed-turn owner.
           if (
             runtime &&
             typeof runtime === "object" &&
-            "runEmbeddedAgent" in runtime &&
-            runtime.runEmbeddedAgent === voiceMocks.runEmbeddedAgent
+            "agentCommandFromGatewayIngress" in runtime &&
+            "createOperationalRunInstanceRef" in runtime
           ) {
             await voiceMocks.executionReady();
           }

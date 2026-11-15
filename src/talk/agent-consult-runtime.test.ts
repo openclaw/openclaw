@@ -562,4 +562,40 @@ describe("realtime voice agent consult runtime", () => {
       traceAuthorized: false,
     });
   });
+
+  it("leaves the lock and thinking level to the session's own runtime when dispatching there", async () => {
+    const sessionKey = "agent:main:session-runtime";
+    const bridge = createAgentRuntime();
+    bridge.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-bridge" };
+    // Bridges without the session runtime still refuse to cross a locked native transcript.
+    await expect(runConsult(bridge.runtime, { agentId: "main", sessionKey })).rejects.toThrow(
+      /locked/i,
+    );
+    expect(bridge.runEmbeddedAgent).not.toHaveBeenCalled();
+
+    const session = createAgentRuntime();
+    session.sessionStore[sessionKey] = { ...lockedEntry, sessionId: "locked-session" };
+    await expect(
+      runConsult(session.runtime, {
+        agentId: "main",
+        sessionKey,
+        dispatchesInSessionRuntime: true,
+      }),
+    ).resolves.toEqual({ text: "Speak this." });
+    // No voice-imposed default: the chat's typed-turn owner resolves its own thinking level.
+    expect(requireEmbeddedAgentCall(session.runEmbeddedAgent).thinkLevel).toBeUndefined();
+
+    const plain = createAgentRuntime();
+    await runConsult(plain.runtime, { agentId: "main", sessionKey: "agent:main:bridge" });
+    expect(requireEmbeddedAgentCall(plain.runEmbeddedAgent).thinkLevel).toBe("high");
+
+    await expect(
+      runConsult(createAgentRuntime().runtime, {
+        agentId: "main",
+        sessionKey: "agent:main:override",
+        dispatchesInSessionRuntime: true,
+        provider: "openai",
+      }),
+    ).rejects.toThrow("Session-runtime consults use the session's own model selection");
+  });
 });

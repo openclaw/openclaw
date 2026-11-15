@@ -1,0 +1,2 @@
+300
+# Real-Gateway Claude CLI and locked-harness consult routing, typed-turn handoff authority, published-runtime lease, and thinking-preference fallback regressions.

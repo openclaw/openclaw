@@ -165,7 +165,12 @@ describe("authenticated Talk permission parity", () => {
         cwd,
         sessionRoot: cwd,
         permissionMode: "guarded",
-        execOverrides: { host: "node", node: "session-node", nodeCwd: "/node/task" },
+        // The typed-turn owner carries the session's exec pin; exec defaults resolve from it.
+        execSession: expect.objectContaining({
+          execHost: "node",
+          execNode: "session-node",
+          execCwd: "/node/task",
+        }),
       });
       return { payloads: [{ text: "Prepared." }], meta: {} };
     });
@@ -223,9 +228,11 @@ describe("authenticated Talk permission parity", () => {
     });
     try {
       const runner = createRunner({ context, runAuthority: retained });
-      expect(await runner.runArgs({ question: "Carry out the action" })).toEqual({
-        text: "Denied.",
-      });
+      // Like a typed turn, a revoked caller's result is not delivered (or spoken) at all.
+      await expect(runner.runArgs({ question: "Carry out the action" })).rejects.toThrow(
+        "Talk caller source authority is no longer active",
+      );
+      await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       retained.release();
       source.release();
