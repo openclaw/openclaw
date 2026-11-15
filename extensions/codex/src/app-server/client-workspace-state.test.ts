@@ -108,7 +108,7 @@ describe("native thread runtime-reference admission (#84662)", () => {
         state,
         threadId,
         "workspace instructions",
-        "## Watched Sessions\\n- synthetic session",
+        "## Watched Sessions\n- synthetic session",
       );
       included.push([refs.includeWorkspace, refs.includeWatchedSessions]);
       refs.accepted({
@@ -116,16 +116,17 @@ describe("native thread runtime-reference admission (#84662)", () => {
         watchedSessionsAccepted: refs.includeWatchedSessions,
       });
     }
-    expect(included).toEqual([
-      [true, true],
-      [false, false],
-      [false, false],
-    ]);
+    expect(included).toEqual([[true, true], [false, false], [false, false]]);
   });
 
   it("resends only a changed reference, and retries a truncated section", () => {
     const state = workspaceState();
-    const first = prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched A");
+    const first = prepareCodexWorkspaceReferenceState(
+      state,
+      threadId,
+      "workspace A",
+      "watched A",
+    );
     first.accepted({ workspaceAccepted: true, watchedSessionsAccepted: true });
 
     const changed = prepareCodexWorkspaceReferenceState(
@@ -141,7 +142,12 @@ describe("native thread runtime-reference admission (#84662)", () => {
         .includeWatchedSessions,
     ).toBe(true);
 
-    const retried = prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched B");
+    const retried = prepareCodexWorkspaceReferenceState(
+      state,
+      threadId,
+      "workspace A",
+      "watched B",
+    );
     retried.accepted({ workspaceAccepted: false, watchedSessionsAccepted: true });
     expect(
       prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched B")

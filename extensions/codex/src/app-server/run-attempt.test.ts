@@ -2537,7 +2537,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("bounds watched-session references in consecutive native turn/start inputs", async () => {
     const harnessRuntime = await import("openclaw/plugin-sdk/agent-harness-runtime");
-    const watchedText = "## Watched Sessions\\n- synthetic session: active";
+    const watchedText = "## Watched Sessions\n- synthetic session: active";
     const watchedContext = vi
       .spyOn(harnessRuntime, "prepareWatchedSessionsHarnessContext")
       .mockResolvedValue(watchedText);

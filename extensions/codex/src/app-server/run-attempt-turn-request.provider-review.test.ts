@@ -279,8 +279,11 @@ describe("native acknowledged turn requests", () => {
     const attempt = await prepare();
     await attempt.start();
     const submitted = attempt.request.mock.calls.find(([method]) => method === "turn/start");
-    expect(submitted?.[1]?.input?.[0]?.text).toContain("workspace reference");
-    expect(submitted?.[1]?.input?.[0]?.text).toContain("watched reference");
+    const nativeInput = submitted?.[1]?.input?.[0];
+    expect(nativeInput?.type).toBe("text");
+    const text = nativeInput?.type === "text" ? nativeInput.text : "";
+    expect(text).toContain("workspace reference");
+    expect(text).toContain("watched reference");
     expect(references.accepted).toHaveBeenCalledWith({
       workspaceAccepted: true,
       watchedSessionsAccepted: true,
