@@ -60,6 +60,28 @@ The origin must have no credentials, path, query, or fragment. Route only
 Do not expose the Control UI, Gateway WebSocket, or other administrative paths.
 OpenClaw does not open a tunnel or change your network configuration.
 
+If the callback host is on a private network the MCP server can reach (for example a
+Tailscale Serve name or a LAN reverse proxy), the startup check refuses it because
+it resolves to a private address. Set `allowPrivateNetwork: true` next to
+`callbackOrigin` to trust that one host. Link-local and cloud metadata addresses
+are still refused, and the rest of OpenClaw's network policy is unchanged:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "mcp-events": {
+        enabled: true,
+        config: {
+          callbackOrigin: "https://gateway.example.ts.net",
+          allowPrivateNetwork: true,
+        },
+      },
+    },
+  },
+}
+```
+
 The remote server must be able to reach this origin and verify its TLS
 certificate. Public DNS validation is a prerequisite, not proof of reachability;
 subscription callback verification supplies that proof. Infrastructure that
