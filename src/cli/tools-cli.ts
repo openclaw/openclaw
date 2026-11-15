@@ -1,3 +1,4 @@
+import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
@@ -20,8 +21,10 @@ type ToolUsageOptions = GatewayRpcOpts & {
 };
 
 function boundedInteger(value: string, maximum: number): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
+  // Strict decimal only: Number() would also accept hexadecimal (0x1f) and
+  // exponent (1e2) forms that the option help describes as plain integers.
+  const parsed = parseStrictInteger(value);
+  if (parsed === undefined || !Number.isSafeInteger(parsed) || parsed < 1 || parsed > maximum) {
     throw new InvalidArgumentError(`Expected an integer between 1 and ${maximum}.`);
   }
   return parsed;

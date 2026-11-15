@@ -48,12 +48,22 @@ it.each([
   expect(mocks.log).not.toHaveBeenCalled();
 });
 
-it.each(["0", "91", "2.5", "not-a-number"])(
+it.each(["0", "91", "2.5", "not-a-number", "0x1f", "1e1"])(
   "rejects invalid import days %s before RPC",
   async (days) => {
+    // 0x1f and 1e1 both resolve to in-range integers on the base (31 and 10),
+    // so only strict-decimal parsing can reject them.
     await expect(run(["import", "--since", days])).rejects.toThrow(
       "Expected an integer between 1 and 90",
     );
     expect(mocks.call).not.toHaveBeenCalled();
   },
 );
+
+it.each(["0x64", "1e1"])("rejects non-decimal status limit %s before RPC", async (limit) => {
+  await expect(run(["status", "--limit", limit])).rejects.toThrow(
+    "Expected an integer between 1 and 100",
+  );
+  expect(mocks.call).not.toHaveBeenCalled();
+});
+
