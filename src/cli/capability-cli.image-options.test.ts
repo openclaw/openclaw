@@ -70,6 +70,24 @@ it.each([
   expect(mocks.generateImage).not.toHaveBeenCalled();
 });
 
+it("rejects image --count beyond the 50-image request cap before dispatch", async () => {
+  const run = runCapability(
+    "image",
+    "generate",
+    "--prompt",
+    "portrait",
+    "--model",
+    "openai/gpt-image-1.5",
+    "--count",
+    "999999999999999",
+    "--json",
+  );
+  await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+  await expect(run).rejects.toThrow("--count must be at most 50 images per request.");
+  expect(mocks.resolveLocalCapabilityAgent).not.toHaveBeenCalled();
+  expect(mocks.generateImage).not.toHaveBeenCalled();
+});
+
 it("passes a numeric aspect ratio outside the tool list to the image runtime", async () => {
   await runImage("generate", "7:5");
 

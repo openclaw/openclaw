@@ -17,6 +17,9 @@ const IMAGE_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
 const IMAGE_BACKGROUNDS = ["transparent", "opaque", "auto"] as const;
 const IMAGE_QUALITIES = ["low", "medium", "high", "xhigh", "max", "auto"] as const;
 const IMAGE_MODERATIONS = ["low", "auto"] as const;
+// One request fans out into per-image downloads and atomic publishes; a stray
+// huge value is a typo, not a batch anyone can consume.
+const MAX_IMAGE_COUNT = 50;
 const parseImageOption = createEnumOptionParser();
 
 export function registerImageCapabilityCommands(capabilityCommand: Command): void {
@@ -36,7 +39,7 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
     generate
       .requiredOption("--prompt <text>", "Prompt text")
       .option("--model <provider/model>", "Model override")
-      .option("--count <n>", "Number of images")
+      .option("--count <n>", "Number of images (1-50)")
       .option("--size <size>", "Size hint like 1024x1024")
       .option("--aspect-ratio <ratio>", "Aspect ratio hint like 16:9")
       .option("--resolution <value>", "Resolution hint: 1K, 2K, or 4K")
@@ -72,6 +75,11 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const agent = resolveCapabilityAgentOption(command, opts.agent);
           const model = opts.model as string | undefined;
           const count = parseOptionalPositiveInteger(opts.count, "--count");
+          if (count !== undefined && count > MAX_IMAGE_COUNT) {
+            throwExpectedCliError(
+              `--count must be at most ${MAX_IMAGE_COUNT} images per request.`,
+            );
+          }
           const size = opts.size as string | undefined;
           const aspectRatio = normalizeOptionalString(opts.aspectRatio);
           const { parseAspectRatioValue } =
