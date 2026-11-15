@@ -1,3 +1,3 @@
 # Request locale ownership, transport/queue boundaries, and real Gateway restart/upgrade proof.
-# 788 net test lines minus the standard 400-line allowance.
-388
+# 804 net test lines minus the standard 400-line allowance.
+404

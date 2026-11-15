@@ -113,9 +113,10 @@ it.each([
   { aborted: false, messageLocale: undefined },
   { aborted: true, messageLocale: undefined },
   { aborted: false, messageLocale: "de" as const },
+  { aborted: false, messageLocale: "de" as const, transportError: "ECONNRESET" },
 ])(
-  "publishes native provider failures with their locale (aborted=$aborted, locale=$messageLocale)",
-  async ({ aborted, messageLocale }) => {
+  "publishes native failures (aborted=$aborted, locale=$messageLocale, transport=$transportError)",
+  async ({ aborted, messageLocale, transportError }) => {
     vi.useFakeTimers();
     const runId = "run-native-provider-error";
     const h = createAgentEventTestHarness({ lifecycleErrorRetryGraceMs: 0 });
@@ -137,7 +138,7 @@ it.each([
     lifecycle.emitLifecycleStart({ provider: "openai", model: "gpt-5.6-luna" });
     lifecycle.emitLifecycleTerminal({
       phase: "error",
-      error: "Selected model is at capacity. Please try a different model.",
+      error: transportError ?? "Selected model is at capacity. Please try a different model.",
       aborted,
       stopReason: aborted ? "stop" : "error",
       replayInvalid: true,
@@ -155,15 +156,16 @@ it.each([
       expect(payload.errorDetail).toBeUndefined();
     } else {
       expect(payload).toMatchObject({
-        errorMessage:
-          messageLocale === "de"
+        errorMessage: transportError
+          ? expect.stringContaining("Die Verbindung zum KI-Dienst wurde unterbrochen")
+          : messageLocale === "de"
             ? "⚠️ Das gewählte Modell ist ausgelastet. Wähle ein anderes Modell oder versuche es später erneut."
             : "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
-        errorKind: "rate_limit",
+        errorKind: transportError ? "timeout" : "rate_limit",
         errorDetail: {
           provider: "openai",
           model: "gpt-5.6-luna",
-          failoverReason: "overloaded",
+          failoverReason: transportError ? "timeout" : "overloaded",
         },
       });
     }

@@ -375,11 +375,15 @@ export function renderSanitizedUserFacingText(
   if (providerRequestCode) {
     return renderProviderRequestCodeCopy(providerRequestCode, opts?.locale);
   }
-  if (reason === "timeout" && resolveMessageLocale(opts?.locale) === "de") {
-    return renderAssistantRequestFailureCopy({ reason: "timeout" }, "de") ?? sanitized;
-  }
   if (isGenericProviderInternalError(trimmed)) {
     return formatRawAssistantErrorForUi(trimmed);
+  }
+  if (reason === "timeout" && resolveMessageLocale(opts?.locale) === "de") {
+    return (
+      formatTransportErrorCopy(trimmed, "de") ??
+      renderAssistantRequestFailureCopy({ reason: "timeout" }, "de") ??
+      sanitized
+    );
   }
   if (isInvalidStreamingEventOrderError(trimmed)) {
     return "LLM request failed: provider returned an invalid streaming response. Please try again.";
@@ -391,7 +395,7 @@ export function renderSanitizedUserFacingText(
     return "LLM streaming response contained a malformed fragment. Please try again.";
   }
   if (ERROR_PREFIX_RE.test(trimmed)) {
-    const transport = formatTransportErrorCopy(trimmed);
+    const transport = formatTransportErrorCopy(trimmed, opts?.locale);
     if (transport) {
       return transport;
     }

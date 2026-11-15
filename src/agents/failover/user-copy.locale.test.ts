@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { renderUserFacingText } from "../embedded-agent-helpers/user-facing-text.js";
 import {
   renderRateLimitOrOverloadedCopy,
   renderRateLimitResetCopy,
@@ -7,6 +8,19 @@ import {
 } from "./user-copy.js";
 
 describe("localized provider failures", () => {
+  it.each([
+    ["ECONNRESET", "Die Verbindung zum KI-Dienst wurde unterbrochen"],
+    ["ENOTFOUND", "Die Verbindung zum KI-Dienst ist fehlgeschlagen"],
+    ["socket hang up", "Die Verbindung zum KI-Dienst wurde unterbrochen"],
+    ["request timed out", "Die Anfrage hat zu lange gedauert"],
+    [
+      "An error occurred while processing your request. Contact help.openai.com.",
+      "The AI service returned an internal error",
+    ],
+  ])("preserves the failure cause when rendering German %s", (raw, expected) => {
+    expect(renderUserFacingText(raw, { errorContext: true, locale: "de" })).toContain(expected);
+  });
+
   it("uses a singular German retry instruction for one recorded attempt", () => {
     expect(renderRateLimitRetryExhaustion(1, false, "de")).toContain(
       "einem automatischen Wiederholungsversuch",
