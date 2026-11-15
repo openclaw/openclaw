@@ -560,37 +560,34 @@ export function DashboardsView(props: {
   };
   return (
     <>
-      <HubPageHeader
-        active="dashboards"
-        wide
-        docsUrl="https://docs.openclaw.ai/web/dashboards"
-        class="dashboards-header"
-        actions={
-          <Show
-            when={
-              !props.sidebarListsDashboards && props.data?.result?.sessions.length
-                ? props.data
-                : undefined
-            }
-          >
-            {(data) => (
-              <div class="dashboards-tools">
-                <DashboardSearch
-                  query={props.filters.query}
-                  onQueryChange={(query) => props.handlers.onFilterChange({ query })}
-                />
-                <DashboardAuthorFilter
-                  authors={dashboardAuthors(data())}
-                  selfId={props.gatewaySnapshot?.selfUser?.id}
-                  filters={props.filters}
-                  handlers={props.handlers}
-                />
-                <DashboardDisplayMenu filters={props.filters} handlers={props.handlers} />
-              </div>
-            )}
-          </Show>
-        }
-      />
+      {/* Beside the open sidebar the page waits for a dashboard, so it drops the section header. */}
+      <Show when={!props.sidebarListsDashboards}>
+        <HubPageHeader
+          active="dashboards"
+          wide
+          docsUrl="https://docs.openclaw.ai/web/dashboards"
+          class="dashboards-header"
+          actions={
+            <Show when={props.data?.result?.sessions.length ? props.data : undefined}>
+              {(data) => (
+                <div class="dashboards-tools">
+                  <DashboardSearch
+                    query={props.filters.query}
+                    onQueryChange={(query) => props.handlers.onFilterChange({ query })}
+                  />
+                  <DashboardAuthorFilter
+                    authors={dashboardAuthors(data())}
+                    selfId={props.gatewaySnapshot?.selfUser?.id}
+                    filters={props.filters}
+                    handlers={props.handlers}
+                  />
+                  <DashboardDisplayMenu filters={props.filters} handlers={props.handlers} />
+                </div>
+              )}
+            </Show>
+          }
+        />
+      </Show>
       <SettingsWorkspace>
         <Show
           when={!props.sidebarListsDashboards}
