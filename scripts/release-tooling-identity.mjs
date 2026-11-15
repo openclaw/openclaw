@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
+import childProcess from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { accountGithubRequest } from "./lib/plain-gh.mjs";
@@ -320,7 +320,7 @@ function parseJson(raw, label) {
 
 export function runReleaseToolingGh(args) {
   accountGithubRequest(args);
-  return execFileSync("gh", args, {
+  return childProcess.execFileSync("gh", args, {
     encoding: "utf8",
     killSignal: "SIGKILL",
     maxBuffer: 1024 * 1024,

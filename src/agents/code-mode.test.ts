@@ -313,6 +313,9 @@ describe("Code Mode catalog and model-visible surface", () => {
       "browser sign-in",
       "ready_to_verify",
       "action_unresolved",
+      "that the human can complete while this run waits",
+      "not the current user-requested turn",
+      "Never wait in ask_user for a native session control that requires this run to end",
     ]);
 
     addClientToolsToToolCatalog({

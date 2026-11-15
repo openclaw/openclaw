@@ -445,10 +445,19 @@ export async function resolveUpdateCommandTarget(
             packageInstallEnv = withNodeRuntimePath(packageInstallEnv, packageUpdateNodeRunner);
           }
           if (packageInstallTarget.manager === "npm") {
-            const destination = await inspectNpmGlobalDestination(root, packageInstallTarget);
+            const destination = await inspectNpmGlobalDestination(
+              root,
+              packageInstallTarget,
+              opts.dryRun,
+            );
             if (destination.kind !== "owned" && destination.kind !== "empty") {
               await refuseUpdate(destination.reason, destination.message, destination.failureFacts);
               return undefined;
+            }
+            if (destination.kind === "owned" && destination.interruptedLink) {
+              warn(
+                `${opts.dryRun ? "Would restore" : "Restored"} the npm package link an interrupted update left at ${destination.interruptedLink}.`,
+              );
             }
           }
           const diskWarning = createLowDiskSpaceWarning({

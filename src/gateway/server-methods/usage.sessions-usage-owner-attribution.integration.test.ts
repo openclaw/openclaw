@@ -20,8 +20,7 @@ import {
 import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import {
   historyLane,
-  projectionLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createPersistCronSessionEntry } from "../../cron/isolated-agent/run-session-state.js";
@@ -463,7 +462,7 @@ it("hydrates context metadata only for emitted usage rows while aggregating ever
     for (const [selected, includeContextWeight, filters = {}] of scenarios) {
       let payload: unknown;
       const transferredPrompts = new Set<string>();
-      const transfers = [historyLane, projectionLane, targetDiscoveryLane].map(({ pool }) => {
+      const transfers = [historyLane, sessionStoreLane].map(({ pool }) => {
         const run = pool.run.bind(pool);
         return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
           const reply = await run(...args);

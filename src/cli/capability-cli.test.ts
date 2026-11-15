@@ -637,14 +637,13 @@ describe("capability cli", () => {
   }
 
   it.each(["list", "inspect"])("queries capability metadata through %s", async (action) => {
-    await runCap(
-      "capability",
-      action,
-      ...(action === "inspect" ? ["--name", "image.edit"] : []),
-      "--json",
-    );
+    const nameOption = action === "inspect" ? ["--name", "image.edit"] : [];
+    await runCap("capability", action, ...nameOption, "--json");
     if (action === "inspect") {
       expect(firstJsonOutput()).toMatchObject({ id: "image.edit", transports: ["local"] });
+      const unknown = runCap("capability", "inspect", "--name", "no-such", "--json");
+      await expect(unknown).rejects.toBeInstanceOf(ExpectedCliError);
+      await expect(unknown).rejects.toThrow("Unknown capability: no-such");
     } else {
       const payload = (firstJsonOutput() as unknown as Array<{ id: string }> | undefined) ?? [];
       const ids = payload.map((entry) => entry.id);

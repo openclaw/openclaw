@@ -12,9 +12,10 @@ import {
   type ChangeDesc,
 } from "@codemirror/state";
 import { Decoration, EditorView, WidgetType, type DecorationSet } from "@codemirror/view";
-import { render } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import type { ApplicationContext } from "../../../app/context-types.ts";
 import { PersonReferenceLabel } from "../../../components/solid/person-reference-label.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import {
   MENTION_AFTER,
@@ -31,11 +32,14 @@ import {
   withHumanMentionEdit,
 } from "../../../lib/chat/human-mentions.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   mountComposerEditor,
   type ComposerEditorOptions,
   type ComposerEditorSnapshot,
 } from "./composer-editor-view.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 // Style modules live for the document lifetime, not an individual editor mount.
 const mentionTheme = EditorView.theme({
@@ -77,13 +81,16 @@ class MentionChip extends WidgetType {
     node.className = "markdown-person-reference chat-composer-mention";
     node.dataset.profileId = this.profileId;
     // Provide the capability in this separate root; CM owns its lifetime.
-    const label = () => (
-      <PersonReferenceLabel
-        profileId={this.profileId}
-        label={this.label}
-        avatarUrl={this.avatarUrl}
-      />
-    );
+    const label = () => {
+      spread(node, () => ({ title: t("chat.mentions.invite") }), true);
+      return (
+        <PersonReferenceLabel
+          profileId={this.profileId}
+          label={this.label}
+          avatarUrl={this.avatarUrl}
+        />
+      );
+    };
     chipDisposers.set(
       node,
       render(

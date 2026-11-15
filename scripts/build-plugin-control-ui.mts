@@ -10,8 +10,6 @@ async function buildBundledPluginControlUi(
 ): Promise<void> {
   const rootDir = path.resolve(packageDir);
   const packageManifest = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
-  const manifestPath = path.join(rootDir, "openclaw.plugin.json");
-  const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
   if (options.copy) {
     const generatedManifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "dist/openclaw.plugin.json"), "utf8"),
@@ -34,6 +32,8 @@ async function buildBundledPluginControlUi(
       { recursive: true },
     );
   } else {
+    const { readPluginAuthoringJson } = await import("../src/cli/plugins-authoring-json.js");
+    const manifest = readPluginAuthoringJson(path.join(rootDir, "openclaw.plugin.json"), true);
     const { buildPluginControlUi, writePluginBuildManifest } =
       await import("../src/cli/plugins-control-ui-build.js");
     const { controlUiSource } = await import("../src/plugins/manifest-control-ui.js");

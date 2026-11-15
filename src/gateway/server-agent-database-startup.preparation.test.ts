@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, assert, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
@@ -8,6 +8,7 @@ import {
   PreparedModelRuntimePublicationSupersededError,
 } from "../agents/prepared-model-runtime.errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { AgentDatabaseSchemaAdmissionChangedError } from "../state/agent-database-admission-error.js";
 import {
@@ -24,6 +25,7 @@ import { createContext } from "./server-plugin-in-process-dispatch.test-support.
 const mocks = vi.hoisted(() => ({
   migrate: vi.fn(),
   maintain: vi.fn(),
+  scheduleFacts: vi.fn(),
   journal: vi.fn(),
   opened: vi.fn(),
   refreshSecrets: vi.fn(),
@@ -38,6 +40,7 @@ const mocks = vi.hoisted(() => ({
   warn: vi.fn(),
   integrityCheck: vi.fn(),
   corruption: vi.fn(),
+  verified: vi.fn(),
 }));
 
 // mock-isolation: Keep the real background verdict owner while controlling its native I/O.
@@ -49,6 +52,13 @@ vi.mock("../state/openclaw-agent-execution.js", () => ({
   captureOpenClawAgentDatabaseExecution: () => ({
     onTerminal: () => () => {},
     release: async () => {},
+    runExisting: async (
+      source: { assertCurrent: () => void },
+      run: (scope: unknown) => unknown,
+    ) => {
+      source.assertCurrent();
+      return run({ execute: mocks.verified });
+    },
   }),
 }));
 // mock-isolation: Observe corruption revocation without retiring unrelated database handles.
@@ -257,6 +267,7 @@ function createFleet(
           context,
           preparationReady,
           waitForPostReadyWork: () => postReadyWork,
+          scheduleSessionFactsBackfill: mocks.scheduleFacts,
           getConfig: () => cfg,
           getPluginRegistry: vi.fn(),
           getPluginMetadataSnapshot: () => undefined,
@@ -290,6 +301,32 @@ function expectAdmission(fleet: ReturnType<typeof createFleet>, agentId: string,
     expect(refusal).toBeUndefined();
   }
 }
+
+it("verifies an admitted runtime store outside the configured startup roster", async () => {
+  const fleet = createFleet(["main"]);
+  const pathname = resolveOpenClawAgentSqlitePath({ agentId: "claude", env: fleet.env });
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  fs.writeFileSync(pathname, "synthetic runtime store identity");
+  const identity = readDatabasePathIdentitySync(pathname);
+  const birthtime = identity.birthtime;
+  assert(birthtime !== undefined);
+  await fleet.run(async (admission) => {
+    fleet.inspect(0);
+    await admission.pendingPreparation;
+    admission.observation.observePreparedIntegrity!({
+      agentId: "claude",
+      path: pathname,
+      env: fleet.env,
+      identity: identity.key.slice("file:".length),
+      birthtime,
+    });
+    await admission.pendingPreparation;
+    expect(mocks.verified).toHaveBeenCalledWith({
+      type: "database.integrityVerified",
+      input: { verifiedAt: expect.any(Number) },
+    });
+  });
+});
 
 it.for(["borrow", "worker", "rejecting worker", "failed publication"] as const)(
   "isolates a %s cleanup from sibling publication and shutdown",
@@ -452,6 +489,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expectAdmission(fleet, "large");
       expect(admission.waitForAgentPreparation("large", fleet)).toBeUndefined();
       expect(mocks.maintain).not.toHaveBeenCalled();
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       postReady.resolve();
       await withinTest(entered.promise, signal);
       fleet.inspect(1);
@@ -466,6 +504,7 @@ it("admits agents before transcript repair and joins repair on shutdown", async 
       expect(stopped).toBe(false);
       release.resolve();
       await stopping;
+      expect(mocks.scheduleFacts).not.toHaveBeenCalled();
       expect(mocks.warn).not.toHaveBeenCalled();
     },
     Promise.resolve(),

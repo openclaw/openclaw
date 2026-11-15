@@ -563,7 +563,7 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     expect.stringMatching(/^\+ 3\. End your reply .*left unchanged>`\.\n$/),
     "− Also tidy page titles.\n",
   ]);
-  // A lost response: confirming again repeats the same request, not a second turn.
+  // A lost response: replacing again on the reconnected page repeats the request, not a turn.
   const answerReplace = request.getMockImplementation()!;
   let lost = false;
   request.mockImplementation(async (method, params) => {
@@ -575,11 +575,10 @@ it("asks an earlier scribe's conversation to update it once and offers an edited
     return result;
   });
   buttonNamed(confirm, "Replace with new").click();
-  await vi.waitFor(() => expect(lost).toBe(true));
-  await vi.waitFor(() =>
-    expect(buttonNamed(confirm, "Replace with new").hasAttribute("disabled")).toBe(false),
-  );
-  buttonNamed(confirm, "Replace with new").click();
+  await vi.waitFor(() => expect(confirm.querySelector(".knowledge-error")).toBeTruthy());
+  // The reconnect replaces the page, and its dialog, before the operator retries.
+  buttonNamed(await render(), "Replace with new\u2026").click();
+  buttonNamed(page.querySelector("dialog")!, "Replace with new").click();
   await vi.waitFor(() =>
     expect(calls.filter(([method]) => method === "chat.send")).toHaveLength(2),
   );

@@ -28,6 +28,7 @@ import {
   prepareAgentRunTerminalReply,
   type PreparedAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
+import { withAgentTerminalPayloadSnapshot } from "../../agent-terminal-snapshot.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
 import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
@@ -121,6 +122,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTranscriptIdempotencyKey?: string;
   lastAssistant: AssistantMessage | undefined;
   currentAssistant?: AssistantMessage | null;
+  agentTerminal?: EmbeddedRunAttemptResult["agentTerminal"];
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
@@ -163,6 +165,7 @@ export function buildEmbeddedRunPayloads(params: {
     sourceReplies.filter((payload) => !payload.toolAuthored),
   );
   const replyItems = ordinarySourceReplies.replyItems;
+  let selectedProviderErrorPayload: ReplyPayload | undefined;
   const pendingAuthoredReplies = new Set(sourceReplies.filter((payload) => payload.toolAuthored));
   const useMarkdown = params.toolResultFormat === "markdown";
   let suppressFailureArtifacts = false;
@@ -289,6 +292,9 @@ export function buildEmbeddedRunPayloads(params: {
         isError: true,
         ...(providerLoginRecovery ? { presentation: providerLoginRecovery.presentation } : {}),
       };
+      if (!runAborted && lastAssistantErrored && assistantForPayload === params.currentAssistant) {
+        selectedProviderErrorPayload = errorPayload;
+      }
       replyItems.push(
         setReplyPayloadMetadata(errorPayload, {
           terminalProviderError: true,
@@ -553,7 +559,10 @@ export function buildEmbeddedRunPayloads(params: {
       if (hasAudioAsVoiceTag && item.mediaUrls?.length) {
         payload.audioAsVoice = true;
       }
-      return payload;
+      // Tag the final producer-owned payload, after normalization creates its copy.
+      return item === selectedProviderErrorPayload
+        ? withAgentTerminalPayloadSnapshot(payload, params.agentTerminal)
+        : payload;
     })
     .filter((payload) => hasReplyPayloadContent(payload) || hasReplyPayloadSpeechContent(payload));
 }
