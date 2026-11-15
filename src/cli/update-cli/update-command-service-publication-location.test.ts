@@ -101,3 +101,88 @@ it.each(["disjoint", "overlapping", "unknown", "retargeted"] as const)(
       }
     }),
 );
+
+it.each(["overlapping", "unknown", "incomplete inventory", "recovered disjoint"] as const)(
+  "does not lose unsafe sibling evidence behind a readable disjoint invoking service: %s",
+  (scenario) =>
+    withServiceHome(async (home) => {
+      mockProcessPlatform("linux");
+      const root = path.join(home, "checkout");
+      const invoking = path.join(home, "invoking");
+      for (const directory of [root, invoking]) {
+        await fs.mkdir(path.join(directory, "dist"), { recursive: true });
+        await fs.writeFile(path.join(directory, "package.json"), '{"name":"openclaw"}');
+        await fs.writeFile(path.join(directory, "dist", "entry.js"), "export {};");
+      }
+      const command = (directory: string) => ({
+        programArguments: [process.execPath, path.join(directory, "dist", "entry.js"), "gateway"],
+      });
+      const env = { ...process.env };
+      const target = {
+        scope: "system" as const,
+        unitName: "sibling",
+        unitPath: "/fixture/sibling",
+      };
+      const sibling = { env: { OPENCLAW_SYSTEMD_UNIT: "sibling" }, systemdReadTarget: target };
+      const denied = Object.assign(new Error("protected sibling environment"), { code: "EACCES" });
+      const service = createMockGatewayService({
+        readCommand: vi.fn(async (serviceEnv) => {
+          if (
+            serviceEnv?.OPENCLAW_SYSTEMD_UNIT === "sibling" &&
+            scenario !== "recovered disjoint"
+          ) {
+            throw denied;
+          }
+          return command(invoking);
+        }),
+        readRuntime: vi.fn(async () => ({ status: "running", systemd: { managerUid: 2001 } })),
+        isLoaded: vi.fn(async () => true),
+      });
+      mocks.service.mockReturnValue(service);
+      vi.spyOn(gatewayBindings, "discoverManagedGatewayBindings").mockImplementation(
+        async (_env, options) => {
+          if (scenario === "incomplete inventory") {
+            if (options?.requireComplete) {
+              throw new Error("Managed Gateway inventory could not be completely inspected.");
+            }
+            return [];
+          }
+          return [...(options?.includeInvoking ? [{ env }] : []), sibling];
+        },
+      );
+      const readLocation = vi
+        .spyOn(serviceFiles, "readSystemdServiceCommandLocation")
+        .mockImplementation(async (_env, readTarget) => {
+          if (readTarget === target) {
+            if (scenario === "unknown" || scenario === "recovered disjoint") {
+              throw new Error("sibling location unavailable");
+            }
+            return { kind: "command", command: command(root) };
+          }
+          return { kind: "command", command: command(invoking) };
+        });
+      vi.spyOn(gatewayLocks, "readActiveGatewayLockIdentity").mockResolvedValue(undefined);
+      const effect = vi.fn(async () => "published");
+      const publication = withGatewayRuntimeArtifactPublication(
+        { root, env, timeoutMs: 1_000, assertCurrent() {} },
+        effect,
+      );
+      if (scenario === "recovered disjoint") {
+        await expect(publication).resolves.toBe("published");
+        expect(effect).toHaveBeenCalledOnce();
+      } else {
+        await expect(publication).rejects.toMatchObject({ reason: "runtime-artifact-publication" });
+        expect(effect).not.toHaveBeenCalled();
+      }
+      if (scenario !== "incomplete inventory") {
+        expect(readLocation).toHaveBeenCalledWith(sibling.env, target);
+        expect(service.readCommand).toHaveBeenCalledWith(
+          sibling.env,
+          expect.objectContaining({ systemdReadTarget: target }),
+        );
+      }
+      for (const mutation of [service.stop, service.start, service.restart, service.install]) {
+        expect(mutation).not.toHaveBeenCalled();
+      }
+    }),
+);
