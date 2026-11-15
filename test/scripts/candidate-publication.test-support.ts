@@ -12,11 +12,11 @@ import {
   publicationSourceRequest,
   type PublicationSelection,
 } from "../../scripts/full-release-publication-contract.mjs";
-import { verifyReceiptRecoveryAuthority } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   composeReleaseAttemptJobs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,

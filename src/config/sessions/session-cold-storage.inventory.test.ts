@@ -20,7 +20,7 @@ import {
   historicalId,
   maintenanceConfig,
 } from "./session-cold-storage.test-support.js";
-import { historyLane, targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { historyLane, sessionStoreLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 let fixture: Awaited<ReturnType<typeof createSessionColdStorageFixture>>;
@@ -107,8 +107,8 @@ it("refuses a replaced source while its worker inventory is delayed", async () =
   await fs.mkdir(path.dirname(missing), { recursive: true });
   const entered = createDeferredCore();
   const release = createDeferredCore();
-  const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
-  vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+  const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+  vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
     const reply = await run(...args);
     if (
       reply.ok &&

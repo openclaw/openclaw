@@ -96,10 +96,73 @@ describe("state-dir-gateway-check", () => {
     expect(mocks.readServiceCommand.mock.calls[0]?.[1]).toMatchObject({ requireEffective: true });
   });
 
+  const selectorKey =
+    process.platform === "darwin"
+      ? "OPENCLAW_LAUNCHD_LABEL"
+      : process.platform === "win32"
+        ? "OPENCLAW_WINDOWS_TASK_NAME"
+        : "OPENCLAW_SYSTEMD_UNIT";
+
+  it.each([
+    ["names an inherited selector for another service", "production-gateway", true],
+    ["keeps the uninstall advice for this profile's own service", undefined, false],
+  ] as const)("%s", async (_name, selector, named) => {
+    const canonicalRoot = await fs.realpath(root);
+    vi.stubEnv("OPENCLAW_PROFILE", "beta");
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(canonicalRoot, "beta"));
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(canonicalRoot, "beta", "openclaw.json"));
+    const {
+      resolveGatewayLaunchAgentLabel,
+      resolveGatewaySystemdServiceName,
+      resolveGatewayWindowsTaskName,
+    } = await import("../daemon/constants.js");
+    const ownService =
+      process.platform === "darwin"
+        ? resolveGatewayLaunchAgentLabel("beta")
+        : process.platform === "win32"
+          ? // Root prefixes and casing name the same task.
+            `\\${resolveGatewayWindowsTaskName("beta").toUpperCase()}`
+          : resolveGatewaySystemdServiceName("beta");
+    vi.stubEnv(selectorKey, selector ?? ownService);
+    serviceEnv({ OPENCLAW_STATE_DIR: path.join(canonicalRoot, "production") });
+
+    const outcome = await check();
+
+    expect(outcome.kind).toBe("refuse");
+    const message = outcome.kind === "refuse" ? outcome.message : "";
+    expect(message).toContain("Fix: run OPENCLAW_STATE_DIR=");
+    expect(message).toContain("uninstall or reconfigure");
+    if (named) {
+      expect(message).toContain(
+        `This shell selects that service with ${selectorKey}=production-gateway`,
+      );
+      expect(message).toContain(`remove ${selectorKey} from this shell's environment`);
+    } else {
+      expect(message).not.toContain("This shell selects");
+    }
+  });
+
   it("allows an offline command and does not probe an ordinary transport failure", async () => {
     await expect(check()).resolves.toEqual({ kind: "allow" });
     expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
+
+  it.runIf(process.platform === "linux")(
+    "does not suggest clearing a selector for this profile's legacy systemd unit",
+    async () => {
+      const canonicalRoot = await fs.realpath(root);
+      vi.stubEnv("OPENCLAW_PROFILE", "beta");
+      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(canonicalRoot, "beta"));
+      vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(canonicalRoot, "beta", "openclaw.json"));
+      vi.stubEnv("OPENCLAW_SYSTEMD_UNIT", "openclaw-beta.service");
+      serviceEnv({ OPENCLAW_STATE_DIR: path.join(canonicalRoot, "legacy") });
+
+      const outcome = await check();
+
+      expect(outcome.kind).toBe("refuse");
+      expect(outcome.kind === "refuse" ? outcome.message : "").not.toContain("This shell selects");
+    },
+  );
 
   it.each(["error", "missing home"])(
     "warns without inferring paths or exposing %s",

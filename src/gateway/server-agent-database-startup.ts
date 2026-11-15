@@ -76,13 +76,15 @@ export function activateGatewayAgentDatabaseStartup(params: {
           await import("../state/agent-database-startup-verification.js");
         await verifyAgentDatabaseStartupIntegrity({
           ...input,
-          assertCurrent: createPreparationGuard(
-            input.agentId,
-            input.paths,
-            input.env,
-            input.signal,
-            input.assertCurrent,
-          ),
+          assertCurrent: input.configurationBound
+            ? createPreparationGuard(
+                input.agentId,
+                input.paths,
+                input.env,
+                input.signal,
+                input.assertCurrent,
+              )
+            : input.assertCurrent,
         });
       }),
     captureReadAdmission: ({ agentId, paths, env, signal, assertCurrent }) =>

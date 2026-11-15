@@ -10,7 +10,7 @@ import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../infra/sqlite-worker-identity.js";
-import { getQueueSize } from "../process/command-queue.js";
+import { getCommandLaneSnapshot } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
 import { captureAgentDatabaseAdmission } from "../state/agent-database-admission.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
@@ -47,6 +47,7 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
       let complete = false;
       let delayMs = 250;
       let backfill: SessionTranscriptFactsBackfill | undefined;
+      let deferrals = 0;
       scheduleGatewayIdleTask({
         id: `maintenance:transcript-facts:${database.path}`,
         scheduler: params.scheduler,
@@ -55,7 +56,21 @@ export function createGatewaySessionFactsBackfillScheduler(params: {
         retryDelayMs: 1_000,
         waitForReady: params.waitForReady,
         isClosing: () => complete || params.signal.aborted,
-        isBusy: () => getQueueSize(CommandLane.RestartRecovery) > 0,
+        // Resumed turns stay active in this lane for hours; only recovery work still
+        // waiting for a slot defers the pass. Record a long wait instead of parking silently.
+        isBusy: () => {
+          const queued = getCommandLaneSnapshot(CommandLane.RestartRecovery).queuedCount;
+          if (queued === 0) {
+            deferrals = 0;
+            return false;
+          }
+          if (++deferrals === 60) {
+            params.log.info(
+              `session: transcript facts backfill waiting for ${queued} queued restart-recovery turn(s)`,
+            );
+          }
+          return true;
+        },
         log: params.log,
         errorMessage: "Transcript facts backfill failed",
         run: async (signal) => {

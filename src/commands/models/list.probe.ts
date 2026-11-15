@@ -73,11 +73,7 @@ export type AuthProbeStatus =
 /** Reason code for probes that never reached a model call. */
 export type AuthProbeReasonCode =
   | "excluded_by_auth_order"
-  | "missing_credential"
-  | "expired"
-  | "invalid_expires"
-  | "unresolved_ref"
-  | "ineligible_profile"
+  | keyof typeof ELIGIBILITY_PROBE_ERRORS
   | "no_model";
 
 export type AuthProbeResult = {
@@ -137,6 +133,7 @@ export type AuthProbeOptions = {
 
 const ELIGIBILITY_PROBE_ERRORS = {
   expired: "token credentials are expired.",
+  refresh_failed: "the OAuth refresh failed; sign in again.",
   invalid_expires: "token expires must be a positive Unix ms timestamp.",
   missing_credential: "no inline credential or SecretRef is configured.",
   unresolved_ref: "configured SecretRef could not be resolved.",
@@ -149,6 +146,7 @@ function mapEligibilityReasonToProbeReasonCode(
   switch (reasonCode) {
     case "missing_credential":
     case "expired":
+    case "refresh_failed":
     case "invalid_expires":
     case "unresolved_ref":
       return reasonCode;

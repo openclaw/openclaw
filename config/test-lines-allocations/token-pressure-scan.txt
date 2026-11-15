@@ -1,0 +1,2 @@
+# Exact added lines: deterministic token-pressure equivalence corpus (2,060 strings, seven ratios).
+43

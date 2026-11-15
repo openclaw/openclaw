@@ -113,6 +113,11 @@ export const pluginInvocationContext = resolveGlobalSingleton(
   () => new AsyncLocalStorage<PluginInvocationContext>(),
 );
 
+/** Host-owned work admits a fresh plugin call without inheriting a finished turn's lease. */
+export function runOutsidePluginInvocationScope<T>(run: () => T): T {
+  return pluginInvocationContext.exit(() => pluginInstanceInvocation.exit(run));
+}
+
 /** Compatibility query for callers holding a published plugin invocation context. */
 export function currentPluginWorkHoldsPendingReplacement(): boolean {
   return (

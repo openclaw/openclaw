@@ -290,7 +290,9 @@ function createTabFence(page: Page, session: CDPSession) {
       }
       // Claims are fixed at arrival: a request never moves to a later invocation's grant.
       const claims = [...invocations];
-      const operation = claims.length > 0 ? handle(event, claims) : enforceStanding(target, event);
+      const operation = (
+        claims.length > 0 ? handle(event, claims) : enforceStanding(target, event)
+      ).catch(() => {});
       for (const invocation of claims) {
         invocation.inFlight.add(operation);
       }

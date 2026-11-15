@@ -605,7 +605,7 @@ export function projectionOperations(
       await settle(true);
     },
     finishRestore: cleanupAccepted,
-    prepareArchive: async (snapshotCommit: string) => {
+    prepareArchive: async () => {
       await settle();
       const merge = await runGit(
         owner.worktree.path,
@@ -617,42 +617,44 @@ export function projectionOperations(
           "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
-      await assertLocalWorkspaceDirectory(sourcePath("canonical"));
-      const archive = await readManifest({
-        kind: "archive",
-        canonicalRoot: owner.worktree.path,
-        archiveRoot: owner.worktree.repoRoot,
-        snapshotCommit,
-      });
-      if (archive.kind !== "archive") {
-        throw new Error("Local workspace archive preparation is missing");
-      }
-      if (!archive.overlay) {
-        return;
-      }
-      const { base: archiveBase, accepted } = archive.overlay;
-      const resultRef = workerWorkspaceResultRef(randomUUID());
-      // Keep accepted directory membership until the receipt owns it. Recovery
-      // must not mistake derived children for deletion after interrupted staging.
-      await update({
-        pending_ref: resultRef,
-        pending_target: "canonical",
-        checkpoint_json: null,
-      });
-      await rejection.settle(async () => {
-        await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
-          root: owner.worktree.repoRoot,
-          stagingRoot: current().projection_path,
-          stagedResultRef: resultRef,
-          baseManifestRaw: archiveBase.rawManifest,
-          baseManifestRef: archiveBase.manifestRef,
-          currentManifestRaw: accepted.rawManifest,
-          currentManifestRef: accepted.manifestRef,
-          buildCacheInputs: await buildCacheInputs(),
-          assertCurrent,
+      return async (snapshotCommit: string) => {
+        await assertLocalWorkspaceDirectory(sourcePath("canonical"));
+        const archive = await readManifest({
+          kind: "archive",
+          canonicalRoot: owner.worktree.path,
+          archiveRoot: owner.worktree.repoRoot,
+          snapshotCommit,
         });
-      }, current().baseline_ref ?? undefined);
-      current();
+        if (archive.kind !== "archive") {
+          throw new Error("Local workspace archive preparation is missing");
+        }
+        if (!archive.overlay) {
+          return;
+        }
+        const { base: archiveBase, accepted } = archive.overlay;
+        const resultRef = workerWorkspaceResultRef(randomUUID());
+        // Keep accepted directory membership until the receipt owns it. Recovery
+        // must not mistake derived children for deletion after interrupted staging.
+        await update({
+          pending_ref: resultRef,
+          pending_target: "canonical",
+          checkpoint_json: null,
+        });
+        await rejection.settle(async () => {
+          await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+            root: owner.worktree.repoRoot,
+            stagingRoot: current().projection_path,
+            stagedResultRef: resultRef,
+            baseManifestRaw: archiveBase.rawManifest,
+            baseManifestRef: archiveBase.manifestRef,
+            currentManifestRaw: accepted.rawManifest,
+            currentManifestRef: accepted.manifestRef,
+            buildCacheInputs: await buildCacheInputs(),
+            assertCurrent,
+          });
+        }, current().baseline_ref ?? undefined);
+        current();
+      };
     },
     expire: async (retireSnapshot?: (assertCurrent: () => void) => Promise<void>) => {
       const selected = rejection.assertNotRejected();
