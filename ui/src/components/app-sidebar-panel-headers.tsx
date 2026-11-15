@@ -1,5 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
+import { titleForRoute } from "../app-navigation.ts";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -59,10 +60,10 @@ export function SidebarPanelFilter(props: {
   );
 }
 
-export function SidebarPagesHeader(props: { host: AppSidebarRenderHost }) {
+export function SidebarDashboardsHeader(props: { host: AppSidebarRenderHost }) {
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
-      <span class="sidebar-panel-header__title">{t("nav.pages")}</span>
+      <span class="sidebar-panel-header__title">{titleForRoute("dashboards", t)}</span>
     </SidebarPanelHeader>
   );
 }

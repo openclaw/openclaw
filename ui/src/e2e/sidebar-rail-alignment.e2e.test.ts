@@ -1,5 +1,4 @@
 import { expect, it } from "vitest";
-import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { captureFrame } from "./sidebar-assertions.test-support.ts";
@@ -129,7 +128,7 @@ suite.define(() => {
               2;
             return [
               ...element.querySelectorAll<HTMLElement>(
-                ".sidebar-agent-card__main, .sidebar-new-session, [data-navigation-view], .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
+                ".sidebar-agent-card__main, .sidebar-new-session, [data-navigation-view], .sidebar-rail__more, .sidebar-brand__search, .sidebar-footer-bar__home, .sidebar-issues-button, .sidebar-identity-card",
               ),
             ].map((control) => {
               const box = control.getBoundingClientRect();
@@ -208,18 +207,7 @@ suite.define(() => {
             ".sidebar-sessions .sidebar-recent-session",
             ".sidebar-recent-session__name",
           );
-          await page.locator('[data-navigation-view="pages"]').click();
-          await measure("pages", ".sidebar-pages__entry .nav-item", ".nav-item__text");
-          await evaluateControlUiContext(
-            page,
-            ({ navigation }, entries) => navigation.update({ sidebarEntries: entries }),
-            ["session:agent:main:notes"],
-          );
-          await measure(
-            "pinned",
-            ".sidebar-pages__entry .sidebar-recent-session",
-            ".sidebar-recent-session__name",
-          );
+          // Pages is a menu beside the rail now, outside the panel's text column.
           await page.locator('[data-navigation-view="online"]').click();
           await measure("users", ".sidebar-online__person", ".sidebar-online__person-name");
           for (const text of columns) {

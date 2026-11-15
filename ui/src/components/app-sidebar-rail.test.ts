@@ -151,7 +151,7 @@ describe("personal navigation rail", () => {
     const { sidebar, dom } = await fixture();
     expect(
       [...dom.all("[data-navigation-view]")].map((button) => button.dataset.navigationView),
-    ).toEqual(["sessions", "online", "pages"]);
+    ).toEqual(["sessions", "online"]);
     const frame = dom.query("aside.sidebar")!;
     const bottom = dom.query(".sidebar-rail__bottom")!;
     expect(
@@ -164,10 +164,11 @@ describe("personal navigation rail", () => {
     expect(dom.present(".nav-item--home", ".sidebar-shell__footer .sidebar-identity-card")).toEqual(
       [false, false],
     );
-    await click(sidebar, '[data-navigation-view="pages"]');
+    // "More" opens the page menu and leaves the open Sessions sidebar alone.
+    await click(sidebar, "[data-rail-more]");
     await vi.dynamicImportSettled();
-    await waitForSolid(() => expect(dom.query(".sidebar-pages")).not.toBeNull());
-    expect(dom.query(".sidebar-session-content")).toBeNull();
+    await waitForSolid(() => expect(dom.query(".sidebar-pages-menu")).not.toBeNull());
+    expect(dom.query(".sidebar-session-content")).not.toBeNull();
     expect(dom.query("aside.sidebar")).toBe(frame);
     expect(dom.query(".sidebar-rail__bottom")).toBe(bottom);
     const identity = bottom.querySelector(".sidebar-identity-card")!;
@@ -352,12 +353,18 @@ describe("personal navigation rail", () => {
 
   it("supports native page drop, direct pin reordering, and context-menu unpin with unloaded refs retained", async () => {
     const retained = ["person:offline", "session-rail:agent:other:unloaded"];
-    const { sidebar, dom } = await fixture({
-      sidebarEntries: retained,
-      navigationView: "pages",
-    });
+    const { sidebar, dom } = await fixture({ sidebarEntries: retained });
+    await click(sidebar, "[data-rail-more]");
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"]')).not.toBeNull(),
+    );
     const transfer = createDataTransferStub();
-    drag(dom.query('.sidebar-pages [data-sidebar-entry="route:usage"]')!, "dragstart", transfer);
+    drag(
+      dom.query('.sidebar-pages-menu [data-sidebar-entry="route:usage"]')!,
+      "dragstart",
+      transfer,
+    );
     drag(dom.query(".sidebar-rail__pins")!, "drop", transfer);
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([...retained, "route:usage"]);
@@ -428,11 +435,9 @@ describe("personal navigation rail", () => {
     });
     sidebar.onToggleSidebar = toggle;
     for (const [view, collapsed] of [
-      ["pages", false],
-      ["pages", true],
+      ["online", false],
+      ["online", false],
       ["sessions", false],
-      ["online", false],
-      ["online", false],
     ] as const) {
       await click(sidebar, `[data-navigation-view="${view}"]`);
       expect(sidebar).toMatchObject({ navigationView: view, navigationCollapsed: collapsed });
@@ -440,7 +445,12 @@ describe("personal navigation rail", () => {
         collapsed ? undefined : sidebar.querySelector(`[data-navigation-view="${view}"]`),
       );
     }
-    expect(toggle).toHaveBeenCalledTimes(2);
+    expect(toggle).not.toHaveBeenCalled();
+    // A view control reopens a collapsed panel.
+    await update(sidebar, { navigationCollapsed: true });
+    await click(sidebar, '[data-navigation-view="online"]');
+    expect(sidebar).toMatchObject({ navigationView: "online", navigationCollapsed: false });
+    expect(toggle).toHaveBeenCalledOnce();
     await update(sidebar, { navigationVisible: false });
     expect(sidebar.activeNavigationViewElement()).toBeUndefined();
     await update(sidebar, { navigationVisible: true });
@@ -457,10 +467,10 @@ describe("personal navigation rail", () => {
     sidebar.navigationCollapsed = true;
     const toggle = vi.fn();
     await update(sidebar, { onToggleSidebar: toggle });
-    for (const view of ["sessions", "pages"]) {
+    for (const view of ["sessions", "online"]) {
       await click(sidebar, `[data-navigation-view="${view}"]`);
     }
-    expect(sidebar.navigationView).toBe("pages");
+    expect(sidebar.navigationView).toBe("online");
     expect(toggle).not.toHaveBeenCalled();
   });
 
@@ -906,30 +916,6 @@ describe("personal navigation rail", () => {
     },
   );
 
-  it("discovers MCP apps only while Pages is mounted", async () => {
-    const { sidebar, gateway } = await fixture();
-    const request = vi.spyOn(gateway.gateway.snapshot.client!, "request").mockResolvedValue({
-      servers: [],
-    });
-    const discoveries = () =>
-      request.mock.calls.filter(([method]) => method === "mcp.app.discover");
-    gateway.publish({ hello: gatewayHelloForMethods(["mcp.app.discover"]) });
-    await sidebar.updateComplete;
-    gateway.publishEvent("config.changed", {});
-    await sidebar.updateComplete;
-    expect(discoveries()).toHaveLength(0);
-
-    await click(sidebar, '[data-navigation-view="pages"]');
-    await waitForSolid(() => expect(discoveries()).toHaveLength(1));
-    await click(sidebar, '[data-navigation-view="sessions"]');
-    gateway.publishEvent("config.changed", {});
-    await sidebar.updateComplete;
-    expect(discoveries()).toHaveLength(1);
-
-    await click(sidebar, '[data-navigation-view="pages"]');
-    await waitForSolid(() => expect(discoveries()).toHaveLength(2));
-  });
-
   it("does not recreate catalog observations in an update queued before removal", async () => {
     const { sidebar, sessions, gateway } = await fixture();
     const parent = sidebar.parentElement!;
@@ -954,14 +940,14 @@ describe("personal navigation rail", () => {
         ([query]) => query.includeOwnerSessionCounts || query.source === "dashboard",
       );
     expect(catalogQueries()).toHaveLength(0);
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "dashboards";
     sidebar.remove();
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(0);
     parent.append(sidebar.hostElement);
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(1);
-    expect(sidebar.querySelector(".sidebar-pages")).not.toBeNull();
+    await waitForSolid(() => expect(sidebar.querySelector(".sidebar-dashboards")).not.toBeNull());
     sidebar.navigationView = "sessions";
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(1);
@@ -972,12 +958,12 @@ describe("personal navigation rail", () => {
     gateway.publish({ phase: "connected" });
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(1);
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "dashboards";
     await sidebar.updateComplete;
     expect(catalogQueries()).toHaveLength(2);
   });
 
-  it("observes Pages when Solid mounts the sidebar into a connected application", async () => {
+  it("observes Dashboards when Solid mounts the sidebar into a connected application", async () => {
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
     const sessions = createSessionsHarness("main", ["agent:main:dashboard"]);
     sessions.sessions.state.result!.sessions[0]!.label = "Team board";
@@ -989,7 +975,7 @@ describe("personal navigation rail", () => {
         createComponent(ApplicationProvider, {
           value: context,
           get children() {
-            return createComponent(AppSidebar, { navigationView: "pages" });
+            return createComponent(AppSidebar, { navigationView: "dashboards" });
           },
         }),
       { container: provider },
@@ -997,7 +983,7 @@ describe("personal navigation rail", () => {
     await waitForSolid(() => {
       expect(
         view.container.querySelector(
-          '.sidebar-pages [data-sidebar-entry="session:agent:main:dashboard"]',
+          '.sidebar-dashboards [data-sidebar-entry="session:agent:main:dashboard"]',
         )?.textContent,
       ).toContain("Team board");
     });
@@ -1012,15 +998,16 @@ describe("personal navigation rail", () => {
       hasMore: true,
       nextOffset: 7,
     });
-    sidebar.navigationView = "pages";
+    sidebar.navigationView = "dashboards";
     await settleLitElement(sidebar);
     expect(
-      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="session:agent:main:dashboard"]')
-        ?.textContent,
+      sidebar.querySelector(
+        '.sidebar-dashboards [data-sidebar-entry="session:agent:main:dashboard"]',
+      )?.textContent,
     ).toContain("Team board");
     const pending = createDeferred<typeof result>();
     sessions.list.mockClear().mockReturnValueOnce(pending.promise);
-    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-pages > .btn")!;
+    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-dashboards > .btn")!;
     more.click();
     more.click();
     expect(sessions.list).toHaveBeenCalledExactlyOnceWith(
@@ -1034,10 +1021,10 @@ describe("personal navigation rail", () => {
     await pending.promise;
     await settleLitElement(sidebar);
     expect(
-      sidebar.querySelector('.sidebar-pages [data-sidebar-entry="session:agent:main:second"]')
+      sidebar.querySelector('.sidebar-dashboards [data-sidebar-entry="session:agent:main:second"]')
         ?.textContent,
     ).toContain("Second board");
-    expect(sidebar.querySelector(".sidebar-pages > .btn")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-dashboards > .btn")).toBeNull();
   });
 
   it("stores only stable person references", () => {

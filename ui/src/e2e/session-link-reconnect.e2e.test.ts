@@ -55,9 +55,7 @@ suite.define(() => {
         await link
           .and(page.locator(`.markdown-session-link--titled[data-session-key="${destinationKey}"]`))
           .waitFor({ state: "visible" });
-        await page.locator('openclaw-app-sidebar [data-navigation-view="pages"]').click();
         const activity = page.locator('openclaw-app-sidebar a[href="/activity"]');
-        await activity.waitFor({ state: "visible" });
         const initialHistoryLength = await page.evaluate(() => history.length);
         const initialTitleResolutions = (await requests("sessions.resolve", resolutionMatch))
           .length;
@@ -75,6 +73,8 @@ suite.define(() => {
         await gateway.closeLatest(4000, "session subscription recovery failed");
         await gateway.waitForRequest("connect", { after: previousConnects });
         if (navigateAway) {
+          // Activity is in the rail's page menu, which closes on any outside click.
+          await page.locator("openclaw-app-sidebar [data-rail-more]").click();
           await activity.click();
           await expect.poll(() => new URL(page.url()).pathname).toBe("/activity");
         }

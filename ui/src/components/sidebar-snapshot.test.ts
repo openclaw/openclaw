@@ -388,12 +388,12 @@ describe("sidebar snapshot lifecycle", () => {
   });
 
   it.each(["before", "after"] as const)(
-    "rejects a Pages snapshot when its agent filter changes %s restoration",
+    "rejects a Dashboards snapshot when its agent filter changes %s restoration",
     async (timing) => {
       const store = new SessionSnapshotStore();
       store.connect();
       disposers.push(() => store.disconnect());
-      const pages = { ...model, navigationView: "pages" as const, pageScopeId: "main" };
+      const pages = { ...model, navigationView: "dashboards" as const, pageScopeId: "main" };
       await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
       const test = fixture("main", timing === "before" ? "other" : "main");
       disposers.push(
@@ -422,11 +422,15 @@ describe("sidebar snapshot lifecycle", () => {
     },
   );
 
-  it("keeps an all-agent Pages snapshot when only the selected chat agent changes", async () => {
+  it("keeps an all-agent Dashboards snapshot when only the selected chat agent changes", async () => {
     const store = new SessionSnapshotStore();
     store.connect();
     disposers.push(() => store.disconnect());
-    const pages: SidebarSnapshotModel = { ...model, navigationView: "pages", pageScopeId: null };
+    const pages: SidebarSnapshotModel = {
+      ...model,
+      navigationView: "dashboards",
+      pageScopeId: null,
+    };
     await store.writeSidebar(sidebarSnapshotScopeKey(scope), pages, parseSidebarSnapshot);
     const test = fixture();
     disposers.push(

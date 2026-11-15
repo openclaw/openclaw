@@ -329,7 +329,7 @@ export function createSidebarSnapshot(host: {
     return (
       model.mode === host.sidebarAgentsMode &&
       (model.mode !== "chip" || model.roster?.agentId === host.expandedAgentId()) &&
-      (model.navigationView !== "pages" ||
+      (model.navigationView !== "dashboards" ||
         model.pageScopeId === host.sessionDataContext?.agentSelection.state.scopeId)
     );
   }

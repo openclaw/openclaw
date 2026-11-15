@@ -72,15 +72,22 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
     })
     .toBeLessThan(0.5);
   expect(await customize.count()).toBe(0);
-  await selected(false, builtInLink.click());
-  await selected(true, pluginLink.click());
+  // Each choice closes the page menu, so reopen it before the next one.
+  const choose = async (link: typeof pluginLink) => {
+    if ((await pagesButton.getAttribute("aria-expanded")) !== "true") {
+      await pagesButton.click();
+    }
+    await link.click();
+  };
+  await selected(false, choose(builtInLink));
+  await selected(true, choose(pluginLink));
   await selected(false, page.goBack());
   await selected(true, page.goForward());
   await page.goto(`${suite.server.baseUrl}plugin?p.filter=review&id=proof&plugin=ui-fixture`);
   await revisionOne.waitFor();
   await pagesButton.click();
   await expect.poll(() => pluginLink.getAttribute("aria-current")).toBe("page");
-  await selected(false, builtInLink.click());
+  await selected(false, choose(builtInLink));
   expect(await customize.count()).toBe(0);
   await page.goto(`${suite.server.baseUrl}settings/plugins?tab=advanced`);
   await plugins.waitFor();
@@ -96,8 +103,7 @@ async function checkNavigation({ page }: { page: Page }, admin: boolean) {
   await button("Reload plugin UI").click();
   await gateway.waitForRequest("plugins.controlUi.reload");
   await button("Back to app").click();
-  await pagesButton.click();
-  await pluginLink.click();
+  await choose(pluginLink);
   await heading("Fixture revision two").waitFor();
   expect(pageErrors).toEqual([]);
 }

@@ -34,7 +34,7 @@ export function isSidebarSnapshotSettled(host: AppSidebarRenderHost): boolean {
   if (!host.connected || !context) {
     return false;
   }
-  if (host.navigationView === "pages") {
+  if (host.navigationView === "dashboards") {
     const pages = host.navigationCatalog.dashboards;
     return pages?.loading === false && (pages.readSucceeded === true || pages.error !== null);
   }
@@ -104,7 +104,7 @@ export function captureSidebarSnapshotModel(
   const roster = rosterActivityStore(context).snapshot;
   if (
     host.sidebarSnapshot ||
-    (host.navigationView === "pages" &&
+    (host.navigationView === "dashboards" &&
       host.navigationCatalog.dashboards?.readSucceeded !== true) ||
     host.sessionData.sessionListError !== null ||
     context.sessions.state.error !== null ||

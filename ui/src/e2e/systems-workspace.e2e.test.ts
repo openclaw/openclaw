@@ -191,8 +191,8 @@ suite.define(() => {
         };
         const navigate = async (path: string) => {
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-          await page.locator('[data-navigation-view="pages"]').click();
-          await page.locator(`.sidebar-pages a[href$="/${path}"]`).click();
+          await page.locator("[data-rail-more]").click();
+          await page.locator(`.sidebar-pages-menu a[href$="/${path}"]`).click();
         };
         await page.goto(suite.server.baseUrl + "systems");
         await page
@@ -214,8 +214,8 @@ suite.define(() => {
             .locator("main.content")
             .evaluate((element) => getComputedStyle(element).paddingInline);
         expect(await inset()).toBe("0px");
+        // The drawer opens on Sessions; tapping its avatar there would open the agent menu.
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        await page.locator('[data-navigation-view="sessions"]').click();
         await page.locator('.sidebar-recent-session[data-session-key="agent:main:task-0"]').click();
         await page.locator(".chat-thread").waitFor();
         expect(await inset()).toBe("0px");
@@ -698,7 +698,8 @@ suite.define(() => {
           // The middle column no longer includes the navigation stack: overflow its own roster.
           await installSystemsGateway(page, 40);
           await page.goto(suite.server.baseUrl + route);
-          await page.locator('[data-navigation-view="pages"]').click();
+          // Another rail view replaces the route's own sidebar until Sessions returns.
+          await page.locator('[data-navigation-view="online"]').click();
           await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
           await page.locator('[data-navigation-view="sessions"]').click();
           const home = page.locator(".sidebar-rail__bottom .sidebar-footer-bar__home");
@@ -789,10 +790,12 @@ suite.define(() => {
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
       expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
-      await page.locator('[data-navigation-view="pages"]').click();
-      await page.locator('.sidebar-pages a[href$="/dashboards"]').click();
+      await page.locator("[data-rail-more]").click();
+      await page.locator('.sidebar-pages-menu a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
-      await page.locator('.sidebar-pages a[href$="/systems"]').click();
+      await page.locator(".sidebar-pages-menu").waitFor({ state: "hidden" });
+      await page.locator("[data-rail-more]").click();
+      await page.locator('.sidebar-pages-menu a[href$="/systems"]').click();
       await page.locator('[data-navigation-view="sessions"]').click();
       await inventory.waitFor();
       await expect

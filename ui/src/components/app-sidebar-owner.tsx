@@ -10,7 +10,7 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { SidebarOnlineHeader, SidebarPagesHeader } from "./app-sidebar-panel-headers.tsx";
+import { SidebarDashboardsHeader, SidebarOnlineHeader } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
@@ -64,8 +64,8 @@ const SidebarAgentRoster = lazy(() => import("./sidebar-agent-roster.tsx"), {
 const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
   export: "SidebarPinnedSession",
 });
-const SidebarPages = lazy(() => import("./app-sidebar-pages.tsx"), {
-  export: "SidebarPages",
+const SidebarDashboards = lazy(() => import("./app-sidebar-pages.tsx"), {
+  export: "SidebarDashboards",
 });
 
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
@@ -444,8 +444,18 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     hidePersonalSidebarCatalog(this, catalogId);
   }
 
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): JSX.Element {
-    const row = <SessionTree host={this} session={session()} listItem={false} />;
+  renderPinnedSidebarSession(
+    session: () => SidebarRecentSession,
+    fallbackSubtitle?: () => string | undefined,
+  ): JSX.Element {
+    const row = (
+      <SessionTree
+        host={this}
+        session={session()}
+        listItem={false}
+        fallbackSubtitle={fallbackSubtitle?.()}
+      />
+    );
     return (
       <Show when={this.sidebarAgentsMode === "roster"} fallback={row}>
         <SidebarViewBoundary fallback={row}>
@@ -548,10 +558,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const SidebarFrame = () => {
       const scrollRef = scroll.createRef();
       const rail = renderSidebarRail(this);
-      const Pages = () => (
+      const Dashboards = () => (
         <SidebarViewBoundary>
           <SidebarReady />
-          <SidebarPages host={this} />
+          <SidebarDashboards host={this} />
         </SidebarViewBoundary>
       );
       const toolbar = renderSessionListToolbar(this);
@@ -580,14 +590,14 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 {/* Every panel header sits above the scroller so it stays pinned, keeps
                   one geometry across views, and the scroll fade starts below it. */}
                 <Show
-                  when={this.navigationView === "pages"}
+                  when={this.navigationView === "dashboards"}
                   fallback={
                     <Show when={this.navigationView === "online"} fallback={toolbar}>
                       <SidebarOnlineHeader host={this} />
                     </Show>
                   }
                 >
-                  <SidebarPagesHeader host={this} />
+                  <SidebarDashboardsHeader host={this} />
                 </Show>
                 <div
                   ref={scrollRef}
@@ -595,7 +605,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   onScroll={scroll.onScroll}
                 >
                   <Show
-                    when={this.navigationView === "pages"}
+                    when={this.navigationView === "dashboards"}
                     fallback={
                       <Show
                         when={this.navigationView === "online"}
@@ -625,7 +635,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       </Show>
                     }
                   >
-                    <Pages />
+                    <Dashboards />
                   </Show>
                 </div>
                 <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>

@@ -42,6 +42,11 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   );
 }
 
+/** Section pages own a sidebar of their own; other pages run full width. */
+export function sidebarSectionForRoute(route: NavigationRouteId): "dashboards" | undefined {
+  return route === "dashboards" ? "dashboards" : undefined;
+}
+
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the
 // Sessions entry for both routes, mirroring the Plugins hub behavior.
 export function isSessionsHubRoute(routeId: NavigationRouteId): boolean {

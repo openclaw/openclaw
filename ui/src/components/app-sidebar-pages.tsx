@@ -8,16 +8,112 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { nativeListener } from "../lib/solid-native-listener.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
-import { McpAppCatalog } from "./mcp-app-catalog.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 
-/** Pages is the accessible destination catalog, not another favorites list. */
-export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element {
+function PinToggle(props: { host: AppSidebarRenderHost; entry: string }) {
+  const pinned = () => props.host.sidebarEntries.includes(props.entry);
+  return (
+    <button
+      type="button"
+      class={["sidebar-pages__pin", { "sidebar-pages__pin--pinned": pinned() }]}
+      disabled={Boolean(props.host.sidebarSnapshot)}
+      aria-label={t(pinned() ? "nav.unpin" : "nav.pin")}
+      onClick={(event) => {
+        // Pinning keeps the surrounding menu open.
+        event.stopPropagation();
+        if (pinned()) {
+          props.host.sessionOrganizer.removeSidebarEntry(props.entry);
+        } else {
+          props.host.sessionOrganizer.writeSidebarEntryAt(props.entry, undefined, undefined);
+        }
+      }}
+    >
+      <Icon name="pin" />
+    </button>
+  );
+}
+
+/**
+ * The rail's "more" menu: every native page, a separator, then every plugin page,
+ * each with its pin toggle. Sessions, people and agents have their own sections.
+ */
+export function SidebarPagesMenu(props: {
+  host: AppSidebarRenderHost;
+  onNavigate: (entry: SidebarZoneEntry | null) => void;
+}): JSX.Element {
   const zone = createMemo(() => props.host.reconciledSidebarZone());
+  const routes = createMemo(() =>
+    SIDEBAR_NAV_ROUTES.filter((route) => props.host.sidebarMenus.isRouteEnabled(route))
+      .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
+      .map((route) => serializeSidebarEntry({ type: "route", route })),
+  );
+  const plugins = createMemo(() =>
+    [
+      ...new Set([
+        ...zone().pluginTabs.keys(),
+        ...props.host.pluginNavigation().map((entry) => entry.key),
+      ]),
+    ].map((key) => serializeSidebarEntry({ type: "plugin", key })),
+  );
+  const Entry = (entry: { key: string }) => {
+    // Allocate once per entry; the rendered link owns its reactive fields.
+    const content = renderAppSidebarPageEntry(
+      props.host,
+      parseSidebarEntry(entry.key)!,
+      () => zone().pluginTabs,
+    );
+    return (
+      <div class="sidebar-pages__entry">
+        {content}
+        <PinToggle host={props.host} entry={entry.key} />
+      </div>
+    );
+  };
+  return (
+    <nav
+      class="sidebar-pages sidebar-pages-menu"
+      aria-label={t("nav.pages")}
+      // Plugin links render in their own root, which delegated handlers do not see.
+      ref={nativeListener(
+        "click",
+        (event: MouseEvent) => {
+          const path = event.composedPath();
+          if (
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey ||
+            !path.some((target) => target instanceof Element && target.matches("a[href]"))
+          ) {
+            return;
+          }
+          const row = path.find(
+            (target): target is Element =>
+              target instanceof Element && target.hasAttribute("data-sidebar-entry"),
+          );
+          props.onNavigate(row ? parseSidebarEntry(row.getAttribute("data-sidebar-entry")) : null);
+        },
+        true,
+      )}
+    >
+      <For each={routes()}>{(key) => <Entry key={key} />}</For>
+      <Show when={plugins().length > 0}>
+        <span class="sidebar-pages-menu__separator" aria-hidden="true" />
+        <For each={plugins()}>{(key) => <Entry key={key} />}</For>
+      </Show>
+    </nav>
+  );
+}
+
+/** The Dashboards section: every managed dashboard, newest first, with its author and update. */
+export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.Element {
   const dashboards = () => props.host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     props.host.sidebarSnapshot
@@ -28,68 +124,37 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
           props.host.getSessionNavigationState().toSidebarSession(row),
         ),
   );
-  const rows = createMemo(() => {
-    const result = new Map(zone().sessionRows);
-    for (const row of dashboardRows()) {
-      result.set(row.key, row);
-    }
-    return result;
-  });
-  const entries = createMemo(() => {
-    const result = SIDEBAR_NAV_ROUTES.filter((route) =>
-      props.host.sidebarMenus.isRouteEnabled(route),
-    )
-      .toSorted((left, right) => titleForRoute(left, t).localeCompare(titleForRoute(right, t)))
-      .map((route) => serializeSidebarEntry({ type: "route", route }));
-    for (const key of new Set([
-      ...zone().pluginTabs.keys(),
-      ...props.host.pluginNavigation().map((entry) => entry.key),
-    ])) {
-      result.push(serializeSidebarEntry({ type: "plugin", key }));
-    }
-    for (const row of dashboardRows()) {
-      result.push(serializeSidebarEntry({ type: "session", key: row.key }));
-    }
-    return result;
-  });
+  const byline = (row: SidebarRecentSession) => {
+    const actor = row.owner?.actor;
+    const author = actor
+      ? props.host.sessionOwnerOptions.find(
+          (option) => option.type === actor.type && option.id === actor.id,
+        )?.label
+      : undefined;
+    const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : undefined;
+    return [author, updated].filter(Boolean).join(" · ") || undefined;
+  };
   return (
     <nav
-      class="sidebar-pages"
-      aria-label={t("nav.pages")}
+      class="sidebar-dashboards"
+      aria-label={titleForRoute("dashboards", t)}
       onDragOver={(event) => props.host.sessionOrganizer.handleSessionListDragOver(event)}
       onDrop={(event) => props.host.sessionOrganizer.handleSessionListDrop(event)}
     >
-      <McpAppCatalog surface="sidebar" />
-      <For each={entries()}>
-        {(key) => {
-          // Allocate once per entry; the rendered link owns its reactive fields.
-          const content = renderAppSidebarPageEntry(
-            props.host,
-            parseSidebarEntry(key)!,
-            rows,
-            () => zone().pluginTabs,
+      <For each={dashboardRows()}>
+        {(row) => {
+          const key = serializeSidebarEntry({ type: "session", key: row.key });
+          // Allocate once per row; the session row owns its reactive fields.
+          const content = props.host.renderPinnedSidebarSession(
+            () => row,
+            () => byline(row),
           );
           return (
             <div class="sidebar-pages__entry">
-              {content}
-              <button
-                type="button"
-                class={[
-                  "sidebar-pages__pin",
-                  { "sidebar-pages__pin--pinned": props.host.sidebarEntries.includes(key) },
-                ]}
-                disabled={Boolean(props.host.sidebarSnapshot)}
-                aria-label={t(props.host.sidebarEntries.includes(key) ? "nav.unpin" : "nav.pin")}
-                onClick={() => {
-                  if (props.host.sidebarEntries.includes(key)) {
-                    props.host.sessionOrganizer.removeSidebarEntry(key);
-                  } else {
-                    props.host.sessionOrganizer.writeSidebarEntryAt(key, undefined, undefined);
-                  }
-                }}
-              >
-                <Icon name="pin" />
-              </button>
+              <div class="sidebar-zone-entry" data-sidebar-entry={key}>
+                {content}
+              </div>
+              <PinToggle host={props.host} entry={key} />
             </div>
           );
         }}
@@ -111,15 +176,13 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
 function renderAppSidebarPageEntry(
   host: AppSidebarRenderHost,
   entry: SidebarZoneEntry,
-  sessionRows: () => ReadonlyMap<string, SidebarRecentSession>,
   pluginTabs: () => ReadonlyMap<string, GatewayControlUiPluginTab>,
 ): JSX.Element {
-  if (entry.type === "person") {
+  if (entry.type === "person" || entry.type === "session") {
     return undefined;
   }
   const serialized = serializeSidebarEntry(entry);
   const pluginTab = () => (entry.type === "plugin" ? pluginTabs().get(entry.key) : undefined);
-  const pinnedSession = () => (entry.type === "session" ? sessionRows().get(entry.key) : undefined);
   const content =
     entry.type === "route" ? (
       host.sidebarMenus.renderRoute(entry.route, host)
@@ -137,9 +200,7 @@ function renderAppSidebarPageEntry(
       >
         {(tab) => renderAppSidebarPluginTab(host, tab)}
       </Show>
-    ) : (
-      <Show when={pinnedSession()}>{(session) => host.renderPinnedSidebarSession(session)}</Show>
-    );
+    ) : undefined;
   const draggable = () =>
     !host.sidebarSnapshot && (entry.type === "route" || entry.type === "plugin");
   return (
