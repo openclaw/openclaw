@@ -1,0 +1,2 @@
+# Drive finalizeReplyAgentRun so the raw trace reply itself carries the retained-window estimate, plus per-call snapshot precedence.
+112
