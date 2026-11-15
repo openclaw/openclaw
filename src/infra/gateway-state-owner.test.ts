@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,6 +32,7 @@ import {
   captureGatewayStateOwner,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
+  getStateDatabaseSchemaLease,
   hasActiveGatewayStateOwner,
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
@@ -509,6 +511,30 @@ describe("Gateway state ownership", () => {
     expectExistence(false, first.path, stateDir);
     expect(fs.existsSync(root)).toBe(true);
     acquireGatewayStateOwner({ databasePath }).release();
+  });
+
+  it.each([false, true])("retains async schema scope through rejection=%s", async (reject) => {
+    const lease = schemaLease();
+    const failure = new Error("controlled schema preparation failure");
+    let inspectEscaped = () => getStateDatabaseSchemaLease(databasePath);
+    const operation = lease.run(async () => {
+      const inScope = AsyncLocalStorage.snapshot();
+      inspectEscaped = () => inScope(() => getStateDatabaseSchemaLease(databasePath));
+      await Promise.resolve();
+      expect(inspectEscaped()).toBe(lease);
+      assertStateDatabaseAccessAllowed(databasePath);
+      if (reject) {
+        throw failure;
+      }
+      return "prepared";
+    });
+    if (reject) {
+      await expect(operation).rejects.toBe(failure);
+    } else {
+      await expect(operation).resolves.toBe("prepared");
+    }
+    expect(inspectEscaped).toThrow("State schema maintenance scope is no longer current");
+    lease.run(() => assertStateDatabaseAccessAllowed(databasePath));
   });
 
   it.skipIf(process.platform === "win32").each([undefined, 0])(

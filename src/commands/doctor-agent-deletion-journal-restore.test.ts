@@ -290,7 +290,6 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
           expect(preview.warnings.join("\n")).toContain("automatically after verified backups");
           expect(preview.warnings.join("\n")).not.toContain("without activating held stores");
         }
-        const bytes = agentPaths.map((pathname) => fs.readFileSync(pathname));
         if (phase === "already-held") {
           // The old Doctor owner produces a real reconstruction receipt; remove only
           // the new optional observation field to exercise the published format.
@@ -316,11 +315,33 @@ it.each(["first-upgrade", "already-held", "upgraded-producer"])(
           expect(result.warnings.join("\n")).toContain("Automatically restored agent ayudante");
         }
         expect(recoveryHolds(env)).toEqual([]);
-        expect(agentPaths.map((pathname) => fs.readFileSync(pathname))).toEqual(bytes);
-        verifyBackups(result.changes, agentPaths, (database) => {
-          expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
-          expect(row(database, "SELECT count(*) AS n FROM migration_runs")?.n).toBeGreaterThan(0);
-        });
+        for (const pathname of agentPaths) {
+          using database = new DatabaseSync(pathname, { readOnly: true });
+          expect(row(database, "PRAGMA user_version")?.user_version).toBe(
+            OPENCLAW_AGENT_SCHEMA_VERSION,
+          );
+          expect(preservedValue(database)).toBe(preservedBytes);
+        }
+        verifyBackups(
+          result.changes,
+          agentPaths,
+          (database) => {
+            expect(sourceReport(database, reconstructionKey)).toContain('"agentId":"main"');
+            expect(row(database, "SELECT count(*) AS n FROM migration_runs")?.n).toBeGreaterThan(0);
+          },
+          (database) => {
+            expect(row(database, "PRAGMA user_version")?.user_version).toBe(
+              phase === "upgraded-producer" ? 26 : 24,
+            );
+            expect(
+              row(database, "SELECT * FROM schema_meta WHERE meta_key = 'primary'"),
+            ).toMatchObject({
+              role: "agent",
+              app_version: phase === "upgraded-producer" ? "2026.10.6" : "2026.10.4",
+              updated_at: phase === "upgraded-producer" ? 2000 : 1000,
+            });
+          },
+        );
         expect(await repair(env)).toEqual({ changes: [], warnings: [] });
       },
       "main",
