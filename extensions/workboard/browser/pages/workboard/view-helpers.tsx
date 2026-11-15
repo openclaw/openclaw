@@ -8,6 +8,7 @@ import type { GatewaySessionRow } from "../../api/types.ts";
 import { icons } from "../../components/icons.tsx";
 import { workboardLocale } from "../../host.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
   getWorkboardState,
   workboardMutationsReady,
@@ -167,8 +168,14 @@ export function dispatchSummaryMessage(state: WorkboardUiState) {
   if (!summary) {
     return "";
   }
-  const total = Object.values(summary).reduce((sum, count) => sum + count, 0);
-  return t(total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary", {
+  const total =
+    summary.started +
+    summary.failures +
+    summary.promoted +
+    summary.blocked +
+    summary.reclaimed +
+    summary.orchestrated;
+  const message = t(total === 0 ? "workboard.dispatchSummaryEmpty" : "workboard.dispatchSummary", {
     started: String(summary.started),
     failures: String(summary.failures),
     promoted: String(summary.promoted),
@@ -176,6 +183,10 @@ export function dispatchSummaryMessage(state: WorkboardUiState) {
     reclaimed: String(summary.reclaimed),
     orchestrated: String(summary.orchestrated),
   });
+  return summary.firstFailure
+    ? `${message}
+${t("workboard.dispatchFirstFailure", { message: formatUiExternalText(summary.firstFailure) })}`
+    : message;
 }
 
 export function refreshStatusLabel(state: WorkboardUiState) {

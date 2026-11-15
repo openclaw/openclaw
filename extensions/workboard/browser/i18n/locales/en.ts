@@ -271,8 +271,9 @@ export default {
     dispatchHelpAll: "Run Ready cards across all boards, up to 3 at once.",
     moveTo: "Move to",
     dispatchSummary:
-      "Started {started}. Prepared {promoted}, blocked {blocked}, released {reclaimed}, organized {orchestrated}. Failed to start: {failures}.",
+      "Started {started}. Readiness updated: {promoted}; blocked: {blocked}; claims released: {reclaimed}; marked for planning: {orchestrated}. Failed to start: {failures}.",
     dispatchSummaryEmpty: "No cards were started.",
+    dispatchFirstFailure: "First start failure: {message}",
     lastRefreshed: "Updated {time}",
     refreshError: "Refresh failed",
     fieldTitle: "Title",
