@@ -119,14 +119,28 @@ function skipEntry(name: string): boolean {
   return GENERATION_NAME.test(name) || RETIRED_BACKUP_NAME.test(name) || COMPANION_NAME.test(name);
 }
 
+/** Changes on any write, replacement or mode change of the file. */
+export function fileStamp(pathname: string): string | undefined {
+  const stat = fs.lstatSync(pathname, { bigint: true, throwIfNoEntry: false });
+  return stat && `${stat.ino}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+}
+
+const hasJournalContent = (pathname: string) =>
+  ["-wal", "-journal"].some(
+    (suffix) => (fs.statSync(`${pathname}${suffix}`, { throwIfNoEntry: false })?.size ?? 0) > 0,
+  );
+
 /**
- * Copy the live tree into `shadow`. SQLite files get a consistent read-only copy,
- * other files a copy-on-write clone where the filesystem supports it.
+ * Copy the live tree into `shadow` and record each copy's stamp in `baseline`, so the
+ * swap moves only what the upgrade wrote. A SQLite file with WAL or journal content
+ * gets a consistent read-only copy; every other file a copy-on-write clone where the
+ * filesystem supports it.
  */
 export function copyTree(
   live: string,
   shadow: string,
   skip: (absolute: string) => boolean,
+  baseline: Map<string, string | undefined>,
   visited = new Set<string>([fs.realpathSync(live)]),
 ): void {
   fs.mkdirSync(shadow, { recursive: true, mode: 0o700 });
@@ -142,17 +156,19 @@ export function copyTree(
     if (entry.isDirectory() || linked?.isDirectory()) {
       const real = fs.realpathSync(source);
       if (!visited.has(real)) {
-        copyTree(source, target, skip, new Set([...visited, real]));
+        copyTree(source, target, skip, baseline, new Set([...visited, real]));
       }
     } else if (entry.isSymbolicLink() && !linked) {
       fs.symlinkSync(fs.readlinkSync(source), target);
+      baseline.set(target, fileStamp(target));
     } else if (entry.isFile() || linked?.isFile()) {
-      if (isSqliteFile(source)) {
+      if (isSqliteFile(source) && hasJournalContent(source)) {
         vacuumSqliteInto(source, target);
       } else {
         fs.copyFileSync(source, target, fs.constants.COPYFILE_FICLONE);
       }
       fs.chmodSync(target, fs.statSync(source).mode & 0o7777);
+      baseline.set(target, fileStamp(target));
     }
   }
 }
@@ -211,13 +227,25 @@ function listFiles(root: string, skip: (absolute: string) => boolean, out = new 
   return out;
 }
 
-/** What the upgraded shadow changed relative to the live tree. */
+/** Shadow files the upgrade wrote or created since `copyTree`. */
+export function changedShadowFiles(
+  shadow: string,
+  baseline: ReadonlyMap<string, string | undefined>,
+): string[] {
+  return [...listFiles(shadow, () => false)].filter(
+    (file) => baseline.get(file) !== fileStamp(file),
+  );
+}
+
+/**
+ * What the upgrade changed in the shadow since `copyTree`. Live files the copy did
+ * not include, or that changed only on the live side, are left alone.
+ */
 export function diffTree(
   live: string,
   shadow: string,
-  skip: (absolute: string) => boolean,
+  baseline: ReadonlyMap<string, string | undefined>,
 ): UpgradeOp[] {
-  const liveFiles = listFiles(live, skip);
   const ops: UpgradeOp[] = [];
   // Accepted edge case: a symlinked directory is upgraded only in the private copy;
   // the swap leaves it alone, so the live target and its volume are never written.
@@ -229,21 +257,24 @@ export function diffTree(
     }
     return false;
   };
-  for (const next of listFiles(shadow, () => false)) {
+  for (const next of changedShadowFiles(shadow, baseline)) {
     const target = path.join(live, path.relative(shadow, next));
     if (underLinkedDirectory(target)) {
-      liveFiles.delete(target);
       continue;
     }
-    if (!liveFiles.has(target)) {
+    if (!fs.existsSync(target) && !isSymlinkAt(target)) {
       ops.push({ kind: "add", live: target, next });
     } else if (!sameContent(target, next)) {
       ops.push({ kind: "replace", live: target, next });
     }
-    liveFiles.delete(target);
   }
-  for (const target of liveFiles) {
-    if (!underLinkedDirectory(target)) {
+  for (const copied of baseline.keys()) {
+    const target = path.join(live, path.relative(shadow, copied));
+    if (
+      !fs.lstatSync(copied, { throwIfNoEntry: false }) &&
+      (fs.existsSync(target) || isSymlinkAt(target)) &&
+      !underLinkedDirectory(target)
+    ) {
       ops.push({ kind: "remove", live: target });
     }
   }

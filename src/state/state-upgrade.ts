@@ -31,6 +31,7 @@ import {
 import {
   applyPlan,
   companionRemovals,
+  changedShadowFiles,
   copyTree,
   countSqlitePrefix,
   diffTree,
@@ -237,8 +238,8 @@ function buildFallback(
   return { reports, foldInFailures };
 }
 
-function checkpointShadowDatabases(shadowRoot: string): void {
-  for (const file of listTreeFiles(shadowRoot)) {
+function checkpointShadowDatabases(files: readonly string[]): void {
+  for (const file of files) {
     if (!isSqliteFile(file)) {
       continue;
     }
@@ -387,7 +388,8 @@ export async function upgradeStateDirectory(params: {
     params.log.info(
       `Upgrading state to ${VERSION}: ${outdated.map((t) => `${path.relative(stateDir, t.path)} v${t.version}`).join(", ")}`,
     );
-    copyTree(stateDir, shadowRoot, skip);
+    const baseline = new Map<string, string | undefined>();
+    copyTree(stateDir, shadowRoot, skip, baseline);
     if (!configInside && fs.existsSync(configPath)) {
       fs.mkdirSync(path.dirname(shadowConfig), { recursive: true });
       fs.copyFileSync(configPath, shadowConfig);
@@ -473,8 +475,10 @@ export async function upgradeStateDirectory(params: {
         mismatches.push(...report.conservationMismatches.map((t) => `${report.label}:${t}`));
       }
     }
-    // Paths the run wrote into the shadow point at the live tree again.
-    for (const file of listTreeFiles(shadowRoot)) {
+    // Paths the run wrote into the shadow point at the live tree again. Only files the
+    // run wrote can hold them; the rest of the copy is never read again.
+    const written = changedShadowFiles(shadowRoot, baseline);
+    for (const file of written) {
       if (isSqliteFile(file)) {
         const db = openNodeSqliteDatabase(file);
         try {
@@ -510,10 +514,11 @@ export async function upgradeStateDirectory(params: {
       setAside,
       pinned,
     );
-    checkpointShadowDatabases(shadowRoot);
+    // The report row may have touched a shared database the run left alone.
+    checkpointShadowDatabases(changedShadowFiles(shadowRoot, baseline));
     const ops: UpgradeOp[] =
       mode === "chain"
-        ? diffTree(stateDir, shadowRoot, skip)
+        ? diffTree(stateDir, shadowRoot, baseline)
         : [
             ...outdated.map((t) => ({
               kind: "replace" as const,

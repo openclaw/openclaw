@@ -10,7 +10,7 @@ import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { buildStateDatabaseByCopy } from "./openclaw-state-db-swap.js";
 import { buildSqliteByCopy, type SqliteSwapTarget } from "./sqlite-copy-swap.js";
-import { applyPlan } from "./state-upgrade-tree.js";
+import { applyPlan, copyTree, diffTree } from "./state-upgrade-tree.js";
 
 const corpusDir = fileURLToPath(
   new URL("../../test/fixtures/state-corpus-populated/", import.meta.url),
@@ -307,6 +307,42 @@ describe("generic rebuild data rules", () => {
     const mapped = build(sql, renamed, { columns: { "t.title": "name" } });
     expect(mapped.rows).toEqual([{ id: "a", name: "kept" }]);
     expect(droppedUserColumns(source, mapped.report)).toEqual([]);
+  });
+});
+
+describe("copyTree and diffTree", () => {
+  it("clones closed databases and moves only what the upgrade wrote", () => {
+    const root = tempDir();
+    const live = path.join(root, "live");
+    fs.mkdirSync(path.join(live, "backups"), { recursive: true });
+    const closed = path.join(live, "backups", "old.sqlite");
+    const db = new DatabaseSync(closed);
+    db.exec("CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('kept');");
+    db.close();
+    for (const name of ["edited.json", "deleted.json", "untouched.json"]) {
+      fs.writeFileSync(path.join(live, name), name);
+    }
+    const shadow = path.join(root, "shadow");
+    const baseline = new Map<string, string | undefined>();
+    copyTree(live, shadow, () => false, baseline);
+    // A closed database is cloned byte for byte; VACUUM INTO would rewrite it.
+    expect(hash(path.join(shadow, "backups", "old.sqlite"))).toBe(hash(closed));
+
+    fs.writeFileSync(path.join(shadow, "edited.json"), "upgraded");
+    fs.rmSync(path.join(shadow, "deleted.json"));
+    fs.writeFileSync(path.join(shadow, "added.json"), "new");
+    // Written live after the copy: the swap must not revert or remove it.
+    fs.writeFileSync(path.join(live, "untouched.json"), "live write during the upgrade");
+    fs.writeFileSync(path.join(live, "late.log"), "late");
+
+    const ops = diffTree(live, shadow, baseline).map(
+      (op) => `${op.kind}:${path.relative(live, op.live)}`,
+    );
+    expect(ops.toSorted()).toEqual([
+      "add:added.json",
+      "remove:deleted.json",
+      "replace:edited.json",
+    ]);
   });
 });
 
