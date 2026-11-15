@@ -147,3 +147,43 @@ it.each([true, false])(
     expect(append.mock.calls).toEqual(current ? [[finalAssistantVisibleText]] : []);
   },
 );
+
+it.each([
+  [true, true],
+  [true, false],
+  [false, true],
+  [false, false],
+])(
+  "claims command speech after committed successor (current=%s, source=%s)",
+  async (current, withSource) => {
+    const instance = { instanceId: "successor-instance", runId: "run-talk" };
+    mocks.createOperationalRunInstanceRef.mockReturnValueOnce(instance);
+    mocks.runEmbeddedAgentCore.mockImplementationOnce(async (params) => {
+      const operation = getCurrentSessionControllerOwner();
+      expect(operation).toBeDefined();
+      operation?.updateSessionId("session-successor");
+      params.onSessionIdChanged?.("session-successor");
+      return {
+        payloads: [{ text: "successor answer" }],
+        meta: {
+          durationMs: 0,
+          terminalReply: { disposition: "visible", text: "successor answer" },
+          agentMeta: { terminalReceipt: { runId: "run-talk", sessionId: "session-successor" } },
+        },
+      };
+    });
+    let runCurrent = true;
+    const runner = createConsultRunner({
+      ...(withSource ? { ownerConnId: "talk-successor-owner" } : {}),
+      context: { logGateway: { warn: vi.fn() } } as never,
+      registerRun: vi.fn(async () => ({ release: vi.fn(), isCurrent: () => runCurrent })),
+    });
+    runner.runPrompt.adoptCompletionClaims();
+    await expect(runner.runPrompt({ prompt: "compact then answer" })).resolves.toEqual({
+      text: "done",
+    });
+    runCurrent = current;
+    expect(runner.runPrompt.claimAppend()).toBe(current);
+    expect(runner.runPrompt.claimAppend()).toBe(false);
+  },
+);

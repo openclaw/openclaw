@@ -181,11 +181,18 @@ export function createTalkClientAgentConsultRunner(params: {
     // Provider callbacks can inherit another ambient Gateway. Keep the source
     // under the captured owner, and release this binding when the consultation ends.
     let preparedSessionEntry: SessionEntry | undefined;
+    let currentSessionId: string | undefined;
     let registeredSource: RpcSourceRef | undefined;
     const resolveGatewayContext = params.context.resolveGatewayContext;
     const runtime = createTalkClientAgentRuntime({
       config,
       getPreparedSessionEntry: () => preparedSessionEntry,
+      onSessionIdChanged: (sessionId) => {
+        currentSessionId = sessionId;
+        if (owner?.identity) {
+          owner.identity = { ...owner.identity, sessionId };
+        }
+      },
       resolveGatewayContext,
       runAuthority: params.runAuthority,
       ...(params.ownerConnId
@@ -284,6 +291,7 @@ export function createTalkClientAgentConsultRunner(params: {
           },
           abortSignal: signal,
           onRunStarted: async ({ runId, sessionId, timeoutMs }) => {
+            currentSessionId = sessionId;
             let registeredRun:
               | {
                   release: () => void;
@@ -336,7 +344,7 @@ export function createTalkClientAgentConsultRunner(params: {
               isTalkConsultSourceCurrent({
                 entry,
                 connectionId: params.ownerConnId,
-                sessionId,
+                sessionId: currentSessionId ?? sessionId,
                 sessionKey: canonicalKey,
                 lifecycleGeneration: generation,
                 phase,
@@ -404,7 +412,7 @@ export function createTalkClientAgentConsultRunner(params: {
                 owner.isCurrent = (resolvedSessionId, phase = "active") =>
                   params.getVoiceSessionId() === voiceSessionId &&
                   isChatRegistrationCurrent(phase) &&
-                  (resolvedSessionId === undefined || resolvedSessionId === sessionId) &&
+                  (resolvedSessionId === undefined || resolvedSessionId === currentSessionId) &&
                   (registeredRun?.isCurrent(phase) ?? true);
               }
               return {

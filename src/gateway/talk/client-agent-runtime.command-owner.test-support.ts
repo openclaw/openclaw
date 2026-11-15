@@ -18,6 +18,7 @@ export function createTalkCommandOwnerStandIn(params: {
     try {
       opts.abortSignal?.throwIfAborted();
       return await params.run({
+        onSessionIdChanged: opts.onSessionIdChanged,
         runId: opts.runId,
         agentId: opts.agentId,
         sessionId: opts.sessionId,

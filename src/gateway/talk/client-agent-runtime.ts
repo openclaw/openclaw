@@ -5,12 +5,14 @@ import type {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import { adoptExecRequestSession } from "../../infra/exec-request-context.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import {
   getRpcSourceForGateway,
   getRpcSourceIdentity,
   getRpcSourceLifecycleGeneration,
+  updateRpcSourceSessionId,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
 import {
@@ -50,6 +52,7 @@ export function createTalkClientAgentRuntime(params: {
   runAuthority?: TalkClientRunAuthority;
   assertCurrent?: () => void;
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
+  onSessionIdChanged?: (sessionId: string) => void;
   onCommandCompleted?: (instance: OperationalRunInstanceRef) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
@@ -88,6 +91,7 @@ export function createTalkClientAgentRuntime(params: {
     if ((params.getRegisteredSource || params.rawSourceRef) && !source) {
       throw new Error("Talk consultation source registration is unavailable");
     }
+    let currentSessionId = sessionId;
     const lifecycleGeneration = source && getRpcSourceLifecycleGeneration(source);
     const assertSourceCurrent = () => {
       if (!source) {
@@ -104,7 +108,7 @@ export function createTalkClientAgentRuntime(params: {
         !isTalkConsultSourceCurrent({
           entry: source,
           connectionId: params.rawSourceRef,
-          sessionId,
+          sessionId: currentSessionId,
           sessionKey,
           lifecycleGeneration,
           phase: "active",
@@ -217,6 +221,44 @@ export function createTalkClientAgentRuntime(params: {
                     operationalRunInstance,
                     operatorAuthority: retained?.authority,
                     assertSourceCurrent: retained?.assertSourceCurrent,
+                    onSessionIdChanged: (nextSessionId) => {
+                      runParams.abortSignal?.throwIfAborted();
+                      if (source) {
+                        // The command may already have advanced its controller operation.
+                        // Validate the exact retained source, not the predecessor incarnation.
+                        const identity = getRpcSourceIdentity(source);
+                        if (
+                          params.getRegisteredSource?.() !== source ||
+                          getRpcSourceForGateway(runParams.runId, params.resolveGatewayContext) !==
+                            source ||
+                          source.input.protocolRunId !== runParams.runId ||
+                          source.input.target?.storeScope !== storePath ||
+                          identity.agentId !== agentId ||
+                          !params.rawSourceRef ||
+                          !isTalkConsultSourceCurrent({
+                            entry: source,
+                            connectionId: params.rawSourceRef,
+                            sessionId: identity.sessionId,
+                            sessionKey,
+                            lifecycleGeneration,
+                            phase: "active",
+                          })
+                        ) {
+                          throw new Error(
+                            "Talk consultation source registration is no longer current",
+                          );
+                        }
+                        source.adapter.authority?.assertCurrent();
+                        updateRpcSourceSessionId(source, nextSessionId);
+                      }
+                      adoptExecRequestSession({
+                        runId: runParams.runId,
+                        previousSessionId: currentSessionId,
+                        sessionId: nextSessionId,
+                      });
+                      currentSessionId = nextSessionId;
+                      params.onSessionIdChanged?.(nextSessionId);
+                    },
                     onAdmittedRunContext: (context) => {
                       admitted = context;
                       // Closes the admission-to-listener race.
@@ -266,7 +308,8 @@ export function createTalkClientAgentRuntime(params: {
               result.meta.stopReason !== "error" &&
               result.meta.terminalReply?.disposition === "visible" &&
               (!receipt ||
-                (receipt.runId === operationalRunInstance.runId && receipt.sessionId === sessionId))
+                (receipt.runId === operationalRunInstance.runId &&
+                  receipt.sessionId === currentSessionId))
             ) {
               params.onCommandCompleted?.(operationalRunInstance);
             }
