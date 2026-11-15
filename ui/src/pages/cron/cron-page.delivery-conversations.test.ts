@@ -104,7 +104,11 @@ it("keeps primary account directory targets out of failure-alert suggestions", a
     expect(input).not.toBeNull();
     return Array.from(input?.list?.options ?? [], (option) => option.value);
   };
-  await waitForCronPage(() => expect(optionsFor("#cron-delivery-to")).toContain("-100work"));
+  await waitForCronPage(() => expect(page.querySelector("button#cron-delivery-to")).not.toBeNull());
+  page.querySelector<HTMLButtonElement>("button#cron-delivery-to")!.click();
+  await waitForCronPage(() =>
+    expect(document.querySelector('[role="option"][data-value="conv_-100work"]')).not.toBeNull(),
+  );
   expect(request).toHaveBeenCalledWith("conversations.list", {
     agentId: "writer",
     channel: "telegram",
@@ -112,6 +116,7 @@ it("keeps primary account directory targets out of failure-alert suggestions", a
   });
   expect(optionsFor("#cron-failure-alert-to")).toEqual(["-100saved"]);
   expect(inputValue(page, "#cron-failure-alert-to")).toBe("-100personal");
+  page.remove();
 });
 
 it("keeps account and topic routing operator-authored without rediscovering cached targets", async () => {

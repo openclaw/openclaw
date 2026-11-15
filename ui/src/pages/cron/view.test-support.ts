@@ -92,6 +92,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     thinkingSuggestions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
+    deliveryConversations: [],
     failureAlertToSuggestions: [],
     accountSuggestions: [],
     onListTabChange: () => undefined,

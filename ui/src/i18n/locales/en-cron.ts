@@ -268,6 +268,13 @@ const enCron = {
       channelHelp: "Choose which connected channel receives the summary.",
       webhookHelp: "Send run summaries to a webhook endpoint.",
       to: "To",
+      noRecipientOverride: "No recipient override",
+      enterRecipient: "Enter another recipient…",
+      customRecipient: "Custom recipient",
+      knownRecipientsHelp:
+        "Choose a loaded conversation for this channel and sending account, or enter another recipient.",
+      recipientThread: "{target} · Thread {thread}",
+      recipientThreadOnly: "Thread {thread}",
       toPlaceholder: "+1555… or chat ID",
       toHelp: "Optional recipient override (chat ID, phone number, or user ID).",
       advanced: "Advanced",
