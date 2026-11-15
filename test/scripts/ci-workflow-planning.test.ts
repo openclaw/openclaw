@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   copyFileSync,
@@ -15,7 +16,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { minimatch } from "minimatch";
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import type { createChangedCiLintPlan } from "../../scripts/check-changed.mts";
 import {
@@ -24,12 +25,13 @@ import {
   shouldRunNativeI18n,
   writeGitHubOutput,
 } from "../../scripts/ci-changed-scope.mjs";
-import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
+import { resolveShardPlans, runShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import {
   decodeNodeTestGroups,
   encodeNodeTestGroups,
 } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import { listNodeTestConfigFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
@@ -13167,6 +13169,23 @@ describe("ci workflow guards", () => {
           includePatterns: ["src/a.test.ts"],
           shard_name: "first",
           timing_key: "first#include-1",
+          volume: {
+            version: 1,
+            revision: "a".repeat(40),
+            policy: "node",
+            entries: [
+              {
+                config: "test/vitest/vitest.unit-fast.config.ts",
+                runtime: "node",
+                engine: "vitest",
+                profile: "b".repeat(64),
+                environment: "c".repeat(64),
+                argsDigest: "d".repeat(64),
+                full: { count: 2, digest: "e".repeat(64), id: "f".repeat(64) },
+                selected: { count: 1, digest: "0".repeat(64) },
+              },
+            ],
+          },
         },
       ],
       [
@@ -13379,6 +13398,214 @@ describe("ci workflow guards", () => {
       }
     },
   );
+
+  it("keeps the volume-enabled PR manifest within bounds and aligned through warm runtime admission", async () => {
+    const config = "test/vitest/vitest.gateway-database-workers.config.ts";
+    const targets = listNodeTestConfigFiles(config)!;
+    const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
+    const sourceRoot = process.cwd();
+    const normalEnv = {
+      CI: "true",
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+    };
+    const manifest = runCiManifestFixture({
+      bundledPlanner: true,
+      historicalCompatibility: false,
+      eventName: "pull_request",
+      changedPaths: targets,
+      selectedTestTargets: targets,
+      scopeEnv: { ...normalEnv, NODE_OPTIONS: "", OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40) },
+      changedPlannerSource: `
+        import { createChangedNodeTestShards as create } from ${JSON.stringify(planner)};
+        export { hasQaSmokeAffectingChange, isCiDocumentationPath } from ${JSON.stringify(planner)};
+        export function createChangedNodeTestShards(paths, options) {
+          if (!options.volumeContext || options.volumeContext.revision !== "${"a".repeat(40)}") {
+            throw new Error("Missing active volume context");
+          }
+          const previous = process.cwd();
+          try {
+            process.chdir(${JSON.stringify(sourceRoot)});
+            const baseline = create(paths, { ...options, volumeContext: undefined });
+            const result = create(paths, options);
+            const stripped = result.map(job => ({ ...job, groups: job.groups?.map(group => {
+              const { volume, ...rest } = group;
+              return rest;
+            }) }));
+            if (JSON.stringify(stripped) !== JSON.stringify(baseline)) {
+              throw new Error("Volume metadata changed the execution plan");
+            }
+            return result;
+          } finally { process.chdir(previous); }
+        }
+      `,
+    });
+    expect(manifest.status, manifest.output).toBe(0);
+    expect(manifest.outputChars).toBeLessThan(262_144);
+    const pools = JSON.parse(manifest.outputs.node_test_group_pools_json || "{}");
+    for (const encoded of Object.values(pools)) {
+      expect(String(encoded).length).toBeLessThanOrEqual(60_000);
+    }
+    let measured = 0;
+    const denominators = new Map<string, string[]>();
+    const runtimeRows: {
+      row: Record<string, unknown>;
+      plans: ReturnType<typeof resolveShardPlans>;
+    }[] = [];
+    for (const row of readJsonOutput(manifest.outputs, "checks_node_core_nondist_matrix").include) {
+      const groups = row.groups_pool
+        ? decodeNodeTestGroups(pools[row.groups_pool])[row.groups_index]
+        : row.groups;
+      if (row.groups_pool && !Array.isArray(groups)) throw new Error("Missing pooled groups");
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_pool
+          ? encodeNodeTestGroups(groups)
+          : row.groups_gzip_base64,
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups),
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(row.configs),
+      });
+      if (plans.some((plan) => plan.kind === "group" && plan.plan.volume?.entries.length)) {
+        runtimeRows.push({ row, plans });
+      }
+      for (const plan of plans) {
+        if (plan.kind !== "group") continue;
+        for (const entry of plan.plan.volume?.entries ?? []) {
+          const owner = new Set(listNodeTestConfigFiles(entry.config));
+          const selected = (plan.plan.includePatterns ?? [])
+            .filter((file) => owner.has(file))
+            .toSorted();
+          expect(entry.runtime).toBe("node");
+          expect(entry.full).not.toBeNull();
+          expect(entry.selected).toEqual({
+            count: selected.length,
+            digest: createHash("sha256").update(JSON.stringify(selected)).digest("hex"),
+          });
+          if (entry.full) {
+            const key = JSON.stringify([entry.config, entry.runtime, entry.profile]);
+            denominators.set(key, [...(denominators.get(key) ?? []), entry.full.id]);
+          }
+          measured++;
+        }
+      }
+    }
+    expect(measured).toBeGreaterThan(0);
+    expect([...denominators.values()].some((ids) => ids.length > 1)).toBe(true);
+    for (const ids of denominators.values()) expect(new Set(ids).size).toBe(1);
+
+    const output: string[] = [];
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    try {
+      for (const { row, plans } of runtimeRows) {
+        const expected = plans.flatMap((plan) =>
+          plan.kind === "group"
+            ? (plan.plan.volume?.entries ?? []).map((entry) => ({
+                config: entry.config,
+                full: entry.full,
+                selected: entry.selected,
+                profile: entry.profile,
+              }))
+            : [],
+        );
+        const execute = async (warm: boolean, workers: number, scenario = false) => {
+          output.length = 0;
+          const runChild = vi
+            .fn<NonNullable<NonNullable<Parameters<typeof runShardPlans>[1]>["runChild"]>>()
+            .mockImplementation(async (args, env) => {
+              expect(env.OPENCLAW_VITEST_MAX_WORKERS).toBe(String(workers));
+              expect(env.OPENCLAW_VITEST_WORKER_CACHE).toBe(warm ? "1" : undefined);
+              const files: string[] = JSON.parse(
+                readFileSync(env.OPENCLAW_VITEST_INCLUDE_FILE!, "utf8"),
+              );
+              for (const config of args.slice(
+                0,
+                args.indexOf("--") < 0 ? args.length : args.indexOf("--"),
+              )) {
+                const owner = new Set(listNodeTestConfigFiles(config));
+                const selected = files.filter((file) => owner.has(file)).toSorted();
+                expect(expected).toContainEqual(
+                  expect.objectContaining({
+                    config,
+                    selected: {
+                      count: selected.length,
+                      digest: createHash("sha256").update(JSON.stringify(selected)).digest("hex"),
+                    },
+                  }),
+                );
+              }
+              return 0;
+            });
+          const code = await runShardPlans(
+            plans.map((plan) =>
+              plan.kind === "group"
+                ? {
+                    ...plan,
+                    plan: {
+                      ...plan.plan,
+                      fallbackMaxWorkers: workers,
+                      minTotalMemoryBytes: Number.MAX_SAFE_INTEGER,
+                    },
+                  }
+                : plan,
+            ),
+            {
+              concurrency: 1,
+              scratchDir: tempDirs.make("openclaw-volume-runtime-"),
+              env: {
+                ...process.env,
+                ...normalEnv,
+                RUNNER_ENVIRONMENT: "self-hosted",
+                FROZEN_TARGET: "false",
+                NODE_OPTIONS: "--max-old-space-size=8192",
+                OPENCLAW_VITEST_MAX_WORKERS: "6",
+                OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+                OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(row.env ?? {}),
+                OPENCLAW_VITEST_WORKER_CACHE: warm ? "1" : undefined,
+                ...(scenario ? { OPENCLAW_TEST_VOLUME_SCENARIO: "different" } : {}),
+              },
+              runChild,
+            },
+          );
+          expect(code).toBe(0);
+          const records = output
+            .filter((line) => line.startsWith("[shard:volume] "))
+            .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+          expect(records).toHaveLength(expected.length);
+          expect(runChild).toHaveBeenCalled();
+          return { records, commands: runChild.mock.calls.map(([args]) => args) };
+        };
+        const cold = await execute(false, 1);
+        const warm = await execute(true, 1);
+        const fallback = await execute(true, 2);
+        for (const result of [cold, warm, fallback]) {
+          expect(result.commands).toEqual(cold.commands);
+          expect(
+            result.records.map(({ config, full, selected, profile }) => ({
+              config,
+              full,
+              selected,
+              profile,
+            })),
+          ).toEqual(expected);
+        }
+        expect(warm.records.map((record) => record.admittedProfile)).not.toEqual(
+          cold.records.map((record) => record.admittedProfile),
+        );
+        expect(fallback.records.map((record) => record.admittedProfile)).not.toEqual(
+          warm.records.map((record) => record.admittedProfile),
+        );
+        const overridden = await execute(true, 2, true);
+        expect(overridden.commands).toEqual(cold.commands);
+        expect(
+          overridden.records.every((record) => record.full === null && record.selected === null),
+        ).toBe(true);
+      }
+    } finally {
+      stdout.mockRestore();
+    }
+  });
 
   it("uses projected legacy groups for historical targets without the codec", () => {
     const groups = [
