@@ -13508,6 +13508,7 @@ describe("ci workflow guards", () => {
     const normalEnv = {
       CI: "true",
       GITHUB_ACTIONS: "true",
+      OPENCLAW_CI_TEST_RUNTIME: "node",
       OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
       // The enclosing test runner owns these filters; ordinary CI shards do not inherit them.
       OPENCLAW_VITEST_INCLUDE_FILE: "",
