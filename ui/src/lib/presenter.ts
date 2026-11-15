@@ -91,6 +91,17 @@ export function formatCronCadence(job: Pick<CronJob, "schedule">) {
   if (s.kind === "at") {
     return t("cron.scheduleLabel.once");
   }
+  // Intervals read in long units ("Every 20 minutes"), like the rest of the cadence words.
+  const every = (value: number | bigint, unit: "minute" | "hour") =>
+    t("cron.scheduleLabel.every", { duration: formatUnit({ value, unit, unitDisplay: "long" }) });
+  if (s.kind === "every") {
+    const parts = resolveExactDurationParts(s.everyMs);
+    return parts
+      ? t("cron.scheduleLabel.every", {
+          duration: parts.map((part) => formatUnit({ ...part, unitDisplay: "long" })).join(" "),
+        })
+      : formatCronSchedule(job);
+  }
   if (s.kind !== "cron") {
     return formatCronSchedule(job);
   }
@@ -104,11 +115,11 @@ export function formatCronCadence(job: Pick<CronJob, "schedule">) {
   }
   const minuteStep = step(minute);
   if (minuteStep && hour === "*" && day === "*" && weekday === "*") {
-    return t("cron.scheduleLabel.every", { duration: `${minuteStep}m` });
+    return every(Number(minuteStep), "minute");
   }
   const hourStep = step(hour);
   if (fixed(minute) && hourStep && day === "*" && weekday === "*") {
-    return t("cron.scheduleLabel.every", { duration: `${hourStep}h` });
+    return every(Number(hourStep), "hour");
   }
   if (fixed(minute) && hour === "*" && day === "*" && weekday === "*") {
     return t("cron.scheduleLabel.hourly");

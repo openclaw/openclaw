@@ -24,15 +24,18 @@ registerEnglishCatalog(registerCronEnglish);
 const formatTimeToday = createMsFormatter({ hour: "numeric", minute: "2-digit" });
 const formatLaterDay = createMsFormatter({ month: "short", day: "numeric" });
 
-/** Next run, then cadence: "5:05 PM · Every 20m" today, "Nov 21 · Weekly" later. */
+/** When it runs next, then how often: "Today 5:05 PM · Every 20 minutes", "Nov 21 · Weekly",
+    or "Paused · Every 5 hours" once paused. */
 function automationByline(job: CronCompactJob): string {
   const cadence = job.schedule ? formatCronCadence({ schedule: job.schedule }) : undefined;
   const nextMs = job.enabled ? job.nextRunAtMs : undefined;
-  const next = nextMs
-    ? new Date(nextMs).toDateString() === new Date().toDateString()
-      ? formatTimeToday(nextMs)
-      : formatLaterDay(nextMs)
-    : undefined;
+  const next = !job.enabled
+    ? t("cron.tabs.paused")
+    : nextMs
+      ? new Date(nextMs).toDateString() === new Date().toDateString()
+        ? t("cron.scheduleLabel.today", { time: formatTimeToday(nextMs) })
+        : formatLaterDay(nextMs)
+      : undefined;
   return [next, cadence].filter(Boolean).join(" · ");
 }
 
@@ -130,6 +133,7 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
       </a>
     );
   };
+  // Group headings share the Sessions sidebar's group heading.
   const Group = (group: {
     label: string;
     jobs: CronCompactJob[];
@@ -138,15 +142,21 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
   }) => (
     <Show when={group.jobs.length > 0}>
       <div class="sidebar-automations__group" role="group" aria-label={group.label}>
-        <button
-          type="button"
-          class="sidebar-automations__heading"
-          aria-expanded={group.open ? "true" : "false"}
-          onClick={() => group.onToggle()}
-        >
-          {group.label}
-          <Icon name={group.open ? "chevronDown" : "chevronRight"} />
-        </button>
+        <div class="sidebar-recent-sessions__head">
+          <button
+            type="button"
+            class="sidebar-session-group-toggle"
+            aria-expanded={group.open ? "true" : "false"}
+            onClick={() => group.onToggle()}
+          >
+            <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+              <span class="sidebar-session-group-toggle__icon">
+                <Icon name={group.open ? "chevronDown" : "chevronRight"} />
+              </span>
+            </span>
+            <span class="sidebar-recent-sessions__label-text">{group.label}</span>
+          </button>
+        </div>
         <Show when={group.open}>
           <For each={group.jobs}>{(job) => <Row job={job} />}</For>
         </Show>
