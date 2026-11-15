@@ -459,6 +459,18 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         } catch OpenClawIDNodeEnrollmentError.wrongHost {
             return .problem(.inviteInvalid)
         }
+        let store = self.environment.keyStore
+        let device: OpenClawIDNodeIdentity
+        let peer: OpenClawIDNodeIdentity
+        do {
+            device = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .device))
+            peer = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .devicePeer))
+            // Nothing reaches the claw until D and W are bound: a failure here can be retried.
+            try await client.bind(session: session, device: device, peer: peer, label: self.label())
+        } catch {
+            await self.environment.forgetKeys(deviceID, nil)
+            throw error
+        }
         let join = MacOpenClawIDPendingJoin(
             hostname: link.hostname,
             clawID: clawID,
@@ -467,24 +479,31 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             deviceEnrollmentID: deviceID,
             accountID: session.accountID,
             requestedAt: self.environment.now())
+        return try await self.sendJoin(join, link: &link, keys: (device, peer), client: client, session: session)
+    }
+
+    /// Saves the request, then mails the redemption. A refusal forgets it; an uncertain answer keeps
+    /// waiting on it.
+    private func sendJoin(
+        _ join: MacOpenClawIDPendingJoin,
+        link: inout OpenClawIDInviteLink,
+        keys: (device: OpenClawIDNodeIdentity, peer: OpenClawIDNodeIdentity),
+        client: OpenClawIDMemberJoinClient,
+        session: OpenClawIDDiscoverySession) async throws -> OnboardingOpenClawIDStep
+    {
         // Saved before the redemption is sent: a lost answer or a closed window may follow
         // Discovery's acceptance, and only these keys can then be admitted.
         self.environment.store.savePendingJoin(join)
         self.environment.saveSession(session)
         self.pending = join
-        let store = self.environment.keyStore
-        let device: OpenClawIDNodeIdentity
-        let peer: OpenClawIDNodeIdentity
-        do {
-            device = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .device))
-            peer = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .devicePeer))
-        } catch {
-            await self.forget(join)
-            throw error
-        }
         do {
             try await client.redeem(
-                &link, clawID: clawID, session: session, device: device, peer: peer, label: self.label())
+                &link,
+                clawID: join.clawID,
+                session: session,
+                device: keys.device,
+                peer: keys.peer,
+                label: self.label())
         } catch let OpenClawIDNodeEnrollmentError.discoveryRejected(status) {
             // Discovery refused the request outright: nothing reached the claw.
             await self.forget(join)

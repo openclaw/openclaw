@@ -104,8 +104,18 @@ public struct OpenClawIDMemberJoinClient: Sendable {
         }
     }
 
-    /// Binds D and W to the account, then mails the InviteRedemption to the claw's Gateway, where
-    /// it waits for an owner. `label` names this device to the owner and in the member's devices.
+    /// Binds D and W to the account, which Discovery requires before this device can send mail.
+    /// `label` names this device to the owner and in the member's devices.
+    public func bind(
+        session: OpenClawIDDiscoverySession,
+        device: OpenClawIDNodeIdentity,
+        peer: OpenClawIDNodeIdentity,
+        label: String) async throws
+    {
+        try await self.discovery.bindDevice(session, device: device, peer: peer, label: label)
+    }
+
+    /// Mails the InviteRedemption from bound D to the claw's Gateway, where it waits for an owner.
     /// Consumes the link's secret.
     public func redeem(
         _ link: inout OpenClawIDInviteLink,
@@ -123,7 +133,6 @@ public struct OpenClawIDMemberJoinClient: Sendable {
             peer: peer,
             label: label,
             now: self.now())
-        try await self.discovery.bindDevice(session, device: device, peer: peer, label: label)
         try await self.discovery.send(
             session, device: device, clawID: clawID, to: "gateway", payload: .object([
                 "kind": .string("invite_redemption"),

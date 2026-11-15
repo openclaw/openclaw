@@ -109,6 +109,8 @@ struct OpenClawIDMemberJoinTests {
         var link = try OpenClawIDInviteLink(vectors.text("invite", "link"))
         let clawID = try await client.clawID(hostname: link.hostname, session: Self.session)
         #expect(try clawID == vectors.text("claw_id"))
+        try await client.bind(
+            session: Self.session, device: vectors.identity("device_seed_hex"), peer: peer, label: "Example Mac")
         try await client.redeem(
             &link, clawID: clawID, session: Self.session, device: vectors.identity("device_seed_hex"), peer: peer,
             label: "Example Mac")

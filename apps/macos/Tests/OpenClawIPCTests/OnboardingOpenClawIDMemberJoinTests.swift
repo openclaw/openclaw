@@ -208,6 +208,25 @@ struct OnboardingOpenClawIDMemberJoinTests {
         #expect(await http.redemptions == 1)
     }
 
+    @Test func `a failed device binding sends nothing and stays retryable`() async throws {
+        let (defaults, suite) = try Self.defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let effects = Effects()
+        effects.clipboard = try Self.link()
+        let http = MemberDiscovery(bindFailures: 1)
+        let service = Self.service(http: http, effects: effects, defaults: defaults)
+        _ = try await service.perform(.signIn)
+        _ = try await service.perform(.joinWithInvite)
+        _ = try await service.perform(.pasteInvite)
+        await #expect(throws: URLError.self) { try await service.perform(.requestJoin) }
+        // Nothing reached the claw: no pending request, and that attempt's keys are gone.
+        #expect(MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: Self.database()).pendingJoin() == nil)
+        #expect(effects.forgotten.count == 1)
+        #expect(await http.redemptions == 0)
+        #expect(try await service.perform(.requestJoin) == .memberPending(claw: Self.claw, device: "Fixture Mac"))
+        #expect(await http.redemptions == 1)
+    }
+
     // MARK: helpers
 
     private static func defaults() throws -> (UserDefaults, String) {
@@ -314,17 +333,20 @@ struct OnboardingOpenClawIDMemberJoinTests {
         private(set) var recipients: [String] = []
 
         private var lookupFailures: Int
+        private var bindFailures: Int
 
         init(
             account: String = "acct_bob",
             member: Bool = false,
             mailFailure: MailFailure? = nil,
-            lookupFailures: Int = 0)
+            lookupFailures: Int = 0,
+            bindFailures: Int = 0)
         {
             self.account = account
             self.member = member
             self.mailFailure = mailFailure
             self.lookupFailures = lookupFailures
+            self.bindFailures = bindFailures
         }
 
         func approve(role: String) {
@@ -359,6 +381,9 @@ struct OnboardingOpenClawIDMemberJoinTests {
                     "ticket": .string("dt_unused"), "origin": .string("https://unused.example.test"),
                     "expires_at": .integer(1), "claw_id": .string(OnboardingOpenClawIDMemberJoinTests.clawID),
                 ]))
+            case ("POST", "/v1/devices") where self.bindFailures > 0:
+                self.bindFailures -= 1
+                throw URLError(.timedOut)
             case ("POST", "/v1/devices"): return json(.object([:]))
             case let ("POST", path) where path.hasSuffix("/mailbox") && self.mailFailure == .refused:
                 return .init(status: 400, body: Data(#"{"error":{"code":"invalid_statement","message":"x"}}"#.utf8))
