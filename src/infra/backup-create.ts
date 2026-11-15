@@ -86,6 +86,7 @@ export type BackupCreateOptions = {
   dryRun?: boolean;
   includeWorkspace?: boolean;
   excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig?: boolean;
   verify?: boolean;
   json?: boolean;
@@ -110,6 +111,7 @@ export type BackupCreateResult = {
   dryRun: boolean;
   includeWorkspace: boolean;
   excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
   onlyConfig: boolean;
   localCompanion?: boolean;
   verified: boolean;
@@ -317,6 +319,7 @@ async function createBackupArchiveInScope(
     (await resolveBackupPlanFromDisk({
       includeWorkspace,
       excludeWorktreeTemplates: opts.excludeWorktreeTemplates,
+      excludeMigrationBackups: opts.excludeMigrationBackups,
       localCompanion: opts.localCompanion,
       onlyConfig,
       nowMs,
@@ -386,6 +389,7 @@ async function createBackupArchiveInScope(
     dryRun: Boolean(opts.dryRun),
     includeWorkspace,
     ...(opts.excludeWorktreeTemplates ? { excludeWorktreeTemplates: true } : {}),
+    ...(opts.excludeMigrationBackups ? { excludeMigrationBackups: true } : {}),
     onlyConfig,
     ...(opts.localCompanion ? { localCompanion: true } : {}),
     verified: false,

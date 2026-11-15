@@ -2723,6 +2723,7 @@ jobs:
             resolve("ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts"),
             resolve("ui/src/e2e/logs-scroll.e2e.test.ts"),
             resolve("ui/src/e2e/chat-history-reading-stability.e2e.test.ts"),
+            resolve("ui/src/e2e/chat-scroll-tool-rows.e2e.test.ts"),
             resolve("ui/src/e2e/chat-loading-animation-retention.e2e.test.ts"),
           ].filter((file) => existsSync(file) && isSelected(file)));
           const runtimeSuite = resolve("ui/src/e2e/stale-build-recovery.production.e2e.test.ts");
@@ -3848,6 +3849,7 @@ jobs:
           sparse-checkout: |
             scripts/ci-run-node-test-shard.mts
             scripts/lib/ci-node-test-groups-codec.mts
+            scripts/lib/ci-test-observations.mjs
             scripts/lib/direct-run.mjs
             scripts/lib/local-check-runtime.mts
             scripts/lib/managed-child-process.mts

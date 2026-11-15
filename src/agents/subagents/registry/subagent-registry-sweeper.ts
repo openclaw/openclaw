@@ -1,3 +1,4 @@
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import type { callGateway } from "../../../gateway/call.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import {
@@ -256,7 +257,14 @@ export function createSubagentRegistrySweeper(params: {
           shouldSuppressSubagentSessionCleanup(entry) ? undefined : freezeSessionIdentity(entry),
         );
       }
+      let yieldAt = performance.now() + 4;
+      let visited = 0;
       for (const [runId, snapshot] of runEntries) {
+        // Break resolved-promise drains without yielding for every cheap batch.
+        if (++visited % 128 === 0 && performance.now() >= yieldAt) {
+          await yieldToEventLoop();
+          yieldAt = performance.now() + 4;
+        }
         // Finish admitted cleanup, but leave the remaining durable backlog for the next Gateway.
         if (drainSignal.aborted) {
           return;

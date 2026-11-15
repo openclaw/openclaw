@@ -170,6 +170,8 @@ describe("production lint suppressions", () => {
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // Node MessagePort and Worker postMessage have no Window target-origin parameter.
         "scripts/diagnostics/windows-link-service.mjs|unicorn/require-post-message-target-origin|5",
+        // The retained-runtime observer calls captured native Set.forEach with its real receiver.
+        "scripts/e2e/lib/upgrade-survivor/installed-terminal-directory-watch.mjs|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
         "scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs|typescript/unbound-method|2",
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|no-underscore-dangle|1",
@@ -191,6 +193,8 @@ describe("production lint suppressions", () => {
         // The Talk probe forwards native playback, analyser, processor, start, and stop methods with their original receivers.
         "scripts/lib/control-ui-talk-fixture.ts|typescript/unbound-method|5",
         "scripts/lib/plain-gh.mjs|no-warning-comments|1",
+        // Aggregate logs strip only SGR color and reject other control bytes that could hide errors.
+        "scripts/lib/release-validation-waivers.mjs|no-control-regex|2",
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         "scripts/lib/usage-bench-observer.mjs|typescript/unbound-method|1",
         // The frame census retains native methods and supplies their original receivers through .call.
@@ -238,6 +242,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/plugin-transform-preload.mjs|typescript/unbound-method|1",
         // The provider probe forwards native methods with their original receivers.
         "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // Node worker ports have no browser target origin.
+        "scripts/perf/remote-catalog-inheritance-measure.mjs|unicorn/require-post-message-target-origin|1",
         // SQLite observers preserve native methods for restoration and forward each live receiver.
         "scripts/perf/schema-crossing-observer.ts|@typescript-eslint/unbound-method|1",
         // Native transaction timing forwards the live receiver and restores the original method.
@@ -250,6 +256,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/session-pr-currency-measure.ts|typescript/unbound-method|1",
         // The subscription probe forwards track with the original AsyncWorkScope receiver.
         "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
+        // The resource probe forwards the live pool receiver and restores the exact captured method.
+        "scripts/perf/skill-resource-admission-measure.mjs|typescript/unbound-method|1",
         // The admission-charge probe forwards runTask with the original pool receiver.
         "scripts/perf/state-read-worker-bench.ts|typescript/unbound-method|1",
         // Backup attribution forwards the native SQLite receiver and restores both methods in finally.
@@ -453,8 +461,6 @@ describe("production lint suppressions", () => {
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
-        // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
-        "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
         // Browser preview selection reverses only freshly collected private arrays.
         "ui/src/pages/chat/components/chat-tool-cards.ts|unicorn/no-array-reverse|2",
         // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.

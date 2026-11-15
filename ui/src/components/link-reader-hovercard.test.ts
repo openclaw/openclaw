@@ -132,6 +132,49 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "suppresses held %s pointer and focus previews, then restores normal hover",
+    async (modifier) => {
+      const { anchor, provider } = createLink();
+      const request = connect(provider);
+      anchor.dispatchEvent(
+        new MouseEvent("pointerover", { bubbles: true, composed: true, [modifier]: true }),
+      );
+      anchor.focus();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(card()).toBeNull();
+      expect(request).not.toHaveBeenCalled();
+      document.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+      leave(anchor);
+      await hover(anchor);
+      expect(card()?.textContent).toContain("Keep previews compact");
+    },
+  );
+
+  it.each(["ctrlKey", "metaKey"] as const)(
+    "dismisses open and pending previews on %s without reopening on release",
+    async (modifier) => {
+      const { anchor, provider } = createLink();
+      connect(provider);
+      await hover(anchor);
+      expect(card()).not.toBeNull();
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, [modifier]: true }));
+      expect(card()).toBeNull();
+      document.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(card()).toBeNull();
+      leave(anchor);
+      anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+      document.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, [modifier]: true }));
+      await vi.advanceTimersByTimeAsync(300);
+      expect(card()).toBeNull();
+      window.dispatchEvent(new Event("blur"));
+      leave(anchor);
+      await hover(anchor);
+      expect(card()).not.toBeNull();
+    },
+  );
+
   it("preserves co-author faces, missing-face counts, and accessible credit", async () => {
     const { anchor, provider } = createLink();
     const imageUrl = preview().imageUrl;

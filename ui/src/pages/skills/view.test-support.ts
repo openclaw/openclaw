@@ -85,6 +85,7 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     readClawHubDetail: () => read(state.clawhubDetail, state.clawhubDetailError),
     clawhubSearchEpoch: 0,
     readClawHubSearch: () => read(true, value<string | null>("clawhubSearchError", null)),
+    libraryEntries: [],
     canUpdate: true,
     canInstall: true,
     loading: state.skillsLoading,

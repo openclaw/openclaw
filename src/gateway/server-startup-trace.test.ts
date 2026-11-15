@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
 import { createGatewayDispatchStartupTrace } from "../cli/startup-trace.js";
 import { measureDoctorConfigPreflightStep } from "../commands/doctor-config-preflight-measure.js";
+import * as workerCpu from "../infra/worker-cpu.js";
 import { captureWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
@@ -84,6 +85,12 @@ describe("gateway startup trace", () => {
     async (enabled) => {
       vi.stubEnv("OPENCLAW_GATEWAY_STARTUP_TRACE", enabled);
       const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(128 * 1024 * 1024);
+      vi.spyOn(workerCpu, "sampleTrackedWorkerMemory").mockReturnValue({
+        ...workerCpu.sampleTrackedWorkerMemory({ refresh: false }),
+        workerCount: 2,
+        workerHeapSampledCount: 0,
+        workerHeapTotalBytes: undefined,
+      });
       const info = vi.fn();
       const trace = createGatewayStartupTrace({ info } as never);
       try {
@@ -91,10 +98,10 @@ describe("gateway startup trace", () => {
           rss.mockReturnValue(256 * 1024 * 1024);
         });
         expect(info.mock.calls[0]?.[0]).not.toContain("rssMb=");
-        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
+        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=2 /);
         rss.mockReturnValue(512 * 1024 * 1024);
         trace.mark("ready");
-        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=0 /);
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=2 /);
       } finally {
         trace.close();
       }

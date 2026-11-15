@@ -70,7 +70,7 @@ describe("createAckReactionHandle", () => {
   });
 
   it("reports a synchronous scope failure during deferred ack removal", async () => {
-    const error = new Error("Plugin invocation scope is closed");
+    const error = new Error("Plugin fixture was reloaded or disabled");
     const { handle } = makeAck({
       remove: () => {
         throw error;

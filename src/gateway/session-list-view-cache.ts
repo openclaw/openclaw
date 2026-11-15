@@ -88,6 +88,34 @@ export function retainCurrentSessionListPartitions(
   }
 }
 
+/** Aggregate count and runtime-membership facts from admitted partitions. */
+export function mergeSessionListOwnerCounts(parts: SessionListFilteredEntries[]) {
+  const counts = new Map<
+    string,
+    NonNullable<SessionEntrySelection["ownerSessionCounts"]>[number]
+  >();
+  const ownerSessionProfiles = new Map<string, string>();
+  for (const part of parts) {
+    for (const count of part.ownerSessionCounts ?? []) {
+      const combined = counts.get(count.profileId);
+      if (combined) {
+        combined.open += count.open;
+      } else {
+        counts.set(count.profileId, { ...count });
+      }
+    }
+    part.ownerSessionProfiles?.forEach((profileId, key) =>
+      ownerSessionProfiles.set(key, profileId),
+    );
+  }
+  return {
+    ownerSessionProfiles,
+    ownerSessionCounts: [...counts.values()].toSorted((a, b) =>
+      a.profileId.localeCompare(b.profileId),
+    ),
+  };
+}
+
 export type SessionListView = {
   key: string;
   refs: number;
@@ -278,6 +306,16 @@ export class SessionListViewCache {
     this.bytes += bytes - view.bytes;
     view.refs = refs;
     view.bytes = bytes;
+    if (
+      this.bytes > MAX_ESTIMATED_BYTES &&
+      view.selection?.ownerSessionCounts &&
+      view.partitions?.size
+    ) {
+      // Retire count acceleration before displacing conditional sidebar baselines.
+      view.partitions = undefined;
+      this.update(view);
+      return;
+    }
     if ((view.rowHistory?.length ?? 0) > ROW_HISTORY_LIMIT) {
       this.retireOldestGeneration(view);
     }
@@ -290,14 +328,18 @@ export class SessionListViewCache {
       this.remove(view);
     }
     while (this.lists.size > MAX_VIEWS || this.bytes > MAX_ESTIMATED_BYTES) {
-      // Retire old comparison witnesses before an active reader's entire view.
+      // Retire optional count partitions, then old comparison witnesses, before whole views.
       // Keep its newest generation even while current rows await reconstruction.
       let history: SessionListView | undefined;
       if (this.lists.size <= MAX_VIEWS) {
         for (const candidate of this.lists.values()) {
-          if ((candidate.rowHistory?.length ?? 0) > 1) {
+          if (candidate.selection?.ownerSessionCounts && candidate.partitions?.size) {
+            candidate.partitions = undefined;
+            this.update(candidate);
+            return;
+          }
+          if (!history && (candidate.rowHistory?.length ?? 0) > 1) {
             history = candidate;
-            break;
           }
         }
       }

@@ -1,4 +1,5 @@
 import { randomUUID, X509Certificate } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 // Real authenticated Gateway, agent/tool dispatch and persisted creator effects.
 // Only provider HTTP is replayed; authorization and storage use production owners.
 import "../agents/prepared-model-runtime.js";
@@ -11,6 +12,7 @@ import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { getSessionControllerOperation } from "../sessions/session-controller.state.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
@@ -210,10 +212,29 @@ it(
       { timeoutMs: 65_000 },
     );
     await awaitGateBeforeSettlement(entered.promise, terminal, "model did not request creation");
+    const participants = expectDefined(
+      getSessionControllerOperation(parent.key)?.personalToolParticipants,
+      "active turn participants",
+    );
+    const steerAccepted = createDeferredCore();
+    const acceptParticipant = participants.accept.bind(participants);
+    const participantAcceptance = vi.spyOn(participants, "accept").mockImplementation((input) => {
+      acceptParticipant(input);
+      if (input.operatorAuthority?.profileId === people.selected!.id) {
+        steerAccepted.resolve();
+      }
+    });
+    cleanup.defer(() => participantAcceptance.mockRestore());
     const steer = await send(
       selected,
       "Use my selected execution identity for this request.",
       "steer",
+    );
+    // A started ACK owns input custody; the selected person must join this turn first.
+    await awaitGateBeforeSettlement(
+      steerAccepted.promise,
+      terminal,
+      "selected steering did not reach participant acceptance",
     );
     release.resolve();
     expect(await terminal).toMatchObject({ status: "ok" });

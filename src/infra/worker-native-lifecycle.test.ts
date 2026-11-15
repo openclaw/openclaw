@@ -45,6 +45,13 @@ const nativeExit = {
 };
 const cases = [
   { ending: "reference-liveness", activeCompleted: true },
+  ...(["close-live-worker", "close-owner-retry"] as const).map((ending) =>
+    Object.assign({ ending }, trueFields("refusedSourceUsable retryJoined freshSourceUsable")),
+  ),
+  {
+    ending: "close-teardown-failure",
+    ...trueFields("failedSourceRetained overlapRefused"),
+  },
   {
     ending: "resource-idle-broker",
     ...resourceCustody,

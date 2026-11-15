@@ -315,7 +315,7 @@ async function authenticateGatewayConnectCore(
 
     if (decision.kind === "reject-control-ui-insecure-auth") {
       const errorMessage =
-        "control ui requires device identity (use HTTPS or localhost secure context)";
+        "web app requires device identity (use HTTPS or localhost secure context)";
       markHandshakeFailure("control-ui-insecure-auth", {
         insecureAuthConfigured: false,
       });
@@ -570,7 +570,7 @@ async function authenticateGatewayConnectCore(
   if (controlUiBuildMismatch) {
     // Build identity predates this rejection. Frozen clients recognize the shipped
     // protocol-mismatch signal and surface its literal reload guidance.
-    const message = "protocol mismatch: Control UI updated; reload this page to continue";
+    const message = "protocol mismatch: OpenClaw updated; reload this page to continue";
     markHandshakeFailure("control-ui-build-mismatch", {
       clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
       gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,

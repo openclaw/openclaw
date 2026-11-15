@@ -37,12 +37,14 @@ function sessionEntry() {
   };
 }
 vi.mock("node:fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:fs")>();
-  return {
-    ...actual,
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
     stat: statRead.mockImplementation(actual.stat),
     watchFile: vi.fn(actual.watchFile),
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 vi.mock("./operator-role-policy.js", () => ({ resolveGatewayOperatorRoleActor: () => undefined }));
 vi.mock("./server-methods/session-scoped-read.js", () => ({

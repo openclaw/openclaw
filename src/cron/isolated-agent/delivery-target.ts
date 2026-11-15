@@ -112,8 +112,10 @@ export async function prepareCronDeliverySourceGenerations(
     requests.map(({ agentId, sourceConversation }) => ({
       agentId,
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-      ...sourceConversation,
-      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
+      sessionKey: sourceConversation.sessionKey,
+      sessionId: sourceConversation.sessionId,
+      // The creating conversation is linked by key; edits and resets keep it.
+      lifecycleRevision: null,
     })),
   );
 }
@@ -187,8 +189,9 @@ export async function resolveDeliveryTarget(
         ).prepareSessionGenerationFacts({
           agentId,
           storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-          ...source,
-          lifecycleRevision: source.lifecycleRevision ?? null,
+          sessionKey: source.sessionKey,
+          sessionId: source.sessionId,
+          lifecycleRevision: null,
         }));
       try {
         generation.assertCurrent();

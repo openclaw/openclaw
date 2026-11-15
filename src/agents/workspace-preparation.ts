@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { OptionalBootstrapFileName } from "../config/types.agent-defaults.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import { resolveUserPath } from "../utils.js";
 import { DuplicateAgentError } from "./agent-create-error.js";
@@ -11,8 +11,11 @@ import {
   DEFAULT_USER_FILENAME,
 } from "./workspace-bootstrap-policy.js";
 import { publishBootstrapFile } from "./workspace-bootstrap-publish.js";
-import { captureWorkspaceStateFilesystemGuard } from "./workspace-state-guard.js";
-import { resolveCanonicalWorkspacePath } from "./workspace-state-identity.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  validateWorkspaceFilesystemEvidence,
+  type WorkspaceFilesystemEvidence,
+} from "./workspace-state-guard.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
   mergeWorkspaceSetupState,
@@ -22,8 +25,12 @@ import {
 import type { WorkspaceStateGuard } from "./workspace-state-store.worker-contract.js";
 import { loadWorkspaceTemplate } from "./workspace-template-load.js";
 
-const preparationQueues = resolveGlobalMap<string, StoreWriterQueue>(
+const preparation = resolveGlobalSingleton(
   Symbol.for("openclaw.workspacePreparationQueues"),
+  () => ({
+    queues: new Map<string, StoreWriterQueue>(),
+    admissionTail: Promise.resolve(),
+  }),
 );
 
 // The initializer owns seeding even when ordinary turns use this workspace.
@@ -77,22 +84,33 @@ export async function seedDeferredWorkspaceDefaults(
 }
 
 /** Keep host filesystem preparation and its worker writes in one directory's FIFO interval. */
-export function runWorkspacePreparation<T>(
+export async function runWorkspacePreparation<T>(
   dir: string,
-  prepare: (assertFilesystem: () => void) => Promise<T>,
+  prepare: (filesystem: WorkspaceFilesystemEvidence) => Promise<T>,
 ): Promise<T> {
-  const assertFilesystem = captureWorkspaceStateFilesystemGuard(dir, false);
-  const canonicalDir = resolveCanonicalWorkspacePath(dir);
-  assertFilesystem();
-  return runQueuedStoreWrite({
-    queues: preparationQueues,
-    storePath: canonicalDir,
-    label: "Workspace preparation",
-    fn: async () => {
-      assertFilesystem();
-      return await prepare(assertFilesystem);
-    },
+  const admission = preparation.admissionTail.then(async () => {
+    const filesystem = await captureWorkspaceFilesystemEvidence(dir);
+    // Preserve invocation order through discovery, but never hold other directories
+    // behind an admitted operation. The wrapper keeps promise adoption out of the tail.
+    return {
+      completion: runQueuedStoreWrite({
+        queues: preparation.queues,
+        storePath: filesystem.canonical,
+        label: "Workspace preparation",
+        fn: async () => {
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          const result = await prepare(filesystem);
+          await validateWorkspaceFilesystemEvidence(filesystem);
+          return result;
+        },
+      }),
+    };
   });
+  preparation.admissionTail = admission.then(
+    () => {},
+    () => {},
+  );
+  return (await admission).completion;
 }
 
 export async function maybeWriteWorkspaceAttestation(
@@ -130,6 +148,8 @@ export async function maybeWriteWorkspaceAttestation(
       assertCurrent: assertHost,
       recoveryHoldPredicate: guard?.recoveryHoldPredicate,
       beforeLegacyApply: guard?.beforeLegacyApply,
+      filesystem: guard?.filesystem,
+      stateOwnerPath: guard?.stateOwnerPath,
     });
   } catch (error) {
     if (error instanceof DuplicateAgentError) {
