@@ -72,6 +72,16 @@ function readOpenAIResponsesCompactionReplayState(
     : undefined;
 }
 
+export function hasOpenAIResponsesItemRecovery(
+  replay: ProviderReplayState | undefined,
+  anchor: string,
+) {
+  const state = readOpenAIResponsesCompactionReplayState(replay);
+  return (
+    state?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE && state.itemRecovery === anchor
+  );
+}
+
 export function captureOpenAIResponsesCompaction(
   output: Pick<AssistantMessage, "providerReplay">,
   item: ReplayableResponseCompactionItem,
@@ -340,6 +350,7 @@ export function buildOpenAIResponsesCompactionReplayPlan(
   }
   if (compaction.mode === "item-recovery") {
     const owner = compaction.owner;
+    let replayMessages = messages;
     if (resolveFailedAssistantReplay(owner, { pairingAware: false }) === "drop") {
       // Keep a content-free boundary while normal transforms discard the failed output.
       const boundary: AssistantMessage = {
@@ -353,11 +364,11 @@ export function buildOpenAIResponsesCompactionReplayPlan(
         timestamp: owner.timestamp,
         providerReplay: owner.providerReplay,
       };
-      messages = [...messages];
-      messages.splice(messages.indexOf(owner), 0, boundary);
+      replayMessages = [...messages];
+      replayMessages.splice(messages.indexOf(owner), 0, boundary);
     }
     return {
-      messages,
+      messages: replayMessages,
       preserveUnframedToolResults: false,
       itemRecovery: { anchor: compaction.anchor },
     };

@@ -28,6 +28,7 @@ import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
+  hasOpenAIResponsesItemRecovery,
   isSafeResponsesReplayItemId,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -644,7 +645,7 @@ function convertResponsesMessagesWithStyle(
       "role" in msg &&
       msg.role === "assistant" &&
       replayPlan.itemRecovery &&
-      msg.providerReplay?.itemRecovery === replayPlan.itemRecovery.anchor
+      hasOpenAIResponsesItemRecovery(msg.providerReplay, replayPlan.itemRecovery.anchor)
     ) {
       pastRecoveryBoundary = true;
     }
@@ -659,7 +660,9 @@ function convertResponsesMessagesWithStyle(
     // Delayed async results keep their call's repair identity across the boundary.
     if (recoveryAnchor && msg.role === "assistant") {
       for (const block of msg.content) {
-        if (block.type === "toolCall") recoveredCalls?.add(block.id);
+        if (block.type === "toolCall") {
+          recoveredCalls?.add(block.id);
+        }
       }
     }
     // Prepared suffix results resolve IDs against the current request's call map.
