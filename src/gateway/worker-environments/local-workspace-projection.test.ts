@@ -212,7 +212,7 @@ it("reuses warm workspaces and reconciles edits", () => proveWarmWorkspaceReuse(
 
 it("isolates cold capacity", ({ signal }) => proveColdPreparationCapacityIsolation(owner, signal));
 
-it("attributes sandbox projection custody and joined preparation waits", () =>
+it("attributes cold sandbox preparation, projection custody, and joined waits", () =>
   proveWorkspaceWaitAttribution(owner));
 
 it("coalesces concurrent cold and warm sandbox preparations without retaining completed scans", () =>

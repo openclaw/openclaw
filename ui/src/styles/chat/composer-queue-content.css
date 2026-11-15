@@ -327,6 +327,10 @@
   overflow-wrap: break-word;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  /* The waiting message keeps macOS stem darkening so it reads at the weight it
+     has once sent (.chat-text); queue chrome keeps the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .chat-queue__edit-input {

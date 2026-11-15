@@ -80,6 +80,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     sandbox,
   } = connection;
   const { toolBridge } = attemptTools;
+  const collaboration = buildTurnCollaborationMode(params).settings;
   const isTelegram = (params.messageChannel ?? params.messageProvider) === "telegram";
   const usesSelectedHistory = Boolean(
     activeContextEngine ||
@@ -222,7 +223,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
               ? [replacedSystemPromptForBudget]
               : [openClawBaseInstructions, baseDeveloperInstructions]),
             refreshableInstructions,
-            buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
+            collaboration.developer_instructions ?? undefined,
             JSON.stringify(toolBridge.specs),
           ),
           prompt: joinPresentSections(
@@ -345,9 +346,19 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       deferredHistoryRejection = error;
     }
   }
-  // The binding owner decides native continuity; thread startup may later replace a binding.
-  const initialNativeThreadId = mutable.startupBinding?.threadId;
+  // The binding owner decides native continuity. The connection may already have rotated
+  // the admitted binding away, and thread startup may later replace it.
+  const { initialNativeThreadId } = connection;
   let nativeThreadAction: "started" | "resumed" | "forked" | undefined;
+  const resolveContinuity = () =>
+    resolveCodexPromptContinuity({
+      initialNativeThreadId,
+      nativeThreadAction,
+      currentNativeThreadId: mutable.startupBinding?.threadId,
+      historyIncluded:
+        promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
+    });
+  let reportedContinuity: ReturnType<typeof resolveContinuity> | undefined;
   // Refresh changes the transport prompt, but retains the admitted request's recorder.
   const buildPromptFromCurrentInputs = () =>
     resolveAgentHarnessBeforePromptBuildResult({
@@ -373,13 +384,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         // Shipped prompt-hook capabilities revalidate synchronously after awaits.
         assertActive: connection.assertLegacyCurrent,
       },
-      continuity: resolveCodexPromptContinuity({
-        initialNativeThreadId,
-        nativeThreadAction,
-        currentNativeThreadId: mutable.startupBinding?.threadId,
-        historyIncluded:
-          promptState.noEngineContinuityProjectionApplied || contextEngineBootstrapPromptApplied,
-      }),
+      continuity: (reportedContinuity = resolveContinuity()),
     });
   const decorateCodexTurnPromptText = (
     promptBuildResult: {
@@ -452,29 +457,27 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
   };
   let parentLocalEgress = false;
   let inferenceInstructions: string | undefined;
+  let threadDeveloperInstructions: string | undefined;
   let baseInDeveloperCarrier = false;
   // Observability view of OpenClaw-managed developer instructions; not the complete
   // native/provider prompt. Reuse registered relay text so diagnostics include every
   // relay component. Hook context is already in that text, so only native policy
   // precedes it. These projections must never feed native thread requests.
   const buildRenderedCodexDeveloperInstructions = () =>
-    inferenceInstructions !== undefined
-      ? joinPresentSections(
-          renderCodexThreadPolicy(
-            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
-            turnState.promptBuild.threadDeveloperInstructions ??
-              turnState.promptBuild.developerInstructions,
-          ),
-          inferenceInstructions,
-        )
-      : joinPresentSections(
-          renderCodexThreadPolicy(
-            baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
-            turnState.promptBuild.developerInstructions,
-            refreshableInstructions,
-          ),
-          buildTurnCollaborationMode(params).settings.developer_instructions ?? undefined,
-        );
+    joinPresentSections(
+      renderCodexThreadPolicy(
+        baseInDeveloperCarrier ? reportedOpenClawBaseInstructions : undefined,
+        threadDeveloperInstructions ??
+          (inferenceInstructions !== undefined
+            ? (turnState.promptBuild.threadDeveloperInstructions ??
+              turnState.promptBuild.developerInstructions)
+            : joinPresentSections(
+                turnState.promptBuild.developerInstructions,
+                refreshableInstructions,
+              )),
+      ),
+      inferenceInstructions ?? collaboration.developer_instructions ?? undefined,
+    );
   // Reports, hooks, trajectory, and history budgets also count the pinned base. The
   // rotation fuse does not: native token counts already include it. Until the thread
   // lifecycle reports the base it placed, this is the pre-startup estimate.
@@ -539,11 +542,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
     }
     return await applyResumeStaleBindingContinuityProjection(binding);
   };
-  const applyNoContextEngineContinuityProjection = async (
+  const applyThreadContinuityProjection = async (
     action: "started" | "resumed" | "forked",
     binding?: NonNullable<typeof mutable.startupBinding>,
   ) => {
-    nativeThreadAction = action;
     // A bounded history can retain an answer after its user turn falls outside the window.
     // Fresh threads need that text (or summaries), but tool-only suffixes are not continuity.
     // Resumed bindings hand off only newer local conversation and durable notes.
@@ -602,6 +604,18 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       return true;
     }
     return false;
+  };
+  // Returns whether the turn prompt needs a rebuild, including when a resume fell back
+  // to a new thread: enrichment that saw `resumed` must run again and see `invalidated`.
+  const applyNoContextEngineContinuityProjection = async (
+    action: "started" | "resumed" | "forked",
+    binding?: NonNullable<typeof mutable.startupBinding>,
+  ) => {
+    nativeThreadAction = action;
+    return (
+      (await applyThreadContinuityProjection(action, binding)) ||
+      resolveContinuity().state !== reportedContinuity?.state
+    );
   };
   const precomputedStaleBindingContinuityProjectionApplied =
     await precomputeNoContextEngineStaleBindingProjection();
@@ -688,6 +702,10 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
         Object.assign(systemPromptReport, buildSystemPromptReport(!include));
         workspaceReferencesIncluded = include;
       }
+    },
+    setThreadDeveloperInstructions: (instructions: string) => {
+      threadDeveloperInstructions = instructions;
+      Object.assign(systemPromptReport, buildSystemPromptReport(!workspaceReferencesIncluded));
     },
     setInferenceInstructions: (instructions: string) => {
       inferenceInstructions = instructions;

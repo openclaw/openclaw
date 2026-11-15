@@ -1,3 +1,0 @@
-# Workflow-boundary regressions for authenticated retained npm producer identity,
-# ordinary and historical publication, and mismatched/unbound producer rejection.
-96

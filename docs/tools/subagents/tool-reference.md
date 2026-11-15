@@ -152,7 +152,20 @@ Cloud placement requires a live hosted Gateway session; standalone and local-emb
 
 An error with `childSessionKey` means the child was retained. `initialTaskStatus: "not-sent"` means the tool did not submit its initial task; `"unknown"` means task admission was attempted but not confirmed. Inspect that child and its placement before retrying. Do not repeat the spawn merely because provisioning or the initial reply timed out. An attempted task that cannot be registered is settled through exact-run cancellation; its session and worker are preserved for inspection.
 
-Selecting a cloud profile is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
+To run the child on one paired device instead, pass that device's node ID (the `nodeId` the `nodes` tool reports):
+
+```json
+{
+  "task": "Run the macOS UI tests and report failures",
+  "visible": true,
+  "worktree": true,
+  "placement": { "kind": "device", "deviceId": "<paired-device-id>" }
+}
+```
+
+The Gateway dispatches the child with the same checks as `sessions.dispatch` with `deviceId`: the device must be paired and connected, and it must support the child's runtime and execution mode. Otherwise the spawn returns an error naming the device and the reason, keeps the child with `initialTaskStatus: "not-sent"`, and runs nothing elsewhere. On success, the receipt's `placement` names the selected device. See [Placement and machine selection](/gateway/cloud-workers/placement-and-machine-selection) for device requirements.
+
+Selecting a cloud profile or paired device is available only to Gateway-side visible spawns. The restricted cloud-worker spawn tool keeps its existing parent-profile inheritance contract; it does not accept a different profile, OS, or size.
 
 ### Delegation prompt mode
 
@@ -225,7 +238,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Override thinking level for the sub-agent run. Not available with `visible: true`.
 </ParamField>
 <ParamField path="cyberAccessProgram" type='"standard" | "daybreak_blue" | "daybreak_red"'>
-  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`.
+  Select the child's OpenAI [cyber Access](/providers/openai/models#chat-access-control): `daybreak_blue` is Blue and `daybreak_red` is Red. When omitted, a same-agent child on the requester's model keeps the requester's saved session Access; a child on another agent or model starts at its model default. The value is saved on the child session like a chat Access selection, and both the OpenClaw runtime and the Codex runtime check it against the child's account and model before every model request, so an unavailable program fails the child run instead of downgrading. Native sub-agents only (hidden or `visible: true`); rejected with `runtime: "acp"`. Code-mode `agents.run(prompt, { cyberAccessProgram })` and plugin `runtime.subagent.native.spawn({ ..., cyberAccessProgram })` use the same native spawn owner and checks. Session status shows a saved Access selection; this is a selected control, not proof that an account or model can use it.
 </ParamField>
 <ParamField path="thread" type="boolean" default="false">
   When `true`, requests channel thread binding for this sub-agent session.
@@ -258,7 +271,7 @@ In either mode, internal QA, research, coding, review, and test lanes use ordina
   Create a persistent dashboard session only when the user requests a separate session or needs to return to and steer the work independently. Omit this flag or use `false` for internal QA, research, coding, review, and test workers supporting the parent task. Visible spawns support only `runtime: "subagent"` and always keep the created session.
 </ParamField>
 <ParamField path="placement" type="object">
-  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
+  Omit to default to local execution, or use `{ kind: "local" }` explicitly without cloud selectors. For a visible worktree session on a configured cloud profile, use `{ kind: "profile", profileId, os?, machineClass? }` with `visible: true` and `worktree: true`; OS and machine IDs come from cloud profile discovery. Omitted cloud selectors use the profile defaults. For one paired device, use `{ kind: "device", deviceId }` with the same `visible: true` and `worktree: true`; an unavailable or incompatible device fails the spawn. The Gateway creates the cloud child without starting its task, dispatches it, then admits its first task on the worker. Invalid placement and failed or uncertain cloud starts never silently fall back to local execution; a failed cloud start retains the child for inspection.
 </ParamField>
 <ParamField path="group" type="string">
   Optional custom sidebar group for a visible session; a new name creates the group. Omitted, empty, and whitespace-only values mean ungrouped and are also accepted for hidden or ACP runs. A nonempty group requires `visible: true`.
@@ -324,8 +337,16 @@ announcing children before answering. It does not collect Swarm results:
 collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
 Code Mode, and do not send completion notifications.
 
+`sessions_yield` also awaits wake-armed background commands that the current
+run started: the exec running result says so. Their first exit resumes the
+yielded run with the exit result, bounded by the command's `timeoutSeconds`.
+This is how a hidden subagent or an isolated cron run waits for a command,
+because ending such a run's turn returns its final result instead of waiting.
+A yielded subagent resumes as its original task; a cron run resumes in place,
+and the resumed turn's reply is the run's result.
+
 In automation turns, including cron jobs and jobs running in an existing session,
-`sessions_yield` returns `status: "yielded"` and ends the current model turn.
+`sessions_yield` for children returns `status: "yielded"` and ends the current model turn.
 The scheduler delivers child output under the job's delivery policy; yielding
 does not register an interactive requester continuation or an incoming-message
 wait, even with `waitFor: "message"`.
@@ -379,7 +400,7 @@ message: those completions resume the session. There, `waitFor: "message"` is
 not applied. The yield is an ordinary child wait, the requester gets no pause
 notice, and the `yielded` result carries a `note` saying so. Omit `waitFor`
 when yielding for your own children.
-Without a real pending child/runtime completion or this explicit message intent,
+Without a real pending child/runtime completion, an awaited background command, or this explicit message intent,
 yield is rejected. Return completed work as the normal final response:
 `sessions_yield` is not a final-result submission. An accepted yield pauses
 the child run instead of completing it. For a child with announced completion,

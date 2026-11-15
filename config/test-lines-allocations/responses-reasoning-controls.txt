@@ -1,2 +1,0 @@
-3
-# Keep in-place mutable tool schema edits visible on continued requests.

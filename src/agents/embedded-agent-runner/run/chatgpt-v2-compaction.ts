@@ -7,11 +7,11 @@ import {
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import { SAFETY_MARGIN } from "../../compaction-planning.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { getRawSessionAppendMessageAsync } from "../../session-raw-append-message.js";
 import { agentSessionRunProviderCompaction } from "../../sessions/agent-session-types.js";
 import type { AgentSession } from "../../sessions/agent-session.js";
+import { SAFETY_MARGIN } from "../../sessions/context-token-pressure.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import { SessionTranscriptMessageCommittedError } from "../../sessions/session-manager-message-error.js";
 import { withSessionManagerWriteAssertion } from "../../sessions/session-manager-write-admission.js";

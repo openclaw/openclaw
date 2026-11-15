@@ -1,3 +1,4 @@
+import { composerInputElement } from "../lib/composer-input.ts";
 import type { LobsterComposerElements } from "./lobster-pet-contract.ts";
 
 export type LobsterSceneLane = { start: number; end: number; y: number };
@@ -263,9 +264,10 @@ export class LobsterComposerGeometry {
       }
       this.observed = observed;
     }
-    const editorBox = editor.getBoundingClientRect();
+    const editorSurface = composerInputElement(editor);
+    const editorBox = editorSurface.getBoundingClientRect();
     let placeholderRight = editorBox.left;
-    const style = getComputedStyle(editor);
+    const style = getComputedStyle(editorSurface);
     // The aria-label holds the complete placeholder while its visible text
     // types in. Measure that full string so a route cannot overtake it.
     const label = editor.getAttribute("aria-label") ?? editor.placeholder;

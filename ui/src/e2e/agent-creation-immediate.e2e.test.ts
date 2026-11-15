@@ -100,7 +100,9 @@ suite.define(() => {
         },
       });
       const dialog = await openCreationDialog(page);
-      await page.waitForTimeout(250);
+      await expect
+        .poll(() => dialog.evaluate((element) => element.closest("dialog")?.dataset.phase))
+        .toBe("open");
       const initialHeight = await dialog.evaluate(
         (element) => element.getBoundingClientRect().height,
       );

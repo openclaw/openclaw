@@ -59,7 +59,7 @@ async function resolveGatewaySkillBins(
         : {}),
     });
     return {
-      skillBins: resolveSkillBinTrustEntries(collectSkillBins(eligible), pathEnv),
+      skillBins: await resolveSkillBinTrustEntries(collectSkillBins(eligible), pathEnv),
       pathEnv,
       source: { workspaceDir, sourceVersion },
     };
@@ -91,14 +91,11 @@ export async function evaluateGatewayShellAllowlist(
 
 /**
  * Skill-bin authority as the last async re-resolution verified it, held so native initiation can
- * recheck it synchronously: the skill source revision discovery read, and the bins that authorized
- * the command with the PATH they resolve on.
+ * recheck it synchronously: the skill source revision that discovery read.
  */
 export type HeldGatewaySkillBinAuthority = {
   workspaceDir: string;
   sourceVersion: number;
-  pathEnv: string;
-  bins: string[];
 };
 
 type GatewaySkillBinSegments = {
@@ -115,9 +112,9 @@ function listSkillAdmittedSegments(params: GatewaySkillBinSegments): ExecCommand
  * trust no longer covers. The approvals file records only the `autoAllowSkills` flag, never which
  * skill or executable authorized the command, so the committed `requireAutoAllowSkills` recheck
  * cannot see the trusted name being repointed at a different executable while approval settles.
- * Re-resolving closes that window before the process can perform any I/O. Fails closed: a scope
- * that no longer resolves yields no bins, which denies. While trust holds, also returns the
- * authority to hold through native initiation.
+ * Re-resolving closes that window before launch preparation. Fails closed: a scope that no longer
+ * resolves yields no bins, which denies. While trust holds, also returns the authority to hold
+ * through native initiation.
  */
 export async function verifyGatewaySkillBinAuthority(
   params: GatewaySkillBinSegments & {
@@ -133,39 +130,29 @@ export async function verifyGatewaySkillBinAuthority(
   if (!params.autoAllowSkills) {
     return { revoked: firstSkillSegment };
   }
-  const { skillBins, pathEnv, source } = await resolveGatewaySkillBins(params.allowlistParams);
-  const revoked = skillSegments.find(
-    (segment) => !isSegmentAuthorizedBySkillBins({ segment, skillBins }),
-  );
-  if (revoked || !source) {
-    return { revoked: revoked ?? firstSkillSegment };
+  const { skillBins, source } = await resolveGatewaySkillBins(params.allowlistParams);
+  for (const segment of skillSegments) {
+    if (!(await isSegmentAuthorizedBySkillBins({ segment, skillBins }))) {
+      return { revoked: segment };
+    }
   }
-  // Hold only the bins that authorized a segment, so native initiation re-resolves just those.
-  const bins = skillBins
-    .filter((entry) =>
-      skillSegments.some((segment) =>
-        isSegmentAuthorizedBySkillBins({ segment, skillBins: [entry] }),
-      ),
-    )
-    .map((entry) => entry.name);
-  return { held: { ...source, pathEnv, bins: [...new Set(bins)] } };
+  return source ? { held: source } : { revoked: firstSkillSegment };
 }
 
 /**
  * Synchronous recheck of held skill authority for the final native-initiation boundary, where no
- * await may separate the check from the spawn. Denies when nothing was verified, when the skill
- * source revision moved since verification (a skill installed, removed or reconfigured), or when an
- * authorizing bin now resolves to a different executable. Uses the same identity comparison as
- * allowlist evaluation, so the two cannot drift.
+ * await may separate the check from the spawn. Like the other initiation checks it reads only
+ * in-memory authority: it denies when nothing was verified or when the skill source revision moved
+ * since verification (a skill installed, removed or reconfigured). Executable identity is
+ * filesystem state, so it is re-resolved by the async pre-launch recheck instead, as the approval
+ * cwd and mutable-file bindings are.
  */
 export function findStaleHeldGatewaySkillBinSegment(
   params: GatewaySkillBinSegments & { held?: HeldGatewaySkillBinAuthority },
 ): ExecCommandSegment | undefined {
-  const skillSegments = listSkillAdmittedSegments(params);
   const held = params.held;
   if (!held || getSkillsSourceVersion(held.workspaceDir) !== held.sourceVersion) {
-    return skillSegments[0];
+    return listSkillAdmittedSegments(params)[0];
   }
-  const skillBins = resolveSkillBinTrustEntries(held.bins, held.pathEnv);
-  return skillSegments.find((segment) => !isSegmentAuthorizedBySkillBins({ segment, skillBins }));
+  return undefined;
 }

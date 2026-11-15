@@ -22,6 +22,7 @@ export async function readSessionSharingFactsInWorker(
     snapshotFields: [],
     includeMembers: true,
     includeAuthorization: true,
+    pointRead: true as const,
   };
   // Match ordinary metadata reads so committed actor facts serve warmed admission.
   let loaded = await readSessionEntriesFromStoreInWorker(request, captureSource);

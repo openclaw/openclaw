@@ -1,6 +1,8 @@
 import type { FsSafeNativeMode } from "@openclaw/fs-safe/config";
 import type { CloneFileMetadata, TreeCloneBackend } from "@openclaw/fs-safe/copy";
 import type { DarwinAclInspection } from "@openclaw/fs-safe/permissions";
+import type { ScratchTreeResult } from "./scratch-cleanup-tree.js";
+
 export type { CloneFileMetadata } from "@openclaw/fs-safe/copy";
 
 export type FsSafeCopyRead =
@@ -39,6 +41,7 @@ export type ProvisionCopyDetails = {
 };
 
 export type FsSafeCopyReply =
+  | ScratchTreeResult
   | { type: "probe"; backend: TreeCloneBackend | undefined; nativeMode: FsSafeNativeMode }
   | { type: "metadata"; entries: (CloneFileMetadata | undefined)[] }
   | { type: "acl"; acl: DarwinAclInspection }

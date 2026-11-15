@@ -243,6 +243,7 @@ export function buildCodexConversationTurnInstructions(
     "<conversation_instructions>",
     splitCodexExtraSystemPrompt(params).turn ??
       "No additional conversation instructions for this turn.",
+    "### Tool Bindings",
     `Current OpenClaw tool bindings for this turn (accepted declarations alone do not grant execution): ${availableNames.length ? availableNames.toSorted().join(", ") : "none"}.`,
     "</conversation_instructions>",
   ].join("\n\n");

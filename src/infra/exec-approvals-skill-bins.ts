@@ -50,17 +50,17 @@ export function buildSkillBinTrustIndex(
   return trustByName;
 }
 
-export function isSkillAutoAllowedSegment(params: {
+export async function isSkillAutoAllowedSegment(params: {
   segment: ExecCommandSegment;
   allowSkills: boolean;
   skillBinTrust: ReadonlyMap<string, ReadonlySet<string>>;
-}): boolean {
+}): Promise<boolean> {
   if (!params.allowSkills) {
     return false;
   }
   const resolution = params.segment.resolution;
   const execution = resolveExecutionTargetResolution(resolution);
-  const trustPath = resolveExecutionTargetTrustPath(resolution);
+  const trustPath = await resolveExecutionTargetTrustPath(resolution);
   if (!execution?.resolvedPath || !trustPath) {
     return false;
   }
@@ -81,10 +81,10 @@ export function isSkillAutoAllowedSegment(params: {
  * identity comparison the allowlist evaluation applies. Shared so a caller revalidating skill
  * authority before launch cannot drift from the check that granted it.
  */
-export function isSegmentAuthorizedBySkillBins(params: {
+export async function isSegmentAuthorizedBySkillBins(params: {
   segment: ExecCommandSegment;
   skillBins: readonly SkillBinTrustEntry[];
-}): boolean {
+}): Promise<boolean> {
   return isSkillAutoAllowedSegment({
     segment: params.segment,
     allowSkills: params.skillBins.length > 0,

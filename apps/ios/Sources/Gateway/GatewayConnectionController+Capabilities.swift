@@ -32,7 +32,7 @@ extension GatewayConnectionController {
         }
         // A failed switch keeps the previous route paused until its retry, trust, or cancel decision.
         guard let cfg = appModel.activeGatewayConnectConfig,
-              appModel.gatewayAutoReconnectEnabled,
+              appModel.canAutoReconnect,
               appModel.unresolvedGatewayPreconnectStableID == nil
         else { return }
         let generation = appModel.gatewayConnectGeneration
@@ -45,7 +45,7 @@ extension GatewayConnectionController {
         guard !Task.isCancelled,
               !self.hasPendingForgetCleanup(stableID: cfg.stableID),
               cfg.ingressAuthorization?.isCurrent() != false,
-              appModel.gatewayAutoReconnectEnabled,
+              appModel.canAutoReconnect,
               appModel.unresolvedGatewayPreconnectStableID == nil,
               appModel.activeGatewayConnectConfig?.hasSameConnectionInputs(as: cfg) == true
         else { return }

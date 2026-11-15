@@ -28,6 +28,7 @@ import { listen } from "../../../lib/reactive/listener.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectOwner, projectSource } from "../../../lib/reactive/projection.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
+import { TemplateCreatorReview } from "../../templates/creator-review.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import {
   getExpandedToolCards,
@@ -153,8 +154,10 @@ export function ChatThread(input: ChatThreadInput) {
                   ref={[elementRef(input.bindViewport)]}
                 >
                   {!heldWarmBoot && (
-                    <div class="chat-thread-inner">
-                      <ChatConversationLoading route />
+                    <div class="chat-thread-content">
+                      <div class="chat-thread-inner">
+                        <ChatConversationLoading route />
+                      </div>
                     </div>
                   )}
                 </div>
@@ -516,7 +519,14 @@ function ChatThreadContent(input: ChatThreadInput & { presented: boolean }) {
             name: input.props.assistantName,
           }}
         />
-        {contents()}
+        <div class="chat-thread-content">
+          {contents()}
+          <Show when={input.props.applicationContext}>
+            {(context) => (
+              <TemplateCreatorReview context={context()} sessionKey={input.props.sessionKey} />
+            )}
+          </Show>
+        </div>
         <Show when={commentPins() ? getTranscriptState(paneId()) : undefined} keyed>
           {(threadState) => (
             <Loading>

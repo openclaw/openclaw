@@ -14,6 +14,7 @@ import type {
   SessionActorMemoryAnchorReads,
 } from "./session-actor-memory-history-facts-contract.js";
 import type {
+  SessionContextSeedRequest,
   PreparedSessionTranscriptHydration,
   SessionModelContextLimits,
   SessionTranscriptModelContext,
@@ -46,7 +47,7 @@ export type SessionActorMemoryHistoryReads = ProjectionReads &
       output: PreparedSessionTranscriptHydration;
     };
     "session.history.context-messages": {
-      input: Target;
+      input: Target & { seed?: SessionContextSeedRequest };
       output: SessionTranscriptContextSnapshot;
     };
     "session.history.context": {

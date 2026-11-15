@@ -1,6 +1,7 @@
 import { isIrohEndpointKey } from "../../../packages/openclaw-id-protocol/src/index.js";
 import type { OpenClawIdAuthority } from "./authority.js";
 import { clawOriginOfRecord, setOpenClawIdClawOriginResolver } from "./claw-origin.js";
+import { setOpenClawIdOwnerAccountResolver } from "./owner-account.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   setOpenClawIdNodeDescriptionLookup,
@@ -61,6 +62,11 @@ export function createTunnelPrincipalPublisher(params: {
       setOpenClawIdClawOriginResolver(() =>
         params.enabled() ? clawOriginOfRecord(params.current()?.current()) : undefined,
       );
+      setOpenClawIdOwnerAccountResolver(() =>
+        params.enabled()
+          ? (params.current()?.current()?.discovery.owner_account_id ?? undefined)
+          : undefined,
+      );
     },
     stop(): void {
       setOpenClawIdNodeDescriptionLookup(undefined);
@@ -68,6 +74,7 @@ export function createTunnelPrincipalPublisher(params: {
       setOpenClawIdTunnelPrincipalResolver(undefined);
       setOpenClawIdTunnelPrincipalLookup(undefined);
       setOpenClawIdClawOriginResolver(undefined);
+      setOpenClawIdOwnerAccountResolver(undefined);
     },
   };
 }

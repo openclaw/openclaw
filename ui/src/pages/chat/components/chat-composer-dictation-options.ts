@@ -1,4 +1,5 @@
 import { t } from "../../../i18n/index.ts";
+import { focusComposerInput, selectComposerInput } from "../../../lib/composer-input.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
@@ -51,9 +52,8 @@ export function createComposerDictationOptions(
         if (!textarea) {
           return;
         }
-        textarea.focus({ preventScroll: true });
-        textarea.selectionStart = insertion.caret;
-        textarea.selectionEnd = insertion.caret;
+        focusComposerInput(textarea, { preventScroll: true });
+        selectComposerInput(textarea, insertion.caret, insertion.caret);
       });
     },
     onError: (

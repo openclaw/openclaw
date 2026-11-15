@@ -108,7 +108,6 @@ suite.define(() => {
       expect(new URL(page.url()).hash).toBe("#settings-session-sources");
     });
   });
-
   it("indexes source labels before Appearance and waits for the catalog", async () => {
     await suite.withPage({}, async ({ page }) => {
       const gateway = await installMockGateway(page, {
@@ -125,14 +124,15 @@ suite.define(() => {
       await sidebar.getByRole("link", { name: /Session sources/ }).click();
       await gateway.waitForRequest("plugins.list");
       const section = page.locator("#settings-session-sources");
-      await section.getByRole("status", { name: "Loading…", exact: true }).waitFor();
+      const loading = section.getByRole("status", { name: "Loading…", exact: true });
+      await expectCount(loading, 1);
+      expect(await loading.getAttribute("aria-busy")).toBe("true");
       expect(await section.getByRole("switch").count()).toBe(0);
       expect(await gateway.getRequests("config.set")).toHaveLength(0);
       await gateway.resolveDeferred("plugins.list");
       await expectCount(section.getByRole("switch"), 2);
     });
   });
-
   it("navigates from the sidebar and independently saves source preferences", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, { featureMethods, methodResponses });

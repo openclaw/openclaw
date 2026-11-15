@@ -44,7 +44,15 @@ export const verifyAgentDatabaseStartupIntegrity: AgentDatabaseStartupVerifier =
     const startedAt = Date.now();
     try {
       try {
-        await assertSqliteIntegrityInWorker(pathname, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, checkSignal);
+        await assertSqliteIntegrityInWorker(
+          pathname,
+          OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          checkSignal,
+          undefined,
+          undefined,
+          undefined,
+          { priority: "background" },
+        );
       } catch (error) {
         assertVerificationCurrent();
         if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {

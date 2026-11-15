@@ -160,22 +160,15 @@ describe.skipIf(process.platform === "win32")(
     };
 
     // The spawn preflight has already re-resolved skill trust when these withdrawals land, so only a
-    // synchronous recheck at native initiation can stop the launch.
+    // synchronous recheck at native initiation can stop the launch. That recheck reads in-memory
+    // skill revisions only; a repointed bin is filesystem state, caught by the async spawn-boundary
+    // recheck (auto-allow-skills suite).
     it.each([
       { name: "the authorizing skill is uninstalled", withdraw: uninstallSkill },
       {
         name: "the executing agent's skill is uninstalled under a borrowed policy",
         withdraw: uninstallSkill,
         borrowedPolicy: true,
-      },
-      {
-        name: "the trusted bin name is repointed",
-        withdraw: () => {
-          const swapped = path.join(root, "swapped-tool");
-          fs.copyFileSync("/usr/bin/touch", swapped);
-          fs.rmSync(path.join(binDir, "skill-tool"));
-          fs.symlinkSync(swapped, path.join(binDir, "skill-tool"));
-        },
       },
     ])("denies at native initiation when $name after preflight", async (withdrawal) => {
       launchWait.during = withdrawal.withdraw;

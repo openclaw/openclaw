@@ -14,7 +14,6 @@ import { buildInterSessionPromptContext } from "../../../sessions/input-provenan
 import { getUserTurnTranscriptAdmissionOwner } from "../../../sessions/user-turn-transcript-admission.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
-import { runAuthorizedPromptBuildForTurn } from "../../authorized-prompt-build.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import {
   buildAgentInternalEventContext,
@@ -241,8 +240,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   const authorizedHookResult =
     preserveExactPrompt || !hookRunner || !attempt.toolAuthorityFingerprint || !assertHostActive
       ? undefined
-      : await runAuthorizedPromptBuildForTurn(
-          hookRunner,
+      : await hookRunner.runAuthorizedPromptBuild(
           {
             ...promptEvent,
             // The embedded runner owns its transcript; there is no native binding to invalidate.

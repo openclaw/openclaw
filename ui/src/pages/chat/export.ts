@@ -1,7 +1,10 @@
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { t } from "../../i18n/index.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
-import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
+import {
+  isStandaloneToolMessageForDisplay,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
 import { pluginInlineViewItems } from "../../lib/chat/plugin-inline-views.ts";
 import { resolveMessageSenderLabel } from "../../lib/chat/sender-label.ts";
@@ -23,6 +26,13 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
   const lines: string[] = [];
   const seen = new Set<string>();
   for (const [index, msg] of history.entries()) {
+    const m = msg as Record<string, unknown>;
+    // The export is the readable conversation: user and assistant turns only.
+    // Tool calls, tool results, and system traffic are activity, not turns.
+    const role = normalizeRoleForGrouping(typeof m.role === "string" ? m.role : "unknown");
+    if ((role !== "user" && role !== "assistant") || isStandaloneToolMessageForDisplay(msg)) {
+      continue;
+    }
     const text = extractTextCached(msg) ?? "";
     const views = pluginInlineViewItems(
       { kind: "message", key: "export:" + index, message: msg },
@@ -35,14 +45,10 @@ export function buildChatMarkdown(messages: unknown[], assistantName: string): s
     if (!content.trim()) {
       continue;
     }
-    const m = msg as Record<string, unknown>;
-    const role = normalizeRoleForGrouping(resolveMessageRole(msg));
     const speaker =
       role === "user"
         ? (resolveMessageSenderLabel(msg) ?? t("chat.messages.unattributedSender"))
-        : role === "assistant"
-          ? (resolveMessageSenderLabel(msg) ?? assistantName)
-          : "Tool";
+        : (resolveMessageSenderLabel(msg) ?? assistantName);
     const ts = timestampMsToIsoString(m.timestamp) ?? "";
     lines.push(`## ${speaker}${ts ? ` (${ts})` : ""}`, "", content, "");
   }

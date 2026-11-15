@@ -9,7 +9,10 @@ import {
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { boundInFlightRunSnapshotForChatHistory } from "./chat-history-budget.js";
 import { resolveInFlightRunSnapshot } from "./chat-inflight-snapshot.runtime.js";
-import { updateChatRunProgressSnapshot } from "./server-chat-progress-snapshot.js";
+import {
+  readChatRunProgressEvents,
+  updateChatRunProgressSnapshot,
+} from "./server-chat-progress-snapshot.js";
 import { createChatRunState, type ChatRunPlanSnapshot } from "./server-chat-state.js";
 import { createRpcSourceForTest, claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -31,7 +34,7 @@ it.each([2, 50])("keeps the newest %i progress events with bounded serialization
       },
     });
   }
-  const events = progress?.events ?? [];
+  const events = readChatRunProgressEvents(progress) ?? [];
   expect(events).toHaveLength(50);
   const snapshot = { runId: "run-budget", text: "x".repeat(200_000), startedAt: 1_000, events };
   const original = JSON.stringify(snapshot);

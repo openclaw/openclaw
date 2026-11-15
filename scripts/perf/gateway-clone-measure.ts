@@ -8,11 +8,19 @@
  * --workload memory-command or memory-append uses 1,000 incognito sessions with 32 KiB
  * skills metadata. Its --source-dir contains session-actor-memory.ts. --counts counts clones
  * separately from uninstrumented CPU and sampled allocation runs.
+ * --workload turn combines 1,000 retained messages, twenty ~500-KiB PNGs,
+ * a modifying prompt hook, 20 tool events delivered to four metadata subscribers,
+ * and a sharing publication/comparison rotated through 10,000 session keys.
+ * --workload events isolates the same event dispatch. Both load baseline owner files
+ * host-hook-runtime.ts, session-actor-reducers.ts, and
+ * session-accessor.sqlite-entry-cache.types.ts from --source-dir.
+ * These are in-memory owner workloads: no provider, database, or workspace I/O.
  * Accept fewer copies/lower allocation with unchanged isolation; compare CPU in
  * separate untraced passes, alternating baseline/candidate order for five pairs.
  * Run baseline/candidate in alternating order; this is not whole-Gateway stress evidence.
  */
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { registerHooks } from "node:module";
@@ -37,24 +45,40 @@ const { values } = parseArgs({
 });
 const iterations = Number(values.iterations);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
-assert(["tool", "history", "sharing", "memory-command", "memory-append"].includes(values.workload));
+assert(
+  ["tool", "history", "sharing", "memory-command", "memory-append", "turn", "events"].includes(
+    values.workload,
+  ),
+);
 assert(!(values.allocation && values.counts), "Measure allocation and clone counts separately");
 const memoryCommand = values.workload.startsWith("memory-");
+const turnWorkload = values.workload === "turn" || values.workload === "events";
 const ownerRoot = new URL(
-  values.workload === "sharing" || memoryCommand
-    ? "../../src/config/sessions/"
-    : "../../src/gateway/",
+  turnWorkload
+    ? "../../src/"
+    : values.workload === "sharing" || memoryCommand
+      ? "../../src/config/sessions/"
+      : "../../src/gateway/",
   import.meta.url,
 );
 if (values["source-dir"]) {
   const sourceDir = path.resolve(values["source-dir"]);
   const replacements = new Map(
-    (values.workload === "sharing"
-      ? ["session-accessor.sqlite-entry-cache.types.ts"]
-      : memoryCommand
-        ? ["session-actor-memory.ts"]
-        : ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"]
-    ).map((file) => [new URL(file, ownerRoot).href, path.join(sourceDir, file)]),
+    (turnWorkload
+      ? [
+          "plugins/host-hook-runtime.ts",
+          "config/sessions/session-accessor.sqlite-entry-cache.types.ts",
+          "config/sessions/session-actor-reducers.ts",
+        ]
+      : values.workload === "sharing"
+        ? ["session-accessor.sqlite-entry-cache.types.ts"]
+        : memoryCommand
+          ? ["session-actor-memory.ts"]
+          : ["session-transcript-readers.ts", "worker-environments/live-event-projection.ts"]
+    ).map((file) => [
+      new URL(file, ownerRoot).href,
+      path.join(sourceDir, turnWorkload ? path.basename(file) : file),
+    ]),
   );
   registerHooks({
     load(url, context, nextLoad) {
@@ -73,7 +97,172 @@ if (values["source-dir"]) {
 let run: () => Promise<void>;
 let cleanup = () => {};
 let operationsPerIteration: number;
-if (memoryCommand) {
+let wireSha256: string | undefined;
+let imageBytes = 0;
+if (turnWorkload) {
+  const [
+    { createEmptyPluginRegistry },
+    { createHookRunner },
+    { clearPluginHostRuntimeState, dispatchPluginAgentEventSubscriptions },
+    { normalizeTranscriptJsonValue },
+    { reduceSessionActorEntry },
+    { createNoisyPngBuffer },
+    { projectSessionSharingEntry, sessionSharingEntriesEqual },
+    { configureAiTransportHost },
+    { buildOpenAIResponsesParams },
+    { sanitizeResponsesImagePayload },
+    { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    { transformTransportMessages },
+  ] = await Promise.all([
+    import("../../src/plugins/registry-empty.js"),
+    import("../../src/plugins/hooks.js"),
+    import("../../src/plugins/host-hook-runtime.js"),
+    import("../../src/config/sessions/transcript-json-normalize.js"),
+    import("../../src/config/sessions/session-actor-reducers.js"),
+    import("../../test/helpers/image-fixtures.js"),
+    import("../../src/config/sessions/session-accessor.sqlite-entry-cache.types.js"),
+    import("../../packages/ai/src/host.js"),
+    import("../../packages/ai/src/transports/openai-responses-params-internal.js"),
+    import("../../packages/ai/src/transports/responses-image-payload-sanitizer.js"),
+    import("../../src/shared/immutable-data.js"),
+    import("../../src/agents/transport-message-transform.js"),
+  ]);
+  configureAiTransportHost({
+    immutableData: { freezeJsonSnapshot, isDeeplyFrozenPlainData },
+    transformTransportMessages,
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.typedHooks.push({
+    pluginId: "synthetic-prompt",
+    source: "synthetic",
+    hookName: "before_prompt_build",
+    handler: () => ({ appendSystemContext: "Synthetic modifying hook context." }),
+  });
+  let deliveries = 0;
+  for (let index = 0; index < 4; index++) {
+    registry.agentEventSubscriptions.push({
+      pluginId: `synthetic-${index}`,
+      source: "synthetic",
+      subscription: {
+        id: "metadata",
+        streams: ["tool"],
+        payload: "metadata",
+        handle(event) {
+          assert.equal(event.data.name, "read");
+          assert.equal(event.data.result, undefined);
+          event.data.phase = "subscriber-local";
+          if (event.preamble) {
+            event.preamble.retainedText = "subscriber-local";
+          }
+          deliveries++;
+        },
+      },
+    });
+  }
+  const runner = createHookRunner(registry, { catchErrors: false });
+  const model: import("../../packages/llm-core/src/types.js").Model = {
+    id: "fixture-model",
+    name: "Synthetic",
+    provider: "openai",
+    api: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+    reasoning: false,
+    input: ["text", "image"],
+    contextWindow: 200000,
+    maxTokens: 1024,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  };
+  const context: import("../../packages/llm-core/src/types.js").Context = {
+    messages: Array.from({ length: 1_000 }, (_, index) => {
+      const content: import("../../packages/llm-core/src/types.js").UserMessage["content"] = [
+        { type: "text", text: `Synthetic history ${index}: `.padEnd(2048, "x") },
+      ];
+      if (index % 50 === 0) {
+        const bytes = createNoisyPngBuffer(512, 330 + index / 50);
+        imageBytes += bytes.length;
+        content.push({ type: "image", mimeType: "image/png", data: bytes.toString("base64") });
+      }
+      const message = { role: "user" as const, timestamp: index, content };
+      // Use the transcript producer's actual normalization and ownership admission.
+      normalizeTranscriptJsonValue(message, "message");
+      return freezeJsonSnapshot(message);
+    }),
+  };
+  const skillsPrompt = "Synthetic skills instructions. ".repeat(1093);
+  const entries: InternalSessionEntry[] = Array.from({ length: 10_000 }, (_, index) => ({
+    sessionId: `synthetic-${index}`,
+    updatedAt: index,
+    parentSessionKey: "agent:synthetic:dashboard:parent",
+    inheritedToolAllow: Array.from({ length: 40 }, (_tool, tool) => `plugin-${tool}.read`),
+    skillsSnapshot: { prompt: skillsPrompt, skills: [] },
+    templateInitialization: {
+      source: { packageName: "synthetic-template", version: "1.0.0" },
+      agentConfig: { name: "Synthetic template ".padEnd(1024, "x") },
+      workspaceIdentity: `synthetic-workspace-${index}`,
+    },
+  }));
+  const events = Array.from({ length: 20 }, (_, index) => ({
+    runId: "synthetic-run",
+    seq: index,
+    ts: index,
+    stream: "tool",
+    sessionKey: "agent:synthetic:dashboard:turn",
+    preamble: { retainedText: "Synthetic tool preamble." },
+    data: {
+      name: "read",
+      phase: index % 2 === 0 ? "start" : "result",
+      toolCallId: `call-${Math.floor(index / 2)}`,
+      result: { content: [{ type: "text", text: "Synthetic output. ".repeat(512) }] },
+    },
+  }));
+  const dispatch = () => {
+    for (const event of events) {
+      dispatchPluginAgentEventSubscriptions({ registry, event, isLive: () => true });
+    }
+  };
+  let cursor = 0;
+  const prepare = async () => {
+    const entry = entries[cursor++ % entries.length]!;
+    const sessionKey = `agent:synthetic:dashboard:${entry.sessionId}`;
+    const hook = await runner.runBeforePromptBuild(
+      { prompt: "Synthetic next turn", messages: context.messages },
+      { sessionKey, runId: "synthetic-run", agentId: "synthetic" },
+    );
+    const appendSystemContext = hook?.appendSystemContext;
+    assert.equal(appendSystemContext, "Synthetic modifying hook context.");
+    const request = sanitizeResponsesImagePayload(
+      buildOpenAIResponsesParams(
+        model,
+        { ...context, systemPrompt: appendSystemContext },
+        undefined,
+      ),
+    );
+    const next = reduceSessionActorEntry(entry, [
+      { kind: "activity", updatedAt: entry.updatedAt + 1 },
+    ]);
+    const sharing = projectSessionSharingEntry(next);
+    assert(sessionSharingEntriesEqual(entry, sharing));
+    assert.equal(next.skillsSnapshot?.prompt, skillsPrompt);
+    return request;
+  };
+  if (values.workload === "turn") {
+    const first = JSON.stringify(await prepare());
+    assert.equal(JSON.stringify(await prepare()), first);
+    wireSha256 = createHash("sha256").update(first).digest("hex");
+  }
+  operationsPerIteration = values.workload === "turn" ? 1 : events.length;
+  run = async () => {
+    if (values.workload === "turn") {
+      await prepare();
+    }
+    dispatch();
+  };
+  await run();
+  assert.equal(deliveries, 80);
+  assert.equal(events[0]!.data.phase, "start");
+  assert.equal(events[0]!.preamble.retainedText, "Synthetic tool preamble.");
+  cleanup = () => clearPluginHostRuntimeState();
+} else if (memoryCommand) {
   const { createMemorySessionActorOwner } =
     await import("../../src/config/sessions/session-actor-memory.js");
   const owner = createMemorySessionActorOwner({ agentId: "synthetic", path: "/synthetic/memory" });
@@ -283,8 +472,18 @@ const diagnostics = startGatewayBenchDiagnostics();
 const hostLoad = loadavg();
 const before = process.memoryUsage();
 let cloneCalls = 0;
+let base64Decodes = 0;
+const bufferFrom = Buffer.from.bind(Buffer);
 const clone = globalThis.structuredClone;
 if (values.counts) {
+  Buffer.from = new Proxy(bufferFrom, {
+    apply(target, receiver, args) {
+      if (args[1] === "base64") {
+        base64Decodes++;
+      }
+      return Reflect.apply(target, receiver, args);
+    },
+  });
   globalThis.structuredClone = function <T>(value: T, options?: StructuredSerializeOptions): T {
     cloneCalls++;
     return clone(value, options);
@@ -301,6 +500,7 @@ for (let index = 0; index < iterations; index++) {
 const wallMs = performance.now() - started;
 const cpu = process.threadCpuUsage(cpuBefore);
 globalThis.structuredClone = clone;
+Buffer.from = bufferFrom;
 await setImmediate();
 const metrics = diagnostics();
 let sampledBytes: number | undefined;
@@ -324,6 +524,9 @@ console.log(
     operations,
     allocation: values.allocation,
     cloneCallsPerOperation: values.counts ? cloneCalls / operations : undefined,
+    base64DecodesPerOperation: values.counts ? base64Decodes / operations : undefined,
+    wireSha256,
+    imageBytes: turnWorkload ? imageBytes : undefined,
     wallMs,
     cpuUsPerOperation: (cpu.user + cpu.system) / operations,
     sampledBytesPerOperation: sampledBytes === undefined ? undefined : sampledBytes / operations,

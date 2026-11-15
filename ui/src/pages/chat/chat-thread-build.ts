@@ -660,7 +660,12 @@ export function buildChatItems(
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
   // skeleton still owns an otherwise empty thread, but not an active stream.
-  const initialHistoryLoad = props.stream === null && props.loading === true && items.length === 0;
+  const hasContentBeforeProgress = items.length > 0;
+  if (facts) {
+    facts.hasContentBeforeProgress = hasContentBeforeProgress;
+  }
+  const initialHistoryLoad =
+    props.stream === null && props.loading === true && !hasContentBeforeProgress;
   // A non-null empty stream is the acknowledgement bridge before runWorking
   // catches up.
   const hasEmptyLiveStream = props.stream !== null && props.stream.trim().length === 0;

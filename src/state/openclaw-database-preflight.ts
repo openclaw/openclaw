@@ -13,16 +13,15 @@ import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission
 import { deferSqliteSnapshotCleanupAfterRead } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocation } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   AgentDatabaseAdmissionError,
   canIsolateAgentDatabase,
+  createAgentDatabaseHeldRefusal,
   createAgentDatabaseInspectionRefusal,
   inspectAgentDatabaseAdmission,
   recordAgentDatabaseAdmissions,
 } from "./agent-database-admission.js";
 import { getAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
-import { readAgentDeletionRecoveryHoldsInWorker } from "./agent-deletion-journal.read.js";
 import type {
   AgentDeletionJournalDisposition,
   AgentDeletionJournalPurpose,
@@ -30,10 +29,8 @@ import type {
 import {
   isArtifactPreservingStateRead,
   isLiveStateRead,
-  withArtifactPreservingStateReads,
 } from "./artifact-preserving-state-reads.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
-import { isSameOpenClawAgentDatabasePath } from "./openclaw-agent-db.paths.js";
 import { createAgentSchemaInspectionWorker } from "./openclaw-agent-schema-inspection-worker.js";
 import type { AgentSchemaInspection } from "./openclaw-agent-schema-inspection.js";
 import { preflightAgentDatabasesBounded } from "./openclaw-database-preflight-agent-scheduler.js";
@@ -84,9 +81,6 @@ export { OpenClawDatabaseSchemaPreflightError } from "./openclaw-database-prefli
 // Public readiness rows stay serializable; their original failures belong to this inspection.
 const indeterminateCauses = new WeakMap<IndeterminateOpenClawDatabase, unknown>();
 
-// Keep this startup disposition private; clients receive the existing unavailable response.
-class AgentDatabaseRecoveryHeldError extends Error {}
-
 /** Verify persisted runtime schemas before certifying repair or accepting restart. */
 export async function assertOpenClawDatabasesReady(
   options: OpenClawDatabaseReadinessOptions,
@@ -126,14 +120,16 @@ export async function assertOpenClawDatabasesReady(
   );
   const failures: unknown[] = [];
   for (const refusal of schemas.agentRefusals ?? []) {
+    if (refusal.code === "agent-database-held") {
+      continue;
+    }
     const error = new AgentDatabaseAdmissionError(refusal);
     if (
-      !(error.cause instanceof AgentDatabaseRecoveryHeldError) &&
-      (!options.config ||
-        ((refusal.code === "agent-database-ownership-mismatch" ||
-          (options.operation === "gateway-startup" &&
-            refusal.code !== "agent-database-inspection-pending")) &&
-          !canIsolateAgentDatabase(options.config, refusal.agentId)))
+      !options.config ||
+      ((refusal.code === "agent-database-ownership-mismatch" ||
+        (options.operation === "gateway-startup" &&
+          refusal.code !== "agent-database-inspection-pending")) &&
+        !canIsolateAgentDatabase(options.config, refusal.agentId))
     ) {
       failures.push(error);
     }
@@ -424,6 +420,18 @@ export async function preflightOpenClawDatabaseSchemas(
     candidates,
     configuredTargets,
   );
+  const held = new Map<string, Set<string>>();
+  const liveTargets = inspectionTargets.filter((row) => {
+    if (!row.held) {
+      return true;
+    }
+    if (row.agentId) {
+      const paths = held.get(row.agentId) ?? new Set<string>();
+      paths.add(row.path);
+      held.set(row.agentId, paths);
+    }
+    return false;
+  });
   const recordInspectionFailure = (
     row: { agentId?: string; path: string },
     inspection: OpenClawDatabaseSchemaPreflight,
@@ -451,9 +459,8 @@ export async function preflightOpenClawDatabaseSchemas(
     );
     return true;
   };
-  let recoveryHolds: ReturnType<typeof readAgentDeletionRecoveryHoldsInWorker> | undefined;
   const stats = await preflightAgentDatabasesBounded(
-    inspectionTargets,
+    liveTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
       const agentPath = row.path;
       if (refusalOwner?.reuseRefusal(row, inspection, priorRefusals)) {
@@ -545,37 +552,6 @@ export async function preflightOpenClawDatabaseSchemas(
             agentPath,
             realAgentPath,
             schemaInspection,
-          );
-          return undefined;
-        }
-        // A held old store stays inaccessible even when Doctor cannot verify its owner.
-        // Healthy held stores retain runtime access; only Doctor may migrate a held store.
-        if (
-          agentVersion < supportedVersions.agent &&
-          purpose === "runtime" &&
-          row.agentId &&
-          (
-            await (recoveryHolds ??= withArtifactPreservingStateReads(() =>
-              readAgentDeletionRecoveryHoldsInWorker({ env: options.env }),
-            ))
-          ).some(
-            (held) =>
-              held.agentId === row.agentId &&
-              isSameOpenClawAgentDatabasePath(held.path, realAgentPath),
-          )
-        ) {
-          const cause = new AgentDatabaseRecoveryHeldError(
-            `Agent ${row.agentId} database is held for deletion recovery at schema ${agentVersion}; migration to schema ${supportedVersions.agent} requires Doctor.`,
-          );
-          const refusal = createAgentDatabaseInspectionRefusal({
-            agentId: row.agentId,
-            paths: [agentPath],
-            reason: cause.message,
-            cause,
-          });
-          (inspection.agentRefusals ??= []).push(refusal);
-          createSubsystemLogger("state/agent-admission").warn(
-            `${refusal.reason} ${refusal.repairHint}`,
           );
           return undefined;
         }
@@ -708,6 +684,9 @@ export async function preflightOpenClawDatabaseSchemas(
   );
   if (preparedDiscovery) {
     options.onAgentDatabaseDiscovery?.(preparedDiscovery);
+  }
+  for (const [agentId, paths] of held) {
+    (result.agentRefusals ??= []).push(createAgentDatabaseHeldRefusal(agentId, [...paths]));
   }
   stats.schemaProcessCount += prestartedReader?.processCount ?? 0;
   options.onAgentInspection?.({

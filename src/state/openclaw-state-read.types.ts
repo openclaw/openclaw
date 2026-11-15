@@ -150,7 +150,13 @@ export type OpenClawStateReadCommand =
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
   | { type: "userProfiles.channelIdentity.resolve"; identity: UserChannelIdentitySelector }
   | ({ type: "userProfiles.githubIdentity.cached" } & CachedGitHubIdentityBinding)
-  | { type: "userProfiles.githubAttribution.resolve"; profileIds: readonly string[]; host?: string }
+  | {
+      type: "userProfiles.githubAttribution.resolve";
+      profileIds: readonly string[];
+      host?: string;
+      organizationDefaults?: string;
+      githubAvailability?: boolean;
+    }
   | { type: "userProfiles.catalog" }
   | {
       type: "userProfiles.catalogIdentity";

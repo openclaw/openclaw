@@ -37,6 +37,9 @@ line-comment and trailing-comma support as model loading. It keeps references
 backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
+In `models.mode: "replace"`, only explicit providers count as catalog providers;
+model refs routed through an enabled CLI backend also remain available. Doctor
+preserves those runtime pins and fallbacks in default and per-agent scopes.
 
 ## Plugin prompt-modification permission
 

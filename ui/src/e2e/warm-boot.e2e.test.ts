@@ -580,7 +580,7 @@ suite.define(() => {
             (profile === "device-token" || profile === "trusted-proxy" ? "" : "#token=test-token"),
         );
         await gateway.waitForRequest("connect");
-        await page.locator(".connect-splash").waitFor();
+        await page.locator(".chat-pane__connection-state", { hasText: /^Connecting…$/u }).waitFor();
         await capture("cold-connecting.png");
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");

@@ -1,6 +1,7 @@
-import { createCipheriv } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { deflateSync } from "node:zlib";
 import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
@@ -125,4 +126,71 @@ it("compacts committed loose packs while retaining unpublished temporary packs",
   await fs.access(path.join(directory, temporary + ".pack"));
   await fs.access(path.join(directory, temporary + ".idx"));
   await git(repo, "fsck", "--no-reflogs");
+});
+
+it("drains a 600-pack burst during hourly throttling only when eligible packs are backlogged", async () => {
+  const repo = await initRepo(tempDirs.make("worktree-pack-burst-"));
+  await insertRegistryWorktree(env, makeWorktreeRecord(repo, "burst"));
+  await git(repo, "config", "remote.origin.promisor", "true");
+  await git(repo, "remote", "set-url", "origin", path.join(repo, "unavailable.git"));
+  const maintain = createWorktreeGitMaintenance(env);
+  await maintain({});
+  const directory = path.join(repo, ".git", "objects", "pack");
+  const objects: Array<{ oid: string; contents: Buffer; stem: string }> = [];
+  const sha1 = (bytes: Buffer) => createHash("sha1").update(bytes).digest();
+  for (let i = 0; i < 600; i++) {
+    const contents = Buffer.from(`blob-${String(i).padStart(3, "0")}`);
+    const oid = sha1(Buffer.concat([Buffer.from("blob 8\0"), contents]));
+    // A single-blob Git pack; Git itself builds and validates the indexes below.
+    const entry = Buffer.concat([Buffer.from([0x38]), deflateSync(contents)]);
+    const pack = Buffer.concat([Buffer.from("5041434b0000000200000001", "hex"), entry]);
+    const hash = sha1(pack);
+    const stem = path.join(directory, `pack-${hash.toString("hex")}`);
+    await Promise.all([
+      fs.writeFile(`${stem}.pack`, Buffer.concat([pack, hash])),
+      fs.writeFile(`${stem}.promisor`, ""),
+    ]);
+    objects.push({ oid: oid.toString("hex"), contents, stem });
+  }
+  await git(
+    repo,
+    "-c",
+    'alias.openclaw-test-index-burst=!for pack in .git/objects/pack/pack-*.pack; do git index-pack "$pack" || exit; done',
+    "openclaw-test-index-burst",
+  );
+  const packNames = async () =>
+    (await fs.readdir(directory)).filter((name) => name.endsWith(".pack")).toSorted();
+  const burst = await packNames();
+  expect(burst).toHaveLength(600);
+  const throttled = new WorktreeGcProgress();
+  await maintain({ progress: throttled });
+  expect(throttled.result.gitMaintenance?.stage).toBe("throttled");
+  for (const object of objects.slice(0, 90)) {
+    await fs.writeFile(`${object.stem}.keep`, "");
+  }
+  await maintain({ checkBacklog: true });
+  expect(await packNames()).toEqual(burst);
+  for (const object of objects.slice(1, 90)) {
+    await fs.unlink(`${object.stem}.keep`);
+  }
+  const progress = new WorktreeGcProgress();
+  await maintain({ checkBacklog: true, progress });
+  expect(progress.result.issues).toEqual([]);
+  expect(progress.result.gitMaintenance?.packsBefore).toBe(600);
+  expect(progress.result.gitMaintenance?.packsAfter).toBeLessThan(600);
+  await fs.access(`${objects[0]!.stem}.pack`);
+  expect(
+    await requireGitBuffer(repo, ["cat-file", "--batch"], {
+      input: `${objects.map(({ oid }) => oid).join("\n")}\n`,
+      env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+    }),
+  ).toEqual(
+    Buffer.concat(
+      objects.flatMap(({ oid, contents }) => [
+        Buffer.from(`${oid} blob 8\n`),
+        contents,
+        Buffer.from("\n"),
+      ]),
+    ),
+  );
 });

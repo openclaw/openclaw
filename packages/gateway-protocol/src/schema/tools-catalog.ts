@@ -137,3 +137,23 @@ export type ToolsEffectiveGroup = Static<typeof ToolsEffectiveGroupSchema>;
 export type ToolsEffectiveNotice = Static<typeof ToolsEffectiveNoticeSchema>;
 export type ToolsEffectiveResult = Static<typeof ToolsEffectiveResultSchema>;
 export type ToolAccessDiagnostics = Static<typeof ToolAccessDiagnosticsSchema>;
+
+export const ToolUsageStatusParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  sessionKey: Type.Optional(NonEmptyString),
+});
+
+export const ToolUsageImportParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sinceDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 90 })),
+  dryRun: Type.Optional(Type.Boolean()),
+});
+
+export const ToolUsageResetParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+});
+
+export type ToolUsageStatusParams = Static<typeof ToolUsageStatusParamsSchema>;
+export type ToolUsageImportParams = Static<typeof ToolUsageImportParamsSchema>;
+export type ToolUsageResetParams = Static<typeof ToolUsageResetParamsSchema>;

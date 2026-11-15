@@ -15,7 +15,7 @@ import { verifyBinding } from "./binding-check.js";
 import type { StoredClaw } from "./claw-store.js";
 
 /** The machine keys a binding names. */
-export type BoundKeys = { k_srv: IrohEndpointKey; k_gw: Ed25519PublicKey };
+type BoundKeys = { k_srv: IrohEndpointKey; k_gw: Ed25519PublicKey };
 
 /** What R signs for a re-bind, and the binding it replaces (for display). */
 export type RebindPreparation = BoundKeys & {
@@ -33,9 +33,7 @@ const nowSeconds = () => Math.floor(Date.now() / 1000);
  * The lowest binding_seq a re-bind may sign: one above the stored binding. The owner's CLI
  * signs above Discovery's verified published binding when that is higher (a restored backup).
  */
-export function nextBindingSeq(
-  record: StoredClaw & { binding: NonNullable<StoredClaw["binding"]> },
-) {
+function nextBindingSeq(record: StoredClaw & { binding: NonNullable<StoredClaw["binding"]> }) {
   return record.binding.body.binding_seq + 1;
 }
 

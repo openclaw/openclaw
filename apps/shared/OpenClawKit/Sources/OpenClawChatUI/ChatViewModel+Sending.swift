@@ -69,7 +69,9 @@ extension OpenClawChatViewModel {
         // hydration cannot retire its owner before asynchronous validation starts.
         guard let draft = captureSendDraft(queueMode: queueMode) else { return nil }
         isSubmittingDraft = true
-        return Task { await self.performSend(draft) }
+        let task = Task { await self.performSend(draft) }
+        self.composerDraftSync.send = task
+        return task
     }
 
     public func loadSlashCommandsIfNeeded() {
@@ -361,7 +363,7 @@ extension OpenClawChatViewModel {
             session: currentSessionSnapshot(),
             replyTarget: Self.isSlashCommandDraft(trimmed) ? nil : replyTarget,
             queueMode: queueMode,
-            composerSessionKey: self.composerSessionKey(for: sessionKey),
+            composerSessionKey: self.visibleComposerKey,
             composerRevision: composerRevision(for: sessionKey))
     }
 
@@ -376,6 +378,7 @@ extension OpenClawChatViewModel {
                 return false
             }
             if input == draft.input { input = "" }
+            self.flushComposerDraftText()
             switch command {
             case "/new": await performStartNewSession(inheritCurrentSession: true, worktree: false)
             case "/compact": await performCompact()
@@ -447,6 +450,7 @@ extension OpenClawChatViewModel {
             text: draft.outgoingMessageText,
             draftInput: draft.input,
             draftRevision: draft.composerRevision,
+            draftComposerKey: draft.composerSessionKey,
             draftAttachments: draft.attachments,
             queueMode: draft.queueMode,
             session: draft.session)
@@ -530,6 +534,8 @@ extension OpenClawChatViewModel {
         }
         let sentAttachmentIDs = Set(draft.attachments.map(\.id))
         attachments.removeAll { sentAttachmentIDs.contains($0.id) }
+        // A live send has no outbox insert to clear its draft, so write the cleared composer now.
+        self.flushComposerDraftText()
 
         return LiveSendAttempt(
             draft: draft,

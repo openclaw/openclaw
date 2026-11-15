@@ -237,15 +237,19 @@ api.on(
 ```
 
 CLI runtimes report all three states. Codex reports `fresh` or `resumed` from
-its native thread binding and `invalidated` when that binding is rotated away
-before the turn starts. The embedded runtime owns its transcript and has no
+its native thread binding and `invalidated` when that binding is discarded
+before the turn starts: rotated away by the token limit, or replaced by a new
+thread when resuming fails. The embedded runtime owns its transcript and has no
 native binding, so it reports `fresh` or `resumed`. Other runtimes omit the
 field; omission means unknown. The ordinary prompt-build phase never receives
 it, because its tool restrictions are inputs to the reuse decision.
 
-The phase runs once per logical turn. When a model fallback candidate repeats
-the same request with the same tool surface, it reuses the first result instead
-of invoking handlers again, even if that candidate's session decision differs.
+The phase runs on every attempt, including each model fallback candidate. Each
+run reports that attempt's own continuity and receives that attempt's model,
+context budget, and tool authority, so handlers repeat their own model- and
+authority-keyed checks. A handler that wants to avoid repeated work across
+fallback candidates owns that cache and keys it on every input that changes its
+answer.
 
 This option requires a host that implements the post-policy phase. Published
 plugins must set `package.json` `openclaw.compat.pluginApi` to a range beginning
@@ -264,7 +268,9 @@ the runner submits the same prepared image bytes after approval. The event is a
 copy, so mutating its images does not rewrite model input. `images: []` means no
 current-turn images; an absent field means an older host without this contract.
 Gateway worker turns expose Gateway-prepared images too; legacy worker turns do
-not expose a worker-local system prompt. Paired-node CLI sessions do not support
+not expose a worker-local system prompt. Their history preparation reads the selected
+conversation branch, leaving inactive branches unloaded. Recorder-owned user input
+is persisted only after policy approval. Paired-node CLI sessions do not support
 images. This hook remains limited to runners that implement it. Return `{ outcome: "block", reason, message? }`
 to stop the run before the model reads the prompt. `reason` is internal;
 `message` is the user-facing replacement. Only `pass` and `block` outcomes are
@@ -412,6 +418,35 @@ integration: the embedded runner and native hook relay provide it, but the
 Copilot harness does not dispatch it.
 Codex native `Stop` hooks are relayed into this hook as OpenClaw
 `before_agent_finalize` decisions.
+
+#### Presentation on an accepted final
+
+When `event.supportsFinalPresentation === true`, a handler can return
+`{ finalPresentation: MessagePresentation }` with or without an action. Compute
+the presentation from this invocation's candidate answer; returning it does not
+send a message or force finalization. OpenClaw normalizes it through the existing
+presentation model and carries it only with the selected ordinary final reply.
+Adapters retain rendering, text fallback, routing and delivery ownership.
+
+The first presentation in hook priority order wins. A revision decision discards
+the candidate's presentation, even when the revision budget is exhausted. An
+explicit `finalize` decision still overrides revisions under the existing rules;
+if it follows a revision, only its own presentation can accompany that decision.
+Later handlers cannot change an already-forced finalization. Timeout or failure
+does not accept a late handler result.
+
+Support currently covers natural final answers in the embedded runner. It does
+not create an answer for an empty, silent, failed, canceled or incomplete turn,
+or decorate explicit tool/approval output. The native Codex relay, Copilot and
+settled-tool finalization do not advertise this capability. Missing support must
+not be treated as successful preparation. The flag describes the finalization
+path, not whether the destination renders cards or other structured content.
+
+This contract has no cross-hook staging or preparation tool. Do not use a
+session-keyed or run-keyed map to infer the accepted candidate: a run can contain
+multiple attempts. A tool-prepared presentation needs a separately supported
+execution/attempt association. Existing `reply_payload_sending` hooks still apply
+their sequential transformations and cancellation before delivery.
 
 When returning `action: "revise"`, plugins can include `retry` metadata to
 bound repeated revision requests within a run:

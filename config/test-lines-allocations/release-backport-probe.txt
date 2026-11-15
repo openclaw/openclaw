@@ -1,3 +1,0 @@
-55
-# Exact net growth for pinned-scan ancestry, patch-only qualification,
-# and the negotiated partial-clone CLI regression under the same scan contract.

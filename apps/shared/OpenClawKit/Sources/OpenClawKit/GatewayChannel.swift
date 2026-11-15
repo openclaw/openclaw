@@ -341,6 +341,7 @@ public actor GatewayChannelActor {
     }
 
     public func connect() async throws {
+        try self.validateTransportRole()
         try Task.checkCancellation()
         guard self.shouldReconnect else {
             throw Self.failure(6, "gateway channel is shut down")
@@ -410,7 +411,17 @@ public actor GatewayChannelActor {
         }
     }
 
+    private func validateTransportRole() throws {
+        if let role = self.session.requiredGatewayRole,
+           role != (self.connectOptions?.role ?? "operator")
+        {
+            throw WebSocketGatewayRoleError.incompatibleRole
+        }
+    }
+
     private func performConnectAttempt() async throws {
+        // Automatic reconnects bypass connect(); keep admission at both entry points.
+        try self.validateTransportRole()
         guard self.shouldReconnect else { throw CancellationError() }
         if let disconnectError { throw disconnectError }
         try await self.waitForConnectFailureBackoff()

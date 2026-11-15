@@ -424,6 +424,7 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     expect(await refresh(agentId)).toBe("refreshed");
     await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(observed.refreshWorkers.size).toBe(0);
 
     openOpenClawAgentDatabase({ agentId });
     expect(await refresh(agentId)).toBe("refreshed");
@@ -436,6 +437,21 @@ it("leaves an empty usage store absent until a transcript needs a rollup", async
     expectFresh(await readSession(agentId, sessionFile), 10);
   });
   // A cache-miss worker retains no database; runtime shutdown owns its retirement.
+  await closeStateDatabaseForTest();
+});
+
+it("refreshes file-backed usage before its database exists", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "usage-file-only";
+    const { databasePath } = prepareUsageCostWorker({ config, agentId }).location;
+    const sessionsDir = state.sessionsDir(agentId);
+    const sessionFile = path.join(sessionsDir, "recorded.jsonl");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await fs.writeFile(sessionFile, usageLine("recorded"));
+    await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await refresh(agentId)).toBe("refreshed");
+    expectFresh(await readSession(agentId, sessionFile), 10);
+  });
   await closeStateDatabaseForTest();
 });
 
@@ -630,7 +646,7 @@ it("propagates an original host pricing error through exact report replay", asyn
     const original = new Error("Host pricing is unavailable");
     const pricing = await import("./session-cost-usage-pricing-context.js");
     {
-      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockReturnValue(() => {
+      using _ = vi.spyOn(pricing, "createUsageCostResolver").mockResolvedValue(() => {
         throw original;
       });
       await expect(runUsageCostWorker(prepared, exactRequest)).rejects.toBe(original);

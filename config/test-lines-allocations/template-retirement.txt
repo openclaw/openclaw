@@ -1,2 +1,0 @@
-12
-# Extend custody regression for deferred deletion and update service assertions for persisted retired generations.
