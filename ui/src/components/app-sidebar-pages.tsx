@@ -13,10 +13,7 @@ import { dashboardAuthor, dashboardsFilter } from "../lib/dashboards-filter.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import {
-  createSectionSidebarPresence,
-  rememberSectionLocation,
-} from "../lib/section-navigation.ts";
+import { rememberSectionLocation } from "../lib/section-navigation.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import {
   resolveSessionNavigationAgentId,
@@ -130,7 +127,6 @@ export function SidebarPagesMenu(props: {
 /** The Dashboards section: every managed dashboard, newest first, with its author and update. */
 export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.Element {
   const app = useApplication();
-  createSectionSidebarPresence("dashboards", () => props.host.navigationCollapsed);
   const dashboards = () => props.host.navigationCatalog.dashboards;
   // The header's filter narrows to one author and orders the loaded rows.
   const filteredDashboards = createMemo(() => {

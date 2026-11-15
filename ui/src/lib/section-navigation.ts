@@ -1,10 +1,8 @@
-import { createEffect, createSignal, onSettled } from "solid-js";
+import { onCleanup } from "solid-js";
 import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context-types.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
-import { createMediaQuery } from "./reactive/platform.ts";
 
 /** Sections whose sidebar lists their items, so their landing page waits for one to open. */
 export type ListingSection = "automations" | "dashboards";
@@ -37,38 +35,20 @@ export function rememberSectionLocation(
   }
 }
 
-// The section whose sidebar stands open beside the page; its page need not list the items too.
-const [shownSection, setShownSection] = createSignal<ListingSection | null>(null);
+// The shell reports which section's sidebar stands open beside the page, from its own route and
+// layout, so a section's page knows before its first frame whether its sidebar lists the items.
+let shownSection: () => string | undefined = () => undefined;
+
+/** The shell's source for the shown section, for as long as the calling owner lives. */
+export function createSectionSidebarSource(read: () => string | undefined): void {
+  shownSection = read;
+  onCleanup(() => {
+    if (shownSection === read) {
+      shownSection = () => undefined;
+    }
+  });
+}
 
 export function sectionSidebarShown(section: ListingSection): boolean {
   return shownSection() === section;
-}
-
-/**
- * Called by a section's sidebar list: it counts as shown while the sidebar is expanded on a
- * desktop layout. The mobile drawer and a collapsed or peeking sidebar do not stand beside it.
- */
-export function createSectionSidebarPresence(
-  section: ListingSection,
-  collapsed: () => boolean,
-): void {
-  const mobile = createMediaQuery(
-    mobileNavLayoutMediaQuery(),
-    globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false,
-  );
-  createEffect(
-    () => !collapsed() && !mobile(),
-    (shown) => {
-      if (shown) {
-        setShownSection(section);
-      } else if (shownSection() === section) {
-        setShownSection(null);
-      }
-    },
-  );
-  onSettled(() => () => {
-    if (shownSection() === section) {
-      setShownSection(null);
-    }
-  });
 }
