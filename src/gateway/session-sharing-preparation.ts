@@ -408,6 +408,8 @@ export async function prepareSessionMutationFacts(
         preparedSources,
         registryDiscovery: inventory.registryDiscovery,
       }),
+      undefined,
+      true,
     );
     followRegistration = inventoryRead.followRegistration;
     assertRegistryPublication = inventoryRead.assertRegistryCurrent;
