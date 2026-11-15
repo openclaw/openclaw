@@ -33,6 +33,27 @@ it.each([
   },
 );
 
+it.each([
+  ["not-json native-secret-canary", false, "invalid JSON"],
+  [JSON.stringify({ callerSid: "native-secret-canary" }), true, "invalid access facts"],
+  [JSON.stringify("native-secret-canary"), false, "invalid task snapshot"],
+] as const)(
+  "identifies invalid probe responses without exposing output: %s",
+  (stdout, access, detail) => {
+    native.mockReturnValue(nativeResult(stdout));
+    const probe = access ? probeAccess("Synthetic Gateway") : probeState("Synthetic Gateway");
+    expect(probe.status).toBe("unknown");
+    if (probe.status !== "unknown") {
+      throw new Error("Expected inspection refusal");
+    }
+    const error = new ScheduledTaskInspectionError(probe);
+    expect(error.message).toContain(detail);
+    expect(JSON.stringify({ message: error.message, cause: error.cause })).not.toContain(
+      "native-secret-canary",
+    );
+  },
+);
+
 function nativeResult(stdout = "", status: number | null = 0, error?: Error) {
   return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status, signal: null, error };
 }

@@ -285,6 +285,12 @@ or rewrite its pin; custom task directories remain operator-owned overrides.
 
 Gateway status and Doctor read the Scheduled Task's numeric current state, independently of the Windows display language or console code page. A previous task exit result does not prove whether it is running now. Queued or unknown tasks do not count as safely stopped for Doctor maintenance. Stop a queued task through its service owner; if inspection is inaccessible, restore Task Scheduler inspection permissions before retrying.
 
+Invalid-response diagnostics distinguish invalid JSON, invalid access facts, and
+an invalid task snapshot. These categories identify the failed inspection step,
+not its underlying cause; they omit raw PowerShell output and task/account values.
+The inspecting runtime must contain this diagnostic improvement. A newer candidate
+does not change checks performed by an older installed updater.
+
 Updates and service recovery change the task's enabled state through Task Scheduler's
 native API. Access-denied guidance uses its numeric HRESULT, not translated Windows
 error text. An uncertain disable still attempts to restore the previous enabled state;

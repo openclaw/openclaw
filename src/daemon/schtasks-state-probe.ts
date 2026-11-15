@@ -146,7 +146,7 @@ function queryTaskScheduler(
     return {
       status: "unknown",
       detail: "Scheduled Task check returned invalid JSON.",
-      diagnostic: { kind: "invalid-response" },
+      diagnostic: { kind: "invalid-response", stage: "json" },
     };
   }
   const hresult = Number(probe.stdout.trim());
@@ -193,7 +193,7 @@ export function probeScheduledTaskUpdateAccess(
     return {
       status: "unknown",
       detail: "Scheduled Task access check returned invalid facts.",
-      diagnostic: { kind: "invalid-response" },
+      diagnostic: { kind: "invalid-response", stage: "access-facts" },
     };
   }
   // Group principals and unresolved accounts do not establish a different user.
@@ -256,8 +256,8 @@ export function probeScheduledTaskState(
     ? { status: "found", ...snapshot }
     : {
         status: "unknown",
-        detail: "Scheduled Task check returned invalid JSON.",
-        diagnostic: { kind: "invalid-response" },
+        detail: "Scheduled Task check returned an invalid task snapshot.",
+        diagnostic: { kind: "invalid-response", stage: "task-snapshot" },
       };
 }
 
