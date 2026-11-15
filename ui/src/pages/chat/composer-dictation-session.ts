@@ -2,8 +2,11 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
+import { registerChatDictationEnglish } from "../../i18n/locales/en-chat-dictation.ts";
 import { bytesToBase64 } from "../../lib/bytes-base64.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
+import type { GatewaySpeechPlayback } from "../../lib/speech-playback.ts";
 import {
   floatToG711Ulaw,
   measureRealtimeTalkAudioFrame,
@@ -12,6 +15,8 @@ import {
 } from "./talk/audio.ts";
 import { describeRealtimeTalkInputError, RealtimeTalkInputOwner } from "./talk/input.ts";
 import { RealtimeTalkLevelSignal } from "./talk/level.ts";
+
+registerEnglishCatalog(registerChatDictationEnglish);
 
 const FINAL_TRANSCRIPT_MAX_WAIT_MS = 10_000;
 const DICTATION_ENCODING = "g711_ulaw";
@@ -28,7 +33,7 @@ type DictationSessionResult = {
 };
 
 type ComposerDictationSessionCallbacks = {
-  onError: (message: string, preservesText: boolean) => void;
+  onError: (message: string, preservesText: boolean) => void | (() => void);
   onLevel?: (level: number) => void;
   onTranscriptChange: () => void;
   onReady: () => void;
@@ -68,13 +73,18 @@ export class ComposerDictationSession {
   private readonly finalTranscripts: string[] = [];
   private currentPartial = "";
   private startPromise: Promise<void> | null = null;
-  private readonly pendingAudio: Float32Array[] = [];
+  private readonly pendingAudio: string[] = [];
+  // One tab-local recording; released on successful text, cancellation, or replacement.
+  private readonly recording: string[] = [];
+  recovery: ComposerDictationSession | undefined;
+  retrying = false;
   private pendingAudioSamples = 0;
   private appendChain: Promise<void> = Promise.resolve();
   private closeRequest: { discard: boolean; promise: Promise<void> } | null = null;
   private stopped = false;
   private discarded = false;
   private failed = false;
+  dismissFailure: (() => void) | undefined;
   private gatewayDisconnected = false;
   private settleLateFinalDrain: ((discard: boolean) => void) | null = null;
   private pauseFinalDrain: (() => void) | null = null;
@@ -162,22 +172,32 @@ export class ComposerDictationSession {
       if (this.stopped) {
         return;
       }
+      const audio = bytesToBase64(floatToG711Ulaw(samples));
+      this.recording.push(audio);
       if (!this.sessionId) {
         const remaining = MAX_PENDING_AUDIO_SAMPLES - this.pendingAudioSamples;
         if (remaining <= 0) {
           return;
         }
-        const buffered = samples.slice(0, remaining);
-        this.pendingAudio.push(buffered);
-        this.pendingAudioSamples += buffered.length;
+        const count = Math.min(samples.length, remaining);
+        this.pendingAudio.push(
+          count === samples.length
+            ? audio
+            : bytesToBase64(floatToG711Ulaw(samples.subarray(0, count))),
+        );
+        this.pendingAudioSamples += count;
         this.detectSilence(samples);
         return;
       }
-      this.queueAudio(samples);
+      this.queueAudio(audio);
       this.detectSilence(samples);
     });
     this.callbacks.onReady();
 
+    await this.createRemote();
+  }
+
+  private async createRemote(): Promise<void> {
     const result = await this.client.request<DictationSessionResult>("talk.session.create", {
       mode: "transcription",
       transport: "gateway-relay",
@@ -205,6 +225,9 @@ export class ComposerDictationSession {
     }
     if (this.stopped) {
       if (!this.discarded) {
+        // Admission is bounded separately. Replay may upload more than ten seconds
+        // of queued audio; final-event grace starts after upload and provider close.
+        this.pauseFinalDrain?.();
         await this.appendChain;
       }
       await this.closeRemote();
@@ -220,11 +243,61 @@ export class ComposerDictationSession {
       this.gatewayDisconnected || this.failed ? this.transcriptSnapshot() : this.waitForLateFinal();
     // Bound admission separately; a started close uses the media provider timeout.
     void this.stopAndClose(true).catch(() => undefined);
-    return transcript;
+    const text = await transcript;
+    this.recovery = !text && this.hasRecording ? this : undefined;
+    if (text) {
+      this.releaseRecording();
+    }
+    return text;
+  }
+
+  get hasRecording(): boolean {
+    return this.recording.length > 0 && !this.discarded;
+  }
+
+  private releaseRecording(): void {
+    this.recording.length = 0;
+  }
+
+  async retry(playback: GatewaySpeechPlayback, superseded: () => void): Promise<string> {
+    // Every voice action, including replay, reclaims the existing shared slot.
+    playback.prepare(this.client, superseded);
+    this.retrying = true;
+    this.callbacks.onTranscriptChange();
+    try {
+      // Finish the prior transport before reusing this recording's session owner.
+      // No capture is restarted and every explicit attempt creates a freshly authorized relay.
+      this.gatewayDisconnected = false;
+      await this.stopAndClose(false);
+      if (this.discarded || this.gatewayDisconnected) {
+        return "";
+      }
+      this.failed = false;
+      this.sessionId = null;
+      this.transcriptionSessionId = null;
+      this.closeRequest = null;
+      this.finalTranscripts.length = 0;
+      this.currentPartial = "";
+      this.pendingAudio.length = 0;
+      for (const audio of this.recording) {
+        this.pendingAudio.push(audio);
+      }
+      this.startPromise = this.createRemote();
+      const transcript = await this.finish();
+      if (transcript) {
+        this.dismissFailure?.();
+        this.dismissFailure = undefined;
+      }
+      return transcript;
+    } finally {
+      this.retrying = false;
+    }
   }
 
   async cancel(): Promise<void> {
     this.discarded = true;
+    this.recovery = undefined;
+    this.releaseRecording();
     this.pendingAudio.length = 0;
     this.pendingAudioSamples = 0;
     this.settleLateFinalDrain?.(true);
@@ -269,12 +342,11 @@ export class ComposerDictationSession {
     }
   }
 
-  private queueAudio(samples: Float32Array): void {
+  private queueAudio(audioBase64: string): void {
     if (!this.sessionId) {
       return;
     }
     const sessionId = this.sessionId;
-    const audioBase64 = bytesToBase64(floatToG711Ulaw(samples));
     this.appendChain = this.appendChain
       .then(async () => {
         if (this.discarded) {
@@ -293,7 +365,8 @@ export class ComposerDictationSession {
     }
     this.failed = true;
     this.settleLateFinalDrain?.(false);
-    this.callbacks.onError(message, this.hasTranscript());
+    this.dismissFailure?.();
+    this.dismissFailure = this.callbacks.onError(message, this.hasTranscript()) || undefined;
   }
 
   private hasTranscript(): boolean {

@@ -82,7 +82,7 @@ type DirectDictationOptions = {
   isConnected: () => boolean;
   canCommit: () => boolean;
   onMessage: (message: string) => void;
-  onError: (message: string) => void;
+  onError: (message: string) => void | (() => void);
   onSubmit: () => void;
 };
 
@@ -168,7 +168,7 @@ export class DirectDictationControl extends EventTarget {
       },
       onError: (message: string) => {
         if (ownsDraft()) {
-          this.options.onError(message);
+          return this.options.onError(message);
         }
       },
       onDictationUnavailable: this.devicePicker.handleOpen,
