@@ -158,4 +158,60 @@ suite.define(() => {
       },
     );
   });
+
+  it("shows a whole saved-size report on a phone so a swipe over it scrolls the board", async () => {
+    await suite.withPage(
+      { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+      async ({ context, page }) => {
+        const rows = Array.from({ length: 8 }, (_, index) => [
+          `Issue ${index + 1}`,
+          "Open",
+          "Mira",
+        ]);
+        await installMockGateway(page, {
+          sessionKey,
+          controlUiWidgetKinds: [{ pluginId: "session", kind: "session:report", label: "Report" }],
+          featureMethods: ["board.get", "chat.metadata", "chat.startup", "sessions.list"],
+          methodResponses: {
+            "board.get": {
+              ...reportSnapshot("https://example.com/"),
+              widgets: [
+                // The default "md" pin size: 6 columns by 4 rows on a desktop grid.
+                createBoardWidget({
+                  name: "blockers",
+                  title: "Blockers",
+                  contentKind: "plugin",
+                  pluginKind: "session:report",
+                  props: {
+                    blocks: [{ type: "table", columns: ["Issue", "Status", "Owner"], rows }],
+                  },
+                }),
+              ],
+            },
+            "sessions.list": chatSessionListResponse([
+              { key: sessionKey, kind: "direct", label: "Release", updatedAt: Date.now() },
+            ]),
+          },
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+        const board = page.locator("openclaw-board-view");
+        const body = board.locator('[data-widget-name="blockers"] .board-widget__body');
+        await body.getByText("Issue 8").waitFor({ state: "attached" });
+        // Before the fix the report kept its 260px desktop height and scrolled inside itself.
+        expect(await body.evaluate((node) => node.scrollHeight - node.clientHeight)).toBe(0);
+
+        const box = (await body.boundingBox())!;
+        const x = box.x + box.width / 2;
+        const y = Math.min(box.y + box.height, 800) - 20;
+        const cdp = await context.newCDPSession(page);
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ x, y }] });
+        await cdp.send("Input.dispatchTouchEvent", {
+          type: "touchMove",
+          touchPoints: [{ x, y: y - 200 }],
+        });
+        await cdp.send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] });
+        await expect.poll(() => board.evaluate((node) => node.scrollTop)).toBeGreaterThan(100);
+      },
+    );
+  });
 });

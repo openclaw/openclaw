@@ -28,6 +28,9 @@ openclaw-board-view {
 .board-view {
   --board-line: color-mix(in srgb, var(--border) 84%, transparent);
   --board-surface: color-mix(in srgb, var(--panel) 94%, transparent);
+  /* Named so narrow rules can restyle .board-grid; the grid stays the unnamed
+     container that widget content queries. Its content box matches the grid's width. */
+  container: board-view / inline-size;
   display: grid;
   gap: 12px;
   min-width: 0;
@@ -158,15 +161,6 @@ openclaw-board-view {
 .board-grid[hidden],
 openclaw-board-widget-cell[hidden] {
   display: none;
-}
-
-@container (max-width: 560px) {
-  /* Keep desktop sizes canonical; only placement changes on narrow boards.
-     CSS order preserves the keyed frame nodes when persisted order changes. */
-  .board-widget {
-    grid-area: auto / 1 / span var(--board-widget-rows) / -1 !important;
-    order: var(--board-widget-order);
-  }
 }
 
 .board-grid__append-zone {
@@ -328,6 +322,50 @@ openclaw-board-widget-cell {
 
 .board-widget__body--fixed-report {
   contain: strict;
+}
+
+@container board-view (max-width: 560px) {
+  /* Narrow boards stack one card per row and keep desktop sizes canonical.
+     CSS order preserves the keyed frame nodes when persisted order changes. */
+  .board-grid {
+    grid-auto-rows: auto;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .board-widget {
+    --board-widget-stack-height: calc(
+      var(--board-widget-rows) * 56px + (var(--board-widget-rows) - 1) * 12px
+    );
+    grid-area: auto / 1 / auto / -1 !important;
+    height: var(--board-widget-stack-height);
+    order: var(--board-widget-order);
+  }
+
+  /* Native reports would otherwise keep their desktop height at phone width,
+     clipping their content into a small inner scroller. Showing all of it
+     leaves the board as the only thing that scrolls. */
+  .board-widget--fit-content {
+    height: auto;
+  }
+
+  .board-widget--fit-content > .board-widget__body {
+    overflow: visible;
+  }
+
+  .board-widget--fit-content.board-widget--fixed-report {
+    contain-intrinsic-block-size: auto var(--board-widget-stack-height);
+  }
+
+  .board-widget--fit-content > .board-widget__body--fixed-report {
+    contain: content;
+  }
+
+  /* Stacked cards always span the board, so the corner cannot set a width,
+     and on touch it catches swipes that start near it. Size presets and
+     Auto height stay in the widget menu. */
+  .board-widget__resize-handle {
+    display: none;
+  }
 }
 
 .board-widget__body--scrollable .board-widget__grant {
@@ -728,6 +766,7 @@ openclaw-board-widget-cell {
 
     .board-widget:not(.board-widget--dragging) {
       grid-area: 1 / 1 / -1 / -1 !important;
+      height: auto;
     }
   }
 }
