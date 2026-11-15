@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { chatSessionListResponse, waitForTranscriptScrollIdle } from "./chat-flow.test-support.ts";
 import { swarmSnapshot } from "./chat-swarm.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -205,9 +205,11 @@ suite.define(() => {
         // The retained tool stays with the completed request, before the next user turn.
         const next = pane.getByText("Now look at the next change.", { exact: true });
         // Expanded results can push the next turn past the mounted transcript window on a phone.
-        await pane.locator(".chat-thread").evaluate((thread) => {
-          thread.scrollTop = thread.scrollHeight;
-        });
+        const thread = pane.locator(".chat-thread");
+        await waitForTranscriptScrollIdle(thread);
+        await thread.hover({ position: { x: 16, y: 16 } });
+        await page.mouse.wheel(0, await thread.evaluate((element) => element.scrollHeight));
+        await waitForTranscriptScrollIdle(thread);
         await next.waitFor();
         const collectorBounds = await tools.last().boundingBox();
         const nextBounds = await next.boundingBox();

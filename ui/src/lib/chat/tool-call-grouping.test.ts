@@ -103,14 +103,16 @@ describe("summarizeToolGroup", () => {
         prepared("search", "Skill Search", { name: "skills_search" }),
         prepared("read", "Skill Read", { name: "skills_read" }),
         prepared("wait", "Wait for Agents", { name: "agents_wait" }),
+        prepared("question", "Ask User", { name: "ask_user" }),
       ]),
-    ).toBe("Ran commands, searched skills, read skills, waited for agents");
+    ).toBe("Ran commands, searched skills, read skills, waited for agents, asked questions");
     expect(
       summarizeToolGroup([
         prepared("search", "Skill Search", { name: "skills_search", status: "running" }),
         prepared("read", "Skill Read", { name: "skills_read", hideFromChannelProgress: true }),
+        prepared("question", "Ask User", { name: "ask_user", status: "running" }),
       ]),
-    ).toBe("Searching skills");
+    ).toBe("Searching skills, asking questions");
     expect(
       summarizeToolGroup([
         prepared("command", "Exec", { name: "exec", status: "running" }),

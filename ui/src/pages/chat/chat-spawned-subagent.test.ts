@@ -104,53 +104,56 @@ describe("a launched subagent", () => {
     ).toBe(coder.key);
   });
 
-  it("keeps subagent and child-chat launches as standalone activity", async () => {
-    const calls = [
-      { id: "story", args: { label, task: "Write it." } },
-      { id: "opened", args: { label: "Opened", task: "Write it.", visible: true } },
-    ];
-    const activity = calls.map(({ id }): AgentActivityItem => ({
-      itemId: `tool:${id}`,
-      toolCallId: id,
-      kind: "tool",
-      phase: "end",
-      status: "completed",
-      name: "sessions_spawn",
-      title: "Sub-agent",
-    }));
-    const group = createToolGroup("launches", [
-      createMessageEntry(
-        "launches:entry",
-        createAssistantMessage(
-          calls.flatMap(({ id, args }) => [
-            createToolCall(id, "sessions_spawn", args),
-            createToolResultBlock(
-              id,
-              "sessions_spawn",
-              accepted(`agent:main:${id === "opened" ? "dashboard" : "subagent"}:${id}`),
-            ),
-          ]),
-          { activity },
+  it.each(["sessions_spawn", "mcp__openclaw__sessions_spawn", "mcp_openclaw_sessions_spawn"])(
+    "keeps %s subagent and child-chat launches as standalone activity",
+    async (toolName) => {
+      const calls = [
+        { id: "story", args: { label, task: "Write it." } },
+        { id: "opened", args: { label: "Opened", task: "Write it.", visible: true } },
+      ];
+      const activity = calls.map(({ id }): AgentActivityItem => ({
+        itemId: `tool:${id}`,
+        toolCallId: id,
+        kind: "tool",
+        phase: "end",
+        status: "completed",
+        name: "sessions_spawn",
+        title: "Sub-agent",
+      }));
+      const group = createToolGroup("launches", [
+        createMessageEntry(
+          "launches:entry",
+          createAssistantMessage(
+            calls.flatMap(({ id, args }) => [
+              createToolCall(id, toolName, args),
+              createToolResultBlock(
+                id,
+                toolName,
+                accepted(`agent:main:${id === "opened" ? "dashboard" : "subagent"}:${id}`),
+              ),
+            ]),
+            { activity },
+          ),
         ),
-      ),
-    ]);
-    const container = document.createElement("div");
-    mountSolid(
-      ActivityGroup,
-      {
-        groups: [group],
-        options: { showToolCalls: true, showReasoning: false },
-        presentation: "standalone",
-      },
-      container,
-    );
-    await settleToolBridges(container);
-    await waitForSolid(() => {
-      expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
-      expect(container.textContent).toContain(`Launched subagent${label}`);
-      expect(container.textContent).toContain("Opened child chatOpened");
-    });
-  });
+      ]);
+      const container = document.createElement("div");
+      mountSolid(
+        ActivityGroup,
+        {
+          groups: [group],
+          options: { showToolCalls: true, showReasoning: false },
+          presentation: "standalone",
+        },
+        container,
+      );
+      await settleToolBridges(container);
+      await waitForSolid(() => {
+        expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+        expect(container.textContent).toContain(`Launched subagent${label}`);
+        expect(container.textContent).toContain("Opened child chatOpened");
+      });
+    },
+  );
 
   it("shows its name and duration, and opens its session without toggling the row", async () => {
     const onOpenSubagent = vi.fn();

@@ -138,8 +138,8 @@ not turn an unresolved step into success.
 
 Answers work on the surfaces listed above. The web Control UI and TUI show one
 question at a time. Collapsing an inline Control UI question keeps a compact
-question in the transcript; collapsing a docked question restores the composer
-with a slim pending-question indicator. The TUI's `/question` command reopens
+question in the transcript; collapsing a docked question leaves a slim
+pending-question indicator above the composer. The TUI's `/question` command reopens
 it, and a plain reply still answers an eligible pending question. iOS, macOS, and Android show
 inline cards; multiple questions stay stacked as an intentional touch-friendly
 idiom. The TUI keeps a compact resolution notice in the chat; other platforms
@@ -160,9 +160,9 @@ an explicit tool message; automatic final-reply delivery is configured separatel
 ## Async questions
 
 Codex async questions use the same panel above the Control UI composer. They open
-without taking keyboard focus and replace the message box while the agent
-continues working. Collapse the panel to restore the composer and keep a compact
-unanswered-question count and the current question visible. New messages, the question's own completed
+without taking keyboard focus and leave the message box available while the agent
+continues working. Collapse the panel to keep a compact unanswered-question count
+and the current question visible. New messages, the question's own completed
 turn, and collapsed work history do not dismiss the question or reopen a minimized
 panel. When a later run completes successfully, older reminders leave the dock.
 Overlapping runs, commentary, interruptions, and failed runs do not retire a

@@ -247,6 +247,7 @@ export function createChatComposerContext(
   // Expanded questions keep routine progress quiet without replacing the writing surface.
   const showComposerProgress =
     !questionPanelProps ||
+    questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.requestedBySession !== undefined ||
     questionPanelProps.model.collapsed;
 

@@ -146,8 +146,8 @@ child's transcript.
 
 When this session asks a blocking question with `ask_user`, the question appears
 in the transcript beside the agent's work, with the composer still available.
-An asynchronous question stays in the question dock and replaces the composer
-while its panel is open. Answering or skipping uses the same question controls;
+An asynchronous question stays in the question dock above the composer,
+which remains available while the panel is open. Answering or skipping uses the same question controls;
 closing the panel does not answer the question. Requests without a recorded
 blocking state keep their existing placement.
 

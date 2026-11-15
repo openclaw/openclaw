@@ -110,6 +110,25 @@ export function resolveToolOperationLabel(
   }
   const display = resolveToolDisplayIdentity(call.name);
   const name = call.name.trim().toLowerCase();
+  if (name === "view_image") {
+    const key =
+      outcome === "running"
+        ? "viewingImage"
+        : outcome === "succeeded"
+          ? "viewedImage"
+          : "viewImage";
+    const imageName = typeof args?.path === "string" ? pathDisplayName(args.path) : undefined;
+    return [t(`chat.toolCards.${key}`), imageName].filter(Boolean).join(" ");
+  }
+  if (name === "ask_user") {
+    const key =
+      outcome === "running"
+        ? "askingQuestion"
+        : outcome === "succeeded"
+          ? "askedQuestion"
+          : "questionRequest";
+    return [t(`chat.toolCards.${key}`), detail].filter(Boolean).join(" ");
+  }
   if (name === "agents_wait") {
     const action =
       outcome === "running" ? "waitingFor" : outcome === "succeeded" ? "waitedFor" : "waitFor";

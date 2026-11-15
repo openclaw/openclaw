@@ -8,6 +8,8 @@ const text = (container: ParentNode, selector: string) =>
 
 it.each([
   ["wait", { runId: "cm_test" }, "Wait"],
+  ["ask_user", {}, "Asked a question"],
+  ["view_image", { path: "/tmp/inspection-a.png" }, "Viewed image inspection-a.png"],
   ["custom_tool", { text: "custom tool" }, "Custom Tool"],
   ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
   ["custom_tool", { text: "Inspect the workspace" }, "Custom Tool"],

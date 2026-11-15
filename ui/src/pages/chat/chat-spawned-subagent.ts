@@ -60,10 +60,11 @@ type LaunchCard = Pick<ToolCard, "name" | "args" | "details" | "outputText">;
  * `visible` or was answered with a dashboard session.
  */
 function readLaunch(card: LaunchCard) {
-  if (card.name.trim().toLowerCase() !== "sessions_spawn") {
+  const call = unwrapToolCallForDisplay(card);
+  if (call.name.trim().toLowerCase() !== "sessions_spawn") {
     return null;
   }
-  const args = asRecord(card.args);
+  const args = asRecord(call.args);
   // Collector details contain only routing metadata; their complete receipt stays in text.
   const result = { ...safeParseJsonRecord(card.outputText ?? ""), ...asRecord(card.details) };
   const childKey = text(result?.childSessionKey);
