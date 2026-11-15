@@ -45,19 +45,14 @@ describe("system-cli", () => {
   });
 
   it.each([
-    {
-      name: "invalid wake mode",
-      args: ["--text", "hello", "--mode", "later"],
-      message: "--mode must be now or next-heartbeat",
-    },
-    { name: "blank text", args: ["--text", "   "], message: "--text is required." },
-  ])("hands $name refusals to the CLI failure owner", async ({ args, message }) => {
+    [["--text", "hello", "--mode", "later"], "--mode must be now or next-heartbeat"],
+    [["--text", "   "], "--text is required."],
+  ] as const)("hands %j refusals to the CLI failure owner", async (args, message) => {
     await expect(runCli(["system", "event", ...args, "--json"])).rejects.toMatchObject({
       name: "ExpectedCliError",
       message: expect.stringContaining(message),
     });
-    expect(runtimeLogs).toEqual([]);
-    expect(runtimeErrors).toEqual([]);
+    expect([runtimeLogs, runtimeErrors]).toEqual([[], []]);
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
