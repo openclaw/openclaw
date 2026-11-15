@@ -215,10 +215,17 @@ try {
     summary.native = native;
   } else {
     assert.equal(process.platform, "darwin");
+    summary.outcome = "setup-failure";
     summary.macos = capture("sw_vers", ["-productVersion"]);
     summary.xcode = capture("xcodebuild", ["-version"]);
     summary.swift = capture("swift", ["--version"]);
-    assert.match(summary.swift, /Swift version 6\.3/);
+    const swiftVersion = summary.swift.match(/Swift version (\d+)\.(\d+)/);
+    assert.ok(swiftVersion, "Swift must report its compiler version");
+    assert.ok(
+      Number(swiftVersion[1]) > 6 ||
+        (Number(swiftVersion[1]) === 6 && Number(swiftVersion[2]) >= 3),
+      "Swift 6.3 or newer is required by the pinned Package.swift",
+    );
     run("native-assets", "node", ["scripts/prepare-apple-mermaid.mjs"], 300000);
     run(
       "swift-build",
@@ -256,6 +263,7 @@ try {
       { mode: 0o700 },
     );
     env.PATH = shims + path.delimiter + env.PATH;
+    summary.outcome = "test-failure";
     run(
       "permissions-test",
       "node",

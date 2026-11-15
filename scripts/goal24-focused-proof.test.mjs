@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 
 const driver = fileURLToPath(new URL("./goal24-focused-proof.mjs", import.meta.url));
 for (const scenario of ["pass", "zero", "install-failure"]) {
@@ -76,6 +77,28 @@ if (path.basename(process.argv[1]) === "git") {
       }
     } finally {
       fs.rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+}
+
+// Exercise the driver's actual preflight statements, without invoking Swift or
+// contributor source on the operator host.
+for (const version of ["6.3", "6.4", "7.0", "6.2", "unknown"]) {
+  test("Swift minimum-toolchain preflight: " + version, () => {
+    const source = fs.readFileSync(driver, "utf8");
+    const start = source.indexOf('    summary.swift = capture("swift", ["--version"]);');
+    const end = source.indexOf('    run("native-assets"', start);
+    assert.ok(start >= 0 && end > start);
+    const check = () =>
+      vm.runInNewContext(source.slice(start, end), {
+        assert,
+        summary: {},
+        capture: () => "Apple Swift version " + version + " (swiftlang-test)",
+      });
+    if (["6.3", "6.4", "7.0"].includes(version)) {
+      assert.doesNotThrow(check);
+    } else {
+      assert.throws(check);
     }
   });
 }

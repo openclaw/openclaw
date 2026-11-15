@@ -21,18 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - proof: history
-            runner: ubuntu-24.04
-            deadline: 30
-            sha: eb919fb0d0b19dfa86c3e7055145b5a83ae27ef9
           - proof: permissions
             runner: xcode-27
             deadline: 45
             sha: 77ee3e8424d789b7bad5804a9dc5a1693f34c91e
-          - proof: audio
-            runner: xcode-27
-            deadline: 45
-            sha: a9a084486e3df10193dfa9ac5ab9faa9f53a4619
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.deadline }}
     steps:
