@@ -1,0 +1,221 @@
+{
+  "cases": [
+    {
+      "id": "subscription",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex"
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": true
+          }
+        }
+      },
+      "realtime": true
+    },
+    {
+      "id": "platform",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1"
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": true
+          }
+        }
+      },
+      "realtime": true
+    },
+    {
+      "id": "subscription-provider-level",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "providers": {
+              "openai": {
+                "model": "gpt-live-1-codex"
+              }
+            }
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "providers": {
+              "openai": {
+                "model": "gpt-live-1-codex"
+              }
+            }
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": true
+          }
+        }
+      },
+      "realtime": true
+    },
+    {
+      "id": "explicit-stt-tts",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex",
+            "mode": "stt-tts"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex",
+            "mode": "stt-tts"
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": true
+          }
+        }
+      },
+      "realtime": false
+    },
+    {
+      "id": "opaque-model",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-test-canary"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai"
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "modelSource": "gateway",
+            "gatewayRelaySupported": false
+          }
+        }
+      },
+      "realtime": false
+    },
+    {
+      "id": "ga-realtime",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-realtime-2.1"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-realtime-2.1"
+          }
+        }
+      },
+      "realtime": true
+    },
+    {
+      "id": "subscription-force-agent-consult",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex",
+            "consultRouting": "force-agent-consult"
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "model": "gpt-live-1-codex",
+            "consultRouting": "force-agent-consult"
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": false
+          }
+        }
+      },
+      "realtime": false
+    },
+    {
+      "id": "subscription-azure",
+      "source": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "providers": {
+              "openai": {
+                "model": "gpt-live-1-codex",
+                "azureEndpoint": "https://example.openai.azure.com"
+              }
+            }
+          }
+        }
+      },
+      "config": {
+        "talk": {
+          "realtime": {
+            "provider": "openai",
+            "providers": {
+              "openai": {
+                "model": "gpt-live-1-codex",
+                "azureEndpoint": "https://example.openai.azure.com"
+              }
+            }
+          }
+        },
+        "clientHints": {
+          "realtime": {
+            "gatewayRelaySupported": false
+          }
+        }
+      },
+      "realtime": false
+    }
+  ]
+}

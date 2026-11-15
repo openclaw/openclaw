@@ -1,42 +1,110 @@
 /** Builds and revalidates system.run approval plans for cwd and executable paths. */
-import fs from "node:fs";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeNullableString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
-import { isBlockedShellWrapperCommand } from "../infra/exec-wrapper-resolution.js";
-import { resolveMutableFileOperandSnapshotSync } from "../infra/system-run-approval-binding.js";
+import {
+  realpathForExec,
+  resolveCommandResolutionFromArgv,
+} from "../infra/exec-command-resolution.js";
+import {
+  isBlockedShellWrapperCommand,
+  isShellWrapperInvocation,
+} from "../infra/exec-wrapper-resolution.js";
+import {
+  inspectHostExecEnvOverrides,
+  sanitizeHostExecEnv,
+  sanitizeSystemRunEnvOverrides,
+} from "../infra/host-env-security.js";
+import {
+  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
+  resolveMutableFileOperandSnapshot,
+  revalidateSystemRunMutableFileBinding,
+  type SystemRunMutableFileBinding,
+} from "../infra/system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   type ApprovedCwdSnapshot,
-  captureApprovedCwdSnapshotSync,
+  captureApprovedCwdSnapshot,
+  APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
+  revalidateApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
+import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
+import type { SystemRunBindingFailure } from "../infra/system-run-mutable-file-operand.js";
 
-function shouldPinExecutableForApproval(params: {
-  shellCommand: string | null;
-  wrapperChain: string[] | undefined;
-}): boolean {
-  return params.shellCommand === null && (params.wrapperChain?.length ?? 0) === 0;
+type SystemRunPrepareEnv =
+  | {
+      ok: true;
+      env: Record<string, string>;
+    }
+  | {
+      ok: false;
+      message: string;
+    };
+export function buildEnvOverrideRejectionMessage(params: {
+  rejectedOverrideBlockedKeys: string[];
+  rejectedOverrideInvalidKeys: string[];
+}): string {
+  const details: string[] = [];
+  if (params.rejectedOverrideBlockedKeys.length > 0) {
+    details.push(`blocked override keys: ${params.rejectedOverrideBlockedKeys.join(", ")}`);
+  }
+  if (params.rejectedOverrideInvalidKeys.length > 0) {
+    details.push(
+      `invalid non-portable override keys: ${params.rejectedOverrideInvalidKeys.join(", ")}`,
+    );
+  }
+  return `SYSTEM_RUN_DENIED: environment override rejected (${details.join("; ")})`;
 }
 
-export function hardenApprovedExecutionPaths(params: {
+export function buildSystemRunPrepareCoverageEnv(params: {
+  argv: string[];
+  env?: Record<string, string> | null;
+}): SystemRunPrepareEnv {
+  const diagnostics = inspectHostExecEnvOverrides({
+    overrides: params.env ?? undefined,
+    blockPathOverrides: true,
+  });
+  if (
+    diagnostics.rejectedOverrideBlockedKeys.length > 0 ||
+    diagnostics.rejectedOverrideInvalidKeys.length > 0
+  ) {
+    return {
+      ok: false,
+      message: buildEnvOverrideRejectionMessage(diagnostics),
+    };
+  }
+  const envOverrides = sanitizeSystemRunEnvOverrides({
+    overrides: params.env ?? undefined,
+    shellWrapper: isShellWrapperInvocation(params.argv),
+  });
+  return {
+    ok: true,
+    // Prepared coverage is durable approval evidence, so keep this in parity
+    // with the env passed to `system.run` policy and execution.
+    env: sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
+  };
+}
+
+export async function hardenApprovedExecutionPaths(params: {
   approvedByAsk: boolean;
   argv: string[];
   shellCommand: string | null;
   cwd: string | undefined;
-}):
+}): Promise<
   | {
       ok: true;
       argv: string[];
-      argvChanged: boolean;
       cwd: string | undefined;
       approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
     }
-  | { ok: false; message: string } {
+  | { ok: false; message: string }
+> {
   if (!params.approvedByAsk) {
     return {
       ok: true,
       argv: params.argv,
-      argvChanged: false,
       cwd: params.cwd,
       approvedCwdSnapshot: undefined,
     };
@@ -44,31 +112,26 @@ export function hardenApprovedExecutionPaths(params: {
 
   // Capture an omitted cwd once on the execution host. Approval, persistence,
   // revalidation, and process launch must all bind the same directory identity.
-  let hardenedCwd = params.cwd ?? process.cwd();
-  const canonicalCwd = captureApprovedCwdSnapshotSync(hardenedCwd);
+  const canonicalCwd = await captureApprovedCwdSnapshot(params.cwd ?? process.cwd());
   if (!canonicalCwd.ok) {
     return canonicalCwd;
   }
-  hardenedCwd = canonicalCwd.snapshot.cwd;
-  const approvedCwdSnapshot = canonicalCwd.snapshot;
+  const hardened = {
+    ok: true as const,
+    argv: params.argv,
+    cwd: canonicalCwd.snapshot.cwd,
+    approvedCwdSnapshot: canonicalCwd.snapshot,
+  };
 
-  const resolution = resolveCommandResolutionFromArgv(params.argv, hardenedCwd);
+  const resolution = await resolveCommandResolutionFromArgv(params.argv, hardened.cwd);
   if (
     params.argv.length === 0 ||
-    !shouldPinExecutableForApproval({
-      shellCommand: params.shellCommand,
-      wrapperChain: resolution?.wrapperChain,
-    })
+    params.shellCommand !== null ||
+    (resolution?.wrapperChain?.length ?? 0) !== 0
   ) {
     // Wrapper argv must stay intact: replacing its effective executable can shift
     // positional arguments and run a different command than the approved one.
-    return {
-      ok: true,
-      argv: params.argv,
-      argvChanged: false,
-      cwd: hardenedCwd,
-      approvedCwdSnapshot,
-    };
+    return hardened;
   }
 
   const pinnedExecutable =
@@ -80,20 +143,14 @@ export function hardenApprovedExecutionPaths(params: {
     };
   }
   if (pinnedExecutable === params.argv[0]) {
-    return {
-      ok: true,
-      argv: params.argv,
-      argvChanged: false,
-      cwd: hardenedCwd,
-      approvedCwdSnapshot,
-    };
+    return hardened;
   }
   const argv = [...params.argv];
   argv[0] = pinnedExecutable;
-  return { ok: true, argv, argvChanged: true, cwd: hardenedCwd, approvedCwdSnapshot };
+  return { ...hardened, argv };
 }
 
-export function buildSystemRunApprovalPlan(
+export async function buildSystemRunApprovalPlan(
   params: {
     command?: unknown;
     rawCommand?: unknown;
@@ -102,7 +159,7 @@ export function buildSystemRunApprovalPlan(
     sessionKey?: unknown;
   },
   bindApproval = true,
-): { ok: true; plan: SystemRunApprovalPlan } | { ok: false; message: string } {
+): Promise<{ ok: true; plan: SystemRunApprovalPlan } | SystemRunBindingFailure> {
   const command = resolveSystemRunCommandRequest({
     command: params.command,
     rawCommand: params.rawCommand,
@@ -116,14 +173,16 @@ export function buildSystemRunApprovalPlan(
   if (bindApproval && command.shellPayload === null && isBlockedShellWrapperCommand(command.argv)) {
     return {
       ok: false,
+      reason: "unsupported-command-shape",
       message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
     };
   }
-  let cwd = normalizeNullableString(params.cwd) ?? undefined;
+  let cwd = readNonBlankString(params.cwd);
+  // Node-host cwd preserves whitespace; see resolveExecWorkdir.
   if (!bindApproval) {
     // Ordinary execution follows aliases once; approval binding keeps its stricter path checks.
     try {
-      cwd = fs.realpathSync(cwd ?? process.cwd());
+      cwd = await realpathForExec(cwd ?? process.cwd());
     } catch {
       return {
         ok: false,
@@ -131,7 +190,7 @@ export function buildSystemRunApprovalPlan(
       };
     }
   }
-  const hardening = hardenApprovedExecutionPaths({
+  const hardening = await hardenApprovedExecutionPaths({
     approvedByAsk: bindApproval,
     argv: command.argv,
     shellCommand: command.shellPayload,
@@ -142,11 +201,9 @@ export function buildSystemRunApprovalPlan(
   }
   const commandText = formatExecCommand(hardening.argv);
   const commandPreview =
-    command.previewText?.trim() && command.previewText.trim() !== commandText
-      ? command.previewText.trim()
-      : null;
+    command.previewText && command.previewText !== commandText ? command.previewText : null;
   const mutableFileOperand = bindApproval
-    ? resolveMutableFileOperandSnapshotSync({
+    ? await resolveMutableFileOperandSnapshot({
         argv: hardening.argv,
         cwd: hardening.cwd,
         shellCommand: command.shellPayload,
@@ -167,4 +224,39 @@ export function buildSystemRunApprovalPlan(
       mutableFileOperand: mutableFileOperand.snapshot ?? undefined,
     },
   };
+}
+
+export async function revalidateApprovedExecutionPaths(params: {
+  argv: string[];
+  cwd?: string;
+  approvedCwdSnapshot?: ApprovedCwdSnapshot;
+  mutableFileOperand?: SystemRunApprovalPlan["mutableFileOperand"];
+  executableBinding?: SystemRunMutableFileBinding;
+}): Promise<{ kind: "cwd" | "script" | "executable"; message: string } | undefined> {
+  if (
+    params.approvedCwdSnapshot &&
+    !(await revalidateApprovedCwdSnapshot(params.approvedCwdSnapshot))
+  ) {
+    return { kind: "cwd", message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE };
+  }
+  if (
+    params.mutableFileOperand &&
+    !(await revalidateApprovedMutableFileOperand({
+      snapshot: params.mutableFileOperand,
+      argv: params.argv,
+      cwd: params.cwd,
+    }))
+  ) {
+    return { kind: "script", message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE };
+  }
+  if (params.executableBinding) {
+    const current = await revalidateSystemRunMutableFileBinding({
+      binding: params.executableBinding,
+      cwd: params.cwd,
+    });
+    if (!current.ok) {
+      return { kind: "executable", message: current.message };
+    }
+  }
+  return undefined;
 }

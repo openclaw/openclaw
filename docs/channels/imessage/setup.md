@@ -12,11 +12,13 @@ Install the plugin, install and verify `imsg` on the signed-in Messages Mac, con
 
 ## Install the plugin
 
-Install the official iMessage plugin on the Gateway host, then restart the Gateway:
+Install the official iMessage plugin on the Gateway host:
 
 ```bash
 openclaw plugins install @openclaw/imessage
 ```
+
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) before continuing.
 
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="/channels/imessage/rich-messages#private-api-actions">
@@ -125,7 +127,7 @@ exec ssh -T messages-mac imsg "$@"
 
     `remoteHost` identifies the Messages Mac. OpenClaw uses it for both inbound attachment fetches and outbound attachment staging. For outbound files, OpenClaw creates an owner-only temporary path on that Mac, copies the file over the existing strict SSH/SCP transport, passes only the remote path to `imsg`, and attempts removal after success, failure, or timeout. A failed cleanup SSH call emits a warning and can leave the owner-only temporary directory behind.
 
-    An explicit `remoteHost` is recommended and wins when set. For compatibility, OpenClaw auto-detects the existing transparent `exec ssh ... imsg "$@"` wrapper shape once per process and reuses that host across monitoring, probes, sends, and private actions. Auto-detection covers only the simple documented transparent wrapper; option-rich wrappers such as ProxyJump/ProxyCommand must configure `remoteHost`.
+    An explicit `remoteHost` is recommended and wins when set. For compatibility, OpenClaw auto-detects the existing transparent `exec ssh ... imsg "$@"` wrapper shape once per process and reuses that host across monitoring, checks, sends, and private actions. Auto-detection covers only the simple documented transparent wrapper; option-rich wrappers such as ProxyJump/ProxyCommand must configure `remoteHost`.
     `remoteHost` must be `host` or `user@host` (no spaces or SSH options); unsafe values are ignored.
     OpenClaw uses strict host-key checking for SSH/SCP, so the Messages Mac host key must already exist in `~/.ssh/known_hosts` on the Gateway host.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).

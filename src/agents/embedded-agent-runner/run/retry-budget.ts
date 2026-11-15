@@ -19,6 +19,12 @@ export function beginRunAttempt(budget: RunRetryBudget): void {
   budget.attemptsCounted += 1;
 }
 
+export function recordRunModelProgress(budget: RunRetryBudget): void {
+  // Retain the current attempt's failed tail, not failures before a completed response.
+  // Partial output and tool-only continuations do not replenish this guard.
+  budget.attemptsCounted = 1;
+}
+
 export function resolveRunRetryKind(params: {
   preflightRecovery: { route: string; truncatedCount?: number };
   retryingFromTranscript: boolean;

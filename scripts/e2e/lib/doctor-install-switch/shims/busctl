@@ -61,14 +61,22 @@ while (args[commandIndex]?.startsWith("--")) {
   }
   flags.add(flag);
 }
-if (!flags.has("--json=short")) {
-  fail();
-}
-
 // This fixture owns a stopped, loaded user service and never starts a manager.
 const owner = ":1.42";
 const bus = "org.freedesktop.DBus";
 const invocation = args.slice(commandIndex);
+if (
+  flags.has("--auto-start=no") &&
+  flags.size === 1 &&
+  invocation.length === 5 &&
+  invocation.join(" ") === `get-property ${manager} ${rootObjectPath} ${manager}.Manager Version`
+) {
+  process.stdout.write('s "252.39-1~deb12u2"\n');
+  process.exit(0);
+}
+if (!flags.has("--json=short")) {
+  fail();
+}
 const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
   /(?:\.service)?$/u,
   ".service",
@@ -126,28 +134,36 @@ if (invocation[2] !== `${rootObjectPath}/unit/${encodeUnitName(unitName)}`) {
 
 const content = readUnitContent(unitPath);
 const requestedProperties = invocation.slice(4).join(" ");
-if (
-  invocation[3] === `${manager}.Unit` &&
-  invocation.length === 11 &&
-  requestedProperties ===
-    "Id LoadState ActiveState SubState StartLimitBurst ActiveEnterTimestampMonotonic InactiveEnterTimestampMonotonic"
-) {
-  writeProperties([
-    { type: "s", data: unitName },
-    { type: "s", data: "loaded" },
-    { type: "s", data: "inactive" },
-    { type: "s", data: "dead" },
-    { type: "u", data: 5 },
-    { type: "t", data: 0 },
-    { type: "t", data: 1 },
-  ]);
+if (invocation[3] === `${manager}.Unit`) {
+  const properties = {
+    Id: { type: "s", data: unitName },
+    LoadState: { type: "s", data: "loaded" },
+    ActiveState: { type: "s", data: "inactive" },
+    SubState: { type: "s", data: "dead" },
+    StartLimitBurst: { type: "u", data: 5 },
+    ActiveEnterTimestampMonotonic: { type: "t", data: 0 },
+    InactiveEnterTimestampMonotonic: { type: "t", data: 1 },
+    UnitFileState: { type: "s", data: "enabled" },
+    RefuseManualStart: { type: "b", data: false },
+    CanStart: { type: "b", data: true },
+    FragmentPath: { type: "s", data: unitPath },
+    DropInPaths: { type: "as", data: [] },
+    NeedDaemonReload: { type: "b", data: false },
+  };
+  const names = invocation.slice(4);
+  if (!names.length || names.some((name) => !Object.hasOwn(properties, name))) {
+    fail();
+  }
+  writeProperties(names.map((name) => properties[name]));
   process.exit(0);
 }
+const runtimeProperties =
+  "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent";
+const includeControlGroup =
+  invocation.length === 13 && requestedProperties === `${runtimeProperties} ControlGroup`;
 if (
   invocation[3] === `${manager}.Service` &&
-  invocation.length === 12 &&
-  requestedProperties ===
-    "Result NRestarts MainPID ExecMainStatus ExecMainCode KillMode TasksCurrent MemoryCurrent"
+  ((invocation.length === 12 && requestedProperties === runtimeProperties) || includeControlGroup)
 ) {
   writeProperties([
     { type: "s", data: "success" },
@@ -158,21 +174,8 @@ if (
     { type: "s", data: "control-group" },
     { type: "t", data: 0 },
     { type: "t", data: 0 },
-  ]);
-  process.exit(0);
-}
-if (invocation[3] === `${manager}.Unit`) {
-  if (
-    invocation.length !== 8 ||
-    invocation.slice(4).join(" ") !== "FragmentPath DropInPaths NeedDaemonReload LoadState"
-  ) {
-    fail();
-  }
-  writeProperties([
-    { type: "s", data: unitPath },
-    { type: "as", data: [] },
-    { type: "b", data: false },
-    { type: "s", data: "loaded" },
+    // This stopped fixture owns no native systemd cgroup.
+    ...(includeControlGroup ? [{ type: "s", data: "" }] : []),
   ]);
   process.exit(0);
 }

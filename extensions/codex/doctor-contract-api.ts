@@ -1,6 +1,3 @@
-/**
- * Doctor contract hooks for Codex plugin config and state migrations.
- */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -14,6 +11,10 @@ type LegacyConfigRule = {
 
 function hasRetiredDynamicToolsProfile(value: unknown): boolean {
   return Object.hasOwn(asNullableRecord(value) ?? {}, "codexDynamicToolsProfile");
+}
+
+function hasRetiredCyberFailoverModel(value: unknown): boolean {
+  return Object.hasOwn(asNullableRecord(value) ?? {}, "model");
 }
 
 function hasLegacyPluginDestructivePolicy(value: unknown): boolean {
@@ -35,6 +36,17 @@ function hasRetiredApprovalPolicy(value: unknown): boolean {
   return approvalPolicy === "on-failure" || approvalPolicy === "untrusted";
 }
 
+function hasBlankNetworkProxyOptionalFields(value: unknown): boolean {
+  const appServer = asNullableRecord(value);
+  const networkProxy = asNullableRecord(appServer?.networkProxy);
+  return (
+    networkProxy?.enabled === true &&
+    [networkProxy.profileName, appServer?.remoteWorkspaceRoot].some(
+      (field) => typeof field === "string" && !field.trim(),
+    )
+  );
+}
+
 // These keys shipped in v2026.8.1; only Doctor consumes them after retirement.
 const RETIRED_TURN_IDLE_TIMEOUT_KEYS = [
   "turnCompletionIdleTimeoutMs",
@@ -50,8 +62,13 @@ function hasRetiredTurnIdleTimeout(value: unknown): boolean {
   );
 }
 
-/** Legacy Codex config keys that doctor should report or repair. */
 export const legacyConfigRules: LegacyConfigRule[] = [
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer", "cyberFailover"],
+    message:
+      'plugins.entries.codex.config.appServer.cyberFailover.model is retired; automatic cyber-policy retries use the active model through approved Daybreak access. Run "openclaw doctor --fix" to remove it.',
+    match: hasRetiredCyberFailoverModel,
+  },
   {
     path: ["plugins", "entries", "codex", "config"],
     message:
@@ -76,10 +93,16 @@ export const legacyConfigRules: LegacyConfigRule[] = [
       'Codex app-server turn idle timeouts are retired; native Codex owns provider liveness and turn completion. The existing agents.defaults.timeoutSeconds run limit remains unchanged. Run "openclaw doctor --fix" to remove the old settings.',
     match: hasRetiredTurnIdleTimeout,
   },
+  {
+    path: ["plugins", "entries", "codex", "config", "appServer"],
+    message:
+      'Blank plugins.entries.codex.config.appServer.networkProxy.profileName or appServer.remoteWorkspaceRoot must be removed to use the defaults with network restrictions. Run "openclaw doctor --fix".',
+    match: hasBlankNetworkProxyOptionalFields,
+  },
 ];
 
 /**
- * Removes retired Codex plugin config keys while preserving unrelated config.
+ * Repairs legacy Codex plugin config while preserving unrelated config.
  */
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
   config: OpenClawConfig;
@@ -89,42 +112,31 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   const rawPluginConfig = asNullableRecord(rawEntry?.config);
   const rawCodexPlugins = asNullableRecord(rawPluginConfig?.codexPlugins);
   const rawAppServer = asNullableRecord(rawPluginConfig?.appServer);
-  const shouldRemoveDynamicToolsProfile =
-    rawPluginConfig !== null && hasRetiredDynamicToolsProfile(rawPluginConfig);
-  const shouldRewriteDestructivePolicy = hasLegacyPluginDestructivePolicy(rawCodexPlugins);
-  const shouldRewriteApprovalPolicy = hasRetiredApprovalPolicy(rawAppServer);
-  const shouldRemoveTurnIdleTimeouts = hasRetiredTurnIdleTimeout(rawAppServer);
   if (
     !rawPluginConfig ||
-    (!shouldRemoveDynamicToolsProfile &&
-      !shouldRewriteDestructivePolicy &&
-      !shouldRewriteApprovalPolicy &&
-      !shouldRemoveTurnIdleTimeouts)
+    (!hasRetiredDynamicToolsProfile(rawPluginConfig) &&
+      !hasLegacyPluginDestructivePolicy(rawCodexPlugins) &&
+      !hasRetiredApprovalPolicy(rawAppServer) &&
+      !hasRetiredTurnIdleTimeout(rawAppServer) &&
+      !hasRetiredCyberFailoverModel(rawAppServer?.cyberFailover) &&
+      !hasBlankNetworkProxyOptionalFields(rawAppServer))
   ) {
     return { config: cfg, changes: [] };
   }
 
-  const nextConfig = structuredClone(cfg) as OpenClawConfig & {
-    plugins?: Record<string, unknown>;
-  };
-  const nextPlugins = asNullableRecord(nextConfig.plugins);
-  const nextEntries = asNullableRecord(nextPlugins?.entries);
-  const nextEntry = asNullableRecord(nextEntries?.codex);
-  const nextPluginConfig = asNullableRecord(nextEntry?.config);
-  if (!nextPluginConfig) {
-    return { config: cfg, changes: [] };
-  }
+  const nextConfig = structuredClone(cfg);
+  const nextPluginConfig = nextConfig.plugins!.entries!.codex!.config!;
 
   const changes: string[] = [];
-  if (shouldRemoveDynamicToolsProfile) {
+  if (hasRetiredDynamicToolsProfile(nextPluginConfig)) {
     delete nextPluginConfig.codexDynamicToolsProfile;
     changes.push(
       "Removed retired plugins.entries.codex.config.codexDynamicToolsProfile; Codex app-server always keeps Codex-native workspace tools native.",
     );
   }
 
-  if (shouldRewriteDestructivePolicy) {
-    const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
+  const nextCodexPlugins = asNullableRecord(nextPluginConfig.codexPlugins);
+  if (hasLegacyPluginDestructivePolicy(nextCodexPlugins)) {
     if (nextCodexPlugins?.allow_destructive_actions === "on-request") {
       nextCodexPlugins.allow_destructive_actions = "auto";
     }
@@ -141,7 +153,15 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   }
 
   const nextAppServer = asNullableRecord(nextPluginConfig.appServer);
-  if (nextAppServer && shouldRemoveTurnIdleTimeouts) {
+  const nextCyberFailover = asNullableRecord(nextAppServer?.cyberFailover);
+  if (nextCyberFailover && hasRetiredCyberFailoverModel(nextCyberFailover)) {
+    delete nextCyberFailover.model;
+    changes.push(
+      "Removed retired plugins.entries.codex.config.appServer.cyberFailover.model; automatic cyber-policy retries use the active model through approved Daybreak access. Existing mode and cooloffMs settings were not changed.",
+    );
+  }
+
+  if (nextAppServer && hasRetiredTurnIdleTimeout(nextAppServer)) {
     for (const key of RETIRED_TURN_IDLE_TIMEOUT_KEYS) {
       if (Object.hasOwn(nextAppServer, key)) {
         delete nextAppServer[key];
@@ -152,13 +172,23 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     }
   }
 
-  if (shouldRewriteApprovalPolicy) {
-    if (
-      nextAppServer?.approvalPolicy === "on-failure" ||
-      nextAppServer?.approvalPolicy === "untrusted"
-    ) {
-      nextAppServer.approvalPolicy = "on-request";
+  if (nextAppServer && hasBlankNetworkProxyOptionalFields(nextAppServer)) {
+    const nextNetworkProxy = asNullableRecord(nextAppServer.networkProxy);
+    for (const [target, key, configPath] of [
+      [nextNetworkProxy, "profileName", "networkProxy.profileName"],
+      [nextAppServer, "remoteWorkspaceRoot", "remoteWorkspaceRoot"],
+    ] as const) {
+      if (target && typeof target[key] === "string" && !target[key].trim()) {
+        delete target[key];
+        changes.push(
+          `Removed blank plugins.entries.codex.config.appServer.${configPath}; the default now applies.`,
+        );
+      }
     }
+  }
+
+  if (nextAppServer && hasRetiredApprovalPolicy(nextAppServer)) {
+    nextAppServer.approvalPolicy = "on-request";
     changes.push(
       'Renamed retired plugins.entries.codex.config.appServer.approvalPolicy to "on-request".',
     );
@@ -175,7 +205,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     id: "codex-app-server-sidecars-to-plugin-state",
     label: "Codex app-server thread bindings",
     // Config normalization loads this artifact too; state-only imports belong
-    // behind the detection and migration callbacks.
+    // behind the inventory, detection, and migration callbacks.
+    collectBackupResources: async (params) =>
+      (
+        await import("./src/migration/session-binding-sidecars.js")
+      ).collectLegacySessionBindingBackupResources(params),
     detectLegacyState: async (params) =>
       (
         await import("./src/migration/session-binding-sidecars.js")
@@ -184,6 +218,38 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       (
         await import("./src/migration/session-binding-sidecars.js")
       ).migrateLegacySessionBindingSidecars(params),
+  },
+  {
+    id: "codex-native-task-assignments",
+    label: "Codex native pending assignments",
+    sqliteOnly: { family: "state" },
+    collectBackupResources: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.collectBackupResources(params),
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-task-assignments.js")
+      ).codexNativeTaskAssignmentMigration.migrateLegacyState(params),
+  },
+  {
+    id: "codex-native-assignment-repair",
+    label: "Codex native pending assignment repair",
+    doctorOnly: true,
+    phase: "after-session-repair",
+    collectBackupResources: () => [],
+    detectLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.detectLegacyState(params),
+    migrateLegacyState: async (params) =>
+      (
+        await import("./src/migration/native-assignment-repair.js")
+      ).codexNativeAssignmentRepair.migrateLegacyState(params),
   },
   codexOrphanedSessionBindingMigration,
 ];

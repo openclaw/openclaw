@@ -1,8 +1,12 @@
 /**
  * SSRF policy helpers for Browser routes that need one-off hostname grants.
  */
-import { isPrivateNetworkAllowedByPolicy, type SsrFPolicy } from "../infra/net/ssrf.js";
-import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+import {
+  isPrivateNetworkAllowedByPolicy,
+  matchesHostnameAllowlist,
+  normalizeHostname,
+  type SsrFPolicy,
+} from "openclaw/plugin-sdk/security-runtime";
 
 // Exact-host CDP scoping replaces allowedHostnames. Preserve whether the source
 // policy allowed authority changes before that synthetic allowlist was added.

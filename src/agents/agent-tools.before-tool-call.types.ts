@@ -13,26 +13,19 @@ import type {
   PluginHookBeforeToolCallResult,
   PluginHookToolRequesterContext,
 } from "../plugins/types.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import type { SkillSnapshot, SkillTelemetrySource, SkillUsagePath } from "../skills/types.js";
-import type { AgentTool } from "./runtime/index.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-
-export type ToolOutcomeObservation = {
-  toolName: string;
-  argsHash: string;
-  resultHash: string;
-  resultContentSource?: AgentTool["resultContentSource"];
-  /** Monotonic model-call order within the owning embedded run. */
-  toolCallOrdinal?: number;
-  terminalPresentation?: string;
-  presentationOnly?: boolean;
-};
-
-export type ToolOutcomeObserver = (observation: ToolOutcomeObservation) => void;
+import type { ToolOutcomeObserver } from "./tool-outcome-observation.js";
 
 export type HookContext = {
+  /** Host-owned workspace attribution barrier, captured for this exact run. */
+  awaitSessionDiffBaseline?: () => Promise<void>;
+  watchdogAttempt?: SessionControllerWatchdogAttempt;
   agentId?: string;
   config?: OpenClawConfig;
+  /** Selected tool registration owner; independent of the hook requesting approval. */
+  toolOwnerPluginId?: string;
   /** Tool execution cwd for host-derived path facts. */
   cwd?: string;
   /** Host workspace used to resolve relative tool params for diagnostics only. */
@@ -95,7 +88,6 @@ export type BeforeToolCallPolicyDiagnosticState = {
 };
 
 export type HookBlockedReason =
-  | "client-voice-confirmation"
   | "plugin-before-tool-call"
   | "plugin-approval"
   | "plugin-approval-unavailable"

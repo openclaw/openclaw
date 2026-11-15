@@ -1,21 +1,16 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   matchesAgentLifecycleBinding,
+  matchesAgentLifecycleBindingAsync,
   type AgentLifecycleBinding,
 } from "../agents/agent-lifecycle-registry.js";
 import { resolveMutableAgentEntry } from "../agents/agent-scope.js";
 import { applyAgentConfig } from "../commands/agents.config.js";
 import { unsetConfigValueAtPath } from "../config/config-paths.js";
 import { mutateConfigFileWithRetry } from "../config/config.js";
+import type { ConfigWriteOptions } from "../config/io.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
-
-function sameIdentity(
-  left: GitHubToolIdentityConfig | undefined,
-  right: GitHubToolIdentityConfig | null,
-): boolean {
-  return isDeepStrictEqual(left ?? null, right);
-}
 
 export async function updateGitHubToolIdentityConfig(params: {
   scope: "system" | "agent";
@@ -23,14 +18,16 @@ export async function updateGitHubToolIdentityConfig(params: {
   identity?: GitHubToolIdentityConfig;
   expectedIdentity?: GitHubToolIdentityConfig | null;
   agentLifecycleBinding?: AgentLifecycleBinding;
+  writeOptions?: ConfigWriteOptions;
 }): Promise<OpenClawConfig> {
   const mutation = await mutateConfigFileWithRetry({
     afterWrite: { mode: "auto" },
-    mutate: (draft) => {
+    ...(params.writeOptions ? { writeOptions: params.writeOptions } : {}),
+    mutate: async (draft) => {
       if (params.scope === "system") {
         if (
           params.expectedIdentity !== undefined &&
-          !sameIdentity(draft.tools?.github, params.expectedIdentity)
+          !isDeepStrictEqual(draft.tools?.github ?? null, params.expectedIdentity)
         ) {
           throw new Error("GitHub identity changed while setup was in progress.");
         }
@@ -45,7 +42,8 @@ export async function updateGitHubToolIdentityConfig(params: {
 
       if (
         params.agentLifecycleBinding &&
-        !matchesAgentLifecycleBinding(draft, params.agentLifecycleBinding)
+        (!(await matchesAgentLifecycleBindingAsync(() => draft, params.agentLifecycleBinding)) ||
+          !matchesAgentLifecycleBinding(draft, params.agentLifecycleBinding))
       ) {
         throw new Error("Agent changed while GitHub setup was in progress.");
       }
@@ -55,7 +53,7 @@ export async function updateGitHubToolIdentityConfig(params: {
       }
       if (
         params.expectedIdentity !== undefined &&
-        !sameIdentity(entry?.tools?.github, params.expectedIdentity)
+        !isDeepStrictEqual(entry?.tools?.github ?? null, params.expectedIdentity)
       ) {
         throw new Error("GitHub identity changed while setup was in progress.");
       }
@@ -68,7 +66,10 @@ export async function updateGitHubToolIdentityConfig(params: {
       }
       entry.tools ??= {};
       if (params.identity) {
-        entry.tools.github = params.identity;
+        entry.tools.github =
+          entry.tools.github?.allowInSandbox === undefined
+            ? params.identity
+            : { ...params.identity, allowInSandbox: entry.tools.github.allowInSandbox };
       } else {
         unsetConfigValueAtPath(entry, ["tools", "github"]);
       }

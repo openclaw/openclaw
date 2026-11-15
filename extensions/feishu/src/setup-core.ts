@@ -1,5 +1,4 @@
 import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
-// Feishu plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   patchTopLevelChannelConfigSection,
@@ -34,8 +33,7 @@ export function setFeishuNamedAccountEnabled(
 export const feishuSetupAdapter: ChannelSetupAdapter = {
   resolveAccountId: ({ cfg, accountId }) => accountId?.trim() || resolveDefaultFeishuAccountId(cfg),
   applyAccountConfig: ({ cfg, accountId }) => {
-    const isDefault = !accountId || accountId === DEFAULT_ACCOUNT_ID;
-    if (isDefault) {
+    if (!accountId || accountId === DEFAULT_ACCOUNT_ID) {
       return setSetupChannelEnabled(cfg, "feishu", true);
     }
     return setFeishuNamedAccountEnabled(cfg, accountId, true);

@@ -1,5 +1,5 @@
 ---
-summary: "Adds xAI model provider support to OpenClaw."
+summary: "xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation."
 read_when:
   - You are installing, configuring, or auditing the xai plugin
 title: "xAI plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds xAI model provider support to OpenClaw.
+xAI provider for Grok models, Grok web and X search, code execution, speech, and media generation.
 
 ## Distribution
 

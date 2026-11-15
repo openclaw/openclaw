@@ -5,7 +5,6 @@ import {
   type LlmRuntime,
 } from "@openclaw/ai";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
-import "../ai-transport-runtime-host.js";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
 

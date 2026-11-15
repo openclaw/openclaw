@@ -10,7 +10,7 @@ class GatewayDiagnosticsTest {
   fun authRecoveryLabelsComeFromStructuredProblemCodes() {
     val labels =
       mapOf(
-        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code expired",
+        "AUTH_BOOTSTRAP_TOKEN_INVALID" to "Setup code no longer valid",
         "AUTH_TOKEN_MISSING" to "Gateway token needed",
         "AUTH_TOKEN_NOT_CONFIGURED" to "Gateway token not configured",
         "AUTH_PASSWORD_MISSING" to "Gateway password needed",

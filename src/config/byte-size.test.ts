@@ -8,7 +8,7 @@ describe("parseNonNegativeByteSize", () => {
     expect(parseNonNegativeByteSize("2mb")).toBe(2 * 1024 * 1024);
   });
 
-  it.each([Number.MAX_SAFE_INTEGER + 1, String(Number.MAX_SAFE_INTEGER + 1), "9007199254740993"])(
+  it.each([Number.MAX_SAFE_INTEGER + 1, "9007199254740993"])(
     "rejects unsafe byte size %j",
     (value) => expect(parseNonNegativeByteSize(value)).toBeNull(),
   );

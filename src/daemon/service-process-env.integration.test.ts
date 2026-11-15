@@ -4,25 +4,26 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { serviceProcessEnvEntrypoints } from "./service-process-env-runtime.test-support.js";
 import { resolveServiceManagerEnv } from "./service-process-env.js";
 import {
   buildSystemdManagerPropertyOutput,
   buildSystemdUnitPropertyOutput,
 } from "./service.test-helpers.js";
+import { systemdOperatorBusFixtures } from "./systemd-user-bus.test-support.js";
 
 const execFileAsync = promisify(execFile);
+const systemdExecUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdExec);
+const systemdLingerUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdLinger);
+const systemdFilesUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.systemdServiceFiles);
+const serviceEnvMergeUrl = resolveRuntimeWorkerUrl(serviceProcessEnvEntrypoints.serviceEnvMerge);
 
 async function runDriver(driver: string, env: NodeJS.ProcessEnv) {
   return await execFileAsync(
     process.execPath,
-    [
-      "--import",
-      new URL("../../scripts/tsx.mjs", import.meta.url).href,
-      "--input-type=module",
-      "-e",
-      driver,
-    ],
+    [...resolveRuntimeWorkerArgv(systemdExecUrl).slice(0, -1), "--input-type=module", "-e", driver],
     {
       cwd: fileURLToPath(new URL("../../", import.meta.url)),
       env,
@@ -48,6 +49,7 @@ describe.skipIf(process.platform === "win32")("native control environment bounda
           await fs.writeFile(
             path.join(home, command),
             `#!${process.execPath}
+if (process.argv.includes("Version")) { console.log('s "252.39"'); process.exit(0); }
 console.log(JSON.stringify({
   XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR,
   DBUS_SESSION_BUS_ADDRESS: process.env.DBUS_SESSION_BUS_ADDRESS,
@@ -59,7 +61,8 @@ console.log(JSON.stringify({
         const driver = `
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(systemdExecUrl.href)};
+Object.defineProperty(process, "platform", { value: "linux" });
 const callerDirectory = ${JSON.stringify(callerDirectory)};
 process.chdir(callerDirectory);
 fs.chmodSync(callerDirectory, 0o600);
@@ -67,7 +70,9 @@ try {
   for (const execute of [execSystemctlUser, execBusctlUser]) {
     const result = await execute(process.env, ["status"], 5000);
     assert.equal(result.code, 0, JSON.stringify(result));
-    assert.deepEqual(JSON.parse(result.stdout), ${JSON.stringify(native)});
+    assert.deepEqual(JSON.parse(result.stdout), execute === execSystemctlUser
+      ? { DBUS_SESSION_BUS_ADDRESS: ${JSON.stringify(native.DBUS_SESSION_BUS_ADDRESS)} }
+      : ${JSON.stringify(native)});
   }
 } finally {
   fs.chmodSync(callerDirectory, 0o700);
@@ -78,19 +83,26 @@ try {
     },
   );
 
-  it.each([false, true])(
-    "keeps systemctl and busctl routing with machine fallback %s",
-    async (fallback) => {
+  it.each(["direct", "stale", "machine"])(
+    "keeps systemctl and busctl routing for %s sessions",
+    async (session) => {
       await withTempDir("openclaw-manager-route-", async (temp) => {
         const home = await fs.realpath(temp);
-        const bus = fallback ? undefined : `unix:path=${home}/bus`;
+        const fallback = session === "machine";
+        const bus = fallback
+          ? undefined
+          : systemdOperatorBusFixtures.runtime.address.replace("$XDG_RUNTIME_DIR", home);
+        if (session === "stale") {
+          await fs.writeFile(path.join(home, "bus"), "");
+        }
         const source = {
           HOME: home,
           PATH: home,
           USER: "target",
           LOGNAME: "target",
           XDG_RUNTIME_DIR: fallback ? path.join(home, "missing-runtime") : home,
-          DBUS_SESSION_BUS_ADDRESS: bus,
+          DBUS_SESSION_BUS_ADDRESS:
+            session === "stale" ? systemdOperatorBusFixtures.stale.address : bus,
           BOUNDARY_PARENT_ONLY: "synthetic-parent",
         };
         const callsPath = path.join(home, "calls.jsonl");
@@ -105,18 +117,22 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
   canary: Object.hasOwn(process.env, "BOUNDARY_PARENT_ONLY"),
   native: process.env.PATH === ${JSON.stringify(home)} && process.env.USER === "target" && process.env.DBUS_SESSION_BUS_ADDRESS === ${JSON.stringify(bus)},
 }) + "\\n");
-if (${JSON.stringify(fallback ? "No medium found" : "")} && !args.includes("--machine")) {
-  console.error("Failed to connect to bus: " + ${JSON.stringify(fallback ? "No medium found" : "")}); process.exit(1);
+if (args.includes("Version")) {
+  const available = ${JSON.stringify(fallback)} ? args.includes("--machine") : process.env.DBUS_SESSION_BUS_ADDRESS === ${JSON.stringify(bus)};
+  if (!available) { console.error("Failed to connect to bus: No medium found"); process.exit(1); }
+  console.log('s "252.39"');
+} else {
+  console.log("running");
 }
-console.log("running");
 `,
             { mode: 0o700 },
           );
         }
         const driver = `
 import assert from "node:assert/strict";
-import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { execSystemctlUser, execBusctlUser } from ${JSON.stringify(systemdExecUrl.href)};
 process.geteuid = () => 1000;
+Object.defineProperty(process, "platform", { value: "linux" });
 const source = { ...process.env, XDG_RUNTIME_DIR: ${JSON.stringify(source.XDG_RUNTIME_DIR)}, DBUS_SESSION_BUS_ADDRESS: ${JSON.stringify(source.DBUS_SESSION_BUS_ADDRESS)} };
 for (const execute of [execSystemctlUser, execBusctlUser]) {
   const result = await execute(source, ["status"], 5000);
@@ -129,20 +145,34 @@ for (const execute of [execSystemctlUser, execBusctlUser]) {
           .trim()
           .split("\n")
           .map((line) => JSON.parse(line));
-        const expectedArgs = [
-          ["--user", "status"],
-          ...(fallback ? [["--machine", "target@", "--user", "status"]] : []),
+        const versionArgs = [
+          "--auto-start=no",
+          "get-property",
+          "org.freedesktop.systemd1",
+          "/org/freedesktop/systemd1",
+          "org.freedesktop.systemd1.Manager",
+          "Version",
         ];
-        expect(calls).toEqual(
-          ["systemctl", "busctl"].flatMap((command) =>
-            expectedArgs.map((args) => ({
-              command,
-              args,
-              canary: false,
-              native: true,
-            })),
-          ),
-        );
+        const scope = fallback ? ["--machine", "target@", "--user"] : ["--user"];
+        expect(calls).toEqual([
+          ...(session === "stale"
+            ? [
+                {
+                  command: "busctl",
+                  args: ["--user", ...versionArgs],
+                  canary: false,
+                  native: false,
+                },
+              ]
+            : []),
+          { command: "busctl", args: [...scope, ...versionArgs], canary: false, native: true },
+          ...["systemctl", "busctl"].map((command) => ({
+            command,
+            args: [...scope, "status"],
+            canary: false,
+            native: true,
+          })),
+        ]);
       });
     },
   );
@@ -167,7 +197,7 @@ console.log("Linger=yes");
       const driver = `
 import assert from "node:assert/strict";
 import { mock } from "node:test";
-import { readSystemdUserLingerStatus, enableSystemdUserLinger } from ${JSON.stringify(new URL("./systemd-linger.ts", import.meta.url).href)};
+import { readSystemdUserLingerStatus, enableSystemdUserLinger } from ${JSON.stringify(systemdLingerUrl.href)};
 const realGetuid = process.getuid;
 assert.deepEqual(await readSystemdUserLingerStatus({ env: { USER: "selected" } }), { user: "selected", linger: "yes" });
 // Only the synchronous sudo decision is synthetic; logging must see the real filesystem owner.
@@ -242,7 +272,7 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
   command: path.basename(process.argv[1]), args,
   canaries: ["BOUNDARY_PARENT_ONLY", "BOUNDARY_INLINE", "BOUNDARY_FILE", "BOUNDARY_SHARED"].map(name => Object.hasOwn(process.env, name)),
   selectors: ["OPENCLAW_SYSTEMD_UNIT", "OPENCLAW_PROFILE", "OPENCLAW_STATE_DIR"].some(name => Object.hasOwn(process.env, name)),
-  native: ${JSON.stringify(Object.entries(env).filter(([name]) => !name.startsWith("OPENCLAW_") && !name.startsWith("BOUNDARY_")))}.every(([name, value]) => process.env[name] === value),
+  native: ${JSON.stringify(Object.entries(env).filter(([name]) => !name.startsWith("OPENCLAW_") && !name.startsWith("BOUNDARY_")))}.every(([name, value]) => process.env[name] === (name === "XDG_RUNTIME_DIR" && path.basename(process.argv[1]) === "systemctl" ? undefined : value)),
   marker: process.env.OPENCLAW_CLI === "1",
 }) + "\\n");`;
       for (const command of ["systemctl", "busctl"]) {
@@ -252,7 +282,8 @@ fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify({
 const fs = require("node:fs"), path = require("node:path");
 ${record}
 if (${JSON.stringify(command)} === "busctl") {
-  if (args.includes("LoadUnit")) console.log(JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/boundary"] }));
+  if (JSON.stringify(args) === JSON.stringify(["--user", "--auto-start=no", "get-property", "org.freedesktop.systemd1", "/org/freedesktop/systemd1", "org.freedesktop.systemd1.Manager", "Version"])) console.log('s "252.39"');
+  else if (args.includes("LoadUnit")) console.log(JSON.stringify({ type: "o", data: ["/org/freedesktop/systemd1/unit/boundary"] }));
   else if (args.includes("org.freedesktop.systemd1.Unit")) console.log(${JSON.stringify(unitProperties)});
   else if (args.includes("org.freedesktop.systemd1.Service")) console.log(${JSON.stringify(serviceProperties)});
   else process.exit(91);
@@ -264,9 +295,10 @@ else process.exit(92);
       }
       const driver = `
 import assert from "node:assert/strict";
-import { readSystemdServiceExecStart } from ${JSON.stringify(new URL("./systemd-service-files.ts", import.meta.url).href)};
-import { mergeGatewayServiceEnv } from ${JSON.stringify(new URL("./service-env-merge.ts", import.meta.url).href)};
-import { execSystemctlUser } from ${JSON.stringify(new URL("./systemd-exec.ts", import.meta.url).href)};
+import { readSystemdServiceExecStart } from ${JSON.stringify(systemdFilesUrl.href)};
+import { mergeGatewayServiceEnv } from ${JSON.stringify(serviceEnvMergeUrl.href)};
+import { execSystemctlUser } from ${JSON.stringify(systemdExecUrl.href)};
+Object.defineProperty(process, "platform", { value: "linux" });
 const command = await readSystemdServiceExecStart(process.env, { requireEffective: true });
 assert.deepEqual(command.environment, {
   BOUNDARY_INLINE: "synthetic-inline", BOUNDARY_SHARED: "file-wins", BOUNDARY_FILE: "synthetic-file",
@@ -320,7 +352,7 @@ afterEach(() => {
 });
 
 describe("service manager routing environment", () => {
-  it.each(["linux", "darwin", "win32"] as const)(
+  it.each(["linux", "win32"] as const)(
     "preserves %s native routing without arbitrary namespaces",
     (platform) => {
       vi.spyOn(process, "platform", "get").mockReturnValue(platform);

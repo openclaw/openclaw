@@ -1,0 +1,186 @@
+import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
+import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { hasRoutineOAuthExpiry } from "../../lib/model-auth.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import type { ModelProviderRowMessage } from "./config-mutation.ts";
+import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
+
+/** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
+export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
+  return (
+    profile.type === "oauth" &&
+    (profile.reasonCode === "refresh_failed" || profile.reasonCode === "missing_credential")
+  );
+}
+
+export function profileAuthProblem(profile: ModelAuthStatusProfile): string | undefined {
+  if (!needsOAuthSignIn(profile)) {
+    return undefined;
+  }
+  return profile.reasonCode === "refresh_failed"
+    ? "modelProviders.status.signInExpired"
+    : "modelProviders.status.missing";
+}
+
+const AUTH_STATUS: Record<
+  ModelProviderAuthKind,
+  { kind: "ok" | "warn" | "danger" | "muted"; labelKey: string }
+> = {
+  ok: { kind: "ok", labelKey: "modelProviders.status.ok" },
+  expiring: { kind: "warn", labelKey: "modelProviders.status.expiring" },
+  expired: { kind: "danger", labelKey: "modelProviders.status.expired" },
+  missing: { kind: "danger", labelKey: "modelProviders.status.missing" },
+  "api-key": { kind: "muted", labelKey: "modelProviders.status.apiKey" },
+};
+
+function renderAuthStatus(auth: ModelProviderCard["auth"]) {
+  if (!auth) {
+    return undefined;
+  }
+  const status = AUTH_STATUS[auth.kind];
+  const label = t(status.labelKey);
+  const detail = auth.expiryLabel
+    ? t("modelProviders.expiresIn", { time: auth.expiryLabel })
+    : undefined;
+  return (
+    <span title={detail ?? label}>
+      {" "}
+      <SettingsStatus kind={status.kind} label={label} />{" "}
+    </span>
+  );
+}
+
+/**
+ * Usable through OpenClaw: credentials it stores, or a catalog that reports the
+ * provider ready (for example a CLI backend or plugin that owns its own login).
+ */
+/** Usage the provider reported, even an error, proves a credential it accepted. */
+export function isProviderUsable(card: ModelProviderCard): boolean {
+  return (
+    card.configApiKeys.length > 0 ||
+    Boolean(card.apiKey) ||
+    card.profiles.length > 0 ||
+    card.availableModelCount > 0 ||
+    card.catalogStatus === "ready" ||
+    card.usage !== undefined
+  );
+}
+
+/** Setup owns the page until a usable model exists; its call to action is the only one. */
+export function needsModelSetup(props: {
+  connected: boolean;
+  loading: boolean;
+  catalogDiscovering?: boolean;
+  configuredModels: readonly { available?: boolean }[];
+}): boolean {
+  return (
+    (props.connected || !props.loading) &&
+    !props.catalogDiscovering &&
+    !props.configuredModels.some((model) => model.available !== false)
+  );
+}
+
+export function needsAuthAttention(card: ModelProviderCard): boolean {
+  if (card.auth?.kind === "missing") {
+    return true;
+  }
+  if (card.auth?.kind !== "expired" && card.auth?.kind !== "expiring") {
+    return false;
+  }
+  // A rollup has no credential type. Unknown or mixed expiry retains its warning.
+  // A refresh in progress is routine too; it settles without the operator.
+  return !hasRoutineOAuthExpiry(card.auth.kind, card.profiles);
+}
+
+/**
+ * The row's status already speaks for an account that is the provider's only credential.
+ * With other credentials the row can't say which one failed, so a failing account keeps its word.
+ */
+export function providerStatusCoversAccount(card: ModelProviderCard): boolean {
+  return (
+    card.profiles.length === 1 &&
+    !card.apiKey &&
+    card.configApiKeys.length === 0 &&
+    (card.catalogStatus === "auth-rejected" || needsAuthAttention(card))
+  );
+}
+
+export function hasVerifiedProvider(card: ModelProviderCard): boolean {
+  return card.catalogStatus === "ready" && !needsAuthAttention(card);
+}
+
+export function renderProviderStatus(card: ModelProviderCard) {
+  if (card.catalogStatus === "auth-rejected") {
+    // The card-wide outcome does not identify which saved credential was rejected.
+    return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
+  }
+  if (needsAuthAttention(card)) {
+    return renderAuthStatus(card.auth);
+  }
+  if (card.catalogStatus === "unavailable") {
+    return <SettingsStatus kind={"warn"} label={t("modelProviders.status.modelsUnavailable")} />;
+  }
+  if (!isProviderUsable(card)) {
+    return renderAuthStatus(card.auth);
+  }
+  const attention = providerUsageAttention(card.usage);
+  if (attention) {
+    return <SettingsStatus kind={attention.kind} label={attention.label} />;
+  }
+  // Unverified credentials have nothing to report; the row already names them.
+  if (!hasVerifiedProvider(card)) {
+    return undefined;
+  }
+  const ready = card.availableModelCount > 0;
+  return (
+    <SettingsStatus
+      kind={ready ? "ok" : "muted"}
+      label={t(ready ? "modelProviders.status.ready" : "modelProviders.status.ok")}
+    />
+  );
+}
+
+export function renderMutationMessage(message: ModelProviderRowMessage | undefined) {
+  if (!message) {
+    return undefined;
+  }
+  return (
+    <>
+      <InlineAlert
+        tone={
+          message.kind === "error" ? "danger" : message.kind === "warning" ? "warning" : "success"
+        }
+      >
+        {message.text}
+      </InlineAlert>
+      {message.warning ? (
+        <InlineAlert tone="warning" role="status">
+          {message.warning}
+        </InlineAlert>
+      ) : undefined}
+    </>
+  );
+}
+
+export function ModelProviderConnectAction(props: {
+  onConnect: () => void;
+  connectDisabled: boolean;
+  primary?: boolean;
+  compact?: boolean;
+}) {
+  return (
+    <button
+      class={["btn", { primary: props.primary, "btn--sm": props.compact }]}
+      data-models-connect
+      disabled={props.connectDisabled}
+      onClick={() => props.onConnect()}
+    >
+      {t("modelProviders.login.action")}
+    </button>
+  );
+}

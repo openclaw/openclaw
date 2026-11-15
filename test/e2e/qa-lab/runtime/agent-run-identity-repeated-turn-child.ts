@@ -1,7 +1,13 @@
 // Runs two real public-ingress turns in one session so QA can inspect their executions.
 import { pathToFileURL } from "node:url";
+import {
+  disposeAllSessionMcpRuntimes,
+  setSessionMcpRuntimeScheduler,
+} from "../../../../src/agents/agent-bundle-mcp-manager-api.js";
 import { createAuditEventRecorder } from "../../../../src/audit/audit-recorder.js";
 import { configureExecutionIdentityAdmissionSink } from "../../../../src/audit/execution-identity-admission.js";
+import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../../src/config/io.js";
+import { GatewayScheduler } from "../../../../src/infra/gateway-scheduler.js";
 import { agentCommandFromIngress } from "../../../../src/plugin-sdk/agent-runtime.js";
 
 async function main() {
@@ -9,9 +15,13 @@ async function main() {
   if (!sessionId) {
     throw new Error("session id is required");
   }
-  const recorder = createAuditEventRecorder({ messageMode: "off" });
+  // This standalone ingress fixture owns the config bootstrap normally done by the Gateway.
+  await captureRuntimeConfigAsyncReader()();
+  const scheduler = new GatewayScheduler();
+  const recorder = createAuditEventRecorder({ scheduler, getConfig: getRuntimeConfig });
   const clearSink = configureExecutionIdentityAdmissionSink(recorder.recordExecutionIdentity);
   try {
+    await setSessionMcpRuntimeScheduler(scheduler);
     for (const message of [
       "Reply exactly: REPEATED-TURN-ONE",
       "Reply exactly: REPEATED-TURN-TWO",
@@ -32,8 +42,17 @@ async function main() {
       }
     }
   } finally {
+    scheduler.beginClose();
     clearSink();
-    await recorder.stop();
+    try {
+      await recorder.stop();
+    } finally {
+      try {
+        await disposeAllSessionMcpRuntimes();
+      } finally {
+        await scheduler.stop();
+      }
+    }
   }
 }
 

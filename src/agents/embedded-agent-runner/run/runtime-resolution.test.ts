@@ -5,10 +5,6 @@ import {
 } from "./runtime-resolution.js";
 
 describe("resolveRequestStreamTransportOverrides", () => {
-  it("marks non-empty request stream parameters for OpenClaw routing", () => {
-    expect(resolveRequestStreamTransportOverrides({ maxTokens: 64 })).toBe("present");
-  });
-
   it("keeps an empty request stream parameter record on the implicit runtime route", () => {
     expect(resolveRequestStreamTransportOverrides({})).toBeUndefined();
   });

@@ -1,8 +1,8 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.ui.AppDialog
 import ai.openclaw.app.ui.design.ClawTheme
-import android.annotation.SuppressLint
 import android.util.Base64
 import android.view.ViewGroup
 import android.webkit.RenderProcessGoneDetail
@@ -39,7 +39,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 
 @Composable
@@ -49,7 +48,7 @@ internal fun ChatMermaidPreview(
   onDismiss: () -> Unit,
 ) {
   var failed by remember(svg) { mutableStateOf(false) }
-  Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+  AppDialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
     Column(modifier = Modifier.fillMaxSize().background(background).windowInsetsPadding(WindowInsets.safeDrawing)) {
       Surface(modifier = Modifier.align(Alignment.End).padding(horizontal = 8.dp), color = background) {
         IconButton(onClick = onDismiss) {
@@ -73,7 +72,6 @@ internal fun ChatMermaidPreview(
 
 // SVG stays an image document, not inline active markup. JavaScript and every network/
 // file route are disabled; native WebView zoom keeps labels sharp without another engine.
-@SuppressLint("MissingOnRenderProcessGone")
 @Suppress("DEPRECATION")
 @Composable
 private fun MermaidSvgView(

@@ -52,19 +52,20 @@ export function resolveScheduledToolPolicyContext(params: {
     return undefined;
   }
   const rawPolicy = params.scheduledToolPolicy;
+  const policyRecord = isRecord(rawPolicy) ? rawPolicy : undefined;
   // Already-resolved contexts carry context-only fields (ownerOrigin,
   // execTarget) that the strict persisted-policy normalizer rejects; rebuild
   // the closed policy shape for both modes before normalizing.
   const policy = normalizeCronScheduledToolPolicy(
-    isRecord(rawPolicy) && rawPolicy.mode === "account"
+    policyRecord?.mode === "account"
       ? {
-          version: rawPolicy.version,
-          mode: rawPolicy.mode,
-          ownerSessionKey: rawPolicy.ownerSessionKey,
-          ownerAccountId: rawPolicy.ownerAccountId,
+          version: policyRecord.version,
+          mode: policyRecord.mode,
+          ownerSessionKey: policyRecord.ownerSessionKey,
+          ownerAccountId: policyRecord.ownerAccountId,
         }
-      : isRecord(rawPolicy) && rawPolicy.mode === "trusted"
-        ? { version: rawPolicy.version, mode: rawPolicy.mode }
+      : policyRecord?.mode === "trusted"
+        ? { version: policyRecord.version, mode: policyRecord.mode }
         : rawPolicy,
   );
   if (!policy) {
@@ -72,8 +73,7 @@ export function resolveScheduledToolPolicyContext(params: {
   }
   // Accept the persisted `{version: 1, host}` shape and an already-resolved
   // context's bare `{host}` shape; anything else keeps the baseline (no pin).
-  const rawExecTarget =
-    params.execTarget ?? (isRecord(rawPolicy) ? rawPolicy.execTarget : undefined);
+  const rawExecTarget = params.execTarget ?? policyRecord?.execTarget;
   const pinned =
     isRecord(rawExecTarget) &&
     rawExecTarget.host === "gateway" &&
@@ -91,7 +91,7 @@ export function resolveScheduledToolPolicyContext(params: {
   return {
     ...policy,
     ownerOrigin: normalizeCronScheduledToolCallerOrigin(
-      params.callerOrigin ?? (isRecord(rawPolicy) ? rawPolicy.ownerOrigin : undefined),
+      params.callerOrigin ?? policyRecord?.ownerOrigin,
     ),
     ...pinned,
   };

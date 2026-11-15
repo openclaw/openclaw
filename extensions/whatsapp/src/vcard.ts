@@ -1,14 +1,6 @@
-// Whatsapp plugin module implements vcard behavior.
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-
-type ParsedVcard = {
-  name?: string;
-  phones: string[];
-};
-
 const ALLOWED_VCARD_KEYS = new Set(["FN", "N", "TEL"]);
 
-export function parseVcard(vcard?: string): ParsedVcard {
+export function parseVcard(vcard?: string) {
   if (!vcard) {
     return { phones: [] };
   }
@@ -34,7 +26,7 @@ export function parseVcard(vcard?: string): ParsedVcard {
     if (!baseKey || !ALLOWED_VCARD_KEYS.has(baseKey)) {
       continue;
     }
-    const value = cleanVcardValue(rawValue);
+    const value = rawValue.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
     if (!value) {
       continue;
     }
@@ -47,7 +39,7 @@ export function parseVcard(vcard?: string): ParsedVcard {
       continue;
     }
     if (baseKey === "TEL") {
-      const phone = normalizeVcardPhone(value);
+      const phone = value.toLowerCase().startsWith("tel:") ? value.slice(4).trim() : value;
       if (phone) {
         phones.push(phone);
       }
@@ -65,21 +57,6 @@ function normalizeVcardKey(key: string): string | undefined {
   return segments[segments.length - 1] || undefined;
 }
 
-function cleanVcardValue(value: string): string {
-  return value.replace(/\\n/gi, " ").replace(/\\,/g, ",").replace(/\\;/g, ";").trim();
-}
-
 function normalizeVcardName(value: string): string {
   return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function normalizeVcardPhone(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (normalizeLowercaseStringOrEmpty(trimmed).startsWith("tel:")) {
-    return trimmed.slice(4).trim();
-  }
-  return trimmed;
 }

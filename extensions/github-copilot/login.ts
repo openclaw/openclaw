@@ -1,14 +1,12 @@
-// Github Copilot plugin module implements login behavior.
 import {
-  resolveExpiresAtMsFromDurationMs,
   nonNegativeSecondsToSafeMilliseconds,
   positiveSecondsToSafeMilliseconds,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { normalizeGithubCopilotDomain } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
-import { PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
+import { normalizeGithubCopilotDomain, PUBLIC_GITHUB_COPILOT_DOMAIN } from "./domain.js";
 
 const CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS = 30_000;
@@ -25,15 +23,6 @@ const githubAuthSsrfPolicy = (domain: string): SsrFPolicy => ({
   hostnameAllowlist: [domain],
 });
 
-type DeviceCodeResponse = {
-  deviceCode: string;
-  userCode: string;
-  verificationUri: string;
-  expiresInMs: number;
-  expiresAt: number;
-  intervalMs: number;
-};
-
 type DeviceTokenResponse =
   | {
       access_token: string;
@@ -47,26 +36,6 @@ type DeviceTokenResponse =
       interval?: unknown;
     };
 
-const GITHUB_DEVICE_ACCESS_DENIED = Symbol("github-device-access-denied");
-const GITHUB_DEVICE_EXPIRED = Symbol("github-device-expired");
-
-class GitHubDeviceFlowError extends Error {
-  readonly kind: symbol;
-  constructor(kind: symbol, message: string) {
-    super(message);
-    this.kind = kind;
-    this.name = "GitHubDeviceFlowError";
-  }
-}
-
-function isGitHubDeviceAccessDeniedError(err: unknown): boolean {
-  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_ACCESS_DENIED;
-}
-
-function isGitHubDeviceExpiredError(err: unknown): boolean {
-  return err instanceof GitHubDeviceFlowError && err.kind === GITHUB_DEVICE_EXPIRED;
-}
-
 function parseJsonResponse(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error("Unexpected response from GitHub");
@@ -74,19 +43,15 @@ function parseJsonResponse(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function parseDeviceCodeResponse(
-  value: Record<string, unknown>,
-  issuedAt: number,
-): DeviceCodeResponse {
+function parseDeviceCodeResponse(value: Record<string, unknown>, issuedAtMs: number) {
   const expiresInMs = positiveSecondsToSafeMilliseconds(value.expires_in);
   const intervalMs =
     value.interval === undefined
       ? GITHUB_DEVICE_FLOW_DEFAULT_INTERVAL_MS
       : nonNegativeSecondsToSafeMilliseconds(value.interval);
-  const expiresAt =
-    expiresInMs === undefined
-      ? undefined
-      : resolveExpiresAtMsFromDurationMs(expiresInMs, { nowMs: issuedAt });
+  // Monotonic performance.now() deadline; wall-clock jumps must not stretch or
+  // shrink the device-code window. Sleeps also consume setTimeout (monotonic).
+  const deadlineMs = expiresInMs === undefined ? undefined : issuedAtMs + expiresInMs;
 
   if (
     typeof value.device_code !== "string" ||
@@ -96,7 +61,7 @@ function parseDeviceCodeResponse(
     typeof value.verification_uri !== "string" ||
     !value.verification_uri ||
     expiresInMs === undefined ||
-    expiresAt === undefined ||
+    deadlineMs === undefined ||
     intervalMs === undefined
   ) {
     throw new Error("GitHub device code response missing fields");
@@ -107,168 +72,31 @@ function parseDeviceCodeResponse(
     userCode: value.user_code,
     verificationUri: value.verification_uri,
     expiresInMs,
-    expiresAt,
+    deadlineMs,
     intervalMs,
   };
 }
 
-async function postGitHubDeviceFlowForm(params: {
-  url: string;
-  body: URLSearchParams;
-  failureLabel: string;
-  domain: string;
-  signal?: AbortSignal;
-}): Promise<Record<string, unknown>> {
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    init: {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body: params.body,
-    },
-    ...(params.signal ? { signal: params.signal } : {}),
-    requireHttps: true,
-    policy: githubAuthSsrfPolicy(params.domain),
-    auditContext: "github-copilot-device-flow",
-    timeoutMs: GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS,
-  });
-  try {
-    if (!response.ok) {
-      // Release closes the dispatcher, so cancel its unread response body first.
-      await response.body?.cancel().catch(() => undefined);
-      throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
-    }
-    return parseJsonResponse(
-      await readProviderJsonResponse(response, "github-copilot.device-flow"),
-    );
-  } finally {
-    await release();
-  }
-}
-
-async function requestDeviceCode(params: {
-  scope: string;
-  domain: string;
-  signal?: AbortSignal;
-}): Promise<DeviceCodeResponse> {
-  const body = new URLSearchParams({
-    client_id: CLIENT_ID,
-    scope: params.scope,
-  });
-
-  const json = await postGitHubDeviceFlowForm({
-    url: deviceCodeUrl(params.domain),
-    body,
-    failureLabel: "GitHub device code failed",
-    domain: params.domain,
-    ...(params.signal ? { signal: params.signal } : {}),
-  });
-  // Anchor expiry to when GitHub issued the code, before UI prompts or browser launch.
-  return parseDeviceCodeResponse(json, Date.now());
-}
-
-async function pollForAccessToken(params: {
-  deviceCode: string;
-  intervalMs: number;
-  expiresAt: number;
-  domain: string;
-  signal?: AbortSignal;
-}): Promise<string> {
-  const bodyBase = new URLSearchParams({
-    client_id: CLIENT_ID,
-    device_code: params.deviceCode,
-    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-  });
-
-  let intervalMs = params.intervalMs;
-  while (Date.now() < params.expiresAt) {
-    await sleepGitHubDevicePollDelay(intervalMs, params.expiresAt, params.signal);
-    if (Date.now() >= params.expiresAt) {
-      break;
-    }
-
-    const json = (await postGitHubDeviceFlowForm({
-      url: accessTokenUrl(params.domain),
-      body: bodyBase,
-      failureLabel: "GitHub device token failed",
-      domain: params.domain,
-      ...(params.signal ? { signal: params.signal } : {}),
-    })) as DeviceTokenResponse;
-    if ("access_token" in json) {
-      if (typeof json.access_token === "string") {
-        return json.access_token;
-      }
-      throw new Error("GitHub device flow returned an invalid access token");
-    }
-
-    const err = json.error;
-    if (err === "authorization_pending") {
-      continue;
-    }
-    if (err === "slow_down") {
-      // slow_down is cumulative; a returned interval may raise but never lower the required floor.
-      intervalMs = Math.max(
-        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
-        positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
-      );
-      continue;
-    }
-    if (err === "expired_token") {
-      throw new GitHubDeviceFlowError(
-        GITHUB_DEVICE_EXPIRED,
-        "GitHub device code expired; run login again",
-      );
-    }
-    if (err === "access_denied") {
-      throw new GitHubDeviceFlowError(GITHUB_DEVICE_ACCESS_DENIED, "GitHub login cancelled");
-    }
-    throw new Error(`GitHub device flow error: ${err}`);
-  }
-
-  throw new GitHubDeviceFlowError(
-    GITHUB_DEVICE_EXPIRED,
-    "GitHub device code expired; run login again",
-  );
-}
-
 async function sleepGitHubDevicePollDelay(
   delayMs: number,
-  expiresAt: number,
+  deadlineMs: number,
   signal?: AbortSignal,
 ): Promise<void> {
   const requestedDelayMs = Math.max(1, Math.floor(delayMs));
-  const targetAt = Math.min(Date.now() + requestedDelayMs, expiresAt);
-  while (Date.now() < targetAt) {
-    const remainingMs = Math.max(1, targetAt - Date.now());
+  const targetAt = Math.min(performance.now() + requestedDelayMs, deadlineMs);
+  while (performance.now() < targetAt) {
+    const remainingMs = Math.max(1, targetAt - performance.now());
     const safeDelayMs = resolveTimerTimeoutMs(remainingMs, 1);
     const waitMs = Math.min(safeDelayMs, remainingMs);
-    await new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
-        clearTimeout(timeout);
-        reject(
-          signal?.reason instanceof Error ? signal.reason : new Error("GitHub login cancelled"),
-        );
-      };
-      const timeout = setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, waitMs);
-      signal?.addEventListener("abort", onAbort, { once: true });
-      if (signal?.aborted) {
-        onAbort();
-      }
+    await sleepWithAbort(waitMs, signal).catch(() => {
+      throw signal?.reason instanceof Error ? signal.reason : new Error("GitHub login cancelled");
     });
   }
 }
 
 function normalizeGitHubDeviceVerificationUrl(raw: string, domain: string): string {
-  let parsed: URL;
-  try {
-    parsed = new URL(raw);
-  } catch {
+  const parsed = URL.parse(raw);
+  if (!parsed) {
     throw new Error("GitHub device flow returned an invalid verification URL");
   }
 
@@ -302,6 +130,7 @@ type GitHubCopilotDeviceFlowIO = {
   showCode(args: { verificationUrl: string; userCode: string; expiresInMs: number }): Promise<void>;
   openUrl?: (url: string) => Promise<void>;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 export async function runGitHubCopilotDeviceFlow(
@@ -309,41 +138,126 @@ export async function runGitHubCopilotDeviceFlow(
   domain: string = PUBLIC_GITHUB_COPILOT_DOMAIN,
 ): Promise<GitHubCopilotDeviceFlowResult> {
   const host = normalizeGithubCopilotDomain(domain);
-  const device = await requestDeviceCode({
-    scope: "read:user",
-    domain: host,
-    ...(io.signal ? { signal: io.signal } : {}),
-  });
+  const assertCurrent = () => {
+    io.signal?.throwIfAborted();
+    io.assertCurrent?.();
+  };
+  const postGitHubDeviceFlowForm = async (params: {
+    url: string;
+    body: URLSearchParams;
+    failureLabel: string;
+    signal?: AbortSignal;
+  }): Promise<Record<string, unknown>> => {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: params.url,
+      init: {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: params.body,
+      },
+      ...(params.signal ? { signal: params.signal } : {}),
+      beforeRequest: assertCurrent,
+      requireHttps: true,
+      policy: githubAuthSsrfPolicy(host),
+      auditContext: "github-copilot-device-flow",
+      timeoutMs: GITHUB_DEVICE_FLOW_REQUEST_TIMEOUT_MS,
+    });
+    try {
+      if (!response.ok) {
+        // Release closes the dispatcher, so cancel its unread response body first.
+        await response.body?.cancel().catch(() => undefined);
+        throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
+      }
+      return parseJsonResponse(
+        await readProviderJsonResponse(response, "github-copilot.device-flow"),
+      );
+    } finally {
+      await release();
+    }
+  };
+  assertCurrent();
+  const requestDeviceCode = async () => {
+    const { signal } = io;
+    const body = new URLSearchParams({ client_id: CLIENT_ID, scope: "read:user" });
+    const json = await postGitHubDeviceFlowForm({
+      url: deviceCodeUrl(host),
+      body,
+      failureLabel: "GitHub device code failed",
+      ...(signal ? { signal } : {}),
+    });
+    assertCurrent();
+    // Anchor expiry to when GitHub issued the code, before UI prompts or browser
+    // launch, and keep the budget on the monotonic clock so wall-clock steps
+    // (NTP correction, sleep/resume, manual changes) cannot stretch or shrink it.
+    return parseDeviceCodeResponse(json, performance.now());
+  };
+  const device = await requestDeviceCode();
   const verificationUrl = normalizeGitHubDeviceVerificationUrl(device.verificationUri, host);
   const userCode = normalizeGitHubDeviceUserCode(device.userCode);
+  assertCurrent();
   await io.showCode({
     verificationUrl,
     userCode,
     expiresInMs: device.expiresInMs,
   });
+  assertCurrent();
 
   try {
     await io.openUrl?.(verificationUrl);
   } catch {
     // The code and URL have already been shown. Browser launch is best-effort.
   }
+  assertCurrent();
 
-  try {
-    const accessToken = await pollForAccessToken({
-      deviceCode: device.deviceCode,
-      intervalMs: Math.max(1000, device.intervalMs),
-      expiresAt: device.expiresAt,
-      domain: host,
-      ...(io.signal ? { signal: io.signal } : {}),
-    });
-    return { status: "authorized", accessToken };
-  } catch (err) {
-    if (isGitHubDeviceAccessDeniedError(err)) {
-      return { status: "access_denied" };
+  const { deviceCode, deadlineMs } = device;
+  let intervalMs = Math.max(1000, device.intervalMs);
+  const { signal } = io;
+  const bodyBase = new URLSearchParams({
+    client_id: CLIENT_ID,
+    device_code: deviceCode,
+    grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+  });
+  while (performance.now() < deadlineMs) {
+    await sleepGitHubDevicePollDelay(intervalMs, deadlineMs, signal);
+    assertCurrent();
+    if (performance.now() >= deadlineMs) {
+      break;
     }
-    if (isGitHubDeviceExpiredError(err)) {
+    const json = (await postGitHubDeviceFlowForm({
+      url: accessTokenUrl(host),
+      body: bodyBase,
+      failureLabel: "GitHub device token failed",
+      ...(signal ? { signal } : {}),
+    })) as DeviceTokenResponse;
+    assertCurrent();
+    if ("access_token" in json) {
+      if (typeof json.access_token === "string") {
+        return { status: "authorized", accessToken: json.access_token };
+      }
+      throw new Error("GitHub device flow returned an invalid access token");
+    }
+    const err = json.error;
+    if (err === "authorization_pending") {
+      continue;
+    }
+    if (err === "slow_down") {
+      // slow_down is cumulative; a returned interval may raise but never lower the required floor.
+      intervalMs = Math.max(
+        Math.min(Number.MAX_SAFE_INTEGER, intervalMs + GITHUB_DEVICE_FLOW_SLOW_DOWN_INCREMENT_MS),
+        positiveSecondsToSafeMilliseconds(json.interval) ?? 0,
+      );
+      continue;
+    }
+    if (err === "expired_token") {
       return { status: "expired" };
     }
-    throw err;
+    if (err === "access_denied") {
+      return { status: "access_denied" };
+    }
+    throw new Error(`GitHub device flow error: ${err}`);
   }
+  return { status: "expired" };
 }

@@ -1,4 +1,3 @@
-// FFmpeg exec tests cover command execution wrappers and error mapping.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { runExecMock, resolveSystemBinMock } = vi.hoisted(() => ({
@@ -32,69 +31,19 @@ afterAll(() => {
 
 beforeEach(() => {
   runExecMock.mockReset();
-  resolveSystemBinMock.mockReset();
-  resolveSystemBinMock.mockReturnValue("/usr/bin/ffprobe");
+  resolveSystemBinMock.mockReset().mockReturnValue("/usr/bin/ffprobe");
 });
 
 describe("parseFfprobeCodecAndSampleRate", () => {
-  function expectParsedCodecAndSampleRateCase(
-    input: string,
-    expected: { codec: string | null; sampleRateHz: number | null },
-  ) {
-    expect(parseFfprobeCodecAndSampleRate(input)).toEqual(expected);
-  }
-
   it.each([
-    {
-      name: "normalizes codec casing and parses numeric sample rates",
-      input: "Opus,48000\n",
-      expected: {
-        codec: "opus",
-        sampleRateHz: 48_000,
-      },
-    },
-    {
-      name: "keeps codec when the sample rate is not numeric",
-      input: "opus,not-a-number",
-      expected: {
-        codec: "opus",
-        sampleRateHz: null,
-      },
-    },
-    {
-      name: "rejects partially numeric sample rates",
-      input: "opus,48000hz",
-      expected: {
-        codec: "opus",
-        sampleRateHz: null,
-      },
-    },
-    {
-      name: "rejects missing sample rates",
-      input: "opus,",
-      expected: {
-        codec: "opus",
-        sampleRateHz: null,
-      },
-    },
-    {
-      name: "rejects zero sample rates",
-      input: "opus,0",
-      expected: {
-        codec: "opus",
-        sampleRateHz: null,
-      },
-    },
-    {
-      name: "rejects signed sample rates",
-      input: "opus,-48000",
-      expected: {
-        codec: "opus",
-        sampleRateHz: null,
-      },
-    },
-  ] as const)("$name", ({ input, expected }) => {
-    expectParsedCodecAndSampleRateCase(input, expected);
+    ["Opus,48000\n", 48_000],
+    ["opus,not-a-number", null],
+    ["opus,48000hz", null],
+    ["opus,", null],
+    ["opus,0", null],
+    ["opus,-48000", null],
+  ] as const)("parses codec and sample rate from %j", (input, sampleRateHz) => {
+    expect(parseFfprobeCodecAndSampleRate(input)).toEqual({ codec: "opus", sampleRateHz });
   });
 });
 

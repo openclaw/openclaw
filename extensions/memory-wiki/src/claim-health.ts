@@ -1,5 +1,4 @@
 import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
-// Memory Wiki plugin module implements claim health behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { WikiClaim, WikiPageSummary } from "./markdown.js";
 
@@ -9,6 +8,7 @@ export const WIKI_AGING_DAYS = 30;
 const WIKI_STALE_DAYS = 90;
 
 const CONTESTED_CLAIM_STATUSES = new Set(["contested", "contradicted", "refuted", "superseded"]);
+const CLAIM_FRESHNESS_ORDER = ["stale", "aging", "fresh"];
 
 export type WikiFreshnessLevel = "fresh" | "aging" | "stale" | "unknown";
 
@@ -19,25 +19,7 @@ export type WikiFreshness = {
   lastTouchedAt?: string;
 };
 
-export type WikiClaimHealth = {
-  key: string;
-  pagePath: string;
-  pageTitle: string;
-  pageId?: string;
-  claimId?: string;
-  text: string;
-  status: string;
-  confidence?: number;
-  evidenceCount: number;
-  missingEvidence: boolean;
-  freshness: WikiFreshness;
-};
-
-export type WikiClaimContradictionCluster = {
-  key: string;
-  label: string;
-  entries: WikiClaimHealth[];
-};
+export type WikiClaimHealth = ReturnType<typeof buildWikiClaimHealth>;
 
 export type WikiPageContradictionCluster = {
   key: string;
@@ -50,52 +32,32 @@ export type WikiPageContradictionCluster = {
   }>;
 };
 
-function parseTimestamp(value?: string): number | null {
-  return parseDateStringTimestampMs(value) ?? null;
-}
-
-function clampDaysSinceTouch(daysSinceTouch: number): number {
-  return Math.max(0, daysSinceTouch);
-}
-
 function normalizeClaimTextKey(text: string): string {
   return normalizeLowercaseStringOrEmpty(text.replace(/\s+/g, " "));
 }
 
 function normalizeTextKey(text: string): string {
-  return normalizeLowercaseStringOrEmpty(text)
-    .replace(/[^\p{L}\p{N}\p{M}]+/gu, " ")
-    .replace(/\s+/g, " ");
+  return normalizeLowercaseStringOrEmpty(text).replace(/[^\p{L}\p{N}\p{M}]+/gu, " ");
 }
 
 function buildFreshnessFromTimestamp(params: { timestamp?: string; now?: Date }): WikiFreshness {
   const now = params.now ?? new Date();
-  const timestampMs = parseTimestamp(params.timestamp);
-  if (timestampMs === null || !params.timestamp) {
+  const timestampMs = parseDateStringTimestampMs(params.timestamp);
+  if (timestampMs === undefined || !params.timestamp) {
     return {
       level: "unknown",
       reason: "missing updatedAt",
     };
   }
-  const daysSinceTouch = clampDaysSinceTouch(Math.floor((now.getTime() - timestampMs) / DAY_MS));
-  if (daysSinceTouch >= WIKI_STALE_DAYS) {
-    return {
-      level: "stale",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
-  if (daysSinceTouch >= WIKI_AGING_DAYS) {
-    return {
-      level: "aging",
-      reason: `last touched ${params.timestamp}`,
-      daysSinceTouch,
-      lastTouchedAt: params.timestamp,
-    };
-  }
+  const daysSinceTouch = Math.max(0, Math.floor((now.getTime() - timestampMs) / DAY_MS));
+  const level =
+    daysSinceTouch >= WIKI_STALE_DAYS
+      ? "stale"
+      : daysSinceTouch >= WIKI_AGING_DAYS
+        ? "aging"
+        : "fresh";
   return {
-    level: "fresh",
+    level,
     reason: `last touched ${params.timestamp}`,
     daysSinceTouch,
     lastTouchedAt: params.timestamp,
@@ -106,8 +68,8 @@ function resolveLatestTimestamp(candidates: Array<string | undefined>): string |
   let bestValue: string | undefined;
   let bestMs = -1;
   for (const candidate of candidates) {
-    const parsed = parseTimestamp(candidate);
-    if (parsed === null || !candidate || parsed <= bestMs) {
+    const parsed = parseDateStringTimestampMs(candidate);
+    if (parsed === undefined || !candidate || parsed <= bestMs) {
       continue;
     }
     bestMs = parsed;
@@ -124,6 +86,18 @@ export function isClaimContestedStatus(status?: string): boolean {
   return CONTESTED_CLAIM_STATUSES.has(normalizeClaimStatus(status));
 }
 
+export function compareWikiClaimSummaries(
+  left: { text: string; confidence?: number; freshnessLevel?: string },
+  right: { text: string; confidence?: number; freshnessLevel?: string },
+): number {
+  return (
+    (right.confidence ?? -1) - (left.confidence ?? -1) ||
+    CLAIM_FRESHNESS_ORDER.indexOf(right.freshnessLevel ?? "") -
+      CLAIM_FRESHNESS_ORDER.indexOf(left.freshnessLevel ?? "") ||
+    left.text.localeCompare(right.text)
+  );
+}
+
 export function assessPageFreshness(page: WikiPageSummary, now?: Date): WikiFreshness {
   return buildFreshnessFromTimestamp({ timestamp: page.updatedAt, now });
 }
@@ -133,21 +107,12 @@ export function assessClaimFreshness(params: {
   claim: WikiClaim;
   now?: Date;
 }): WikiFreshness {
-  let hasClaimTimestamp =
-    typeof params.claim.updatedAt === "string" && params.claim.updatedAt.trim().length > 0;
-  let latestTimestamp = resolveLatestTimestamp([params.claim.updatedAt]);
-  let latestMs = parseTimestamp(latestTimestamp) ?? -1;
-  for (const evidence of params.claim.evidence) {
-    if (typeof evidence.updatedAt === "string" && evidence.updatedAt.trim().length > 0) {
-      hasClaimTimestamp = true;
-    }
-    const evidenceMs = parseTimestamp(evidence.updatedAt);
-    if (evidenceMs === null || !evidence.updatedAt || evidenceMs <= latestMs) {
-      continue;
-    }
-    latestMs = evidenceMs;
-    latestTimestamp = evidence.updatedAt;
-  }
+  const candidates = [
+    params.claim.updatedAt,
+    ...params.claim.evidence.map((entry) => entry.updatedAt),
+  ];
+  const hasClaimTimestamp = candidates.some((value) => value?.trim());
+  const latestTimestamp = resolveLatestTimestamp(candidates);
   return buildFreshnessFromTimestamp({
     timestamp: latestTimestamp ?? (hasClaimTimestamp ? undefined : params.page.updatedAt),
     now: params.now,
@@ -159,7 +124,7 @@ function buildWikiClaimHealth(params: {
   claim: WikiClaim;
   index: number;
   now?: Date;
-}): WikiClaimHealth {
+}) {
   const claimId = params.claim.id?.trim();
   return {
     key: `${params.page.relativePath}#${claimId ?? `claim-${params.index + 1}`}`,
@@ -169,7 +134,7 @@ function buildWikiClaimHealth(params: {
     ...(claimId ? { claimId } : {}),
     text: params.claim.text,
     status: normalizeClaimStatus(params.claim.status),
-    ...(typeof params.claim.confidence === "number" ? { confidence: params.claim.confidence } : {}),
+    ...(params.claim.confidence !== undefined ? { confidence: params.claim.confidence } : {}),
     evidenceCount: params.claim.evidence.length,
     missingEvidence: params.claim.evidence.length === 0,
     freshness: assessClaimFreshness({ page: params.page, claim: params.claim, now: params.now }),
@@ -182,10 +147,7 @@ export function collectWikiClaimHealth(pages: WikiPageSummary[], now?: Date): Wi
   );
 }
 
-export function buildClaimContradictionClusters(params: {
-  pages: WikiPageSummary[];
-  now?: Date;
-}): WikiClaimContradictionCluster[] {
+export function buildClaimContradictionClusters(params: { pages: WikiPageSummary[]; now?: Date }) {
   const claimHealth = collectWikiClaimHealth(params.pages, params.now);
   const byId = new Map<string, WikiClaimHealth[]>();
   for (const claim of claimHealth) {
@@ -211,9 +173,7 @@ export function buildClaimContradictionClusters(params: {
         {
           key: claimId,
           label: claimId,
-          entries: [...entries].toSorted((left, right) =>
-            left.pagePath.localeCompare(right.pagePath),
-          ),
+          entries: entries.toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
         },
       ];
     })
@@ -244,7 +204,7 @@ export function buildPageContradictionClusters(
     .map(([key, entries]) => ({
       key,
       label: entries[0]?.note ?? key,
-      entries: [...entries].toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
+      entries: entries.toSorted((left, right) => left.pagePath.localeCompare(right.pagePath)),
     }))
     .toSorted((left, right) => left.label.localeCompare(right.label));
 }

@@ -23,7 +23,7 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
     mcp: false, // allow /mcp
     plugins: false, // allow /plugins
     debug: false, // allow /debug
-    restart: true, // allow /restart + external SIGUSR1 restart requests
+    restart: true, // allow /restart + external SIGUSR2 restart requests
     ownerAllowFrom: ["discord:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
@@ -49,7 +49,7 @@ The `commands.*` block: which chat command surfaces are registered, and who may 
 - `plugins: true` enables `/plugins` for plugin discovery, install, and enable/disable controls.
 - `channels.<provider>.configWrites` gates config mutations per channel (default: true).
 - For multi-account channels, `channels.<provider>.accounts.<id>.configWrites` also gates writes that target that account (for example `/allowlist --config --account <id>` or `/config set channels.<provider>.accounts.<id>...`).
-- `restart: false` disables `/restart` and external `SIGUSR1` restart requests. Default: `true`.
+- `restart: false` disables `/restart` and external `SIGUSR2` restart requests. Default: `true`.
 - `ownerAllowFrom` is the explicit owner allowlist for owner-only commands and owner-gated channel actions. It is separate from `allowFrom`.
 - `allowFrom` is per-provider. When set, it is the **only** authorization source for commands and directives.
 - When `allowFrom` is unset, command authorization follows channel allowlists and pairing state. Access-group entries in channel allowlists are resolved automatically.

@@ -1,4 +1,7 @@
 // Discord test API exposes transcript-provider fixtures without deep extension imports.
+export const loadDiscordDraftPreview = () =>
+  import("./src/monitor/message-handler.draft-preview.js");
+export { RequestClient } from "./src/internal/discord.js";
 export {
   discordVoiceTranscriptsSourceProvider,
   setDiscordTranscriptsVoiceManager,
@@ -11,3 +14,5 @@ export const loadDiscordVoiceTestHarness = () =>
 // Gateway capture proof keeps routing/admission real; only transport edges are substituted.
 export const loadDiscordGatewayCaptureFixture = () =>
   import("./src/voice/voice-gateway-capture.test-support.js");
+
+export const loadDiscordReadinessFixture = () => import("./src/monitor/readiness.test-support.js");

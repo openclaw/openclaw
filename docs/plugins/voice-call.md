@@ -19,7 +19,8 @@ Media Streams).
 <Note>
 The Voice Call plugin runs **inside the Gateway process**. If you use a
 remote Gateway, install and configure the plugin on the machine running the
-Gateway, then restart the Gateway to load it.
+Gateway. Installation applies to a running Gateway automatically; if it is
+offline, start it after configuration.
 </Note>
 
 ## Quick start
@@ -42,8 +43,8 @@ Gateway, then restart the Gateway to load it.
     </Tabs>
 
     Use the bare package to follow the current release tag. Pin an exact
-    version only when you need a reproducible install. Restart the Gateway
-    afterwards so the plugin loads.
+    version only when you need a reproducible install. Check the installation's
+    application result; see [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
   </Step>
   <Step title="Configure provider and webhook">

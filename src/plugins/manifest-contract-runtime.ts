@@ -1,24 +1,17 @@
-// Resolves manifest contracts into runtime-facing plugin capabilities.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasManifestContractValue,
   listAvailableManifestContractPlugins,
 } from "./manifest-contract-eligibility.js";
-import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestContractListKey } from "./manifest-registry.js";
 import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
-
-type ManifestContractRuntimePluginResolution = {
-  pluginIds: string[];
-  bundledCompatPluginIds: string[];
-  plugins: PluginManifestRecord[];
-};
 
 export function resolveManifestContractRuntimePluginResolution(params: {
   cfg?: OpenClawConfig;
   contract: PluginManifestContractListKey;
   value?: string;
-}): ManifestContractRuntimePluginResolution {
+}) {
   const snapshot = loadPluginMetadataSnapshot({
     config: params.cfg ?? {},
     env: process.env,

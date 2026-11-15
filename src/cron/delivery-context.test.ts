@@ -1,126 +1,78 @@
-// Cron delivery context tests cover context assembly for scheduled job delivery.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { DeliveryContext } from "../utils/delivery-context.shared.js";
+import { resolveCronCreationDelivery } from "./delivery-context.js";
 
-const { extractDeliveryInfoMock } = vi.hoisted(() => ({
-  extractDeliveryInfoMock: vi.fn(),
-}));
-
+const { extractDeliveryInfoMock } = vi.hoisted(() => ({ extractDeliveryInfoMock: vi.fn() }));
 vi.mock("../config/sessions/delivery-info.js", () => ({
   extractDeliveryInfo: extractDeliveryInfoMock,
 }));
+const sessionKey = "agent:main:dashboard:conversation";
+const stored = { channel: "discord", to: "channel:stored" };
+function route(channel: string, to: string, rest: DeliveryContext = {}): DeliveryContext {
+  return { channel, to, ...rest };
+}
+beforeEach(() => extractDeliveryInfoMock.mockReset());
 
-import { resolveCronCreationDelivery } from "./delivery-context.js";
-
-describe("cron delivery context", () => {
-  const cfg = {} as OpenClawConfig;
-
-  beforeEach(() => {
-    extractDeliveryInfoMock.mockReset();
-    extractDeliveryInfoMock.mockReturnValue({ deliveryContext: undefined, threadId: undefined });
-  });
-
-  it("builds announce delivery from deliveryContext without changing target casing", () => {
-    expect(
-      resolveCronCreationDelivery({
-        cfg,
-        currentDeliveryContext: {
-          channel: " Matrix ",
-          to: "  !AbCdEf1234567890:Example.Org  ",
-          accountId: " Bot-A ",
-          threadId: "  $RootEvent:Example.Org  ",
-        },
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "matrix",
-      to: "!AbCdEf1234567890:Example.Org",
+it.each<{
+  current?: DeliveryContext;
+  saved?: DeliveryContext;
+  threadId?: string;
+  key?: string | null;
+  expected?: DeliveryContext;
+  reads: number;
+}>([
+  {
+    current: route(" Matrix ", " !AbCd:Example.Org ", {
+      accountId: " Bot-A ",
+      threadId: " $Root:Example.Org ",
+    }),
+    saved: stored,
+    expected: route("matrix", "!AbCd:Example.Org", {
       accountId: "bot-a",
-      threadId: "$RootEvent:Example.Org",
-    });
-  });
-
-  it("prefers current deliveryContext over stored session deliveryContext", () => {
-    extractDeliveryInfoMock.mockReturnValueOnce({
-      deliveryContext: { channel: "matrix", to: "!stored:example.org" },
-      threadId: undefined,
-    });
-
+      threadId: "$Root:Example.Org",
+    }),
+    reads: 0,
+  },
+  {
+    saved: route("line", "Cabcdef", { accountId: "primary" }),
+    expected: route("line", "Cabcdef", { accountId: "primary" }),
+    reads: 1,
+  },
+  {
+    saved: route("telegram", "-1001234567890", { threadId: "stale-topic" }),
+    threadId: "99",
+    expected: route("telegram", "-1001234567890", { threadId: "99" }),
+    reads: 1,
+  },
+  {
+    current: route("custom-plugin", "CaseSensitiveRecipient"),
+    saved: stored,
+    expected: route("custom-plugin", "CaseSensitiveRecipient"),
+    reads: 0,
+  },
+  { current: route("matrix", "   "), key: null, reads: 0 },
+  { reads: 1 },
+  { saved: route("webchat", sessionKey), reads: 1 },
+  ...[" WebChat ", "cron"].map((channel) => ({
+    current: route(channel, sessionKey, {
+      accountId: "internal-account",
+      threadId: "internal-thread",
+    }),
+    saved: stored,
+    reads: 0,
+  })),
+  { current: { channel: " WebChat " }, saved: stored, reads: 0 },
+])(
+  "resolves live/stored routes without leaking internal context %#",
+  async ({ current, saved, threadId, key = sessionKey, expected, reads }) => {
+    extractDeliveryInfoMock.mockReturnValueOnce({ deliveryContext: saved, threadId });
     expect(
-      resolveCronCreationDelivery({
-        cfg,
-        agentSessionKey: "agent:main:matrix:channel:!stored:example.org",
-        currentDeliveryContext: {
-          channel: "matrix",
-          to: "!Current:Example.Org",
-        },
+      await resolveCronCreationDelivery({
+        cfg: {},
+        agentSessionKey: key ?? undefined,
+        currentDeliveryContext: current,
       }),
-    ).toEqual({
-      mode: "announce",
-      channel: "matrix",
-      to: "!Current:Example.Org",
-    });
-    expect(extractDeliveryInfoMock).not.toHaveBeenCalled();
-  });
-
-  it("uses stored session deliveryContext when current context is absent", () => {
-    extractDeliveryInfoMock.mockReturnValueOnce({
-      deliveryContext: {
-        channel: "line",
-        to: "Cabcdef0123456789abcdef0123456789",
-        accountId: "primary",
-      },
-      threadId: undefined,
-    });
-
-    expect(
-      resolveCronCreationDelivery({
-        cfg,
-        agentSessionKey: "agent:main:line:group:cabcdef0123456789abcdef0123456789",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "line",
-      to: "Cabcdef0123456789abcdef0123456789",
-      accountId: "primary",
-    });
-  });
-
-  it("preserves parsed thread ids from stored session lookups", () => {
-    extractDeliveryInfoMock.mockReturnValueOnce({
-      deliveryContext: {
-        channel: "telegram",
-        to: "-1001234567890",
-        threadId: "stale-topic",
-      },
-      threadId: "99",
-    });
-
-    expect(
-      resolveCronCreationDelivery({
-        cfg,
-        agentSessionKey: "agent:main:telegram:group:-1001234567890:topic:99",
-      }),
-    ).toEqual({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890",
-      threadId: "99",
-    });
-  });
-
-  it("does not create delivery without a concrete target", () => {
-    expect(
-      resolveCronCreationDelivery({
-        cfg,
-        currentDeliveryContext: { channel: "matrix", to: "   " },
-      }),
-    ).toBeNull();
-    expect(
-      resolveCronCreationDelivery({
-        cfg,
-        agentSessionKey: "agent:main:matrix:channel:!abcdef:example.org",
-      }),
-    ).toBeNull();
-  });
-});
+    ).toEqual(expected ? { mode: "announce", ...expected } : null);
+    expect(extractDeliveryInfoMock).toHaveBeenCalledTimes(reads);
+  },
+);

@@ -1,4 +1,3 @@
-// Normalizes agent prompt surface kinds advertised by plugins.
 import type { AgentPromptSurfaceKind } from "./types.js";
 
 /** Normalizes legacy prompt surface names to current OpenClaw surface names. */

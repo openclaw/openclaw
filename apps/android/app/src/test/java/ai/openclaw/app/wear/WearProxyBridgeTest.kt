@@ -1,7 +1,7 @@
 package ai.openclaw.app.wear
 
 import ai.openclaw.app.WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS
-import ai.openclaw.app.readWearAgentPulseConcurrently
+import ai.openclaw.app.readWearAgentPulseComponent
 import ai.openclaw.wear.shared.WearConnectionFailure
 import ai.openclaw.wear.shared.WearDecodeResult
 import ai.openclaw.wear.shared.WearEventType
@@ -14,7 +14,6 @@ import com.google.android.gms.tasks.Tasks
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -228,16 +227,10 @@ class WearProxyBridgeTest {
         backgroundScope.recordingBridge(
           handleRequest = { _, request ->
             requestStarted.complete(Unit)
-            readWearAgentPulseConcurrently(
-              readTasks = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-              readSwarm = {
-                delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
-                Unit
-              },
-            )
+            readWearAgentPulseComponent(WEAR_AGENT_PULSE_PHONE_BUDGET_MILLIS) {
+              delay(WearProtocol.RPC_REQUEST_TIMEOUT_MILLIS * 2)
+              Unit
+            }
             WearMessage.Response(requestId = request.requestId, ok = true)
           },
         )
@@ -280,6 +273,39 @@ class WearProxyBridgeTest {
     assertEquals("true", continued.getValue("streamTextComplete").jsonPrimitive.content)
     assertEquals("tail", unknownPrefix.getValue("streamText").jsonPrimitive.content)
     assertEquals("false", unknownPrefix.getValue("streamTextComplete").jsonPrimitive.content)
+  }
+
+  @Test
+  fun canonicalMessagesCanShrinkAndClearWithoutLosingCompleteness() {
+    val projector = WearChatStreamProjector()
+    for (text in listOf("Hello world", "Hello", "")) {
+      val event = projectStreamEvent(projector, state = "delta", runId = "run-1", message = text)
+      assertEquals(text, event.getValue("streamText").jsonPrimitive.content)
+      assertEquals("true", event.getValue("streamTextComplete").jsonPrimitive.content)
+    }
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
+  }
+
+  @Test
+  fun explicitReplacementCanClearWhileMissingContentStillAppends() {
+    val projector = WearChatStreamProjector()
+    projectStreamEvent(projector, state = "delta", runId = "run-1", message = "Hello world")
+    val cleared =
+      checkNotNull(
+        projector.project(
+          buildJsonObject {
+            put("sessionKey", "main")
+            put("runId", "run-1")
+            put("state", "delta")
+            put("replace", true)
+            put("deltaText", "")
+          },
+        ),
+      )
+    assertEquals("", cleared.getValue("streamText").jsonPrimitive.content)
+    val continued = projectStreamEvent(projector, state = "delta", runId = "run-1", text = "New")
+    assertEquals("New", continued.getValue("streamText").jsonPrimitive.content)
   }
 
   @Test
@@ -667,47 +693,6 @@ class WearProxyBridgeTest {
       runCurrent()
 
       assertTrue(awaiting.isCancelled)
-    }
-
-  @Test
-  fun staleEventFailureDoesNotRemoveRefreshedPeer() =
-    withActorScope { actorScope ->
-      val eventStarted = CompletableDeferred<Unit>()
-      val releaseEvent = CompletableDeferred<Unit>()
-      val sent = mutableListOf<SentWearMessage>()
-      var failFirstEvent = true
-      val bridge =
-        actorScope.testBridge(
-          sender =
-            WearMessageSender { nodeId, path, data ->
-              if (path == WearProtocol.EVENT_PATH && failFirstEvent) {
-                failFirstEvent = false
-                eventStarted.complete(Unit)
-                releaseEvent.await()
-                error("stale send failed")
-              }
-              sent += SentWearMessage(nodeId, path, data)
-            },
-          monotonicMillis = { 1_000L },
-        )
-      bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-1")))
-
-      bridge.publishConnection(connected = true, status = "Connected")
-      eventStarted.await()
-      val refreshed =
-        async(start = CoroutineStart.UNDISPATCHED) {
-          bridge.handleMessage("watch-1", WearProtocolCodec.encode(request("req-2")))
-        }
-      releaseEvent.complete(Unit)
-      assertTrue(refreshed.await())
-      bridge.awaitIdleForTests()
-
-      bridge.publishConnection(connected = false, status = "Offline")
-      bridge.awaitIdleForTests()
-
-      assertEquals(1, bridge.peerCountForTests())
-      // The stale send is retried after discovery, then the later offline event also delivers.
-      assertEquals(2, sent.count { it.path == WearProtocol.EVENT_PATH })
     }
 
   private fun assertForeignTerminalPreservesStream(

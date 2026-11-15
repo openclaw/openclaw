@@ -1,9 +1,9 @@
-// Allow-from helpers parse and match plugin channel allowlist entries.
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "../../packages/normalization-core/src/string-normalization.js";
+import type { ChannelResolveResult } from "../channels/plugins/types.adapters.js";
 export { isAllowedParsedChatSender } from "../channels/plugins/chat-target-prefixes.js";
 
 export type {
@@ -127,31 +127,7 @@ export function isNormalizedSenderAllowed(params: {
 }
 
 /** Serializable allowlist resolution record used by setup/status UI surfaces. */
-export type BasicAllowlistResolutionEntry = {
-  /** Original allowlist input. */
-  input: string;
-  /** Whether resolution found a concrete account/user id. */
-  resolved: boolean;
-  /** Resolved id when available. */
-  id?: string;
-  /** Resolved display name when available. */
-  name?: string;
-  /** Optional resolver note for UI or docs output. */
-  note?: string;
-};
-
-/** Clone allowlist resolution entries into a plain serializable shape for UI and docs output. */
-export function mapBasicAllowlistResolutionEntries(
-  entries: BasicAllowlistResolutionEntry[],
-): BasicAllowlistResolutionEntry[] {
-  return entries.map((entry) => ({
-    input: entry.input,
-    resolved: entry.resolved,
-    id: entry.id,
-    name: entry.name,
-    note: entry.note,
-  }));
-}
+export type BasicAllowlistResolutionEntry = ChannelResolveResult;
 
 /** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
 export async function mapAllowlistResolutionInputs<T>(params: {

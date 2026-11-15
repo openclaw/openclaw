@@ -9,6 +9,9 @@ import {
   validatePortalCloseParams,
   validatePortalListParams,
   validatePortalOpenParams,
+  validateSessionPortalOpenParams,
+  validateSessionPortalListParams,
+  validateSessionPortalCloseParams,
 } from "../index.js";
 
 const portal = {
@@ -19,12 +22,28 @@ const portal = {
   tokenQuery: `openclaw_portal=${"a".repeat(64)}`,
   url: `http://127.0.0.1:43123/app?openclaw_portal=${"a".repeat(64)}`,
   publicUrl: "http://127.0.0.1:43123/app",
+  exposure: { kind: "loopback-only", browserReachability: "unverified" },
   path: "/app",
   description: "Live preview",
   createdAtMs: 123,
 };
 
 describe("portal protocol schemas", () => {
+  it("requires an explicit session and environment for scoped requests without accepting hosts", () => {
+    const target = { sessionKey: "agent:main:preview", environmentId: "attached-worker" };
+    expect(validateSessionPortalListParams(target)).toBe(true);
+    expect(validateSessionPortalOpenParams({ ...target, port: 3000 })).toBe(true);
+    expect(validateSessionPortalCloseParams({ ...target, id: "preview" })).toBe(true);
+    expect(validateSessionPortalOpenParams({ port: 3000 })).toBe(false);
+    expect(validateSessionPortalOpenParams({ ...target, port: 3000, host: "other.test" })).toBe(
+      false,
+    );
+    expect(
+      validateSessionPortalOpenParams({ ...target, port: 3000, resourceOwnerKey: "forged" }),
+    ).toBe(false);
+    expect(validateSessionPortalListParams({ sessionKey: target.sessionKey })).toBe(false);
+  });
+
   it("accepts closed list, open, and close requests", () => {
     expect(validatePortalListParams({})).toBe(true);
     expect(validatePortalOpenParams({ port: 3000, title: "Development app", path: "/app" })).toBe(
@@ -37,6 +56,27 @@ describe("portal protocol schemas", () => {
     expect(validatePortalOpenParams({ port: 3000, path: "app" })).toBe(false);
     expect(validatePortalOpenParams({ port: 3000, host: "example.test" })).toBe(false);
     expect(validatePortalCloseParams({ id: "" })).toBe(false);
+  });
+
+  it("carries exposure facts without allowing a producer to claim browser reachability", () => {
+    expect(
+      Value.Check(PortalOpenResultSchema, {
+        ...portal,
+        exposure: { kind: "non-loopback", browserReachability: "unverified" },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(PortalOpenResultSchema, {
+        ...portal,
+        exposure: { kind: "non-loopback", browserReachability: "reachable" },
+      }),
+    ).toBe(false);
+    expect(
+      Value.Check(PortalSummarySchema, {
+        ...portal,
+        exposure: { kind: "public", browserReachability: "unverified" },
+      }),
+    ).toBe(false);
   });
 
   it("validates summaries, results, and full replace-set events", () => {

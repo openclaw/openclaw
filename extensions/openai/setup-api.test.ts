@@ -31,14 +31,14 @@ describe("OpenAI setup auth provider", () => {
       expect(method?.matchesPersonalAccount?.(credential, credentialFor("bob"))).toBe(false);
     }
   });
-  it("offers ChatGPT login as the default OpenAI auth path while keeping API key explicit", () => {
+  it("offers Codex browser login as the default OpenAI auth path while keeping API key explicit", () => {
     const provider = buildOpenAISetupProvider();
     const oauth = provider.auth.find((method) => method.id === "oauth");
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
     expect(provider.id).toBe("openai");
-    expect(authMethodIds(provider)).toEqual(["oauth", "device-code", "api-key"]);
-    expect(oauth?.label).toBe("ChatGPT Login");
+    expect(authMethodIds(provider)).toEqual(["oauth", "device-code", "siwc", "api-key"]);
+    expect(oauth?.label).toBe("Codex login (browser)");
     expect(oauth?.wizard?.choiceId).toBe("openai");
     expect(apiKey?.label).toBe("OpenAI API Key");
     expect(apiKey?.wizard?.choiceId).toBe("openai-api-key");

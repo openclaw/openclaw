@@ -5,7 +5,6 @@ import android.app.Application
 import android.content.ContentProvider
 import android.content.ContentUris
 import android.content.ContentValues
-import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
@@ -369,19 +368,13 @@ private class FakeCalendarDataSource(
   var addedRequest: CalendarAddRequest? = null
     private set
 
-  override fun hasReadPermission(context: Context): Boolean = canRead
+  override fun hasReadPermission(): Boolean = canRead
 
-  override fun hasWritePermission(context: Context): Boolean = canWrite
+  override fun hasWritePermission(): Boolean = canWrite
 
-  override fun events(
-    context: Context,
-    request: CalendarEventsRequest,
-  ): List<CalendarEventRecord> = events
+  override fun events(request: CalendarEventsRequest): List<CalendarEventRecord> = events
 
-  override fun add(
-    context: Context,
-    request: CalendarAddRequest,
-  ): CalendarEventRecord {
+  override fun add(request: CalendarAddRequest): CalendarEventRecord {
     addError?.let { throw it }
     addedRequest = request
     return addResult

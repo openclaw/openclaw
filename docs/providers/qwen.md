@@ -6,7 +6,7 @@ read_when:
 title: "Qwen"
 ---
 
-Qwen Cloud is an official external OpenClaw provider plugin with canonical id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
+Qwen Cloud is an official external OpenClaw provider plugin with primary id `qwen`. It targets Qwen Cloud / Alibaba DashScope Standard and Coding Plan endpoints, exposes Token Plan as `qwen-token-plan`, keeps `modelstudio` as a compatibility alias, and independently owns Alibaba's documented `bailian-token-plan` custom-provider id.
 
 | Property               | Value                                      |
 | ---------------------- | ------------------------------------------ |
@@ -26,16 +26,27 @@ The older Coding Plan does not include these models. `qwen3.7-max` and
 
 ## Install plugin
 
-`qwen` ships as an official external plugin, not bundled with core. Install it and restart Gateway:
+`qwen` ships as an official external plugin, not bundled with core. Install it:
 
 ```bash
 openclaw plugins install @openclaw/qwen-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Getting started
 
 Choose your plan type and follow the setup steps.
+
+If you supply only `QWEN_API_KEY` (or `MODELSTUDIO_API_KEY` / `DASHSCOPE_API_KEY`),
+without `models.providers.qwen.baseUrl`, OpenClaw uses the Global Coding Plan
+endpoint: `https://coding-intl.dashscope.aliyuncs.com/v1`. The environment variable
+name does not select a plan or region. For a Standard pay-as-you-go key, run
+`openclaw onboard --auth-choice qwen-standard-api-key` or set
+`models.providers.qwen.baseUrl` to
+`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`. Explicit endpoint
+configuration takes precedence; use the matching plan and regional key.
 
 <Tabs>
   <Tab title="Coding Plan (subscription)">
@@ -78,7 +89,7 @@ Choose your plan type and follow the setup steps.
 
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
-    work as compatibility aliases, but new setup flows should prefer the canonical
+    work as compatibility aliases, but new setup flows should prefer the current
     `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
     custom `models.providers.modelstudio` entry with another `api` value, that
     custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
@@ -127,7 +138,7 @@ Choose your plan type and follow the setup steps.
 
     <Note>
     Legacy `modelstudio-*` auth-choice ids and `modelstudio/...` model refs still
-    work as compatibility aliases, but new setup flows should prefer the canonical
+    work as compatibility aliases, but new setup flows should prefer the current
     `qwen-*` auth-choice ids and `qwen/...` model refs. If you define an exact
     custom `models.providers.modelstudio` entry with another `api` value, that
     custom provider owns `modelstudio/...` refs instead of the Qwen compatibility
@@ -169,7 +180,7 @@ Choose your plan type and follow the setup steps.
     provider. The plugin registers that id as a compatibility owner, but new
     configs should use `qwen-token-plan`. An exact custom
     `models.providers.bailian-token-plan` entry keeps ownership of its configured
-    transport and catalog; it is never merged into the canonical OpenAI catalog.
+    transport and catalog; it is never merged into the OpenAI catalog.
     </Note>
 
     <Warning>
@@ -203,7 +214,7 @@ are not converted automatically.
 | Token Plan (Team Edition)  | China  | `qwen-token-plan-cn`       | `token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`     |
 | Token Plan (Team Edition)  | Global | `qwen-token-plan`          | `token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1` |
 
-The provider auto-selects the endpoint based on your auth choice. Canonical
+The provider auto-selects the endpoint based on your auth choice. Current
 choices use the `qwen-*` family; `modelstudio-*` remains compatibility-only.
 Override with a custom `baseUrl` in config.
 
@@ -250,23 +261,24 @@ appear without a plugin update. For locally hosted models, use the
 ### Token Plan catalog
 
 Token Plan uses a separate exact-string allowlist. The built-in catalog shows
-Alibaba's currently recommended plan models and keeps the newer Qwen3-Coder
-compatibility tier selectable but hidden. Other allowlisted model IDs remain
+Alibaba's currently recommended plan models. Other allowlisted model IDs remain
 available as custom model refs. Image-generation-only plan models are not
 included here because they use different APIs.
 
-| Model ref                          | Input       | Context   | Picker status |
-| ---------------------------------- | ----------- | --------- | ------------- |
-| `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.8-flash`    | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
-| `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
-| `qwen-token-plan/kimi-k2.5`        | text, image | 262,144   | visible       |
-| `qwen-token-plan/glm-5`            | text        | 202,752   | visible       |
-| `qwen-token-plan/MiniMax-M2.5`     | text        | 196,608   | visible       |
+| Model ref                       | Input       | Context   | Picker status |
+| ------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.7-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-max`   | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.8-flash` | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/qwen3.6-plus`  | text, image | 1,000,000 | visible       |
+| `qwen-token-plan/kimi-k2.5`     | text, image | 262,144   | visible       |
+| `qwen-token-plan/glm-5`         | text        | 202,752   | visible       |
+| `qwen-token-plan/MiniMax-M2.5`  | text        | 196,608   | visible       |
 
 ## Thinking controls
+
+Agent runs and standalone completions use the same model-specific thinking
+controls, including Token Plan tool-choice and reasoning-replay requirements.
 
 `qwen3.8-max` and `qwen3.8-flash` support `off`, `low`, `medium`, and `xhigh`
 thinking, with `xhigh` as the default. `minimal` maps to `low`; `high` and `max`
@@ -285,7 +297,12 @@ family, the provider maps OpenClaw thinking levels to DashScope's top-level
 `enable_thinking` request flag: disabled thinking sends `enable_thinking: false`,
 any other level sends `enable_thinking: true`. Custom models can opt into an
 alternate chat-template thinking payload by setting
-`compat.thinkingFormat: "qwen-chat-template"` on the model entry.
+`compat.thinkingFormat: "qwen-chat-template"` on the model entry. Declaring
+`compat.supportedReasoningEfforts: ["low", "medium", "xhigh"]` with
+`compat.reasoningEffortMap: { "high": "xhigh" }` also sends
+`chat_template_kwargs.reasoning_effort` with the Qwen 3.8 tier mapping above
+when a turn, session, or configuration selects a thinking level. With no selection,
+OpenClaw omits the nested effort and preserves the server template default.
 
 Token Plan models are also marked reasoning-capable. `kimi-k2.7-code` and
 `MiniMax-M2.5` are thinking-only, so OpenClaw keeps thinking enabled even when
@@ -307,7 +324,10 @@ Media understanding is auto-resolved from the configured Qwen auth; no extra
 config is needed. Make sure you are on a Standard (pay-as-you-go) endpoint for
 media understanding to work.
 
-To make Qwen the default video provider:
+### Video generation
+
+Use `QWEN_API_KEY` from a Standard endpoint. To make Qwen the default video
+provider:
 
 ```json5
 {
@@ -319,7 +339,10 @@ To make Qwen the default video provider:
 }
 ```
 
-Each Wan model advertises only its matching runtime mode:
+With exactly one reference image and no video, `wan2.6-t2v` automatically
+uses `wan2.6-i2v`; the result reports the resolved model. This routing applies
+only when a same-generation image-to-video sibling exists in the known model
+catalog. Other requests use the selected model's mode:
 
 | Mode                         | Models                           | Reference limits                      | Max duration | Supported controls                                                   |
 | ---------------------------- | -------------------------------- | ------------------------------------- | ------------ | -------------------------------------------------------------------- |
@@ -333,9 +356,12 @@ documented exact `size`. Wan 2.6 image-to-video sends the `resolution` tier and
 uses the input image's aspect ratio. Wan 2.7 reference-to-video sends
 `media`, `resolution`, and `ratio` and always generates audio.
 
-Reference image/video inputs require remote http(s) URLs; local file paths are
-rejected up front because the DashScope video endpoint does not accept uploaded
-local buffers for those references.
+Image-to-video and Wan 2.7 reference images accept local files or remote
+`http(s)` URLs. Local images are sent as base64 data URIs with a maximum of
+20 MB per image before encoding, matching the [Wan image input
+limit](https://www.alibabacloud.com/help/en/model-studio/image-to-video-api-reference).
+Reference videos and Wan 2.6 reference-to-video images still require remote
+`http(s)` URLs.
 
 <Note>
 See [Video generation](/tools/video-generation) for shared tool parameters, provider selection, and failover behavior.

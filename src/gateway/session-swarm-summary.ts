@@ -1,5 +1,5 @@
 import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
-import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type { SubagentRunReadRecord } from "../agents/subagents/registry/subagent-registry-read.types.js";
 
 const MAX_ACTIVE_GROUPS = 4;
 type SwarmSummary = NonNullable<SessionRow["swarm"]>;
@@ -57,7 +57,8 @@ export function buildSessionSwarmSummary(
   if (groups.size === 0) {
     return undefined;
   }
-  const ordered = [...groups.values()].toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- The spread creates a private group array.
+  const ordered = [...groups.values()].sort(
     (left, right) => right.createdAt - left.createdAt || left.groupId.localeCompare(right.groupId),
   );
   const active = ordered.filter((group) => group.queued + group.running > 0);
@@ -67,7 +68,8 @@ export function buildSessionSwarmSummary(
     // Only a selected-parent read carries member detail; ordinary rosters stay compact.
     for (const group of selected) {
       group.children = (members.get(group.groupId) ?? [])
-        .toSorted(
+        // oxlint-disable-next-line unicorn/no-array-sort -- Member arrays are private to this summary invocation.
+        .sort(
           (left, right) =>
             STATUS_RANK[left.status] - STATUS_RANK[right.status] ||
             left.createdAt - right.createdAt ||

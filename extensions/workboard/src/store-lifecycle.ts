@@ -4,12 +4,12 @@ import type { WorkboardStore } from "./store.js";
 export function registerWorkboardStoreLifecycle(
   api: OpenClawPluginApi,
   store: WorkboardStore,
-  stopServices?: () => void,
+  stopServices?: () => void | Promise<void>,
 ): void {
-  const dispose = () => {
+  const dispose = async () => {
     // Stop producers before the store drains admitted work and closes its connection.
-    stopServices?.();
-    return store.close();
+    await stopServices?.();
+    await store.close();
   };
   api.lifecycle.registerRuntimeLifecycle({
     id: "workboard-sqlite-store",

@@ -1,0 +1,135 @@
+# Maintainer-review tier. SecOps-only paths remain in CODEOWNERS.
+# All paths are repository-relative globs, including hidden files/directories.
+# * matches within a path segment; ** crosses directories; {a,b} means either.
+# Matching is case-sensitive unless an exclusion says otherwise. Exclusions
+# apply only to product categories, never to dependency files. For overlapping
+# categories, the first matching category supplies the review guidance.
+
+rollout:
+  pull-request: 152415
+
+exclude:
+  test-directories:
+    case-insensitive: true
+    paths:
+      - "**/{__tests__,test,tests,fixture,fixtures,test-support,test-helpers}"
+      - "**/{__tests__,test,tests,fixture,fixtures,test-support,test-helpers}/**"
+  test-files-and-support:
+    paths:
+      - "**/*.{test,spec,suite}.*"
+      - "**/*.{test,spec,suite}.*/**"
+      - "**/{test-support,test-helper,test-helpers,fixture,fixtures,bench}{,.*,-*}"
+      - "**/{test-support,test-helper,test-helpers,fixture,fixtures,bench}{,.*,-*}/**"
+      - "**/*{.,-}{test-support,test-helper,test-helpers,fixture,fixtures,bench}{,.*,-*}"
+      - "**/*{.,-}{test-support,test-helper,test-helpers,fixture,fixtures,bench}{,.*,-*}/**"
+  documentation:
+    case-insensitive: true
+    paths:
+      - "**/*.{md,mdx}"
+
+categories:
+  version-control:
+    description: Controls which local files and secrets can accidentally enter version control.
+    review: Check that local credentials and generated secret files stay ignored.
+    paths:
+      - ".gitignore"
+
+  gateway-auth:
+    description: Controls Gateway authentication, pairing, or caller permissions.
+    review: Check identity validation, scope checks, and revocation.
+    paths:
+      - "src/gateway/**/*auth*.ts"
+      - "src/gateway/**/*pairing*.ts"
+      - "src/gateway/**/*role-policy*.ts"
+      - "src/gateway/**/*operator-role*.ts"
+      - "src/gateway/**/*operator-scopes*.ts"
+      - "src/gateway/**/*method-scopes*.ts"
+      - "src/gateway/**/*session-method-policy*.ts"
+      - "src/gateway/**/*device-scope*.ts"
+      - "src/gateway/**/*device-management*.ts"
+      - "src/gateway/**/*device-revocation*.ts"
+      - "src/gateway/**/*device-worker-revocation*.ts"
+      - "src/gateway/**/*security-path*.ts"
+      - "src/gateway/server/ws-connection/**"
+      - "src/gateway/server-http.ts"
+      - "src/gateway/server-methods.ts"
+      - "src/gateway/server/ws-connection.ts"
+      - "src/gateway/http-utils.ts"
+      - "src/gateway/server-methods/devices.ts"
+      - "src/gateway/server-methods/device-pair-setup.ts"
+      - "src/infra/device-auth*.ts"
+      - "src/infra/device-pairing*.ts"
+      - "src/infra/device-bootstrap*.ts"
+      - "src/infra/node-pairing*.ts"
+      - "src/infra/pairing*.ts"
+      - "src/infra/state-migrations.pairing*.ts"
+      - "src/infra/state-migrations.channel-pairing*.ts"
+      - "src/pairing/**"
+      - "src/gateway/methods/**"
+      - "src/gateway/origin-check.ts"
+      - "src/gateway/server/ws-origin-policy.ts"
+      - "src/shared/operator-scope-compat.ts"
+      - "src/shared/device-bootstrap-profile.ts"
+      - "src/shared/gateway-method-policy.ts"
+      - "src/shared/session-method-scopes*.ts"
+
+  credentials:
+    description: Controls credential persistence, secret resolution, or redaction.
+    review: Check storage permissions, credential scope, and exposure in logs or responses.
+    paths:
+      - "src/secrets/**"
+      - "src/agents/auth-profiles/**"
+      - "src/agents/**/*auth*.ts"
+      - "src/{agents,config,gateway,infra,logging,plugins,proxy-capture,state}/**/*auth-store*.ts"
+      - "src/{agents,config,gateway,infra,logging,plugins,proxy-capture,state}/**/*credential*.ts"
+      - "src/{agents,config,gateway,infra,logging,plugins,proxy-capture,state}/**/*secret*.ts"
+      - "src/{agents,config,gateway,infra,logging,plugins,proxy-capture,state}/**/*redact*.ts"
+      - "packages/{acp-core,ai,gateway-protocol,memory-host-sdk,net-policy,plugin-sdk}/src/**/*credential*.ts"
+      - "packages/{acp-core,ai,gateway-protocol,memory-host-sdk,net-policy,plugin-sdk}/src/**/*secret*.ts"
+      - "packages/{acp-core,ai,gateway-protocol,memory-host-sdk,net-policy,plugin-sdk}/src/**/*redact*.ts"
+      - "apps/{ios,shared/OpenClawKit}/Sources/**/*KeychainStore.swift"
+      - "apps/{ios,shared/OpenClawKit}/Sources/**/*DeviceAuthStore.swift"
+      - "apps/android/app/src/main/java/ai/openclaw/app/SecurePrefs.kt"
+      - "apps/android/app/src/main/java/ai/openclaw/app/gateway/DeviceAuthStore.kt"
+
+  execution:
+    description: Controls sandbox containment or tool execution authority.
+    review: Check filesystem and network isolation, approval scope, and command allowlists.
+    paths:
+      - "src/agents/agent-tools.policy.ts"
+      - "src/agents/sandbox/**"
+      - "src/agents/**/*sandbox*.ts"
+      - "src/agents/**/*tool-policy*.ts"
+      - "src/agents/**/*exec-approval*.ts"
+      - "src/agents/**/*exec-auto-review*.ts"
+      - "src/agents/**/*exec-tool-target*.ts"
+      - "src/infra/exec-{approval,allow,safe,policy,wrapper-trust}*.ts"
+      - "src/node-host/**/*exec-policy*.ts"
+      - "src/node-host/**/*exec-approval*.ts"
+      - "src/gateway/**/*exec-approval*.ts"
+      - "src/gateway/**/*sandbox*.ts"
+      - "src/gateway/**/*node-command-policy*.ts"
+      - "src/config/{types,zod-schema}.{agents,tools,sandbox}*.ts"
+      - "packages/{gateway-protocol,plugin-sdk}/src/**/*exec-approval*.ts"
+      - "packages/{gateway-protocol,plugin-sdk}/src/**/*sandbox*.ts"
+      - "packages/{gateway-protocol,plugin-sdk}/src/**/*tool-policy*.ts"
+
+  security-checks:
+    description: Controls product security checks or trust decisions.
+    review: Check whether the change weakens detection, protection, or remediation.
+    paths:
+      - "src/security/**"
+      - "src/skills/security/**"
+
+# Manifests are analyzed for dependency-field changes. Lockfiles can be
+# autoscrubbed under the existing guard rules; other dependency files cannot.
+# These suffix globs preserve the dependency guard's existing classification.
+dependencies:
+  manifests:
+    - "**/*package.json"
+  lockfiles:
+    - "**/*package-lock.json"
+    - "**/*pnpm-lock.yaml"
+  other:
+    - "pnpm-workspace.yaml"
+    - "patches/**"

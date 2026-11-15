@@ -6,7 +6,7 @@ export function buildFullBootstrapPromptLines(params: {
   return [
     params.readLine,
     "Can finish BOOTSTRAP.md here: do it.",
-    "Cannot: brief blocker, safe possible steps, simplest next step.",
+    "Cannot: brief blocker, possible steps, simplest next step.",
     "Never claim completion early. No generic greeting/normal reply before BOOTSTRAP.md handling.",
     params.firstReplyLine,
   ];
@@ -20,7 +20,7 @@ export function buildLimitedBootstrapPromptLines(params: {
   return [
     params.introLine,
     "Never claim complete; no generic first greeting.",
-    "Brief limitation; only safe possible steps; simplest next step.",
+    "Brief limitation; possible steps; simplest next step.",
     params.nextStepLine,
   ];
 }

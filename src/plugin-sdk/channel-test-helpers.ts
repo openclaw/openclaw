@@ -9,7 +9,6 @@ export {
   expectChannelPluginContract,
   installChannelActionsContractSuite,
   installChannelDmPolicyContractSuite,
-  installChannelPluginContractSuite,
   installChannelSetupContractSuite,
   installChannelStatusContractSuite,
 } from "./test-helpers/channel-contract-suites.js";
@@ -31,11 +30,6 @@ export {
   createPluginRuntimeMock,
   type PluginRuntimeMediaMock,
 } from "./test-helpers/plugin-runtime-mock.js";
-export {
-  createSendCfgThreadingRuntime,
-  expectProvidedCfgSkipsRuntimeLoad,
-  expectRuntimeCfgFallback,
-} from "./test-helpers/send-config.js";
 export { createStartAccountContext } from "./test-helpers/start-account-context.js";
 export {
   abortStartedAccount,
@@ -50,10 +44,10 @@ export {
   getRequiredHookHandler,
   registerHookHandlersForTest,
 } from "./test-helpers/subagent-hooks.js";
-export {
-  escapeRegExp,
-  formatEnvelopeTimestamp,
-  formatLocalEnvelopeTimestamp,
-} from "./test-helpers/envelope-timestamp.js";
+export { escapeRegExp, formatEnvelopeTimestamp } from "./test-helpers/envelope-timestamp.js";
 export { expectPairingReplyText, extractPairingCode } from "./test-helpers/pairing-reply.js";
 export { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+export {
+  createNativeApprovalTestFixture,
+  createLocalApprovalPromptTestFixture,
+} from "./test-helpers/native-approval.js";

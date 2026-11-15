@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type {
   PluginHookMessageContext,
@@ -7,7 +8,6 @@ import type {
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { TurnAdoptionLifecycle } from "./get-reply-options.types.js";
 import type { FinalizedMsgContext } from "./templating.js";
-import { isSilentReplyPayloadText } from "./tokens.js";
 import type { ReplyPayload } from "./types.js";
 
 export type GroupThreadParticipant = { agentId: string; name: string };
@@ -41,7 +41,6 @@ type ToolReplySource = {
   format: (text: string) => string;
 };
 type ToolReplyCapture = {
-  active: boolean;
   observed: boolean;
   text?: string;
   source?: ToolReplySource;
@@ -58,15 +57,9 @@ export async function captureGroupThreadToolReply<T>(
   if (!currentScope()) {
     return { result: await run(), observed: false };
   }
-  const capture: ToolReplyCapture = { active: true, observed: false, source };
-  return toolReplies.run(capture, async () => {
-    try {
-      const result = await run();
-      return { result, observed: capture.observed, text: capture.text };
-    } finally {
-      capture.active = false;
-    }
-  });
+  const capture: ToolReplyCapture = { observed: false, source };
+  const result = await toolReplies.run(capture, run);
+  return { result, observed: capture.observed, text: capture.text };
 }
 
 /** Restore source attribution after modifying hooks; undefined preserves cancellation. */
@@ -77,16 +70,12 @@ export function finalizeGroupThreadToolReply(
 ): string | undefined {
   const capture = toolReplies.getStore();
   let content = text;
-  if (
-    capture?.active &&
-    currentScope() &&
-    (!capture.source || capture.source.matches(event, context))
-  ) {
-    if (content?.trim() && !isSilentReplyPayloadText(content)) {
+  if (capture && currentScope() && (!capture.source || capture.source.matches(event, context))) {
+    if (content?.trim()) {
       content = capture.source?.format(content) ?? content;
     }
     capture.observed = true;
-    capture.text = content?.slice(0, 4_000);
+    capture.text = content === undefined ? undefined : truncateUtf16Safe(content, 4_000);
   }
   return content;
 }

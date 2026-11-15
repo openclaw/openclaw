@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements dedupe behavior.
 import {
   isHostedLidUser,
   isHostedPnUser,

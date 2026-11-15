@@ -1,10 +1,23 @@
-import { emitAgentRunOutputTokens } from "../infra/agent-events.js";
+import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
+import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import {
+  bindAgentAssistantSource,
+  readAgentAssistantSource,
+  emitAgentEvent,
+  emitAgentEventForRunContext,
+  emitAgentRunOutputTokens,
+} from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import type { AssistantMessage, Usage } from "../llm/types.js";
 import {
   createUsageAccumulator,
   mergeUsageIntoAccumulator,
   toNormalizedUsage,
 } from "./embedded-agent-runner/usage-accumulator.js";
+import {
+  snapshotAssistantMessage,
+  type AssistantSnapshotReasoning,
+} from "./embedded-agent-subscribe.assistant-snapshot.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import { isSubscribeTranscriptOnlyOpenClawAssistantMessage } from "./embedded-agent-subscribe.handlers.messages.stream.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
@@ -19,7 +32,7 @@ import {
 } from "./usage.js";
 
 function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUsage | undefined) {
-  if (!pending) {
+  if (!pending || message.usage.usageReport?.state === "unavailable") {
     return;
   }
   const final = normalizeUsage(message.usage);
@@ -49,7 +62,9 @@ function preserveAssistantUsage(message: AssistantMessage, pending: NormalizedUs
     cacheRead,
     cacheWrite,
     ...(pending.cacheWrite1h !== undefined ? { cacheWrite1h: pending.cacheWrite1h } : {}),
+    ...(pending.cacheWrite5m !== undefined ? { cacheWrite5m: pending.cacheWrite5m } : {}),
     ...(pending.contextUsage ? { contextUsage: { ...pending.contextUsage } } : {}),
+    ...(pending.usageReport ? { usageReport: { ...pending.usageReport } } : {}),
     totalTokens: pending.total ?? input + output + cacheRead + cacheWrite,
     ...(pending.reasoningTokens !== undefined ? { reasoningTokens: pending.reasoningTokens } : {}),
   };
@@ -66,6 +81,36 @@ export function createEmbeddedModelState(
   let lastUsage: NormalizedUsage | undefined;
   let retryUsage: NormalizedUsage | undefined;
   let completed: AssistantMessage | undefined;
+  let successfulModelResponse = false;
+  let publishedMessageModel: string | undefined;
+  const runContext = getAgentRunContext(params.runId);
+
+  const publishMessageModel = (message: AssistantMessage, reset: boolean) => {
+    if (reset) {
+      publishedMessageModel = undefined;
+    }
+    const provider = message.provider?.trim();
+    const model = message.responseModel?.trim() || message.model?.trim();
+    const identity = provider && model ? `${provider}\0${model}` : undefined;
+    if (!identity || identity === publishedMessageModel) {
+      return;
+    }
+    const event = {
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      lifecycleGeneration: params.lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "model", provider, model },
+    } as const;
+    if (runContext) {
+      emitAgentEventForRunContext(event, runContext);
+    } else {
+      emitAgentEvent(event);
+    }
+    publishedMessageModel = identity;
+  };
 
   const recordPendingUsage = (raw: Usage) => {
     const usage = normalizeUsage(raw);
@@ -73,9 +118,11 @@ export function createEmbeddedModelState(
       return;
     }
     const cost = usage.cost;
-    const next = pending && !hasNonzeroUsage(usage) ? { ...pending, cost } : usage;
+    const next =
+      !usage.usageReport && pending && !hasNonzeroUsage(usage) ? { ...pending, cost } : usage;
     // A provider-billed price remains authoritative over a later catalog estimate.
     if (
+      usage.usageReport?.state !== "unavailable" &&
       pending?.cost?.totalOrigin === "provider-billed" &&
       cost?.totalOrigin !== "provider-billed"
     ) {
@@ -89,13 +136,14 @@ export function createEmbeddedModelState(
       return;
     }
     mergeUsageIntoAccumulator(totals, usage);
-    if (!hasNonzeroUsage(usage) || !params.lifecycleGeneration) {
+    if ((!usage.usageReport && !hasNonzeroUsage(usage)) || !params.lifecycleGeneration) {
       return;
     }
     const data = emitAgentRunOutputTokens({
       runId: params.runId,
       lifecycleGeneration: params.lifecycleGeneration,
       outputTokens: usage.output ?? 0,
+      usageReport: usage.usageReport,
     });
     if (data && params.onAgentEvent) {
       runBestEffortCallback({
@@ -105,9 +153,15 @@ export function createEmbeddedModelState(
       });
     }
   };
+  const recordContextAccounting = (message: AssistantMessage, successful: boolean) =>
+    params.onContextAccountingEvent?.({
+      kind: "model",
+      contextTokens: deriveSessionTotalTokens({ lastCallUsage: normalizeUsage(message.usage) }),
+      successful,
+    });
 
   return {
-    captureModelEvent: (evt: AgentSessionEvent): void => {
+    captureModelEvent: (evt: AgentSessionEvent): AssistantSnapshotReasoning | undefined => {
       if (evt.type === "compaction_end") {
         if (evt.outcome.status === "completed" && evt.outcome.willRetry) {
           // Retain the prior call only until the retry completes or reports its own usage.
@@ -115,60 +169,89 @@ export function createEmbeddedModelState(
           retryUsage = lastUsage ?? retryUsage;
           lastUsage = undefined;
         }
-        return;
+        return undefined;
       }
       if (
         evt.type !== "message_start" &&
         evt.type !== "message_update" &&
-        evt.type !== "message_end"
+        evt.type !== "message_end" &&
+        evt.type !== "turn_end"
       ) {
-        return;
+        return undefined;
       }
       const message = evt.message;
       if (
         message.role !== "assistant" ||
         isSubscribeTranscriptOnlyOpenClawAssistantMessage(message)
       ) {
-        return;
+        return undefined;
       }
+      publishMessageModel(message, evt.type === "message_start");
       switch (evt.type) {
+        case "turn_end":
+          // message_end may describe an async tool fragment, not a completed provider response.
+          if (
+            !successfulModelResponse &&
+            (message.stopReason === "stop" || message.stopReason === "toolUse") &&
+            !isProviderRefusalAssistantError(message)
+          ) {
+            successfulModelResponse = true;
+            recordContextAccounting(message, true);
+          }
+          return undefined;
         case "message_start":
           pending = undefined;
-          return;
+          return undefined;
         case "message_update":
           // Capture the prepared message; core consumes done/error before message_end.
           if (evt.assistantMessageEvent.type === "text_end") {
             recordPendingUsage(message.usage);
           }
-          return;
-        case "message_end":
+          return undefined;
+        case "message_end": {
           recordPendingUsage(message.usage);
           preserveAssistantUsage(message, pending);
-          if (hasNonzeroUsage(pending)) {
+          if (pending?.usageReport || hasNonzeroUsage(pending)) {
             lastUsage = { ...pending };
           }
           recordModelUsage(pending);
           runBestEffortCallback({
             label: "model usage observation",
             log,
-            callback: () => params.onModelUsage?.(pending),
+            callback: () =>
+              params.onModelUsage?.(pending, {
+                responseId: message.responseId,
+                turnId: message.turnId,
+              }),
           });
           pending = undefined;
           // Context-engine projection can later mutate transcript objects; retain this run's result.
-          completed = structuredClone(message);
+          const { snapshot, reasoning } = snapshotAssistantMessage(message);
+          completed = applyAssistantDeliveryDirectives(snapshot);
+          const sourceReceipt = readAgentAssistantSource(message);
+          if (sourceReceipt) {
+            bindAgentAssistantSource(completed, sourceReceipt);
+          }
+          // Delivery facts are prepared here, but terminal classification still owns the raw text.
+          for (let index = 0; index < message.content.length; index += 1) {
+            const source = message.content[index];
+            const captured = completed.content[index];
+            if (source?.type === "text" && captured?.type === "text") {
+              captured.text = source.text;
+            }
+          }
           lastUsage ??= message.stopReason === "error" ? retryUsage : undefined;
           retryUsage = undefined;
-          params.onContextAccountingEvent?.({
-            kind: "model",
-            contextTokens: deriveSessionTotalTokens({
-              lastCallUsage: normalizeUsage(message.usage),
-            }),
-          });
+          recordContextAccounting(message, false);
+          return reasoning;
+        }
       }
+      return undefined;
     },
     recordAuxiliaryUsage: (usage: Usage) => recordModelUsage(normalizeUsage(usage)),
     getUsageTotals: () => toNormalizedUsage(totals),
     getLastAssistantUsage: () => normalizeUsage(lastUsage),
-    getCurrentAttemptAssistant: () => (completed ? structuredClone(completed) : undefined),
+    getCurrentAttemptAssistant: () => completed,
+    hasSuccessfulModelResponse: () => successfulModelResponse,
   };
 }

@@ -8,7 +8,11 @@ export async function runBestEffortCleanup<T>(params: {
   try {
     return await params.cleanup();
   } catch (error) {
-    params.onError?.(error);
+    try {
+      params.onError?.(error);
+    } catch {
+      // A failed warning sink must not replace the result that cleanup preserves.
+    }
     return undefined;
   }
 }

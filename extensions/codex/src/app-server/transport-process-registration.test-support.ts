@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 
 export class RegistrationTestChildProcess extends ChildProcess {
   override pid!: number;
+  override exitCode!: number | null;
   override stdin!: PassThrough;
   override stdout!: PassThrough;
   override stderr!: PassThrough;
@@ -16,7 +17,14 @@ export class RegistrationTestChildProcess extends ChildProcess {
     const stdio: RegistrationTestChildProcess["stdio"] = [stdin, stdout, stderr, null, null];
     // Bun inherits getter-only stdio properties. Define the fixture's own mutable
     // fields instead of assigning through those accessors.
-    for (const [key, value] of Object.entries({ pid, stdin, stdout, stderr, stdio })) {
+    for (const [key, value] of Object.entries({
+      pid,
+      stdin,
+      stdout,
+      stderr,
+      stdio,
+      exitCode: null,
+    })) {
       Object.defineProperty(this, key, {
         value,
         writable: true,

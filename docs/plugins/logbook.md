@@ -28,7 +28,7 @@ You need:
 
 - A connected node that exposes `screen.snapshot` or `logbook.snapshot`. The
   macOS app node needs Screen Recording permission. A headless macOS node host
-  (`openclaw node host run`) gets the plugin-provided `logbook.snapshot`
+  (`openclaw node run`) gets the plugin-provided `logbook.snapshot`
   command backed by the system `screencapture` tool.
 - The bundled Codex plugin enabled and authenticated. Codex provides
   the structured image-extraction contract Logbook requires. Sign in with
@@ -46,7 +46,7 @@ openclaw plugins enable codex
 openclaw plugins enable logbook
 ```
 
-Configure an explicit vision model for deterministic startup:
+Configure an explicit vision model to make startup predictable:
 
 ```json5
 {
@@ -66,12 +66,12 @@ Configure an explicit vision model for deterministic startup:
 }
 ```
 
-If you use `plugins.allow`, include both `codex` and `logbook`. Restart the
-Gateway after changing plugin configuration, then inspect the registrations
-and open the dashboard:
+If you use `plugins.allow`, include both `codex` and `logbook`. Plugin configuration
+changes apply automatically with the default hybrid reload mode (see
+[Hot reload](/gateway/configuration/hot-reload)). If the Gateway is offline,
+start it, then inspect the registrations and open the dashboard:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect logbook --runtime --json
 openclaw nodes status --connected
 openclaw nodes describe --node <idOrNameOrIp>
@@ -172,8 +172,12 @@ and clamped to the supported range.
 Without `nodeId`, Logbook prefers a connected app node exposing
 `screen.snapshot`, then falls back to a headless node exposing
 `logbook.snapshot`. In an unpinned setup, a failed node rotates behind other
-eligible nodes. The dashboard pause toggle is session-only and resets when the
-Gateway restarts; use `captureEnabled: false` for a persistent stop.
+eligible nodes. **Pause capture** stops new capture attempts, not analysis of
+queued snapshots or captures already in progress. Pending changes show
+**Pausing capture** or **Resuming capture**, rather than claiming the change is complete. The pause is shared by clients
+of this Gateway’s Logbook service and resets when the plugin reloads or the Gateway
+restarts. Use `captureEnabled: false` to keep new captures off across restarts;
+this also leaves queued analysis available.
 
 ### Vision model selection
 
@@ -246,7 +250,8 @@ the derived-text methods directly.
 Check all three gates:
 
 1. `openclaw plugins list --enabled` includes `logbook`.
-2. The Gateway restarted after the plugin or allowlist change.
+2. The plugin or allowlist change applied successfully; see
+   [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 3. The Control UI connection has `operator.write`; read-only sessions do not
    receive the interactive tab descriptor.
 
@@ -283,6 +288,9 @@ then retries. An unpinned setup can rotate to another eligible node.
 - If the latest batch shows an error, fix the model or auth problem and select
   **Analyze now**. Failed batches are retried only on that explicit action to
   avoid repeated model spend.
+
+Malformed distraction JSON in stored cards makes timeline reads fail visibly;
+it is not treated as an empty distraction list. The stored card remains unchanged.
 
 ## Related
 

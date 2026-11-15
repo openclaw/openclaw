@@ -43,3 +43,15 @@ export async function createExistingInstallFixture(fixtureRoot: string) {
   await fs.writeFile(path.join(targetDir, "marker.txt"), "old");
   return { installBaseDir, sourceDir, targetDir };
 }
+
+export function updateOptions(sourceDir: string, targetDir: string) {
+  return {
+    sourceDir,
+    targetDir,
+    mode: "update" as const,
+    timeoutMs: 1_000,
+    copyErrorPrefix: "failed to copy plugin",
+    hasDeps: false,
+    depsLogMessage: "",
+  };
+}

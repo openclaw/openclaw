@@ -1,0 +1,107 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { OpenClawStateLeaseError } from "../../state/openclaw-state-lease.js";
+import { WorktreeRemovalContentionError } from "./errors.js";
+import { classifyWorktreeRemovalError, WorktreeBranchMovedError } from "./removal-errors.js";
+import type { ManagedWorktreeGcResult } from "./types.js";
+
+const MAX_WORKTREE_GC_ISSUES = 64;
+
+export class WorktreeGcProgress {
+  readonly result: ManagedWorktreeGcResult = {
+    removed: [],
+    orphansDeleted: 0,
+    orphansRetired: 0,
+    retiredCheckoutPaths: [],
+    snapshotsPruned: 0,
+    outcome: "completed",
+    issues: [],
+    issueCount: 0,
+    eligibleCount: 0,
+    deferredCount: 0,
+    failedCount: 0,
+    protectedCount: 0,
+    protectionReasons: {},
+    limitsSatisfied: null,
+  };
+  private readonly attemptedIds = new Set<string>();
+
+  start(id: string): boolean {
+    if (this.attemptedIds.has(id)) {
+      return false;
+    }
+    this.attemptedIds.add(id);
+    return true;
+  }
+
+  record(
+    stage: ManagedWorktreeGcResult["issues"][number]["stage"],
+    outcome: ManagedWorktreeGcResult["issues"][number]["outcome"],
+    reason: string,
+    id?: string,
+  ): void {
+    if (id !== undefined && (stage === "idle" || stage === "limits")) {
+      this.attemptedIds.add(id);
+    }
+    this.result.issueCount += 1;
+    if (this.result.issues.length < MAX_WORKTREE_GC_ISSUES) {
+      this.result.issues.push({
+        ...(id === undefined ? {} : { id }),
+        stage,
+        outcome,
+        reason: truncateUtf16Safe(reason, 500),
+      });
+    }
+    if (outcome === "failed") {
+      this.result.failedCount += 1;
+    } else if (outcome === "deferred") {
+      this.result.deferredCount += 1;
+    }
+    // Retired checkout files still need manual recovery.
+    this.result.outcome = this.result.failedCount > 0 ? "partial" : "deferred";
+  }
+
+  protect(stage: "idle" | "limits", id: string, reason: string, detail = reason): void {
+    this.result.protectedCount += 1;
+    const counts = this.result.protectionReasons;
+    counts[reason] = (counts[reason] ?? 0) + 1;
+    this.record(stage, "deferred", detail, id);
+  }
+
+  error(
+    stage: ManagedWorktreeGcResult["issues"][number]["stage"],
+    error: unknown,
+    id?: string,
+  ): void {
+    if (
+      stage === "limits" &&
+      id &&
+      error instanceof WorktreeRemovalContentionError &&
+      error.blockedByRun
+    ) {
+      this.protect(
+        stage,
+        id,
+        "live-refused",
+        `Worktree ${error.blockedByRun.worktreeId} has an active run in pid ${error.blockedByRun.pid}`,
+      );
+      return;
+    }
+    if (
+      error instanceof WorktreeBranchMovedError &&
+      id &&
+      (stage === "idle" || stage === "limits")
+    ) {
+      this.protect(stage, id, "branch-moved");
+      return;
+    }
+    const reason = classifyWorktreeRemovalError(error);
+    const outcome =
+      reason === "busy" ||
+      reason === "foreign-lock" ||
+      (error instanceof OpenClawStateLeaseError && error.code === "OPENCLAW_STATE_LEASE_HELD")
+        ? "deferred"
+        : "failed";
+    this.record(stage, outcome, `${reason}: ${formatErrorMessage(error)}`, id);
+  }
+}

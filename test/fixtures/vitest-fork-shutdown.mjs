@@ -3,10 +3,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { getVitestWorkerDescriptor } from "../../scripts/lib/vitest-worker-descriptor.mts";
+import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { runVitestShutdownCommand } from "../helpers/vitest-shutdown-command.ts";
 
 const [root, rawOptions] = process.argv.slice(2);
 const { scenario, setup, fail } = JSON.parse(rawOptions);
+const unexpectedExit = scenario.startsWith("unexpected-");
 const repo = fileURLToPath(new URL("../../", import.meta.url));
 const events = path.join(root, "events.jsonl");
 const ready = path.join(root, "ready");
@@ -50,6 +53,13 @@ import { syncBuiltinESMExports } from "node:module";
 const scenario = ${JSON.stringify(scenario)};
 const ready = ${JSON.stringify(ready)};
 const record = (event) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify(event) + "\\n");
+// Capture the native exit before Vitest installs its process.exit interceptor.
+globalThis[Symbol.for("openclaw.fixture.nativeExit")] = process.exit.bind(process);
+if (scenario === "unexpected-start" && process.argv[1] === ${JSON.stringify(path.join(path.dirname(fileURLToPath(import.meta.resolve("vitest/package.json"))), "dist/workers/forks.js"))}) {
+  fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId: 0, home: process.env.HOME }));
+  fs.writeSync(1, "unexpected-exit-tail\\n");
+  globalThis[Symbol.for("openclaw.fixture.nativeExit")](23);
+}
 const fork = childProcess.fork;
 childProcess.fork = (...args) => {
   const child = fork(...args);
@@ -265,6 +275,12 @@ ${scenario === "hung-exit" ? `process.once("exit", () => { fs.writeFileSync(${JS
 ${scenario === "bad-exit" ? 'process.once("exit", () => { process.exitCode = 23; });' : ""}
 it("completes the test before worker shutdown", () => {
   fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ pid: process.pid, threadId, home: process.env.HOME }));
+  ${
+    unexpectedExit && scenario !== "unexpected-start"
+      ? `fs.writeSync(1, "unexpected-exit-tail\\n");
+  ${scenario === "unexpected-signal" ? 'process.kill(process.pid, "SIGKILL");' : `globalThis[Symbol.for("openclaw.fixture.nativeExit")](${scenario === "unexpected-exit-zero" ? 0 : 23});`}`
+      : ""
+  }
   ${fail ? 'expect.fail("intentional fixture failure");' : "expect(true).toBe(true);"}
 });
 `,
@@ -279,7 +295,7 @@ it("completes the test before worker shutdown", () => {
     "--configLoader",
     "native",
   ];
-  if (scenario !== "plain" && scenario !== "custom") {
+  if (scenario !== "plain" && scenario !== "custom" && !unexpectedExit) {
     // This shutdown contract covers Node's exit-time writes, not the Inspector
     // profiler's awaited cleanup. Pass native flags only to the actual worker.
     args.push(
@@ -289,11 +305,24 @@ it("completes the test before worker shutdown", () => {
       `--execArgv=--heap-prof-dir=${profiles}`,
     );
   }
-  const { code, stdout, stderr } = await runVitestShutdownCommand({
-    args,
-    cwd: root,
-    env,
-  });
+  const parent = getVitestWorkerDescriptor();
+  const workers = parent ? createVitestWorkerRun(env, parent) : undefined;
+  let result;
+  let interrupted = false;
+  try {
+    result = await runVitestShutdownCommand({
+      args,
+      cwd: root,
+      env,
+      workerRun: workers,
+      onSignal() {
+        interrupted = true;
+      },
+    });
+  } finally {
+    await workers?.dispose({ interrupted });
+  }
+  const { code, stdout, stderr } = result;
   const output = stdout + stderr;
   // Scenario failures are data; cancellation of this supervisor is an execution failure.
   if (code > 1) {

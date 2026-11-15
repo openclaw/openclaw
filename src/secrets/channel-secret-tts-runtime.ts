@@ -1,4 +1,4 @@
-/** Runtime adapter for channel text-to-speech secret contracts. */
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import type {
   ChannelAccountPredicate,
   ChannelAccountSurface,
@@ -92,7 +92,7 @@ export function collectNestedChannelTtsAssignments(params: {
     }
     collectTtsApiKeyAssignments({
       tts: providerBlock,
-      pathPrefix: `channels.${params.channelKey}.accounts.${entry.accountId}.${params.nestedKey}.${providerBlockKey}`,
+      pathPrefix: `${appendConfigPathSegment(`channels.${params.channelKey}.accounts`, entry.accountId)}.${params.nestedKey}.${providerBlockKey}`,
       ownerId: resolveOwnerId(entry.accountId),
       defaults: params.defaults,
       context: params.context,

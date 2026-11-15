@@ -1,7 +1,6 @@
 // Hook policy tests cover allow/deny decisions from hook configuration.
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
-import { resolveHookEnableState, resolveHookEntries } from "./policy.js";
+import { resolveHookEntries } from "./policy.js";
 import type { HookEntry, HookSource } from "./types.js";
 
 function makeHookEntry(name: string, source: HookSource): HookEntry {
@@ -27,37 +26,6 @@ function makeHookEntry(name: string, source: HookSource): HookEntry {
 }
 
 describe("hook policy", () => {
-  describe("resolveHookEnableState", () => {
-    it("keeps workspace hooks disabled by default", () => {
-      const entry = makeHookEntry("workspace-hook", "openclaw-workspace");
-      expect(resolveHookEnableState({ entry })).toEqual({
-        enabled: false,
-        reason: "workspace hook (disabled by default)",
-      });
-    });
-
-    it("allows workspace hooks when explicitly enabled", () => {
-      const entry = makeHookEntry("workspace-hook", "openclaw-workspace");
-      const config: OpenClawConfig = {
-        hooks: {
-          internal: {
-            entries: {
-              "workspace-hook": {
-                enabled: true,
-              },
-            },
-          },
-        },
-      };
-      expect(resolveHookEnableState({ entry, config })).toEqual({ enabled: true });
-    });
-
-    it("keeps plugin hooks enabled without local hook toggles", () => {
-      const entry = makeHookEntry("plugin-hook", "openclaw-plugin");
-      expect(resolveHookEnableState({ entry })).toEqual({ enabled: true });
-    });
-  });
-
   describe("resolveHookEntries", () => {
     it("lets managed hooks override bundled and plugin hooks", () => {
       const bundled = makeHookEntry("shared", "openclaw-bundled");

@@ -1,21 +1,9 @@
-const WORKER_SESSION_PLACEMENT_STATES = [
-  "local",
-  "requested",
-  "provisioning",
-  "syncing",
-  "starting",
-  "active",
-  "draining",
-  "reconciling",
-  "reclaimed",
-  "failed",
-] as const;
+import {
+  SESSION_PLACEMENT_STATES,
+  type SessionPlacementState as WorkerSessionPlacementState,
+} from "../../../packages/gateway-protocol/src/schema/session-placement-state.js";
 
-export type WorkerSessionPlacementState = (typeof WORKER_SESSION_PLACEMENT_STATES)[number];
-
-type WorkerSessionPlacementTransition = {
-  [From in WorkerSessionPlacementState]: readonly WorkerSessionPlacementState[];
-};
+export type { WorkerSessionPlacementState };
 
 const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
   local: ["requested", "failed"],
@@ -28,10 +16,10 @@ const WORKER_SESSION_PLACEMENT_TRANSITIONS = {
   reconciling: ["local", "reclaimed", "failed"],
   reclaimed: ["requested"],
   failed: ["local", "requested"],
-} as const satisfies WorkerSessionPlacementTransition;
+} as const satisfies Record<WorkerSessionPlacementState, readonly WorkerSessionPlacementState[]>;
 
 export function parseWorkerSessionPlacementState(value: string): WorkerSessionPlacementState {
-  if ((WORKER_SESSION_PLACEMENT_STATES as readonly string[]).includes(value)) {
+  if ((SESSION_PLACEMENT_STATES as readonly string[]).includes(value)) {
     return value as WorkerSessionPlacementState;
   }
   throw new Error(`Invalid worker session placement state: ${value}`);
@@ -41,7 +29,5 @@ export function canTransitionWorkerSessionPlacement(
   from: WorkerSessionPlacementState,
   to: WorkerSessionPlacementState,
 ): boolean {
-  return (
-    WORKER_SESSION_PLACEMENT_TRANSITIONS[from] as readonly WorkerSessionPlacementState[]
-  ).includes(to);
+  return WORKER_SESSION_PLACEMENT_TRANSITIONS[from].some((candidate) => candidate === to);
 }

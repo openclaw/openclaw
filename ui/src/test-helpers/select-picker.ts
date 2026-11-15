@@ -1,18 +1,10 @@
-import { afterEach } from "vitest";
+import { onTestFinished } from "vitest";
 import type { SelectPicker } from "../components/select-picker.ts";
-
-const mounted = new Set<HTMLElement>();
-afterEach(() => {
-  for (const container of mounted) {
-    container.remove();
-  }
-  mounted.clear();
-});
 
 export async function updatePickers(container: HTMLElement) {
   if (!container.isConnected) {
     document.body.append(container);
-    mounted.add(container);
+    onTestFinished(() => container.remove());
   }
   await Promise.all(
     [...container.querySelectorAll<SelectPicker>("openclaw-select-picker")].map(
@@ -21,7 +13,7 @@ export async function updatePickers(container: HTMLElement) {
   );
 }
 
-export async function choosePickerValue(element: HTMLElement, value: string) {
+export async function openPicker(element: HTMLElement) {
   const picker = element.closest<SelectPicker>("openclaw-select-picker");
   if (!picker) {
     throw new Error("Picker owner is missing");
@@ -35,6 +27,11 @@ export async function choosePickerValue(element: HTMLElement, value: string) {
     trigger.click();
   }
   await picker.updateComplete;
+  return picker;
+}
+
+export async function choosePickerValue(element: HTMLElement, value: string) {
+  const picker = await openPicker(element);
   const row = [...picker.querySelectorAll<HTMLElement>('[role="option"]')].find(
     (option) => option.dataset.value === value,
   );

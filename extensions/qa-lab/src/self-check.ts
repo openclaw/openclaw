@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements self check behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -23,7 +22,7 @@ export function isQaSelfCheckSuccessful(result: QaSelfCheckResult): boolean {
   );
 }
 
-export function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
+function resolveQaSelfCheckOutputPath(params?: { outputPath?: string; repoRoot?: string }) {
   if (params?.outputPath) {
     return params.outputPath;
   }
@@ -47,72 +46,64 @@ export async function runQaSelfCheckAgainstState(params: {
     outputDir: path.dirname(resolveQaSelfCheckOutputPath(params)),
     state: params.state,
   });
-  const transport = transportFactoryResult.adapter;
-  params.state.reset();
-  const scenarioResult = await runQaScenario(
-    createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
-    {
-      state: params.state,
-      performAction: async (action, args) =>
-        await transport.handleAction({
-          action,
-          args,
-          cfg: params.cfg,
-          accountId: transport.accountId,
-        }),
-    },
-  );
-  const checks = [
-    {
-      name: "QA self-check scenario",
-      status: scenarioResult.status,
-      details: `${scenarioResult.steps.filter((step) => step.status === "pass").length}/${scenarioResult.steps.length} steps passed`,
-    },
-  ] satisfies Array<{ name: string; status: "pass" | "fail"; details?: string }>;
-  const finishedAt = new Date();
-  const snapshot = params.state.getSnapshot();
-  const timeline = snapshot.events.map((event) => {
-    switch (event.kind) {
-      case "thread-created":
-        return `${event.cursor}. ${event.kind} ${event.thread.conversationId}/${event.thread.id}`;
-      case "reaction-added":
-        return `${event.cursor}. ${event.kind} ${event.message.id} ${event.emoji}`;
-      default:
-        return `${event.cursor}. ${event.kind} ${"message" in event ? event.message.id : ""}`.trim();
-    }
-  });
-  const report = renderQaMarkdownReport({
-    title: "OpenClaw QA E2E Self-Check",
-    startedAt,
-    finishedAt,
-    checks,
-    scenarios: [
+  try {
+    const transport = transportFactoryResult.adapter;
+    params.state.reset();
+    const scenarioResult = await runQaScenario(
+      createQaSelfCheckScenario({ waitTimeoutMs: params.waitTimeoutMs }),
       {
-        name: scenarioResult.name,
-        status: scenarioResult.status,
-        details: scenarioResult.details,
-        steps: scenarioResult.steps,
+        state: params.state,
+        performAction: async (action, args) =>
+          await transport.handleAction({
+            action,
+            args,
+            cfg: params.cfg,
+            accountId: transport.accountId,
+          }),
       },
-    ],
-    timeline,
-    notes: params.notes ?? [
-      "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
-      "Docker orchestration, additional QA runners, and auto-fix loops remain follow-up work.",
-    ],
-  });
+    );
+    const checks = [
+      {
+        name: "QA self-check scenario",
+        status: scenarioResult.status,
+        details: `${scenarioResult.steps.filter((step) => step.status === "pass").length}/${scenarioResult.steps.length} steps passed`,
+      },
+    ] satisfies Array<{ name: string; status: "pass" | "fail"; details?: string }>;
+    const finishedAt = new Date();
+    const snapshot = params.state.getSnapshot();
+    const timeline = snapshot.events.map((event) => {
+      switch (event.kind) {
+        case "thread-created":
+          return `${event.cursor}. ${event.kind} ${event.thread.conversationId}/${event.thread.id}`;
+        case "reaction-added":
+          return `${event.cursor}. ${event.kind} ${event.message.id} ${event.emoji}`;
+        default:
+          return `${event.cursor}. ${event.kind} ${"message" in event ? event.message.id : ""}`.trim();
+      }
+    });
+    const report = renderQaMarkdownReport({
+      title: "OpenClaw QA E2E Self-Check",
+      startedAt,
+      finishedAt,
+      checks,
+      scenarios: [scenarioResult],
+      timeline,
+      notes: params.notes ?? [
+        "Vertical slice: qa-channel + qa-lab bus + private debugger surface.",
+        "Docker orchestration, additional QA runners, and auto-fix loops remain follow-up work.",
+      ],
+    });
 
-  const outputPath = resolveQaSelfCheckOutputPath({
-    outputPath: params.outputPath,
-    repoRoot: params.repoRoot,
-  });
-  await fs.mkdir(path.dirname(outputPath), { recursive: true });
-  await fs.writeFile(outputPath, report, "utf8");
-  await transportFactoryResult.cleanupWithoutGateway();
-
-  return {
-    outputPath,
-    report,
-    checks,
-    scenarioResult,
-  };
+    const outputPath = resolveQaSelfCheckOutputPath(params);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, report, "utf8");
+    return {
+      outputPath,
+      report,
+      checks,
+      scenarioResult,
+    };
+  } finally {
+    await transportFactoryResult.cleanupWithoutGateway();
+  }
 }

@@ -19,6 +19,9 @@ spec:
       automountServiceAccountToken: false
       securityContext:
         fsGroup: 1000
+        # Avoid repeating kubelet's recursive mode changes when the root matches.
+        # This does not repair existing modes or govern delegated CSI ownership.
+        fsGroupChangePolicy: OnRootMismatch
         seccompProfile:
           type: RuntimeDefault
       initContainers:
@@ -35,6 +38,9 @@ spec:
               [ -f /home/node/.openclaw/openclaw.json ] || cp /config/openclaw.json /home/node/.openclaw/openclaw.json
               mkdir -p /home/node/.openclaw/workspace
               [ -f /home/node/.openclaw/workspace/AGENTS.md ] || cp /config/AGENTS.md /home/node/.openclaw/workspace/AGENTS.md
+              # fsGroup leaves the root-owned emptyDir non-sticky. Mount an owned
+              # sticky child at /tmp so the unsafe volume root is not an ancestor.
+              mkdir -p /tmp-volume/gateway-tmp && chmod 1777 /tmp-volume/gateway-tmp || { echo "init-config: cannot prepare sticky-protected /tmp; ensure tmp-volume is writable by UID 1000" >&2; exit 1; }
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -50,6 +56,8 @@ spec:
               mountPath: /home/node/.openclaw
             - name: config
               mountPath: /config
+            - name: tmp-volume
+              mountPath: /tmp-volume
       containers:
         - name: gateway
           # Bump this immutable versioned tag when upgrading OpenClaw.
@@ -69,6 +77,9 @@ spec:
               value: /home/node
             - name: OPENCLAW_CONFIG_DIR
               value: /home/node/.openclaw
+            # Private SQLite snapshots need a writable cache on the read-only rootfs.
+            - name: XDG_CACHE_HOME
+              value: /home/node/.openclaw/.cache
             - name: NODE_ENV
               value: production
             - name: OPENCLAW_GATEWAY_TOKEN
@@ -146,6 +157,7 @@ spec:
               mountPath: /home/node/.openclaw
             - name: tmp-volume
               mountPath: /tmp
+              subPath: gateway-tmp
           securityContext:
             runAsNonRoot: true
             runAsUser: 1000

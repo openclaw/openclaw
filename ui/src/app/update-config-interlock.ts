@@ -6,7 +6,9 @@ export function bindUpdateConfigWriteInterlock(
   overlays: Pick<ApplicationOverlays, "snapshot" | "subscribe" | "refreshUpdateStatus">,
   runtimeConfig: Pick<RuntimeConfigCapability, "setWritesSuspended">,
 ): () => void {
-  const refreshAdmission = () => overlays.refreshUpdateStatus("completion");
+  const refreshAdmission = async () => {
+    await overlays.refreshUpdateStatus("completion");
+  };
   const sync = () => {
     const update = overlays.snapshot;
     runtimeConfig.setWritesSuspended(

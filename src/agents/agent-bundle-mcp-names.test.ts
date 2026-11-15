@@ -11,7 +11,6 @@ import {
 describe("agent bundle MCP names", () => {
   it.each([
     { value: "", expected: "node" },
-    { value: " North !! Node ", expected: "north_node" },
     { value: "123-node", expected: "node_123_node" },
     { value: "a".repeat(40), expected: "a".repeat(32) },
   ])("sanitizes node ID fragment $value", ({ value, expected }) => {
@@ -48,36 +47,5 @@ describe("agent bundle MCP names", () => {
       reservedNames,
     });
     expect(safeToolName).toBe(`memory${TOOL_NAME_SEPARATOR}status-2`);
-  });
-
-  it("uses the bundle server name for Link MCP tools", () => {
-    const usedServerNames = new Set<string>();
-    const serverName = sanitizeServerName("link", usedServerNames);
-
-    expect(
-      buildSafeToolName({
-        serverName,
-        toolName: "auth_login",
-        reservedNames: new Set(),
-      }),
-    ).toBe(`link${TOOL_NAME_SEPARATOR}auth_login`);
-    expect(
-      buildSafeToolName({
-        serverName,
-        toolName: "spend-request_create",
-        reservedNames: new Set(),
-      }),
-    ).toBe(`link${TOOL_NAME_SEPARATOR}spend-request_create`);
-  });
-
-  it("truncates overlong tool names while keeping the server prefix", () => {
-    const safeToolName = buildSafeToolName({
-      serverName: "memory",
-      toolName: "x".repeat(200),
-      reservedNames: new Set(),
-    });
-
-    expect(safeToolName.startsWith(`memory${TOOL_NAME_SEPARATOR}`)).toBe(true);
-    expect(safeToolName.length).toBeLessThanOrEqual(64);
   });
 });

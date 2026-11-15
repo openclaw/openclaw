@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "id": "clawie-stardust",
+  "name": "Clawie Stardust",
+  "description": "Warm peach shell with red lightning face paint edged in electric blue.",
+  "palette": {
+    "shell": "#f4ddd1",
+    "claw": "#e76545",
+    "glint": "#8be9fd"
+  },
+  "layers": {
+    "shell_overlay": "<g class=\"lob-clawiestardust\">\n    <path d=\"M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z\" fill=\"#4dc8eb\" transform=\"translate(2.5 0)\" />\n    <path d=\"M72 14 L57 49 L70 43 L51 89 L85 38 L72 44 L83 18 Z\" fill=\"#e6393d\" />\n  </g>"
+  }
+}

@@ -2,13 +2,17 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { chromium } from "playwright";
 import { describe, expect, inject, it } from "vitest";
+import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { AuthHealthSummary } from "../../../src/agents/auth-health.js";
 import type { ProfileUsageStats } from "../../../src/agents/auth-profiles/types.js";
+import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import type { ModelAuthStatusResult } from "../../../src/gateway/server-methods/models-auth-status.types.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../../src/state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../../../src/state/openclaw-state-db.paths.js";
+import { quotaRequestMode } from "../../../test/e2e/qa-lab/runtime/quota-reset-diagnostics.mjs";
 import {
   ACCOUNT_ID,
   MARKER,
@@ -87,31 +91,40 @@ function clearSavedBlock(fixture: QuotaFixture): SavedClearReceipt {
 
 async function captureFinalStatus(
   fixture: QuotaFixture,
-  artifactDir: string,
-  observations: unknown[],
+  recordProfile: (profile: unknown) => void,
 ) {
   const cli = await fixture.gateway.cli(["models", "status", "--json"]);
-  observations.push({ action: "models-status", ...cli });
   expect(cli.code, cli.stderr).toBe(0);
   const status: ModelsStatus = JSON.parse(cli.stdout);
+  const profile = status.auth.oauth.profiles.find((entry) => entry.profileId === fixture.profileId);
+  recordProfile(profile);
   expect
     .soft(status.auth.unusableProfiles)
     .not.toContainEqual(expect.objectContaining({ profileId: fixture.profileId }));
-  expect
-    .soft(status.auth.oauth.profiles)
-    .toContainEqual(
-      expect.objectContaining({ profileId: fixture.profileId, type: "oauth", status: "ok" }),
-    );
+  // Refreshed fixture credentials stay valid for two days, outside the CLI
+  // 24-hour expiry warning; original-credential expiry scenarios remain separate.
+  expect.soft(profile).toMatchObject({ profileId: fixture.profileId, type: "oauth", status: "ok" });
+  expect.soft(profile?.remainingMs).toBeGreaterThan(0);
 
+  // Gateway readiness does not join its background UI build; dashboard --json intentionally
+  // fails immediately while assets are preparing. Wait only at the browser-proof boundary.
+  const document = await waitForControlUiDocument({
+    url: `http://127.0.0.1:${fixture.gateway.port}/`,
+    timeoutMs: 60_000,
+  });
+  expect(document.ready, JSON.stringify(document)).toBe(true);
   const dashboard = await fixture.gateway.cli(["dashboard", "--json"]);
-  expect(dashboard.code, dashboard.stderr).toBe(0);
-  const { browserUrl }: { browserUrl: string } = JSON.parse(dashboard.stdout);
+  const { browserUrl, reason }: { browserUrl: string; reason?: string } = JSON.parse(
+    dashboard.stdout,
+  );
+  expect(dashboard.code, reason ?? dashboard.stderr).toBe(0);
   const url = new URL("settings/model-providers", browserUrl);
   url.hash = new URL(browserUrl).hash;
-  const browser = await chromium.launch({
-    headless: true,
-    executablePath: inject("controlUiE2eChromium").executablePath,
-  });
+  const { wsEndpoint } = inject("controlUiE2eChromium");
+  if (!wsEndpoint) {
+    throw new Error("Control UI E2E requires its shared Chromium server");
+  }
+  const browser = await chromium.connect(wsEndpoint);
   try {
     const context = await browser.newContext({
       locale: "en-US",
@@ -120,115 +133,103 @@ async function captureFinalStatus(
     });
     const page = await context.newPage();
     page.setDefaultTimeout(60_000);
-    page.on("websocket", (socket) => {
-      const methods = new Map<string, string>();
-      socket.on("framesent", ({ payload }) => {
-        const frame = JSON.parse(String(payload));
-        if (frame.type === "req") {
-          methods.set(frame.id, frame.method);
-        }
-      });
-      socket.on("framereceived", ({ payload }) => {
-        const frame = JSON.parse(String(payload));
-        const method = methods.get(frame.id);
-        if (method?.startsWith("models.")) {
-          observations.push({ action: "browser-rpc", method, frame });
-        }
-      });
-    });
-    page.on("pageerror", (error) =>
-      observations.push({ action: "browser-error", message: error.message }),
-    );
     await page.addInitScript(() => {
       localStorage.setItem(
-        "openclaw:control-ui:community-invite",
+        "openclaw:control-ui:community-invite:v2",
         JSON.stringify({ dismissedAtMs: 1770000000000 }),
       );
     });
-    try {
-      await page.goto(url.href);
-      await waitForControlUiGatewayReady(page);
-      const card = page.locator('[data-provider-id="openai"]');
-      await card.waitFor({ state: "visible" });
-      const badge = card.locator(".model-providers__head .settings-status");
-      await expect
-        .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
-        .toBe("Ready");
-      observations.push({
-        action: "control-ui-provider-status",
-        status: (await badge.textContent())?.trim(),
-        text: await card.textContent(),
-      });
-      expect(await page.locator(".community-invite-card").count()).toBe(0);
-      await page.screenshot({
-        path: path.join(artifactDir, "provider-status.png"),
-        animations: "disabled",
-      });
-    } finally {
-      await fs.writeFile(
-        path.join(artifactDir, "rendered-page.json"),
-        JSON.stringify({ text: await page.locator("body").textContent() }, null, 2),
-      );
-      if ((await page.locator(".community-invite-card").count()) === 0) {
-        await page.screenshot({
-          path: path.join(artifactDir, "final-page.png"),
-          animations: "disabled",
-        });
-      }
-    }
+    await page.goto(url.href);
+    await waitForControlUiGatewayReady(page);
+    const card = page.locator('[data-provider-id="openai"]');
+    await card.waitFor({ state: "visible" });
+    // The ordinary turn already proved automatic quota recovery. Initial catalog
+    // publication is best effort; Refresh explicitly asks for its settled status.
+    await page.locator(".model-providers__refresh-button").click();
+    const badge = card.locator(".model-providers__head .settings-status");
+    await expect
+      .poll(async () => (await badge.textContent())?.trim(), { timeout: 60_000 })
+      .toBe("Ready");
+    expect(await page.locator(".community-invite-card").count()).toBe(0);
     await context.close();
   } finally {
     await browser.close();
   }
 }
 
-describe.each(["automatic", "saved-clear"] as const)(
-  "Running Gateway quota status: %s",
-  (recovery) => {
-    it(
-      "serves the same account and shows ready status after recovery without restarting",
-      { timeout: 600_000 },
-      async (context) => {
+describe("Running Gateway quota status", () => {
+  it(
+    "serves the same account and shows ready status after each recovery without restarting",
+    { timeout: 600_000 },
+    async (context) => {
+      const fixture = await createQuotaResetFixture(context, {
+        source: "codex_rate_limits",
+        controlUi: true,
+      });
+      const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
+      const gatewayProcess = gateway.child;
+      expect(gatewayProcess?.pid).toEqual(expect.any(Number));
+      // Saved-only recovery needs an unadvanced clock. Each stage uses a fresh
+      // conversation while sharing the Gateway and its quota state.
+      for (const recovery of ["saved-clear", "automatic", "automatic-during-catalog"] as const) {
         const artifactDir = createControlUiE2eArtifactDir(`quota-refresh-${recovery}`);
-        const observations: unknown[] = [];
-        const fixture = await createQuotaResetFixture(context, {
-          source: "codex_rate_limits",
-          controlUi: true,
-        });
-        const { gateway, client, provider, turn, stats, advanceClock, clock, evidence } = fixture;
-        const gatewayProcess = gateway.child;
-        expect(gatewayProcess?.pid).toEqual(expect.any(Number));
+        const sessionKey = `${fixture.sessionKey}-${recovery}`;
+        let finalProfile: unknown;
+        let catalogHold: ReturnType<typeof provider.holdNextCatalog> | undefined;
+        let catalogRefresh:
+          | Promise<{ ok: true; result: ModelsListResult } | { ok: false; error: unknown }>
+          | undefined;
         try {
-          expect(await turn(), evidence()).toEqual({ status: "ok", output: [MARKER] });
+          provider.setPhase("healthy");
+          expect(await turn(sessionKey), evidence()).toEqual({ status: "ok", output: [MARKER] });
           await expect.poll(() => stats()?.lastProbeAt).toEqual(expect.any(Number));
           provider.setPhase("initial-exhaustion");
-          expect((await turn()).status, evidence()).toBe("error");
+          expect((await turn(sessionKey)).status, evidence()).toBe("error");
           const blocked = stats();
-          observations.push({ action: "provider-created-block", state: blocked });
           expect(blocked, evidence()).toMatchObject({
             blockedReason: "subscription_limit",
             blockedSource: "codex_rate_limits",
           });
           expect(blocked?.blockedUntil, evidence()).toBeGreaterThan(Date.now() + 86_400_000);
+          if (recovery === "automatic-during-catalog") {
+            catalogHold = provider.holdNextCatalog();
+            await advanceClock();
+            catalogRefresh = client
+              .request<ModelsListResult>("models.list", {
+                agentId: "main",
+                view: "configured",
+                refresh: true,
+              })
+              .then(
+                (result) => ({ ok: true as const, result }),
+                (error: unknown) => ({ ok: false as const, error }),
+              );
+            const captured = await catalogHold.arrived;
+            expect(captured.phase, evidence()).toBe("initial-exhaustion");
+            expect(stats()?.blockedUntil, evidence()).toBe(blocked?.blockedUntil);
+            const discovering = await client.request<ModelsListResult>("models.list", {
+              agentId: "main",
+              view: "configured",
+            });
+            expect(discovering.pendingProviders, evidence()).toContain("openai");
+          }
           provider.setPhase("restored");
 
           if (recovery === "automatic") {
             await advanceClock();
-          } else {
+          } else if (recovery === "saved-clear") {
             const lastProbeAt = blocked?.lastProbeAt;
             expect(lastProbeAt).toEqual(expect.any(Number));
             if (lastProbeAt === undefined) {
               throw new Error("Recent saved-block proof requires the previous health observation.");
             }
             expect(Date.now() + clock.offset - lastProbeAt).toBeLessThan(300_000);
-            const cleared = clearSavedBlock(fixture);
-            observations.push({ action: "saved-only-external-clear", receipt: cleared });
+            clearSavedBlock(fixture);
             expect(stats()?.blockedUntil).toBeUndefined();
             const refreshed = await client.request<ModelAuthStatusResult>("models.authStatus", {
               agentId: "main",
               refresh: true,
             });
-            observations.push({ action: "models-auth-status-refresh", result: refreshed });
             expect(refreshed.unavailable).toBeUndefined();
             expect(clock.offset).toBe(0);
             expect(Date.now() - lastProbeAt).toBeLessThan(300_000);
@@ -236,30 +237,90 @@ describe.each(["automatic", "saved-clear"] as const)(
 
           // Observe the next turn before CLI or browser reads can affect runtime preparation.
           const beforeRecovery = provider.requests.length;
-          const nextTurn = await turn();
+          let beforeRecoveryReply: ReturnType<typeof stats>;
+          if (catalogHold) {
+            provider.observeNextSuccess(
+              () => {
+                beforeRecoveryReply = stats();
+              },
+              { model: "gpt-5.5", path: "/v1/responses" },
+            );
+            const auxiliary = await provider.fetch("/v1/responses", {
+              method: "POST",
+              headers: {
+                "content-type": "application/json",
+                authorization: `Bearer ${fixture.access}`,
+                "chatgpt-account-id": ACCOUNT_ID,
+              },
+              body: JSON.stringify({ model: "gpt-5.6-luna", input: [] }),
+            });
+            expect(auxiliary.status, evidence()).toBe(200);
+            await auxiliary.text();
+            expect(beforeRecoveryReply, evidence()).toBeUndefined();
+          }
+          const nextTurn = await turn(sessionKey);
           const inference = provider.requests
             .slice(beforeRecovery)
             .filter((request) => request.path.endsWith("/responses"));
-          observations.push({ action: "next-ordinary-turn", result: nextTurn, state: stats() });
-          expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
-          expect(inference, evidence()).toHaveLength(1);
-          expect(inference[0], evidence()).toMatchObject({
-            authorization: `Bearer ${fixture.access}`,
-            accountId: ACCOUNT_ID,
+          const primaryInference = inference.filter(({ body }) => {
+            const request: unknown = JSON.parse(body ?? "{}");
+            return (
+              isRecord(request) &&
+              request.model === "gpt-5.5" &&
+              quotaRequestMode(body) === "inference"
+            );
           });
+          expect.soft(nextTurn, evidence()).toEqual({ status: "ok", output: [MARKER] });
+          expect(primaryInference, evidence()).toHaveLength(1);
+          for (const request of inference) {
+            expect(request, evidence()).toMatchObject({
+              authorization: `Bearer ${fixture.access}`,
+              accountId: ACCOUNT_ID,
+            });
+          }
           expect.soft(stats()?.blockedUntil, evidence()).toBeUndefined();
           expect(gateway.child).toBe(gatewayProcess);
           expect(gatewayProcess?.exitCode).toBeNull();
-          await captureFinalStatus(fixture, artifactDir, observations);
+          if (catalogHold) {
+            expect(beforeRecoveryReply, evidence()).toBeDefined();
+            expect(beforeRecoveryReply?.blockedUntil, evidence()).toBeUndefined();
+            // Quota-only updates keep the catalog owner. Availability must recover while
+            // its refresh is pending and stay recovered after the held response arrives.
+            const readPublishedStatus = async () => {
+              const published = await client.request<ModelsListResult>("models.list", {
+                agentId: "main",
+                view: "configured",
+                preparedOnly: true,
+              });
+              return {
+                pending: published.pendingProviders?.includes("openai") ?? false,
+                available: published.models.some(
+                  (model) =>
+                    model.provider === "openai" && model.id === "gpt-5.5" && model.available,
+                ),
+              };
+            };
+            await expect.poll(readPublishedStatus).toEqual({ pending: true, available: true });
+            catalogHold.release();
+            const refreshed = await catalogRefresh;
+            expect(refreshed, evidence()).toMatchObject({ ok: true });
+            await expect.poll(readPublishedStatus).toEqual({ pending: false, available: true });
+            expect(provider.heldCatalogResponses[0]?.releaseReason, evidence()).toBe("explicit");
+          }
+          await captureFinalStatus(fixture, (profile) => {
+            finalProfile = profile;
+          });
           expect(provider.errors, evidence()).toEqual([]);
         } finally {
-          await fs.writeFile(
-            path.join(artifactDir, "observations.json"),
-            JSON.stringify(observations, null, 2),
-          );
+          catalogHold?.release();
+          await catalogRefresh;
           await fs.writeFile(path.join(artifactDir, "gateway-evidence.json"), evidence());
+          await fs.writeFile(
+            path.join(artifactDir, "quota.public.json"),
+            JSON.stringify(await fixture.publicDiagnostics(finalProfile), null, 2),
+          );
         }
-      },
-    );
-  },
-);
+      }
+    },
+  );
+});

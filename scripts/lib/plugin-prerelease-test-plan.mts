@@ -1,10 +1,8 @@
 // Defines the plugin prerelease validation surface and matching test lanes.
 import { BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS } from "./docker-e2e-scenarios.mts";
 
-type PrereleaseSurfaceEntry = { surfaces: readonly string[] };
-
 /** Required behavioral surfaces that plugin prerelease validation must cover. */
-export const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
+const PLUGIN_PRERELEASE_REQUIRED_SURFACES = Object.freeze([
   "package-artifact",
   "bundled-lifecycle",
   "external-plugins",
@@ -134,14 +132,25 @@ const staticChecks = Object.freeze([
   },
 ]);
 
-function coveredSurfaces(entries: readonly PrereleaseSurfaceEntry[]): string[] {
-  return [
-    ...new Set(
-      entries
-        .flatMap((entry) => entry.surfaces)
-        .filter((surface) => typeof surface === "string" && surface.length > 0),
-    ),
-  ].toSorted((a, b) => a.localeCompare(b));
+/** Run daily extension batches on Bun and retain both runtimes for release proof. */
+export async function resolvePluginPrereleaseExtensionRuntime({
+  fullReleaseValidation,
+  env = process.env,
+}: {
+  fullReleaseValidation: boolean;
+  env?: NodeJS.ProcessEnv;
+}): Promise<{
+  test_runtime_policy: "node" | "bun-all" | "dual-all";
+  requires_bun: boolean;
+}> {
+  const explicitPolicy = env.OPENCLAW_CI_TEST_RUNTIME_POLICY?.trim();
+  // Bounded static-planner copies need no test inventory for the event defaults.
+  const policy = explicitPolicy
+    ? (await import("./ci-test-runtime.mts")).resolveCiTestRuntimePolicy(env)
+    : fullReleaseValidation
+      ? "dual-all"
+      : "bun-all";
+  return { test_runtime_policy: policy, requires_bun: policy !== "node" };
 }
 
 /** Build the plugin prerelease plan from Docker lanes and static checks. */
@@ -156,7 +165,9 @@ export function createPluginPrereleaseTestPlan() {
       command: entry.command,
       surfaces: entry.surfaces.slice(),
     })),
-    surfaces: coveredSurfaces(allEntries),
+    surfaces: [...new Set(allEntries.flatMap((entry) => entry.surfaces))].toSorted((a, b) =>
+      a.localeCompare(b),
+    ),
   };
 }
 

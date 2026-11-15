@@ -1,15 +1,7 @@
-// Reads and formats disk-space snapshots and warnings.
 import fs from "node:fs";
 import path from "node:path";
 
 const LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES = 1024 * 1024 * 1024;
-
-type DiskSpaceSnapshot = {
-  targetPath: string;
-  checkedPath: string;
-  availableBytes: number;
-  totalBytes: number | null;
-};
 
 function finiteNonNegativeNumber(value: unknown): number | null {
   const numberValue = Number(value);
@@ -32,11 +24,13 @@ function findExistingDiskSpacePath(targetPath: string): string | null {
   }
 }
 
-/** Reads available bytes for the volume containing a target path when statfs is available. */
-export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
-  if (typeof fs.statfsSync !== "function") {
-    return null;
-  }
+/** Reads available bytes for the volume containing a target path. */
+export function tryReadDiskSpace(targetPath: string): {
+  targetPath: string;
+  checkedPath: string;
+  availableBytes: number;
+  totalBytes: number | null;
+} | null {
   // Install/update targets may not exist yet; statfs needs the nearest existing
   // ancestor to identify the backing volume.
   const checkedPath = findExistingDiskSpacePath(targetPath);
@@ -79,11 +73,9 @@ export function formatDiskSpaceBytes(bytes: number): string {
 export function createLowDiskSpaceWarning(params: {
   targetPath: string;
   purpose: string;
-  thresholdBytes?: number;
 }): string | null {
-  const thresholdBytes = params.thresholdBytes ?? LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES;
   const snapshot = tryReadDiskSpace(params.targetPath);
-  if (!snapshot || snapshot.availableBytes >= thresholdBytes) {
+  if (!snapshot || snapshot.availableBytes >= LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES) {
     return null;
   }
   const location =

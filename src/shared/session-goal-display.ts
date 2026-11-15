@@ -1,5 +1,22 @@
 import type { SessionGoal } from "../config/sessions/types.js";
 
+const GOAL_STATUS_LABELS = {
+  active: "Pursuing goal",
+  paused: "Goal paused",
+  blocked: "Goal blocked",
+  usage_limited: "Goal hit usage limits",
+  budget_limited: "Goal unmet",
+  complete: "Goal achieved",
+} satisfies Record<SessionGoal["status"], string>;
+
+const GOAL_STOP_TIMESTAMPS = {
+  paused: "pausedAt",
+  blocked: "blockedAt",
+  usage_limited: "usageLimitedAt",
+  budget_limited: "budgetLimitedAt",
+  complete: "completedAt",
+} as const satisfies Record<Exclude<SessionGoal["status"], "active">, keyof SessionGoal>;
+
 function formatGoalTokenCount(value: number): string {
   if (!Number.isFinite(value) || value <= 0) {
     return "0";
@@ -30,22 +47,7 @@ export function formatGoalUsage(goal: SessionGoal): string | null {
 }
 
 export function formatGoalStatusLabel(status: SessionGoal["status"]): string {
-  switch (status) {
-    case "active":
-      return "Pursuing goal";
-    case "paused":
-      return "Goal paused";
-    case "blocked":
-      return "Goal blocked";
-    case "usage_limited":
-      return "Goal hit usage limits";
-    case "budget_limited":
-      return "Goal unmet";
-    case "complete":
-      return "Goal achieved";
-  }
-  const unreachable: never = status;
-  return unreachable;
+  return GOAL_STATUS_LABELS[status];
 }
 
 export function formatGoalSummary(goal: SessionGoal): string {
@@ -56,24 +58,8 @@ export function formatGoalSummary(goal: SessionGoal): string {
 
 /** Wall-clock time spent on the goal; frozen at the status timestamp once not active. */
 export function goalElapsedMs(goal: SessionGoal, now: number): number {
-  const stoppedAt = (() => {
-    switch (goal.status) {
-      case "active":
-        return now;
-      case "paused":
-        return goal.pausedAt ?? goal.updatedAt;
-      case "blocked":
-        return goal.blockedAt ?? goal.updatedAt;
-      case "usage_limited":
-        return goal.usageLimitedAt ?? goal.updatedAt;
-      case "budget_limited":
-        return goal.budgetLimitedAt ?? goal.updatedAt;
-      case "complete":
-        return goal.completedAt ?? goal.updatedAt;
-    }
-    const unreachable: never = goal.status;
-    return unreachable;
-  })();
+  const stoppedAt =
+    goal.status === "active" ? now : (goal[GOAL_STOP_TIMESTAMPS[goal.status]] ?? goal.updatedAt);
   return Math.max(0, stoppedAt - goal.createdAt);
 }
 
@@ -83,13 +69,17 @@ export function formatGoalElapsed(elapsedMs: number): string {
     return `${totalSeconds}s`;
   }
   const totalMinutes = Math.floor(totalSeconds / 60);
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
   if (totalMinutes < 60) {
-    return `${totalMinutes}m ${seconds}s`;
+    return `${totalMinutes}m`;
   }
   const hours = Math.floor(totalMinutes / 60);
-  const minutes = String(totalMinutes % 60).padStart(2, "0");
-  return `${hours}h ${minutes}m ${seconds}s`;
+  const minutes = totalMinutes % 60;
+  if (hours < 24) {
+    return minutes === 0 ? `${hours}h` : `${hours}h ${minutes}m`;
+  }
+  const days = Math.floor(hours / 24);
+  const period = days >= 7 ? `${Math.floor(days / 7)}wk ${days % 7}d` : `${days}d`;
+  return `${period} ${hours % 24}h ${minutes}m`;
 }
 
 export function formatGoalDetail(goal: SessionGoal): string {

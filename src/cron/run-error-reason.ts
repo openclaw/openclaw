@@ -8,11 +8,17 @@ export function resolveCronRunErrorReason(
   provider?: string,
   classification?: CronRunErrorClassification,
 ): FailoverReason | undefined {
-  if (classification?.kind === "permanent") {
+  if (classification?.kind === "permanent" || classification?.kind === "aborted") {
     return undefined;
   }
   if (classification?.kind === "reason") {
     return classification.reason;
+  }
+  // Text-only failures without a model provider have no provider provenance.
+  // In particular, heartbeat delivery errors can contain generic HTTP 5xx
+  // wording that the model failover classifier would otherwise call a timeout.
+  if (!provider?.trim()) {
+    return undefined;
   }
   return resolveFailoverReasonFromError(error, provider) ?? undefined;
 }

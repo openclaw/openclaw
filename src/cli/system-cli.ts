@@ -1,15 +1,14 @@
-// System CLI commands that call Gateway RPC methods for events, heartbeats, and presence.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
-import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatCliCommand } from "./command-format.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "./failure-output.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
+import { formatDocsHelp } from "./help-format.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { isSystemMachineOutput } from "./system-output-mode.js";
 
@@ -21,31 +20,30 @@ type SystemEventOpts = GatewayRpcOpts & {
 };
 type SystemGatewayOpts = GatewayRpcOpts & { json?: boolean };
 
-const normalizeWakeMode = (raw: unknown) => {
-  const mode = normalizeOptionalString(raw) ?? "";
-  if (!mode) {
-    return "next-heartbeat" as const;
-  }
-  if (mode === "now" || mode === "next-heartbeat") {
-    return mode;
-  }
-  throw new Error("--mode must be now or next-heartbeat");
-};
-
 async function runSystemGatewayCommand(
   opts: SystemGatewayOpts,
   action: () => Promise<unknown>,
   successText?: string,
+  signal?: AbortSignal,
 ): Promise<void> {
+  if (signal?.aborted) {
+    return;
+  }
   const machineOutput = opts.json || successText === undefined;
   try {
     const result = await action();
+    if (signal?.aborted) {
+      return;
+    }
     if (machineOutput) {
       defaultRuntime.writeJson(result);
     } else {
       defaultRuntime.log(successText);
     }
   } catch (err) {
+    if (signal?.aborted) {
+      return;
+    }
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (machineOutput) {
@@ -62,11 +60,7 @@ export function registerSystemCli(program: Command) {
   const system = program
     .command("system")
     .description("System tools (events, heartbeat, presence)")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/system", "docs.openclaw.ai/cli/system")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/system"));
   setCommandJsonMode(system, "output", ({ argv }) => isSystemMachineOutput(argv));
 
   addGatewayClientOptions(
@@ -90,7 +84,10 @@ export function registerSystemCli(program: Command) {
             `--text is required. Example: ${formatCliCommand('openclaw system event --text "deploy finished"')}.`,
           );
         }
-        const mode = normalizeWakeMode(opts.mode);
+        const mode = normalizeOptionalString(opts.mode) ?? "next-heartbeat";
+        if (mode !== "now" && mode !== "next-heartbeat") {
+          throw new Error("--mode must be now or next-heartbeat");
+        }
         const sessionKey = normalizeOptionalString(opts.sessionKey);
         const result = await callGatewayFromCli(
           "wake",
@@ -113,50 +110,22 @@ export function registerSystemCli(program: Command) {
 
   const heartbeat = system.command("heartbeat").description("Heartbeat controls");
 
-  addGatewayClientOptions(
-    heartbeat
-      .command("last")
-      .description("Show the last heartbeat event")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli("last-heartbeat", opts, undefined, {
-        expectFinal: false,
-      });
-    });
-  });
-
-  for (const [name, enabled] of [
-    ["enable", true],
-    ["disable", false],
+  for (const [parent, name, description, method, params] of [
+    [heartbeat, "last", "Show the last heartbeat event", "last-heartbeat", undefined],
+    [heartbeat, "enable", "Enable heartbeats", "set-heartbeats", { enabled: true }],
+    [heartbeat, "disable", "Disable heartbeats", "set-heartbeats", { enabled: false }],
+    [system, "presence", "List system presence entries", "system-presence", undefined],
   ] as const) {
     addGatewayClientOptions(
-      heartbeat
-        .command(name)
-        .description(`${enabled ? "Enable" : "Disable"} heartbeats`)
-        .option("--json", "Output JSON", false),
+      parent.command(name).description(description).option("--json", "Output JSON", false),
     ).action(async (opts: SystemGatewayOpts) => {
-      await runSystemGatewayCommand(opts, async () => {
-        return await callGatewayFromCli(
-          "set-heartbeats",
-          opts,
-          { enabled },
-          { expectFinal: false },
-        );
-      });
+      const signal = method === "set-heartbeats" ? undefined : getAsyncWorkSignal();
+      await runSystemGatewayCommand(
+        opts,
+        () => callGatewayFromCli(method, opts, params, { expectFinal: false, signal }),
+        undefined,
+        signal,
+      );
     });
   }
-
-  addGatewayClientOptions(
-    system
-      .command("presence")
-      .description("List system presence entries")
-      .option("--json", "Output JSON", false),
-  ).action(async (opts: SystemGatewayOpts) => {
-    await runSystemGatewayCommand(opts, async () => {
-      return await callGatewayFromCli("system-presence", opts, undefined, {
-        expectFinal: false,
-      });
-    });
-  });
 }

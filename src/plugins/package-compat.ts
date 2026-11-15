@@ -1,7 +1,8 @@
-// Checks package compatibility metadata for plugin manifests.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { prerelease as parseSemverPrerelease, satisfies as satisfiesSemver } from "semver";
+import { PLUGIN_INSTALL_ERROR_CODE, type PluginInstallFailureResult } from "./install-types.js";
+import { checkMinHostVersion } from "./min-host-version.js";
 
 function normalizePartialComparableVersion(version: string): {
   version: string;
@@ -13,18 +14,14 @@ function normalizePartialComparableVersion(version: string): {
     : { version: trimmed, isPartial: false };
 }
 
-function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
-  return Boolean(parseSemverPrerelease(normalizePartialComparableVersion(target).version));
-}
-
 function normalizePluginApiVersionForComparator(version: string, target: string): string {
-  const normalizedCorrection = normalizeOpenClawNumericCorrectionForPluginApi(version);
+  const normalizedCorrection = OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(version.trim())?.[1];
   if (normalizedCorrection) {
     return normalizedCorrection;
   }
-  return shouldPreservePluginApiPrereleaseFloor(target)
+  return parseSemverPrerelease(normalizePartialComparableVersion(target).version)
     ? version
-    : normalizeOpenClawReleaseSuffixForPluginApi(version);
+    : (OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(version.trim())?.[1] ?? version);
 }
 
 function satisfiesComparator(version: string, token: string): boolean {
@@ -65,17 +62,6 @@ const OPENCLAW_RELEASE_SUFFIX_PATTERN =
   /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
 const OPENCLAW_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.[1-9]\d?\.[1-9]\d*)-\d+$/;
 
-function normalizeOpenClawNumericCorrectionForPluginApi(
-  pluginApiVersion: string,
-): string | undefined {
-  return OPENCLAW_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
-}
-
-function normalizeOpenClawReleaseSuffixForPluginApi(pluginApiVersion: string): string {
-  const match = OPENCLAW_RELEASE_SUFFIX_PATTERN.exec(pluginApiVersion.trim());
-  return match?.[1] ?? pluginApiVersion;
-}
-
 /** Result of reading package.json openclaw.compat.pluginApi metadata. */
 type PackagePluginApiRangeResult = { ok: true; range?: string } | { ok: false; error: string };
 
@@ -83,13 +69,7 @@ type PackagePluginApiRangeResult = { ok: true; range?: string } | { ok: false; e
 export function resolvePackagePluginApiRange(
   packageMetadata: unknown,
 ): PackagePluginApiRangeResult {
-  if (packageMetadata === undefined || packageMetadata === null) {
-    return { ok: true };
-  }
-  if (!isRecord(packageMetadata)) {
-    return { ok: true };
-  }
-  if (!("compat" in packageMetadata)) {
+  if (!isRecord(packageMetadata) || !("compat" in packageMetadata)) {
     return { ok: true };
   }
   const compat = packageMetadata.compat;
@@ -122,4 +102,60 @@ export function satisfiesPluginApiRange(
     return true;
   }
   return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
+}
+
+export function validateOpenClawPackageInstallCompatibility(params: {
+  currentHostVersion: string;
+  pluginId: string;
+  packageMetadata?: unknown;
+  allowLegacyBareSemver?: boolean;
+}): PluginInstallFailureResult | null {
+  const { currentHostVersion } = params;
+  const installMetadata = isRecord(params.packageMetadata)
+    ? params.packageMetadata.install
+    : undefined;
+  const minHostVersionCheck = checkMinHostVersion({
+    currentVersion: currentHostVersion,
+    minHostVersion: isRecord(installMetadata) ? installMetadata.minHostVersion : undefined,
+    allowLegacyBareSemver: params.allowLegacyBareSemver,
+  });
+  if (!minHostVersionCheck.ok) {
+    if (minHostVersionCheck.kind === "invalid") {
+      return {
+        ok: false,
+        error: `invalid package.json openclaw.install.minHostVersion: ${minHostVersionCheck.error}`,
+        code: PLUGIN_INSTALL_ERROR_CODE.INVALID_MIN_HOST_VERSION,
+      };
+    }
+    if (minHostVersionCheck.kind === "unknown_host_version") {
+      return {
+        ok: false,
+        error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        code: PLUGIN_INSTALL_ERROR_CODE.UNKNOWN_HOST_VERSION,
+      };
+    }
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires OpenClaw >=${minHostVersionCheck.requirement.minimumLabel}, but this host is ${minHostVersionCheck.currentVersion}. Upgrade OpenClaw and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION,
+    };
+  }
+
+  const pluginApiRangeCheck = resolvePackagePluginApiRange(params.packageMetadata);
+  if (!pluginApiRangeCheck.ok) {
+    return {
+      ok: false,
+      error: `invalid package.json openclaw.compat.pluginApi: ${pluginApiRangeCheck.error}`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INVALID_PLUGIN_API,
+    };
+  }
+  const pluginApiRange = pluginApiRangeCheck.range;
+  if (pluginApiRange && !satisfiesPluginApiRange(currentHostVersion, pluginApiRange)) {
+    return {
+      ok: false,
+      error: `plugin "${params.pluginId}" requires plugin API ${pluginApiRange}, but this OpenClaw runtime exposes ${currentHostVersion}. Upgrade OpenClaw or install a compatible plugin version and retry.`,
+      code: PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
+    };
+  }
+  return null;
 }

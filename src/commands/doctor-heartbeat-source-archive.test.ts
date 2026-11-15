@@ -3,15 +3,20 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../state/openclaw-state-db.js";
 import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
 } from "./doctor-heartbeat-scratch-migration.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
     cleanup();
@@ -27,7 +32,7 @@ async function fixture() {
   const cfg: OpenClawConfig = {
     agents: {
       defaults: { workspace, heartbeat: { every: "30m" } },
-      list: [{ id: "main", workspace }],
+      entries: { main: { workspace } },
     },
   };
   const migrate = () => maybeMigrateHeartbeatFilesToScratch({ cfg, shouldRepair: true });
@@ -35,10 +40,7 @@ async function fixture() {
   const archivedContents = async (
     directory = path.join(root, "backups", "heartbeat-migration"),
   ) => {
-    const entries = await fs.readdir(directory, {
-      recursive: true,
-      withFileTypes: true,
-    });
+    const entries = (await listDirectoryTreeStrict(directory)).map((walkEntry) => walkEntry.dirent);
     return Promise.all(
       entries
         .filter((entry) => entry.isFile())
@@ -134,7 +136,7 @@ it.each(["before claiming", "while claimed"])(
     await fs.writeFile(f.sourcePath, "Same instructions");
     await fs.writeFile(path.join(replacement, "HEARTBEAT.md"), "Same instructions");
     await fs.symlink(original, alias, "dir");
-    f.cfg.agents!.list![0]!.workspace = alias;
+    f.cfg.agents!.entries!.main!.workspace = alias;
     const retarget = async () => {
       await fs.unlink(alias);
       await fs.symlink(replacement, alias, "dir");
@@ -195,11 +197,8 @@ it.each(["before", "after"])(
       await writer.sync();
       expect((await writer.stat()).nlink).toBeGreaterThan(0);
       await f.migrate();
-      if (phase === "after") {
-        expect(await f.archivedContents()).toContain("Late edit after interruption");
-      } else {
-        expect(await fs.readFile(f.sourcePath, "utf8")).toBe("Late edit after interruption");
-      }
+      expect(await f.archivedContents()).toContain("Late edit after interruption");
+      await expect(fs.access(f.sourcePath)).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await writer.close();
     }

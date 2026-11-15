@@ -17,6 +17,10 @@ outputs:
     description: "'true' if any changed file is under docs/ or is markdown"
     value: ${{ steps.check.outputs.docs_changed }}
 
+  root_prose_only:
+    description: "'true' if all changes are root VISION.md or AGENTS.md"
+    value: ${{ steps.check.outputs.root_prose_only }}
+
 runs:
   using: composite
   steps:
@@ -33,12 +37,18 @@ runs:
         if [ "$CHANGED" = "UNKNOWN" ] || [ -z "$CHANGED" ]; then
           echo "docs_only=false" >> "$GITHUB_OUTPUT"
           echo "docs_changed=false" >> "$GITHUB_OUTPUT"
+          echo "root_prose_only=false" >> "$GITHUB_OUTPUT"
           exit 0
         fi
 
         docs_changed=false
         non_docs=false
+        root_prose_only=true
         while IFS= read -r changed_path; do
+          case "$changed_path" in
+            VISION.md | AGENTS.md) ;;
+            *) root_prose_only=false ;;
+          esac
           case "$changed_path" in
             test/fixtures/*)
               non_docs=true
@@ -51,6 +61,7 @@ runs:
               ;;
           esac
         done <<< "$CHANGED"
+        echo "root_prose_only=$root_prose_only" >> "$GITHUB_OUTPUT"
 
         if [ "$docs_changed" = "true" ]; then
           echo "docs_changed=true" >> "$GITHUB_OUTPUT"

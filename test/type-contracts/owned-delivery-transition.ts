@@ -1,7 +1,7 @@
 import { expectTypeOf } from "vitest";
-import type { transitionOwnedDeliveryQueueEntry } from "../../src/infra/delivery-queue-sqlite-claim.js";
+import type { transitionOwnedDeliveryQueueEntryInDatabase } from "../../src/infra/delivery-queue-sqlite-claim.kernel.js";
 
-type OwnedDeliveryTransition = Parameters<typeof transitionOwnedDeliveryQueueEntry>[1];
+type OwnedDeliveryTransition = Parameters<typeof transitionOwnedDeliveryQueueEntryInDatabase>[2];
 
 // requires an explicitly synchronous owned delivery transition
 const transition: OwnedDeliveryTransition = () => {};

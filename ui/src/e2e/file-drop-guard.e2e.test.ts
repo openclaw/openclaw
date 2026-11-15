@@ -1,4 +1,4 @@
-// Control UI tests cover browser-level file-drop routing against a mocked Gateway.
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -12,6 +12,34 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed at ${executablePath}`,
 });
 
+function dropFile(target: Locator, name: string) {
+  return target.evaluate((element, fileName) => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([fileName], fileName, { type: "text/plain" }));
+    const beforeUrl = location.href;
+    const draft = () =>
+      document.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea")?.value;
+    const beforeDraft = draft();
+    const event = (type: string) =>
+      new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: transfer,
+      });
+    const dragOver = event("dragover");
+    const drop = event("drop");
+    element.dispatchEvent(dragOver);
+    element.dispatchEvent(drop);
+    return {
+      draftUnchanged: draft() === beforeDraft,
+      dragOverPrevented: dragOver.defaultPrevented,
+      dropEffect: transfer.dropEffect,
+      dropPrevented: drop.defaultPrevented,
+      urlUnchanged: location.href === beforeUrl,
+    };
+  }, name);
+}
+
 suite.define(() => {
   it("rejects a stray file drop while preserving attachment inputs", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
@@ -19,38 +47,12 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const attachment = (name: string) =>
+        page.locator(".chat-attachment-file__name", { hasText: name });
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await composer.fill("draft survives stray drop");
 
-      const stray = await page.locator("openclaw-app-shell").evaluate((element) => {
-        const transfer = new DataTransfer();
-        transfer.items.add(new File(["stray"], "stray-proof.txt", { type: "text/plain" }));
-        const beforeUrl = location.href;
-        const beforeDraft = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox textarea",
-        )?.value;
-        const dragOver = new DragEvent("dragover", {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        });
-        const drop = new DragEvent("drop", {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        });
-        element.dispatchEvent(dragOver);
-        element.dispatchEvent(drop);
-        return {
-          draftUnchanged:
-            document.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea")
-              ?.value === beforeDraft,
-          dragOverPrevented: dragOver.defaultPrevented,
-          dropEffect: transfer.dropEffect,
-          dropPrevented: drop.defaultPrevented,
-          urlUnchanged: location.href === beforeUrl,
-        };
-      });
+      const stray = await dropFile(page.locator("openclaw-app-shell"), "stray-proof.txt");
 
       expect(stray).toEqual({
         draftUnchanged: true,
@@ -60,42 +62,14 @@ suite.define(() => {
         urlUnchanged: true,
       });
 
-      const accepted = await page.locator("section.card.chat").evaluate((element) => {
-        const transfer = new DataTransfer();
-        transfer.items.add(
-          new File(["accepted drop"], "accepted-drop.txt", { type: "text/plain" }),
-        );
-        const dragOver = new DragEvent("dragover", {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        });
-        const drop = new DragEvent("drop", {
-          bubbles: true,
-          cancelable: true,
-          dataTransfer: transfer,
-        });
-        element.dispatchEvent(dragOver);
-        element.dispatchEvent(drop);
-        return {
-          dragOverPrevented: dragOver.defaultPrevented,
-          dropPrevented: drop.defaultPrevented,
-        };
-      });
+      const accepted = await dropFile(page.locator("section.chat"), "accepted-drop.txt");
 
-      expect(accepted).toEqual({
+      expect(accepted).toMatchObject({
         dragOverPrevented: true,
         dropPrevented: true,
       });
-      await page
-        .locator(".chat-attachment-file__name", { hasText: "accepted-drop.txt" })
-        .first()
-        .waitFor({ timeout: 10_000 });
-      await expect
-        .poll(() =>
-          page.locator(".chat-attachment-file__name", { hasText: "stray-proof.txt" }).count(),
-        )
-        .toBe(0);
+      await attachment("accepted-drop.txt").first().waitFor({ timeout: 10_000 });
+      await expect.poll(() => attachment("stray-proof.txt").count()).toBe(0);
 
       const nativeInput = page.locator(".agent-chat__file-input");
       expect(await nativeInput.isEnabled()).toBe(true);
@@ -104,19 +78,7 @@ suite.define(() => {
         mimeType: "text/plain",
         buffer: Buffer.from("native input"),
       });
-      await page
-        .locator(".chat-attachment-file__name", { hasText: "native-input.txt" })
-        .first()
-        .waitFor({ timeout: 10_000 });
-
-      console.info(
-        `[file-drop-proof] ${JSON.stringify({
-          accepted,
-          nativeInputAccepted: true,
-          path: new URL(page.url()).pathname,
-          stray,
-        })}`,
-      );
+      await attachment("native-input.txt").first().waitFor({ timeout: 10_000 });
     });
   });
 });

@@ -1,0 +1,220 @@
+import { once } from "node:events";
+import { createServer, request, type ClientRequest, type ServerResponse } from "node:http";
+import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { bindHttpResponseAuthority } from "./http-request-authority.js";
+import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
+
+const profileFixture = vi.hoisted(() => vi.fn());
+const authorizeControlUiReadRequestOrReply = vi.hoisted(() => vi.fn());
+const readAuthority = (res: ServerResponse) =>
+  bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true);
+vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../infra/host-account-avatar.js", () => ({ resolveHostAccountAvatar: async () => null }));
+vi.mock("./http-auth-utils.js", () => ({
+  authorizeControlUiReadRequestOrReply,
+}));
+vi.mock("../state/user-profiles.js", () => ({
+  formatUserProfileAvatarEtag: () => "unused-upload-etag",
+  UserProfileNotFoundError: class extends Error {},
+}));
+
+vi.mock("../state/user-profiles-avatar.js", () => ({
+  createProfileAvatarReader: (id: string) => ({
+    async inspect() {
+      const profile = profileFixture(id);
+      return { profile, emails: profile.emails, isCurrent: () => true };
+    },
+  }),
+}));
+
+describe("Gravatar HTTP waiter lifetimes", () => {
+  const imageBytes = new Uint8Array([7, 8, 9]);
+  const imageResponse = () =>
+    new Response(imageBytes, { headers: { "content-type": "image/png" } });
+  const clients: ClientRequest[] = [];
+  const handled = new Map<string, { response: ServerResponse; promise: Promise<boolean> }>();
+  const producers: Array<ReturnType<typeof createDeferred<Response>>> = [];
+  const fetchImpl = vi.fn<typeof fetch>();
+  let nativeUpstream: ((res: ServerResponse) => void) | undefined;
+  const server = createServer((req, res) => {
+    const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+    if (pathname === "/native-gravatar" && nativeUpstream) {
+      nativeUpstream(res);
+      return;
+    }
+    const promise = handleUserProfileAvatarHttpRequest(req, res, pathname, {
+      auth: { mode: "none", allowTailscale: false },
+    });
+    handled.set(pathname, { response: res, promise });
+    void promise.catch((error: unknown) => {
+      res.destroy(error instanceof Error ? error : new Error(String(error)));
+    });
+  });
+  let origin: string;
+
+  beforeAll(async () => {
+    origin = await listenLoopback(server);
+  });
+
+  afterAll(() => closeHttpServer(server));
+
+  beforeEach(() => {
+    fetchImpl.mockReset();
+    vi.stubGlobal("fetch", fetchImpl);
+    profileFixture.mockReset().mockImplementation((id: string) => ({
+      id,
+      emails: [`${id}@example.test`],
+    }));
+    authorizeControlUiReadRequestOrReply
+      .mockReset()
+      .mockImplementation(({ res }: { res: ServerResponse }) => readAuthority(res));
+  });
+
+  afterEach(async () => {
+    for (const producer of producers) {
+      producer.resolve(imageResponse());
+    }
+    await Promise.allSettled([...handled.values()].map(({ promise }) => promise));
+    for (const client of clients) {
+      client.destroy();
+    }
+    clients.length = 0;
+    producers.length = 0;
+    handled.clear();
+    nativeUpstream = undefined;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  function startRequest(profileId: string) {
+    const pathname = `/api/users/${profileId}/avatar`;
+    const result = createDeferred<{ statusCode?: number; body?: Buffer; error?: Error }>();
+    const client = request(`${origin}${pathname}`, { agent: false }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.once("end", () =>
+        result.resolve({ statusCode: response.statusCode, body: Buffer.concat(chunks) }),
+      );
+      response.once("error", (error) => result.resolve({ error }));
+    });
+    client.once("error", (error) => result.resolve({ error }));
+    clients.push(client);
+    client.end();
+    return { client, pathname, result: result.promise };
+  }
+
+  it("cancels an oversized native Gravatar response without retaining its connection", async ({
+    signal,
+  }) => {
+    const closed = createDeferred();
+    nativeUpstream = (res) => {
+      res.once("close", () => closed.resolve());
+      res.writeHead(200, { "content-type": "image/png" });
+      res.write(Buffer.alloc(600_000));
+      res.write(Buffer.alloc(600_000));
+    };
+    // Only the fixed upstream URL is redirected; fetch, body cancellation and socket are native.
+    vi.unstubAllGlobals();
+    const nativeFetch = fetch;
+    fetchImpl.mockImplementation((_input, init) => nativeFetch(`${origin}/native-gravatar`, init));
+    vi.stubGlobal("fetch", fetchImpl);
+
+    const result = await withinTest(startRequest("native-overflow").result, signal);
+    expect(result.statusCode).toBe(502);
+    expect(result.body?.toString()).toBe(
+      JSON.stringify({ ok: false, error: { type: "avatar_upstream_unavailable" } }),
+    );
+    await withinTest(closed.promise, signal);
+  });
+
+  it.each(["deadline", "disconnect"] as const)(
+    "keeps a fresh HTTP waiter alive after the older waiter's %s",
+    async (cause) => {
+      const totalDeadlines: AbortController[] = [];
+      if (cause === "deadline") {
+        const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+        vi.spyOn(AbortSignal, "timeout").mockImplementation((delay) => {
+          if (delay !== 6_000) {
+            return nativeTimeout(delay);
+          }
+          const controller = new AbortController();
+          totalDeadlines.push(controller);
+          return controller.signal;
+        });
+      }
+      profileFixture.mockImplementation((id: string) => ({
+        id,
+        emails:
+          id === "deadline-older"
+            ? ["deadline-primary@example.test", "deadline-shared@example.test"]
+            : [`${cause}-shared@example.test`],
+      }));
+      const shared = createDeferred<Response>();
+      producers.push(shared);
+      if (cause === "deadline") {
+        fetchImpl.mockResolvedValueOnce(new Response(null, { status: 404 }));
+      }
+      fetchImpl.mockImplementation((_input, init) =>
+        racePromiseWithAbortSignal(shared.promise, init?.signal ?? undefined),
+      );
+      const expectedFetches = cause === "deadline" ? 2 : 1;
+      const older = startRequest(`${cause}-older`);
+      await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches));
+      const fresh = startRequest(`${cause}-fresh`);
+      if (cause === "deadline") {
+        await vi.waitFor(() => expect(totalDeadlines).toHaveLength(2));
+        expectDefined(totalDeadlines[0], "older deadline").abort();
+        expect((await older.result).statusCode).toBe(502);
+      } else {
+        await vi.waitFor(() => expect(handled.has(fresh.pathname)).toBe(true));
+        const first = expectDefined(handled.get(older.pathname), "first HTTP waiter");
+        const end = vi.spyOn(first.response, "end");
+        const writeHead = vi.spyOn(first.response, "writeHead");
+        let settled = false;
+        void first.promise.then(() => {
+          settled = true;
+        });
+        const closed = once(first.response, "close");
+        older.client.destroy();
+        await closed;
+        await setImmediate();
+        expect(settled).toBe(true);
+        expect([writeHead.mock.calls, end.mock.calls]).toEqual([[], []]);
+      }
+      shared.resolve(imageResponse());
+      expect(await fresh.result).toEqual({ statusCode: 200, body: Buffer.from(imageBytes) });
+      expect(fetchImpl).toHaveBeenCalledTimes(expectedFetches);
+    },
+  );
+
+  it("does not start a Gravatar fetch for a client already disconnected during authorization", async () => {
+    const authorized = createDeferred<ReturnType<typeof bindHttpResponseAuthority> | null>();
+    authorizeControlUiReadRequestOrReply.mockReturnValue(authorized.promise);
+    fetchImpl.mockResolvedValue(imageResponse());
+    const disconnected = startRequest("disconnected-before-lookup");
+    try {
+      await vi.waitFor(() => expect(handled.has(disconnected.pathname)).toBe(true));
+      const first = expectDefined(handled.get(disconnected.pathname), "held authorization");
+      const writeHead = vi.spyOn(first.response, "writeHead");
+      const end = vi.spyOn(first.response, "end");
+      const closed = once(first.response, "close");
+      disconnected.client.destroy();
+      await closed;
+      authorized.resolve(readAuthority(first.response));
+      await expect(first.promise).rejects.toThrow("HTTP request authority expired");
+
+      expect(fetchImpl).not.toHaveBeenCalled();
+      expect([writeHead.mock.calls, end.mock.calls]).toEqual([[], []]);
+    } finally {
+      authorized.resolve(null);
+    }
+  });
+});

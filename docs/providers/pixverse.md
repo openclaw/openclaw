@@ -26,8 +26,11 @@ OpenClaw provides `pixverse` as an official external plugin for hosted PixVerse 
   <Step title="Install the plugin">
     ```bash
     openclaw plugins install @openclaw/pixverse-provider
-    openclaw gateway restart
     ```
+
+    Installation applies to a running Gateway automatically; otherwise it takes effect
+    on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
+
   </Step>
   <Step title="Set the API key">
     ```bash
@@ -81,7 +84,7 @@ The video provider accepts these optional provider-specific keys:
 
 | Option                               | Type   | Effect                                        |
 | ------------------------------------ | ------ | --------------------------------------------- |
-| `seed`                               | number | Deterministic seed, 0 to 2147483647           |
+| `seed`                               | number | Seed for repeatable output, 0 to 2147483647   |
 | `negativePrompt` / `negative_prompt` | string | Negative prompt                               |
 | `quality`                            | string | PixVerse quality such as `720p`               |
 | `motionMode` / `motion_mode`         | string | Image-to-video motion mode (default `normal`) |

@@ -1,5 +1,7 @@
 /** Resolves isolated cron delivery requests into concrete outbound targets. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { resolveChannelAllowFrom } from "../../channels/account-resolution.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { stripTargetProviderPrefix } from "../../infra/outbound/channel-target-prefix.js";
@@ -11,8 +13,10 @@ import { resolveSessionDeliveryTarget } from "../../infra/outbound/targets-sessi
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
-import { hasExplicitCronDeliveryTarget, type CronDeliveryPlan } from "../delivery-plan.js";
-import type { CronJob } from "../types.js";
+import type { CronDeliveryPlan } from "../delivery-plan.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
+import type { CronStoredJob } from "../types.js";
+import { selectCronRouteCurrentSessionKey } from "./delivery-route-session-key.js";
 import {
   readCronDeliveryTargetContexts,
   type CronDeliveryContextRequest,
@@ -28,6 +32,7 @@ export type DeliveryTargetResolution =
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
+      sessionRoute?: OutboundSessionRoute;
     }
   | {
       ok: false;
@@ -37,6 +42,8 @@ export type DeliveryTargetResolution =
       threadId?: string | number;
       mode: "explicit" | "implicit";
       error: Error;
+      sourceConversationUnavailable?: true;
+      deliverySuppressionReason?: "channel_transform";
     };
 
 // Explicit destinations remain owed when channel selection fails; remembered
@@ -59,12 +66,12 @@ async function resolveOutboundTargetWithRuntime(
   params: Parameters<typeof tryResolveLoadedOutboundTarget>[0],
 ) {
   try {
-    const loaded = tryResolveLoadedOutboundTarget(params);
+    const loaded = await tryResolveLoadedOutboundTarget(params);
     if (loaded) {
       return loaded;
     }
     const { resolveOutboundTarget } = await targetsRuntimeLoader.load();
-    return resolveOutboundTarget({ ...params, allowBootstrap: true });
+    return await resolveOutboundTarget({ ...params, allowBootstrap: true });
   } catch (err) {
     return {
       ok: false as const,
@@ -79,6 +86,37 @@ const channelSelectionRuntimeLoader = createLazyImportLoader(
 const deliveryTargetRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-target.runtime.js"),
 );
+const sessionGenerationRuntimeLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-delivery-generation.js"),
+);
+
+export type CronDeliverySourceGeneration = Awaited<
+  ReturnType<
+    typeof import("../../config/sessions/session-delivery-generation.js").prepareSessionGenerationFactsBatch
+  >
+>[number];
+
+/** Prepare preview source leases together; callers release every successful preparation. */
+export async function prepareCronDeliverySourceGenerations(
+  cfg: OpenClawConfig,
+  requests: readonly {
+    agentId: string;
+    sourceConversation: NonNullable<CronStoredJob["sourceConversation"]>;
+  }[],
+) {
+  if (requests.length === 0) {
+    return [];
+  }
+  const { prepareSessionGenerationFactsBatch } = await sessionGenerationRuntimeLoader.load();
+  return prepareSessionGenerationFactsBatch(
+    requests.map(({ agentId, sourceConversation }) => ({
+      agentId,
+      storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+      ...sourceConversation,
+      lifecycleRevision: sourceConversation.lifecycleRevision ?? null,
+    })),
+  );
+}
 
 /** Read one preview batch after runtime loading, then release all source read ownership. */
 export async function prepareCronDeliveryTargetContexts(
@@ -106,26 +144,6 @@ function routesSharePeer(left?: OutboundSessionRoute | null, right?: OutboundSes
   );
 }
 
-function shouldCarrySessionThread(params: {
-  resolved: ReturnType<typeof resolveSessionDeliveryTarget>;
-  explicitTo?: string;
-  route?: OutboundSessionRoute | null;
-  lastRoute?: OutboundSessionRoute | null;
-}) {
-  if (!isNonEmptyThreadId(params.resolved.threadId)) {
-    return false;
-  }
-  if (!params.explicitTo) {
-    return (
-      params.resolved.channel === params.resolved.lastChannel &&
-      params.resolved.to === params.resolved.lastTo
-    );
-  }
-  // Explicit targets may reuse a stored thread only when both targets resolve
-  // to the same channel peer; otherwise cron could reply into a stale thread.
-  return routesSharePeer(params.route, params.lastRoute);
-}
-
 function stripSelectedProviderPrefix(params: { channel: string; to?: string }): string | undefined {
   const trimmed = params.to?.trim();
   if (!trimmed) {
@@ -135,40 +153,113 @@ function stripSelectedProviderPrefix(params: { channel: string; to?: string }): 
   return stripped || undefined;
 }
 
-function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget): boolean {
-  return target.resolutionSource === "normalized";
-}
-
 /** Resolves cron delivery config into a concrete channel target and optional thread/account. */
 export async function resolveDeliveryTarget(
   cfg: OpenClawConfig,
   agentId: string,
-  jobPayload: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId"> &
-    Partial<Pick<CronJob, "sessionKey" | "sessionTarget">>,
+  jobPayload: Pick<
+    CronDeliveryPlan,
+    "target" | "directPolicy" | "channel" | "to" | "threadId" | "accountId"
+  > &
+    Partial<Pick<CronStoredJob, "sessionKey" | "sessionTarget" | "sourceConversation">>,
   options?: {
     dryRun?: boolean;
     inheritSessionThread?: boolean;
     sessionContext?: CronDeliveryTargetContext;
+    sourceGeneration?: CronDeliverySourceGeneration;
   },
 ): Promise<DeliveryTargetResolution> {
   const requestedChannel = typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
   const explicitTo = typeof jobPayload.to === "string" ? jobPayload.to : undefined;
   const allowMismatchedLastTo = requestedChannel === "last";
   const deliveryTargetRuntime = await deliveryTargetRuntimeLoader.load();
+  const source = jobPayload.sourceConversation;
+  if (source && !hasExplicitCronDeliveryTarget(jobPayload)) {
+    try {
+      const preparedGeneration = options?.sourceGeneration;
+      if (preparedGeneration && !preparedGeneration.ok) {
+        throw preparedGeneration.error;
+      }
+      const generation =
+        preparedGeneration?.value ??
+        (await (
+          await sessionGenerationRuntimeLoader.load()
+        ).prepareSessionGenerationFacts({
+          agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          ...source,
+          lifecycleRevision: source.lifecycleRevision ?? null,
+        }));
+      try {
+        generation.assertCurrent();
+      } finally {
+        if (!preparedGeneration) {
+          generation.release();
+        }
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        mode: "implicit",
+        sourceConversationUnavailable: true,
+        error: new Error(`Creating conversation unavailable: ${formatErrorMessage(error)}`),
+      };
+    }
+  }
 
   const sessionContext =
     options?.sessionContext ??
-    (() => {
-      const result = readCronDeliveryTargetContexts(cfg, [
-        { agentId, sessionKey: jobPayload.sessionKey },
-      ])[0]!;
+    (await (async () => {
+      const result = (
+        await readCronDeliveryTargetContexts(cfg, [{ agentId, sessionKey: jobPayload.sessionKey }])
+      )[0]!;
       if (!result.ok) {
         throw result.error;
       }
       return result.value;
-    })();
-  const { mainSessionKey, rawSessionKey, threadSessionKey, main, usedSharedMainFallback } =
-    sessionContext;
+    })());
+  const { rawSessionKey, threadSessionKey, usedSharedMainFallback } = sessionContext;
+  const hasConversationCompletion =
+    jobPayload.sessionTarget === "current" || jobPayload.sourceConversation !== undefined;
+  // A missing creating conversation cannot inherit another conversation's shared route.
+  const main =
+    hasConversationCompletion && usedSharedMainFallback ? undefined : sessionContext.main;
+
+  if (jobPayload.target === "owner") {
+    const resolved = await deliveryTargetRuntime.resolveProactiveDeliveryTargetWithSessionRoute({
+      cfg,
+      agentId,
+      entry: main,
+      currentSessionKey: threadSessionKey,
+      policy: {
+        target: "owner",
+        channel: requestedChannel === "last" ? undefined : requestedChannel,
+        accountId: jobPayload.accountId,
+        directPolicy: jobPayload.directPolicy,
+      },
+    });
+    return resolved.channel !== "none" && resolved.to
+      ? {
+          ok: true,
+          channel: resolved.channel,
+          to: resolved.to,
+          accountId: resolved.accountId,
+          threadId: resolved.threadId,
+          mode: "explicit",
+        }
+      : {
+          ok: false,
+          channel: resolved.channel,
+          accountId: resolved.accountId,
+          mode: "explicit",
+          ...(resolved.reason === "dm-blocked"
+            ? { deliverySuppressionReason: "channel_transform" as const }
+            : {}),
+          error: new Error(
+            `Owner delivery unavailable (${resolved.reason ?? "no-route"}); configure an authorized owner DM or edit this automation's delivery`,
+          ),
+        };
+  }
 
   const preliminary = resolveSessionDeliveryTarget({
     entry: main,
@@ -183,11 +274,8 @@ export async function resolveDeliveryTarget(
   if (!preliminary.channel) {
     if (preliminary.lastChannel) {
       fallbackChannel = preliminary.lastChannel;
-    } else if (
-      jobPayload.sessionTarget !== "current" ||
-      hasExplicitCronDeliveryTarget(jobPayload)
-    ) {
-      // Current jobs without an external source route complete in their own
+    } else if (!hasConversationCompletion || hasExplicitCronDeliveryTarget(jobPayload)) {
+      // Bound jobs without an external source route complete in their creating
       // conversation; an unrelated configured channel cannot create a delivery obligation.
       try {
         const { resolveMessageChannelSelection } = await channelSelectionRuntimeLoader.load();
@@ -220,16 +308,14 @@ export async function resolveDeliveryTarget(
 
   // Prefer an explicit accountId from the job's delivery config (set via
   // --account on cron add/edit). Fall back to the session's lastAccountId,
-  // then to the agent's bound account from bindings config.
+  // then to the agent's bound account and the channel's default account.
   const explicitAccountId =
     typeof jobPayload.accountId === "string" ? jobPayload.accountId.trim() || undefined : undefined;
   let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
-    accountId = deliveryTargetRuntime.resolveFirstBoundAccountId({
-      cfg,
-      channelId: channel,
-      agentId,
-    });
+    accountId =
+      deliveryTargetRuntime.resolveFirstBoundAccountId({ cfg, channelId: channel, agentId }) ??
+      deliveryTargetRuntime.resolveChannelDefaultAccountIdForDelivery({ cfg, channel, agentId });
   }
 
   if (!channel) {
@@ -249,16 +335,24 @@ export async function resolveDeliveryTarget(
   const explicitThreadId = isNonEmptyThreadId(jobPayload.threadId)
     ? jobPayload.threadId
     : undefined;
+  const failTarget = (error: Error): Extract<DeliveryTargetResolution, { ok: false }> => ({
+    ok: false,
+    channel,
+    to: undefined,
+    accountId,
+    threadId: explicitThreadId,
+    mode,
+    error,
+  });
 
   let effectiveAllowFrom: string[] | undefined;
   if (mode === "implicit") {
     const { getLoadedChannelPluginForRead, mapAllowFromEntries } = deliveryTargetRuntime;
     const channelPlugin = getLoadedChannelPluginForRead(channel);
     const resolvedAccountId = normalizeAccountId(accountId);
-    const configuredAllowFromRaw = channelPlugin?.config.resolveAllowFrom?.({
-      cfg,
-      accountId: resolvedAccountId,
-    });
+    const configuredAllowFromRaw = channelPlugin
+      ? await resolveChannelAllowFrom({ plugin: channelPlugin, cfg, accountId: resolvedAccountId })
+      : undefined;
     const configuredAllowFrom = configuredAllowFromRaw
       ? mapAllowFromEntries(configuredAllowFromRaw)
       : [];
@@ -282,20 +376,9 @@ export async function resolveDeliveryTarget(
     }
   }
 
-  // Issue #91613: refuse a KEYLESS implicit isolated cron whose delivery target was only inherited
-  // from the SHARED agent-main session bucket's last recipient. That bucket is last-writer-wins
-  // across every conversation the agent handles, so the inherited `lastTo` can be a different
-  // conversation's room — the wrong room — which the durable delivery queue then replays verbatim
-  // after a restart. Returning ok:false (instead of a separate flag callers must remember to check)
-  // routes the refusal through the delivery dispatch !ok gate, the failure-notification path, and
-  // the delivery preview alike: every consumer honors ok:false, the dispatch gate refuses the send
-  // WITHOUT reaching the durable enqueue, so recovery replays nothing. (The agent turn still runs;
-  // only delivery is refused, at the dispatch gate — there is no pre-execution preflight.) Narrowed:
-  //   - keyless only (`!rawSessionKey`) — a cron with its own session key/target resolves via that
-  //     session, not the shared bucket, so it is never refused here;
-  //   - evaluated AFTER the allowFrom reroute above (`toCandidate === resolved.lastTo`) — a cron
-  //     whose stale target was rerouted to a configured allow-from peer is delivering to that
-  //     allowed peer, not the inherited room, so it is not refused.
+  // The shared main bucket is last-writer-wins across conversations (#91613).
+  // Refuse keyless inheritance before durable enqueue, but allow a target
+  // rerouted by allowFrom above or owned by the cron's explicit session.
   if (
     !rawSessionKey &&
     mode === "implicit" &&
@@ -304,21 +387,15 @@ export async function resolveDeliveryTarget(
     toCandidate != null &&
     toCandidate === resolved.lastTo
   ) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId: explicitThreadId,
-      mode,
-      error: new Error(
+    return failTarget(
+      new Error(
         "Refusing implicit isolated cron delivery: the target would be inherited from the shared " +
           "agent-main session bucket's last recipient, which is ambiguous across conversations and " +
           "can deliver to the wrong room (and replay there after a restart). Set delivery.channel " +
           "and delivery.to explicitly, or run the cron from a session that carries its own " +
           "delivery context.",
       ),
-    };
+    );
   }
 
   const preResolvedRouteTargetCandidate = toCandidate;
@@ -332,15 +409,7 @@ export async function resolveDeliveryTarget(
   });
   if (!docked.ok) {
     if (!toCandidate || !isReservedTargetLiteralError(docked.error)) {
-      return {
-        ok: false,
-        channel,
-        to: undefined,
-        accountId,
-        threadId: explicitThreadId,
-        mode,
-        error: docked.error,
-      };
+      return failTarget(docked.error);
     }
   } else {
     toCandidate = docked.to;
@@ -353,56 +422,54 @@ export async function resolveDeliveryTarget(
     accountId,
   });
   if (!targetResolution.ok) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId: explicitThreadId,
-      mode,
-      error: targetResolution.error,
-    };
+    return failTarget(targetResolution.error);
   }
   const resolvedTarget: ResolvedMessagingTarget | undefined = targetResolution.target;
   const routeTargetCandidate =
     resolvedTarget.source === "directory"
       ? resolvedTarget.to
       : (preResolvedRouteTargetCandidate ?? toCandidate);
-  const selectedTarget = shouldStripResolvedTargetProviderPrefix(resolvedTarget)
-    ? stripSelectedProviderPrefix({
-        channel,
-        to: resolvedTarget.to,
-      })
-    : resolvedTarget.to.trim();
+  const selectedTarget =
+    resolvedTarget.resolutionSource === "normalized"
+      ? stripSelectedProviderPrefix({
+          channel,
+          to: resolvedTarget.to,
+        })
+      : resolvedTarget.to.trim();
   if (!selectedTarget) {
-    return {
-      ok: false,
-      channel,
-      to: undefined,
-      accountId,
-      threadId: explicitThreadId,
-      mode,
-      error: new Error("Target is required"),
-    };
+    return failTarget(new Error("Target is required"));
   }
   toCandidate = selectedTarget;
 
-  const route = await (async () => {
+  const resolveRoute = async (
+    targetParams: Omit<
+      Parameters<typeof deliveryTargetRuntime.resolveOutboundSessionRouteForDelivery>[0],
+      "cfg" | "channel" | "agentId" | "currentSessionKey"
+    >,
+  ) => {
     try {
       return await deliveryTargetRuntime.resolveOutboundSessionRouteForDelivery({
         cfg,
         channel,
         agentId,
-        accountId,
-        target: routeTargetCandidate,
-        resolvedTarget,
-        threadId: explicitThreadId,
-        currentSessionKey: threadSessionKey ?? mainSessionKey,
+        ...targetParams,
+        currentSessionKey: selectCronRouteCurrentSessionKey(
+          rawSessionKey,
+          agentId,
+          channel,
+          targetParams.target,
+        ),
       });
     } catch {
       return null;
     }
-  })();
+  };
+  const route = await resolveRoute({
+    accountId,
+    target: routeTargetCandidate,
+    resolvedTarget,
+    threadId: explicitThreadId,
+  });
   const routeCanCanonicalizeTarget = deliveryTargetRuntime.channelCanResolveOutboundSessionRoute({
     cfg,
     channel,
@@ -418,49 +485,49 @@ export async function resolveDeliveryTarget(
       to: route.to,
     });
     if (!routeTo) {
-      return {
-        ok: false,
-        channel,
-        to: undefined,
-        accountId,
-        threadId: explicitThreadId,
-        mode,
-        error: new Error("Target is required"),
-      };
+      return failTarget(new Error("Target is required"));
     }
     toCandidate = routeTo;
   }
-  const lastTo = resolved.lastTo;
-  const lastRoute =
-    lastTo && resolved.lastChannel === channel
-      ? await (async () => {
-          try {
-            return await deliveryTargetRuntime.resolveOutboundSessionRouteForDelivery({
-              cfg,
-              channel,
-              agentId,
+  let canUseSessionThread = false;
+  if (options?.inheritSessionThread !== false && isNonEmptyThreadId(resolved.threadId)) {
+    if (explicitTo) {
+      // Only explicit targets need the previous route to prove same-peer thread inheritance.
+      const lastTo = resolved.lastTo;
+      const lastRoute =
+        lastTo && resolved.lastChannel === channel
+          ? await resolveRoute({
               accountId: resolved.lastAccountId ?? accountId,
               target: lastTo,
               threadId: resolved.lastThreadId,
-              currentSessionKey: threadSessionKey ?? mainSessionKey,
-            });
-          } catch {
-            return null;
-          }
-        })()
-      : null;
-
+            })
+          : null;
+      canUseSessionThread = routesSharePeer(route, lastRoute);
+    } else {
+      canUseSessionThread =
+        resolved.channel === resolved.lastChannel && resolved.to === resolved.lastTo;
+    }
+  }
   // Thread precedence is explicit config, route canonicalization, then same-peer session history.
-  const canUseSessionThread =
-    options?.inheritSessionThread !== false &&
-    shouldCarrySessionThread({
-      resolved,
-      explicitTo,
-      route,
-      lastRoute,
-    });
   const threadId =
     explicitThreadId ?? route?.threadId ?? (canUseSessionThread ? resolved.threadId : undefined);
+  const sessionRoute =
+    route && route.threadId === threadId
+      ? route
+      : await resolveRoute({ accountId, target: toCandidate, resolvedTarget, threadId });
+  if (
+    jobPayload.directPolicy === "block" &&
+    (resolvedTarget.kind === "user" ||
+      route?.chatType === "direct" ||
+      route?.peer.kind === "direct")
+  ) {
+    return {
+      ...failTarget(
+        new Error("Automation delivery to direct messages is blocked by delivery.directPolicy"),
+      ),
+      deliverySuppressionReason: "channel_transform",
+    };
+  }
   return {
     ok: true,
     channel,
@@ -468,5 +535,6 @@ export async function resolveDeliveryTarget(
     accountId,
     threadId,
     mode,
+    ...(sessionRoute ? { sessionRoute } : {}),
   };
 }

@@ -1,9 +1,6 @@
-// Health check adapter converts plugin health checks into doctor check records.
+import type { SecurityAuditFinding } from "../security/audit.types.js";
 import type { DoctorHealthCheck } from "./health-check-runner-types.js";
-
-export function copyHealthCheck(check: DoctorHealthCheck): DoctorHealthCheck {
-  return { ...check };
-}
+import type { HealthFinding } from "./health-checks.js";
 
 // Snapshot metadata now; method lookup and receiver remain owned by the input check.
 export function normalizeHealthCheck(check: DoctorHealthCheck): DoctorHealthCheck {
@@ -19,5 +16,18 @@ export function normalizeHealthCheck(check: DoctorHealthCheck): DoctorHealthChec
       check.repair === undefined
         ? undefined
         : (ctx, findings) => check.repair?.(ctx, findings) ?? Promise.resolve({ changes: [] }),
+  };
+}
+
+export function securityAuditFindingToHealthFinding(finding: SecurityAuditFinding): HealthFinding {
+  const [firstDetail, ...detailLines] = finding.detail.split("\n");
+  const fixHint = [...detailLines, ...(finding.remediation?.split("\n") ?? [])].join("\n");
+  return {
+    checkId: "core/doctor/security",
+    requirement: finding.checkId,
+    severity:
+      finding.severity === "critical" ? "error" : finding.severity === "warn" ? "warning" : "info",
+    message: `${finding.title}${firstDetail ? `: ${firstDetail}` : ""}`,
+    ...(fixHint ? { fixHint } : {}),
   };
 }

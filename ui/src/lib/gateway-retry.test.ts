@@ -8,13 +8,16 @@ afterEach(() => {
 
 describe("gateway retry owner", () => {
   it("backs off from 30 seconds and caps retries at five minutes", () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const owner = createGatewayRetryOwner();
     const retry = vi.fn();
 
     for (const delayMs of [30_000, 60_000, 120_000, 240_000, 300_000, 300_000]) {
       const completed = retry.mock.calls.length;
       owner.schedule(retry);
+      owner.pause();
+      vi.setSystemTime(Date.now() + (completed % 2 ? -3_600_000 : 3_600_000));
+      owner.resume();
       vi.advanceTimersByTime(delayMs - 1);
       expect(retry).toHaveBeenCalledTimes(completed);
       vi.advanceTimersByTime(1);
@@ -22,37 +25,17 @@ describe("gateway retry owner", () => {
     }
   });
 
-  it("cancels stale timers without resetting the current backoff", () => {
-    vi.useFakeTimers();
+  it.each(["cancel", "reset"] as const)("clears stale timers on %s", (mode) => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const owner = createGatewayRetryOwner();
     const staleRetry = vi.fn();
     const currentRetry = vi.fn();
-
-    owner.schedule(staleRetry);
-    owner.cancel();
-    expect(vi.getTimerCount()).toBe(0);
-
-    owner.schedule(currentRetry);
-    vi.advanceTimersByTime(59_999);
-    expect(staleRetry).not.toHaveBeenCalled();
-    expect(currentRetry).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
-    expect(currentRetry).toHaveBeenCalledOnce();
-  });
-
-  it("resets active timers and restarts the initial delay", () => {
-    vi.useFakeTimers();
-    const owner = createGatewayRetryOwner();
-    const staleRetry = vi.fn();
-    const currentRetry = vi.fn();
-
     owner.schedule(staleRetry);
     vi.advanceTimersByTime(10_000);
-    owner.reset();
+    owner[mode]();
     expect(vi.getTimerCount()).toBe(0);
-
     owner.schedule(currentRetry);
-    vi.advanceTimersByTime(29_999);
+    vi.advanceTimersByTime((mode === "cancel" ? 60_000 : 30_000) - 1);
     expect(staleRetry).not.toHaveBeenCalled();
     expect(currentRetry).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);

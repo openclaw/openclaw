@@ -15,7 +15,7 @@ Adds StepFun, StepFun Plan model provider support to OpenClaw.
 ## Distribution
 
 - Package: `@openclaw/stepfun-provider`
-- Install route: npm or ClawHub: `clawhub:@openclaw/stepfun-provider`
+- Install route: npm or ClawHub: `@openclaw/stepfun-provider`
 
 ## Surface
 

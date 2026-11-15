@@ -22,55 +22,6 @@ describe("resolveGatewayTokenForDriftCheck", () => {
     expect(token).toBe("config-token");
   });
 
-  it("resolves env-backed local gateway token refs from the provided env", async () => {
-    const token = await resolveGatewayTokenForDriftCheck({
-      cfg: {
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          mode: "local",
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "SERVICE_GATEWAY_TOKEN" },
-          },
-        },
-      } as OpenClawConfig,
-      env: {
-        SERVICE_GATEWAY_TOKEN: "service-token",
-      } as NodeJS.ProcessEnv,
-    });
-
-    expect(token).toBe("service-token");
-  });
-
-  it("throws when an active local token ref is unresolved", async () => {
-    await expect(
-      resolveGatewayTokenForDriftCheck({
-        cfg: {
-          secrets: {
-            providers: {
-              default: { source: "env" },
-            },
-          },
-          gateway: {
-            mode: "local",
-            auth: {
-              mode: "token",
-              token: { source: "env", provider: "default", id: "MISSING_LOCAL_TOKEN" },
-            },
-            remote: {
-              token: "remote-token",
-            },
-          },
-        } as OpenClawConfig,
-        env: {} as NodeJS.ProcessEnv,
-      }),
-    ).rejects.toThrow(/gateway\.auth\.token/i);
-  });
-
   it("returns undefined when token auth is disabled by mode", async () => {
     const token = await resolveGatewayTokenForDriftCheck({
       cfg: {

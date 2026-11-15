@@ -1,4 +1,3 @@
-// Line helper module supports config schema behavior.
 import {
   ChannelDeliveryStreamingConfigSchema,
   DmPolicySchema,
@@ -56,7 +55,7 @@ const LineGroupConfigSchema = buildGroupEntrySchema().omit({
   toolsBySender: true,
 });
 
-const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
+export const LineAccountConfigSchema = LineCommonConfigSchemaBase.extend({
   groups: z.record(z.string(), LineGroupConfigSchema.optional()).optional(),
 }).strict();
 
@@ -81,5 +80,3 @@ export const LineChannelConfigSchema = buildChannelConfigSchema(LineConfigSchema
     },
   },
 });
-
-export type LineConfigSchemaType = z.infer<typeof LineConfigSchema>;

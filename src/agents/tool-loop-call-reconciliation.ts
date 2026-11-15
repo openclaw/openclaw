@@ -17,10 +17,10 @@ export function reconcileToolCallExecutionParams(
     runId?: string;
     warningThreshold: number;
   },
-): { active: boolean; count: number; variantCount: number } {
+): boolean {
   const history = state.toolCallHistory;
   if (!history) {
-    return { active: false, count: 0, variantCount: 0 };
+    return false;
   }
 
   const runId = normalizeRunId(params.runId);
@@ -46,11 +46,8 @@ export function reconcileToolCallExecutionParams(
       .slice(0, index)
       .filter((record) => normalizeRunId(record.runId) === runId);
     const churn = getArgumentChurnNoProgressStreak(scopedHistory, params.toolName, argsHash);
-    return {
-      active: churn.count >= params.warningThreshold,
-      ...churn,
-    };
+    return churn.count >= params.warningThreshold;
   }
 
-  return { active: false, count: 0, variantCount: 0 };
+  return false;
 }

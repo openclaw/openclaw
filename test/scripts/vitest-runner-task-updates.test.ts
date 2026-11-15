@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { describe, expect, it, onTestFinished } from "vitest";
+import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createTaskUpdateFixture } from "../fixtures/vitest-runner-task-updates.mjs";
+
+const testNodeExecPath = resolveTestNodeExecPath();
 
 type TaskResult = { name: string; state: string };
 type Batch = {
@@ -27,7 +30,7 @@ describe("Vitest runner trailing task updates", () => {
     const fixture = createTaskUpdateFixture(firstFireAt);
     onTestFinished(() => fs.rmSync(fixture.root, { recursive: true, force: true }));
     // One native process owns its threads; a deadline cannot orphan a nested CLI.
-    const child = spawnSync(process.execPath, fixture.args, {
+    const child = spawnSync(testNodeExecPath, fixture.args, {
       cwd: fixture.root,
       env: fixture.env,
       encoding: "utf8",

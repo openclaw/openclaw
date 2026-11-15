@@ -3,37 +3,8 @@ import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
   DiagnosticTraceContext,
-} from "../api.js";
-import {
-  isValidDiagnosticSpanId,
-  isValidDiagnosticTraceFlags,
-  isValidDiagnosticTraceId,
-} from "../api.js";
-
-export function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  const candidate = value as Partial<DiagnosticTraceContext>;
-  if (!isValidDiagnosticTraceId(candidate.traceId)) {
-    return undefined;
-  }
-  if (candidate.spanId !== undefined && !isValidDiagnosticSpanId(candidate.spanId)) {
-    return undefined;
-  }
-  if (candidate.parentSpanId !== undefined && !isValidDiagnosticSpanId(candidate.parentSpanId)) {
-    return undefined;
-  }
-  if (candidate.traceFlags !== undefined && !isValidDiagnosticTraceFlags(candidate.traceFlags)) {
-    return undefined;
-  }
-  return {
-    traceId: candidate.traceId,
-    ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
-    ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
-    ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
-  };
-}
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { normalizeDiagnosticTraceContext } from "openclaw/plugin-sdk/diagnostic-runtime";
 
 function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
   const parsed = Number.parseInt(traceFlags ?? "00", 16);
@@ -41,25 +12,15 @@ function traceFlagsToOtel(traceFlags: string | undefined): TraceFlags {
 }
 
 export function contextForTraceContext(traceContext: DiagnosticTraceContext | undefined) {
-  const normalized = normalizeTraceContext(traceContext);
-  if (!normalized?.spanId) {
+  if (!traceContext?.spanId) {
     return undefined;
   }
   return trace.setSpanContext(otelContextApi.active(), {
-    traceId: normalized.traceId,
-    spanId: normalized.spanId,
-    traceFlags: traceFlagsToOtel(normalized.traceFlags),
+    traceId: traceContext.traceId,
+    spanId: traceContext.spanId,
+    traceFlags: traceFlagsToOtel(traceContext.traceFlags),
     isRemote: true,
   });
-}
-
-export function contextForTrustedTraceContext(
-  evt: DiagnosticEventPayload,
-  metadata: DiagnosticEventMetadata,
-) {
-  return metadata.trusted || metadata.trustedTraceContext === true
-    ? contextForTraceContext(evt.trace)
-    : undefined;
 }
 
 export function normalizedTrustedTraceContext(
@@ -67,26 +28,6 @@ export function normalizedTrustedTraceContext(
   metadata: DiagnosticEventMetadata,
 ): DiagnosticTraceContext | undefined {
   return metadata.trusted || metadata.trustedTraceContext === true
-    ? normalizeTraceContext(evt.trace)
+    ? normalizeDiagnosticTraceContext(evt.trace)
     : undefined;
-}
-
-export function addTraceAttributes(
-  attributes: Record<string, string | number | boolean>,
-  traceContext: DiagnosticTraceContext | undefined,
-): void {
-  const normalized = normalizeTraceContext(traceContext);
-  if (!normalized) {
-    return;
-  }
-  attributes["openclaw.traceId"] = normalized.traceId;
-  if (normalized.spanId) {
-    attributes["openclaw.spanId"] = normalized.spanId;
-  }
-  if (normalized.parentSpanId) {
-    attributes["openclaw.parentSpanId"] = normalized.parentSpanId;
-  }
-  if (normalized.traceFlags) {
-    attributes["openclaw.traceFlags"] = normalized.traceFlags;
-  }
 }

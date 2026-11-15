@@ -10,7 +10,6 @@ struct SystemSettingsURLSupportTests {
         (.location, "Privacy_LocationServices"),
         (.accessibility, "Privacy_Accessibility"),
         (.screenRecording, "Privacy_ScreenCapture"),
-        (.appleScript, "Privacy_Automation"),
         (.notifications, "com.apple.Notifications-Settings.extension"),
     ])
     func `explicit settings links start at the capability pane`(capability: Capability, pane: String) throws {

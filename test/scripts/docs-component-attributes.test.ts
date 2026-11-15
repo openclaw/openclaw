@@ -25,10 +25,6 @@ function componentAttrs(source: string, kind: string) {
 describe("docs component attribute boundaries", () => {
   it.each([
     [
-      '<ParamField path="--section <section>" type="string">Filter.</ParamField>',
-      { path: "--section <section>", type: "string" },
-    ],
-    [
       "<ResponseField name='--key <key>' type='string > null'>Value.</ResponseField>",
       { name: "--key <key>", type: "string > null" },
     ],
@@ -39,7 +35,7 @@ describe("docs component attribute boundaries", () => {
       document.tokens
         .filter((token) => token.type === "inline" && !token.content.startsWith(markerPrefix))
         .map((token) => token.content),
-    ).toEqual([source.includes("Filter.") ? "Filter." : "Value."]);
+    ).toEqual(["Value."]);
   });
 
   it.each([

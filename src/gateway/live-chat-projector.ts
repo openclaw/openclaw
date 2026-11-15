@@ -1,21 +1,24 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import {
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../auto-reply/tokens.js";
-import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
+  INTERNAL_RUNTIME_CONTEXT_BEGIN,
+  INTERNAL_RUNTIME_CONTEXT_END,
+  stripInternalRuntimeContext,
+} from "../agents/internal-runtime-context.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
+import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
-import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import {
+  createConditionalTextProjector,
+  createTextProjection,
+  type TextFilter,
+  type TextProjection,
+} from "../shared/text/text-projection.js";
+import {
+  inlineDirectiveDisplayTextFilter,
+  stripInlineDirectiveTagsForDisplay,
+} from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
-import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-  stripSuppressedControlReplyToken,
-} from "./control-reply-text.js";
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
@@ -44,63 +47,118 @@ export function capLiveAssistantText(snapshot: AssistantTextSnapshot): string {
 /** Removes runtime-only context/directive tags from the merged live assistant buffer. */
 export function normalizeLiveAssistantBufferedText(
   text: string,
-  options?: { final?: boolean; managedMediaUrls?: readonly string[] },
+  options?: {
+    final?: boolean;
+    managedMediaUrls?: readonly string[];
+  },
 ): string {
   const normalized = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
-  const trailing = options?.final
-    ? { text: normalized, tail: "" }
-    : splitTrailingDirective(normalized);
-  const parsedTail = trailing.tail
-    ? splitMediaFromOutput(trailing.tail, {
-        extractAudioDirectives: false,
-        extractMarkdownImages: false,
-      })
-    : undefined;
-  // Hold an ambiguous final line until it is either a client-renderable legacy
-  // reference or a relative pipeline directive that the display projection removes.
-  const withoutPendingMediaTail =
-    parsedTail?.mediaUrls?.length &&
-    parsedTail.mediaUrls.every((url) => !isRelativeAssistantMediaReference(url))
-      ? normalized
-      : trailing.text;
   return stripAssistantMediaDirectivesForDisplay(
-    withoutPendingMediaTail,
+    options?.final ? normalized : stripPendingLiveAssistantTail(normalized),
     options?.managedMediaUrls ?? [],
   );
 }
 
-/** Projects buffered assistant text into display text or a suppressed/pending state. */
-export function projectLiveAssistantBufferedText(
-  rawText: string,
-  options?: { suppressLeadFragments?: boolean },
-): {
+function stripPendingLiveAssistantTail(text: string): string {
+  const trailing = splitTrailingDirective(text);
+  const parsedTail = trailing.tail
+    ? splitMediaOutput(trailing.tail, {
+        extractAudioDirectives: false,
+      })
+    : undefined;
+  // Hold an ambiguous final line until it is either a client-renderable legacy
+  // reference or a relative pipeline directive that the display projection removes.
+  return parsedTail?.mediaUrls?.length &&
+    parsedTail.mediaUrls.every((url) => !isRelativeAssistantMediaReference(url))
+    ? text
+    : trailing.text;
+}
+
+const pendingLiveAssistantTailFilter: TextFilter = {
+  transform: stripPendingLiveAssistantTail,
+  create: () => {
+    let previousChar = "";
+    let openBrackets = false;
+    let possibleMediaLine = true;
+    let mediaPrefixLength = 0;
+    return createConditionalTextProjector(stripPendingLiveAssistantTail, (input) => {
+      for (const char of input.delta ?? input.text) {
+        if (previousChar === "[" && char === "[") {
+          openBrackets = true;
+        } else if (previousChar === "]" && char === "]") {
+          openBrackets = false;
+        }
+        previousChar = char;
+        if (char === "\n") {
+          possibleMediaLine = true;
+          mediaPrefixLength = 0;
+        } else if (possibleMediaLine && mediaPrefixLength < 5) {
+          if (mediaPrefixLength === 0 && /\s/u.test(char)) {
+            continue;
+          }
+          possibleMediaLine = char.toUpperCase() === "MEDIA"[mediaPrefixLength];
+          if (possibleMediaLine) {
+            mediaPrefixLength += 1;
+          }
+        }
+      }
+      // These are negative probes only. The canonical parser still decides whether
+      // a bracket or a MEDIA-prefixed line is an incomplete directive or visible text.
+      return openBrackets || previousChar === "[" || (possibleMediaLine && mediaPrefixLength > 0);
+    });
+  },
+};
+
+/** One run-owned display chain; replacements rebuild every syntax and visibility probe. */
+export function createLiveAssistantTextProjection(options?: {
+  managedMediaUrls?: readonly string[];
+  final?: boolean;
+}) {
+  const managedMediaUrls = [...(options?.managedMediaUrls ?? [])];
+  const projection = createTextProjection([
+    inlineDirectiveDisplayTextFilter,
+    {
+      activationTokens: [
+        INTERNAL_RUNTIME_CONTEXT_BEGIN,
+        INTERNAL_RUNTIME_CONTEXT_END,
+        "runtime-generated",
+      ],
+      transform: stripInternalRuntimeContext,
+    },
+    ...(options?.final ? [] : [pendingLiveAssistantTailFilter]),
+    ...(managedMediaUrls.length
+      ? [
+          {
+            activationTokens: ["MEDIA:"],
+            transform: (text: string) =>
+              stripAssistantMediaDirectivesForDisplay(text, managedMediaUrls),
+          },
+        ]
+      : []),
+  ]);
+  const present = (result: TextProjection, replace = false) => {
+    return {
+      text: result.text,
+      suppress: !result.text,
+      delta: replace ? null : result.delta,
+    };
+  };
+  return {
+    get source() {
+      return projection.source;
+    },
+    append: (delta: string, preparedSource?: string) =>
+      present(projection.append(delta, preparedSource)),
+    replace: (text: string) => present(projection.replace(text), true),
+  };
+}
+
+/** Projects already-prepared text without interpreting reply control tokens. */
+export function projectLiveAssistantBufferedText(rawText: string): {
   text: string;
   suppress: boolean;
-  pendingLeadFragment: boolean;
 } {
-  if (!rawText) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (isSuppressedControlReplyText(rawText)) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
-    return { text: rawText, suppress: true, pendingLeadFragment: true };
-  }
-  const withoutTrailingControlToken = stripSuppressedControlReplyToken(rawText);
-  if (!withoutTrailingControlToken) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  const text = startsWithSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
-    ? stripLeadingSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
-    : withoutTrailingControlToken;
-  if (!text || isSuppressedControlReplyText(text)) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(text)) {
-    return { text, suppress: true, pendingLeadFragment: true };
-  }
-  return { text, suppress: false, pendingLeadFragment: false };
+  return { text: rawText, suppress: !rawText };
 }
 
 /** Returns true when an assistant event phase should not appear in live chat. */

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { resolveGatewayStartupMaintenanceReason } from "../cli/gateway-cli/startup-maintenance.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "../state/openclaw-state-db-schema-migration-required.js";
-import { throwStartupMigrationRefusal } from "./doctor-startup-migration-refusal.js";
+import { rethrowStartupConfigFailure } from "./doctor-startup-migration-refusal.js";
 
 describe("startup refusal handoff", () => {
   it("preserves maintenance classification after the preflight exit", () => {
@@ -12,7 +12,7 @@ describe("startup refusal handoff", () => {
     const output = vi.spyOn(console, "error").mockImplementation(() => undefined);
     let refusal: unknown;
     try {
-      throwStartupMigrationRefusal("Startup admission failed.", cause);
+      rethrowStartupConfigFailure(cause);
     } catch (error) {
       refusal = error;
     } finally {

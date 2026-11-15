@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { TOOL_DISPLAY_CONFIG } from "../src/agents/tool-display-config.js";
+import { isTestOnlyPath } from "./lib/changed-path-facts.mjs";
 
 type ToolDisplayConfig = typeof TOOL_DISPLAY_CONFIG;
 
@@ -68,7 +69,7 @@ function ensureCoreToolCoverage() {
     collectToolNamesFromFile(sourcePath, toolNames);
   }
   for (const entry of fs.readdirSync(path.join(repoRoot, "src/agents/tools"))) {
-    if (!entry.endsWith(".ts") || entry.endsWith(".test.ts")) {
+    if (!entry.endsWith(".ts") || isTestOnlyPath(entry)) {
       continue;
     }
     collectToolNamesFromFile(path.join(repoRoot, "src/agents/tools", entry), toolNames);
@@ -93,11 +94,27 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
 }
 
 function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
-  const tools = Object.entries(config.tools);
+  // Clients render prepared activity and only consume icon/title/detail/action metadata.
+  // Progress labels and reference policy stay in the Gateway's source registry.
+  const clientSpec = ({ progress: _progress, actions, ...spec }: ToolDisplayConfig["fallback"]) =>
+    actions
+      ? {
+          ...spec,
+          actions: Object.fromEntries(
+            Object.entries(actions).map(([name, { progress: _actionProgress, ...action }]) => [
+              name,
+              action,
+            ]),
+          ),
+        }
+      : spec;
+  const tools = Object.entries(config.tools).map(
+    ([name, spec]) => [name, clientSpec(spec)] as const,
+  );
   return [
     "{",
     `  "version": ${JSON.stringify(config.version)},`,
-    `  "fallback": ${JSON.stringify(config.fallback)},`,
+    `  "fallback": ${JSON.stringify(clientSpec(config.fallback))},`,
     '  "tools": {',
     ...tools.map(
       ([name, spec], index) =>

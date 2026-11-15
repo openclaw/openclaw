@@ -20,40 +20,34 @@ function normalizeMatrixIdSegment(segment: string) {
   return segment;
 }
 
+const MATRIX_QA_ROUTE_ID_SEGMENTS = new Map([
+  ["rooms", "{roomId}"],
+  ["profile", "{userId}"],
+  ["user", "{userId}"],
+  ["filter", "{filterId}"],
+  ["devices", "{deviceId}"],
+  ["redact", "{eventId}"],
+]);
+
 export function normalizeMatrixQaRoute(pathname: string) {
   const segments = pathname.split("/");
   for (let index = 0; index < segments.length; index += 1) {
     const previous = segments[index - 1];
     const beforePrevious = segments[index - 2];
-    if (previous === "rooms") {
-      segments[index] = "{roomId}";
-      continue;
-    }
-    if (previous === "profile" || previous === "user") {
-      segments[index] = "{userId}";
-      continue;
-    }
-    if (previous === "filter") {
-      segments[index] = "{filterId}";
+    const idSegment = MATRIX_QA_ROUTE_ID_SEGMENTS.get(previous ?? "");
+    if (idSegment) {
+      segments[index] = idSegment;
       continue;
     }
     if (previous === "join") {
       segments[index] = normalizeMatrixIdSegment(segments[index] ?? "");
       continue;
     }
-    if (previous === "devices") {
-      segments[index] = "{deviceId}";
-      continue;
-    }
-    if (previous === "redact") {
-      segments[index] = "{eventId}";
-      continue;
-    }
-    if (beforePrevious === "send" || beforePrevious === "redact") {
-      segments[index] = "{transactionId}";
-      continue;
-    }
-    if (beforePrevious === "sendToDevice") {
+    if (
+      beforePrevious === "send" ||
+      beforePrevious === "redact" ||
+      beforePrevious === "sendToDevice"
+    ) {
       segments[index] = "{transactionId}";
       continue;
     }
