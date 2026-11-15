@@ -22,10 +22,8 @@ function entry(file: string, payload: string, maxFileBytes = 1024 * 1024) {
   return { file, hostname: "transport-test-host", maxFileBytes, payload };
 }
 function records(file: string): { message?: string; dropped?: number; index?: number }[] {
-  return read(file)
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
+  const lines = read(file).trim().split("\n");
+  return lines.map((line) => JSON.parse(line));
 }
 function logTo(file: string, message: string) {
   setLoggerOverride({ level: "info", file });
@@ -84,8 +82,7 @@ beforeEach(() => {
 });
 
 it("writes queued records in order and byte-identically to the synchronous drain", async () => {
-  const syncPath = logPathTracker.nextPath();
-  const asyncPath = logPathTracker.nextPath();
+  const [syncPath, asyncPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-07-27T12:00:00Z"));
   vi.spyOn(os, "hostname").mockReturnValue("transport-test-host");
@@ -93,14 +90,13 @@ it("writes queued records in order and byte-identically to the synchronous drain
 
   writeStableRecords();
   fileLogTransport.drainSync();
-  const syncBytes = fs.readFileSync(syncPath);
 
   resetLogger();
   setLoggerOverride({ level: "info", file: asyncPath });
   writeStableRecords();
   await fileLogTransport.flush();
 
-  expect(fs.readFileSync(asyncPath)).toEqual(syncBytes);
+  expect(fs.readFileSync(asyncPath)).toEqual(fs.readFileSync(syncPath));
   const messages = records(syncPath).map((record) => record.message);
   expect(messages).toEqual(["first queued record", "second queued record"]);
 });
@@ -124,8 +120,7 @@ it("drops the oldest records on overflow and writes one count marker", async () 
 it.each(["async", "sync"])(
   "preserves rotation and target boundaries in %s batches",
   async (mode) => {
-    const firstPath = logPathTracker.nextPath();
-    const secondPath = logPathTracker.nextPath();
+    const [firstPath, secondPath] = [logPathTracker.nextPath(), logPathTracker.nextPath()];
     const payloads = [1, 2, 3, 4, 5, "x".repeat(128), 7].map(
       (value) => `${JSON.stringify(value)}\n`,
     );
@@ -207,11 +202,7 @@ for (const kind of ["symlink", "hardlink"]) {
     async () => {
       const target = logPathTracker.nextPath();
       fs.writeFileSync(target, "untouched");
-      if (kind === "symlink") {
-        fs.symlinkSync(target, logPath);
-      } else {
-        fs.linkSync(target, logPath);
-      }
+      (kind === "symlink" ? fs.symlinkSync : fs.linkSync)(target, logPath);
       failedLogPaths.add(logPath);
       const stderr = captureStderr();
       setLoggerOverride({ level: "info", file: logPath });
@@ -219,9 +210,7 @@ for (const kind of ["symlink", "hardlink"]) {
       await fileLogTransport.flush();
 
       expect(read(target)).toBe("untouched");
-      expect(
-        warningLines(stderr).filter((line) => line.includes("log file append failed")),
-      ).toHaveLength(1);
+      expect(warningLines(stderr)).toEqual([expect.stringContaining("log file append failed")]);
     },
   );
 }

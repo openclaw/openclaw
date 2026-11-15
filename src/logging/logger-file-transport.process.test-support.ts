@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -17,36 +18,27 @@ import {
 async function withoutSyncFs(operation: () => Promise<void>): Promise<void> {
   const counts: Record<string, number> = {};
   const restore: Array<() => void> = [];
+  const track = (owner: object, key: string) => {
+    const descriptor = Object.getOwnPropertyDescriptor(owner, key)!;
+    Object.defineProperty(owner, key, {
+      ...descriptor,
+      value: new Proxy(descriptor.value, {
+        apply(fn, receiver, args) {
+          counts[key] = (counts[key] ?? 0) + 1;
+          return Reflect.apply(fn, receiver, args);
+        },
+      }),
+    });
+    restore.push(() => Object.defineProperty(owner, key, descriptor));
+  };
   try {
     // Linux exposes unsupported methods such as lchmodSync as undefined.
     for (const key of Object.keys(fs).filter(
       (name) => name.endsWith("Sync") && typeof Reflect.get(fs, name) === "function",
     )) {
-      const descriptor = Object.getOwnPropertyDescriptor(fs, key)!;
-      Object.defineProperty(fs, key, {
-        ...descriptor,
-        value: new Proxy(descriptor.value, {
-          apply(fn, receiver, args) {
-            counts[key] = (counts[key] ?? 0) + 1;
-            return Reflect.apply(fn, receiver, args);
-          },
-        }),
-      });
-      restore.push(() => Object.defineProperty(fs, key, descriptor));
+      track(fs, key);
     }
-    const nativeRealpath = Object.getOwnPropertyDescriptor(fs.realpathSync, "native")!;
-    Object.defineProperty(fs.realpathSync, "native", {
-      ...nativeRealpath,
-      value: new Proxy(nativeRealpath.value, {
-        apply(fn, receiver, args) {
-          counts["realpathSync.native"] = (counts["realpathSync.native"] ?? 0) + 1;
-          return Reflect.apply(fn, receiver, args);
-        },
-      }),
-    });
-    restore.push(() => {
-      Object.defineProperty(fs.realpathSync, "native", nativeRealpath);
-    });
+    track(fs.realpathSync, "native");
     await operation();
   } finally {
     restore.toReversed().forEach((undo) => undo());
@@ -154,76 +146,17 @@ async function proveDefaultTargets(): Promise<void> {
   );
   assert.equal(starts.length, 1);
   await drainGlobalSingletonLifecycleState();
-  process.stdout.write(
-    JSON.stringify({
-      defaultAppend: true,
-      reload: true,
-      fallback: true,
-      rollover: true,
-      refusal: true,
-      forcedRescue: true,
-      mainThreadSyncCalls: 0,
-      workers: starts.length,
-    }) + "\n",
-  );
 }
 
 if (!isMainThread && workerData.interruptAppend) {
-  const { executeFileLogIO } = await import("./logger-file-io.js");
   const open = fs.promises.open;
   fs.promises.open = (...args) => {
     const pending = open(...args);
     parentPort!.postMessage("opening", []);
-    // Let native open finish without delivering its FileHandle before termination.
+    // Hold FileHandle delivery, not the native open or the descriptor it allocates.
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
     return pending;
   };
-  await executeFileLogIO({
-    type: "append",
-    file: path.join(directory, "interrupted.log"),
-    payload: "synthetic worker record\n",
-    rotate: false,
-  });
-  parentPort!.postMessage("written", []);
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
-}
-
-if (
-  isMainThread &&
-  process.platform === "linux" &&
-  process.argv[3] !== "--disposable-default-root"
-) {
-  const target = path.join(directory, "interrupted.log");
-  const retained = () =>
-    fs.readdirSync("/proc/self/fd").filter((fd) => {
-      try {
-        return fs.readlinkSync(`/proc/self/fd/${fd}`) === target;
-      } catch {
-        return false;
-      }
-    });
-  const interrupted = new Worker(new URL(import.meta.url), {
-    workerData: { directory, interruptAppend: true },
-  });
-  try {
-    const message = await new Promise<string>((resolve, reject) => {
-      interrupted.once("message", resolve);
-      interrupted.once("error", reject);
-    });
-    if (message === "opening") {
-      const deadline = Date.now() + 5_000;
-      while (retained().length === 0 && Date.now() < deadline) {
-        await setImmediate();
-      }
-      assert.ok(retained().length > 0, "Native open must allocate a real descriptor");
-    } else {
-      assert.equal(message, "written");
-      assert.equal(fs.readFileSync(target, "utf8"), "synthetic worker record\n");
-    }
-  } finally {
-    await interrupted.terminate();
-  }
-  assert.deepEqual(retained(), [], "Terminated log writers must not retain file descriptors");
 }
 
 await runWithWorkerStartObserver(
@@ -303,14 +236,39 @@ await runWithWorkerStartObserver(
     getLogger().info("lifecycle drain");
     await drainGlobalSingletonLifecycleState();
     assert.match(fs.readFileSync(failed, "utf8"), /lifecycle drain/);
-    const worker = new Worker(new URL(import.meta.url), { workerData: { directory } });
-    await new Promise<void>((resolve, reject) => {
-      worker.once("error", reject);
-      worker.once("exit", (code) =>
-        code === 0 ? resolve() : reject(new Error(`Nested logger failed: ${code}`)),
-      );
-    });
-    assert.match(fs.readFileSync(path.join(directory, "nested.log"), "utf8"), /warm transport/);
+    const target = path.join(directory, "nested.log");
+    const retained = () =>
+      fs.readdirSync("/proc/self/fd").filter((fd) => {
+        try {
+          return fs.readlinkSync(`/proc/self/fd/${fd}`) === target;
+        } catch {
+          return false;
+        }
+      });
+    for (const interruptAppend of process.platform === "linux" ? [false, true] : [false]) {
+      const worker = new Worker(new URL(import.meta.url), {
+        workerData: { directory, interruptAppend },
+      });
+      const exited = once(worker, "exit");
+      if (interruptAppend) {
+        const [message] = await Promise.race([once(worker, "message"), exited]);
+        if (message === "opening") {
+          const deadline = Date.now() + 5_000;
+          while (retained().length === 0 && Date.now() < deadline) {
+            await setImmediate();
+          }
+          assert.ok(retained().length > 0, "Native open must allocate a real descriptor");
+          await worker.terminate();
+        }
+      } else {
+        assert.equal((await exited)[0], 0);
+      }
+      await exited;
+      if (process.platform === "linux") {
+        assert.deepEqual(retained(), [], "Terminated log writers must not retain file descriptors");
+      }
+    }
+    assert.match(fs.readFileSync(target, "utf8"), /warm transport/);
 
     // The existing explicit diagnostic opt-in keeps source-map resolution available.
     process.env.TSLOG_SOURCE_MAPS = "on";
