@@ -1492,10 +1492,9 @@ describe("release decision policy", () => {
     expect(observed.errors).toEqual([]);
     expect(fetched).toEqual([51]);
     expect(observed.conclusion).toBe("failure");
-    expect(observed.jobs.find((job: { name: string }) => job.name === gate.name)).toMatchObject({
-      acceptedRunAttempt: 1,
-      conclusion: "failure",
-    });
+    expect(observed.jobs).toContainEqual(
+      expect.objectContaining({ name: gate.name, acceptedRunAttempt: 1, conclusion: "failure" }),
+    );
     expect(classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state).toBe(
       "passed",
     );
