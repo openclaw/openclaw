@@ -96,8 +96,11 @@ suite.define(() => {
           await writeFile(path.join(dir, "first-failure.png"), frame.png);
         }
         expect.soft(await empty.count(), "first failure must not imply empty").toBe(0);
+        after = (await gateway.getRequests("workboard.sessionsBoard.read")).length;
         await page.locator('[data-sidebar-entry="route:sessions"] a').click();
+        await surface.waitFor({ state: "hidden" });
         await boardLink.click();
+        await gateway.waitForRequest("workboard.sessionsBoard.read", { after });
         await surface.getByRole("button", { name: "Review release", exact: true }).waitFor();
         after = await gateway.deferNext("workboard.sessionsBoard.read");
         await surface.locator(".workboard-people-filter .picker-select__trigger").click();
