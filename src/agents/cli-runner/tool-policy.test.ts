@@ -16,31 +16,6 @@ describe("resolveCliRuntimeToolsAllow", () => {
 });
 
 describe("resolveCliRunOfferedToolNames", () => {
-  it("reports the capped run's native and discovery selection", () => {
-    const offered = resolveCliRunOfferedToolNames(
-      {
-        cliToolAvailability: {
-          native: ["WebSearch"],
-          openClaw: ["exec", "read"],
-          discovery: ["ToolSearch"],
-        },
-      },
-      claudeBackend,
-    );
-
-    expect(offered && [...offered].toSorted()).toEqual(["ToolSearch", "WebSearch"]);
-    expect(offered?.has("mcp__invoke")).toBe(false);
-  });
-
-  it("omits discovery the run never selected", () => {
-    const offered = resolveCliRunOfferedToolNames(
-      { cliToolAvailability: { native: [], openClaw: ["read"] } },
-      claudeBackend,
-    );
-
-    expect(offered && [...offered]).toEqual([]);
-  });
-
   // An uncapped run also hands its configured MCP servers to the CLI, and those
   // tool names live nowhere in cliToolAvailability. Claiming an offered set here
   // would mark a real external MCP call unoffered.

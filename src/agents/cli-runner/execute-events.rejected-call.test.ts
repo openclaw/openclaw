@@ -35,6 +35,26 @@ function toolResult(id: string, content: string, isError = false) {
   })}\n`;
 }
 
+// Tools the provider or a connector runs report in one assistant record, under their
+// own use and result types (the shapes `cli-output-events.test.ts` pins).
+function remoteToolExchange(
+  useType: "server_tool_use" | "mcp_tool_use",
+  resultType: string,
+  id: string,
+  name: string,
+) {
+  return `${JSON.stringify({
+    type: "assistant",
+    message: {
+      role: "assistant",
+      content: [
+        { type: useType, id, name, input: { query: "openclaw" } },
+        { type: resultType, tool_use_id: id, content: [{ type: "text", text: "found" }] },
+      ],
+    },
+  })}\n`;
+}
+
 function refusal(name: string) {
   return `<tool_use_error>Error: No such tool available: ${name}</tool_use_error>`;
 }
@@ -168,6 +188,35 @@ describe("after_tool_call rejected flag", () => {
     await drain(events, 1);
 
     expect(events[0]).toMatchObject({ toolName: "mcp__observe" });
+    expect(events[0]).not.toHaveProperty("rejected");
+  });
+
+  // The run offers `WebSearch`, but Anthropic's servers execute it and the CLI reports
+  // it as a `server_tool_use` named `web_search`. The harness refuses only the client
+  // calls it dispatches itself, so a name mismatch on any other kind proves nothing.
+  it.each([
+    { useType: "server_tool_use", resultType: "web_search_tool_result", name: "web_search" },
+    { useType: "mcp_tool_use", resultType: "mcp_tool_result", name: "echo" },
+  ] as const)("leaves a $useType result unmarked", async ({ useType, resultType, name }) => {
+    const { parser, events } = prepareRun(`rejected-${useType}`, cappedAvailability);
+
+    parser.push(remoteToolExchange(useType, resultType, "remote_1", name));
+    await drain(events, 1);
+
+    expect(events[0]).toMatchObject({ toolName: name });
+    expect(events[0]).not.toHaveProperty("rejected");
+  });
+
+  // Offered and called names are compared by canonical name, so a spelling the CLI
+  // uses for an offered tool is never mistaken for a tool the run did not offer.
+  it("leaves a call spelled differently from the offered tool unmarked", async () => {
+    const { parser, events } = prepareRun("rejected-spelling", cappedAvailability);
+
+    parser.push(toolUse("toolu_spelling", "web_search"));
+    parser.push(toolResult("toolu_spelling", "one result"));
+    await drain(events, 1);
+
+    expect(events[0]).toMatchObject({ toolName: "web_search" });
     expect(events[0]).not.toHaveProperty("rejected");
   });
 

@@ -245,7 +245,14 @@ export function createCliEventHandlers(params: {
       // registry membership can say so. The refusal's error string is a constant
       // shared with tools that ran and failed, and its result envelope is
       // tool-authored content any MCP server can reproduce verbatim.
-      const offeredToolNames = resolveCliRunOfferedToolNames(runParams, context.backendResolved);
+      // The harness refuses only the client calls it dispatches itself. A tool the
+      // provider or a connector runs is never refused here and reports under its own
+      // name (`WebSearch` can arrive as a `server_tool_use` named `web_search`), and
+      // a result whose start was never seen has no kind to go on: no claim for either.
+      const offeredToolNames =
+        startedCall?.kind === "tool_use"
+          ? resolveCliRunOfferedToolNames(runParams, context.backendResolved)
+          : undefined;
       void runAgentHarnessAfterToolCallHook({
         toolName: normalizeCliToolName(event.name),
         toolCallId: event.toolCallId,
@@ -259,7 +266,9 @@ export function createCliEventHandlers(params: {
         ...(event.isError
           ? { error: extractToolErrorMessage(result) ?? "CLI tool execution failed" }
           : {}),
-        ...(offeredToolNames && !offeredToolNames.has(event.name) ? { rejected: true } : {}),
+        ...(offeredToolNames && !offeredToolNames.has(normalizeCliToolName(event.name))
+          ? { rejected: true }
+          : {}),
         startedAt: startedCall?.startedAt,
       }).catch(() => {});
     }

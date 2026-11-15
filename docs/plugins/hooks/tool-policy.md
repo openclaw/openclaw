@@ -319,7 +319,9 @@ refusal text rather than tool output. `error` does not distinguish that case,
 because a tool that ran and failed carries the same harness-supplied message.
 The host sets `rejected` only from the run's own offered-tool registry, and
 omits it whenever that set is not known to be complete, so a missing field
-means unknown rather than "the call ran". A handler that treats tool results as
+means unknown rather than "the call ran". It is also omitted for tools the
+harness does not dispatch itself, such as a search the provider runs on its own
+servers: the harness cannot refuse those, so they are never marked. A handler that treats tool results as
 content should skip a rejected call entirely, and must not reconstruct the
 signal from `error` or from text inside `result`, which the called tool
 authors.

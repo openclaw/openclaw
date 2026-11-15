@@ -20,8 +20,11 @@ export function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | u
 }
 
 /**
- * The exact non-mediated tool names this CLI run offered, or `undefined` when the
- * run's offered set is not known to be complete.
+ * The non-mediated tools this CLI run offered, by canonical name, or `undefined` when
+ * the run's offered set is not known to be complete. Callers compare a called name
+ * through `normalizeCliToolName` too: the CLI reports some offered tools under another
+ * spelling (`WebSearch` can arrive as `web_search`), and a spelling difference must
+ * never read as "not offered".
  *
  * Only a run that carries an exact availability cap onto a backend that enforces it
  * through execution arguments has a complete, gateway-held offered set. For
@@ -49,7 +52,9 @@ export function resolveCliRunOfferedToolNames(
   ) {
     return undefined;
   }
-  return new Set([...availability.native, ...(availability.discovery ?? [])]);
+  return new Set(
+    [...availability.native, ...(availability.discovery ?? [])].map(normalizeCliToolName),
+  );
 }
 
 /**
