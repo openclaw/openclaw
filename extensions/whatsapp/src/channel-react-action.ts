@@ -75,7 +75,10 @@ function readWhatsAppActionChatJid(params: WhatsAppMessageActionParams): string 
   ) {
     return undefined;
   }
-  return resolveActionTargetFacts(params.toolContext.currentChannelId)?.normalizedTarget;
+  const facts = resolveActionTargetFacts(params.toolContext.currentChannelId);
+  return facts?.wireDelivery.preserveJidAsAuthorizedTarget
+    ? facts.wireDelivery.jid
+    : facts?.normalizedTarget;
 }
 
 async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParams) {
