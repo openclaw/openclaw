@@ -147,8 +147,12 @@ while :; do
       --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"')
     bad=$(printf '%s\n' "$runs" | grep -E '^completed (failure|timed_out|action_required|startup_failure) ')
     [ -n "$bad" ] && { echo "FAIL $sha"; echo "$bad"; exit 1; }
-    if [ -z "$runs" ] || ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; then
-      printf '%s\n' "$runs" | grep -q '^completed success ' && { echo "PASS $sha"; exit 0; }
+    st=$(gh api "repos/$repo/commits/$sha/status" --jq 'select(.total_count > 0) | .state')
+    case "$st" in failure | error) echo "FAIL $sha commit status: $st"; exit 1 ;; esac
+    if [ "$st" != pending ] && { [ -z "$runs" ] ||
+      ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; }; then
+      { [ "$st" = success ] || printf '%s\n' "$runs" | grep -q '^completed success '; } &&
+        { echo "PASS $sha"; exit 0; }
       [ "$n" -ge 4 ] && { echo "NO-RUN $sha"; exit 12; }
     fi
   elif [ -n "$head" ] && { [ "$seen" = 1 ] || [ "$n" -ge 4 ]; }; then
@@ -158,7 +162,7 @@ while :; do
 done
 ```
 
-The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, and ignores cancelled runs, because concurrency groups cancel superseded runs. It reads check runs only, not legacy commit statuses. It exits 12 when no run succeeded, for example when every run was skipped or none started, because draft PRs skip CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
+The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, and ignores cancelled runs, because concurrency groups cancel superseded runs. It also reads commit statuses, which some aggregate gates use. It exits 12 when no run succeeded, for example when every run was skipped or none started, because draft PRs skip CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
 
 ## API
 
