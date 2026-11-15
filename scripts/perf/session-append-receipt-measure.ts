@@ -1,6 +1,6 @@
 /**
  * Actual SessionManager appends across --sessions retained readers (default 2), followed by
- * a separate main-thread native admission + receipt delivery benchmark. Synthetic state only.
+ * a separate main-thread native admission-request + receipt delivery benchmark. Synthetic state only.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-append-receipt-measure.ts \
  *   --output .local/append-receipt/base --mode timing --iterations 2000
  * Repeat counterbalanced with --mode allocation. --owner-file substitutes a saved
@@ -67,11 +67,13 @@ const sourceDigest = createHash("sha256").update(readFileSync(source)).digest("h
 const receiptOwner = pathToFileURL(path.resolve("src/config/sessions/session-actor-receipt.ts"));
 const captured: unknown[] = [];
 const admissions: unknown[] = [];
+const admissionRequests: unknown[] = [];
 const frames: Array<{ receipt: unknown; admissions: unknown[] }> = [];
 const admissionKey = Symbol.for("openclaw.benchmark.entryAdmission");
-Reflect.set(globalThis, admissionKey, (snapshot: unknown) => {
+Reflect.set(globalThis, admissionKey, (snapshot: unknown, request: unknown) => {
   if (capture) {
     admissions.push(structuredClone(snapshot));
+    admissionRequests.push(structuredClone(request));
   }
 });
 const sqliteOwner = pathToFileURL(path.resolve("src/config/sessions/session-actor-sqlite.ts"));
@@ -98,7 +100,7 @@ registerHooks({
         ...result,
         source: result.source.replace(
           anchor,
-          `$& globalThis[Symbol.for("openclaw.benchmark.entryAdmission")](facts.snapshot);`,
+          `$& globalThis[Symbol.for("openclaw.benchmark.entryAdmission")](facts.snapshot, request);`,
         ),
       };
     }
@@ -329,7 +331,7 @@ try {
           `Expected one native append receipt at round ${round}, slot ${slot}`,
         );
         const native = captured.at(-1);
-        frames.push({ receipt: native, admissions: admissions.slice(admissionsBefore) });
+        frames.push({ receipt: native, admissions: admissionRequests.slice(admissionsBefore) });
         assert(isRecord(native) && isRecord(native.receipt));
         if (values["check-compact"]) {
           assert(size(native) < 64 * 1024, "Small append receipt exceeded 64 KiB");
@@ -352,6 +354,9 @@ try {
           admissionBytes: admissions
             .slice(admissionsBefore)
             .reduce<number>((total, item) => total + size(item), 0),
+          admissionRequestBytes: admissionRequests
+            .slice(admissionsBefore)
+            .reduce<number>((total, item) => total + size(item), 0),
           admissionFields: admissions
             .slice(admissionsBefore)
             .map((item) => fields(isRecord(item) ? item.entry : undefined)),
@@ -372,6 +377,7 @@ try {
         if (values.mode === "heap") {
           captured.length = 0;
           admissions.length = 0;
+          admissionRequests.length = 0;
           frames.length = 0;
         }
       }

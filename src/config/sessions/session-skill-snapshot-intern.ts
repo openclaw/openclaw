@@ -35,7 +35,7 @@ export function internSessionEntryField<T extends object>(snapshot: T): T {
   const key = sessionEntryFieldKey(snapshot);
   const existing = snapshots.get(key)?.deref();
   if (existing) {
-    // The content digest includes the complete JSON shape and member order.
+    // SAFETY: Persisted JSON with the same content digest has the same shape and member order.
     return existing as T;
   }
   snapshots.delete(key);

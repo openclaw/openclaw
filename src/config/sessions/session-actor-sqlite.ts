@@ -163,7 +163,10 @@ export function createSqliteSessionActorExecutor(
           throw new Error("Session actor admission belongs to another target");
         }
         // SAFETY: The paired kernel owns these facts; references require its exact preimage.
-        let snapshot = facts.snapshot as SessionActorAuthorityFacts & { writeToken?: string };
+        let snapshot = facts.snapshot as SessionActorAuthorityFacts & {
+          writeToken?: string;
+          entryFields?: SessionActorEntryFieldReferences;
+        };
         if ("entryReference" in facts.snapshot) {
           const preimage = entryReference?.();
           if (!preimage || facts.snapshot.entryReference !== preimage.writeToken) {
@@ -172,11 +175,7 @@ export function createSqliteSessionActorExecutor(
           snapshot = { target: preimage.target, entry: preimage.entry };
         }
         if ("entryFields" in facts.snapshot) {
-          restoreSessionActorEntryFields(
-            snapshot.entry,
-            facts.snapshot.entryFields as SessionActorEntryFieldReferences,
-            entryFields!(),
-          );
+          restoreSessionActorEntryFields(snapshot.entry, snapshot.entryFields, entryFields!());
         }
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
