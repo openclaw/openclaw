@@ -45,7 +45,7 @@ export function registerRequesterIdentityTests({
         senderId: "original-owner",
         conversationId: "channel:fixture",
       };
-      const register = (runId: string, senderId = origin.senderId) =>
+      const register = (runId: string, senderId = origin.senderId, senderName = "Alice") =>
         withPluginRuntimeGatewayRequestScope(
           { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
           () =>
@@ -53,7 +53,7 @@ export function registerRequesterIdentityTests({
               {
                 agentId: "main",
                 sessionKey: origin.sessionKey,
-                requesterOrigin: { ...origin, senderId },
+                requesterOrigin: { ...origin, senderId, senderName },
                 operatorAuthority: source.authority,
                 gatewayContextResolver: () => context,
               },
@@ -69,6 +69,7 @@ export function registerRequesterIdentityTests({
       try {
         await register("owner-child");
         await register("refresh-child");
+        await register("renamed-child", origin.senderId, "Alice renamed");
         await register("foreign-child", "other-person");
         source.release();
         const entry = expectDefined(subagentRuns.get("owner-child"), "registered owner child");
@@ -148,12 +149,28 @@ export function registerRequesterIdentityTests({
             });
           });
         }
-        expect(() =>
-          subagentRuns.runWithCompletionBatchAuthority(
-            [entry, foreign],
-            () => "must not borrow the first human",
-          ),
-        ).toThrow(/incompatible.*authority/);
+        await subagentRuns.runWithCompletionBatchAuthority(
+          [entry, expectDefined(subagentRuns.get("renamed-child"), "renamed child")],
+          async (authority) => {
+            await expectDefined(authority, "same principal authority").runWithRequester(
+              async () => {
+                expect(getGatewayToolCallerIdentity()?.requesterOrigin?.senderId).toBe(
+                  origin.senderId,
+                );
+              },
+            );
+          },
+        );
+        expect(
+          subagentRuns.runWithCompletionBatchAuthority([entry, foreign], (authority) => {
+            expect(authority).toBeUndefined();
+            expect(getGatewayToolCallerIdentity()).toBeUndefined();
+            expect(
+              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.source,
+            ).toBe(source.authority.source);
+            return "both results can be delivered without borrowing a human";
+          }),
+        ).toBe("both results can be delivered without borrowing a human");
         await withPluginRuntimeGatewayRequestScope(
           { client, context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
           () =>
@@ -188,12 +205,10 @@ export function registerRequesterIdentityTests({
           draft.endedReason = "subagent-killed";
           draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "error" } };
         });
-        expect(() =>
-          subagentRuns.runWithCompletionBatchAuthority(
-            [entry, foreign],
-            () => "mixed cancellation",
-          ),
-        ).toThrow(/incompatible.*authority/);
+        subagentRuns.runWithCompletionBatchAuthority([entry, foreign], (authority) => {
+          expect(authority).toBeUndefined();
+          expect(getGatewayToolCallerIdentity()).toBeUndefined();
+        });
         await updateRun(entry.runId, (draft) => {
           draft.endedReason = "subagent-killed";
           draft.execution = { status: "terminal", endedAt: 1, outcome: { status: "error" } };
