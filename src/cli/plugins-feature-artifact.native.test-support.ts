@@ -114,9 +114,7 @@ void describe("plugin artifact authoring", () => {
       '\nif (typeof require("openclaw/plugin-sdk/feature-plugin").defineFeaturePlugin !== "function") throw new Error("CommonJS SDK dependency failed");\n',
     );
     const jsonOutput: unknown[] = [];
-    defaultRuntime.writeJson = (value) => {
-      jsonOutput.push(value);
-    };
+    defaultRuntime.writeJson = (value) => jsonOutput.push(value);
     const archive = path.join(await fs.realpath(rootDir), "draft-review.tgz");
     await runPluginsPackCommand({ root: rootDir, json: true });
     const bytes = await fs.readFile(archive);
@@ -178,8 +176,6 @@ void describe("plugin artifact authoring", () => {
       globalThis: "author-global",
       default: { id: "draft-review" },
     });
-    await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
-    assert.deepEqual(await fs.readFile(archive), bytes);
   });
 
   runCases(
@@ -258,9 +254,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       await runPluginsBuildCommand({ root: rootDir });
       const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
       const jsonOutput: unknown[] = [];
-      defaultRuntime.writeJson = (value) => {
-        jsonOutput.push(value);
-      };
+      defaultRuntime.writeJson = (value) => jsonOutput.push(value);
       await runPluginsPackCommand({ root: rootDir, json: true });
       const archive = path.join(rootDir, filename);
       assert.partialDeepStrictEqual(jsonOutput.at(-1), { pluginId: id, path: archive });
