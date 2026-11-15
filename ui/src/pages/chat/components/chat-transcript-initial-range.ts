@@ -174,26 +174,6 @@ export class TranscriptInitialRange {
     this.retainViewportRows();
     const active = this.activeIndexes();
     const virtualizer = this.virtualizer();
-    const first = active[0];
-    // Ordinary rows would pay another commit on every wheel step. Retained fragments
-    // need preparation before their cold, estimated height can enter the flow.
-    const predecessor =
-      !this.pending &&
-      !this.preparingEnd &&
-      first !== undefined &&
-      rows[first]?.retainDom &&
-      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
-      !this.cachedRowSize(first) &&
-      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
-      !this.rowsMeasured([first])
-        ? active.shift()
-        : undefined;
-    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
-      // Incoming overscan takes priority over speculative background preparation.
-      this.preparingRowKey = rows[predecessor]!.key;
-      // A resumed reader can have a cached moving range without this predecessor.
-      this.refresh();
-    }
     const keys = forecast.rowKeys(virtualizer, this.forecastViewport(), rows, this.preparedRowKeys);
     // Arriving rows wait out of the flow only while the reader moves through laid-out content.
     const arriving = this.reading && !this.preparingEnd ? active : [];

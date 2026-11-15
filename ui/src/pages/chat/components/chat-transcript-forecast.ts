@@ -100,14 +100,16 @@ export function rowKeys(
 
 /**
  * The flow starts at the first active row's virtual offset, which counts rows of unknown size at
- * their estimates. Rows arriving before laid-out content would enter the flow at their real size
- * in a frame where the content already moved by an estimate's error, so they wait outside it
- * until all of them have known sizes. Removes them from `active`; with nothing laid out, as after
- * a jump, every row enters.
+ * their estimates. A row arriving before laid-out content would enter the flow at its real size
+ * in a frame where the content already moved by its estimate's error, so it waits outside the
+ * flow until its size is known, and so do the rows before it. Rows of known size between it and
+ * the flow join at once, so the flow keeps up with the reader. Removes the waiting rows from
+ * `active`; with nothing laid out, as after a jump, every row enters.
  *
- * A row outside the flow paints at its virtual slot, which is where it will land only once its
- * size and those of the rows between it and the flow are known. Until then it stays unpainted
- * (`unsettled`), so no text first appears in one place and then moves.
+ * A row outside the flow paints where it will land: a row before the flow hangs above the rows
+ * between them, a row after it sits at its virtual slot. That place is exact only once the sizes of
+ * those rows (and, after the flow, its own) are known. Until then it stays unpainted (`unsettled`),
+ * so no text first appears in one place and then moves.
  */
 export function hold(
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
@@ -121,27 +123,26 @@ export function hold(
     const element = virtualizer.elementsCache.get(key(index));
     return element?.isConnected === true && element.dataset.preparedRow !== "true";
   });
-  const held = new Set(
-    laidOut > 0 && !active.slice(0, laidOut).every(known) ? active.splice(0, laidOut).map(key) : [],
-  );
-  const unsettled = new Set(held);
+  const edge = active.slice(0, Math.max(laidOut, 0)).findLastIndex((index) => !known(index));
+  const held = new Set(active.splice(0, edge + 1).map(key));
+  for (const row of held) {
+    keys.add(row);
+  }
+  const unsettled = new Set<string>();
   const first = active[0];
   const last = active.at(-1);
   for (const item of virtualizer.getVirtualItems()) {
     const row = String(item.key);
-    if (first === undefined || last === undefined || !keys.has(row) || held.has(row)) {
+    if (first === undefined || last === undefined || !keys.has(row)) {
       continue;
     }
-    const [from, to] = item.index < first ? [item.index, first - 1] : [last + 1, item.index];
+    const [from, to] = item.index < first ? [item.index + 1, first - 1] : [last + 1, item.index];
     for (let index = from; index <= to; index++) {
       if (!known(index)) {
         unsettled.add(row);
         break;
       }
     }
-  }
-  for (const row of held) {
-    keys.add(row);
   }
   return { held, unsettled };
 }

@@ -1,8 +1,23 @@
+import { webkit, type Browser, type BrowserContext } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Chat scroll through settled tool rows" });
+let webkitBrowser: Browser;
+const suite = createControlUiE2eSuite({
+  name: "Chat scroll through settled tool rows",
+  resources: {
+    async run() {
+      webkitBrowser = await webkit.launch({ headless: true });
+    },
+    async close() {
+      await webkitBrowser?.close();
+    },
+  },
+});
+// Virtual-core defers its scroll corrections during iOS scrolling by user agent.
+const IPHONE_UA =
+  "Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1";
 const topics = [
   "Review the command output and explain the next step.",
   "Can you compare the two approaches?",
@@ -87,97 +102,133 @@ function history() {
 type Sample = { top: number; blocks: Record<string, number> };
 
 suite.define(() => {
-  it("never moves visible text against an upward scroll", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      await installMockGateway(page, { historyMessages: history() });
-      await page.goto(suite.server.baseUrl + "chat");
-      await page.getByText("Answer 280:", { exact: false }).waitFor();
-      const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-      await page.waitForTimeout(1500);
-      // Record what each frame paints: every text block the reader can see, including the one
-      // the top edge cuts and rows painted at their slot outside the flow.
-      await thread.evaluate((element) => {
-        const ids = new WeakMap<Element, string>();
-        const state = { active: true, samples: [] as Sample[] };
-        (window as unknown as { scrollSamples: typeof state }).scrollSamples = state;
-        const channel = new MessageChannel();
-        channel.port1.addEventListener("message", () => {
-          const view = element.getBoundingClientRect();
-          const blocks: Record<string, number> = {};
-          for (const row of element.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
-            const style = getComputedStyle(row);
-            if (style.opacity === "0") {
-              continue;
-            }
-            const box = row.getBoundingClientRect();
-            const clipped = style.clip.startsWith("rect");
-            const bottom = clipped ? box.top + Number(row.dataset.rowSize) : box.bottom;
-            const selector = "p, li, pre, tr, h1, h2, h3, h4, .chat-tool-row";
-            for (const block of row.querySelectorAll(selector)) {
-              const rect = block.getBoundingClientRect();
-              const visible =
-                rect.height > 0 &&
-                rect.bottom > Math.max(view.top, box.top) &&
-                rect.top < Math.min(view.bottom, bottom);
-              if (visible) {
-                let id = ids.get(block);
-                if (!id) {
-                  id = String(Math.random());
-                  ids.set(block, id);
+  it.each(["chromium", "webkit"] as const)(
+    "never moves visible text against an upward scroll (%s)",
+    async (engine) => {
+      // WebKit runs at phone size with the momentum scrolling of a flick, one step per frame.
+      const options = {
+        viewport: engine === "webkit" ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+        hasTouch: engine === "webkit",
+        userAgent: engine === "webkit" ? IPHONE_UA : undefined,
+        locale: "en-US",
+        serviceWorkers: "block" as const,
+      };
+      const context: BrowserContext =
+        engine === "chromium"
+          ? await suite.newBrowserContext(options)
+          : await webkitBrowser.newContext(options);
+      try {
+        const page = await context.newPage();
+        await installMockGateway(page, { historyMessages: history() });
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.getByText("Answer 280:", { exact: false }).waitFor();
+        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        await page.waitForTimeout(1500);
+        // Record what each frame paints: every text block the reader can see, including the one
+        // the top edge cuts and rows painted at their slot outside the flow.
+        await thread.evaluate((element) => {
+          const ids = new WeakMap<Element, string>();
+          const state = { active: true, samples: [] as Sample[] };
+          (window as unknown as { scrollSamples: typeof state }).scrollSamples = state;
+          const channel = new MessageChannel();
+          channel.port1.addEventListener("message", () => {
+            const view = element.getBoundingClientRect();
+            const blocks: Record<string, number> = {};
+            for (const row of element.querySelectorAll<HTMLElement>(".chat-virtual-row")) {
+              const style = getComputedStyle(row);
+              if (style.opacity === "0") {
+                continue;
+              }
+              const box = row.getBoundingClientRect();
+              const clipped = style.clip.startsWith("rect");
+              const bottom = clipped ? box.top + Number(row.dataset.rowSize) : box.bottom;
+              const selector = "p, li, pre, tr, h1, h2, h3, h4, .chat-tool-row";
+              for (const block of row.querySelectorAll(selector)) {
+                const rect = block.getBoundingClientRect();
+                const visible =
+                  rect.height > 0 &&
+                  rect.bottom > Math.max(view.top, box.top) &&
+                  rect.top < Math.min(view.bottom, bottom);
+                if (visible) {
+                  let id = ids.get(block);
+                  if (!id) {
+                    id = String(Math.random());
+                    ids.set(block, id);
+                  }
+                  blocks[id] = rect.top;
                 }
-                blocks[id] = rect.top;
+              }
+            }
+            state.samples.push({ top: element.scrollTop, blocks });
+            if (state.active) {
+              requestAnimationFrame(() => channel.port2.postMessage(0));
+            }
+          });
+          channel.port1.start();
+          requestAnimationFrame(() => channel.port2.postMessage(0));
+        });
+        // Read slowly up from the end, then fast. Native scrolling clamps corrections at the
+        // transcript start, so the sweep stops well before it.
+        await thread.hover({ position: { x: engine === "webkit" ? 200 : 400, y: 250 } });
+        if (engine === "webkit") {
+          // Repeated flicks: a dragged start, then decaying momentum, one step per frame.
+          await thread.evaluate(async (element) => {
+            const frame = () => new Promise(requestAnimationFrame);
+            const end = Math.max(5000, element.scrollTop - 80_000);
+            while (element.scrollTop > end) {
+              for (let step = 0; step < 5; step++) {
+                element.scrollTop -= 70;
+                await frame();
+              }
+              for (let step = 140; step > 4 && element.scrollTop > end; step *= 0.93) {
+                element.scrollTop -= step;
+                await frame();
+              }
+            }
+          });
+        } else {
+          for (const [delta, steps] of [
+            [-180, 100],
+            [-1100, 100],
+          ] as const) {
+            for (let step = 0; step < steps; step++) {
+              if ((await thread.evaluate((element) => element.scrollTop)) < 5000) {
+                break;
+              }
+              await page.mouse.wheel(0, delta);
+              await page.waitForTimeout(55);
+            }
+          }
+        }
+        await page.waitForTimeout(750);
+        const result = await page.evaluate(() => {
+          const state = (
+            window as unknown as { scrollSamples: { active: boolean; samples: Sample[] } }
+          ).scrollSamples;
+          state.active = false;
+          let against = 0;
+          for (let index = 1; index < state.samples.length; index++) {
+            const before = state.samples[index - 1]!.blocks;
+            const after = state.samples[index]!.blocks;
+            for (const key of Object.keys(before)) {
+              // Scrolling up moves content down; text moving up jumped against the scroll.
+              if (key in after) {
+                against = Math.max(against, before[key]! - after[key]!);
               }
             }
           }
-          state.samples.push({ top: element.scrollTop, blocks });
-          if (state.active) {
-            requestAnimationFrame(() => channel.port2.postMessage(0));
-          }
+          return {
+            against,
+            frames: state.samples.length,
+            lowest: Math.min(...state.samples.map((sample) => sample.top)),
+          };
         });
-        channel.port1.start();
-        requestAnimationFrame(() => channel.port2.postMessage(0));
-      });
-      await thread.hover({ position: { x: 400, y: 250 } });
-      // Read slowly up from the end, then fast. Native scrolling clamps corrections at the
-      // transcript start, so the sweep stops well before it.
-      for (const [delta, steps] of [
-        [-180, 100],
-        [-1100, 100],
-      ] as const) {
-        for (let step = 0; step < steps; step++) {
-          if ((await thread.evaluate((element) => element.scrollTop)) < 5000) {
-            break;
-          }
-          await page.mouse.wheel(0, delta);
-          await page.waitForTimeout(55);
-        }
+        expect(result.frames).toBeGreaterThan(60);
+        expect(result.lowest).toBeGreaterThan(0);
+        expect(result.against).toBeLessThan(2);
+      } finally {
+        await (engine === "chromium" ? suite.closeBrowserContext(context) : context.close());
       }
-      await page.waitForTimeout(750);
-      const result = await page.evaluate(() => {
-        const state = (
-          window as unknown as { scrollSamples: { active: boolean; samples: Sample[] } }
-        ).scrollSamples;
-        state.active = false;
-        let against = 0;
-        for (let index = 1; index < state.samples.length; index++) {
-          const before = state.samples[index - 1]!.blocks;
-          const after = state.samples[index]!.blocks;
-          for (const key of Object.keys(before)) {
-            // Scrolling up moves content down; text moving up jumped against the scroll.
-            if (key in after) {
-              against = Math.max(against, before[key]! - after[key]!);
-            }
-          }
-        }
-        return {
-          against,
-          frames: state.samples.length,
-          lowest: Math.min(...state.samples.map((sample) => sample.top)),
-        };
-      });
-      expect(result.frames).toBeGreaterThan(60);
-      expect(result.lowest).toBeGreaterThan(0);
-      expect(result.against).toBeLessThan(2);
-    });
-  });
+    },
+  );
 });
