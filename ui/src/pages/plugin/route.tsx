@@ -1,41 +1,13 @@
 import { definePage } from "@openclaw/uirouter";
 import {
-  INTERNAL_PLUGIN_PATH_PARAM,
-  pluginTabSlugFromPath,
+  pluginTabRefFromSearch,
+  pluginTabKey,
+  pluginTabForLocation,
+  type PluginTab,
   routePageSpec,
 } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
-
-type PluginTabRef = {
-  pluginId: string;
-  id: string;
-};
-
-export function pluginTabRefFromSearch(search: string, pathname = "", basePath = ""): PluginTabRef {
-  const params = new URLSearchParams(search);
-  const tab = pluginTabSlugFromPath(params.get(INTERNAL_PLUGIN_PATH_PARAM) ?? pathname, basePath);
-  return {
-    pluginId: tab?.pluginId ?? params.get("plugin")?.trim() ?? "",
-    id: tab?.id ?? params.get("id")?.trim() ?? "",
-  };
-}
-
-/** Stable key for one tab; ids are only unique per plugin, so both parts matter. */
-export function pluginTabKey(ref: PluginTabRef): string {
-  return `${ref.pluginId}/${ref.id}`;
-}
-
-/** The advertised tab owns navigation placement, including direct sign-in links. */
-export function pluginTabForLocation(
-  context: Pick<ApplicationContext, "basePath" | "gateway">,
-  location: { search: string; pathname: string } | undefined,
-) {
-  const key = pluginTabKey(
-    pluginTabRefFromSearch(location?.search ?? "", location?.pathname, context.basePath),
-  );
-  return context.gateway.snapshot.hello?.controlUiTabs?.find((tab) => pluginTabKey(tab) === key);
-}
 
 /** The page's own label: its native page registration, else the Gateway-advertised tab. */
 export function pluginPageLabel(
@@ -47,7 +19,8 @@ export function pluginPageLabel(
   );
   return (
     context.plugins.registrations("pages").find((entry) => entry.key === key)?.value.label ||
-    pluginTabForLocation(context, location)?.label
+    pluginTabForLocation(context.gateway.snapshot.hello?.controlUiTabs, location, context.basePath)
+      ?.label
   );
 }
 
@@ -78,7 +51,7 @@ export const page = definePage({
       // still replaces its contribution through PluginPage's own keys.
       renderOwnerKey: () => "plugin-page",
       renderSolid: (
-        props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
+        props: SolidRouteProps<PluginTab & { params: Readonly<Record<string, string>> }>,
       ) => (
         <module.PluginPage
           pluginId={props.data?.pluginId ?? ""}

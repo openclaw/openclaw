@@ -89,6 +89,7 @@ export interface ShellChromeHost
   readonly elements: ShellOwnedElements;
   readonly element: HTMLElement;
   readonly isConnected: boolean;
+  readonly workspaceChromeVisible: boolean;
   readonly activeSessionKey: string;
   readonly updateComplete: Promise<boolean>;
   readonly queryRenderedElement: (tagName: string) => Element | null;
@@ -193,7 +194,12 @@ export class ShellChromeOwner {
       !context ||
       host.onboardingMode ||
       (host.initialConnectionPending && isMobileNavLayout()) ||
-      (isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
+      (isSettingsTakeover(
+        host.routeState.routeId,
+        host.context?.gateway.snapshot.hello?.controlUiTabs,
+        host.routeState.location,
+        host.context?.basePath,
+      ) &&
         !isMobileNavLayout())
     ) {
       return;
@@ -393,7 +399,12 @@ export class ShellChromeOwner {
       event.preventDefault();
       host.closeNavDrawer({ restoreFocus: true });
     } else if (
-      isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
+      isSettingsTakeover(
+        host.routeState.routeId,
+        host.context?.gateway.snapshot.hello?.controlUiTabs,
+        host.routeState.location,
+        host.context?.basePath,
+      ) &&
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
@@ -440,8 +451,7 @@ export class ShellChromeOwner {
       isTerminalPanelShortcut(event) &&
       !isSessionRouteId(host.routeState.routeId) &&
       !event.defaultPrevented &&
-      !host.onboardingMode &&
-      !isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) &&
+      host.workspaceChromeVisible &&
       host.context &&
       isTerminalAvailable(
         host.context.gateway.snapshot,
@@ -749,13 +759,8 @@ export class ShellChromeOwner {
     applyCommandPaletteTargetEvent(this.host, event);
 
   readonly nativeNavCollapsed = (): boolean =>
-    this.host.onboardingMode ||
+    !this.host.workspaceChromeVisible ||
     isMobileNavLayout() ||
-    isSettingsTakeover(
-      this.host.routeState.routeId,
-      this.host.context,
-      this.host.routeState.location,
-    ) ||
     (!this.host.navDrawerOpen &&
       !this.host.desktopNavigationExpanded &&
       (this.host.context?.navigation.snapshot.navCollapsed ?? false));

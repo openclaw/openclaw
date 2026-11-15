@@ -155,7 +155,12 @@ export class ShellOwner
     const routeId = this.routeState.routeId;
     // Hidden workspace chrome must not preload its sidebar and panel graphs.
     return (
-      !isSettingsTakeover(routeId, this.context, this.routeState.location) && !this.onboardingMode
+      !isSettingsTakeover(
+        routeId,
+        this.context?.gateway.snapshot.hello?.controlUiTabs,
+        this.routeState.location,
+        this.context?.basePath,
+      ) && !this.onboardingMode
     );
   }
 

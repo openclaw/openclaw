@@ -12,7 +12,7 @@ import {
   visibleSettingsNavigationGroups,
   type SettingsSearchBlock,
 } from "../app-navigation.ts";
-import { pathForRoute, pluginTabLocation, type RouteId } from "../app-route-paths.ts";
+import { pathForRoute, pluginTabLocation, type RouteId, pluginTabKey } from "../app-route-paths.ts";
 import type { AgentSelectionCapability } from "../app/agent-selection.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
@@ -38,7 +38,6 @@ import {
   settingsSearchTextMatches,
   settingsSearchTitleRank,
 } from "../lib/settings-navigation.ts";
-import { pluginTabKey } from "../pages/plugin/route.tsx";
 import type { GatewayStatusProps } from "./gateway-status.ts";
 import { isIconName } from "./icon-data.ts";
 import {

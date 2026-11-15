@@ -141,7 +141,12 @@ export class ShellPanelOwner {
     const detail = event instanceof CustomEvent ? event.detail : null;
     if (
       !snapshot ||
-      isSettingsTakeover(host.routeState.routeId, host.context, host.routeState.location) ||
+      isSettingsTakeover(
+        host.routeState.routeId,
+        host.context?.gateway.snapshot.hello?.controlUiTabs,
+        host.routeState.location,
+        host.context?.basePath,
+      ) ||
       isNativeEmbedHost()
     ) {
       return;

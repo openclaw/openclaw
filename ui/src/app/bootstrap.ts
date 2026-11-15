@@ -339,8 +339,9 @@ export function bootstrapApplication(
         shell?.element.isConnected === true &&
         !isSettingsTakeover(
           selectShellRouteState(router.getState()).routeId,
-          { gateway, basePath },
+          gateway.snapshot.hello?.controlUiTabs,
           selectShellRouteState(router.getState()).location,
+          basePath,
         )
       );
     },

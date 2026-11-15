@@ -361,8 +361,9 @@ export function createAssistantPanel(
       (destination === "custodian" &&
         isSettingsTakeover(
           props.pageRouteId,
-          props.context,
+          props.context?.gateway.snapshot.hello?.controlUiTabs,
           props.context?.router.getState().location,
+          props.context?.basePath,
         ))
     );
   }
