@@ -516,6 +516,12 @@ ownership before rechecking profile-backed requester authority. Service custody
 remains with the updater; the next Doctor acquires its own database ownership.
 This avoids refusing the updater's own policy reads during its maintenance window.
 
+Plugin lifecycle work in update finalization and repair renews its lease from a
+worker, so a blocked main thread cannot expire the lease. Native Doctor and plugin
+install/update operations share this renewal behavior. Ownership checks,
+cancellation, and release still apply. The runtime holding the lease must contain
+this fix; a newer candidate cannot change an already-running lease owner.
+
 Candidate Doctor inspects the managed service even after the previous Gateway
 releases its state lease. On macOS, it unloads a loaded, enabled LaunchAgent
 between KeepAlive respawns before entering maintenance and records that stop for

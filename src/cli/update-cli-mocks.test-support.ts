@@ -196,6 +196,11 @@ vi.mock("../infra/update-repair-agent.js", () => ({
 vi.mock("../infra/update-candidate-canary.js", () => ({
   validateUpdateCandidateCanary: candidateValidation,
 }));
+// The activated-release boot is a process boundary like the canary above.
+vi.mock(import("../infra/update-activated-gateway-check.js"), async (original) => ({
+  ...(await original()),
+  checkActivatedGatewayStartup: async ({ result }) => result,
+}));
 // Runtime retention and publication have real owner/process coverage; CLI
 // orchestration must not copy or rebuild the checkout behind its simulated updater.
 vi.mock("./update-cli/update-command-runtime.js", async (importOriginal) => ({

@@ -64,6 +64,7 @@ import {
   writeDoctorRollbackReceipt,
 } from "./update-command-rollback.test-support.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import { captureUpdateActivationSchemas } from "./update-command-schema.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
 
 const dirs = createTempDirTracker();
@@ -189,6 +190,41 @@ beforeEach(async () => {
   });
 });
 registerRollbackReportTests(() => ({ candidateRoot, previousRoot, stateDir: serviceStateDir }));
+it("captures SQLite rollback schemas even without candidate metadata", async () => {
+  const env = { ...process.env, OPENCLAW_STATE_DIR: serviceStateDir };
+  const shared = path.join(serviceStateDir, "state/openclaw.sqlite");
+  const agent = path.join(serviceStateDir, "agents/main/agent/openclaw-agent.sqlite");
+  setVersion(shared, 7);
+  setVersion(agent, 3);
+  const captured = await captureUpdateActivationSchemas({
+    root: previousRoot,
+    env,
+    config: {},
+    run: undefined,
+    candidateSchemaVersions: undefined,
+    gatewayRestartCompletion: false,
+    timeoutMs: 30_000,
+  });
+  expect(captured.schemaVersions).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ path: shared, userVersion: 7 }),
+      expect.objectContaining({ path: agent, userVersion: 3 }),
+    ]),
+  );
+});
+
+it("does not inspect live PostgreSQL without candidate schema metadata", async () => {
+  const captured = await captureUpdateActivationSchemas({
+    root: previousRoot,
+    env: { ...process.env, OPENCLAW_STATE_DIR: serviceStateDir },
+    config: { database: { engine: "postgres" } },
+    run: undefined,
+    candidateSchemaVersions: undefined,
+    gatewayRestartCompletion: false,
+    timeoutMs: 1_000,
+  });
+  expect(captured.schemaVersions).toBeUndefined();
+});
 it.each([false, true])(
   "records refused project rollback without an additional stop (during stop=%s)",
   async (duringStop) => {

@@ -249,14 +249,9 @@ export function prepareBundledPluginRuntime() {
         return value;
       };
       const leaseMs = 1_000;
-      vi.useFakeTimers({
-        toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
-      });
       try {
         await expect(
           withPluginLifecycleLease({ env, waitMs: 0, leaseMs }, async (lease) => {
-            // The worker acquires against its real clock; align the controlled timer clock afterward.
-            vi.setSystemTime(readExpiry() - leaseMs);
             const writeFile = fs.writeFile;
             vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
               if (args[0] === artifact && args[1] === "candidate") {
@@ -269,9 +264,10 @@ export function prepareBundledPluginRuntime() {
                   );
                 });
                 const before = readExpiry();
-                await vi.advanceTimersByTimeAsync(leaseMs * 4);
+                // The heartbeat has its own clock; stall the parent through real expiry.
+                Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500);
                 lease.assertOwned();
-                expect(readExpiry()).toBeGreaterThan(before + leaseMs * 3);
+                expect(readExpiry()).toBeGreaterThan(before);
                 expect(lease.signal.aborted).toBe(false);
               }
               return await writeFile(...args);
@@ -284,9 +280,9 @@ export function prepareBundledPluginRuntime() {
             });
             expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
             const afterPublication = readExpiry();
-            await vi.advanceTimersByTimeAsync(leaseMs * 4);
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_500);
             lease.assertOwned();
-            expect(readExpiry()).toBeGreaterThan(afterPublication + leaseMs * 3);
+            expect(readExpiry()).toBeGreaterThan(afterPublication);
             return result;
           }),
         ).resolves.toEqual({ changed: sourceRuntimePrepared !== true });
@@ -300,7 +296,6 @@ export function prepareBundledPluginRuntime() {
           expect(lock).not.toHaveBeenCalled();
         }
       } finally {
-        vi.useRealTimers();
         closeOpenClawStateDatabaseForTest();
       }
     }),

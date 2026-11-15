@@ -96,6 +96,32 @@ describe("scheduled update discovery and application", () => {
     expect(info).toHaveBeenCalledTimes(2);
   });
 
+  it("rediscovers the installation after a returned failure on the next scheduled check", async () => {
+    config = { update: { channel: "dev", auto: { enabled: true } } };
+    vi.mocked(checkUpdateStatus)
+      .mockResolvedValueOnce({
+        ...createDevGitStatus(),
+        error: { status: "failed", message: "Git facts unavailable", timeoutMs: 1000 },
+      })
+      .mockResolvedValue(createDevGitStatus());
+    check.start();
+    await clock.advanceBy(0);
+    expect(info).toHaveBeenCalledExactlyOnceWith(
+      "update check failed; retrying at the next scheduled check",
+      { error: "Error: Git facts unavailable" },
+    );
+    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+
+    await clock.advanceBy(24 * 60 * 60_000);
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(3);
+    expect(getUpdateSchedule()).toMatchObject({
+      campaign: { state: "countdown" },
+      install: { git: { status: "behind", commitsBehind: 2 } },
+    });
+    await check.initialize();
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(3);
+  });
+
   it("returns cleanup before slow dev git discovery schedules a campaign", async ({ signal }) => {
     const entered = createDeferred();
     const remoteFinished = createDeferred();
