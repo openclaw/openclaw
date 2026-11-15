@@ -439,9 +439,13 @@ export function createAgentEventAuditRecorder(options: {
         return;
       }
       if (projection.input.kind === "skill_selection") {
+        // Skill observations are independent rows: they must never be dropped,
+        // even when the run start is still buffered. Flush the buffered start
+        // first as a best effort so the ledger holds the run before its skill
+        // rows arrive (readers join them by run), but retain it for the
+        // existing paired settlement boundary when the writer cannot accept
+        // it yet — the terminal still settles as one paired run.
         const start = bufferedStarts.get(runInstance);
-        // Retain the buffered start for the paired settlement path when the
-        // writer cannot accept it yet; skill observations record independently.
         if (start && writer.record(start)) {
           bufferedStarts.delete(runInstance);
         }

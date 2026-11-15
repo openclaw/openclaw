@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { withLegacySkillSelectionCompanionAbsent } from "../state/openclaw-state-db-schema-skill-selection.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
@@ -10,7 +11,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { getOpenClawStatePredecessorSchema } from "../state/openclaw-state-schema-runtime.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
@@ -158,9 +159,11 @@ describe("audit event skill-selection persistence", () => {
   });
 
   it("upgrades a v2026.11.3 database preserving settings and audit rows", async () => {
-    // Simulate an installed v2026.11.3 database (schema v39, no companion
-    // table) with stored settings and one audit row, then open it with the
-    // current build the way a real upgrade would.
+    // Simulate an installed v2026.11.3 database: the current schema layout
+    // minus the unreleased companion table (the release predates it), with
+    // stored settings and one audit row. Opening it with the current build
+    // must keep every stored row working while the companion table is
+    // created lazily on first observed skill use.
     const options = {
       env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-audit-upgrade-") },
     };
@@ -169,10 +172,13 @@ describe("audit event skill-selection persistence", () => {
     const storedAt = Date.now() - 60_000;
     const setup = new DatabaseSync(pathname);
     try {
-      setup.exec(getOpenClawStatePredecessorSchema(39));
-      setup.exec(`PRAGMA user_version = 39;
+      setup.exec(withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL));
+      setup.exec(`PRAGMA user_version = 40;
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-        VALUES ('primary', 'global', 39, 1, 1);`);
+        VALUES ('primary', 'global', 40, 1, 1);`);
+      // A stored user setting from the release install.
+      setup.exec(`INSERT INTO workspace_setup_state (workspace_key, workspace_path, version)
+        VALUES ('proof-workspace', '/tmp/skill-proof', 1);`);
       setup.exec(`INSERT INTO audit_events (event_id, source_id, schema_version, source_sequence,
         occurred_at, kind, action, status, actor_type, actor_id, agent_id, session_key, session_id, run_id)
         VALUES ('legacy-event-1', 'run-legacy:1:${storedAt}:agent.run.started', 1, 1, ${storedAt},
@@ -183,7 +189,8 @@ describe("audit event skill-selection persistence", () => {
     }
 
     const auditDatabase = { ...options, database: openOpenClawStateDatabase(options) };
-    // The upgrade migrates 39 -> 40 while the stored settings row survives.
+    // Stored settings survive the upgrade untouched, including the release's
+    // schema version row and the workspace setting.
     expect(auditDatabase.database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: 40,
     });
@@ -192,6 +199,13 @@ describe("audit event skill-selection persistence", () => {
         .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
         .get(),
     ).toEqual({ schema_version: 40 });
+    expect(
+      auditDatabase.database.db
+        .prepare(
+          "SELECT workspace_path, version FROM workspace_setup_state WHERE workspace_key = 'proof-workspace'",
+        )
+        .get(),
+    ).toEqual({ workspace_path: "/tmp/skill-proof", version: 1 });
     const legacy = await listAuditEvents({ database: options, limit: 10 });
     expect(legacy.events.map((event) => event.eventId)).toEqual(["legacy-event-1"]);
 
