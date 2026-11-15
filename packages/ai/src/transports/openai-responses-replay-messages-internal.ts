@@ -377,6 +377,8 @@ function convertResponsesMessagesWithStyle(
   }
   let msgIndex = 0;
   let recoveryAnchor = replayPlan.itemRecovery?.anchor;
+  let pastRecoveryBoundary = false;
+  const recoveredCalls = recoveryAnchor ? new Set<string>() : undefined;
   const replayCallId = (id: string) =>
     recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
@@ -641,14 +643,24 @@ function convertResponsesMessagesWithStyle(
     if (
       "role" in msg &&
       msg.role === "assistant" &&
-      replayPlan.itemRecovery?.owner &&
-      msg.providerReplay === replayPlan.itemRecovery.owner.providerReplay
+      replayPlan.itemRecovery &&
+      msg.providerReplay?.itemRecovery === replayPlan.itemRecovery.anchor
     ) {
-      recoveryAnchor = undefined;
+      pastRecoveryBoundary = true;
     }
     if (!("role" in msg)) {
       messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook([msg]) : [msg]));
       continue;
+    }
+    recoveryAnchor =
+      !pastRecoveryBoundary || (msg.role === "toolResult" && recoveredCalls?.has(msg.toolCallId))
+        ? replayPlan.itemRecovery?.anchor
+        : undefined;
+    // Delayed async results keep their call's repair identity across the boundary.
+    if (recoveryAnchor && msg.role === "assistant") {
+      for (const block of msg.content) {
+        if (block.type === "toolCall") recoveredCalls?.add(block.id);
+      }
     }
     // Prepared suffix results resolve IDs against the current request's call map.
     // Retained projections already prove source immutability. Images retain their own scalar facts.

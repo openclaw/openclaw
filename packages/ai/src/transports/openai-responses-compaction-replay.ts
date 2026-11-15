@@ -6,6 +6,7 @@ import type {
 } from "openai/resources/responses/responses.js";
 import { getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions, CompactionReplayRejection } from "../provider-options.js";
+import { resolveFailedAssistantReplay } from "../replay-turn-classification.js";
 import {
   isOpenAIResponsesCompactionOutput,
   publishResponsesCompactionInput,
@@ -305,7 +306,7 @@ type OpenAIResponsesCompactionReplayPlan = {
   compactedWindow?: OpenAIResponsesCompactionOutput;
   compaction?: ResponseCompactionItemParam;
   preserveUnframedToolResults: boolean;
-  itemRecovery?: { anchor: string; owner?: AssistantMessage };
+  itemRecovery?: { anchor: string };
 };
 
 export class CompactionReplayRefreshRequiredError extends Error {
@@ -338,10 +339,27 @@ export function buildOpenAIResponsesCompactionReplayPlan(
     return { messages, preserveUnframedToolResults: false };
   }
   if (compaction.mode === "item-recovery") {
+    const owner = compaction.owner;
+    if (resolveFailedAssistantReplay(owner, { pairingAware: false }) === "drop") {
+      // Keep a content-free boundary while normal transforms discard the failed output.
+      const boundary: AssistantMessage = {
+        role: "assistant",
+        content: [],
+        stopReason: "stop",
+        api: owner.api,
+        provider: owner.provider,
+        model: owner.model,
+        usage: owner.usage,
+        timestamp: owner.timestamp,
+        providerReplay: owner.providerReplay,
+      };
+      messages = [...messages];
+      messages.splice(messages.indexOf(owner), 0, boundary);
+    }
     return {
       messages,
       preserveUnframedToolResults: false,
-      itemRecovery: { anchor: compaction.anchor, owner: compaction.owner },
+      itemRecovery: { anchor: compaction.anchor },
     };
   }
   if (options?.mode === "full-history") {
