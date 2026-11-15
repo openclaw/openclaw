@@ -16,6 +16,7 @@ import {
   markTargetBlocked,
   pageTargetInfo,
 } from "./pw-session-connection.js";
+import { claimPageDocumentPolicy, ensurePageDocumentPolicy } from "./pw-session-document-policy.js";
 import { isConnectionScopedPage } from "./pw-session-page-target.js";
 
 type BrowserDocumentNavigationRequestKind = "top-level" | "subframe";
@@ -104,7 +105,11 @@ export async function assertPageNavigationCompletedSafely(
 ): Promise<void> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
+  if (navigationPolicy.ssrfPolicy || navigationPolicy.browserProxyMode) {
+    await ensurePageDocumentPolicy(opts.page, navigationPolicy);
+  }
   const policySignal = opts.signal ? { signal: opts.signal } : {};
   try {
     await assertBrowserNavigationRedirectChainAllowed({
@@ -129,34 +134,7 @@ export async function assertPageNavigationCompletedSafely(
   }
 }
 
-async function resumeRouteSafely(route: Route, method: "continue" | "fallback"): Promise<void> {
-  try {
-    await route[method]();
-  } catch (err) {
-    if (!(err instanceof Error && err.message.includes("Route is already handled"))) {
-      throw err;
-    }
-  }
-}
-
 const sourcePreservedPolicyDenials = new WeakSet<object>();
-
-async function removePageNavigationRequestGuard(
-  page: Page,
-  handler: (route: Route, request: Request) => Promise<void>,
-): Promise<unknown> {
-  try {
-    await page.unroute("**", handler);
-  } catch (err) {
-    // A closed page owns no remaining route. Preserve close-triggering actions,
-    // but surface cleanup failures while the page is still usable.
-    if (page.isClosed()) {
-      return undefined;
-    }
-    return err;
-  }
-  return undefined;
-}
 
 /** Return true when policy denial left the selected page on its source document. */
 export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknown): boolean {
@@ -167,6 +145,7 @@ export function wasBrowserNavigationSourcePreservedAfterPolicyDenial(err: unknow
 export async function withPageNavigationRequestGuard<T>(
   opts: {
     action: (baselineUrl: string) => Promise<T>;
+    assertCurrent?: () => void | Promise<void>;
     onPolicyCheckStarted?: (check: Promise<void>) => void;
     onPolicyDenied?: (
       event:
@@ -179,6 +158,7 @@ export async function withPageNavigationRequestGuard<T>(
 ): Promise<T> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   if (!navigationPolicy.ssrfPolicy && !navigationPolicy.browserProxyMode) {
     return await opts.action(opts.page.url());
@@ -294,34 +274,29 @@ export async function withPageNavigationRequestGuard<T>(
         recordGuardError(err);
         notifyPolicyDeniedDetected();
         await stopGuardedRoute(route, true, err);
-        return;
+        return false;
       }
     }
-    try {
-      await resumeRouteSafely(route, "fallback");
-    } catch (err) {
-      recordGuardError(err);
-      await stopGuardedRoute(route, preserveDocument, err);
-    }
+    return true;
   };
-  const handler = (route: Route, request: Request) => {
-    const operation = handleRoute(route, request).catch(async (err: unknown) => {
+  const release = await claimPageDocumentPolicy(opts.page, navigationPolicy, {
+    handle: handleRoute,
+    inFlight,
+    assertCurrent: () => {
+      const assertion = opts.assertCurrent?.();
+      if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
+      opts.signal?.throwIfAborted();
+    },
+    failed: async (route, request, err) => {
       recordGuardError(err);
-      await stopGuardedRoute(route, true, err);
-    });
-    inFlight.add(operation);
-    void operation.finally(() => inFlight.delete(operation));
-    return operation;
-  };
-
-  try {
-    await opts.page.route("**", handler);
-  } catch (err) {
-    // Playwright can register the client handler before browser-side setup
-    // rejects, so roll back that exact handler even on setup failure.
-    await removePageNavigationRequestGuard(opts.page, handler);
-    throw err;
-  }
+      notifyPolicyDeniedDetected();
+      await stopGuardedRoute(
+        route,
+        Boolean(classifyBrowserDocumentNavigationRequest(opts.page, request)),
+        err,
+      );
+    },
+  });
 
   let result: T | undefined;
   let actionFailed = false;
@@ -358,12 +333,9 @@ export async function withPageNavigationRequestGuard<T>(
     }
   }
 
-  // Remove admission first so a busy page cannot add work indefinitely. Active
-  // RouteHandler callbacks retain their exact invocation and are drained below.
-  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
-  while (inFlight.size > 0) {
-    await Promise.allSettled(inFlight);
-  }
+  // Release invocation-only admission, but retain the configured tab policy.
+  // Captured requests drain under the original invocation's authority.
+  await release();
 
   // Request-policy denial wins over locator/action/cleanup errors. Only 204
   // responses prove that every denied document was intercepted and source-preserved.
@@ -374,9 +346,6 @@ export async function withPageNavigationRequestGuard<T>(
   }
   if (actionFailed) {
     throw toErrorObject(actionError, "Non-Error thrown");
-  }
-  if (cleanupError !== undefined) {
-    throw toErrorObject(cleanupError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -395,50 +364,44 @@ export async function gotoPageWithNavigationGuard(
 ): Promise<Response | null> {
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   let blockedError: unknown = null;
+  let routeError: unknown;
 
-  const handler = async (route: Route, request: Request) => {
-    if (blockedError) {
+  const release = await claimPageDocumentPolicy(opts.page, navigationPolicy, {
+    inFlight: new Set(),
+    assertCurrent: () => {
+      const assertion = opts.assertPageCurrent?.();
+      if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
+      opts.signal?.throwIfAborted();
+    },
+    handle: async (route, request) => {
+      if (blockedError) {
+        await route.abort().catch(() => {});
+        return false;
+      }
+      const kind = classifyBrowserDocumentNavigationRequest(opts.page, request);
+      if (!kind) return true;
+      try {
+        await assertBrowserNavigationAllowed({
+          url: request.url(),
+          ...navigationPolicy,
+          ...(opts.signal ? { signal: opts.signal } : {}),
+        });
+        return true;
+      } catch (err) {
+        if (isPolicyDenyNavigationError(err) && kind === "top-level") blockedError = err;
+        else if (!isPolicyDenyNavigationError(err)) routeError ??= err;
+        await route.abort().catch(() => {});
+        return false;
+      }
+    },
+    failed: async (route, _request, err) => {
+      routeError ??= err;
       await route.abort().catch(() => {});
-      return;
-    }
-    const requestKind = classifyBrowserDocumentNavigationRequest(opts.page, request);
-    if (!requestKind) {
-      await resumeRouteSafely(route, "continue");
-      return;
-    }
-    try {
-      await assertBrowserNavigationAllowed({
-        url: request.url(),
-        ...navigationPolicy,
-        ...(opts.signal ? { signal: opts.signal } : {}),
-      });
-    } catch (err) {
-      if (opts.signal?.aborted) {
-        await route.abort().catch(() => {});
-        return;
-      }
-      if (isPolicyDenyNavigationError(err)) {
-        if (requestKind === "top-level") {
-          blockedError = err;
-        }
-        await route.abort().catch(() => {});
-        return;
-      }
-      throw err;
-    }
-    await resumeRouteSafely(route, "continue");
-  };
-
-  try {
-    await opts.page.route("**", handler);
-  } catch (err) {
-    // Playwright registers the client route before browser-side setup can fail.
-    // Remove this exact handler without replacing the original setup error.
-    await removePageNavigationRequestGuard(opts.page, handler);
-    throw err;
-  }
+    },
+  });
   let response: Response | null = null;
   let navigationFailed = false;
   let navigationError: unknown;
@@ -454,7 +417,7 @@ export async function gotoPageWithNavigationGuard(
     navigationError = err;
   }
 
-  const cleanupError = await removePageNavigationRequestGuard(opts.page, handler);
+  await release();
   if (blockedError) {
     await closeBlockedNavigationTarget({
       cdpUrl: opts.cdpUrl,
@@ -463,13 +426,10 @@ export async function gotoPageWithNavigationGuard(
     });
     throw toErrorObject(blockedError, "Non-Error thrown");
   }
-  // A live-page cleanup failure is observable, but the original navigation
-  // error owns the result and must not lose its precedence.
+  // The original navigation error retains precedence over route transport errors.
   if (navigationFailed) {
     throw navigationError;
   }
-  if (cleanupError !== undefined) {
-    throw toErrorObject(cleanupError, "Non-Error thrown");
-  }
+  if (routeError !== undefined) throw toErrorObject(routeError, "Non-Error thrown");
   return response;
 }

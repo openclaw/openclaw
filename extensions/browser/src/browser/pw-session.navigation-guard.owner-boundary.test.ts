@@ -1,4 +1,5 @@
 // Browser tests cover selected-page navigation guard owner-boundary cleanup.
+import { EventEmitter } from "node:events";
 import type { Page } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
@@ -39,8 +40,12 @@ function installBrowserMocks() {
       routeHandler = null;
     }
   });
-  const mainFrame = {};
+  const mainFrame = { url: () => "about:blank" };
+  const events = new EventEmitter();
   const page = {
+    on: events.on.bind(events),
+    off: events.off.bind(events),
+    context: () => ({ browser: () => null }),
     url: vi.fn(() => "about:blank"),
     route: pageRoute,
     unroute: pageUnroute,
@@ -179,8 +184,8 @@ describe("pw-session navigation guard owner boundary", () => {
       expect(route.abort).toHaveBeenCalledOnce();
       expect(route.fallback).not.toHaveBeenCalled();
       expect(route.continue).not.toHaveBeenCalled();
-      expect(pageUnroute).toHaveBeenCalledWith("**", pageRoute.mock.calls[0]?.[1]);
-      expect(getRouteHandler()).toBeNull();
+      expect(pageUnroute).not.toHaveBeenCalled();
+      expect(getRouteHandler()).toBe(pageRoute.mock.calls[0]?.[1]);
     } finally {
       releasePolicy();
       await dispatched?.catch(() => {});

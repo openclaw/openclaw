@@ -524,6 +524,7 @@ export async function createPageViaPlaywright(
   const targetUrl = opts.url.trim() || "about:blank";
   const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
   await assertBrowserNavigationAllowed({
     url: targetUrl,

@@ -76,6 +76,7 @@ export function interactionNavigationPolicy(
 ): BrowserNavigationPolicyOptions {
   return withBrowserNavigationPolicy(opts.ssrfPolicy, {
     browserProxyMode: opts.browserProxyMode,
+    standingSsrfPolicy: opts.standingSsrfPolicy,
   });
 }
 
@@ -452,6 +453,7 @@ export async function awaitNavigationGuardedInteraction<T>(
     }));
   const guardedAction = withPageNavigationRequestGuard({
     page: opts.page,
+    assertCurrent: opts.assertCurrent,
     ...navigationPolicy,
     ...(policySignal ? { signal: policySignal } : {}),
     onPolicyCheckStarted: (check) => {

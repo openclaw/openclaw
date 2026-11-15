@@ -50,6 +50,8 @@ export function parseBrowserNavigationUrl(url: string): URL {
 
 export type BrowserNavigationPolicyOptions = {
   ssrfPolicy?: SsrFPolicy;
+  /** Configured policy before any invocation-only grants; never retain those grants. */
+  standingSsrfPolicy?: SsrFPolicy;
   browserProxyMode?: BrowserNavigationProxyMode;
 };
 
@@ -65,10 +67,11 @@ type BrowserNavigationRequestLike = {
 /** Build a navigation-policy object while omitting default direct proxy mode. */
 export function withBrowserNavigationPolicy(
   ssrfPolicy?: SsrFPolicy,
-  opts?: { browserProxyMode?: BrowserNavigationProxyMode },
+  opts?: Pick<BrowserNavigationPolicyOptions, "browserProxyMode" | "standingSsrfPolicy">,
 ): BrowserNavigationPolicyOptions {
   return {
     ...(ssrfPolicy ? { ssrfPolicy } : {}),
+    ...(opts?.standingSsrfPolicy ? { standingSsrfPolicy: opts.standingSsrfPolicy } : {}),
     ...(opts?.browserProxyMode && opts.browserProxyMode !== "direct"
       ? { browserProxyMode: opts.browserProxyMode }
       : {}),

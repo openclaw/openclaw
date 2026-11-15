@@ -349,6 +349,8 @@ export async function waitForDownloadViaPlaywright(
   return await withPageNavigationRequestGuard({
     page,
     ...navigationPolicy,
+    assertCurrent: opts.assertCurrent,
+    signal,
     onPolicyDenied: (event) => {
       if (event.state === "detected") {
         policyDenial.abort(
