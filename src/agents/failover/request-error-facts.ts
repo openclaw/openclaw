@@ -6,7 +6,7 @@ import {
 import { describeFailoverError } from "../failover-error.js";
 import {
   renderAssistantRequestFailureCopy,
-  renderFormatErrorCopy,
+  renderAssistantFormatFailureCopy,
 } from "./assistant-request-failure-copy.js";
 import { classifyFailoverReason } from "./classify.js";
 import { classifyProviderRequestFacets } from "./request-error-facets.js";
@@ -36,7 +36,10 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     requestFailureText:
       storageCopy ??
       (reason === "format"
-        ? renderFormatErrorCopy(rawError)
+        ? renderAssistantFormatFailureCopy(
+            { errorMessage: rawError, errorCode: described.code },
+            reason,
+          )
         : transportCopy
           ? `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
           : undefined),
