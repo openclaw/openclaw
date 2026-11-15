@@ -1,7 +1,9 @@
+import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
+import { promisify } from "node:util";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
@@ -107,6 +109,70 @@ it("links an unmatched real Git failure to its retained process diagnostics", as
     resetLogger();
   }
 });
+
+it.each(["inventory", "publication"] as const)(
+  "retains native Git diagnostics when refresh fails during ref %s",
+  async (phase) => {
+    const root = dirs.make("openclaw-refresh-diagnostic-");
+    const source = path.join(root, "source");
+    const target = path.join(root, "checkout");
+    const git = promisify(execFile);
+    await git("git", ["init", "-b", "main", source]);
+    await git("git", [
+      "-C",
+      source,
+      "-c",
+      "user.name=Fixture",
+      "-c",
+      "user.email=fixture@example.invalid",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "initial",
+    ]);
+    await cloneProjectCheckout({ url: source, target });
+    const fault =
+      phase === "inventory"
+        ? path.join(target, ".git", "packed-refs")
+        : path.join(target, ".git", "refs", "remotes", "origin", "main.lock");
+    await fs.mkdir(path.dirname(fault), { recursive: true });
+    await fs.writeFile(fault, phase === "inventory" ? "invalid packed ref\n" : "");
+    const file = path.join(root, "gateway.log");
+    setLoggerOverride({ level: "warn", consoleLevel: "silent", file });
+    try {
+      const error = await capture(refreshProjectCheckout({ url: source, target }));
+      expect(error).toBeInstanceOf(ProjectCloneError);
+      if (!(error instanceof ProjectCloneError)) {
+        throw error;
+      }
+      expect(error.failure).toBe("clone_failed");
+      const summary = resolveSessionRunError({ error: String(error) }, "failed");
+      expect(summary).not.toContain(" ... ");
+      expect(summary).toContain(
+        phase === "inventory"
+          ? "Git could not read repository branches."
+          : "Git could not update repository branches.",
+      );
+      expect(summary).toContain("Send again");
+      const diagnosticId = /Diagnostic ID: ([a-f0-9-]{36})/u.exec(error.message)?.[1];
+      expect(diagnosticId).toBeDefined();
+      expect(summary).toContain(`Diagnostic ID: ${diagnosticId}`);
+      expect(error.message).not.toContain(target);
+      await flushLogger();
+      const records = await fs.readFile(file, "utf8");
+      expect(records).toContain(diagnosticId);
+      expect(records).toContain(phase === "inventory" ? "packed-refs" : "main.lock");
+      expect(records).toContain("exitCode");
+      // Correct only the fixture's filesystem fault; the same checkout can retry.
+      await fs.unlink(fault);
+      await expect(refreshProjectCheckout({ url: source, target })).resolves.toBeUndefined();
+    } finally {
+      await flushLogger();
+      setLoggerOverride(null);
+      resetLogger();
+    }
+  },
+);
 
 it("preserves an existing checkout when its target cannot be inspected", async () => {
   const target = dirs.make("openclaw-clone-target-");

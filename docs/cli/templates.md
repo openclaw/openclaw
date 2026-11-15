@@ -200,6 +200,9 @@ folders are not installed or counted as dependencies. Bundled contents show thei
 name and package-relative path; they have no invented registry version or
 standalone ClawHub verification claim.
 
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
+
 Bundled skill and plugin folders use the same bounded selection: regular files
 only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
 per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are

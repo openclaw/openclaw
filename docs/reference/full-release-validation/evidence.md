@@ -228,6 +228,25 @@ The downstream `Verify release checks` failure must contain only the existing
 `live_repo_e2e_release_checks ended with failure` cause. All other grants,
 including the earlier `5eb2` normal-CI grants and Kova, remain unchanged.
 
+On November 15, 2026 at 21:50 UTC, Dallin Romney authorized two more exact-job
+failures for unchanged C/Q `d843d6af39a42cd3c30084edbeabeece732fd93a` in FRV
+`43759426550/1`: `normalCi` job `checks-node-agentic-gateway-server-isolated-4`
+(child `43759963756/1`, job `132952700537`) and `releaseChecksIndependent` job
+`Run repo/live E2E validation / Native live suites (Native live gateway core)`
+(child `43759969390/1`, job `132953160694`). The CI gate log for job
+`132963783513` records exactly
+`checks-node-core-test-nondist-shard finished with failure (selected=true)`.
+The release-check aggregate must contain exactly
+`live_repo_e2e_release_checks ended with failure`. Both aggregates retain their
+required terminal state and sole expected failure step; extra causes still block.
+The catalog warm ownership-file read and native missing-required-read failures
+remain unresolved. Two zero-I/O catalog diagnostic replays do not prove a fix;
+the native local replay was quota-blocked. Preserve the raw errors and artifacts,
+not a fixed or passed label. These grants accept only executed terminal failures
+of these exact jobs on this exact candidate. They do not waive not-run coverage,
+relabel old evidence, or change any older grant, C/Q, dispatch, credential,
+integrity, or publication-approval requirement.
+
 Only exact terminal **failed** live-provider or Telegram leaves, the
 operator-accepted beta.3 and candidate-bound `2026.11.4` jobs, or the Kova
 threshold exceptions above are eligible.
