@@ -515,15 +515,30 @@ export type RunMessageCheck =
   | { state: "outdated" | "differs"; current: string };
 
 /** Compare a scribe automation's run message with every message each version generated. */
-export function checkRunMessage(id: ScribeId, message: string, schedule?: string): RunMessageCheck {
+/** The part of an automation's schedule a run message check reads. */
+export type RunSchedule = { kind: string; expr?: string };
+
+export function checkRunMessage(
+  id: ScribeId,
+  message: string,
+  schedule?: RunSchedule,
+): RunMessageCheck {
   // The automation's own schedule comes first, so an earlier message that names no amounts is
   // brought up to the amounts of the schedule it runs on.
   const all = settingsChoices(id);
-  const scheduled = all.find((options) => "schedule" in options && options.schedule === schedule);
+  const expr = schedule?.kind === "cron" ? schedule.expr : undefined;
+  const scheduled =
+    expr === undefined
+      ? undefined
+      : all.find((options) => "schedule" in options && options.schedule === expr);
   const choices = scheduled ? [scheduled, ...all.filter((options) => options !== scheduled)] : all;
   // A consolidation automation on a schedule the dialog doesn't offer gets no amounts, so the
   // skill's defaults stay in force instead of another schedule's.
-  const amounts = !(id === "claim-consolidation" && schedule !== undefined && !scheduled);
+  // Interval and one-time schedules count as such too; a schedule that isn't read stays unknown.
+  const custom =
+    schedule !== undefined &&
+    (schedule.kind !== "cron" || (schedule.expr !== undefined && !scheduled));
+  const amounts = !(id === "claim-consolidation" && custom);
   const generate = (options: ScribeOptions[ScribeId], wording?: RunWording) =>
     runPrompt({ scribe: id, mode: "ongoing", options, timezone: "UTC" }, wording, amounts);
   for (const options of choices) {
@@ -599,7 +614,7 @@ export function repairPrompt(
   const check =
     current.runMessage === undefined
       ? undefined
-      : checkRunMessage(id, current.runMessage, current.schedule.expr);
+      : checkRunMessage(id, current.runMessage, current.schedule);
   const runMessage =
     check?.state === "outdated"
       ? check.current

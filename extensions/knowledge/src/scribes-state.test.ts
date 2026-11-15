@@ -130,6 +130,7 @@ describe("scribes catalog", () => {
   });
 
   it("recognizes run messages earlier versions generated and keeps edited ones", () => {
+    const cron = (expr: string) => ({ kind: "cron", expr });
     const runMessage = (id: "claim-consolidation" | "granola", options: object) =>
       setupPrompt(scribeSetup(id, "ongoing", options as never, "UTC")).match(
         /Run message:\n\n```text\n([\s\S]+)\n```$/,
@@ -163,23 +164,38 @@ describe("scribes catalog", () => {
     expect(beforeAmounts).not.toContain("Each run:");
     const earlier = claimsOnly(earlierOf(beforeAmounts));
     expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
-    expect(checkRunMessage("claim-consolidation", nightly, REVIEW_NIGHTLY_SCHEDULE)).toEqual({
+    expect(checkRunMessage("claim-consolidation", nightly, cron(REVIEW_NIGHTLY_SCHEDULE))).toEqual({
       state: "current",
     });
     // An unedited message from before the amounts takes those of the schedule it runs on.
-    expect(checkRunMessage("claim-consolidation", beforeAmounts, REVIEW_NIGHTLY_SCHEDULE)).toEqual({
+    expect(
+      checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_NIGHTLY_SCHEDULE)),
+    ).toEqual({
       state: "outdated",
       current: nightly,
     });
-    expect(checkRunMessage("claim-consolidation", beforeAmounts, REVIEW_WEEKLY_SCHEDULE)).toEqual({
+    expect(
+      checkRunMessage("claim-consolidation", beforeAmounts, cron(REVIEW_WEEKLY_SCHEDULE)),
+    ).toEqual({
       state: "outdated",
       current,
     });
     // A custom schedule gets no amounts: its message without them is already current.
-    expect(checkRunMessage("claim-consolidation", beforeAmounts, "5 1 * * 2")).toEqual({
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, { kind: "every" })).toEqual({
       state: "current",
     });
-    expect(checkRunMessage("claim-consolidation", claimsOnly(beforeAmounts), "5 1 * * 2")).toEqual({
+    expect(
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "every" },
+        runMessage: claimsOnly(beforeAmounts),
+      }),
+    ).toContain(`\`\`\`text\n${beforeAmounts}\n\`\`\``);
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, cron("5 1 * * 2"))).toEqual({
+      state: "current",
+    });
+    expect(
+      checkRunMessage("claim-consolidation", claimsOnly(beforeAmounts), cron("5 1 * * 2")),
+    ).toEqual({
       state: "outdated",
       current: beforeAmounts,
     });
