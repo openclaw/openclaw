@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   agentDir: "/tmp/prepared-model-catalog-agent",
   workspaceDir: "/tmp/prepared-model-catalog-workspace",
   config: {} as object,
+  readRuntimeConfig: vi.fn(),
   agentIds: ["main"],
   agentDirs: new Map<string, string>(),
   activateSnapshot: vi.fn(),
@@ -20,8 +21,9 @@ const mocks = vi.hoisted(() => ({
 }));
 const { agentDir, workspaceDir } = mocks;
 
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => mocks.config,
+vi.mock("../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: mocks.readRuntimeConfig,
 }));
 
 // mock-isolation: Use fixed agent directories without ambient workspace discovery.
@@ -131,6 +133,40 @@ describe("prepared model catalog access", () => {
         mock.mockReset();
       }
     }
+    mocks.readRuntimeConfig.mockReturnValue(mocks.config);
+  });
+
+  it.each(["published", "explicit"] as const)(
+    "passes the exact %s config to the selected catalog owner",
+    async (selection) => {
+      const config =
+        selection === "published"
+          ? mocks.config
+          : { agents: { defaults: { model: "openai/explicit" } } };
+      const snapshot = { ...fullSnapshot, config };
+      mocks.prepareSnapshot.mockResolvedValue(snapshot);
+
+      await expect(loadOwner(selection === "explicit" ? { config } : {})).resolves.toBe(snapshot);
+      expect(mocks.prepareSnapshot).toHaveBeenCalledOnce();
+      expect(mocks.prepareSnapshot.mock.calls[0]?.[0].config).toBe(config);
+      if (selection === "explicit") {
+        expect(mocks.readRuntimeConfig).not.toHaveBeenCalled();
+      } else {
+        expect(mocks.readRuntimeConfig).toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("preserves an unpublished config error before selecting a catalog owner", async () => {
+    const failure = new Error("Runtime config is not prepared");
+    mocks.readRuntimeConfig.mockImplementation(() => {
+      throw failure;
+    });
+
+    await expect(loadOwner()).rejects.toBe(failure);
+    expect(mocks.prepareSnapshot).not.toHaveBeenCalled();
+    expect(mocks.activateSnapshot).not.toHaveBeenCalled();
+    expect(mocks.acquireSnapshot).not.toHaveBeenCalled();
   });
 
   // Projection rejection/release is covered with real SQLite by the resources sibling.

@@ -239,10 +239,22 @@ export function createVitestResolveConfig(repoRoot: string) {
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "event-stream.ts"),
       },
       {
+        find: "@openclaw/llm-core/request-headers",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "llm-core",
+          "src",
+          "utils",
+          "request-headers.ts",
+        ),
+      },
+      {
         find: "@openclaw/llm-core/validation",
         replacement: path.join(repoRoot, "packages", "llm-core", "src", "validation.ts"),
       },
       sourcePackageAlias("llm-core", "types"),
+      sourcePackageAlias("llm-core", "usage-cost"),
       sourcePackageAlias("llm-core", "model-contracts/anthropic"),
       {
         find: "@openclaw/llm-core",

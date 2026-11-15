@@ -1,9 +1,9 @@
 // Provides model selection, usage, and thinking-level utility helpers.
 import {
-  calculateUsageCost,
   resolveClaudeNativeThinkingLevelMap,
   requiresClaudeMandatoryAdaptiveThinking,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/model-contracts/anthropic";
+import { calculateUsageCost } from "@openclaw/llm-core/usage-cost";
 import {
   resolveOpenAIThinkingApi,
   listMappedModelThinkingLevels,

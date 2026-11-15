@@ -19,7 +19,7 @@ import {
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
   usesClaude5RequestContract,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/model-contracts/anthropic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { clampThinkingLevel } from "../model-utils.js";
@@ -50,7 +50,7 @@ export {
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/model-contracts/anthropic";
 
 // Starting Claude Code identity for OAuth requests. Anthropic gates newer models
 // with claude_code_version_too_old and names the required version; the transport

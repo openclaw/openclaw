@@ -691,8 +691,10 @@ function buildLlmCoreDistEntries(): Record<string, string> {
     index: "packages/llm-core/src/index.ts",
     "model-contracts/anthropic": "packages/llm-core/src/model-contracts/anthropic.ts",
     types: "packages/llm-core/src/types.ts",
+    "usage-cost": "packages/llm-core/src/usage-cost.ts",
     "utils/diagnostics": "packages/llm-core/src/utils/diagnostics.ts",
     "utils/event-stream": "packages/llm-core/src/utils/event-stream.ts",
+    "utils/request-headers": "packages/llm-core/src/utils/request-headers.ts",
     validation: "packages/llm-core/src/validation.ts",
   };
 }

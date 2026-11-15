@@ -1,7 +1,8 @@
 /**
  * Converts inline provider model config into runtime model definitions.
  */
-import { normalizeResolvedPricing, omitNullRequestHeaders } from "@openclaw/llm-core";
+import { omitNullRequestHeaders } from "@openclaw/llm-core/request-headers";
+import { normalizeResolvedPricing } from "@openclaw/llm-core/usage-cost";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { MODEL_APIS } from "../../config/model-config-vocabulary.js";
 import { resolveMergedModelProviderModels } from "../../config/model-provider-config.js";

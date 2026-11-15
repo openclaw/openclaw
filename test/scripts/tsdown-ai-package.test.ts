@@ -8,6 +8,7 @@ import { expect, it } from "vitest";
 import manifest from "../../packages/ai/package.json" with { type: "json" };
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import config from "../../tsdown.ai.config.ts";
+import { runNodeScript } from "../helpers/run-node-script.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -47,7 +48,53 @@ it("loads bundled provider SDKs and Bun proxy support from production dependenci
         ),
     );
     expect(parserModules.length).toBeGreaterThan(0);
+    const validationSources = new Set(
+      ["packages/llm-core/src/index.ts", "packages/llm-core/src/validation.ts"].map((file) =>
+        path.resolve(file),
+      ),
+    );
+    const validationModules = bundles.flatMap((bundle) =>
+      bundle.chunks
+        .filter(
+          (chunk) =>
+            chunk.type === "chunk" &&
+            Object.keys(chunk.modules).some((id) => validationSources.has(path.resolve(id))),
+        )
+        .map(
+          (chunk) => pathToFileURL(fs.realpathSync(path.join(chunk.outDir, chunk.fileName))).href,
+        ),
+    );
+    expect(validationModules.length).toBeGreaterThan(0);
     linkDependencies(root, manifest.dependencies);
+    // Inspect bundled ownership as well as external imports in a fresh process.
+    const cold = await runNodeScript(
+      [
+        "--input-type=module",
+        "--eval",
+        `
+import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+const validationModules = new Set(${JSON.stringify(validationModules)});
+registerHooks({ resolve(specifier, context, next) {
+  assert.notEqual(specifier, "@openclaw/llm-core", "pure helpers must not load the LLM barrel");
+  assert(!["typebox/compile", "typebox/value"].includes(specifier),
+    "catalog helpers must not initialize tool validation");
+  return next(specifier, context);
+}, load(url, context, next) {
+  assert(!validationModules.has(url), "runtime helpers must not load bundled tool validation");
+  return next(url, context);
+}});
+const { calculateCost } = await import("./dist/internal/runtime.mjs");
+assert.equal(typeof calculateCost, "function");
+console.log("cold-helper-ok");`,
+      ],
+      { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot },
+      30_000,
+      { cwd: root, requireProcessTreeExit: process.platform !== "win32" },
+    );
+    expect(cold.error).toBeUndefined();
+    expect(cold.status, cold.stderr).toBe(0);
+    expect(cold.stdout).toContain("cold-helper-ok");
     expect(fs.readFileSync(path.join(outDir, "mistral.LICENSE"), "utf8")).toContain(
       "Apache License",
     );
@@ -72,10 +119,12 @@ it("loads bundled provider SDKs and Bun proxy support from production dependenci
         }
         return next(url, context);
       }});
-      const { createApiRegistry, createNodeLlmRuntime } = await import("./dist/index.mjs");
+      const { createApiRegistry, createLlmRuntime, createNodeLlmRuntime } = await import("./dist/index.mjs");
       const { registerBuiltInApiProviders } = await import("./dist/providers.mjs");
       await import("./dist/transports.mjs");
-      await import("./dist/internal/runtime.mjs");
+      const internalRuntime = await import("./dist/internal/runtime.mjs");
+      assert.equal(internalRuntime.createApiRegistry, createApiRegistry);
+      assert.equal(internalRuntime.createLlmRuntime, createLlmRuntime);
       await import("./dist/internal/openai.mjs");
       await import("./dist/internal/anthropic.mjs");
       const registry = createApiRegistry();

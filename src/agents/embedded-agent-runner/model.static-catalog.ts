@@ -1,4 +1,4 @@
-import { normalizeResolvedPricing } from "@openclaw/llm-core";
+import { normalizeResolvedPricing } from "@openclaw/llm-core/usage-cost";
 import type { ModelCatalogRef as BundledStaticCatalogLookup } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import {

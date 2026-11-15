@@ -2,7 +2,7 @@ import {
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaude1MContext,
-} from "@openclaw/llm-core";
+} from "@openclaw/llm-core/model-contracts/anthropic";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeConfiguredProviderCatalogModelId,

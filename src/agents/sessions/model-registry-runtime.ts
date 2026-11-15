@@ -3,7 +3,7 @@ import {
   createLlmRuntime,
   type ApiRegistry,
   type LlmRuntime,
-} from "@openclaw/ai";
+} from "@openclaw/ai/internal/runtime";
 import { registerBuiltInApiProviders } from "@openclaw/ai/providers";
 import { bindStreamLlmRuntime } from "../../llm/model-runtime-binding.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";

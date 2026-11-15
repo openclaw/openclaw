@@ -1,5 +1,5 @@
 /** Lifecycle-owned model catalog access. */
-import { getRuntimeConfig } from "../config/config.js";
+import { readRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   listAgentIds,
@@ -56,7 +56,6 @@ import {
   normalizeThinkingCatalogProviders,
   resolveEffectiveAgentRuntime,
 } from "./thinking-runtime.js";
-import { resolveDefaultAgentWorkspaceDir } from "./workspace.js";
 
 export { withPreparedModelRuntimeReadBatch } from "./prepared-model-runtime.owner.js";
 export { getPendingPreparedModelRuntimeReplacement } from "./prepared-model-runtime.js";
@@ -171,7 +170,7 @@ function resolveInputs(params: LoadPreparedModelCatalogParams = {}): {
   activationFull: PreparedModelRuntimeInput;
   inventory: PreparedModelRuntimeInput;
 } {
-  const config = params.config ?? getRuntimeConfig();
+  const config = params.config ?? readRuntimeConfig();
   const explicitOrDefaultAgentId =
     params.agentId ??
     (params.agentDir === undefined ? resolveAmbientOwnerAgentId(config) : undefined);
@@ -535,10 +534,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
         cfg: params.config,
         agentId,
         agentDir: params.agentDir ?? resolveAgentDir(params.config, agentId),
-        workspaceDir:
-          params.workspaceDir ??
-          resolveAgentWorkspaceDir(params.config, agentId) ??
-          resolveDefaultAgentWorkspaceDir(),
+        workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(params.config, agentId),
         defaultProvider: params.provider,
         defaultModel: `${params.provider}/${params.model}`,
         agentRuntime: params.agentRuntime,

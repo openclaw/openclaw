@@ -630,6 +630,9 @@
       "@openclaw/llm-core/event-stream": [
         "../packages/plugin-sdk/dist/packages/llm-core/src/utils/event-stream.d.ts"
       ],
+      "@openclaw/llm-core/request-headers": [
+        "../packages/plugin-sdk/dist/packages/llm-core/src/utils/request-headers.d.ts"
+      ],
       "@openclaw/llm-core/types": [
         "../packages/plugin-sdk/dist/packages/llm-core/src/types.d.ts"
       ],
