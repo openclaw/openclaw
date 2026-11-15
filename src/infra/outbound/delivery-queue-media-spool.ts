@@ -19,9 +19,10 @@ import {
   type DeliveryQueueStateContext,
 } from "../delivery-queue-sqlite.js";
 import { ignoreMissingPath } from "../errno.js";
+import { runFsSafeStoreOperation } from "../fs-safe-filesystem-worker.js";
 import { FsSafeError } from "../fs-safe.js";
 import { generateSecureUuid } from "../secure-random.js";
-import { getOrLoadSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
+import { peekSqliteDatabaseAdmissionForPath } from "../sqlite-database-admission.js";
 import {
   ARTIFACT_NAME_RE,
   collectEntrySpoolPaths,
@@ -45,6 +46,15 @@ function openSpoolStore(stateDir: string | undefined, maxBytes?: number) {
     dirMode: 0o700,
     mode: 0o600,
     maxBytes,
+  });
+}
+
+async function removeSpoolArtifact(relativePath: string, stateDir?: string): Promise<void> {
+  // Terminal cleanup retains its own task after the originating request loses authority.
+  await runFsSafeStoreOperation({
+    type: "remove-store-file",
+    rootDir: resolveDeliveryQueueMediaDir(stateDir),
+    relativePath,
   });
 }
 
@@ -156,7 +166,7 @@ export async function stageQueuePayloadMedia(
       await root.move(partRelative, finalRelative, { overwrite: false });
       publishedSources.add(source);
     } catch (err) {
-      await store.remove(partRelative).catch(() => undefined);
+      await removeSpoolArtifact(partRelative, stateDir).catch(() => undefined);
       throw err;
     }
     return stagedPath;
@@ -209,7 +219,7 @@ export async function releaseSpoolArtifacts(
     const relative = spoolRelativePath(artifact, stateDir);
     if (relative) {
       try {
-        await openSpoolStore(stateDir).remove(relative);
+        await removeSpoolArtifact(relative, stateDir);
       } catch (err) {
         if (!(err instanceof FsSafeError && err.code === "not-found")) {
           log.warn(`failed to remove delivery queue media artifact ${relative}: ${String(err)}`);
@@ -265,10 +275,9 @@ export async function pruneOrphanedDeliveryQueueMedia(
     await releaseSpoolArtifacts([artifactPath], stateDir);
   }
   if (!retainPaths) {
-    const oldest = getOrLoadSqliteDatabaseAdmissionForPath(
+    const oldest = peekSqliteDatabaseAdmissionForPath(
       captured.workerContext.admission.databasePath,
       oldestDeliveryQueueMediaStageAdmission,
-      () => undefined,
     );
     // A crashed producer can leave an expiring stage without ever creating a file.
     if (oldest === undefined || (oldest !== null && oldest <= cutoffMs)) {

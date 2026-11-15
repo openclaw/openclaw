@@ -25,7 +25,7 @@ export {
   type ResolvedWritableAbsolutePath,
 } from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
-export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
 export { resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
@@ -58,6 +58,29 @@ export {
   type WalkDirectoryResult,
 } from "@openclaw/fs-safe/walk";
 export { withTimeout } from "@openclaw/fs-safe/advanced";
+
+/** Follow links; all filesystem failures mean the optional path is unavailable. */
+export async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    let target = filePath;
+    // fs-safe's async pathExists still uses statSync. Preserve its private
+    // Windows namespace-root adaptation while using asynchronous stat here.
+    if (process.platform === "win32" && /^[\\/]{2}[?.][\\/][A-Za-z]:[\\/]/.test(filePath)) {
+      if (filePath.length === 7) {
+        target = `${filePath[4]}:\\`;
+      } else {
+        const resolved = path.resolve(filePath);
+        if (/^[\\/]{2}[?.][\\/][A-Za-z]:$/.test(resolved) && !filePath.includes(":", 6)) {
+          target = `${resolved[4]}:\\`;
+        }
+      }
+    }
+    await fs.stat(target);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // Root.walk remains core-only on this facade; temp workspace stores keep their shipped full Root.
 export type Root = Omit<CompatibleFsSafeRoot, "walk">;

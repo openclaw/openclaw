@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveStateDir } from "../config/state-dir.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
@@ -22,11 +23,13 @@ export type OpenClawStateReadContext = ReturnType<
 /** Capture read authority without constructing a worker environment. */
 export function captureOpenClawStateReadContext(
   pathname = resolveOpenClawStateSqlitePath(),
+  preparedIdentity?: DatabasePathIdentity,
 ): OpenClawStateReadContext {
   return captureOpenClawStateReadContextWithAdmission(
     pathname,
     captureOpenClawStateDatabaseReadAdmission,
     openClawStateDatabaseCache.getKnownOpenClawStateDatabaseIdentity,
+    preparedIdentity,
   );
 }
 

@@ -15,6 +15,7 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../runtime.js";
+import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
 import type { ReplyOperation } from "../../sessions/session-controller.js";
 import { deferSessionControllerClaimBeforeExecution } from "../../sessions/session-controller.mailbox-claim.js";
 import { getReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
@@ -376,27 +377,30 @@ export function createFollowupRunner(
         turn.session.kind === "session" &&
         turn.session.storePath
       ) {
-        await enqueueGoalContinuation({
-          base: turn.queued,
-          result: completedAccounting.runResult,
-          initialGoalId:
-            runWithGoalReturn(() => readCreatedGoalContinuationId(turn.runId, turn.operation)) ??
-            turn.queued.goalContinuation?.goalId ??
-            initialGoalId,
-          expectedSession: completedAccounting.expectedSession,
-          sessionKey: turn.session.key,
-          storePath: turn.session.storePath,
-          reader: getReplyOperationSessionReader(turn.operation),
-          queueKey: turn.queued.run.sessionKey ?? turn.session.key,
-          settings: resolveQueueSettings({
-            cfg: turn.config,
-            sessionEntry: turn.session.current(),
-            channel: turn.queued.originatingChannel,
+        const { key: sessionKey, storePath } = turn.session;
+        await withSessionControllerOwner(turn.operation, () =>
+          enqueueGoalContinuation({
+            base: turn.queued,
+            result: completedAccounting.runResult,
+            initialGoalId:
+              runWithGoalReturn(() => readCreatedGoalContinuationId(turn.runId, turn.operation)) ??
+              turn.queued.goalContinuation?.goalId ??
+              initialGoalId,
+            expectedSession: completedAccounting.expectedSession,
+            sessionKey,
+            storePath,
+            reader: getReplyOperationSessionReader(turn.operation),
+            queueKey: turn.queued.run.sessionKey ?? sessionKey,
+            settings: resolveQueueSettings({
+              cfg: turn.config,
+              sessionEntry: turn.session.current(),
+              channel: turn.queued.originatingChannel,
+            }),
+            sourceRunId: turn.runId,
+            operation: turn.operation,
+            runFollowup,
           }),
-          sourceRunId: turn.runId,
-          operation: turn.operation,
-          runFollowup,
-        });
+        );
       }
     } catch (error) {
       let operatorAuthorityLost = false;
