@@ -2462,6 +2462,22 @@ div.shell.shell--onboarding {
   margin-block-start: 10px;
 }
 
+.sidebar-customize__plugin-icon {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  object-fit: cover;
+}
+
+.sidebar-customize__plugin-icon--fallback {
+  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
+  color: rgb(255 255 255 / 92%);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .sidebar-customize__heading {
   padding: 4px 8px;
   color: var(--muted);
