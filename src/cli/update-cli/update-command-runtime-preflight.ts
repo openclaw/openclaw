@@ -297,12 +297,16 @@ export async function resolvePackageRuntimePreflight(params: {
             continuation,
           })
         : undefined;
+    // An early engine refusal for the service's own Node needs the same owner step when this
+    // updater cannot rewrite that service definition; retrying from a new shell Node refuses again.
+    const serviceKeepsNode = params.engineOnly
+      ? nodeRunner === params.service?.serviceNodeRunner && !canRefreshService
+      : params.alreadyCurrent && !canRefreshCurrentService;
     if (
       recoverySteps?.at(-1)?.kind === "continue-update" &&
-      params.alreadyCurrent &&
+      serviceKeepsNode &&
       nodeRunner &&
-      params.service?.serviceNodeRunner &&
-      !canRefreshCurrentService
+      params.service?.serviceNodeRunner
     ) {
       recoverySteps.splice(-1, 0, {
         kind: "select-runtime",

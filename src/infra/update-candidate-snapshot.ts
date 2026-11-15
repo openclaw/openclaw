@@ -190,9 +190,10 @@ export async function assessInitialUpdateSnapshotCapacity(
         ...step,
         durationMs: Date.now() - started,
         exitCode: 1,
-        // The first line is the operator's instruction; the update refuses on it unchanged.
+        // The instruction line leads; the blank line keeps the diagnostics out of the terminal.
         stderrTail: [
           `Update refused: no eligible directory has ${formatDiskSpaceBytes(capacity.requiredBytes)} free for the state snapshot. Free space on a reported filesystem or set TMPDIR to a writable directory with enough space, then retry openclaw update. No changes were made.`,
+          "",
           ...diagnostics,
         ].join("\n"),
         snapshotCapacity: capacity,
@@ -212,7 +213,7 @@ export async function assessInitialUpdateSnapshotCapacity(
           ...step,
           durationMs: Date.now() - started,
           exitCode: 1,
-          stderrTail: [`Update refused: ${error.message}`, ...diagnostics].join("\n"),
+          stderrTail: [`Update refused: ${error.message}`, "", ...diagnostics].join("\n"),
         };
       }
     }
