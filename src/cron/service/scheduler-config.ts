@@ -1,5 +1,5 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import type { CronConfig } from "../../config/types.cron.js";
+import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
@@ -17,20 +17,38 @@ export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
 }
 
 /**
- * Run slots automation may hold right now: eight, unless `cron.dynamicConcurrency` is on. Then
- * automation shares the agent concurrency limit with conversations and yields to them: every
- * conversation turn in progress takes one slot away, down to the eight automation always keeps.
- * Conversations are never held back by automation.
+ * Run slots automation may hold right now. Automation shares the agent concurrency limit with
+ * conversations and yields to them: every conversation turn in progress takes one slot away, down
+ * to the eight automation always keeps. Conversations are never held back by automation. Free
+ * memory can lower this further; see {@link resolveCronFreeMemoryRuns}.
  */
-export function resolveCronRunSlots(cron: CronConfig | undefined): number {
-  if (cron?.dynamicConcurrency !== true) {
-    return DEFAULT_CRON_MAX_CONCURRENT_RUNS;
-  }
+export function resolveCronRunSlots(): number {
   const conversations = getCommandLaneSnapshot(CommandLane.Main);
   return Math.max(
     DEFAULT_CRON_MAX_CONCURRENT_RUNS,
     conversations.maxConcurrent - conversations.activeCount,
   );
+}
+
+/**
+ * An estimate of the memory one automation run uses: its agent session, model streams, and the
+ * tool processes it starts. Runs that use less let more start; see `cron.drainQueue`.
+ */
+const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
+
+/**
+ * How many more runs the memory free now could hold, at the per-run estimate. Host memory counts
+ * reclaimable cache as free. Under a container or cgroup limit, the Gateway's resident memory
+ * counts against that limit: the cgroup's own usage includes page cache the kernel would reclaim,
+ * so on a long-running Gateway it reads as nearly full.
+ */
+export function resolveCronFreeMemoryRuns(): number {
+  const limit = process.constrainedMemory();
+  const free = Math.min(
+    readHostFreeMemoryBytes(),
+    limit > 0 ? limit - process.memoryUsage.rss() : Infinity,
+  );
+  return Math.max(0, free) / RUN_MEMORY_BYTES;
 }
 
 /** The conversation a job's run would have to wait for right now, if its turn is still running. */
@@ -67,7 +85,8 @@ export async function captureCronSchedulerSnapshot(
       cronEnabled: state.deps.cronEnabled,
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
-      maxConcurrentRuns: resolveCronRunSlots(state.deps.cronConfig),
+      maxConcurrentRuns: resolveCronRunSlots(),
+      freeMemoryRuns: resolveCronFreeMemoryRuns(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
         ? preparedOwner.defaultAgentId

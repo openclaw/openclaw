@@ -413,10 +413,7 @@ it.each([
   }
 });
 
-it.each([
-  ["eight automations at once by default", undefined, 8],
-  ["as many as the agent limit allows with dynamic concurrency", true, 12],
-])("runs %s", async (_name, dynamicConcurrency, expected) => {
+it("starts fewer automations while free memory is short, and at least one", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
@@ -427,21 +424,37 @@ it.each([
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       started.push(job.id);
       await finish.promise;
       return { status: "ok" as const, summary: job.id };
     },
   });
+  const gib = 1024 ** 3;
+  cron.stubFreeMemory(0);
   setCommandLaneConcurrency(CommandLane.Main, 32);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
+    // No free memory: one run at a time, so automation still progresses.
     nowMs = dueAtMs;
     await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(expected));
+    await vi.waitFor(() => expect(started).toHaveLength(1));
     await running.wake(state);
-    expect(started).toHaveLength(expected);
+    expect(started).toHaveLength(1);
+
+    // 1 GiB free holds four runs at 256 MiB each; with one running, automation takes half of five.
+    cron.stubFreeMemory(gib);
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+    // The runs took that memory: no more start.
+    cron.stubFreeMemory(gib / 2);
+    await running.wake(state);
+    expect(started).toHaveLength(2);
+
+    // Memory is freed: the rest start, up to the agent limit.
+    cron.stubFreeMemory(16 * gib);
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(12));
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);
@@ -462,7 +475,6 @@ it("runs as many automations as the agent limit leaves free of conversations", a
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency: true },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       await (started.push(job.id) === 1 ? release : finish).promise;
       return { status: "ok" as const, summary: job.id };
@@ -517,7 +529,7 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency: true, triggers: { enabled: true } },
+    cronConfig: { triggers: { enabled: true } },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       started.push(job.id);
       if (job.id.startsWith("long-")) {
