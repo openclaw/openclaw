@@ -135,117 +135,43 @@ original-attempt reconciliation, not blind re-publication.
 
 ## Release-tooling waivers
 
-Waivers are code in trusted release tooling **P**, not candidate **C** or its
-qualification harness **Q=C**. The grant list is
-`scripts/lib/release-validation-waivers.mjs` and is empty by default. Add a
-reviewed row with an exact target version, child role, job name, and reason.
-An optional `targetSha` restricts the grant to that exact authenticated candidate;
-a missing or different candidate SHA cannot use it, including through
-changelog-only evidence reuse.
-For example (illustrative only, not an active grant):
+Waivers live in trusted release tooling **P**, in
+`scripts/lib/release-validation-waivers.mjs`, not in candidate **C** or its
+qualification harness **Q=C**. Add an operator-approved entry with the exact
+version, child role, job name, and a short reason. Optional `targetSha` and
+`evidence: { runId, runAttempt }` fields restrict it to a candidate or execution.
+The checked-in list is authoritative; keep release-specific authorization and
+diagnostics in the PR or release handoff, not this page.
 
-```js
-const RELEASE_VALIDATION_WAIVERS = [
-  {
-    targetVersion: "YYYY.M.PATCH",
-    childRole: "releaseChecksIndependent",
-    jobName: "Run repo/live E2E validation / Native live suites (Native live Z.AI Coding Plan)",
-    reason: "Provider credential outage; tracked in the release handoff.",
-  },
-];
-```
+Land the policy, pin **P**, and run or revalidate FRV with unchanged **C/Q**.
+The candidate workflow must route state operations to admitted P; changing P
+alone does not retrofit older workflows. State, manifest, and summary preserve
+the raw failure and reason. A failed-job grant does not skip a test or mark it
+passed. Failed aggregates must contain only causes explained by granted jobs.
+Missing, cancelled, timed-out, incomplete, or mismatched required evidence and
+ungranted failures still block. Package, dispatch, and seal integrity checks
+remain mandatory.
 
-Land the policy in trusted tooling, pin that **P** when admitting validation,
-and run or revalidate FRV with the unchanged **C/Q**. P's
-`full-release-validation-state.mjs` owns Release Decision, Diagnostic Drain,
-manifest writing, and final validation. Candidate workflows still run every
-selected test except for the explicit pre-dispatch exception below. A failed-job
-waiver does not omit a test or change its raw conclusion.
-State, manifest, and summary retain each waived failure and its reason.
+Kova performance grants cover only operator-approved threshold failures, not
+crashes, correctness, isolation, data integrity, or install/update failures.
+The separate `qualificationExemption` entry is an explicit **waived-not-run**
+disposition, not a failed-job grant or reuse of an old measurement. It requires:
 
-The `Kova mock provider performance` leaf can be granted only for an exact
-version the operator named, and only for threshold breaches; retain the report.
-An `evidence: { runId, runAttempt }` restriction binds a grant to one reviewed
-execution, not subsequent failures of the same job. The 2026.9.37 exception
-uses this restriction for child 42361846301/1 in FRV 42361691019/1 on original
-C/Q `5ca478fb3d02d7d988ce09cfcc214ec1eed46ab8`. Its retained report records the
-bundled-plugin-startup gateway CPU threshold breach.
+- P to authenticate the supporting historical receipt and seal the exemption
+  into qualification coverage.
+- Q to support `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT` version `1` and
+  consume the verified admission before dispatch. Older frozen harnesses need
+  an explicit backport and fresh C=Q admission.
+- The execution plan to omit only the exempted lane, and the manifest to record
+  its not-run disposition, empty run ID, and supporting receipt identity.
 
-The operator additionally authorized a new 2026.9.37 candidate on November 7,
-2026 at 17:49 UTC, with performance explicitly **waived-not-run**. This is the
-only pre-dispatch exception: admitted P seals it into qualification coverage
-after checking the exact historical failed receipt, original source, current
-attempt, trusted upload, archive/payload digests, and absence of other child
-failures. The historical receipt supports the exception; it does not measure
-the new candidate. Q must declare `FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT`
-version `1` and consume the verified admission before dispatch. The execution
-plan omits only performance; the manifest records its explicit not-run
-disposition, empty run ID, and supporting receipt identity. Strict consumers
-require that record and reject presenting the old child as new-target evidence.
-All remaining gates and artifact checks stay mandatory.
-
-This cutover requires main-first trusted tooling and a deliberate qualification
-harness backport to the frozen candidate, producing new C=Q and a fresh request.
-Changing P alone cannot suppress the old Q dispatcher. No performance rerun,
-historical evidence rewrite, threshold change, or publisher override is used.
-
-Waiver support requires a candidate workflow that routes state operations to
-admitted P. Pre-cutover frozen workflows retain strict validation; changing P
-alone does not retrofit waiver support. Readers still accept the historical empty
+Strict consumers verify this record; the historical receipt never qualifies
+new candidate bytes. Readers retain support for the historical empty
 `telegram_waiver` field without rewriting authenticated evidence.
 
-The operator also authorized exact-job failure grants for `2026.11.5-beta.3`
-on November 14, 2026 at 13:30 UTC: the recorded UI reply-navigation shard,
-Android screenshots, Google Decision and Gateway runtime shards, and Docker
-package/update OpenAI test job from FRV `43594812558/1`. The checked-in list
-is authoritative. These accept failures of those named jobs, not only the
-individual observed assertions. Raw failures remain visible; the CI and release
-aggregates must contain only causes explained by granted jobs. This exception
-does not carry to another release or excuse package/receipt integrity failures.
-
-On November 15, 2026 at 04:13 UTC, the operator authorized three exact
-`2026.11.4` normal-CI failures for unchanged candidate
-`5eb2d8052ddc363245bea3ca4ec0833815ab6e93`:
-`checks-node-agentic-control-plane-runtime-state`,
-`checks-ui-e2e-real-gateway (1/2)`, and `macos-swift (tests)`. The grants accept
-terminal failures of those named jobs, not a test pass or permission to skip
-them. Their failed `openclaw/ci-gate` must have only the expected failed step
-and the complete set of causes explained by the granted leaves. Other shards,
-Swift phases, and unexplained aggregate failures remain blocking. The existing
-Kova grant is unchanged. FRV `43641896010/1` tested the older `005030` candidate;
-it remains historical evidence, not qualification of `5eb2`. New admission and
-exact-candidate qualification under the reviewed P are required.
-
-On November 15, 2026 at 15:03 UTC, Dallin Romney authorized the two
-`releaseChecksIndependent` native-live failures for unchanged C/Q
-`e283dccf68ba35ef1af5b3fa31571db7f4b6bc74`: `Native live gateway core` and
-`Native live test harnesses`, under `Run repo/live E2E validation / Native live suites`.
-Child `43719709063/1` records the unresolved original failures; preserve its raw
-logs and artifacts. These exact-candidate grants also cover fresh executions of
-those named jobs. They are not bound to the old run because ordinary child reuse
-remains green-only, and they do not authorize skipped tests or evidence reuse.
-The downstream `Verify release checks` failure must contain only the existing
-`live_repo_e2e_release_checks ended with failure` cause. All other grants,
-including the earlier `5eb2` normal-CI grants and Kova, remain unchanged.
-
-Only exact terminal **failed** live-provider or Telegram leaves, the
-operator-accepted beta.3 and candidate-bound `2026.11.4` jobs, or the Kova
-threshold exceptions above are eligible.
-Every other required result must pass. Missing, skipped, cancelled, timed-out,
-incomplete, or mismatched required evidence still blocks. Normal CI outside
-those exact grants, npm/Docker artifact production, package integrity,
-install/upgrade outside the named Docker test job, soak, performance outside the
-explicit 2026.9.37 not-run exception, plugin
-prerelease, dispatch identity, and seal/evidence integrity cannot be waived.
-An aggregate failure is tolerated only when its causes are entirely explained
-by those exact waived leaves.
-
-FRV must itself conclude **success** under that policy before publication can
-accept it. There is no failed-but-publication-eligible verdict, publisher waiver
-input, operator JSON declaration, or runtime approver lookup. Changing P only
-at publication cannot retroactively authorize a failed FRV; produce successful
-validation under the pinned policy first. Beta confidence deferrals remain
-separate and are recorded as **not run**, never as passed or waived failures.
+FRV must conclude **success** under the pinned policy before publication.
+Publishers cannot waive a failed FRV; changing P only at publication is too late.
+Beta confidence deferrals remain separate and are recorded as **not run**.
 
 ## Receipt-backed beta aggregate recovery
 
