@@ -4,7 +4,11 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePlan } from "./state-upgrade-tree.js";
-import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
+import {
+  createDoctorChain,
+  isStateUpgradePending,
+  upgradeStateDirectory,
+} from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -21,6 +25,13 @@ describe("upgradeStateDirectory version zero", () => {
     const anchor = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
     anchor.exec("CREATE TABLE anchor (v TEXT)");
     anchor.close();
+    // A SQLite agent family beside PostgreSQL shared state keeps the previous path.
+    fs.mkdirSync(path.join(stateDir, "agents", "main", "agent"), { recursive: true });
+    const agent = new DatabaseSync(
+      path.join(stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+    );
+    agent.exec("CREATE TABLE t (v TEXT); PRAGMA user_version = 41");
+    agent.close();
     const env = {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
@@ -34,6 +45,36 @@ describe("upgradeStateDirectory version zero", () => {
       },
     });
     expect(result).toEqual({ status: "current" });
+  });
+});
+
+describe("createDoctorChain", () => {
+  it("points agent-directory selectors into the private copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-chain-"));
+    dirs.push(root);
+    const entry = path.join(root, "entry.mjs");
+    fs.writeFileSync(
+      entry,
+      "console.log(JSON.stringify([process.env.OPENCLAW_AGENT_DIR, process.env.PI_CODING_AGENT_DIR ?? null]));",
+    );
+    const logPath = path.join(root, "chain.log");
+    await createDoctorChain(
+      entry,
+      [],
+    )({
+      stateDir: path.join(root, "shadow"),
+      configPath: path.join(root, "shadow", "openclaw.json"),
+      logPath,
+      env: {
+        OPENCLAW_STATE_DIR: path.join(root, "live"),
+        OPENCLAW_AGENT_DIR: path.join(root, "live", "agents", "main", "agent"),
+        PI_CODING_AGENT_DIR: path.join(root, "elsewhere"),
+      },
+    });
+    expect(JSON.parse(fs.readFileSync(logPath, "utf8"))).toEqual([
+      path.join(root, "shadow", "agents", "main", "agent"),
+      null,
+    ]);
   });
 });
 

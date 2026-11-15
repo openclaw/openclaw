@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
+import { resolveUserPath } from "../infra/home-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { VERSION } from "../version.js";
@@ -143,10 +144,20 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
 const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
   target.kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
 
-// Version 0 is no released schema (2026.7.1 is v1): a PostgreSQL anchor or a catalog a
-// native client created before the first Gateway. The normal bootstrap owns those.
-const isOutdated = (target: DatabaseTarget) =>
-  target.version > 0 && target.version < expectedVersion(target);
+/**
+ * Databases this build upgrades. Version 0 is no released schema (2026.7.1 is v1): a
+ * PostgreSQL anchor or a catalog a native client created before the first Gateway; the
+ * normal bootstrap owns those. Accepted edge case: with the shared state on PostgreSQL
+ * the report and set-aside rows have no SQLite home, so SQLite agent databases there
+ * keep the previous path (Doctor).
+ */
+function outdatedDatabases(stateDir: string): DatabaseTarget[] {
+  const targets = discoverDatabases(stateDir);
+  if (targets.some((target) => target.kind === "state" && target.version === 0)) {
+    return [];
+  }
+  return targets.filter((target) => target.version > 0 && target.version < expectedVersion(target));
+}
 
 /**
  * Whether this start must take state ownership: an interrupted swap to finish or a
@@ -158,7 +169,7 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   return (
     fs.existsSync(stateDir) &&
     (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
-      discoverDatabases(stateDir).some(isOutdated))
+      outdatedDatabases(stateDir).length > 0)
   );
 }
 
@@ -192,6 +203,18 @@ export const createDoctorChain =
       if (!/^OPENCLAW_(LAUNCHD_LABEL|PROFILE|SERVICE_|GATEWAY_TOKEN|GATEWAY_PASSWORD)/u.test(key)) {
         childEnv[key] = value;
       }
+    }
+    // Agent-directory selectors into the live tree point at the copy; any other
+    // directory is not part of the swap, so the shadow run uses its default.
+    const liveStateDir = path.resolve(resolveStateDir(env));
+    for (const key of ["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]) {
+      const value = env[key]?.trim();
+      const inside =
+        value && path.relative(liveStateDir, path.resolve(resolveUserPath(value, env)));
+      childEnv[key] =
+        inside && !inside.startsWith("..") && !path.isAbsolute(inside)
+          ? path.join(stateDir, inside)
+          : undefined;
     }
     Object.assign(childEnv, {
       OPENCLAW_STATE_DIR: stateDir,
@@ -374,7 +397,7 @@ export async function upgradeStateDirectory(params: {
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  const outdated = discoverDatabases(stateDir).filter(isOutdated);
+  const outdated = outdatedDatabases(stateDir);
   if (outdated.length === 0) {
     if (resumed) {
       finish(stateDir, undefined, skip);
