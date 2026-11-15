@@ -661,6 +661,11 @@ The session prompt rebuilds only at these points:
 These are also the operator refresh points: use `/compact` or `/new` to make the
 model see a fully re-rendered prompt.
 
+When the next request is predicted to overflow the context window, OpenClaw
+compacts. It can still cap tool results that the provider has not received yet,
+but it never trims results that earlier requests already sent. Sent tool results
+are trimmed in history only after the provider rejects the prompt.
+
 Known exceptions:
 
 - Remote worker turns still render the system prompt on each turn.

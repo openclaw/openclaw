@@ -352,6 +352,9 @@ function resolveCompactionPressureDecision(
           messages: pressure.messages,
           contextWindowTokens: params.contextTokenBudget,
           maxCharsOverride: params.toolResultMaxChars,
+          // Trimming sent results would rewrite the cached prefix on every run near the
+          // budget. Only unsent results count; the rest of the overflow needs compaction.
+          preserveSentToolResults: true,
         }).maxReducibleChars
       : 0;
   const overflowChars = overflowTokens * CHARS_PER_TOKEN_ESTIMATE;

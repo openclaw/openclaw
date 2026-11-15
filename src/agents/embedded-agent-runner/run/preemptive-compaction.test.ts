@@ -499,6 +499,40 @@ describe("preemptive-compaction", () => {
     expect(result.shouldCompact).toBe(false);
   });
 
+  it("compacts instead of trimming tool results the provider already cached", () => {
+    // Earlier runs sent these results in full; only a new run's input follows them.
+    const medium = "alpha beta gamma delta epsilon ".repeat(500);
+    const messages: AgentMessage[] = [
+      makeAssistantHistory("short history"),
+      ...Array.from({ length: 8 }, () => makeToolResultMessage(medium)),
+      makeAssistantHistory("done"),
+    ];
+    const reserveTokens = 2_000;
+    const estimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+      messages,
+      systemPrompt: "sys",
+      prompt: "next run",
+    });
+    const contextTokenBudget = estimatedPromptTokens - 500 + reserveTokens;
+    // The whole history could still be trimmed under the aggregate budget...
+    expect(
+      estimateToolResultReductionPotential({ messages, contextWindowTokens: contextTokenBudget })
+        .aggregateReducibleChars,
+    ).toBeGreaterThan(500 * 4 * 2);
+
+    const result = shouldPreemptivelyCompactBeforePrompt({
+      messages,
+      systemPrompt: "sys",
+      prompt: "next run",
+      contextTokenBudget,
+      reserveTokens,
+    });
+
+    // ...but that rewrites the cached prefix and recurs on the next run near the budget.
+    expect(result.route).toBe("compact_only");
+    expect(result.toolResultReducibleChars).toBe(0);
+  });
+
   it("estimates CJK tool results at roughly one token per character", () => {
     const cjkText = "中".repeat(85_000);
     const toolResultTokens = estimateLlmBoundaryTokenPressure({

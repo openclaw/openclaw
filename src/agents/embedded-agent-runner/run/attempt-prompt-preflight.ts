@@ -93,6 +93,8 @@ export async function handleEmbeddedAttemptMidTurnPrecheck(input: {
       projectionState: input.toolResultPromptProjectionState,
       contextWindowTokens: contextTokenBudget,
       maxCharsOverride: toolResultMaxChars,
+      // No provider rejected this prompt; keep the bytes it already cached.
+      preserveSentToolResults: true,
       sessionFile: attempt.sessionFile,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,

@@ -1,5 +1,5 @@
 // One Gateway session through every mid-session trigger: each provider request must extend the
-// previous one byte for byte, except at the explicit compaction.
+// previous one byte for byte, except at a compaction.
 import fs from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
@@ -12,9 +12,18 @@ import { listenProofProvider, useRuntimeProofFixture } from "./runtime-proof.tes
 const TOKEN = "prefix-stability-token";
 const TARGET = "agent:main:prefix-stability-target";
 const SENDER = "agent:main:prefix-stability-sender";
+const CONTEXT_WINDOW = 200_000;
+// Sent exec output (~56k chars each) beyond the aggregate tool-result budget of 2 chars per token.
+const SENT_OUTPUTS = 14;
+// Parallel results that carry the next request past the window from just under the
+// proactive-compaction threshold (75% of the window).
+const BURST_OUTPUTS = 4;
+const BURST_MEASURED_TOKENS = CONTEXT_WINDOW * 0.75 - 10;
 
 export type Api = "anthropic-messages" | "openai-completions";
-type Reply = { text: string } | { tool: string; args: Record<string, unknown> };
+type Call = { tool: string; args: Record<string, unknown> };
+// `inputTokens` is the provider-measured context occupancy the reply reports.
+type Reply = ({ text: string } | { calls: Call[] }) & { inputTokens?: number };
 type WireRequest = { system: string; tools: string; messages: string[]; text: string };
 
 // Cache markers move to the newest message on every request, and the newest message carries
@@ -66,15 +75,20 @@ function lastMessage(request: WireRequest): string {
 
 function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: number) {
   response.writeHead(200, { "content-type": "text/event-stream; charset=utf-8" });
+  const inputTokens = reply.inputTokens ?? 10;
   if (api === "anthropic-messages") {
-    const block =
+    const blocks =
       "text" in reply
-        ? { type: "text", text: "" }
-        : { type: "tool_use", id: `toolu_${ordinal}`, name: reply.tool, input: {} };
-    const delta =
-      "text" in reply
-        ? { type: "text_delta", text: reply.text }
-        : { type: "input_json_delta", partial_json: JSON.stringify(reply.args) };
+        ? [{ start: { type: "text", text: "" }, delta: { type: "text_delta", text: reply.text } }]
+        : reply.calls.map((call, index) => ({
+            start: {
+              type: "tool_use",
+              id: `toolu_${ordinal}_${index}`,
+              name: call.tool,
+              input: {},
+            },
+            delta: { type: "input_json_delta", partial_json: JSON.stringify(call.args) },
+          }));
     const events = [
       {
         type: "message_start",
@@ -85,12 +99,14 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
           model: "claude-opus-5",
           content: [],
           stop_reason: null,
-          usage: { input_tokens: 10, output_tokens: 0 },
+          usage: { input_tokens: inputTokens, output_tokens: 0 },
         },
       },
-      { type: "content_block_start", index: 0, content_block: block },
-      { type: "content_block_delta", index: 0, delta },
-      { type: "content_block_stop", index: 0 },
+      ...blocks.flatMap(({ start, delta }, index) => [
+        { type: "content_block_start", index, content_block: start },
+        { type: "content_block_delta", index, delta },
+        { type: "content_block_stop", index },
+      ]),
       {
         type: "message_delta",
         delta: { stop_reason: "text" in reply ? "end_turn" : "tool_use", stop_sequence: null },
@@ -108,21 +124,27 @@ function writeReply(api: Api, response: ServerResponse, reply: Reply, ordinal: n
       created: 0,
       model: "gpt-5.4-mini",
       choices: [{ index: 0, delta, finish_reason: finish }],
-      ...(finish ? { usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } } : {}),
+      ...(finish
+        ? {
+            usage: {
+              prompt_tokens: inputTokens,
+              completion_tokens: 5,
+              total_tokens: inputTokens + 5,
+            },
+          }
+        : {}),
     })}\n\n`;
   const delta =
     "text" in reply
       ? { role: "assistant", content: reply.text }
       : {
           role: "assistant",
-          tool_calls: [
-            {
-              index: 0,
-              id: `call_${ordinal}`,
-              type: "function",
-              function: { name: reply.tool, arguments: JSON.stringify(reply.args) },
-            },
-          ],
+          tool_calls: reply.calls.map((call, index) => ({
+            index,
+            id: `call_${ordinal}_${index}`,
+            type: "function",
+            function: { name: call.tool, arguments: JSON.stringify(call.args) },
+          })),
         };
   response.end(
     `${chunk(delta, null)}${chunk({}, "text" in reply ? "stop" : "tool_calls")}data: [DONE]\n\n`,
@@ -139,7 +161,7 @@ function buildProvider(api: Api, baseUrl: string) {
     reasoning: false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 200_000,
+    contextWindow: CONTEXT_WINDOW,
     maxTokens: 4096,
   };
   const config: ModelProviderConfig = {
@@ -193,39 +215,63 @@ export function usePrefixStabilityJourney() {
     const fixture = await createFixture(`openclaw-prefix-stability-${api}-`, TOKEN, "1");
     const targetRequests: WireRequest[] = [];
     const seen: string[] = [];
+    // Target request indexes that follow a compaction summary: the allowed rebuild points.
+    const rebuilds = new Set<number>();
+    let outputs = 0;
     let ordinal = 0;
+    const call = (tool: string, args: Record<string, unknown>): Reply => ({
+      calls: [{ tool, args }],
+    });
     const script = (request: WireRequest): Reply => {
       const latest = lastMessage(request);
       const hasToolResult = /tool_result|"role":"tool"/.test(latest);
       if (request.tools === "[]") {
+        rebuilds.add(targetRequests.length);
         return { text: "Summary: the session ran the probe journey." };
       }
       if (request.text.includes(`session=${SENDER}`)) {
         return hasToolResult || !latest.includes("forward a ping")
           ? { text: "REPLY_SKIP" }
-          : {
-              tool: "sessions_send",
-              args: { sessionKey: TARGET, message: "INTER-SESSION ping", timeoutSeconds: 0 },
-            };
+          : call("sessions_send", {
+              sessionKey: TARGET,
+              message: "INTER-SESSION ping",
+              timeoutSeconds: 0,
+            });
       }
       if (!request.text.includes(`session=${TARGET}`)) {
         return { text: "child-done" };
       }
       targetRequests.push(request);
+      const output = () => ({
+        tool: "exec",
+        args: { command: `seq ${++outputs}00000 ${outputs}08000` },
+      });
+      if (latest.includes("STEP-OUTPUT") && !hasToolResult) {
+        return { calls: [output()] };
+      }
+      if (hasToolResult && outputs > 0 && outputs < SENT_OUTPUTS) {
+        return { calls: [output()] };
+      }
+      if (hasToolResult && outputs === SENT_OUTPUTS + BURST_OUTPUTS) {
+        return { text: "outputs read" };
+      }
+      if (hasToolResult && outputs === SENT_OUTPUTS) {
+        return {
+          calls: Array.from({ length: BURST_OUTPUTS }, output),
+          inputTokens: BURST_MEASURED_TOKENS,
+        };
+      }
       if (hasToolResult) {
         return { text: "acknowledged" };
       }
       if (latest.includes("STEP-EXEC")) {
-        return {
-          tool: "exec",
-          args: { command: "sleep 1; echo exec-finished", background: true },
-        };
+        return call("exec", { command: "sleep 1; echo exec-finished", background: true });
       }
       if (latest.includes("STEP-SPAWN")) {
-        return {
-          tool: "sessions_spawn",
-          args: { task: "CHILD-TASK reply child-done", expectsCompletionMessage: true },
-        };
+        return call("sessions_spawn", {
+          task: "CHILD-TASK reply child-done",
+          expectsCompletionMessage: true,
+        });
       }
       return { text: `ok ${targetRequests.length}` };
     };
@@ -339,11 +385,17 @@ export function usePrefixStabilityJourney() {
         const compactionAt = targetRequests.length;
         await send(TARGET, "TARGET after compaction");
         expect(targetRequests.length).toBeGreaterThan(compactionAt);
+        // Sent tool results exceed their aggregate budget, then parallel results carry the
+        // next request past the window. Reclaiming space must compact, not trim results the
+        // provider already cached.
+        await send(TARGET, "STEP-OUTPUT read the large outputs");
         const breaks = prefixBreaks(targetRequests);
+        expect(rebuilds.has(compactionAt), [...rebuilds].join(",")).toBe(true);
+        expect(rebuilds.size, [...rebuilds].join(",")).toBe(2);
         expect(
           breaks.map(({ at }) => at),
           JSON.stringify(breaks, null, 2),
-        ).toEqual([compactionAt]);
+        ).toEqual([...rebuilds]);
       } catch (error) {
         throw new Error(`${String(error)}\n${seen.join("\n")}`, { cause: error });
       }

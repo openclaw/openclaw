@@ -840,6 +840,26 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(findAssistant("suppression owner")?.providerReplay).toEqual(suppressionReplay);
   });
 
+  it("keeps results the provider already received when predicted pressure trims", async () => {
+    const scope = await createSession("runtime-sqlite-preserve-sent");
+    await append(scope, user("run tools"));
+    const medium = "alpha beta gamma delta epsilon ".repeat(600);
+    for (const message of toolResults([medium, medium, medium], "sent")) {
+      await append(scope, message);
+    }
+    await append(scope, assistant("read them"));
+    await append(scope, toolResult("fresh output ".repeat(4_000), "unsent"));
+
+    const result = await recover(scope, { preserveSentToolResults: true });
+
+    expect(result.truncated).toBe(true);
+    const texts = activeMessages(scope)
+      .filter((message) => message.role === "toolResult")
+      .map(toolText);
+    expect(texts.slice(0, 3)).toEqual([medium, medium, medium]);
+    expect(texts[3]).toContain("truncated");
+  });
+
   it.each([
     ["per-result", 12_000, 48_000],
     ["aggregate-only", 8_000, 6_000],

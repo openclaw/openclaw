@@ -886,6 +886,11 @@ function buildToolResultReplacementPlan(params: {
   maxChars: number;
   aggregateBudgetChars: number;
   protectTrailingToolResults?: boolean;
+  /**
+   * Results before the last assistant message are already in the provider's cached prefix.
+   * Only a rejected prompt may rewrite them; predicted pressure goes to compaction instead.
+   */
+  preserveSentToolResults?: boolean;
 }) {
   // Plan on message positions; transcript entry IDs belong only to the rewrite boundary.
   const { textLengths, totalChars, largestChars } = getToolResultHistoryTextBudget(params.messages);
@@ -900,12 +905,14 @@ function buildToolResultReplacementPlan(params: {
       aggregateReducibleChars: 0,
     };
   }
-  const trailingStart = params.protectTrailingToolResults
-    ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
-    : params.messages.length;
+  const trailingStart =
+    params.protectTrailingToolResults || params.preserveSentToolResults
+      ? params.messages.findLastIndex((message) => message.role === "assistant") + 1
+      : params.messages.length;
   const candidates = params.messages.flatMap((message, index) => {
     const textLength = textLengths[index]!;
-    return message.role === "toolResult" && textLength > 0
+    const sent = params.preserveSentToolResults && index < trailingStart;
+    return message.role === "toolResult" && textLength > 0 && !sent
       ? [{ index, source: message, message, textLength, aggregateTextLength: textLength }]
       : [];
   });
@@ -1035,19 +1042,14 @@ export function estimateToolResultReductionPotential(params: {
   contextWindowTokens: number;
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
+  preserveSentToolResults?: boolean;
 }) {
   const { maxChars, aggregateBudgetChars } = resolveToolResultBudgets(params);
-  const plan = buildToolResultReplacementPlan({
-    messages: params.messages,
-    maxChars,
-    aggregateBudgetChars,
-  });
-  const maxReducibleChars = plan.oversizedReducibleChars + plan.aggregateReducibleChars;
-
+  const plan = buildToolResultReplacementPlan({ ...params, maxChars, aggregateBudgetChars });
   return {
     oversizedCount: plan.oversizedReplacementCount,
     aggregateReducibleChars: plan.aggregateReducibleChars,
-    maxReducibleChars,
+    maxReducibleChars: plan.oversizedReducibleChars + plan.aggregateReducibleChars,
   };
 }
 
@@ -1057,6 +1059,7 @@ export async function truncateOversizedToolResultsInSessionManager(params: {
   maxCharsOverride?: number;
   aggregateMaxCharsOverride?: number;
   protectTrailingToolResults?: boolean;
+  preserveSentToolResults?: boolean;
   projectionState?: ToolResultPromptProjectionState;
   sessionFile?: string;
   sessionId?: string;
