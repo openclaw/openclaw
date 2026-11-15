@@ -255,10 +255,10 @@ suite.define(() => {
             .waitFor();
         };
         await dismissHovercard();
-        expect(await rail.getAttribute("aria-label")).toBe("Users");
+        expect(await rail.getAttribute("aria-label")).toBe("People");
         const header = page.locator("openclaw-app-sidebar:visible .sidebar-panel-header");
         const usersTitle = header.locator(".sidebar-panel-header__title");
-        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        await usersTitle.getByText("People", { exact: true }).waitFor();
         const titleStyle = (title: typeof usersTitle) =>
           title.evaluate((element) => {
             const { color, fontSize, fontWeight, letterSpacing, textTransform } =
