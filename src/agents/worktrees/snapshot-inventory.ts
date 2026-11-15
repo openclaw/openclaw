@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode, isMissingPathError } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
-import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
 import {
   createStagedInputPathMatcher,
@@ -22,7 +21,7 @@ import {
   type GitTreePath,
 } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
-import { commandError, requireGit, requireGitBuffer, runGit } from "./git.js";
+import { commandError, requireGit, requireGitBuffer, requireGitPath, runGit } from "./git.js";
 import { snapshotProvisionedFiles } from "./provisioned-snapshot.js";
 import {
   captureExactState,
@@ -406,9 +405,7 @@ async function prepareSnapshotIndex(
       }
     }
   }
-  const common = normalizeGitPathForFilesystem(
-    await requireGit(input.repoRoot, ["rev-parse", "--git-common-dir"]),
-  );
+  const common = await requireGitPath(input.repoRoot, ["rev-parse", "--git-common-dir"]);
   await requestGitWorkerEffect<"worktree.snapshot-capacity">({
     type: "worktree.snapshot-capacity",
     input: {
