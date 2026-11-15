@@ -331,8 +331,8 @@ export async function requireGit(
 }
 
 function gitPathOutput(output: string): string {
-  // Git adds one LF; all other whitespace belongs to the filesystem path.
-  return output.endsWith("\n") ? output.slice(0, -1) : output;
+  // Remove one LF or CRLF; all other whitespace belongs to the filesystem path.
+  return output.endsWith("\n") ? output.slice(0, output.endsWith("\r\n") ? -2 : -1) : output;
 }
 
 export async function requireGitPath(

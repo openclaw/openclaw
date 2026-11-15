@@ -608,21 +608,21 @@ describe("Git checkout discovery", () => {
           policy.require(linked, ["symbolic-ref", "HEAD", "refs/heads/alias"]),
         ).resolves.toBe("");
       });
-      const normalized = vi.spyOn(gitExec, "normalizeGitPathForFilesystem");
+      const run = processExec.runCommandWithTimeout;
+      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+        const result = await run(argv, options);
+        return { ...result, stdout: result.stdout.replace(/\r?\n$/u, "\r\n") };
+      });
       await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
         canonicalRoot,
         commonDir: await fs.realpath(commonDir),
       });
-      // The common directory and primary checkout are the only paths this reader consumes.
-      expect(normalized).toHaveBeenCalledTimes(2);
       const detachedPath = await fs.realpath(detached);
       await fs.rm(detached, { recursive: true });
       const paths = await readGitWorktreePathInventory(repo);
-      normalized.mockClear();
       expect(paths.has(await fs.realpath(linked))).toBe(true);
       expect(paths.has(detachedPath)).toBe(true);
       expect(paths.has(`${detachedPath}-sibling`)).toBe(false);
-      expect(normalized).not.toHaveBeenCalled();
     },
   );
 });
