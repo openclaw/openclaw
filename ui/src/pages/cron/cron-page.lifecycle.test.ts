@@ -308,7 +308,7 @@ it.each(["agent", "connection", "detach", "panel close"])(
   },
 );
 
-it("refreshes model suggestions when team selection changes without changing scope", async () => {
+it("changes model scope with the draft agent, not an unrelated team selection", async () => {
   const lateMain = deferred<{ models: { id: string }[] }>({ models: [] });
   const writer = deferred<{ models: { id: string }[] }>({ models: [] });
   const modelRequests: unknown[] = [];
@@ -351,6 +351,10 @@ it("refreshes model suggestions when team selection changes without changing sco
   await waitForCronPage(() => expect(modelRequests).toHaveLength(2));
   agentSelection.set("writer");
   expect(agentSelection.state).toEqual({ selectedId: "writer", scopeId: null });
+  await page.settle();
+  expect(modelRequests).toHaveLength(2);
+  expect(page.cron.cronForm.agentId).toBe("main");
+  fillInput(page, "#cron-agent-id", "writer");
   await waitForCronPage(() => expect(modelRequests).toHaveLength(3));
   expect(page.cron).toBe(cron);
   expect(page.cronModelSuggestions).toEqual([]);
@@ -670,7 +674,10 @@ it.each([false, true])(
 it.each(["hello", "roster after same-scope intent", "roster after model catalog"])(
   "opens the linked editor when %s supplies the initial agent scope after mount",
   async (publication) => {
-    const job = createCronViewJob("linked-job", { name: "Linked automation" });
+    const job = createCronViewJob("linked-job", {
+      name: "Linked automation",
+      agentId: publication === "roster after model catalog" ? "previous" : undefined,
+    });
     const roster = createDeferred<AgentsListResult>();
     const lookup = deferred(job);
     const fallback = createRequest();
@@ -725,7 +732,7 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
         } else {
           await page.settle();
           expect(agentSelection.state.selectedId).toBeNull();
-          expect(modelReads).toBe(0);
+          expect(modelReads).toBe(1);
         }
         fillInput(page, "#cron-name", "Unsaved name");
         await page.settle();
@@ -738,6 +745,9 @@ it.each(["hello", "roster after same-scope intent", "roster after model catalog"
       expect(agentSelection.state.scopeId).toBe("main");
       lookup.resolve(job);
       if (changingCatalog) {
+        await page.settle();
+        expect(page.cronModelSuggestions).toEqual(["previous-model"]);
+        fillInput(page, "#cron-agent-id", "main");
         await waitForCronPage(() =>
           expect(page.textContent).toContain("Current agent catalog unavailable"),
         );

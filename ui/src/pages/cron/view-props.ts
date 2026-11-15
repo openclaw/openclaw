@@ -2,11 +2,15 @@ import {
   normalizeSortedUniqueTrimmedStringList,
   normalizeTrimmedStringList,
 } from "@openclaw/normalization-core/string-normalization";
+import { tryResolveCronJobEffectiveAgentId } from "../../../../src/cron/agent-id.ts";
 import { userProfileDisplayName } from "../../../../src/shared/user-profile-display-name.js";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { hasCronFormErrors } from "../../lib/cron/form.ts";
-import { resolveConfiguredCronModelSuggestions } from "../../lib/cron/model-suggestions.ts";
+import {
+  resolveConfiguredCronModelSuggestions,
+  resolveCronModelAgentId,
+} from "../../lib/cron/model-suggestions.ts";
 import { getCronRunsViewState } from "../../lib/cron/runs.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -55,12 +59,15 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
           : "",
       ),
     ]);
+    const modelAgentId = resolveCronModelAgentId(cron);
     modelSuggestions = normalizeSortedUniqueTrimmedStringList([
       ...page.cronModelSuggestions(),
-      ...resolveConfiguredCronModelSuggestions(configValue),
+      ...resolveConfiguredCronModelSuggestions(configValue, modelAgentId),
       ...cron.cronJobs.map((job) => {
         const payload = job.payload;
-        return payload.kind === "agentTurn" && typeof payload.model === "string"
+        return tryResolveCronJobEffectiveAgentId(job) === modelAgentId &&
+          payload.kind === "agentTurn" &&
+          typeof payload.model === "string"
           ? payload.model.trim()
           : "";
       }),
