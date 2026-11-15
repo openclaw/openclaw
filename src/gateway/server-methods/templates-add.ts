@@ -364,12 +364,14 @@ export const templatesAddHandlers: GatewayRequestHandlers = {
     try {
       respond(true, await planTemplateAddForRequest({ ...options, params }));
     } catch (error) {
+      // A preview never mutates state; say so, or owner-routed CLIs report a possible partial Add.
+      const noEffect = { details: { mutationAccepted: false } };
       if (error instanceof TemplatesLabsDisabledError) {
-        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+        respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message, noEffect));
         return;
       }
       const message = reportTemplateAddFailure(error, "plan");
-      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, noEffect));
     }
   },
   "templates.add.apply": async (options) => {
