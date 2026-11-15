@@ -608,6 +608,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/code-mode-session-store.test.ts",
   "src/agents/code-mode.bridge.host-denial.test.ts",
   "src/agents/code-mode.bridge.lifecycle.test.ts",
+  "src/agents/code-mode.tool-result-middleware.test.ts",
   "src/agents/code-mode.source-reply.loop.test.ts",
   "src/agents/command/attempt-execution.shared.test.ts",
   "src/agents/command/session-store.snooze.test.ts",
