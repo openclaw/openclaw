@@ -554,6 +554,10 @@ OpenClaw subagent sessions still own execution. One dispatch pass:
 4. Claims a small batch of ready cards and starts worker runs through the
    Gateway subagent runtime.
 
+The Control UI reports the counts from that pass. Marking a card for planning
+does not mean it has been specified or decomposed. If workers cannot start, the
+result shows the first start failure alongside the total failure count.
+
 Idle scans leave ready-card history unchanged. Existing dispatch counters and
 timestamps remain as historical values; new launches use the card's launch,
 attempt, and execution history.
