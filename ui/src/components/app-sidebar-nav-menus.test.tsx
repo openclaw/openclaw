@@ -309,6 +309,9 @@ describe("sidebar rail pin menu", () => {
           element.getAttribute("data-navigation-view") ??
           "separator",
       );
+    await sidebar.updateComplete;
+    // A new rail: Automations, Customize and Usage, then the "more" menu.
+    expect(order()).toEqual(["route:cron", "route:plugins", "route:usage", "pages"]);
     sidebar.sidebarEntries = ["person:ada", "route:usage", "route:cron"];
     await sidebar.updateComplete;
     expect(order()).toEqual(["route:usage", "route:cron", "pages", "separator", "person:ada"]);
