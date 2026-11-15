@@ -3,7 +3,7 @@ import { createUniqueId, For } from "solid-js";
 import { brandIconData, type BrandIconName } from "../icon-data-brand.ts";
 import { keyboardIconData, type KeyboardIconSymbol } from "../icon-data-tools.ts";
 import { strokeIconData, type IconData, type IconNode } from "../icon-data-types.ts";
-import { iconData, type IconName } from "../icon-data.ts";
+import { filledIconNames, iconData, type IconName } from "../icon-data.ts";
 
 export type { BrandIconName } from "../icon-data-brand.ts";
 export { hasKeyboardIcon, type KeyboardIconSymbol } from "../icon-data-tools.ts";
@@ -89,8 +89,13 @@ function IconSvg(props: IconPresentation & { data: IconData }) {
   );
 }
 
-export function Icon(props: IconPresentation & { name: IconName }) {
-  return <IconSvg {...props} data={iconData[props.name]} />;
+export function Icon(props: IconPresentation & { name: IconName; filled?: boolean }) {
+  return (
+    <IconSvg
+      {...props}
+      data={iconData[(props.filled && filledIconNames[props.name]) || props.name]}
+    />
+  );
 }
 
 export function KeyboardIcon(props: IconPresentation & { symbol: KeyboardIconSymbol }) {

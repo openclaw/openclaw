@@ -286,6 +286,28 @@ it("returns to the durable trigger without consuming native Tab", async () => {
 describe("sidebar rail pin menu", () => {
   setupSidebarTest();
 
+  it("fills the icon of the current page and view and outlines the rest", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    Object.assign(sidebar, {
+      sidebarEntries: ["route:usage"],
+      activeRouteId: "chat",
+      navigationView: "pages",
+    });
+    await sidebar.updateComplete;
+    const usage = () =>
+      sidebar.querySelector('.sidebar-rail [data-sidebar-entry="route:usage"] svg')!;
+    const online = () => sidebar.querySelector('[data-navigation-view="online"] svg')!;
+    expect(usage().querySelector("mask")).toBeNull();
+    expect(online().querySelector('[fill-rule="evenodd"]')).toBeNull();
+    Object.assign(sidebar, { activeRouteId: "usage", navigationView: "online" });
+    await sidebar.updateComplete;
+    expect(usage().querySelector("mask")).not.toBeNull();
+    expect(online().querySelector('[fill-rule="evenodd"]')).not.toBeNull();
+  });
+
   it.each([
     ["before", 1, "route:usage"],
     ["after", 1, "person:ada"],
