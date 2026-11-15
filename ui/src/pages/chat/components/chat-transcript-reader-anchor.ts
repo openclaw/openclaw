@@ -541,8 +541,10 @@ export class TranscriptReaderAnchor {
     }
     this.syncColumn();
     if (Math.abs(owed) >= 0.5) {
+      // A smaller range can clamp the native offset before its correction is written.
+      const offset = this.host.scrollElement?.scrollTop;
       this.commitRange();
-      this.scrollBy(owed);
+      this.scrollBy(owed, offset);
     }
     // Virtual-core notifies when its scrolling state ends.
     this.settle();
