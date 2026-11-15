@@ -591,8 +591,8 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     (resolvedAuth.mode === "token" || resolvedAuth.mode === "password") &&
     !token &&
     !password &&
-    !opts.approvalRuntimeToken &&
-    !resolvedAuth.allowTailscale
+    // gateway.remote.edgeAuth authenticates at the proxy; first connects then pair.
+    !(opts.approvalRuntimeToken || resolvedAuth.allowTailscale || edgeAuthHeaders)
   ) {
     const availableAuth =
       storedAuth === undefined

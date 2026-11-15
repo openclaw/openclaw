@@ -356,6 +356,11 @@ invokes the exact command an operator configures. Resolved edge-auth headers are
 sent only when the target matches the configured `gateway.remote.url` scope,
 only over `wss://`, and never across redirects.
 
+The proxy authenticates these connections, so a CLI or TUI behind it needs no
+Gateway token or password. Its first `openclaw tui` connection sends a device
+pairing request; after an administrator approves it, the stored device token
+serves later CLI and TUI connections.
+
 ## Credential precedence
 
 Gateway credential resolution follows one shared contract across call/check/status paths and Discord exec-approval monitoring. Node-host uses the same contract with one local-mode exception (it ignores `gateway.remote.*`).

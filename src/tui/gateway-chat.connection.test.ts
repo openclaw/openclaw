@@ -180,6 +180,14 @@ it.each([
   await expect(connect({})).rejects.toThrow(error);
 });
 
+it("connects an edgeAuth remote without shared or paired credentials so it can pair", async () => {
+  const url = "wss://gateway.example";
+  setGateway(remote(url, { edgeAuth: { "Cf-Access-Token": "access-token" } }));
+  const expected = { url, ...noAuth, edgeAuthHeaders: { "Cf-Access-Token": "access-token" } };
+  await expectConnection({}, expected);
+  await expectConnection({ url }, expected);
+});
+
 it("points to local chat instead of a token when no local Gateway is running", async () => {
   loadConfig.mockReturnValue({});
   await expect(connect({})).rejects.toThrow(

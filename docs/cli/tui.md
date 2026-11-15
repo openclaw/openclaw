@@ -75,7 +75,9 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
 - When the configured remote Gateway is behind an identity-aware proxy, `tui`
   resolves `gateway.remote.edgeAuth` SecretInputs and sends those headers only
   to that configured Gateway scope. URL or host targets for other origins never
-  inherit them.
+  inherit them. The proxy authenticates the connection, so the first connection
+  to that Gateway, with or without `--url`, needs no `--token` or `--password`:
+  it sends a pairing request to approve in that Gateway's Control UI.
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
   `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.
