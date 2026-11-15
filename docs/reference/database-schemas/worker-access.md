@@ -76,6 +76,12 @@ after transport cleanup. Workspace mutations release their payload and previous
 row captures after acknowledgement or recovery finishes, including failed writes;
 retaining an admission must not retain those completed workspace payloads.
 
+Workspace checkpoint acceptance references the fingerprint observations already
+saved by reservation. The writer checks the row revision and checkpoint roots
+before publishing those observations; the main thread retains the same published
+projection and decodes its fingerprint bytes once for receipt and acknowledgement.
+Checkpoint bytes, rollback journals, and persistence timing are unchanged.
+
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
 the worker's registry key. Request handlers release completed replies before
