@@ -45,15 +45,22 @@ The app requires iOS 26.2 or iPadOS 26.2 or later.
 
 ## Appearance
 
-Open **Settings → Device → Appearance** and choose **System**, **Light**, or
-**Dark**. System is the default. This preference stays on this device and works
-offline without Gateway admin access.
+Open **Settings → Device → Appearance** to choose a built-in theme, **System**,
+**Light**, or **Dark**, and an accent color. The 11 built-in families use the same
+palettes as Android. Native navigation, controls, typography, and Dynamic Type
+stay native; themes do not select different fonts.
 
-Embedded Dashboard pages, including Automations and connected Settings, use
-native-aligned colors and sans-serif typography and follow the device appearance.
-Web Dashboard theme, accent, and font selections remain saved separately; opening
-a page in the iOS app does not change those selections. The web Appearance page
-still edits web preferences, not the app’s device appearance.
+When your Gateway connection has a writable profile, appearance uses the same
+`ui.theme`, `ui.themeMode`, and `ui.accent` preferences as Android and the Dashboard.
+Missing profile values inherit Gateway appearance defaults. Offline edits made
+after identifying a writable profile remain queued for that Gateway and profile;
+they are never sent to another profile. Without a writable profile, changes stay
+local. Previously saved device-only light/dark choices stay local until you change
+them with a writable profile connected.
+
+Embedded Dashboard pages consume the same resolved appearance as native screens
+without changing saved web font preferences. Plugin and personal theme rendering
+is not supported by this native palette projection.
 
 ## Chat text size
 

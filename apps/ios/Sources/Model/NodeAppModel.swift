@@ -499,6 +499,10 @@ final class NodeAppModel {
 
     private var mainSessionBaseKey: String = "main"
     private var gatewaySessionScope: String?
+    let appearanceModel = AppAppearanceModel()
+    private var appearanceRefreshGeneration: UInt64 = 0
+    private var appearanceWriteTask: Task<Void, Never>?
+    private var appearancePreferenceRoute: GatewayNodeSessionRoute?
     var gatewayAccentColorHex: String?
     private var focusedChatSessionKey: String?
     var selectedAgentId: String?
@@ -1097,6 +1101,9 @@ final class NodeAppModel {
         didSet {
             if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
                 self.operatorAuthorityGeneration &+= 1
+                self.appearanceModel.connectionChanged(
+                    gatewayID: self.activeGatewayConnectConfig?.effectiveStableID,
+                    connected: true)
             }
         }
     }
@@ -1735,34 +1742,129 @@ final class NodeAppModel {
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
             let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
-            let profileAccentHex = await self.fetchProfileAccentHex(ifCurrentRoute: sourceRoute)
+            await self.refreshAppearance(config: config, gatewayID: sourceGatewayID, route: sourceRoute)
             guard shouldApply(),
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
             self.mainSessionBaseKey = mainKey
             self.gatewaySessionScope = scope
-            self.gatewayAccentColorHex = profileAccentHex ?? accentHex
+            self.gatewayAccentColorHex = self.appearanceModel.accentHex ?? accentHex
             self.synchronizeTalkSessionKey()
         } catch {
             // Best-effort only.
         }
     }
 
-    /// Caller's per-profile accent (users.prefs.get). nil covers every
-    /// non-authoritative outcome — profile-less connections
-    /// (no_durable_identity), older gateways without the method, and malformed
-    /// stored values — so the gateway accent stays the fallback.
-    private func fetchProfileAccentHex(ifCurrentRoute sourceRoute: GatewayNodeSessionRoute) async -> String? {
+    private func refreshAppearance(config: [String: Any], gatewayID: String, route: GatewayNodeSessionRoute) async {
+        guard self.chatTranscriptCacheGatewayID == gatewayID,
+              await self.operatorGateway.currentRoute(ifGatewayID: gatewayID) == route
+        else { return }
+        self.appearanceRefreshGeneration &+= 1
+        let generation = self.appearanceRefreshGeneration
+        let authority = self.operatorAuthorityGeneration
+        let revisions = self.appearanceModel.revisions
+        let ui = config["ui"] as? [String: Any]
+        let fallback = ui?["prefs"] as? [String: Any]
+        self.appearanceModel.gatewayAccentHex = ColorHexSupport.gatewayUserAccentHex(configUI: ui)
         do {
-            let res = try await operatorGateway.request(
-                method: "users.prefs.get",
-                paramsJSON: #"{"keys":["ui.accent"]}"#,
-                timeoutSeconds: 8,
-                ifCurrentRoute: sourceRoute)
-            return try GatewayUserPreferences.decodeProfileAccentHex(res)
+            let supportsPreferences = await self.operatorGateway.supportsServerMethod(
+                "users.prefs.get",
+                ifCurrentRoute: route) != false
+            var entries: [String: Any] = [:]
+            var noIdentity = false
+            var scope: AppAppearanceModel.Scope?
+            if supportsPreferences {
+                let data = try await self.operatorGateway.request(
+                    method: "users.prefs.get",
+                    paramsJSON: #"{"keys":["ui.theme","ui.themeMode","ui.accent"]}"#,
+                    timeoutSeconds: 8,
+                    ifCurrentRoute: route)
+                guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let status = response["status"] as? String
+                else { return }
+                switch status {
+                case "ok":
+                    guard let values = response["entries"] as? [String: Any],
+                          let access = await self.operatorGateway.currentReactionAccess(ifCurrentRoute: route)
+                    else { return }
+                    entries = values
+                    let writable = access.scopes?.contains("operator.write") == true || access.scopes?
+                        .contains("operator.admin") == true
+                    if let profileID = access.userID, writable {
+                        scope = AppAppearanceModel.Scope(gatewayID: gatewayID, profileID: profileID)
+                    } else if writable { return }
+                case "no_durable_identity": noIdentity = true
+                default: return
+                }
+            }
+            guard self.operatorAuthorityGeneration == authority,
+                  self.appearanceRefreshGeneration == generation,
+                  self.chatTranscriptCacheGatewayID == gatewayID,
+                  await self.operatorGateway.currentRoute(ifGatewayID: gatewayID) == route
+            else { return }
+            self.appearanceModel.prepareSync(scope: scope)
+            self.appearancePreferenceRoute = scope == nil ? nil : route
+            let protected = Set(self.appearanceModel.pending.filter {
+                noIdentity ? $0.scope.gatewayID == gatewayID : $0.scope == scope
+            }.map(\.key))
+            await self.syncAppearancePreferences()
+            guard self.operatorAuthorityGeneration == authority,
+                  self.appearanceRefreshGeneration == generation,
+                  await self.operatorGateway.currentRoute(ifGatewayID: gatewayID) == route
+            else { return }
+            let family = (entries["ui.theme"] as? String).flatMap(AppThemeFamily.init(rawValue:))?.rawValue
+                ?? (fallback?["theme"] as? String).flatMap(AppThemeFamily.init(rawValue:))?.rawValue ?? "claw"
+            let mode = (entries["ui.themeMode"] as? String).flatMap(AppAppearancePreference.init(rawValue:))?.rawValue
+                ?? (fallback?[
+                    "themeMode",
+                ] as? String).flatMap(AppAppearancePreference.init(rawValue:))?.rawValue ?? "system"
+            self.appearanceModel.applyRemote(
+                [
+                    .family: family,
+                    .mode: mode,
+                    .accent: GatewayUserPreferences.normalizedAccentHex(entries["ui.accent"] as? String),
+                ],
+                revisions: revisions,
+                protected: protected)
         } catch {
-            return nil
+            // An unavailable profile is not permission to overwrite offline edits with fallback values.
         }
+    }
+
+    func syncAppearancePreferences() async {
+        if let task = self.appearanceWriteTask { await task.value
+            return
+        }
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.appearanceWriteTask = nil }
+            while let scope = self.appearanceModel.editScope,
+                  let route = self.appearancePreferenceRoute,
+                  let entry = self.appearanceModel.pending.first(where: { $0.scope == scope })
+            {
+                let authority = self.operatorAuthorityGeneration
+                guard await self.operatorGateway.currentRoute(ifGatewayID: scope.gatewayID) == route else { return }
+                do {
+                    let value: Any = entry.value.map { $0 as Any } ?? NSNull()
+                    let data = try JSONSerialization.data(withJSONObject: ["entries": [entry.key.rawValue: value]])
+                    let result = try await self.operatorGateway.request(
+                        method: "users.prefs.set",
+                        paramsJSON: String(bytes: data, encoding: .utf8),
+                        timeoutSeconds: 8,
+                        ifCurrentRoute: route)
+                    guard let response = try JSONSerialization.jsonObject(with: result) as? [String: Any],
+                          response["status"] as? String == "ok"
+                    else { return }
+                    guard self.operatorAuthorityGeneration == authority,
+                          self.appearanceModel.editScope == scope else { continue }
+                    self.appearanceModel.complete(entry)
+                } catch {
+                    if self.appearancePreferenceRoute == route { return }
+                }
+            }
+        }
+        self.appearanceWriteTask = task
+        await task.value
     }
 
     private func refreshAgentsFromGateway(shouldApply: () -> Bool = { true }) async {
@@ -5049,6 +5151,7 @@ extension NodeAppModel {
         guard previous != current else { return }
         self.operatorAuthorityGeneration &+= 1
         let connected = current != nil
+        self.appearanceModel.connectionChanged(gatewayID: self.chatTranscriptCacheGatewayID, connected: connected)
         guard connected != (previous != nil) else { return }
         guard connected else {
             self.isDesktopObserveAvailable = false

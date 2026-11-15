@@ -19,6 +19,22 @@ extension NSAppearance {
 #endif
 
 public enum OpenClawChatTheme {
+    static var primary: Color {
+        #if os(iOS)
+        Color(uiColor: OpenClawNativePalette.color(.primary, fallback: .systemRed))
+        #else
+        self.userBubble
+        #endif
+    }
+
+    static var primaryText: Color {
+        #if os(iOS)
+        Color(uiColor: OpenClawNativePalette.color(.primaryText, fallback: .white))
+        #else
+        self.userText
+        #endif
+    }
+
     public static func desktopCanvas(in colorScheme: ColorScheme) -> Color {
         colorScheme == .dark
             ? Color(.sRGB, red: 14 / 255.0, green: 16 / 255.0, blue: 21 / 255.0)
@@ -77,11 +93,13 @@ public enum OpenClawChatTheme {
 
     private static func adaptiveColor(
         light: UIColor,
-        dark: UIColor) -> Color
+        dark: UIColor,
+        token: OpenClawNativePalette.Token? = nil) -> Color
     {
-        Color(uiColor: UIColor { traits in
+        let fallback = UIColor { @Sendable traits in
             traits.userInterfaceStyle == .dark ? dark : light
-        })
+        }
+        return Color(uiColor: token.map { OpenClawNativePalette.color($0, fallback: fallback) } ?? fallback)
     }
     #endif
 
@@ -122,13 +140,16 @@ public enum OpenClawChatTheme {
                 colors: [
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasTop,
-                        dark: IOSPalette.darkCanvasTop),
+                        dark: IOSPalette.darkCanvasTop,
+                        token: .canvas),
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasMiddle,
-                        dark: IOSPalette.darkCanvasMiddle),
+                        dark: IOSPalette.darkCanvasMiddle,
+                        token: .canvas),
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasBottom,
-                        dark: IOSPalette.darkCanvasBottom),
+                        dark: IOSPalette.darkCanvasBottom,
+                        token: .canvas),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
@@ -140,7 +161,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .tertiarySystemBackground, dark: IOSPalette.darkPanelRaised))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .tertiarySystemBackground,
+            dark: IOSPalette.darkPanelRaised,
+            token: .raised))
         #endif
     }
 
@@ -152,12 +176,17 @@ public enum OpenClawChatTheme {
         #else
         self.adaptiveColor(
             light: IOSPalette.lightAccent,
-            dark: IOSPalette.darkAccent)
+            dark: IOSPalette.darkAccent,
+            token: .userMessageSurface)
         #endif
     }
 
     static var accent: Color {
+        #if os(iOS)
+        Color(uiColor: OpenClawNativePalette.color(.accent, fallback: .systemRed))
+        #else
         self.userBubble
+        #endif
     }
 
     static var danger: Color {
@@ -193,7 +222,7 @@ public enum OpenClawChatTheme {
         Color(nsColor: self.assistantBubbleDynamicNSColor)
         #else
         // iMessage-style grey receiver bubble: clearly visible on the white chat surface.
-        self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised)
+        self.adaptiveColor(light: .systemGray5, dark: IOSPalette.darkPanelRaised, token: .raised)
         #endif
     }
 
@@ -201,7 +230,7 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: self.onboardingAssistantBubbleDynamicNSColor)
         #else
-        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised)
+        self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkPanelRaised, token: .raised)
         #endif
     }
 
@@ -210,7 +239,11 @@ public enum OpenClawChatTheme {
     }
 
     static var userText: Color {
+        #if os(iOS)
+        Color(uiColor: OpenClawNativePalette.color(.text, fallback: .white))
+        #else
         .white
+        #endif
     }
 
     /// Readable ink for text rendered on a host-supplied user accent. Mirrors the
@@ -244,7 +277,7 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: .labelColor)
         #else
-        Color(uiColor: .label)
+        Color(uiColor: OpenClawNativePalette.color(.text, fallback: .label))
         #endif
     }
 
@@ -252,7 +285,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemGroupedBackground, dark: IOSPalette.darkPanel))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .secondarySystemGroupedBackground,
+            dark: IOSPalette.darkPanel,
+            token: .surface))
         #endif
     }
 
@@ -260,7 +296,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.thinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkComposer))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .secondarySystemBackground,
+            dark: IOSPalette.darkComposer,
+            token: .pressed))
         #endif
     }
 
@@ -268,7 +307,7 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         Color(nsColor: .separatorColor).opacity(0.6)
         #else
-        self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14))
+        self.adaptiveColor(light: .separator, dark: UIColor.white.withAlphaComponent(0.14), token: .border)
         #endif
     }
 

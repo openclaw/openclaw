@@ -149,7 +149,7 @@ struct ChatProTab: View {
                 resolveComposerModel: owner.composerModelResolver(),
                 drawsBackground: true,
                 showsSessionSwitcher: false,
-                userAccent: self.chatUserAccent,
+                userAccent: nil,
                 displayOptions: self.chatTraceDisplayOptions,
                 assistantName: self.agentDisplayName,
                 assistantAvatarText: self.agentBadge,
@@ -674,10 +674,6 @@ struct ChatProTab: View {
             (self.isAttachmentOwnerPinned
                 ? self.appModel.chatPresentation.hasVerifiedOfflineRoutingIdentity
                 : self.appModel.hasVerifiedChatOfflineRoutingIdentity)
-    }
-
-    private var chatUserAccent: Color {
-        ColorHexSupport.color(fromHex: self.appModel.gatewayAccentColorHex) ?? OpenClawBrand.accent
     }
 
     private var isAttachmentOwnerPinned: Bool {

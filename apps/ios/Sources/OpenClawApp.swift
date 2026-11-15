@@ -1,5 +1,6 @@
 import BackgroundTasks
 import Foundation
+import OpenClawChatUI
 import OpenClawKit
 import os
 import SwiftUI
@@ -619,7 +620,7 @@ struct OpenClawApp: App {
         }
         #endif
         OpenClawAppModelRegistry.appModel = appModel
-        _appearanceModel = State(initialValue: AppAppearanceModel())
+        _appearanceModel = State(initialValue: appModel.appearanceModel)
         _appModel = State(initialValue: appModel)
         _voiceLiveActivityCoordinator = State(initialValue: VoiceLiveActivityCoordinator())
         _gatewayController = State(
@@ -635,6 +636,8 @@ struct OpenClawApp: App {
                 .tint(OpenClawBrand.accent)
                 .font(OpenClawType.body)
                 .environment(self.appearanceModel)
+                .environment(\.openClawNativeAppearance, self.appearanceModel.appearance)
+                .foregroundStyle(OpenClawBrand.text)
                 .preferredColorScheme(self.appearanceModel.preference.colorScheme)
                 .environment(self.appModel)
                 .environment(self.appModel.voiceWake)
