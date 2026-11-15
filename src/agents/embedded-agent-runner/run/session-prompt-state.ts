@@ -339,9 +339,8 @@ export async function createEmbeddedRunSessionPromptState(input: {
           messages,
         };
       }
-      // A request rejected before any output left the transcript unchanged. Replaying
-      // the persisted keyed user turn resends that exact request; a hidden prompt
-      // would add a user turn and shift the prompt prefix on every retry.
+      // Replay the keyed turn and any completed tools in place. A hidden prompt
+      // would append another user turn and runtime carrier on every precheck retry.
       if (options?.replayCurrentUserTurn && canReplayCurrentUserTurn()) {
         return;
       }
