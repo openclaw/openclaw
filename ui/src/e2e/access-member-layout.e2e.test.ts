@@ -196,7 +196,7 @@ suite.define(() => {
           .getByRole("textbox", { name: "Email address to invite" })
           .fill("review@example.test");
         await invite.locator(".ocid-access__role-picker button").click();
-        const options = page.getByRole("option");
+        const options = page.getByRole("listbox").getByRole("option");
         expect(await options.allTextContents()).toEqual([
           expect.stringContaining("Operator"),
           expect.stringContaining("administrator"),
