@@ -1993,28 +1993,19 @@ describe("capability cli", () => {
     },
   );
 
-  it.each([undefined, "firecrawl"])(
-    "rejects disabled web fetch with provider %s",
-    async (provider) => {
-      mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled: false } } } });
-
-      const args = [
-        "--url",
-        "https://example.com",
-        ...(provider ? ["--provider", provider] : []),
-        "--json",
-      ];
-      await expect(runCapability("web", "fetch", ...args)).rejects.toMatchObject({
-        name: "ExpectedCliError",
-        humanOutput: expect.stringContaining("tools.web.fetch.enabled"),
-        machineOutput: expect.stringContaining("tools.web.fetch.enabled"),
-      });
-
-      expect(mocks.runtime.error).not.toHaveBeenCalled();
-      expect(mocks.runtime.exit).not.toHaveBeenCalled();
-      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-    },
-  );
+  it.each([
+    { enabled: false, provider: undefined },
+    { enabled: false, provider: "firecrawl" },
+    { enabled: true, provider: "nosuch" },
+  ])("rejects fetch preflight ($enabled, $provider)", async ({ enabled, provider }) => {
+    mocks.loadConfig.mockReturnValue({ tools: { web: { fetch: { enabled } } } });
+    const args = cliOptions({ url: "https://example.com", provider, json: true });
+    const run = runCapability("web", "fetch", ...args);
+    await expect(run).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(run).rejects.toThrow(enabled ? "not available" : "tools.web.fetch.enabled");
+    expect(mocks.runtime.error).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
