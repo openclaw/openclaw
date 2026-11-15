@@ -60,6 +60,13 @@ export function createCronRegressionState(
   return state;
 }
 
+/** Stands in for the host's free memory, with no container limit; run slots read both. */
+export function stubFreeMemory(bytes: number) {
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+  vi.spyOn(process, "availableMemory").mockReturnValue(bytes);
+  vi.spyOn(os, "freemem").mockReturnValue(bytes);
+}
+
 export function setupCronRegressionFixtures(options?: { prefix?: string; baseTimeIso?: string }) {
   let fixtureRoot = "";
   let fixtureCount = 0;
@@ -80,6 +87,8 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   beforeEach(() => {
     resetCommandQueueStateForTest();
     useFrozenTime(options?.baseTimeIso ?? "2026-02-06T10:05:00.000Z");
+    // Run slots in these cases come from the agent limit, not the free memory of the test host.
+    stubFreeMemory(Number.MAX_SAFE_INTEGER);
   });
 
   afterEach(async () => {

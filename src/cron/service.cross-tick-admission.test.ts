@@ -419,10 +419,7 @@ it.each([
   }
 });
 
-it.each([
-  ["eight automations at once by default", undefined, 8],
-  ["as many as the agent limit allows with dynamic concurrency", true, 12],
-])("runs %s", async (_name, dynamicConcurrency, expected) => {
+it("starts fewer automations while free memory is short, and at least one", async () => {
   let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
   const dueAtMs = nowMs + 1_000;
   const store = await seedJobs(
@@ -433,21 +430,37 @@ it.each([
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       started.push(job.id);
       await finish.promise;
       return { status: "ok" as const, summary: job.id };
     },
   });
+  const gib = 1024 ** 3;
+  cron.stubFreeMemory(0);
   setCommandLaneConcurrency(CommandLane.Main, 32);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
+    // No free memory: one run at a time, so automation still progresses.
     nowMs = dueAtMs;
     await running.wake(state);
-    await vi.waitFor(() => expect(started).toHaveLength(expected));
+    await vi.waitFor(() => expect(started).toHaveLength(1));
     await running.wake(state);
-    expect(started).toHaveLength(expected);
+    expect(started).toHaveLength(1);
+
+    // 1 GiB free holds four runs at 256 MiB each; with one running, automation takes half of five.
+    cron.stubFreeMemory(gib);
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(2));
+    // The runs took that memory: no more start.
+    cron.stubFreeMemory(gib / 2);
+    await running.wake(state);
+    expect(started).toHaveLength(2);
+
+    // Memory is freed: the rest start, up to the agent limit.
+    cron.stubFreeMemory(16 * gib);
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(12));
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);
@@ -468,7 +481,6 @@ it("runs as many automations as the agent limit leaves free of conversations", a
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency: true },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       await (started.push(job.id) === 1 ? release : finish).promise;
       return { status: "ok" as const, summary: job.id };
@@ -530,7 +542,6 @@ it("halves automation's sessions on a provider rate limit and adds a slot back e
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency: true },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       await (started.push(job.id) === 1 ? release : finish).promise;
       return { status: "ok" as const, summary: job.id };
@@ -556,10 +567,10 @@ it("halves automation's sessions on a provider rate limit and adds a slot back e
 
     // A model attempt reports that its provider rate-limited it: half the sessions in flight.
     rateLimited();
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(11);
+    expect(resolveCronRunSlots()).toBe(11);
     // Those sessions keep retrying; their pushback does not halve the limit again.
     rateLimited();
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(11);
+    expect(resolveCronRunSlots()).toBe(11);
 
     // A run ends: its slot is not handed to a queued run.
     release.resolve();
@@ -571,15 +582,15 @@ it("halves automation's sessions on a provider rate limit and adds a slot back e
 
     // One more slot a minute, but not within a minute of pushback.
     await tickAfter(60_000);
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
+    expect(resolveCronRunSlots()).toBe(12);
     rateLimited();
     await tickAfter(30_000);
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(12);
+    expect(resolveCronRunSlots()).toBe(12);
     await tickAfter(30_000);
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(13);
+    expect(resolveCronRunSlots()).toBe(13);
     // Without further pushback the limit climbs back to whole.
     vi.setSystemTime(Date.now() + 60 * 60_000);
-    expect(resolveCronRunSlots(state.deps.cronConfig)).toBe(30);
+    expect(resolveCronRunSlots()).toBe(30);
   } finally {
     release.resolve();
     finish.resolve();
@@ -604,7 +615,7 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
   const state = cron.createCronRegressionState({
     storePath: store.storePath,
     nowMs: () => nowMs,
-    cronConfig: { dynamicConcurrency: true, triggers: { enabled: true } },
+    cronConfig: { triggers: { enabled: true } },
     runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
       started.push(job.id);
       if (job.id.startsWith("long-")) {
@@ -646,7 +657,6 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
 });
 
 it("starts the quiet minute again on pushback that cannot lower the limit", async () => {
-  const cronConfig = { dynamicConcurrency: true };
   setCommandLaneConcurrency(CommandLane.Main, 30);
   setCommandLaneConcurrency(CommandLane.CronNested, 30);
   const ends = Array.from({ length: 9 }, () => createDeferred());
@@ -660,7 +670,7 @@ it("starts the quiet minute again on pushback that cannot lower the limit", asyn
     await vi.waitFor(() => expect(inFlight()).toBe(9));
     // Nine automation sessions and a rate limit: automation drops to its floor of eight.
     rateLimited();
-    expect(resolveCronRunSlots(cronConfig)).toBe(8);
+    expect(resolveCronRunSlots()).toBe(8);
     ends[0]?.resolve();
     await sessions[0];
     expect(inFlight()).toBe(8);
@@ -670,9 +680,9 @@ it("starts the quiet minute again on pushback that cannot lower the limit", asyn
     after(50_000);
     rateLimited();
     after(10_000);
-    expect(resolveCronRunSlots(cronConfig)).toBe(8);
+    expect(resolveCronRunSlots()).toBe(8);
     after(50_000);
-    expect(resolveCronRunSlots(cronConfig)).toBe(9);
+    expect(resolveCronRunSlots()).toBe(9);
   } finally {
     stopWatch();
     ends.forEach((end) => end.resolve());

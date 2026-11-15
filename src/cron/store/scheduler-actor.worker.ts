@@ -241,10 +241,9 @@ function armActor(
       );
     }
   }
-  // With dynamic concurrency a conversation turn ending frees a run slot without any automation
+  // A conversation turn ending or memory being freed opens a run slot without any automation
   // event. While a run is queued or a fired condition waits for a slot, look again within a minute.
-  const awaitingRunSlot =
-    snapshot.config.cronConfig?.dynamicConcurrency === true && jobs.some(waitsForRunSlot);
+  const awaitingRunSlot = jobs.some(waitsForRunSlot);
   if (!enabled && !awaitingRunSlot) {
     return undefined;
   }
@@ -587,6 +586,7 @@ export function runCronSchedulerInWorker(
         {
           requests: input.requests ?? [],
           maxConcurrentRuns: snapshot.config.maxConcurrentRuns ?? DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+          freeMemoryRuns: snapshot.config.freeMemoryRuns,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,

@@ -26,12 +26,9 @@ const CRON_HOOK_LANE_GROUP = "cron-hooks";
 export function resolveGatewayLaneConcurrency(cfg: OpenClawConfig): GatewayLaneConcurrency {
   const main = resolveAgentMaxConcurrent(cfg);
   return {
-    // With dynamic concurrency the run queue admits automation runs against the agent limit;
-    // these lanes are as wide as the most it can admit.
-    cron:
-      cfg.cron?.dynamicConcurrency === true
-        ? Math.max(DEFAULT_CRON_MAX_CONCURRENT_RUNS, main)
-        : DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+    // The run queue admits automation runs against the agent limit and free memory; these
+    // lanes are as wide as the most it can admit.
+    cron: Math.max(DEFAULT_CRON_MAX_CONCURRENT_RUNS, main),
     // The reservation guarantees one slot, but hooks may use every free slot
     // inside the shared budget, up to their own width, which the agent limit
     // does not widen. A one-wide lane would serialize unrelated hooks.
