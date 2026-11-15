@@ -34,6 +34,7 @@ import { runAcpAgentCommand } from "./command/acp-execution.js";
 import { persistAgentSession } from "./command/attempt-execution.shared.js";
 import { finishAgentCommandCleanup } from "./command/cleanup.js";
 import { createCompactionSessionIdReporter } from "./command/compaction-accounting.js";
+import type { AgentCommandDeliveryResult } from "./command/delivery-result.js";
 import { emitIngressModelUsageDiagnostic } from "./command/ingress-diagnostics.js";
 import { prepareCommandForegroundRun } from "./command/maintenance.js";
 import { resolveEmbeddedModelSelection } from "./command/model-selection.js";
@@ -109,7 +110,7 @@ async function agentCommandInternalOwned(
   deps?: CliDeps,
   watchSkills = false,
   retainMaintenanceRequest?: (request: SessionMaintenanceRequest) => void,
-) {
+): Promise<AgentCommandDeliveryResult | undefined> {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
   const isRawModelRun = prepared.opts.modelRun === true || prepared.opts.promptMode === "none";
   const suppressVisibleSessionEffects = prepared.opts.sessionEffects === "internal";

@@ -72,6 +72,7 @@ const answer = (text: string, provider: string) => ({
   payloads: [{ text }],
   meta: {
     durationMs: 0,
+    terminalReply: { disposition: "visible" as const, text },
     agentMeta: { sessionId, provider, model: "claude-sonnet-5-5", usage: { input: 1, output: 1 } },
   },
 });
@@ -165,19 +166,40 @@ async function rpc(method: string, params: Record<string, unknown>) {
 
 // The server realtime relay (runId prefix talk-realtime-relay-consult) and browser direct
 // consults share this runner; the browser tool-call RPC already goes through chat.send.
-async function consult(question: string) {
+async function consult(
+  question: string,
+  adoptCompletionClaims = false,
+  invalidate?: "abort" | "voice",
+) {
   const callId = expectDefined(voiceSessionId, "voice session");
+  let currentCallId: string | undefined = callId;
   const runner = createTalkClientAgentConsultRunner({
     config: getRuntimeConfig(),
     context,
     sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
     ownerConnId: connectionId,
     authority: resolveTalkAgentConsultAuthority(client.connect?.scopes, client),
-    getVoiceSessionId: () => callId,
+    getVoiceSessionId: () => currentCallId,
     initialItems: [],
     runIdPrefix: "talk-realtime-relay-consult",
   });
   try {
+    if (adoptCompletionClaims) {
+      runner.runPrompt.adoptCompletionClaims();
+      const controller = new AbortController();
+      const result = await runner.runPrompt({ prompt: question, signal: controller.signal });
+      if (invalidate === "abort") {
+        controller.abort();
+      } else if (invalidate === "voice") {
+        currentCallId = randomUUID();
+      }
+      expect(
+        runner.runPrompt.claimAppend(),
+        "completed CLI consultation owns its spoken result",
+      ).toBe(!invalidate);
+      expect(runner.runPrompt.claimAppend(), "completion is claimed once").toBe(false);
+      return result;
+    }
     return await runner.runArgs({ question });
   } finally {
     await captureSessionControllerSettlement({
@@ -214,6 +236,58 @@ it("runs a Claude CLI chat's voice consult through the typed-turn CLI dispatch a
   // Owner consults are not narrowed to a voice-specific allowlist.
   expect(run.toolsAllow).toBeUndefined();
 });
+
+it.each([false, true])(
+  "retains completed CLI speech with correlation receipt present=%s",
+  async (withReceipt) => {
+    await prepare({});
+    runCliAgent.mockImplementation(async ({ runId }) => {
+      const result = answer("CLI_SPOKEN_ANSWER", "claude-cli");
+      return {
+        ...result,
+        meta: {
+          ...result.meta,
+          agentMeta: {
+            ...result.meta.agentMeta,
+            ...(withReceipt
+              ? {
+                  terminalReceipt: {
+                    runId,
+                    sessionId,
+                    turnId: runId,
+                    requested: { provider: "anthropic", model: "claude-sonnet-5-5" },
+                    effective: {
+                      provider: "anthropic",
+                      model: "claude-sonnet-5-5",
+                      responseModel: "claude-sonnet-5-5",
+                    },
+                    successfulToolNames: [],
+                    rerouted: false,
+                  },
+                }
+              : {}),
+          },
+        },
+      };
+    });
+    await expect(consult("CLI_SPOKEN_QUESTION", true)).resolves.toEqual({
+      text: "CLI_SPOKEN_ANSWER",
+    });
+    expect(runCliAgent).toHaveBeenCalledOnce();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["abort", "voice"] as const)(
+  "rejects completed CLI speech after %s invalidation",
+  async (invalidate) => {
+    await prepare({});
+    runCliAgent.mockImplementation(async () => answer("CLI_STALE_ANSWER", "claude-cli"));
+    await expect(consult("CLI_STALE_QUESTION", true, invalidate)).resolves.toEqual({
+      text: "CLI_STALE_ANSWER",
+    });
+  },
+);
 
 it("routes a locked native Codex chat's consult to its pinned harness instead of refusing it", async () => {
   await prepare({

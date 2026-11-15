@@ -85,7 +85,7 @@ it.each([true, false])(
     const finalAssistantVisibleText = current ? "late final" : "stale final";
     const instance = { instanceId: `instance:${batch.rearmGeneration}`, runId: "run-talk" };
     mocks.createOperationalRunInstanceRef.mockReturnValueOnce(instance);
-    const core = createDeferredCore<{ payloads: never[] }>();
+    const core = createDeferredCore<{ payloads: never[]; meta: { durationMs: number } }>();
     if (current) {
       const handle = createEmbeddedRunHandle({ runId: "run-talk" });
       mocks.runEmbeddedAgentCore.mockImplementationOnce(async () => {
@@ -132,7 +132,7 @@ it.each([true, false])(
     expect(promoteRequesterFinalAttachment({ ...batch, requesterTurnRunId: "run-talk" })).toBe(
       true,
     );
-    core.resolve({ payloads: [] });
+    core.resolve({ payloads: [], meta: { durationMs: 0 } });
     await expect(run).resolves.toEqual({ text: "done" });
     runCurrent = current;
     expect(runner.runPrompt.claimAppend()).toBe(current);

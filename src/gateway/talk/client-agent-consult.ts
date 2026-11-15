@@ -1,6 +1,8 @@
 import type { EmbeddedRunCompletionRegistration } from "../../agents/embedded-agent-runner/run-state.js";
 import { prepareEmbeddedAgentRunCompletionClaim } from "../../agents/embedded-agent-runner/runs.js";
+import type { OperationalRunInstanceRef } from "../../agents/operational-run-instance.js";
 import { registerRequesterFinalAttachment } from "../../agents/subagents/requester-final-attachment.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -119,6 +121,8 @@ export function createTalkClientAgentConsultRunner(params: {
     }));
   type PromptOwner = {
     completionClaim?: ReturnType<typeof prepareEmbeddedAgentRunCompletionClaim>;
+    commandInstance?: OperationalRunInstanceRef;
+    commandCompleted?: true;
     cleanup?: () => void;
     identity?: { runId: string; sessionId: string };
     isCurrent?: (sessionId?: string, phase?: "active" | "completion") => boolean;
@@ -176,10 +180,12 @@ export function createTalkClientAgentConsultRunner(params: {
     assertConsultCurrent();
     // Provider callbacks can inherit another ambient Gateway. Keep the source
     // under the captured owner, and release this binding when the consultation ends.
+    let preparedSessionEntry: SessionEntry | undefined;
     let registeredSource: RpcSourceRef | undefined;
     const resolveGatewayContext = params.context.resolveGatewayContext;
     const runtime = createTalkClientAgentRuntime({
       config,
+      getPreparedSessionEntry: () => preparedSessionEntry,
       resolveGatewayContext,
       runAuthority: params.runAuthority,
       ...(params.ownerConnId
@@ -201,6 +207,18 @@ export function createTalkClientAgentConsultRunner(params: {
                 owner.completionClaim?.bindOperationalRunInstance(instance) !== true
               ) {
                 throw new Error("The active Talk consult admission is no longer current");
+              }
+              owner.commandInstance = instance;
+            },
+            onCommandCompleted: (instance) => {
+              if (
+                promptOwner === owner &&
+                owner.commandInstance === instance &&
+                owner.requestSignal?.aborted !== true &&
+                isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
+                owner.isCurrent?.(owner.identity?.sessionId, "completion") === true
+              ) {
+                owner.commandCompleted = true;
               }
             },
           }
@@ -237,6 +255,7 @@ export function createTalkClientAgentConsultRunner(params: {
           senderIsOwner: authority.senderIsOwner,
           toolsAllow: authority.toolsAllow,
           prepareToolContext: (sessionEntry) => {
+            preparedSessionEntry = sessionEntry;
             const toolContext = prepareTalkClientToolContext({
               config,
               agentId,
@@ -448,8 +467,12 @@ export function createTalkClientAgentConsultRunner(params: {
     if (!owner) {
       return false;
     }
-    const current = isOwnerCurrent(owner, undefined, "completion");
-    const completed = owner.completionClaim?.claimCompletion() === true;
+    const current =
+      owner.requestSignal?.aborted !== true &&
+      isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration) &&
+      isOwnerCurrent(owner, undefined, "completion");
+    const embeddedCompleted = owner.completionClaim?.claimCompletion() === true;
+    const completed = owner.commandCompleted === true || embeddedCompleted;
     clearRequesterFinalRegistration(owner, current && completed ? "release" : "revoke");
     clearOwner(owner);
     return current && completed;

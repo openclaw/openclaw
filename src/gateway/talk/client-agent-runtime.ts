@@ -2,6 +2,7 @@ import type {
   AdmittedRunContext,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
@@ -41,6 +42,7 @@ const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
 
 export function createTalkClientAgentRuntime(params: {
   config: OpenClawConfig;
+  getPreparedSessionEntry?: () => SessionEntry | undefined;
   resolveGatewayContext?: GatewayContextResolver;
   rawSourceRef?: string;
   /** Present only when this consultation registers an exact source before execution. */
@@ -48,6 +50,7 @@ export function createTalkClientAgentRuntime(params: {
   runAuthority?: TalkClientRunAuthority;
   assertCurrent?: () => void;
   bindOperationalRunInstance?: (instance: OperationalRunInstanceRef) => void;
+  onCommandCompleted?: (instance: OperationalRunInstanceRef) => void;
 }) {
   const agentRuntime = createPluginRuntime().agent;
   if (params.assertCurrent) {
@@ -174,7 +177,7 @@ export function createTalkClientAgentRuntime(params: {
               {
                 agentId,
                 sessionKey,
-                sessionEntry: runParams.execSession,
+                sessionEntry: params.getPreparedSessionEntry?.(),
                 workspaceDir: runParams.workspaceDir,
                 abortSignal: runParams.abortSignal,
               },
@@ -251,6 +254,20 @@ export function createTalkClientAgentRuntime(params: {
             );
             if (!result) {
               throw new Error("Talk consult produced no agent result");
+            }
+            // Completion is a command-owner fact, independent of the selected backend's
+            // embedded attachment. Accepted terminal writes must settle before publication.
+            await drainAgentRunTerminalWrites(operationalRunInstance);
+            runParams.abortSignal?.throwIfAborted();
+            const receipt = result.meta.agentMeta?.terminalReceipt;
+            if (
+              !result.meta.aborted &&
+              !result.meta.yielded &&
+              result.meta.terminalReply?.disposition === "visible" &&
+              (!receipt ||
+                (receipt.runId === operationalRunInstance.runId && receipt.sessionId === sessionId))
+            ) {
+              params.onCommandCompleted?.(operationalRunInstance);
             }
             return result as unknown as Awaited<ReturnType<typeof agentRuntime.runEmbeddedAgent>>;
           } finally {
