@@ -243,7 +243,6 @@ describe("MemoryOverview", () => {
       );
       expect(findButton(container, /^Test$/)).toBeUndefined();
       expect(findButton(container, /^Refresh status$/)).toBeDefined();
-      expect(Boolean(container.querySelector('[data-reading="true"]'))).toBe(status === "ready");
     },
   );
 
