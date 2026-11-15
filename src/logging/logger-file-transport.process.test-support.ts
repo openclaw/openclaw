@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import { isMainThread, Worker, workerData } from "node:worker_threads";
+import { setImmediate } from "node:timers/promises";
+import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import { runWithWorkerStartObserver } from "../infra/worker-request-diagnostics.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { fileLogTransport } from "./logger-file-transport.js";
@@ -165,6 +166,64 @@ async function proveDefaultTargets(): Promise<void> {
       workers: starts.length,
     }) + "\n",
   );
+}
+
+if (!isMainThread && workerData.interruptAppend) {
+  const { executeFileLogIO } = await import("./logger-file-io.js");
+  const open = fs.promises.open;
+  fs.promises.open = (...args) => {
+    const pending = open(...args);
+    parentPort!.postMessage("opening", []);
+    // Let native open finish without delivering its FileHandle before termination.
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+    return pending;
+  };
+  await executeFileLogIO({
+    type: "append",
+    file: path.join(directory, "interrupted.log"),
+    payload: "synthetic worker record\n",
+    rotate: false,
+  });
+  parentPort!.postMessage("written", []);
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+}
+
+if (
+  isMainThread &&
+  process.platform === "linux" &&
+  process.argv[3] !== "--disposable-default-root"
+) {
+  const target = path.join(directory, "interrupted.log");
+  const retained = () =>
+    fs.readdirSync("/proc/self/fd").filter((fd) => {
+      try {
+        return fs.readlinkSync(`/proc/self/fd/${fd}`) === target;
+      } catch {
+        return false;
+      }
+    });
+  const interrupted = new Worker(new URL(import.meta.url), {
+    workerData: { directory, interruptAppend: true },
+  });
+  try {
+    const message = await new Promise<string>((resolve, reject) => {
+      interrupted.once("message", resolve);
+      interrupted.once("error", reject);
+    });
+    if (message === "opening") {
+      const deadline = Date.now() + 5_000;
+      while (retained().length === 0 && Date.now() < deadline) {
+        await setImmediate();
+      }
+      assert.ok(retained().length > 0, "Native open must allocate a real descriptor");
+    } else {
+      assert.equal(message, "written");
+      assert.equal(fs.readFileSync(target, "utf8"), "synthetic worker record\n");
+    }
+  } finally {
+    await interrupted.terminate();
+  }
+  assert.deepEqual(retained(), [], "Terminated log writers must not retain file descriptors");
 }
 
 await runWithWorkerStartObserver(

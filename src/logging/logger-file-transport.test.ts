@@ -1,12 +1,12 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import fsPromises from "node:fs/promises";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { fileLogTransport } from "./logger-file-transport.js";
+import * as fileLogWorker from "./logger-file-worker.js";
 import { getLogger, resetLogger, setLoggerOverride } from "./logger.js";
 import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
 import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
@@ -31,9 +31,9 @@ function logTo(file: string, message: string) {
   setLoggerOverride({ level: "info", file });
   getLogger().info(message);
 }
-function failAppends(shouldFail: (file: Parameters<typeof fsPromises.open>[0]) => boolean) {
-  const open = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (file, ...args) => {
+function failAppends(shouldFail: (file: Parameters<typeof fs.openSync>[0]) => boolean) {
+  const open = fs.openSync.bind(fs);
+  vi.spyOn(fs, "openSync").mockImplementation((file, ...args) => {
     if (shouldFail(file)) {
       throw new Error("injected append failure");
     }
@@ -155,21 +155,15 @@ it.each(["async", "sync"])(
 it("rescues the unissued tail without replaying an in-flight batch", async () => {
   const [issued, release] = [createDeferred(), createDeferred()] as const;
   let issuedRecords = 0;
-  const openFile = fsPromises.open.bind(fsPromises);
-  vi.spyOn(fsPromises, "open").mockImplementation(async (...args) => {
-    const handle = await openFile(...args);
-    if (args[0] === logPath) {
-      const append = handle.appendFile.bind(handle);
-      vi.spyOn(handle, "appendFile").mockImplementation(async (...appendArgs) => {
-        await append(...appendArgs);
-        const content = appendArgs[0];
-        assert(typeof content === "string", "Expected a serialized log batch");
-        issuedRecords = content.trim().split("\n").length;
-        issued.resolve();
-        await release.promise;
-      });
+  const write = fileLogWorker.runFileLogIOInWorker;
+  vi.spyOn(fileLogWorker, "runFileLogIOInWorker").mockImplementation(async (request) => {
+    const result = await write(request);
+    if (request.type === "append" && request.file === logPath) {
+      issuedRecords = request.payload.trim().split("\n").length;
+      issued.resolve();
+      await release.promise;
     }
-    return handle;
+    return result;
   });
   const entries = Array.from({ length: 4 }, (_, index) =>
     entry(logPath, `${JSON.stringify({ index, text: "x".repeat(20_000) })}\n`),
