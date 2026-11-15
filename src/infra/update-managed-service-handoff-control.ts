@@ -386,12 +386,16 @@ export function waitForHandoffResponse(
     // The canonical updater owns activation/finalization budgets. Once closed,
     // the parent joins its helper instead of inventing a shorter shutdown timer.
     if (command !== "closed") {
-      cancelTimeout = scheduleAbsoluteDeadline(Date.now() + timeoutMs, () => {
-        const phase = command ? "respond" : "signal readiness";
-        onOutputError(
-          new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
-        );
-      });
+      cancelTimeout = scheduleAbsoluteDeadline(
+        performance.now() + timeoutMs,
+        () => {
+          const phase = command ? "respond" : "signal readiness";
+          onOutputError(
+            new Error(`managed update handoff did not ${phase} within ${timeoutMs / 1000} seconds`),
+          );
+        },
+        () => performance.now(),
+      );
     }
     if (settled) {
       return;
