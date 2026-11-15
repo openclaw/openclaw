@@ -203,7 +203,7 @@ describe("parseTemplateManifest", () => {
     [{ url, transport: "http" }, ".transport", 'expected one of "sse"|"streamable-http"'],
     [{ command: "node", args: [8080] }, ".args[0]", "expected string, received number"],
     [{}, ".command", "expected string, received undefined"],
-    [{ timeout: "slow" }, "", "Invalid input"],
+    [{ transport: "http" }, "", "Invalid input"],
   ])("reports malformed MCP diagnostics for %j", (server, suffix, reason) => {
     const result = parseTemplateManifest({ ...baseManifest, mcpServers: { server } });
     expect(result.ok).toBe(false);
