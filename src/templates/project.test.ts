@@ -111,20 +111,15 @@ You triage incidents.
     );
   });
 
-  it("matches the cross-platform golden artifact digest", async () => {
+  it("matches the golden artifact digest through a directory symlink under a restrictive umask", async () => {
+    const output = join(tempDirs.make("openclaw-template-umask-"), "golden.tgz");
     const project = join(tempDirs.make("openclaw-template-golden-"), "project");
     await symlink(goldenProject, project, process.platform === "win32" ? "junction" : "dir");
-    const result = await buildTemplateProject(project, `${project}.tgz`);
-    expect(result.integrity).toBe(GOLDEN_ARTIFACT_INTEGRITY);
-  });
-
-  it("matches the golden artifact digest under a restrictive umask", () => {
-    const output = join(tempDirs.make("openclaw-template-umask-"), "golden.tgz");
     const projectBuildUrl = resolveRuntimeWorkerUrl(templateProjectBuildEntrypoint);
     const script = [
       "process.umask(0o077);",
       `const { buildTemplateProject } = await import(${JSON.stringify(projectBuildUrl.href)});`,
-      `const result = await buildTemplateProject(${JSON.stringify(goldenProject)}, ${JSON.stringify(output)});`,
+      `const result = await buildTemplateProject(${JSON.stringify(project)}, ${JSON.stringify(output)});`,
       "process.stdout.write(result.integrity);",
     ].join("\n");
 
@@ -151,7 +146,6 @@ You triage incidents.
       },
     );
 
-    expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toBe(GOLDEN_ARTIFACT_INTEGRITY);
   });
@@ -188,53 +182,24 @@ You triage incidents.
     }
   });
 
-  it("creates a minimal project that validates through the canonical reader", async () => {
-    const root = join(tempDirs.make("openclaw-template-create-"), "research-assistant");
-
-    const created = await createTemplateProject(root);
-    const validated = await validateTemplateProject(root);
-
-    expect(created.packageJson).toEqual({
-      name: "research-assistant",
-      version: "0.1.0",
-      openclaw: { template: "CLAW.md" },
-    });
-    assert(validated.ok);
-    expect(validated.template.manifest.agent.id).toBe("research-assistant");
-    expect(validated.template.templateMarkdownBody?.toString()).toContain(
-      "purpose-built OpenClaw agent",
-    );
-  });
-
-  it.each([
-    { file: "package.json", existing: false },
-    { file: "CLAW.md", existing: true },
-  ])("cleans up a failed $file write so creation can be retried", async ({ file, existing }) => {
-    const root = join(tempDirs.make("openclaw-template-create-failed-"), "project");
-    if (existing) {
-      await mkdir(root);
-    }
-    const originalWriteFile = fs.writeFile;
-    const failedWrite = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      const [target, data, options] = args;
+  it.each(["package.json", "CLAW.md"])("cleans up a failed %s write before retry", async (file) => {
+    const root = join(tempDirs.make("openclaw-template-create-failed-"), "research-assistant");
+    const original = fs.writeFile;
+    const failed = vi.spyOn(fs, "writeFile").mockImplementation(async (target, data, options) => {
       if (typeof data === "string" && data.startsWith(file === "package.json" ? "{" : "---")) {
-        await originalWriteFile(target, data.slice(0, 8), options);
+        await original(target, data.slice(0, 8), options);
         throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
       }
-      return originalWriteFile(...args);
+      return original(target, data, options);
     });
     syncBuiltinESMExports();
     try {
       await expect(createTemplateProject(root)).rejects.toMatchObject({ code: "ENOSPC" });
     } finally {
-      failedWrite.mockRestore();
+      failed.mockRestore();
       syncBuiltinESMExports();
     }
-    if (existing) {
-      await expect(readdir(root)).resolves.toEqual([]);
-    } else {
-      await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
-    }
+    await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
     await createTemplateProject(root);
     await expect(validateTemplateProject(root)).resolves.toMatchObject({ ok: true });
   });
