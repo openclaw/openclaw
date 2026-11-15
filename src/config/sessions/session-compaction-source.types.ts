@@ -52,7 +52,7 @@ export type SessionCompactionSourceRequest =
   | SessionCompactionPlanRequest
   | SessionCompactionSerializeRequest;
 export type SessionCompactionSourceName = "history" | "turnPrefix" | "reconciliation";
-export type SessionCompactionSourcePlan = {
+type SessionCompactionSourcePlan = {
   facts: PreparedCompactionFacts;
   header: TranscriptEvent;
   retained: SessionTreeEntry[];

@@ -11,7 +11,6 @@ export {
   createFileOps,
   mergeSummaryFileOperations,
   extractFileOpsFromMessage,
-  extractFileOpsFromMessages,
   extractFileOpsFromFacts,
   prepareFileOperationMessage,
   type FileOperationMessage,
@@ -333,13 +332,6 @@ function renderSerializedEntry(
   throw new Error("Compaction serialization source changed during its snapshot");
 }
 
-/** Index sizes and bounded call labels, not rendered conversation payloads. */
-export function createSerializedConversationSource(
-  messages: CompactionMessageSource,
-): SerializedConversationSource {
-  return indexSerializedConversation(messages);
-}
-
 function indexSerializedConversation(
   messages: CompactionMessageSource,
   consume?: (text: string) => void,
@@ -639,7 +631,7 @@ export function serializeConversationWithinBudget(
   maxChars: number,
 ): BoundedConversation {
   return serializeConversationSourceWithinBudget(
-    createSerializedConversationSource({
+    indexSerializedConversation({
       length: messages.length,
       get: (index) => messages[index],
     }),

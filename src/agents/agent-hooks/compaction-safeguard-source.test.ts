@@ -4,7 +4,7 @@ import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixture
 import { extractOpaqueIdentifiers } from "./compaction-safeguard-quality.js";
 import {
   arraySafeguardSource,
-  buildSplitTurnContextSectionFromSource,
+  buildSplitTurnContextSection,
   prepareCompactionSafeguardSource,
   type SafeguardMessageSource,
 } from "./compaction-safeguard-source.js";
@@ -72,7 +72,7 @@ it("prepares complete safeguard facts without retaining hydrated transcript mess
   expect(source.reconciliation.get(0)?.role).toBe("user");
   expect(source.reconciliation.get(2)?.role).toBe("toolResult");
 
-  const split = buildSplitTurnContextSectionFromSource(transientSource(history));
+  const split = buildSplitTurnContextSection(history);
   expect(split.text).toContain("- Tool result (read): failed to read service log");
   expect(split.text).toContain("- User: Investigate service failure abcdef123456.");
   expect(split.segmentStarts).toHaveLength(4);

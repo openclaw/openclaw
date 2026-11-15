@@ -127,7 +127,7 @@ export function findTurnStartIndex(
 }
 
 /** Indexed variant for planners that hydrate only the entry being visited. */
-export function findTurnStartIndexFromSource(
+function findTurnStartIndexFromSource(
   entries: CompactionEntrySource,
   entryIndex: number,
   startIndex: number,

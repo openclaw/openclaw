@@ -114,20 +114,6 @@ export function extractFileOpsFromFacts(
   }
 }
 
-export function extractFileOpsFromMessages(
-  messages: readonly AgentMessage[],
-  fileOps: FileOperations,
-): void {
-  extractFileOpsFromFacts(
-    (function* () {
-      for (const message of messages) {
-        yield prepareFileOperationMessage(message);
-      }
-    })(),
-    fileOps,
-  );
-}
-
 /** Compute sorted read-only and modified file lists from accumulated operations. */
 export function computeFileLists(fileOps: FileOperations): {
   readFiles: string[];
