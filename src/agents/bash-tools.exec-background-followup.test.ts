@@ -10,6 +10,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   loadSessionEntry,
+  readLatestSessionTranscriptReport,
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
@@ -623,6 +624,66 @@ test("wakes a dashboard conversation on silent success, with exit, duration and 
     await completion(signal);
     expect(wakes.mock.calls.at(-1)?.[0]).toMatch(expected);
   }
+});
+
+test("wakes the same conversation after its session id rotates while the command runs", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:rotated-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-rotated-waiter");
+  const started = runningSession(
+    (
+      await backgroundExec(sessionKey, { agentId: "main" })(
+        "rotated-waiter",
+        waitForRelease(release),
+      )
+    ).details,
+  );
+  // Compaction installs a new physical session id and keeps the lifecycle revision.
+  const rotated = await upsertSessionEntryCore(
+    { agentId: "main", sessionKey },
+    { sessionId: "rotated-session" },
+  );
+  expect(rotated).toMatchObject({ sessionId: "rotated-session", lifecycleRevision: "original" });
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await completion(signal);
+  const [prompt] = expectDefined(model.mock.calls.at(-1), "rotated wake turn");
+  expect(prompt.sessionId).toBe("rotated-session");
+  expect(prompt.prompt).toContain(`Exec completed (${started.sessionId.slice(0, 8)}`);
+});
+
+test("withholds a completion from a reset conversation with a visible note", async ({ signal }) => {
+  const sessionKey = "agent:main:dashboard:reset-waiter";
+  await seedOrigin(sessionKey);
+  const release = path.join(state.workspaceDir, "release-reset-waiter");
+  const started = runningSession(
+    (await backgroundExec(sessionKey, { agentId: "main" })("reset-waiter", waitForRelease(release)))
+      .details,
+  );
+  // A reset keeps the transcript id and starts a new lifecycle.
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, { lifecycleRevision: "reset" });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  const calls = wakes.mock.calls.length;
+  await fs.writeFile(release, "release");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  await vi.waitFor(async () => {
+    const note = await readLatestSessionTranscriptReport(
+      { agentId: "main", sessionKey, sessionId: sessionKey.replaceAll(":", "-") },
+      ["run-failed-before-reply"],
+    );
+    expect(note).toMatchObject({
+      ok: true,
+      value: {
+        content: expect.stringContaining(
+          `Background command result withheld (${started.sessionId}, code 0): the conversation was reset`,
+        ),
+      },
+    });
+  });
+  expect(wakes.mock.calls.length).toBe(calls);
+  expect(model).not.toHaveBeenCalled();
 });
 
 test("does not promise a hidden subagent without sessions_yield an exit wake", async ({
