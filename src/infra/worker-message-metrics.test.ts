@@ -1,4 +1,7 @@
+import { serialize } from "node:v8";
 import { describe, expect, it, vi } from "vitest";
+import { createSqliteWorkerOperationAdmission as createAdmission } from "./sqlite-worker-operation-admission.js";
+import { captureSqliteWorkerCommitReceipt as captureReceipt } from "./sqlite-worker-operation-settlement.js";
 import {
   getWorkerMessageMetrics,
   recordWorkerMessage,
@@ -28,6 +31,38 @@ function increment(kind: WorkerMessageKind, direction: WorkerMessageDirection) {
 }
 
 describe("worker message metrics", () => {
+  it("keeps unsupported sampled facts and private request classes out of byte totals", () => {
+    const read = () =>
+      getWorkerMessageMetrics().find(
+        (row) => row.kind === "authority" && row.direction === "from_worker",
+      )?.payloadComponents?.["session.actor.read"];
+    const before = read();
+    const wire = { facts: () => undefined };
+    expect(() => serialize(wire.facts)).toThrow();
+    recordWorkerMessage("authority", "from_worker", undefined, "session.actor.read", wire);
+    recordWorkerMessage("authority", "from_worker", undefined, "session.actor.private-id", wire);
+    const snapshot = getWorkerMessageMetrics().find(
+      (row) => row.kind === "authority" && row.direction === "from_worker",
+    );
+    expect(Object.keys(snapshot?.payloadComponents ?? {})).not.toContain(
+      "session.actor.private-id",
+    );
+    for (const component of ["admission_entry", "admission_other"] as const) {
+      expect(snapshot?.payloadComponents?.["session.actor.read"]?.[component]?.bytes).toBe(
+        before?.[component]?.bytes ?? 0,
+      );
+      expect(snapshot?.payloadComponents?.["session.actor.read"]?.[component]?.samples).toBe(
+        before?.[component]?.samples ?? 0,
+      );
+      expect(snapshot?.payloadComponents?.["session.actor.read"]?.[component]?.unmeasured).toBe(
+        (before?.[component]?.unmeasured ?? 0) + 1,
+      );
+    }
+    recordWorkerMessage("authority", "from_worker", undefined, "session.actor.read", { facts: {} });
+    expect(snapshot?.payloadComponents?.["session.actor.read"]?.admission_other?.samples).toBe(
+      before?.admission_other?.samples ?? 0,
+    );
+  });
   it.each(["sqlite_request", "sqlite_reply", "authority"] as const)(
     "bounds %s byte classes and keeps totals and snapshots intact",
     (kind) => {
@@ -112,4 +147,103 @@ describe("worker message metrics", () => {
     expect(snapshot).toEqual(expect.arrayContaining([expectedReplies]));
     expect(getWorkerMessageMetrics()).toContainEqual(replies(3, 300, 1));
   });
+});
+
+it.each([false, true])("samples complete actor operations with entry reference=%s", (reference) => {
+  let draw = 0;
+  using random = vi.spyOn(Math, "random").mockImplementation(() => ((draw++ % 128) + 0.5) / 128);
+  const requestClass = "session.actor.appendTranscriptEvent";
+  const read = () =>
+    getWorkerMessageMetrics().find(
+      (row) => row.kind === "authority" && row.direction === "from_worker",
+    )?.payloadComponents?.[requestClass];
+  const before = read();
+  const entry = {
+    sessionId: "synthetic-private-session",
+    skillsSnapshot: { prompt: "x".repeat(130_000) },
+  };
+  const facts = {
+    identity: { physicalIdentity: "synthetic-database" },
+    publication: {
+      kind: "session-actor-admission",
+      snapshot: reference ? { entryReference: 1 } : { entry },
+    },
+  };
+  const outcome = {
+    kind: "committed",
+    value: { modelPromptProjection: "projection".repeat(100) },
+    receipt: {
+      postimage: { entry },
+      entryMetadata: [
+        {
+          facts: new Map([
+            ["synthetic-private-key", { kind: "postimage", value: { entry, fullEntry: entry } }],
+          ]),
+        },
+      ],
+      transcript: {
+        appendedEvents: [{ event: "event".repeat(100) }],
+        authorityReceipts: [{ bytes: new Uint8Array(128) }],
+      },
+    },
+  };
+  const captured = captureReceipt(outcome);
+  if (captured.kind !== "inline") {
+    throw new Error("Expected inline fixture");
+  }
+  const serialized = serialize(outcome);
+  for (let operation = 0; operation < 128; operation++) {
+    const admission = createAdmission((_request, grant) => grant());
+    admission.requestClass = requestClass;
+    try {
+      for (const stage of ["transaction", "commit"]) {
+        const decision = new SharedArrayBuffer(4);
+        admission.port.postMessage({ stage, facts, decision, ports: [] }, []);
+        admission.service();
+        expect(Atomics.load(new Int32Array(decision), 0)).toBe(1);
+      }
+      admission.port.postMessage(
+        {
+          kind: "native-commit",
+          committed: { version: 1, sequence: 1, facts: captured.facts },
+          payloadBytes: captured.payloadBytes,
+        },
+        [],
+      );
+      admission.port.postMessage(
+        {
+          kind: "native-settlement",
+          settlement: { kind: "completed" },
+          payloadBytes: 0,
+        },
+        [],
+      );
+      admission.service();
+      expect(serialize(admission.committed?.facts).equals(serialized)).toBe(true);
+    } finally {
+      void admission.finish();
+    }
+  }
+  expect(random).toHaveBeenCalledTimes(128);
+  const after = read();
+  const delta = (component: keyof NonNullable<typeof after>, field: "bytes" | "samples") =>
+    (after?.[component]?.[field] ?? 0) - (before?.[component]?.[field] ?? 0);
+  expect(delta("admission_other", "samples")).toBe(2);
+  expect(delta("receipt_other", "samples")).toBe(1);
+  expect(delta("admission_entry", "bytes") + delta("admission_other", "bytes")).toBe(
+    2 * serialize(facts).byteLength,
+  );
+  if (reference) {
+    expect(delta("admission_entry", "bytes")).toBe(0);
+  } else {
+    expect(delta("admission_entry", "bytes")).toBeGreaterThan(260_000);
+  }
+  expect(delta("receipt_entry", "bytes")).toBeGreaterThan(130_000);
+  expect(delta("receipt_events", "bytes")).toBeGreaterThan(528);
+  expect(
+    delta("receipt_entry", "bytes") +
+      delta("receipt_events", "bytes") +
+      delta("receipt_other", "bytes"),
+  ).toBe(serialized.byteLength);
+  expect(JSON.stringify(after)).not.toMatch(/synthetic-private|projection|prompt/);
 });
