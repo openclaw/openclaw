@@ -83,6 +83,9 @@ def package_skill(skill_path, output_dir=None):
         else:
             output_path = Path.cwd()
         skill_filename = output_path / f"{skill_name}.skill"
+        if skill_filename.is_symlink():
+            print("[ERROR] Output archive is a symlink; remove it before packaging.")
+            return None
 
         archive_target = skill_filename.resolve()
         # Keep the previous artifact intact until the new ZIP is complete.

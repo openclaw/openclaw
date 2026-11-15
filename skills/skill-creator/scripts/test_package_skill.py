@@ -81,6 +81,33 @@ class TestPackageSkillSecurity(TestCase):
                 self.assertEqual(skill_file.read_bytes(), original)
                 self.assertFalse((self.temp_dir / "fresh" / "normal-skill.skill").exists())
 
+    def test_rejects_linked_output_without_changing_its_target(self):
+        skill_dir = self.create_skill()
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+        archive = out_dir / "test-skill.skill"
+        external = self.temp_dir / "external.txt"
+        external.write_text("keep this file\n")
+        for target in (skill_dir / "SKILL.md", external, self.temp_dir / "missing"):
+            with self.subTest(target=target.name):
+                original = target.read_bytes() if target.exists() else None
+                try:
+                    archive.symlink_to(target)
+                except (OSError, NotImplementedError):
+                    self.skipTest("symlink unsupported on this platform")
+                try:
+                    self.assertIsNone(package_skill(str(skill_dir), str(out_dir)))
+                    self.assertTrue(archive.is_symlink())
+                    self.assertEqual(target.read_bytes() if target.exists() else None, original)
+                    self.assertEqual(list(out_dir.iterdir()), [archive])
+                finally:
+                    archive.unlink()
+                    if original is None:
+                        target.unlink(missing_ok=True)
+                    else:
+                        target.write_bytes(original)
+        self.assertIn("test-skill/SKILL.md", self.package_names(skill_dir, out_dir))
+
     def test_failed_write_preserves_output_and_cleans_staging(self):
         skill_dir = self.create_skill("failed-skill")
         for existing in (False, True):
