@@ -883,22 +883,46 @@ it.each([
   expect(callGatewayFromCli).not.toHaveBeenCalled();
 });
 
+// Both helpers run a read on behalf of a cron mutation command. The read must
+// settle from the CLI's Ctrl-C signal instead of hanging on the held request.
 it.each([
-  ["warnIfCronSchedulerDisabled", () => warnIfCronSchedulerDisabled({} as never)],
+  ["warnIfCronSchedulerDisabled", "cron.status", () => warnIfCronSchedulerDisabled({} as never)],
   [
     "buildCronCommandShellArgvForGateway",
+    "system.info",
     () => buildCronCommandShellArgvForGateway("echo hello", {} as never),
   ],
-])("passes the async work signal to %s reads", async (_name, run) => {
+])("%s observes the CLI abort signal on its %s read", async (_name, method, run) => {
   const scope = new AsyncWorkScope();
-  callGatewayFromCli.mockClear();
-  callGatewayFromCli.mockResolvedValueOnce({ enabled: true, platform: "linux" });
-  const running = scope.track(async () => {
-    await run();
+  resetGatewayMock();
+  const read = createDeferredCore();
+  let aborted = false;
+  callGatewayFromCli.mockImplementation(async (_method, _opts, _params, extra) => {
+    extra?.signal?.addEventListener("abort", () => {
+      aborted = true;
+      read.reject(extra.signal?.reason);
+    });
+    return await read.promise;
   });
-  await running;
+
+  const running = scope.track(run);
+  // The read never resolves on its own; only the scope close can settle it.
+  void running.catch(() => undefined);
+  await Promise.resolve();
+
+  expect(callGatewayFromCli.mock.calls[0]?.[0]).toBe(method);
+  // Without this signal the helper hangs on a held Gateway read after SIGINT.
+  expect(callGatewayFromCli.mock.calls[0]?.[3]?.signal).toBeInstanceOf(AbortSignal);
+
+  scope.beginClose(new DOMException("CLI stopping (SIGINT)", "AbortError"));
+  // Cancellation is the read's only outcome, and it produces no user output.
+  await running.then(
+    () => undefined,
+    () => undefined,
+  );
+  expect(aborted).toBe(true);
+  for (const output of [defaultRuntime.writeStdout, defaultRuntime.error, defaultRuntime.exit]) {
+    expect(output).not.toHaveBeenCalled();
+  }
   await scope.drain();
-  const signal = callGatewayFromCli.mock.calls[0]?.[3]?.signal;
-  // The read must observe the CLI's Ctrl-C signal, or it hangs after SIGINT.
-  expect(signal).toBeInstanceOf(AbortSignal);
 });
