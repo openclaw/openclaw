@@ -614,9 +614,10 @@ describe("talk.catalog handler", () => {
       }) as OpenClawConfig,
     });
 
+    // Options for xAI name no provider: the runtime still picks by order and readiness.
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: {
-        source: "streaming",
+        source: "streaming-auto",
         ready: true,
         activeProvider: "xai",
         providers: [

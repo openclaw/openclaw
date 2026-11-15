@@ -125,8 +125,11 @@ function loadedCatalog(catalog: CatalogState) {
 // change links go there rather than to Models.
 type TalkLink = "voice-call" | "voice-model";
 
-/** How Talk listens, in user terms, plus the one place a user changes it. */
-function talkRowState(catalog: CatalogState) {
+/**
+ * How Talk listens, in user terms, plus the one place a user changes it.
+ * `preferredProviderId` is the provider of the picked voice-notes model.
+ */
+function talkRowState(catalog: CatalogState, preferredProviderId: string | undefined) {
   if (catalog === "loading" || catalog === "unavailable") {
     return {
       kind: "muted" as const,
@@ -151,9 +154,15 @@ function talkRowState(catalog: CatalogState) {
   };
   const provider = loaded.activeProvider ? providerDisplayLabel(loaded.activeProvider) : null;
   if (loaded.source === "media-understanding") {
+    // Another audio model can serve Talk while the picked one is not ready:
+    // name the provider in use rather than point at the picked model.
+    const fallback =
+      provider && preferredProviderId && loaded.activeProvider !== preferredProviderId;
     return {
       ...status,
-      description: t("talkPage.transcription.talkUsesVoiceNotes"),
+      description: fallback
+        ? t("talkPage.transcription.talkUsesFallback", { provider })
+        : t("talkPage.transcription.talkUsesVoiceNotes"),
       link: undefined,
     };
   }
@@ -199,9 +208,9 @@ function talkRowState(catalog: CatalogState) {
   };
 }
 
-function TalkRow(props: { catalog: CatalogState }) {
+function TalkRow(props: { catalog: CatalogState; preferredProviderId: string | undefined }) {
   const context = useApplication();
-  const state = createMemo(() => talkRowState(props.catalog));
+  const state = createMemo(() => talkRowState(props.catalog, props.preferredProviderId));
   const open = (link: TalkLink) => {
     if (link === "voice-call") {
       context.navigate("plugin-settings", {
@@ -305,7 +314,12 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
       title={t("talkPage.transcription.title")}
       description={t("talkPage.transcription.description")}
     >
-      <TalkRow catalog={props.catalog} />
+      <TalkRow
+        catalog={props.catalog}
+        preferredProviderId={
+          preferredProvider()?.id ?? splitModelRef(selection().preferredModel ?? "")?.provider
+        }
+      />
       <SettingsRow
         title={t("talkPage.transcription.voiceNotesTitle")}
         description={

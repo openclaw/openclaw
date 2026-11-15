@@ -446,6 +446,7 @@ const enSettings = {
       talkAutomatic: "{provider} live transcription, picked automatically from your keys.",
       talkNotSetUp: "Not set up yet. Add a live transcription key in Voice Call settings.",
       talkUsesVoiceNotes: "Uses the voice notes model below.",
+      talkUsesFallback: "Uses {provider}, because the voice notes model below isn’t ready.",
       talkUses: "Uses {provider}.",
       change: "Change",
       setUp: "Set up",

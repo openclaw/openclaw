@@ -186,7 +186,7 @@ export type TalkMutationHarnessOptions = {
   transports?: TalkCatalogResult["transports"];
   voicesByModel?: Record<string, string[]>;
   navigate?: ReturnType<typeof vi.fn>;
-  modelAuthStatus?: Record<string, unknown>;
+  modelAuthStatus?: Record<string, unknown> | Promise<Record<string, unknown>>;
 };
 
 export function createTalkMutationHarness(options: TalkMutationHarnessOptions = {}) {

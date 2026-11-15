@@ -59,7 +59,7 @@ it("reports the chosen speech-to-text provider as not ready and links to Models"
   expect(navigate).toHaveBeenCalledWith("model-providers", { search: "?provider=openrouter" });
 });
 
-it("keeps Talk speech-to-text status on the active route when the preferred model is not ready", async () => {
+it("names the provider Talk falls back to when the preferred model is not ready", async () => {
   const { page } = createTalkMutationHarness({
     navigate: vi.fn(),
     catalogRequest: (_index, catalog) => ({
@@ -95,12 +95,66 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
     [...page.querySelectorAll<HTMLElement>("section.settings-section")]
       .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
       ?.querySelector<HTMLElement>(".settings-row");
+  // Talk runs on the OpenAI fallback, not on the OpenRouter model the picker shows.
   await waitForSolid(() =>
-    expect(statusRow()?.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes")),
+    expect(statusRow()?.textContent).toContain(
+      t("talkPage.transcription.talkUsesFallback", { provider: "OpenAI" }),
+    ),
   );
+  expect(statusRow()?.textContent).not.toContain(t("talkPage.transcription.talkUsesVoiceNotes"));
   expect(statusRow()?.textContent).toContain(t("talkPage.status.ready"));
   expect(page.textContent).toContain(
     t("talkPage.transcription.providerNotReadyDescription", { provider: "OpenRouter" }),
+  );
+});
+
+it("says Talk uses the voice notes model when that model is the one in use", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "media-understanding",
+        ready: true,
+        activeProvider: "openai",
+        providers: [{ id: "openai", label: "OpenAI", configured: true }],
+      },
+    }),
+  });
+  page.configObject = {
+    ...page.configObject,
+    tools: {
+      media: {
+        models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+        audio: { preferredModel: "openai/gpt-4o-transcribe" },
+      },
+    },
+  };
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes")),
+  );
+});
+
+it("shows the Talk catalog without waiting for Models", async () => {
+  const { page } = createTalkMutationHarness({
+    navigate: vi.fn(),
+    // Models never answers in this run.
+    modelAuthStatus: new Promise(() => {}),
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "streaming",
+        ready: true,
+        activeProvider: "openai",
+        providers: [],
+        mediaProviders: [],
+      },
+    }),
+  });
+  await waitForSolid(() =>
+    expect(page.textContent).toContain(
+      t("talkPage.transcription.talkVoiceCall", { provider: "OpenAI" }),
+    ),
   );
 });
 
