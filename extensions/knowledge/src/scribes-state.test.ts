@@ -4,6 +4,8 @@ import {
   checkRunMessage,
   defaultOptions,
   repairPrompt,
+  REVIEW_NIGHTLY_SCHEDULE,
+  REVIEW_WEEKLY_SCHEDULE,
   scribeById,
   scribeLabel,
   scribeSetup,
@@ -149,18 +151,46 @@ describe("scribes catalog", () => {
           "withdrawn and left; Timelines retired and left; pages reviewed, changed and left unchanged",
           "withdrawn and left",
         );
+    // Consolidation runs before they named how many Timelines and pages to take on.
+    const withoutAmounts = (message: string) =>
+      message.replace(/\n\nSettings:\n- Each run: [^\n]+/, "");
     const current = runMessage("claim-consolidation", defaultOptions("claim-consolidation"));
     expect(current).toContain("Timelines retired and left; pages reviewed, changed");
-    const earlier = claimsOnly(earlierOf(current));
+    expect(current).toContain("- Each run: retire 15 written Timelines and review 6 pages.");
+    const nightly = runMessage("claim-consolidation", { schedule: REVIEW_NIGHTLY_SCHEDULE });
+    expect(nightly).toContain("- Each run: retire 10 written Timelines and review 5 pages.");
+    const beforeAmounts = withoutAmounts(current);
+    expect(beforeAmounts).not.toContain("Each run:");
+    const earlier = claimsOnly(earlierOf(beforeAmounts));
     expect(checkRunMessage("claim-consolidation", current)).toEqual({ state: "current" });
-    for (const message of [earlier, claimsOnly(current)]) {
+    expect(checkRunMessage("claim-consolidation", nightly, REVIEW_NIGHTLY_SCHEDULE)).toEqual({
+      state: "current",
+    });
+    // An unedited message from before the amounts takes those of the schedule it runs on.
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, REVIEW_NIGHTLY_SCHEDULE)).toEqual({
+      state: "outdated",
+      current: nightly,
+    });
+    expect(checkRunMessage("claim-consolidation", beforeAmounts, REVIEW_WEEKLY_SCHEDULE)).toEqual({
+      state: "outdated",
+      current,
+    });
+    expect(
+      repairPrompt("claim-consolidation", {
+        schedule: { kind: "cron", expr: REVIEW_NIGHTLY_SCHEDULE },
+        runMessage: beforeAmounts,
+      }),
+    ).toContain(`\`\`\`text\n${nightly}\n\`\`\``);
+    for (const message of [earlier, claimsOnly(beforeAmounts), beforeAmounts]) {
       expect(message).not.toBe(current);
       expect(checkRunMessage("claim-consolidation", message)).toEqual({
         state: "outdated",
         current,
       });
     }
-    expect(checkRunMessage("claim-consolidation", `${claimsOnly(current)}\nTidy titles.`)).toEqual({
+    expect(
+      checkRunMessage("claim-consolidation", `${claimsOnly(beforeAmounts)}\nTidy titles.`),
+    ).toEqual({
       state: "differs",
       current,
     });
@@ -168,13 +198,28 @@ describe("scribes catalog", () => {
       state: "custom",
     });
     const granola = runMessage("granola", { meetings: "all", since: "today" });
-    const edited = earlierOf(granola).replace("left pending", "skipped and left for later");
+    expect(granola).toContain("- Each run: ingest 4 meetings.");
+    // A Granola message from before run amounts upgrades unedited, and an edited one keeps its
+    // meeting settings.
+    const granolaBeforeAmounts = granola.replace("\n- Each run: ingest 4 meetings.", "");
+    expect(checkRunMessage("granola", granolaBeforeAmounts)).toEqual({
+      state: "outdated",
+      current: granola,
+    });
+    const edited = earlierOf(granolaBeforeAmounts).replace(
+      "left pending",
+      "skipped and left for later",
+    );
     expect(checkRunMessage("granola", edited)).toEqual({ state: "differs", current: granola });
+    // A once run ingests everything pending; only scheduled runs carry a target.
+    expect(
+      setupPrompt(scribeSetup("granola", "once", defaultOptions("granola"), "UTC")),
+    ).not.toContain("Each run:");
     // Granola runs gained the needs-attention rule; a message from before it is upgraded.
     expect(granola).toContain("end with `Scribe status: needs attention — <why>` instead.");
-    const beforeAttention = granola.slice(
+    const beforeAttention = granolaBeforeAmounts.slice(
       0,
-      granola.lastIndexOf("\n\nIf meetings are left pending"),
+      granolaBeforeAmounts.lastIndexOf("\n\nIf meetings are left pending"),
     );
     expect(checkRunMessage("granola", beforeAttention)).toEqual({
       state: "outdated",

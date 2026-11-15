@@ -50,6 +50,11 @@ time zone).
    for one that has none. Record `done` only after verification passes. Write
    each line with `knowledge_edit_body` as soon as the meeting's outcome is
    known, so an interrupted run resumes instead of redoing or losing it.
+   Then start the next pending meeting. A scheduled run's message sets how many
+   meetings it ingests; without one, ingest every pending meeting. That number
+   is a target, not a limit: stop short only when no meeting is left that
+   nothing outside the run holds back. Compaction keeps what you published, so
+   a long run is no reason to stop.
 6. Count meetings ingested, already in Knowledge, left pending and without a
    transcript, and pages and claims written. If meetings are left pending, none
    was ingested and nothing outside the run held them back, the run did not do
