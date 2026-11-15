@@ -111,7 +111,9 @@ suite.define(() => {
                 return { x, y, width, height };
               }),
             );
-        const footer = page.locator(".chat-group.user .chat-group-footer__meta").first();
+        const footer = page
+          .locator(".chat-pane-cache__pane--visible .chat-group.user .chat-group-footer__meta")
+          .first();
         const footerGeometry = () =>
           footer.evaluate((element) => {
             const box = element.getBoundingClientRect();
