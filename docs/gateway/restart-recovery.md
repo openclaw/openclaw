@@ -197,6 +197,12 @@ recovery. Recovery runs after database preparation ends, under the session's
 current authority, before the same session accepts fresh inputs. Another agent becoming
 available does not revoke an already admitted session's authority.
 
+Runtime status and automation-list notifications do not invalidate a resumed
+turn's stored session generation. Compaction and subsequent tool calls retain the
+same admitted owner; session replacement, revocation, and uncertain storage changes
+still refuse stale authority. Model fallback does not retry a refused session
+generation, because selecting another model cannot restore that authority.
+
 The boot owner retains each agent's pending crash intervals in the existing shared
 SQLite machine-state store until its recovery pass completes, including an empty
 successful scan. An intermediate process that never admits that agent cannot erase
