@@ -57,7 +57,11 @@ function ingressFor(boundary: string | undefined): ScheduledAdmissionFacts["ingr
 }
 
 /** A requester's owner status at admission, plus its live recheck for owner-only effects. */
-type RequesterOwnerCheck = Readonly<{ owner: boolean; assertCurrent?: () => void }>;
+type RequesterOwnerCheck = Readonly<{
+  owner: boolean;
+  isOwner?: (current: OpenClawConfig) => boolean;
+  assertCurrent?: () => void;
+}>;
 
 const NOT_OWNER: RequesterOwnerCheck = { owner: false };
 
@@ -68,6 +72,7 @@ function ownerCheck(cfg: OpenClawConfig, isOwner: (current: OpenClawConfig) => b
   }
   return {
     owner: true,
+    isOwner,
     assertCurrent: () => {
       if (!isOwner(selectLiveRuntimeConfig(cfg))) {
         throw new Error("The requester that authorized this automation is no longer an owner.");
@@ -347,7 +352,11 @@ export async function admitScheduledOccurrence(
             toolsAllow: run.toolsAllow,
           },
           parentRow,
-          operatorSourceRequester ? run.operatorAuthority !== undefined : requesterOwner?.owner,
+          operatorSourceRequester
+            ? run.operatorAuthority !== undefined
+            : // A queued occurrence must not retain a revoked owner-private memory audience.
+              (requesterOwner?.isOwner?.(selectLiveRuntimeConfig(run.cfg)) ??
+                requesterOwner?.owner),
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

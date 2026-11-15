@@ -1,0 +1,2 @@
+# Real HTTP MCP shutdown regression in the async-scope suite: cancel before response socket drain.
+29
