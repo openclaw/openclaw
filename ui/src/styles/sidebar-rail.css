@@ -667,6 +667,16 @@ html.openclaw-native-web-chrome body .shell:not(.shell--mobile-nav) .sidebar-she
     .sidebar-shell {
       display: none;
     }
+
+    /* A peek floats the hovered section's sidebar over the content beside the rail. */
+    .shell-nav:has(openclaw-app-sidebar[data-peek]) {
+      clip-path: none;
+      box-shadow: var(--shadow-lg);
+
+      .sidebar-shell {
+        display: flex;
+      }
+    }
   }
 
   /* Connection controls may extend past the rail while it is collapsed. */
