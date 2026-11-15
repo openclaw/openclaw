@@ -1,9 +1,9 @@
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
-  resolveSessionWorkStartError,
-  type InternalSessionEntry,
-  type SessionEntry,
-} from "../../config/sessions.js";
+  resolveSessionWorkStartBlock,
+  type SessionWorkStartError,
+} from "../../config/sessions/session-work-start.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE,
@@ -22,11 +22,11 @@ export function canPrepareAgentSessionWorktree(
   return Boolean(sessionKey && entry?.pendingWorktree) && entry?.pendingProjectGitUrl === undefined;
 }
 
-export function resolveAgentSessionWorkStartError(
+export function resolveAgentSessionWorkStartBlock(
   sessionKey: string,
   entry: SessionEntry | undefined,
-): string | undefined {
-  return resolveSessionWorkStartError(
+): SessionWorkStartError | undefined {
+  return resolveSessionWorkStartBlock(
     sessionKey,
     entry,
     canPrepareAgentSessionWorktree(sessionKey, entry) ? { allowPendingWorkspace: true } : undefined,
@@ -92,12 +92,19 @@ export function respondUnavailableAgentSession(params: {
       resolveAgentHarnessSessionIdMismatchError(entry, params.requestedSessionId) ||
       (params.isRawModelRun && entry?.modelSelectionLocked === true
         ? AGENT_HARNESS_MODEL_RUN_FORBIDDEN_MESSAGE
-        : undefined) ||
-      resolveAgentSessionWorkStartError(canonicalKey, entry);
-    if (!sessionError) {
+        : undefined);
+    if (sessionError) {
+      respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
+      return true;
+    }
+    const workStartBlock = resolveAgentSessionWorkStartBlock(canonicalKey, entry);
+    if (!workStartBlock) {
       return false;
     }
-    respondError(params.respond, ErrorCodes.INVALID_REQUEST, sessionError);
+    // Transient blocks stay retryable so internal callers can tell them from refusals.
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+      retryable: workStartBlock.retryable,
+    });
     return true;
   };
   return deleted instanceof Promise

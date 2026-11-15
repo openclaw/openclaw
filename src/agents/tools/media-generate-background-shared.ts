@@ -72,6 +72,8 @@ const log = createSubsystemLogger("agents/tools/media-generate-background-shared
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS = [250, 500, 1_000, 2_000] as const;
 const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
+// The queue delivers the files; later wakes admit the follow-up turn. Bound that wait too.
+const MEDIA_GENERATION_QUEUED_COMPLETION_TIMEOUT_MS = 600_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
@@ -128,27 +130,26 @@ async function wakeMediaGenerationTaskCompletionWithRetry(params: {
   wake: () => Promise<MediaGenerationCompletionWakeOutcome>;
   beforeRetry?: () => void;
 }): Promise<MediaGenerationCompletionWakeOutcome> {
-  const deadline = monotonicNow() + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
+  const startedAt = monotonicNow();
+  let deadline = startedAt + MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS;
   let outcome = await params.wake();
   let retryIndex = 0;
   let queueOwnsCompletion = false;
   while (outcome.status === "pending" || outcome.status === "queued") {
     if (outcome.status === "queued" && !queueOwnsCompletion) {
       queueOwnsCompletion = true;
+      deadline = startedAt + MEDIA_GENERATION_QUEUED_COMPLETION_TIMEOUT_MS;
       updateMediaGenerationOperation(params.handle.runId, { completionDelivery: "queued" });
     }
     const remainingMs = deadline - monotonicNow();
-    if (!queueOwnsCompletion && remainingMs <= 0) {
+    if (remainingMs <= 0) {
       throw new Error("media completion did not settle before the handoff deadline");
     }
-    // The deadline bounds unconfirmed handoff, not work the queue already owns.
-    // Keep observing its receipt so real delivery failures still retain the media.
     const delayMs = computeBackoffSchedule(
       MEDIA_GENERATION_COMPLETION_HANDOFF_RETRY_DELAYS_MS,
       retryIndex + 1,
     );
-    const retryDelayMs = queueOwnsCompletion ? delayMs : Math.min(delayMs, remainingMs);
-    await sleepWithAbort(retryDelayMs, undefined, { ref: false });
+    await sleepWithAbort(Math.min(delayMs, remainingMs), undefined, { ref: false });
     params.beforeRetry?.();
     outcome = await params.wake();
     retryIndex += 1;
