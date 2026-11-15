@@ -135,7 +135,7 @@ it.each([
             expect.objectContaining({
               exitCode: 1,
               stderrTail: expect.stringMatching(
-                /snapshot-capacity-insufficient[\s\S]*Initial snapshot needs/,
+                /^Update refused: no eligible directory has [^\n]*\n\nSnapshot size estimate[\s\S]*Initial snapshot needs/u,
               ),
               snapshotCapacity: expect.objectContaining({
                 reason: "snapshot-capacity-insufficient",

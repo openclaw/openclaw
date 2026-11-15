@@ -9,9 +9,7 @@ const catalog = {
     },
     composer: {
       composerInput: "Chat composer",
-      usePrediction: "Use suggestion",
-      predictionShortcut: "Tab",
-      dismissPrediction: "Dismiss suggestion",
+      predictionHint: "Tab to complete",
       predictionAvailable:
         "Suggested message: {text}. Press Tab to use it, or Escape to dismiss. It won’t be sent automatically.",
       emojiSuggestions: "Emoji suggestions",
@@ -267,7 +265,7 @@ const catalog = {
       outboxPayloadCapacity:
         "Browser attachment storage is full. Try a smaller batch or send/discard queued messages to free space. No new message was sent; your input is retained.",
       outboxPayloadUnavailable:
-        "Browser attachment storage is unavailable. Allow browser storage and close older dashboard tabs before reconnecting and retrying. No new message was sent.",
+        "Browser attachment storage is unavailable. Allow browser storage and close older OpenClaw tabs before reconnecting and retrying. No new message was sent.",
       outboxPayloadMissing:
         "Queued attachments are missing or unreadable. This may be a stale copy from another tab. Check the conversation, then discard this row and attach the files again if needed. No new message was sent.",
       activeLeafChanged: "The session switched branches — review and resend.",

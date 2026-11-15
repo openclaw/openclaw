@@ -83,7 +83,7 @@ type PreparedAnthropicRequest = {
   request: (
     body: MessageCreateParamsStreaming,
     headers: Record<string, string> | undefined,
-    encodeBody: () => string | Blob,
+    encodeBody: () => string | Uint8Array<ArrayBuffer>,
   ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
   checkResponse?: (response: Response) => Promise<void>;
 };

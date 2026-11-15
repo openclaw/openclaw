@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -162,7 +163,7 @@ async function openWorkspaceEditor(fixture: Awaited<ReturnType<typeof setupReset
 async function makeNonGitTempDir(prefix: string): Promise<string> {
   let root = await fs.realpath(os.tmpdir());
   for (;;) {
-    const checkoutRoot = findGitCheckoutRoot(root);
+    const checkoutRoot = await findGitCheckoutRoot(root);
     if (!checkoutRoot) {
       return tempDirs.make(prefix, root);
     }
@@ -331,8 +332,28 @@ test("an ordinary session created through a workspace alias can adopt without ac
     );
     await fs.unlink(alias);
     await fs.symlink(workspace, alias, directoryLinkType);
+    await expect(
+      adoptUnboundPullRequestWorkspace({
+        ...input,
+        async verifyBeforeBinding() {
+          await fs.unlink(alias);
+          await fs.symlink(other, alias, directoryLinkType);
+        },
+      }),
+    ).rejects.toThrow("workspace path alias points to a different current target");
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: entry.sessionId,
+    });
+    expect(
+      loadSessionEntry({ agentId: "main", sessionKey: key, storePath })?.worktree,
+    ).toBeUndefined();
+    await fs.unlink(alias);
+    await fs.symlink(workspace, alias, directoryLinkType);
+    const workspaceStats = vi.spyOn(syncFs, "lstatSync");
     const adopted = await adoptUnboundPullRequestWorkspace(input);
     adoptedId = adopted.worktree?.id;
+    expect(workspaceStats.mock.calls.filter(([pathname]) => pathname === alias)).toHaveLength(0);
+    workspaceStats.mockRestore();
     expect(adoptedId).toBeDefined();
     expect(adopted.priorWorkspace).toMatchObject({ workspaceDir: alias, fileRoot: alias });
     const worktree = getRegistryWorktree(process.env, adoptedId!);

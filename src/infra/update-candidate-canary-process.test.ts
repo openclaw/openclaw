@@ -13,12 +13,18 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 const root = path.resolve("canary-image");
+function createChild() {
+  return Object.defineProperties(new ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 beforeEach(() => {
   vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(root).href);
   mocks.spawn.mockImplementation(() => {
-    const child = new ChildProcess();
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
+    const child = createChild();
     queueMicrotask(() => {
       child.stdout?.destroy();
       child.stderr?.destroy();
@@ -72,10 +78,8 @@ it("routes a CLI target through the standalone command entry", async () => {
 
 it("reports a check's process to the rehearsal owner and opens stdin only on request", async () => {
   mocks.spawn.mockImplementationOnce(() => {
-    const child = new ChildProcess();
+    const child = createChild();
     Object.defineProperty(child, "pid", { value: 777 });
-    child.stdout = new PassThrough();
-    child.stderr = new PassThrough();
     queueMicrotask(() => child.emit("close", 0, null));
     return child;
   });

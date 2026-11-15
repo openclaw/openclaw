@@ -334,6 +334,31 @@ describe("package runtime compatibility guidance", () => {
     },
   );
 
+  it("keeps the service-definition step when an early refusal cannot refresh the service", async () => {
+    mockUnsupportedNode();
+    const result = await preflight({
+      engineOnly: true,
+      nodeRunner: "/usr/bin/node",
+      service: {
+        ...refreshableService,
+        serviceNodeRunner: "/usr/bin/node",
+        serviceUpdateVerdict: {
+          kind: "owned",
+          root: "/fixture",
+          fingerprint: "fixture",
+          refreshDefinition: false,
+        },
+      },
+    });
+    if (result.ok) {
+      throw new Error("Expected runtime refusal");
+    }
+    // The terminal shows only the block before the blank line; the owner step must be in it.
+    expect(result.error.split("\n\n")[0]).toContain(
+      "have its deployment owner select Node 24.22.1 in the service definition",
+    );
+  });
+
   it("preserves recorded selectors and wrapper ownership", async () => {
     mockUnsupportedNode();
     const result = await preflight({

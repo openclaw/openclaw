@@ -20,7 +20,6 @@ const enCron = {
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
-      notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
       invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
@@ -87,7 +86,6 @@ const enCron = {
     actions: {
       runNow: "Start now",
       runNowJob: "Start now: {name}",
-      runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",
@@ -99,7 +97,7 @@ const enCron = {
     },
 
     attention: {
-      title: "Run failed",
+      title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
@@ -108,6 +106,7 @@ const enCron = {
       running: "A new run is in progress. Review its outcome before starting another run.",
       effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
+      errorDetails: "Error details",
     },
 
     jobs: {
@@ -247,7 +246,7 @@ const enCron = {
       command: "Command",
       script: "Script",
       readOnlyPayloadHelp:
-        "This task was created outside the Control UI. You can’t edit its contents here, but saving other changes keeps them.",
+        "This task was created outside the app. You can’t edit its contents here, but saving other changes keeps them.",
       systemEvent: "Post to main timeline",
       agentTurn: "Run agent task",
       systemEventHelp: "Adds your text to the agent’s main timeline for reminders.",
@@ -357,8 +356,13 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
+      conditionCheckFailed: "Condition check failed",
+      deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       transcript: "Conversation",
-      viewTranscript: "View transcript",
+      viewTranscript: "View chat",
       transcriptScope:
         "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
       transcriptEmpty: "No messages in this conversation yet.",
