@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { createHash as createVolumeHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -26,7 +27,10 @@ import {
   runShardPlans,
   type ShardGroupPlan,
 } from "../../scripts/ci-run-node-test-shard.mts";
-import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
+import {
+  encodeNodeTestGroups,
+  nodeTestVolumeEnvironment,
+} from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import nativeBunQualification from "../../scripts/lib/ci-test-native-bun-qualification.json" with { type: "json" };
 import { resolveCiTestRuntimeSelections } from "../../scripts/lib/ci-test-runtime.mts";
 import * as buildPrerequisites from "../../scripts/lib/vitest-build-prerequisites.mts";
@@ -119,6 +123,69 @@ function groupPlans(groups: ShardGroupPlan["plan"][], packed = false) {
       : { OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(groups) },
   );
 }
+
+it.each([false, true])(
+  "carries volume references through mixed-config plans (packed=%s)",
+  async (packed) => {
+    const configs = ["one.config.ts", "two.config.ts"];
+    const count = { count: 2, digest: "b".repeat(64) };
+    const volume = {
+      version: 1 as const,
+      revision: "a".repeat(40),
+      policy: "node" as const,
+      entries: [
+        {
+          config: configs[0]!,
+          runtime: "node" as const,
+          engine: "vitest" as const,
+          profile: "c".repeat(64),
+          environment: nodeTestVolumeEnvironment({}).semantic,
+          argsDigest: createVolumeHash("sha256")
+            .update(JSON.stringify([configs[0]]))
+            .digest("hex"),
+          full: { ...count, id: "d".repeat(64) },
+          selected: { count: 1, digest: "e".repeat(64) },
+        },
+      ],
+    };
+    const plans = groupPlans([{ configs, volume }], packed);
+    const output: string[] = [];
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output.push(String(chunk));
+      return true;
+    });
+    const result = await recordPlans(plans);
+    expect(result.code).toBe(0);
+    expect(result.calls[0]![0]).toEqual(configs);
+    const records = output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+    expect(records).toHaveLength(2);
+    expect(records[0]).toMatchObject({ config: configs[0], full: volume.entries[0]!.full });
+    expect(records[1]).toMatchObject({ config: configs[1], full: null, selected: null });
+    output.length = 0;
+    await recordPlans(plans, {
+      env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: '["--testTimeout=12345"]' },
+    });
+    const changedArgs = output
+      .filter((line) => line.startsWith("[shard:volume] "))
+      .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
+    expect(changedArgs).toHaveLength(2);
+    expect(changedArgs.every((record) => record.full === null && record.selected === null)).toBe(
+      true,
+    );
+    output.length = 0;
+    volume.entries.push({ ...volume.entries[0]! });
+    await recordPlans(groupPlans([{ configs, volume }], packed));
+    const ambiguous = output.filter((line) => line.startsWith("[shard:volume] "));
+    expect(ambiguous.map((line) => JSON.parse(line.slice("[shard:volume] ".length)))).toMatchObject(
+      [
+        { full: null, selected: null },
+        { full: null, selected: null },
+      ],
+    );
+  },
+);
 
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);
