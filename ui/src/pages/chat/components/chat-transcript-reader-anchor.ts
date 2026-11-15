@@ -489,7 +489,7 @@ export class TranscriptReaderAnchor {
       if (!owned && this.host.scrollElement?.scrollTop === 0) {
         return false;
       }
-      if (moves && !owned && !held && this.host.prependAnchor.messageKey === null) {
+      if (moves && !owned && !held) {
         // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
         this.owedScroll += delta;
         return false;
@@ -545,8 +545,10 @@ export class TranscriptReaderAnchor {
     }
     this.syncColumn();
     if (Math.abs(owed) >= 0.5) {
+      // A smaller range can clamp the native offset before its correction is written.
+      const offset = this.host.scrollElement?.scrollTop;
       this.commitRange();
-      this.scrollBy(owed);
+      this.scrollBy(owed, offset);
     }
     // Virtual-core notifies when its scrolling state ends.
     this.settle();

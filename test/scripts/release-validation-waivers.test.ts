@@ -5,6 +5,7 @@ import {
 } from "../../scripts/full-release-validation-policy.mjs";
 import {
   evaluateReleaseChildPolicy,
+  releaseQualificationExemptions,
   validateReleaseWaiverAggregates,
 } from "../../scripts/lib/release-validation-waivers.mjs";
 
@@ -352,6 +353,125 @@ describe("2026.11.4 exact-candidate exceptions", () => {
           policy,
           jobs: [...stableJobs, ...gates],
           getJobLog: () => stableLog,
+        }),
+      ).rejects.toThrow();
+    }
+  });
+});
+
+describe.each([
+  {
+    role: "normalCi",
+    name: "checks-node-agentic-gateway-server-isolated-4",
+    aggregate: gate,
+    cause: "checks-node-core-test-nondist-shard finished with failure (selected=true)",
+    sibling: "checks-node-agentic-gateway-server-isolated-3",
+  },
+  {
+    role: "releaseChecksIndependent",
+    name: "Run repo/live E2E validation / Native live suites (Native live gateway core)",
+    aggregate: {
+      ...gate,
+      name: "Verify release checks",
+      steps: [{ name: "Verify release check results", conclusion: "failure" }],
+    },
+    cause: "live_repo_e2e_release_checks ended with failure",
+    sibling: "Run repo/live E2E validation / Native live suites (Native live test harnesses)",
+  },
+])("2026.11.4 d843 exact-candidate $role grant", ({ role, name, aggregate, cause, sibling }) => {
+  const sha = "d843d6af39a42cd3c30084edbeabeece732fd93a";
+  const leaf = { ...failedJob, id: 20, name };
+  const currentChild = { ...child, key: role, jobs: [leaf, aggregate] };
+  const input = { child: currentChild, targetVersion: stableVersion, targetSha: sha };
+
+  it("admits only the authorized terminal failure without changing raw evidence or omitting tests", () => {
+    const original = structuredClone(currentChild);
+    expect(terminalPolicyPass(currentChild, stableVersion, sha)).toBe(true);
+    expect(() =>
+      validateReleaseManifestAdvisoryJobs({
+        targetSha: sha,
+        validationInputs: { targetVersion: stableVersion },
+        childEvidence: { [role]: currentChild },
+      }),
+    ).not.toThrow();
+    expect(evaluateReleaseChildPolicy(input).waivers).toEqual([
+      expect.objectContaining({
+        targetSha: sha,
+        targetVersion: stableVersion,
+        childRole: role,
+        jobName: name,
+      }),
+    ]);
+    expect(currentChild).toEqual(original);
+    expect(releaseQualificationExemptions(stableVersion, "stable")).toEqual([]);
+    for (const wrongSha of [undefined, targetSha, "a".repeat(40)]) {
+      expect(evaluateReleaseChildPolicy({ ...input, targetSha: wrongSha }).waivers).toEqual([]);
+    }
+    expect(evaluateReleaseChildPolicy({ ...input, targetVersion: "2026.11.5" }).waivers).toEqual(
+      [],
+    );
+    expect(
+      evaluateReleaseChildPolicy({
+        ...input,
+        child: { ...currentChild, key: "releaseChecksCandidate" },
+      }).waivers,
+    ).toEqual([]);
+    for (const replacement of [
+      [],
+      [{ ...leaf, name: sibling }],
+      [{ ...leaf, status: "in_progress" }],
+      ...["skipped", "cancelled", "timed_out", "neutral", "success"].map((conclusion) => [
+        { ...leaf, conclusion },
+      ]),
+    ]) {
+      const rejected = { ...currentChild, jobs: [...replacement, aggregate] };
+      expect(evaluateReleaseChildPolicy({ ...input, child: rejected }).waivers).toEqual([]);
+      expect(terminalPolicyPass(rejected, stableVersion, sha)).toBe(false);
+    }
+    expect(
+      terminalPolicyPass(
+        { ...currentChild, jobs: [...currentChild.jobs, { ...leaf, name: sibling }] },
+        stableVersion,
+        sha,
+      ),
+    ).toBe(false);
+  });
+
+  it("authenticates the exact aggregate cause and rejects extra, absent or incomplete evidence", async () => {
+    const policy = evaluateReleaseChildPolicy(input);
+    expect(policy.waivers).toHaveLength(1);
+    const log = "2026-11-15T21:25:58.6765169Z ##[error]" + cause;
+    await expect(
+      validateReleaseWaiverAggregates({ policy, jobs: currentChild.jobs, getJobLog: () => log }),
+    ).resolves.toBeUndefined();
+    for (const invalid of [
+      "",
+      log + "\n##[error]package integrity failed",
+      log + "\n" + log,
+      'echo "::error::' + cause + '"',
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: currentChild.jobs,
+          getJobLog: () => invalid,
+        }),
+      ).rejects.toThrow("unwaived failure");
+    }
+    for (const aggregates of [
+      [],
+      [aggregate, aggregate],
+      [{ ...aggregate, status: "in_progress" }],
+      ...["skipped", "cancelled", "timed_out", "neutral"].map((conclusion) => [
+        { ...aggregate, conclusion },
+      ]),
+      [{ ...aggregate, steps: [...aggregate.steps, { name: "Checkout", conclusion: "failure" }] }],
+    ]) {
+      await expect(
+        validateReleaseWaiverAggregates({
+          policy,
+          jobs: [leaf, ...aggregates],
+          getJobLog: () => log,
         }),
       ).rejects.toThrow();
     }
