@@ -12,7 +12,9 @@ OpenAI's versioned MCP Events webhook profile for MCP 2.0 (protocol version
    Forward only `/plugins/mcp-events/callback/*` through your reverse proxy. Do not
    expose the Gateway administration surface. OpenClaw neither creates a tunnel
    nor changes network exposure for you. DNS/public-address preflight does not
-   prove reachability; the server's signed challenge does.
+   prove reachability; the server's signed challenge does. For a callback host on a
+   private network (a tailnet or LAN proxy), set `allowPrivateNetwork: true` to trust
+   that host only.
 3. Create an automation with an authored agent-turn instruction and this schedule:
 
 ```json

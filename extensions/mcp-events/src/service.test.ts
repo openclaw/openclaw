@@ -178,7 +178,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
       }
     };
     deps = {
-      config: { callbackOrigin: "https://receiver.example.com", maxPendingEvents: 2 },
+      config: {
+        callbackOrigin: "https://receiver.example.com",
+        allowPrivateNetwork: false,
+        maxPendingEvents: 2,
+      },
       runtime: {
         state: {
           openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> => {

@@ -20,6 +20,11 @@
         "type": "string",
         "description": "Public HTTPS origin forwarding only /plugins/mcp-events/callback/* to the Gateway. No automatic tunnel or admin exposure."
       },
+      "allowPrivateNetwork": {
+        "type": "boolean",
+        "default": false,
+        "description": "Accept a callbackOrigin whose host resolves to a private address, such as a tailnet or LAN reverse proxy. Trusts that host only; link-local and metadata addresses stay blocked."
+      },
       "maxPendingEvents": {
         "type": "integer",
         "minimum": 1,
@@ -32,6 +37,10 @@
   "uiHints": {
     "callbackOrigin": {
       "label": "Public HTTPS callback origin"
+    },
+    "allowPrivateNetwork": {
+      "label": "Allow a private callback host",
+      "advanced": true
     },
     "maxPendingEvents": {
       "label": "Pending event limit",

@@ -2,7 +2,11 @@ import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtim
 import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalArguments } from "./protocol.js";
 
-export type McpEventsConfig = { callbackOrigin: string; maxPendingEvents: number };
+export type McpEventsConfig = {
+  callbackOrigin: string;
+  allowPrivateNetwork: boolean;
+  maxPendingEvents: number;
+};
 
 export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
   const config = record(value);
@@ -38,13 +42,23 @@ export function resolveMcpEventsConfig(value: unknown): McpEventsConfig {
   ) {
     throw new Error("MCP Events maxPendingEvents must be an integer from 1 to 100000");
   }
-  return { callbackOrigin: url.origin, maxPendingEvents };
+  const allowPrivateNetwork = config.allowPrivateNetwork ?? false;
+  if (typeof allowPrivateNetwork !== "boolean") {
+    throw new Error("MCP Events allowPrivateNetwork must be true or false");
+  }
+  return { callbackOrigin: url.origin, allowPrivateNetwork, maxPendingEvents };
 }
 
 /** DNS/public-address preflight is not a reachability claim or permission to expose the Gateway. */
-export async function preflightCallbackOrigin(origin: string, signal: AbortSignal): Promise<void> {
-  const url = new URL(origin);
-  await resolvePinnedHostnameWithPolicy(url.hostname, { signal });
+export async function preflightCallbackOrigin(
+  config: McpEventsConfig,
+  signal: AbortSignal,
+): Promise<void> {
+  const { hostname } = new URL(config.callbackOrigin);
+  // allowPrivateNetwork trusts this one host on a private network (a tailnet or LAN reverse
+  // proxy); exact-host trust still refuses link-local and metadata answers.
+  const policy = config.allowPrivateNetwork ? { allowedHostnames: [hostname] } : undefined;
+  await resolvePinnedHostnameWithPolicy(hostname, { signal, policy });
 }
 
 export function resolveMcpEventSourceOptions(options: Record<string, unknown>) {

@@ -117,7 +117,7 @@ export class McpEventsService {
   }
 
   async start(): Promise<void> {
-    await preflightCallbackOrigin(this.deps.config.callbackOrigin, this.signal);
+    await preflightCallbackOrigin(this.deps.config, this.signal);
     this.assertService();
     for (const { value: facts } of await this.state.bindings.entries()) {
       if (facts.status === "revoked" && !facts.cleanupPending) {
