@@ -136,7 +136,7 @@ it.each([
   ["web_search", { query: "new plugin APIs" }, "start", 'Web Search for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "Lookup Record release notes…"],
   ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
-  ["exec", {}, "result", "Run code"],
+  ["exec", {}, "result", "Script execution"],
   ["session_status", {}, "result", "Session Status"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
@@ -223,7 +223,7 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   expect(label()).toBe('Web Search for "API docs"…');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
   await draw([exec, search], false);
-  expect(label()).toBe("Running code, searching");
+  expect(label()).toBe("Running scripts, searching");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");
   expect(icon()?.getAttribute("aria-label")).toBeNull();
 });
@@ -418,7 +418,7 @@ it("uses the newest group's live card label without inheriting an earlier failur
 
   await renderActivityFixture(groups, { ...opts, runActive: false });
   expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-    "Attempted file reads, editing files",
+    "File reads, editing files",
   );
 });
 
@@ -637,10 +637,10 @@ it("defers transient replacements and refreshes a held container after its child
   draw(wrapper("running"));
   expect(container.querySelector<HTMLElement>(".chat-activity-group")?.hidden).toBe(true);
   advanceTimersByTime(200);
-  expect(label()).toBe("Running code…");
+  expect(label()).toBe("Running a script…");
   advanceTimersByTime(40);
   draw(wrapper("completed"), prepared("child"));
-  expect(label()).toBe("Ran code");
+  expect(label()).toBe("Ran a script");
   expect(container.querySelector(".text-shimmer")).toBeNull();
   advanceTimersByTime(960);
   expect(label()).toBe("Reading child.ts…");

@@ -183,7 +183,7 @@ export function describeToolGroup(
       }
       if (kind === "code") {
         return t(
-          `chat.toolCards.${code.some((item) => item.status === "running") ? "executingCode" : completedKinds.has(kind) ? "executedCode" : "codeExecution"}${continuation}`,
+          `chat.toolCards.activity.scripts${code.some((item) => item.status === "running") ? "Running" : completedKinds.has(kind) ? "Summary" : "Pending"}${continuation}`,
         );
       }
       return kind === "other" && otherTools.length

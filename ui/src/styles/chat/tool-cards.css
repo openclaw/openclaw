@@ -226,9 +226,14 @@
   color: var(--chat-tool-secondary-color);
 }
 
-.chat-tool-row__subagent-state--failed,
-.chat-activity-group__review-status[data-outcome="denied"],
-.chat-tool-failure {
+.chat-tool-failure,
+.chat-activity-group__review-status[data-outcome="denied"] {
+  color: var(--muted);
+}
+
+.chat-activity-group[data-explicitly-expanded="true"]
+  > .chat-activity-group__body
+  .chat-tool-failure {
   color: var(--danger);
 }
 
@@ -317,11 +322,10 @@
   white-space: nowrap;
 }
 
-/* Expanded commands keep their full preview readable even on narrow panes. */
-.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-disclosure__content,
-.chat-tool-msg-collapse.is-open > .chat-tool-row .chat-tool-row__cmd {
-  white-space: normal;
-  overflow-wrap: anywhere;
+.chat-tool-row--command,
+.chat-tool-row--command:focus-within,
+.chat-tool-row--command:hover {
+  color: var(--chat-tool-activity-color);
 }
 
 .chat-tool-msg-summary__names,
@@ -991,6 +995,23 @@
   padding-left: 0;
   border-left: 0;
   overflow-y: auto;
+}
+
+/* The outer stack has a 2px gap; unwrapped run bodies have no gap. */
+.chat-group-messages > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-activity-group + .chat-tool-msg-collapse,
+.chat-group-messages > .chat-tool-msg-collapse + .chat-activity-group,
+.chat-group-messages > .chat-activity-group + .chat-bubble--tool-shell,
+.chat-group-messages > .chat-bubble--tool-shell + .chat-activity-group {
+  margin-block-start: 2px;
+}
+
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-activity-group + .chat-tool-msg-collapse,
+.chat-agent-run-body > .chat-tool-msg-collapse + .chat-activity-group,
+.chat-agent-run-body > .chat-activity-group + .chat-bubble--tool-shell,
+.chat-agent-run-body > .chat-bubble--tool-shell + .chat-activity-group {
+  margin-block-start: 4px;
 }
 
 /* Grouped activity owns vertical scrolling; inline trails keep per-card bounds. */

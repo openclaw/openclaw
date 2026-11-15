@@ -8,7 +8,12 @@ const text = (container: ParentNode, selector: string) =>
 
 it.each([
   ["wait", { runId: "cm_test" }, "Wait"],
-  ["ask_user", {}, "Asked a question"],
+  ["ask_user", { questions: [{ question: "Do not repeat this prompt" }] }, "Asked you a question"],
+  [
+    "ask_user",
+    { questions: [{ question: "First prompt" }, { question: "Second prompt" }] },
+    "Asked you questions",
+  ],
   ["view_image", { path: "/tmp/inspection-a.png" }, "Viewed image inspection-a.png"],
   ["custom_tool", { text: "custom tool" }, "Custom Tool"],
   ["tool_call", { id: "openclaw:core:wait", args: { runId: "cm_test" } }, "Wait"],
@@ -128,7 +133,7 @@ it("uses names already available to chat rows without exposing unresolved routin
 });
 
 it.each([
-  [true, "cancelled", "Stopped subagent"],
+  [true, "cancelled", "Stopped"],
   [true, "succeeded", "Stop subagent"],
   [false, undefined, "Stop subagent"],
 ])(

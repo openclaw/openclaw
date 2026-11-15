@@ -9,12 +9,14 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ownSessionLaunchCalls, resolveSpawnedSubagent } from "./chat-spawned-subagent.ts";
 import { selectActivityHeadline } from "./components/chat-activity-headline-selection.ts";
 import { ActivityGroup } from "./components/chat-message-group-view.tsx";
+import { createActivityGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
   createMessageEntry,
   createToolCall,
   createToolGroup,
   createToolResultBlock,
+  createToolResultMessage,
 } from "./components/chat-message.test-support.ts";
 import { ChatToolCard } from "./components/chat-tool-cards.solid.tsx";
 import { settleToolBridges } from "./components/chat-tool-render.test-support.ts";
@@ -149,13 +151,13 @@ describe("a launched subagent", () => {
       await settleToolBridges(container);
       await waitForSolid(() => {
         expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
-        expect(container.textContent).toContain(`Launched subagent${label}`);
+        expect(container.textContent).toContain(`Launched ${label}`);
         expect(container.textContent).toContain("Opened child chatOpened");
       });
     },
   );
 
-  it("shows its name and duration, and opens its session without toggling the row", async () => {
+  it("shows its historical name without duration, and opens its session without toggling the row", async () => {
     const onOpenSubagent = vi.fn();
     const onOpenSession = vi.fn();
     const onToggleExpanded = vi.fn();
@@ -182,7 +184,7 @@ describe("a launched subagent", () => {
     const row = await mount([story]);
     const link = row.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!;
     expect(link.textContent?.trim()).toBe(label);
-    expect(row.querySelector(".chat-tool-row__subagent-state")?.textContent).toBe("42s");
+    expect(row.querySelector(".chat-tool-row__subagent-state")).toBeNull();
     // The assignment and launch settings are detail, not the row's text.
     expect(row.querySelector(".chat-tool-disclosure__content")?.textContent).not.toMatch(
       /Reply with the result|demo-mini-story|180/u,
@@ -202,12 +204,12 @@ describe("a launched subagent", () => {
 
     const state = async (session: GatewaySessionRow) =>
       (await mount([session])).querySelector(".chat-tool-row__subagent-state");
-    expect((await state({ ...story, ...running }))?.textContent).toBe("running");
-    // A subagent that failed says so instead of how long it lasted.
+    expect(await state({ ...story, ...running })).toBeNull();
+    // Later worker failures do not rewrite the historical launch row.
     const failed = await state({ ...story, status: "failed", runtimeMs: 291 });
-    expect(failed?.textContent).toBe("failed");
-    expect(failed?.classList.contains("chat-tool-row__subagent-state--failed")).toBe(true);
-    expect((await state({ ...story, status: "killed" }))?.textContent).toBe("stopped");
+    expect(failed).toBeNull();
+
+    expect(await state({ ...story, status: "killed" })).toBeNull();
     // A confirmed child key can open directly before roster hydration; no child status is invented.
     const unlisted = await mount([]);
     unlisted.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!.click();
@@ -353,8 +355,8 @@ describe("a launched subagent", () => {
     expect(read([])).toBe("Reading chat");
     expect(address("sessions_history", {}, "Read session history")([])).toBe("Reading chat");
     const wait = address("agents_wait", { ids: ["known-run"] }, "Wait for Agents");
-    expect(wait([{ ...addressedChild, activeRunIds: ["known-run"] }])).toBe("Waiting for " + label);
-    expect(wait([])).toBe("Waiting for agents");
+    expect(wait([{ ...addressedChild, activeRunIds: ["known-run"] }])).toBe("Waiting for agents…");
+    expect(wait([])).toBe("Waiting for agents…");
     expect(
       address("agents_wait", { ids: ["known-run"] }, "Wait for Agents", {
         details: {
@@ -362,7 +364,7 @@ describe("a launched subagent", () => {
           pending: [],
         },
       })([]),
-    ).toBe("Waiting for " + label);
+    ).toBe("Waiting for agents…");
     // An unlabeled launch is named by the session its result names.
     const unlabeled = address("sessions_spawn", { task: "Write" }, "Start subagent", {
       outputText: accepted(addressedChild.key),
@@ -371,3 +373,269 @@ describe("a launched subagent", () => {
     expect(unlabeled([])).toBe("Start subagent");
   });
 });
+
+it("coalesces only adjacent confirmed lifecycle calls without changing the first row", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createActivityGroupHarness(container);
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  const opened = new Map<string, boolean>();
+  const call = (id: string) => [
+    createToolCall(id, "sessions_spawn", { label: "Cinder", task: "Work" }),
+    createToolResultBlock(id, "sessions_spawn", accepted("agent:main:subagent:" + id)),
+  ];
+  const render = (content: unknown[]) =>
+    root.render(
+      [
+        createToolGroup("lifecycle", [
+          createMessageEntry("entry", createAssistantMessage(content, { runId: "parent" })),
+        ]),
+      ],
+      {
+        showReasoning: false,
+        showToolCalls: true,
+        runActive: true,
+        isToolExpanded: (id) => opened.get(id) ?? false,
+        onToggleToolExpanded: (id, expanded) => opened.set(id, !expanded),
+      },
+    );
+  render([createToolCall("a", "sessions_spawn", { label: "Cinder", task: "Work" })]);
+  await settleToolBridges(container);
+  const first = container.querySelector<HTMLButtonElement>(".chat-tool-row")!;
+  const toggle = first.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")!;
+  toggle.focus();
+  render([...call("a"), ...call("b")]);
+  await settleToolBridges(container);
+  expect(container.querySelector(".chat-tool-row")).toBe(first);
+  expect(document.activeElement).toBe(toggle);
+  expect(first.textContent).toBe("Launched Cinder and Cinder");
+  render([
+    ...call("a"),
+    ...call("b"),
+    createToolCall("wait", "agents_wait", { ids: ["a", "b"] }),
+    createToolResultBlock("wait", "agents_wait", JSON.stringify({ completed: [], pending: [] })),
+    ...call("c"),
+  ]);
+  await settleToolBridges(container);
+  expect([...container.querySelectorAll(".chat-tool-row")].map((row) => row.textContent)).toEqual([
+    "Launched Cinder and Cinder",
+    "Launched Cinder",
+  ]);
+  expect(container.textContent).not.toContain("Waited");
+});
+
+it.each(["launch", "failed stop", "skipped stop", "confirmed stop"] as const)(
+  "keeps the roster name and intrinsic outcome of a %s",
+  async (kind) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createActivityGroupHarness(container);
+    onTestFinished(() => {
+      root.unmount();
+      container.remove();
+    });
+    const worker = child("roster-only", { label: "Cinder", activeRunIds: ["child-run"] });
+    const onOpenSession = vi.fn();
+    const name = kind === "launch" ? "sessions_spawn" : "subagents";
+    const result =
+      kind === "launch"
+        ? accepted(worker.key)
+        : JSON.stringify({
+            found: true,
+            killed: kind === "confirmed stop",
+            sessionKey: worker.key,
+            targetState: { task: { status: kind === "confirmed stop" ? "cancelled" : "running" } },
+          });
+    root.render(
+      [
+        createToolGroup("intrinsic", [
+          createMessageEntry(
+            "intrinsic-entry",
+            createAssistantMessage(
+              [
+                createToolCall(
+                  "intrinsic-call",
+                  name,
+                  kind === "launch" ? { task: "Work" } : { action: "cancel", runId: "child-run" },
+                ),
+                createToolResultBlock("intrinsic-call", name, result, {
+                  isError: kind === "failed stop",
+                  ...(kind === "skipped stop"
+                    ? { details: { status: "skipped", deniedReason: "steering" } }
+                    : {}),
+                }),
+              ],
+              { runId: "parent" },
+            ),
+          ),
+        ]),
+      ],
+      {
+        showReasoning: false,
+        showToolCalls: true,
+        subagents: { subagentSessions: [worker], onOpenSession },
+      },
+    );
+    await settleToolBridges(container);
+    const row = container.querySelector(".chat-tool-row")!;
+    expect(row.textContent).toContain("Cinder");
+    if (kind === "launch") {
+      const link = row.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!;
+      link.click();
+      expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(worker.key);
+    } else {
+      expect(row.textContent).toContain(
+        kind === "failed stop" ? "failed" : kind === "skipped stop" ? "Skipped" : "Stopped",
+      );
+      if (kind === "confirmed stop") {
+        expect(row.querySelector(".chat-tool-failure, .chat-tool-skipped")).toBeNull();
+      }
+    }
+    expect(container.querySelector(".chat-activity-group__summary")).toBeNull();
+  },
+);
+
+it.each([
+  ["sessions_spawn", 1, "Launched an agent"],
+  ["sessions_spawn", 3, "Launched 3 agents"],
+  ["subagents", 2, "Stopped 2 agents"],
+] as const)(
+  "counts unnamed %s lifecycle events by identity (%s)",
+  async (name, count, expected) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createActivityGroupHarness(container);
+    onTestFinished(() => {
+      root.unmount();
+      container.remove();
+    });
+    const content = Array.from({ length: count }, (_, index) => {
+      const id = "unnamed-" + index;
+      return [
+        createToolCall(
+          id,
+          name,
+          name === "sessions_spawn" ? { task: "Work" } : { action: "cancel", runId: id },
+        ),
+        createToolResultBlock(
+          id,
+          name,
+          name === "sessions_spawn"
+            ? accepted("agent:main:subagent:" + id)
+            : JSON.stringify({
+                found: true,
+                killed: true,
+                targetState: { task: { status: "cancelled" } },
+              }),
+        ),
+      ];
+    }).flat();
+    root.render(
+      [
+        createToolGroup("unnamed", [
+          createMessageEntry("unnamed-entry", createAssistantMessage(content, { runId: "parent" })),
+        ]),
+      ],
+      { showReasoning: false, showToolCalls: true },
+    );
+    await settleToolBridges(container);
+    expect(container.querySelector(".chat-tool-row")?.textContent?.trim()).toBe(expected);
+    expect(container.textContent).not.toContain("unnamed-");
+  },
+);
+
+it("retains an unlabeled historical launch disclosure while its roster name hydrates", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const root = createActivityGroupHarness(container);
+  onTestFinished(() => {
+    root.unmount();
+    container.remove();
+  });
+  const worker = child("hydrated", { label: "Cinder" });
+  const onOpenSession = vi.fn();
+  const group = createToolGroup("hydrated", [
+    createMessageEntry(
+      "result",
+      createToolResultMessage("spawn", "sessions_spawn", accepted(worker.key), { runId: "parent" }),
+    ),
+  ]);
+  const draw = (rows: GatewaySessionRow[]) =>
+    root.render([group], {
+      showReasoning: false,
+      showToolCalls: true,
+      subagents: { subagentSessions: rows, onOpenSession },
+    });
+  draw([]);
+  await settleToolBridges(container);
+  const toggle = container.querySelector<HTMLButtonElement>(".chat-tool-row__toggle")!;
+  expect(toggle).not.toBeNull();
+  toggle.focus();
+  draw([worker]);
+  await settleToolBridges(container);
+  expect(container.querySelector(".chat-tool-row__toggle")).toBe(toggle);
+  expect(document.activeElement).toBe(toggle);
+  const link = container.querySelector<HTMLButtonElement>(".chat-tool-row__subagent-link")!;
+  expect(link.textContent).toBe("Cinder");
+  link.click();
+  expect(onOpenSession).toHaveBeenCalledExactlyOnceWith(worker.key);
+});
+
+it.each(["sessions_spawn", "subagents"] as const)(
+  "keeps parent interruption visible for an unrecorded %s without replacing a result",
+  async (name) => {
+    const container = document.body.appendChild(document.createElement("div"));
+    const root = createActivityGroupHarness(container);
+    onTestFinished(() => {
+      root.unmount();
+      container.remove();
+    });
+    for (const completed of [false, true]) {
+      const content = [
+        createToolCall(
+          "attempt",
+          name,
+          name === "sessions_spawn"
+            ? { label: "Cinder", task: "Work" }
+            : { action: "cancel", runId: "child" },
+        ),
+        ...(completed
+          ? [
+              createToolResultBlock(
+                "attempt",
+                name,
+                name === "sessions_spawn"
+                  ? accepted("agent:main:subagent:child")
+                  : JSON.stringify({
+                      found: true,
+                      killed: true,
+                      targetState: { task: { status: "cancelled" } },
+                    }),
+              ),
+            ]
+          : []),
+      ];
+      root.render(
+        [
+          createToolGroup("interruption", [
+            createMessageEntry(
+              "attempt-entry",
+              createAssistantMessage(content, { runId: "parent" }),
+            ),
+          ]),
+        ],
+        {
+          showReasoning: false,
+          showToolCalls: true,
+          interruptedRunIds: new Set(["parent"]),
+          isToolExpanded: () => true,
+        },
+      );
+      await settleToolBridges(container);
+      const row = container.querySelector(".chat-tool-row")!;
+      expect(row.textContent?.includes("interrupted")).toBe(!completed);
+      if (completed) {
+        expect(row.textContent).toContain(name === "sessions_spawn" ? "Launched" : "Stopped");
+      }
+    }
+  },
+);

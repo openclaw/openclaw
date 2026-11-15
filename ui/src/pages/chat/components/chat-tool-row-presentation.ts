@@ -140,11 +140,15 @@ export function resolveToolOperationLabel(
         : outcome === "succeeded"
           ? "askedQuestion"
           : "questionRequest";
-    return [t(`chat.toolCards.${key}`), detail].filter(Boolean).join(" ");
+    return t(
+      `chat.toolCards.${key}${Array.isArray(args?.questions) && args.questions.length > 1 && key !== "questionRequest" ? "s" : ""}`,
+    );
   }
   if (name === "agents_wait") {
-    const action =
-      outcome === "running" ? "waitingFor" : outcome === "succeeded" ? "waitedFor" : "waitFor";
+    if (outcome === "running") {
+      return t("chat.toolCards.waitingForAgents");
+    }
+    const action = outcome === "succeeded" ? "waitedFor" : "waitFor";
     return addressed?.names?.length
       ? t(`chat.toolCards.${action}NamedAgents`, {
           names: new Intl.ListFormat(getLocale(), { type: "conjunction" }).format(addressed.names),

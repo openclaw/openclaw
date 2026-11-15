@@ -16,6 +16,7 @@ import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import {
   buildCachedChatItems,
   getExpansionStateVersion,
+  getExplicitToolExpansion,
   getExpandedToolCards,
   getExpandedUserMessages,
   setExpansionState,
@@ -331,6 +332,8 @@ export function projectChatTranscript(
       activityGroupKey,
       bubbleActivityGroupKey,
       isToolMessageExpanded: toolExpanded,
+      isToolMessageExplicitlyExpanded: (id) =>
+        getExplicitToolExpansion(expandedToolCards, id) === true,
       onToggleToolMessageExpanded: toggleToolCardExpanded,
       ...messageDisclosures,
       loadFullAssistantMessage: actions.loadFullAssistantMessage ?? undefined,

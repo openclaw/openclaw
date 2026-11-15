@@ -221,11 +221,13 @@ function ToolCardView(props: ToolCardProps & { output?: ToolCardOutput }) {
                 identity={[props.options.sessionKey, props.options.messageKey, card().id]}
                 connected={() => Boolean(host?.isConnected)}
                 fallback={() => (
-                  <ToolCardRowPlaceholder
-                    card={card()}
-                    options={props.options}
-                    hasChildren={props.hasChildren}
-                  />
+                  <Show when={!props.options.hideSummary}>
+                    <ToolCardRowPlaceholder
+                      card={card()}
+                      options={props.options}
+                      hasChildren={props.hasChildren}
+                    />
+                  </Show>
                 )}
               >
                 <ToolCardBody

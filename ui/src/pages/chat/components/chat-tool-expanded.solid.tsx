@@ -19,7 +19,7 @@ import { formatToolDetail, resolveToolDisplay } from "../../../lib/chat/tool-dis
 import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
 import { TOOL_OUTPUT_PREVIEW_CHARS, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { HighlightedCommand, shellCommandPreview } from "./chat-command-highlight.solid.tsx";
+import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffBlock } from "./chat-diff-render.solid.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { ToolCardContentProps } from "./chat-tool-card-types.ts";
@@ -104,7 +104,7 @@ function WorkspaceFilePath(props: {
 function TerminalBlock(props: { command: string; output?: string; commandInRow?: boolean }) {
   return (
     <div class="chat-tool-term">
-      <Show when={!props.commandInRow || shellCommandPreview(props.command) !== props.command}>
+      <Show when={props.command}>
         <div class="chat-tool-term__cmd">
           <span class="chat-tool-term__prompt">$</span>
           <code>

@@ -1,4 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import type { MessageGroup as MessageGroupData, ToolCard } from "../../../lib/chat/chat-types.ts";
 import {
@@ -7,7 +9,11 @@ import {
 } from "../../../lib/chat/message-normalizer.ts";
 import { resolveMessageVisibleContent } from "../../../lib/chat/message-visibility.ts";
 import { readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
-import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
+import {
+  resolveSessionLaunchPresentation,
+  readSubagentCancellation,
+} from "../chat-spawned-subagent.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
@@ -105,11 +111,17 @@ export function collectActivityGroup(
       preparedByCard.set(card, item);
     }
   }
-  const projection = projectActivityOperations(
-    groupToolCalls(cards),
-    preparedByCard,
-    suppressedCards,
-  );
+  // Successful waits are transport coordination, not completed narration.
+  for (const card of cards) {
+    if (
+      unwrapToolCallForDisplay(card).name.trim().toLowerCase() === "agents_wait" &&
+      resolveToolCardOutcome(card, opts.runActive) === "succeeded"
+    ) {
+      suppressedCards.add(card);
+    }
+  }
+  const roots = groupToolCalls(cards);
+  const projection = projectActivityOperations(roots, preparedByCard, suppressedCards);
   const hiddenActivity = new Set(
     [...(projection?.hidden ?? [])].flatMap((card) => {
       const item = preparedByCard.get(card);
@@ -118,11 +130,31 @@ export function collectActivityGroup(
   );
   const visibleActivity = activity.filter(
     (item) =>
-      !hiddenActivity.has(item) && !item.hideFromChannelProgress && !item.suppressChannelProgress,
+      !hiddenActivity.has(item) &&
+      !item.hideFromChannelProgress &&
+      !item.suppressChannelProgress &&
+      !(item.name === "agents_wait" && item.status === "completed"),
   );
   const cardGroups = projection.groups;
   const order = new Map(cards.map((card, index) => [card, index]));
   cardGroups.sort((left, right) => order.get(left.card)! - order.get(right.card)!);
+  const original = [...roots];
+  for (const group of original) {
+    original.push(...group.children);
+  }
+  original.sort((a, b) => order.get(a.card)! - order.get(b.card)!);
+  const actionOrder = new Map(
+    original
+      .filter((group) => {
+        const call = unwrapToolCallForDisplay(group.card);
+        return !(
+          group.children.length &&
+          call.name === "exec" &&
+          !asNullableRecord(call.args)?.command
+        );
+      })
+      .map((group, index) => [group.card, index]),
+  );
   const activityOrder = new Map(activity.map((item, index) => [item, index]));
   const representedActivity = new Set(
     [...preparedByCard.values()].map((item) => activityKeys.get(item)),
@@ -161,6 +193,7 @@ export function collectActivityGroup(
     visibleActivity,
     cardGroups,
     activityOrder,
+    actionOrder,
     representedActivity,
   };
 }
@@ -187,7 +220,12 @@ type ActivityEntry = { key: string } & (
 
 type ActivityStructure = Pick<
   NonNullable<ReturnType<typeof collectActivityGroup>>,
-  "firstGroup" | "cardGroups" | "toolContexts" | "unmatchedActivity" | "activityKeys"
+  | "firstGroup"
+  | "cardGroups"
+  | "toolContexts"
+  | "unmatchedActivity"
+  | "activityKeys"
+  | "actionOrder"
 > & {
   toolCardOverrides: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
 };
@@ -205,15 +243,59 @@ export function segmentActivityGroup<State extends ActivityStructure>(
     key: string;
     standalone: boolean;
     inline?: boolean;
+    lifecycle?: "launch" | "stop";
+    coalescible?: boolean;
+    lastAction?: number;
+    runId?: string;
     entries: ActivityEntry[];
     context: typeof context;
   }> = [];
   const append = (item: ActivityEntry, standalone: boolean, inline: boolean, key: string) => {
+    const operation = item.operation?.group;
+    const launch = operation && resolveSessionLaunchPresentation(operation.card);
+    const permission =
+      operation &&
+      readNodePermissionRequest(asNullableRecord(operation.card.details)?.permissionMissing);
+    const lifecycle = permission
+      ? undefined
+      : launch?.kind === "subagent"
+        ? ("launch" as const)
+        : operation && readSubagentCancellation(operation.card)
+          ? ("stop" as const)
+          : undefined;
     const previous = result.at(-1);
+    const coalescible =
+      launch?.phase === "succeeded" ||
+      Boolean(operation && readSubagentCancellation(operation.card)?.stopped);
+    const action = operation && state.actionOrder.get(operation.card);
+    const runId = operation && state.toolContexts.get(operation.card)?.runId;
+    if (
+      lifecycle &&
+      coalescible &&
+      previous?.coalescible &&
+      previous.lifecycle === lifecycle &&
+      action !== undefined &&
+      previous.lastAction === action - 1 &&
+      previous.runId === runId
+    ) {
+      previous.entries.push(item);
+      previous.lastAction = action;
+      return;
+    }
     if (!standalone && previous && !previous.standalone && previous.inline === inline) {
       previous.entries.push(item);
     } else {
-      result.push({ key, context, standalone, inline, entries: [item] });
+      result.push({
+        key,
+        context,
+        standalone,
+        inline,
+        lifecycle,
+        coalescible,
+        lastAction: action,
+        runId,
+        entries: [item],
+      });
     }
   };
   const byMessage = new Map<string, ActivityOperationGroup[]>();
@@ -227,11 +309,26 @@ export function segmentActivityGroup<State extends ActivityStructure>(
   for (const group of context.groups) {
     for (const entry of group.messages) {
       const operations = byMessage.get(entry.key) ?? [];
+      if (
+        !operations.length &&
+        readPreparedActivity(entry.message).some((item) => item.name === "agents_wait")
+      ) {
+        const previous = result.at(-1);
+        if (previous) {
+          previous.coalescible = false;
+        }
+      }
       // A mixed command/edit envelope keeps its native inline presentation.
       const inline =
         inlineCommands && operations.some((operation) => isInlineCommandCard(operation.card));
       const nativeMessage =
-        operations.length > 0 && isStandaloneToolMessageForDisplay(entry.message);
+        operations.length > 0 &&
+        isStandaloneToolMessageForDisplay(entry.message) &&
+        !operations.some(
+          (operation) =>
+            resolveSessionLaunchPresentation(operation.card) !== null ||
+            readSubagentCancellation(operation.card) !== null,
+        );
       if (nativeMessage) {
         const standalone = operations.some((operation) => isStandaloneActivity(operation.card));
         append(

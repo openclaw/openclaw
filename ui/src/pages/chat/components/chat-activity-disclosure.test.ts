@@ -48,9 +48,7 @@ it("commits a cached activity summary with its transcript row", () => {
   ]);
   activityRoot.render([group], visibleTools);
   const row = summaryContainer.querySelector('[data-chat-row-key="cached"]');
-  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain(
-    "Attempted file reads",
-  );
+  expect(row?.querySelector(".chat-activity-group__summary")?.textContent).toContain("File reads");
   expect(row?.querySelector(".chat-tool-failure")).toBeNull();
 });
 
@@ -200,7 +198,7 @@ it.each(["anonymous", "missing-card", "matched"] as const)(
           "call-failed.ts",
         );
       } else {
-        expect(summary?.textContent).toContain("Attempted file reads");
+        expect(summary?.textContent).toContain("File reads");
         expect(summary?.textContent).not.toContain("Some actions failed");
       }
       expect(summaryContainer.querySelector(".chat-tool-failure") !== null).toBe(
@@ -327,9 +325,9 @@ it.each([
 it.each([
   { source: "prepared outcome", expected: "Blocked" },
   { source: "paginated shell results", expected: "Ran commands" },
-  { source: "recorded code inputs", expected: "Ran code" },
-  { source: "failed code after dispatch", expected: "Ran code" },
-  { source: "failed code before dispatch", expected: "Run code" },
+  { source: "recorded code inputs", expected: "Ran scripts" },
+  { source: "failed code after dispatch", expected: "Ran scripts" },
+  { source: "failed code before dispatch", expected: "Scripts" },
 ])("renders $source through transcript grouping", async ({ source, expected }) => {
   const messages =
     source === "prepared outcome"
@@ -491,7 +489,7 @@ it.each([
     await settleToolBridges(summaryContainer);
   };
   await draw(false);
-  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running code" : "Process");
+  expect(summaryContainer.textContent).toContain(name === "exec" ? "Running scripts" : "Process");
   for (const expanded of [false, true]) {
     await draw(true, expanded);
     expect(summaryContainer.querySelector(".chat-activity-group__summary")).toBeNull();
@@ -504,85 +502,94 @@ it.each([
   }
 });
 
-it("preserves prepared-only outcomes and an open group when a permission row arrives", async () => {
-  const first = createMessageEntry(
-    "first-outcome",
-    createAssistantMessage([], {
-      activity: [
-        preparedOutcome("failed", "without-card", {
-          title: "Read release.md",
-          error: "Permission denied",
-        }),
-        preparedOutcome("completed", "another-call", { title: "Read release.md" }),
-      ],
-    }),
-  );
-  const permission = createMessageEntry(
-    "permission",
-    createAssistantMessage([
-      createToolCall(
-        "permission",
-        "exec",
-        { code: "await tools.screen_capture()" },
-        {
-          details: {
-            permissionMissing: {
-              nodeId: "test-mac",
-              command: "screen.capture",
-              capabilities: ["screenRecording"],
-              state: "denied",
+it.each(["exec", "sessions_spawn", "subagents"])(
+  "preserves prepared-only outcomes and an open group when a %s permission row arrives",
+  async (toolName) => {
+    const first = createMessageEntry(
+      "first-outcome",
+      createAssistantMessage([], {
+        activity: [
+          preparedOutcome("failed", "without-card", {
+            title: "Read release.md",
+            error: "Permission denied",
+          }),
+          preparedOutcome("completed", "another-call", { title: "Read release.md" }),
+        ],
+      }),
+    );
+    const permission = createMessageEntry(
+      "permission",
+      createAssistantMessage([
+        createToolCall(
+          "permission",
+          toolName,
+          toolName === "subagents"
+            ? { action: "cancel", runId: "child" }
+            : { code: "await tools.screen_capture()", task: "Work" },
+          {
+            details: {
+              permissionMissing: {
+                nodeId: "test-mac",
+                command: "screen.capture",
+                capabilities: ["screenRecording"],
+                state: "denied",
+              },
             },
           },
-        },
-      ),
-    ]),
-  );
-  const last = createMessageEntry(
-    "last-outcome",
-    createAssistantMessage([], { activity: [preparedOutcome("blocked", "also-without-card")] }),
-  );
-  const expanded = new Set<string>();
-  const draw = async (messages: Parameters<typeof createToolGroup>[1]) => {
-    activityRoot.render([createToolGroup("retained-group", messages)], {
-      ...visibleTools,
-      isToolMessageExpanded: (key) => expanded.has(key),
-      onToggleToolMessageExpanded: (key) => expanded.add(key),
-    });
-    await settleToolBridges(summaryContainer);
-  };
-  await draw([first]);
-  const initial = summaryContainer.querySelector<HTMLButtonElement>(
-    ".chat-activity-group__summary",
-  )!;
-  const bodyId = initial.getAttribute("aria-controls");
-  initial.click();
-  await draw([first]);
-  expect(
-    summaryContainer.querySelector(".chat-activity-group__summary")?.getAttribute("aria-expanded"),
-  ).toBe("true");
-  await draw([first, permission, last]);
-  const summaries = [...summaryContainer.querySelectorAll(".chat-activity-group__summary")];
-  expect(summaries).toHaveLength(2);
-  expect(summaries[0]?.textContent).not.toContain("Some actions failed");
-  const rows = [...summaryContainer.querySelectorAll(`#${bodyId} .chat-tool-row`)];
-  expect(
-    rows.map((row) => row.querySelector(".chat-tool-row__title")?.textContent?.trim()),
-  ).toEqual(["Read release.md", "Read release.md"]);
-  expect(rows[0]?.textContent).toContain("failed");
-  expect(rows[1]?.textContent).toContain("Completed");
-  expect(summaryContainer.querySelector(`#${bodyId}`)?.textContent).toContain("Permission denied");
-  expect(summaries[1]?.textContent).toContain("Blocked");
-  expect(summaries[0]?.getAttribute("aria-expanded")).toBe("true");
-  expect(summaries[0]?.getAttribute("aria-controls")).toBe(bodyId);
-  const permissionCard = summaryContainer.querySelector(".chat-permission-card")!;
-  expect(permissionCard).not.toBeNull();
-  expect(
-    summaries[0]!.compareDocumentPosition(permissionCard) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-  expect(
-    permissionCard.compareDocumentPosition(summaries[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
-  ).toBeTruthy();
-});
+        ),
+      ]),
+    );
+    const last = createMessageEntry(
+      "last-outcome",
+      createAssistantMessage([], { activity: [preparedOutcome("blocked", "also-without-card")] }),
+    );
+    const expanded = new Set<string>();
+    const draw = async (messages: Parameters<typeof createToolGroup>[1]) => {
+      activityRoot.render([createToolGroup("retained-group", messages)], {
+        ...visibleTools,
+        isToolMessageExpanded: (key) => expanded.has(key),
+        onToggleToolMessageExpanded: (key) => expanded.add(key),
+      });
+      await settleToolBridges(summaryContainer);
+    };
+    await draw([first]);
+    const initial = summaryContainer.querySelector<HTMLButtonElement>(
+      ".chat-activity-group__summary",
+    )!;
+    const bodyId = initial.getAttribute("aria-controls");
+    initial.click();
+    await draw([first]);
+    expect(
+      summaryContainer
+        .querySelector(".chat-activity-group__summary")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    await draw([first, permission, last]);
+    const summaries = [...summaryContainer.querySelectorAll(".chat-activity-group__summary")];
+    expect(summaries).toHaveLength(2);
+    expect(summaries[0]?.textContent).not.toContain("Some actions failed");
+    const rows = [...summaryContainer.querySelectorAll(`#${bodyId} .chat-tool-row`)];
+    expect(
+      rows.map((row) => row.querySelector(".chat-tool-row__title")?.textContent?.trim()),
+    ).toEqual(["Read release.md", "Read release.md"]);
+    expect(rows[0]?.textContent).toContain("failed");
+    expect(rows[1]?.textContent).toContain("Completed");
+    expect(summaryContainer.querySelector(`#${bodyId}`)?.textContent).toContain(
+      "Permission denied",
+    );
+    expect(summaries[1]?.textContent).toContain("Blocked");
+    expect(summaries[0]?.getAttribute("aria-expanded")).toBe("true");
+    expect(summaries[0]?.getAttribute("aria-controls")).toBe(bodyId);
+    const permissionCard = summaryContainer.querySelector(".chat-permission-card")!;
+    expect(permissionCard).not.toBeNull();
+    expect(
+      summaries[0]!.compareDocumentPosition(permissionCard) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      permissionCard.compareDocumentPosition(summaries[1]!) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  },
+);
 
 it("keeps review outcomes with their segment, including a hidden execution container", async () => {
   const group = createToolGroup("review-segments", [
@@ -677,6 +684,7 @@ it("keeps expanded historical launches readable when a new launch refreshes acti
       isToolMessageExpanded: () => true,
       runActive: later === false,
       activityRunId: "second-run",
+      isToolExpanded: () => true,
     });
     await settleToolBridges(summaryContainer);
   };
@@ -742,4 +750,29 @@ it("keeps a raw live edit grouped and exposes its completed single-file result",
   expect(row.textContent).toContain("soma.cjs");
   expect(row.querySelector(".chat-diffstat__add")?.textContent).toBe("+1");
   expect(row.querySelector(".chat-diffstat__del")?.textContent).toBe("-1");
+});
+
+it("summarizes a failed child read without counting its failed code container again", async () => {
+  const group = createToolGroup("failed-read", [
+    createMessageEntry(
+      "failed-read:entry",
+      createAssistantMessage(
+        [
+          createToolCall("wrapper", "exec", {
+            title: "Read the missing fixture",
+            code: "await read({path:'missing.txt'})",
+          }),
+          createToolCall("read", "read", { path: "missing.txt" }, { parentToolCallId: "wrapper" }),
+          createToolResultBlock("read", "read", "File not found", { isError: true }),
+          createToolResultBlock("wrapper", "exec", "File not found", { isError: true }),
+        ],
+        { runId: "failed-read-run" },
+      ),
+    ),
+  ]);
+  activityRoot.render([group], visibleTools);
+  await settleToolBridges(summaryContainer);
+  const summary = summaryContainer.querySelector(".chat-activity-group__summary");
+  expect(summary?.textContent).toContain("File reads");
+  expect(summary?.textContent).not.toMatch(/code|attempted/i);
 });

@@ -35,9 +35,7 @@ describe("summarizeToolGroup", () => {
       toolCallId: "refused",
       status: "failed",
     });
-    expect(summarizeToolGroup([...launches, refused])).toBe(
-      "Attempted actions, launched subagents",
-    );
+    expect(summarizeToolGroup([...launches, refused])).toBe("Actions, launched subagents");
   });
 
   it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
@@ -47,7 +45,7 @@ describe("summarizeToolGroup", () => {
         prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
         prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
       ]),
-    ).toBe("Attempted actions");
+    ).toBe("Actions");
     const read = prepared("tool:shared", "Read", { name: "read", toolCallId: "shared" });
     const command = prepared("tool:shared", "Command", { name: "exec", toolCallId: "shared" });
     expect(
@@ -70,18 +68,18 @@ describe("summarizeToolGroup", () => {
         prepared("unknown", "Outcome unknown", { status: undefined }),
         prepared("unpaired", "Run build", { status: undefined, unpairedCall: true }),
       ]),
-    ).toBe("Attempted actions · Blocked · Outcome unknown");
+    ).toBe("Actions · Blocked · Outcome unknown");
   });
 
   it("names a recorded command execution independently of success", () => {
     const command = prepared("command", "Exec", { name: "exec", status: "failed" });
-    expect(summarizeToolGroup([command])).toBe("Attempted commands");
+    expect(summarizeToolGroup([command])).toBe("Commands");
     expect(summarizeToolGroup([{ ...command, status: "running" }])).toBe("Running commands");
     const executedCommands = new Set(["command"]);
     expect(summarizeToolGroup([command], { executedCommands })).toBe("Ran commands");
     for (const status of ["blocked", "skipped"] as const) {
       expect(summarizeToolGroup([{ ...command, status }], { executedCommands })).toContain(
-        "Attempted commands",
+        "Commands",
       );
     }
   });
@@ -90,10 +88,10 @@ describe("summarizeToolGroup", () => {
     const code = prepared("code", "Exec", { name: "exec" });
     const command = prepared("shell", "Exec", { name: "exec" });
     const codeExecutions = new Set(["code"]);
-    expect(summarizeToolGroup([code, command], { codeExecutions })).toBe("Ran code, ran commands");
-    expect(summarizeToolGroup([{ ...code, status: "failed" }], { codeExecutions })).toBe(
-      "Run code",
+    expect(summarizeToolGroup([code, command], { codeExecutions })).toBe(
+      "Ran scripts, ran commands",
     );
+    expect(summarizeToolGroup([{ ...code, status: "failed" }], { codeExecutions })).toBe("Scripts");
   });
 
   it("names skill searches and reads as actions beside commands", () => {

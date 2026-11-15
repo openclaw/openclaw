@@ -87,6 +87,7 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   firstBubbleKey?: string | null;
   showToolCalls?: boolean;
   inlineCommands?: InlineCommandPresentation;
+  isToolMessageExplicitlyExpanded?: (messageId: string) => boolean;
   isToolMessageExpanded?: (messageId: string, card?: ToolCard) => boolean | undefined;
   onToggleToolMessageExpanded?: (messageId: string, expanded?: boolean) => void;
   isUserMessageExpanded?: (messageId: string) => boolean;

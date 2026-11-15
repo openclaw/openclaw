@@ -207,7 +207,9 @@ suite.define(() => {
         const row = page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first();
         await row.click();
         await capture(page, artifacts, "01-expanded");
-        expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain("Ran code");
+        expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain(
+          "Ran a script",
+        );
         const body = page.locator(".chat-tool-msg-body");
         expect(await body.locator(".chat-tool-card__outcome").textContent()).toBe("Completed");
         const visibleOutput = body.locator(".chat-tool-card__block-content").first();

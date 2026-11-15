@@ -5,7 +5,10 @@ import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display
 import type { ToolCallGroup } from "../../../../../src/chat/tool-call-grouping.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallInput } from "../../../lib/chat/tool-call-input.ts";
-import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
+import {
+  resolveSessionLaunchPresentation,
+  readSubagentCancellation,
+} from "../chat-spawned-subagent.ts";
 import type { ActivityOperationGroup } from "./chat-message-bubble-options.ts";
 
 export function isInlineCommandCard(card: ToolCard): boolean {
@@ -18,6 +21,8 @@ export function isStandaloneActivity(card: ToolCard): boolean {
   const name = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
   return (
     name === "view_image" ||
+    name === "agents_wait" ||
+    readSubagentCancellation(card) !== null ||
     resolveSessionLaunchPresentation(card) !== null ||
     Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
   );

@@ -14,13 +14,13 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import {
   addressedSession,
   resolveSessionLaunchPresentation,
   resolveSpawnedSubagent,
+  readSubagentCancellation,
   type SpawnedSubagent,
 } from "../chat-spawned-subagent.ts";
 import { HighlightedCommand, shellCommandPreview } from "./chat-command-highlight.solid.tsx";
@@ -171,14 +171,6 @@ function SessionLaunchRowContent(props: {
   subagent: SpawnedSubagent | null;
   onOpen?: () => void;
 }) {
-  const state = () =>
-    props.subagent?.session?.running
-      ? t("chat.toolCards.subagentRunning")
-      : props.subagent?.session?.ended === "failed"
-        ? t("chat.toolCards.failed")
-        : props.subagent?.session?.ended === "stopped"
-          ? t("chat.toolCards.subagentStopped")
-          : formatDurationCompact(props.subagent?.session?.runtimeMs);
   return (
     <>
       <span class="chat-tool-row__verb">
@@ -200,18 +192,6 @@ function SessionLaunchRowContent(props: {
             onOpen={() => props.onOpen?.()}
           />
         </Show>
-      </Show>
-      <Show when={state()}>
-        <span
-          class={[
-            "chat-tool-row__subagent-state",
-            {
-              "chat-tool-row__subagent-state--failed": props.subagent?.session?.ended === "failed",
-            },
-          ]}
-        >
-          {state()}
-        </span>
       </Show>
     </>
   );
@@ -265,7 +245,11 @@ export function ToolCardRow(props: ToolCardProps) {
         title={display().name}
       >
         <ToolIcon
-          name={TOOL_ROW_ICONS[view().kind] ?? display().icon}
+          name={
+            readSubagentCancellation(card())
+              ? "bot"
+              : (TOOL_ROW_ICONS[view().kind] ?? display().icon)
+          }
           tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
         />
       </span>
@@ -330,6 +314,7 @@ export function ToolCardRow(props: ToolCardProps) {
         "chat-inline-disclosure chat-tool-msg-summary chat-tool-row",
         {
           "chat-tool-row--running": running(),
+          "chat-tool-row--command": view().kind === "command",
           [`chat-tool-row--${linkedRow()}`]: Boolean(linkedRow()),
         },
       ]}
@@ -459,11 +444,13 @@ export function ToolCardBody(
   const InlineToolPreview = dynamic(() => props.options.inlineCommands?.InlineToolPreview);
   return (
     <>
-      <ToolCardRow
-        card={props.displayCard}
-        options={props.options}
-        hasChildren={props.hasChildren}
-      />
+      <Show when={!props.options.hideSummary}>
+        <ToolCardRow
+          card={props.displayCard}
+          options={props.options}
+          hasChildren={props.hasChildren}
+        />
+      </Show>
       <Show when={props.options.inlineCommands && !props.options.expanded && !props.hasChildren}>
         <InlineToolPreview card={props.displayCard} output={props.output} options={props.options} />
       </Show>

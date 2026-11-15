@@ -40,7 +40,7 @@ async function expectCollapsed(work: Locator) {
   const summary = work.locator(":scope > .chat-activity-group__summary");
   expect(await summary.getAttribute("aria-expanded")).toBe("false");
   expect(await summary.locator(".chat-activity-group__label").textContent()).toBe(
-    "Attempted commands, read files",
+    "Commands, read files",
   );
   // The wrapper returned, but the failed child keeps its own outcome inside the group.
   expect(await summary.textContent()).not.toContain("Some actions failed");
@@ -174,7 +174,7 @@ suite.define(() => {
       await call.click();
       const body = page.locator(".chat-tool-msg-body");
       expect(await call.textContent()).toContain("node --version");
-      expect(await body.getByText("node --version", { exact: true }).count()).toBe(0);
+      await body.getByText("node --version", { exact: true }).waitFor({ state: "visible" });
       await showText(body, "v24.7.0");
       expect(await page.getByText("Code Mode", { exact: true }).count()).toBe(0);
     });

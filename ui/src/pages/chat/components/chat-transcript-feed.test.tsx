@@ -154,7 +154,7 @@ it.each(["arguments", "args", "input"])(
     const container = mount([{ role: "assistant", content: Object.freeze(content) }]);
     const groups = container.all(part("tool-group"));
     expect(groups).toHaveLength(1);
-    expect(groups[0]?.querySelector("summary")?.textContent?.trim()).toBe("Attempted commands");
+    expect(groups[0]?.querySelector("summary")?.textContent?.trim()).toBe("Commands");
     expect(container.texts(part("tool-line--full"))).toEqual(expect.arrayContaining(commands));
   },
 );
@@ -196,7 +196,7 @@ it.each([true, false])(
       },
     ]);
     expect(container.one(part("tool-group") + " summary")?.textContent?.trim()).toBe(
-      bridgeDispatchStarted ? "Ran code" : "Run code",
+      bridgeDispatchStarted ? "Ran scripts" : "Scripts",
     );
     expect(container.one(part("error"))).not.toBeNull();
   },

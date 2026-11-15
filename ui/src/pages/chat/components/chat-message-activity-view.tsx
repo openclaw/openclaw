@@ -34,7 +34,11 @@ import {
   collectActivityGroup,
   type ActivityGroupData,
 } from "./chat-activity-projection.ts";
-import { ActivityOperation, PreparedActivityRow } from "./chat-message-activity-operation.tsx";
+import {
+  ActivityOperation,
+  PreparedActivityRow,
+  LifecycleOperations,
+} from "./chat-message-activity-operation.tsx";
 import type {
   ActivityOperationProps,
   ActivityOperationGroup,
@@ -214,19 +218,30 @@ function prepareActivityGroup(
       }
     }
   }
-  const groupSummaryLabel = summarizeToolGroup(summaryActivity, {
-    ownSessionLaunches: new Set(
-      summaryActivity
-        .filter((item) => ownLaunches.has(item.toolCallId ?? item.itemId))
-        .map((item) => activityKeys.get(item)!),
+  const containerItems = new Set(
+    cardGroups.flatMap((group) =>
+      (group.executionCards ?? []).flatMap((card) => {
+        const item = summaryByCard.get(card);
+        return item ? [item] : [];
+      }),
     ),
-    activityKeys,
-    executedCommands,
-    codeExecutions,
-    continuingExecutions,
-    subagentCancellations,
-    interruptedCalls,
-  });
+  );
+  const groupSummaryLabel = summarizeToolGroup(
+    summaryActivity.filter((item) => !containerItems.has(item)),
+    {
+      ownSessionLaunches: new Set(
+        summaryActivity
+          .filter((item) => ownLaunches.has(item.toolCallId ?? item.itemId))
+          .map((item) => activityKeys.get(item)!),
+      ),
+      activityKeys,
+      executedCommands,
+      codeExecutions,
+      continuingExecutions,
+      subagentCancellations,
+      interruptedCalls,
+    },
+  );
   const approvalReviews = cards.flatMap((card) => readToolApprovalReviews(card.details));
   const recordedReviewOutcomes = cards.flatMap((card) => {
     const outcome = readToolApprovalReviewOutcome(card.details);
@@ -269,6 +284,7 @@ function prepareActivityGroup(
 
   return {
     data,
+    actionOrder: data.actionOrder,
     firstGroup,
     toolContexts,
     preparedByCard,
@@ -349,6 +365,13 @@ function ActivityGroupBody(props: {
           "is-open": !soleStep() && state().activityExpanded,
         },
       ]}
+      data-explicitly-expanded={
+        !exposed() &&
+        state().activityExpanded &&
+        props.options.isToolMessageExplicitlyExpanded?.(state().activityDisclosureId)
+          ? "true"
+          : undefined
+      }
       data-file-session-key={state().firstGroup.senderSession?.sessionKey ?? undefined}
     >
       <Show when={!exposed()}>
@@ -539,7 +562,14 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                 </Show>
               }
             >
-              {entries()}
+              <Show when={segment().lifecycle} fallback={entries()}>
+                <LifecycleOperations
+                  kind={segment().lifecycle!}
+                  operations={segment().entries.flatMap((entry) =>
+                    entry.operation ? [entry.operation] : [],
+                  )}
+                />
+              </Show>
             </Show>
           );
         }}

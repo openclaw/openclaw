@@ -146,7 +146,7 @@ describe("grouped chat rendering", () => {
       unpairedCall: true,
     });
     expect(unknown.activity[0]?.items[0]).not.toHaveProperty("status");
-    expect(elementText(".chat-activity-group__label")).toBe("Attempted commands");
+    expect(elementText(".chat-activity-group__label")).toBe("Commands");
     expect(harness.view.textContent).not.toContain("Outcome unknown");
     expect(harness.view.textContent).toContain("No result available.");
     expectAbsent(".chat-tool-row--running");
@@ -171,7 +171,7 @@ describe("grouped chat rendering", () => {
     expect(elementText(".chat-activity-group__label")).toBe("Interrupted actions");
     expect(harness.view.textContent).toContain("No result available.");
     await renderHistory([{ ...call, __openclaw: { id: "next-call", runId: "next-run" } }, abort]);
-    expect(elementText(".chat-activity-group__label")).toBe("Attempted commands");
+    expect(elementText(".chat-activity-group__label")).toBe("Commands");
     const completed = await renderHistory([
       call,
       abort,
@@ -267,17 +267,19 @@ describe("grouped chat rendering", () => {
         details: { exitCode },
       });
       for (const expanded of [false, true]) {
-        await renderToolGroups([group], { isToolMessageExpanded: () => expanded });
-        const summary = requireElement(".chat-tool-msg-summary", HTMLButtonElement);
+        await renderToolGroups([group], {
+          isToolMessageExpanded: () => expanded,
+          isToolExpanded: () => expanded,
+        });
+        const summary = requireElement(".chat-tool-msg-summary", HTMLDivElement);
         expect(summary.classList.contains("chat-tool-msg-summary--error")).toBe(false);
-        expect(elementText(".chat-tool-msg-summary__label")).toBe("Tool output");
-        expect(elementText(".chat-tool-msg-summary__names")).toBe("sessions_spawn");
+        expect(summary.textContent).toContain("Couldn't launch subagent");
         expect(Boolean(element(".chat-tool-msg-body"))).toBe(expanded);
       }
       expect(elementText(".chat-tool-card__outcome")).toBe(
         exitCode ? `Exit code ${exitCode}` : "failed",
       );
-      expect(elementText(".chat-tool-msg-body .chat-text pre code")).toBe(output);
+      expect(elementText(".chat-tool-msg-body pre code")).toBe(output);
       expectAbsent(".chat-tool-msg-body details, .code-block-json-mode");
     },
   );
