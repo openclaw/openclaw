@@ -105,7 +105,7 @@ class SessionsScreenDeletionTest {
       fun openConfirmation() {
         composeRule.onNodeWithText("Research notes").performScrollTo().performSemanticsAction(SemanticsActions.OnLongClick) { it() }
         composeRule.onNodeWithText("Delete…").performClick()
-        composeRule.onNodeWithText("Delete thread?").assertIsDisplayed()
+        composeRule.onNodeWithText("Delete chat?").assertIsDisplayed()
       }
       openConfirmation()
       System.getenv("OPENCLAW_ACTION_PROMISE_PROOF_DIR")?.let { directory ->
@@ -120,7 +120,7 @@ class SessionsScreenDeletionTest {
           )
         }
       }
-      composeRule.onNodeWithText("Regular transcripts are archived; incognito transcripts are deleted without an archive.", substring = true).assertIsDisplayed()
+      composeRule.onNodeWithText("Messages are backed up, except in Incognito.").assertIsDisplayed()
       assertTrue(deletes.isEmpty())
       composeRule.onNodeWithText("Cancel").performClick()
       composeRule.onNode(isDialog()).assertDoesNotExist()
