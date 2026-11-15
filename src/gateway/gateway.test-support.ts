@@ -58,6 +58,7 @@ export async function setupGatewayTempHome(params: { prefix: string; minimalGate
   const envSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
 
   const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), params.prefix));
+  await fs.mkdir(path.join(tempHome, ".openclaw"), { mode: 0o700 });
   setTestEnvValue("HOME", tempHome);
   setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
   deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
