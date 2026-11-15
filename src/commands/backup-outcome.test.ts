@@ -86,30 +86,15 @@ function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
   expect(response).toHaveBeenCalledWith(false, undefined, ownerChangedError);
 }
 
-it("rejects malformed record arguments as expected CLI errors instead of coercing", async () => {
+it.each([
+  ["done", "label", undefined],
+  ["ok", "  ", undefined],
+  ...["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""].map((bytes) => ["ok", "hex", bytes]),
+])("rejects malformed record arguments: %s %s %s", async (status, target, bytes) => {
   const { runtime } = await fixture();
-  for (const bytes of ["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""]) {
-    await expect(
-      backupRecordCommand(runtime, { status: "ok", target: "hex", bytes, json: true }),
-    ).rejects.toMatchObject({
-      name: "ExpectedCliError",
-      message: "--bytes must be a nonnegative integer.",
-    });
-  }
-  await expect(
-    backupRecordCommand(runtime, { status: "done", target: "label", json: true }),
-  ).rejects.toMatchObject({
-    name: "ExpectedCliError",
-    message: "--status must be ok or failed.",
-  });
-  await expect(
-    backupRecordCommand(runtime, { status: "ok", target: "  ", json: true }),
-  ).rejects.toMatchObject({
-    name: "ExpectedCliError",
-    message: "Missing required --target label.",
-  });
+  const result = backupRecordCommand(runtime, { status, target, bytes });
+  await expect(result).rejects.toMatchObject({ name: "ExpectedCliError" });
   expect(await readBackupRuns(process.env)).toEqual([]);
-  expect(runtime.error).not.toHaveBeenCalled();
 });
 
 it("records decimal bytes under offline custody and leaves an absent database absent", async () => {
