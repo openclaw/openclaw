@@ -140,6 +140,8 @@ it("keeps value boundaries, nulls, integers, reals, text and blobs apart in type
     ["empty blob", [[new Uint8Array(0), "x"]]],
     ["integer", [[1n, "x"]]],
     ["real", [[1.5, "x"]]],
+    // Same 8 payload bytes as REAL 1.5 (0x3ff8000000000000); only the tag tells them apart.
+    ["integer with real bits", [[4609434218613702656n, "x"]]],
     ["integer text", [["1", "x"]]],
     ["integer blob", [[Buffer.from("1"), "x"]]],
     ["large blob", [[blob, "x"]]],
