@@ -43,14 +43,14 @@ export function projectUsageScanFields(
  * `selectSessionTranscriptLeafControlledPath` leaves entirely active; those rows
  * keep the flat, file-order timing their legacy appender produced.
  */
-export type BilledTranscriptPaths<T> = {
+type BilledTranscriptPaths<T> = {
   billed: T[];
   userTurnOf: ReadonlyMap<T, T>;
   activeUserTurn?: T;
   navigated: boolean;
 };
 
-export function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
+function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   records: readonly T[],
   isUserTurn: (record: T) => boolean,
 ): BilledTranscriptPaths<T> {
@@ -58,10 +58,7 @@ export function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   const selected: T[] = [];
   const seen = new Set<T>();
   const userTurnOf = new Map<T, T>();
-  const addPath = (leafId: string | null | undefined) => {
-    if (leafId === undefined) {
-      return;
-    }
+  const addPath = (leafId: string | null) => {
     let userTurn: T | undefined;
     for (const node of selectSessionTranscriptTreePathNodes(tree, leafId)) {
       if (!seen.has(node.entry)) {
@@ -90,7 +87,9 @@ export function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
       continue;
     }
     addPath(node.leafId);
-    addPath(node.displacedLeafId);
+    if (node.displacedLeafId !== undefined) {
+      addPath(node.displacedLeafId);
+    }
   }
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
   // and publishes its own leaf control, so both the copy and the original become
@@ -130,9 +129,9 @@ export function selectBilledTranscriptEvents<T extends Record<string, unknown>>(
 }
 
 /** The billed usage rows of one full scan, with the canonical timing they need. */
-export function selectBilledUsageEntries<
-  T extends Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null },
->(records: readonly T[]): { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } {
+export function selectBilledUsageEntries(
+  records: readonly (Record<string, unknown> & { usageEntry: ParsedTranscriptEntry | null })[],
+): { entries: ParsedTranscriptEntry[]; timing?: UsageRollupTiming } {
   const paths = selectBilledTranscriptPaths(
     records,
     (record) => record.usageEntry?.role === "user",

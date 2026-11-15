@@ -10,6 +10,7 @@ const { collect, warn } = vi.hoisted(() => {
   return { collect: gc, warn: vi.fn() };
 });
 
+// mock-isolation: Capture worker GC diagnostics without initializing process-wide logging.
 vi.mock("../logging/subsystem.js", () => ({ createSubsystemLogger: () => ({ warn }) }));
 
 vi.mock("node:inspector/promises", () => ({

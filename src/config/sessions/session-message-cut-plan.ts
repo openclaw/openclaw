@@ -50,7 +50,7 @@ export type SessionMessageCutInPlacePlan =
       result: Extract<SessionMessageCutResult, { status: "created" }>;
     };
 
-export type SessionMessageCutTarget = {
+type SessionMessageCutTarget = {
   eventType: string | null;
   /** Stored message role from navigation facts; no payload is decoded for it. */
   messageRole: string | null;

@@ -57,7 +57,7 @@ type MessageCutProjection = {
  * streams rows in SQL, rather than by hydrating events here, so every reader
  * this returns answers from a current projection.
  */
-export function createSessionMessageCutReader(
+function createSessionMessageCutReader(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
 ): SessionMessageCutReader {

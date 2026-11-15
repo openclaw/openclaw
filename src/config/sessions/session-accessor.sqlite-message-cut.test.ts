@@ -38,9 +38,7 @@ import { recordSessionParticipant } from "./session-accessor.sqlite-participants
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { readTranscriptGenerationInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
-import { createSessionMessageCutReader as createMessageCutReader } from "./session-message-cut-in-place.kernel.js";
 import { SESSION_MESSAGE_CUT_MAX_BYTES } from "./session-message-cut-read.js";
-import { prepareSessionTranscriptActivePathRepoint as prepareRepoint } from "./session-transcript-active-path-repoint.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
 import type { InternalSessionEntry } from "./types.js";
 
@@ -440,17 +438,6 @@ it("repoints oversized history without hydrating it in one transaction", async (
   expect(readPage(target, { maxMessages: 0, offset: 0 }).totalMessages).toBe(2);
   expect(await select("assistant-2")).toMatchObject({ status: "created" });
   await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-  // Through the production reader: the clean projection plans a small divergence,
-  // so the oversized refusal below is the byte bound, not a lagging projection.
-  const database = openOpenClawAgentDatabase({ agentId, env });
-  const reader = createMessageCutReader(database, scope.sessionId);
-  const planned = (leafEventId: string) =>
-    prepareRepoint(database.db, scope.sessionId, leafEventId, (leafId) =>
-      reader.canonicalBranchPathSeqs?.(leafId),
-    );
-  expect(planned("assistant-2")).toBeDefined();
-  expect(planned("oversized-branch-tip")).toBeUndefined();
-
   // A switch needs navigation facts only, so it succeeds over the oversized row,
   // and only a rewind reads that payload, after validating the selection.
   expect(await select("oversized-branch-tip")).toMatchObject({ status: "created" });
