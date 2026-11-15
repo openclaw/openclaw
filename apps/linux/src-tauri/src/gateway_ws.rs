@@ -651,8 +651,7 @@ impl GatewayClient {
                         .ok()
                         .and_then(|notice| notice.clone())
                         .unwrap_or_else(|| {
-                            "Connect the app to this Gateway before opening it."
-                                .into()
+                            "Connect the app to this Gateway before opening it.".into()
                         }));
                 }
                 changed.await;
@@ -727,9 +726,10 @@ impl GatewayClient {
         {
             return Err("The Gateway connection changed. Reload this window.".into());
         }
-        let session = state.native_control_session.as_ref().ok_or(
-            "The Gateway has not accepted this window's sign-in. Reconnect the app.",
-        )?;
+        let session = state
+            .native_control_session
+            .as_ref()
+            .ok_or("The Gateway has not accepted this window's sign-in. Reconnect the app.")?;
         let store = self
             .inner
             .identity

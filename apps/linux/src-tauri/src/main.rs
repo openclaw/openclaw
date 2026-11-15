@@ -1012,9 +1012,7 @@ impl DesktopState {
             format!("OpenClaw is installed, but connecting to the Gateway failed: {error}")
         })?;
         self.finish_local_connection(app, cli, ready, false)
-            .map_err(|error| {
-                format!("OpenClaw is installed, but opening it failed: {error}")
-            })
+            .map_err(|error| format!("OpenClaw is installed, but opening it failed: {error}"))
     }
 
     pub fn gateway_action(
@@ -1372,10 +1370,7 @@ impl DesktopState {
                         .query_pairs_mut()
                         .append_pair("mode", "connectionSettings");
                     let _ = replace_main_webview(app, local, None, None);
-                    Err(
-                        "Could not open the remote Gateway. Try connecting again."
-                            .to_string(),
-                    )
+                    Err("Could not open the remote Gateway. Try connecting again.".to_string())
                 }
             }
         })?;
@@ -1456,9 +1451,9 @@ impl DesktopState {
             let remote_url = navigation
                 .remote_presentation_is_current()
                 .then(|| {
-                    main_window(app)?.url().map_err(|_| {
-                        "Could not keep the current page. Try again.".to_string()
-                    })
+                    main_window(app)?
+                        .url()
+                        .map_err(|_| "Could not keep the current page. Try again.".to_string())
                 })
                 .transpose()?;
             #[cfg(not(target_os = "linux"))]
@@ -1467,9 +1462,9 @@ impl DesktopState {
                 SettingsReturnTarget::Remote(url)
             } else {
                 let window = main_window(app)?;
-                let mut target = window.url().map_err(|_| {
-                    "Could not keep the current page. Try again.".to_string()
-                })?;
+                let mut target = window
+                    .url()
+                    .map_err(|_| "Could not keep the current page. Try again.".to_string())?;
                 if self.main_window_has_local_content(&window)
                     && (navigation.remote_dashboard
                         || navigation

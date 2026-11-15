@@ -1449,9 +1449,8 @@ impl GatewayWindows {
                 let current = view
                     .url()
                     .map_err(|_| "Could not read the current address.")?;
-                view.navigate(current).map_err(|_| {
-                    "Could not reload OpenClaw. Open Connection Settings to retry."
-                })?;
+                view.navigate(current)
+                    .map_err(|_| "Could not reload OpenClaw. Open Connection Settings to retry.")?;
                 Ok(true)
             }
         }
