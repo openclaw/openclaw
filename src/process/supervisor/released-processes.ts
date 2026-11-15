@@ -186,7 +186,7 @@ export async function forgetReleasedProcesses(scopeKey: string): Promise<Release
     if (
       entry.scopeKey === scopeKey &&
       !entry.stopping &&
-      (await isSameLiveProcess(entry)) === true &&
+      (await isSameLiveProcess(entry)) !== false &&
       !entry.stopping &&
       state.adopted.delete(entry)
     ) {

@@ -13,6 +13,7 @@ import {
   localWorkspaceDigestBytes,
   localWorkspaceDigestReference,
   prepareLocalWorkspaceTreePacks,
+  prepareLocalWorkspaceTreeUpdate,
 } from "./local-workspace-cas.js";
 import {
   readLocalWorkspaceSourcePaths,
@@ -625,7 +626,12 @@ export async function executeLocalWorkspaceManifestRead(
           scanStartedAtMs,
         )
       : undefined;
-  const delta = updateLocalWorkspaceManifestTree(records, changes);
+  const preparations = prepareLocalWorkspaceTreeUpdate(
+    records,
+    changes,
+    inspected,
+    previousTreeRoot,
+  );
   const currentNodes: LocalWorkspaceManifestNode[] = [];
   for (const entryPath of inspected) {
     const current = records.get(entryPath);
@@ -686,13 +692,7 @@ export async function executeLocalWorkspaceManifestRead(
     treeRoot,
     previousTreeRoot,
     ...(fingerprints ? { fingerprints } : {}),
-    preparations:
-      treeRoot === previousTreeRoot
-        ? []
-        : prepareLocalWorkspaceTreePacks(
-            records,
-            replace ? undefined : [...delta.records.map(({ node }) => node.path), ...delta.removed],
-          ),
+    preparations,
     records: [],
     observation,
     removed: [],

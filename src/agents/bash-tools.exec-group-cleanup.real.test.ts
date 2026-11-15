@@ -18,13 +18,16 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-const nativeIdentity = vi.hoisted((): { observe?: () => void } => ({}));
+const nativeIdentity = vi.hoisted(
+  (): { observe?: () => void; reject?: (pid: number) => void } => ({}),
+);
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
   return {
     ...actual,
     readProcessIdentity: (...args: Parameters<typeof actual.readProcessIdentity>) => {
       nativeIdentity.observe?.();
+      nativeIdentity.reject?.(args[0]);
       return actual.readProcessIdentity(...args);
     },
   };
@@ -69,6 +72,47 @@ afterEach(async () => {
   resetProcessRegistryForTests();
   vi.restoreAllMocks();
 });
+
+/** Fail only fresh identity inspection after the real adopted birth has been captured. */
+function observeIdentityFailure() {
+  let unavailablePid: number | undefined;
+  const failed = vi.fn(() => {
+    throw Object.assign(new Error("synthetic identity read failure"), { code: "EIO" });
+  });
+  nativeIdentity.reject = (pid) => {
+    if (pid === unavailablePid) {
+      failed();
+    }
+  };
+  const readFile = fs.readFile.bind(fs);
+  const reads = vi
+    .spyOn(fs, "readFile")
+    .mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      if (unavailablePid !== undefined && args[0] === `/proc/${unavailablePid}/stat`) {
+        failed();
+      }
+      return await readFile(...args);
+    });
+  return {
+    failed,
+    async fail(pid: number) {
+      if (process.platform === "linux") {
+        const capture =
+          reads.mock.results[reads.mock.calls.findIndex(([file]) => file === `/proc/${pid}/stat`)];
+        expect(capture?.type).toBe("return");
+        await expect(capture?.value).resolves.toEqual(expect.any(String));
+      }
+      unavailablePid = pid;
+    },
+    recover() {
+      unavailablePid = undefined;
+    },
+    [Symbol.dispose]() {
+      delete nativeIdentity.reject;
+      reads.mockRestore();
+    },
+  };
+}
 
 const MAX_SERVICES_PER_SESSION = 16;
 const byNumber = (left: number | undefined, right: number | undefined) =>
@@ -315,6 +359,7 @@ it.skipIf(process.platform === "win32")(
     const cleanups: Array<(reason: string) => Promise<void>> = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await withEnvAsync(testEnv(cwd), async () => {
+      using identity = observeIdentityFailure();
       registerOneShotExecScopeCleanup(
         { oneShotCliRun: true, registerRunCleanup: (cleanup) => cleanups.push(cleanup) },
         scopeKey,
@@ -344,7 +389,9 @@ it.skipIf(process.platform === "win32")(
       const servicePid = await outputPid(service.details);
       const inFlightPid = await outputPid(inFlight.details);
       expect(cleanups).toHaveLength(1);
+      await identity.fail(leftRunningPid);
       await cleanups[0]!("run-end");
+      identity.recover();
       expect(await waitFor(() => !isPidAlive(inFlightPid))).toBe(true);
       const printed = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(printed).toContain(`pid ${servicePid}`);
@@ -612,37 +659,29 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it
-  .skipIf(process.platform === "win32")
-  .each(
-    process.platform === "linux" ? ["signal-denied", "identity-unavailable"] : ["signal-denied"],
-  )(
+it.skipIf(process.platform === "win32").each(["signal-denied", "identity-unavailable"])(
   "keeps an adopted process tracked and reports uncertainty when its stop is not confirmed (%s)",
   async (failure) => {
     const cwd = tempDirs.make("exec-unconfirmed-");
     const scopeKey = "agent:main:exec-unconfirmed";
     await withEnvAsync(testEnv(cwd, "exec-unconfirmed-test"), async () => {
       const exec = hostExec(cwd, scopeKey);
-      const readFile = fs.readFile.bind(fs);
-      const reads = vi.spyOn(fs, "readFile");
+      using identity = observeIdentityFailure();
       const result = await exec.execute("survivor", {
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
       const pid = firstPid(aggregated(result.details));
       const session = runningIn(scopeKey).find((candidate) => candidate.pid === pid)!;
       expect(session).toBeDefined();
+      const processTool = createProcessTool({ scopeKey });
       if (failure === "identity-unavailable") {
-        const statPath = `/proc/${pid}/stat`;
-        const capture =
-          reads.mock.results[reads.mock.calls.findIndex(([file]) => file === statPath)];
-        expect(capture?.type).toBe("return");
-        await expect(capture?.value).resolves.toEqual(expect.any(String));
-        reads.mockImplementation(async (...args: Parameters<typeof readFile>) => {
-          if (args[0] === statPath) {
-            throw Object.assign(new Error("synthetic identity read failure"), { code: "EIO" });
-          }
-          return await readFile(...args);
-        });
+        await identity.fail(pid);
+        // Let the actual periodic reaper inspect the unavailable identity before Stop.
+        await vi.waitFor(() => expect(identity.failed).toHaveBeenCalled(), { timeout: 6_000 });
+        await setImmediate();
+        expect(
+          (await processTool.execute("observe", { action: "poll", sessionId: session.id })).details,
+        ).toMatchObject({ status: "running" });
       }
       const realKill = process.kill.bind(process);
       // Signals to this process are denied, as for a process that changed user.
@@ -658,6 +697,9 @@ it
       expect(isPidAlive(pid)).toBe(true);
       expect(session.exited).toBe(false);
       expect(session.cleanupUncertain).toBe(true);
+      expect(
+        (await processTool.execute("confirm", { action: "poll", sessionId: session.id })).details,
+      ).toMatchObject({ status: "running" });
       expect(session.aggregated).toContain(`could not confirm that pid ${pid} stopped`);
       expect(runningIn(scopeKey).map((candidate) => candidate.pid)).toContain(pid);
       if (failure === "identity-unavailable") {
@@ -666,7 +708,7 @@ it
         ).toEqual([]);
       }
       // Once inspection and signals work again, retry stops it and settles the record.
-      reads.mockRestore();
+      identity.recover();
       denied.mockRestore();
       await stopSessionExecProcesses([scopeKey], () => {});
       expect(await waitFor(() => !isPidAlive(pid) && session.exited)).toBe(true);

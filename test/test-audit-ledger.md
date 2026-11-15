@@ -901,6 +901,31 @@ worker compilation. The warm candidate passes both in 22.06 seconds wall time
 Independent preservation review found no lost contract. This closes the earlier
 source-only realtime cleanup follow-up; no production change is claimed.
 
+### Secrets CLI plan fixture setup custody
+
+At `69c3acaca6854826a03e7e6ee2a1cf0334959282`, `withPlanFile` writes its
+temporary plan before entering its cleanup block. A partial write followed by
+failure therefore leaves the file behind. Move that write into the existing
+`try`; retain the callback, contents, error propagation and removal operation.
+All 22 declarations / 23 expanded cases remain, including malformed UTF-8,
+literal replacement characters, size limits, FIFO rejection and error causes.
+Test code changes by +1/-1 line; production and shared support are unchanged.
+
+With a real partial write followed by injected `ENOSPC` inside the existing
+valid-Unicode Vitest case, the baseline leaves the file present. The candidate
+removes it, preserves the exact write error and never invokes the apply handler.
+Both observations precede emergency cleanup. Temporary instrumentation was
+restored byte for byte. A separate direct invocation of the unchanged helper
+body confirms the same result and that baseline removal was never called.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+54.35 seconds including cold worker compilation; the warm candidate took 6.71
+seconds (4.47 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation and local ClawSweeper review found no lost contract
+or actionable finding. Source-only follow-ups remain for FIFO setup cleanup,
+failed MCP temporary-directory removal and environment restoration after
+channel/model fixture removal errors.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
