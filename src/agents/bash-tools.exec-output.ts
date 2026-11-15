@@ -3,6 +3,7 @@
  * progress, polling, and completion surfaces.
  */
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
@@ -59,7 +60,7 @@ type ExitWakeFacts = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   notifySessionTarget?: object;
-  assertExitNotificationAcceptanceCurrent?: () => void;
+  sessionKey?: string;
   exitWakeAfterYield?: true;
   processActivity?: { deadlineAtMs?: number };
 };
@@ -77,8 +78,8 @@ export function hasExitWake(session: ExitWakeFacts): boolean {
     session.notifySessionTarget !== undefined &&
     (session.exitWakeAfterYield === true
       ? session.processActivity?.deadlineAtMs !== undefined
-      : // Cron completion admission otherwise requires its originating run.
-        session.assertExitNotificationAcceptanceCurrent === undefined)
+      : // A one-shot run's exit resumes it only through sessions_yield.
+        !isOneShotRunSessionKey(session.sessionKey))
   );
 }
 

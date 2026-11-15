@@ -497,6 +497,7 @@ async function runCronIsolatedAgentTurnInTrace(
                 automationRun.closed = true;
               }
               const finalized = await finalizeCronRun({
+                runId,
                 automationResult,
                 prepared: prepared.context,
                 execution,

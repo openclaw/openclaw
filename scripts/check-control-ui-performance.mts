@@ -61,12 +61,10 @@ const controlUiPerformanceBudgets = {
   // Coordinator-accepted shipped feature cost after paydown #199196.
   // Measured on main 5328b275: exact route totals, with no added headroom.
   // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
-  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,311,932 B
-  // (+1,066 B over main 5dbf569b) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_311_996,
+  // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
+  chatBootJsGzipBytes: 1_312_227,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
-  // Same #198491 approval: measured 815,727 B (+1,107 B over main) plus 64 B headroom.
-  newBootJsGzipBytes: 815_791,
+  newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -78,18 +76,14 @@ const controlUiPerformanceBudgets = {
   // Same snapshot-save repair, measured shared chunk plus 64 B.
   // The same shared-chunk trade, measured plus 64 B.
   // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
-  // Same #198491 approval, absorbing inherited debt: measured 572,065 B (+995 B over main)
-  // plus 64 B headroom.
-  largestJsGzipBytes: 572_129,
+  largestJsGzipBytes: 567_011,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
   // Measured on main a58dbe09: exact totals, with no added headroom.
-  // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
-  // measured 336,964 B gzip (+370 B over main) / 1,738,491 B raw (+771 B), plus 64 B each.
-  totalCssGzipBytes: 337_028,
-  totalCssRawBytes: 1_738_555,
+  totalCssGzipBytes: 326_575,
+  totalCssRawBytes: 1_682_231,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
