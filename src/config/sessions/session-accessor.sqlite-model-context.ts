@@ -474,7 +474,7 @@ export function prepareTranscriptContextSnapshot(
           original
             ? projectSessionModelContextNavigation(original)
             : JSON.parse(row.navigation_json)
-        ) as ContextEntry;
+        ) as ContextEntry; // SAFETY: Both branches use the owned navigation codec.
         const model =
           original &&
           projectSessionModelContextEntry(original, { entry: original, omitCheckpoint: false });
