@@ -65,6 +65,16 @@ export function normalizeMcpToolCatalog(
   // Compiled on first call: most listed tools are never called, and every
   // session runtime normalizes its own catalog (#199327).
   const resultValidators = new Map<string, McpToolResultValidator>();
+  const validatorForCall = (toolName: string): McpToolResultValidator | undefined => {
+    const cached = resultValidators.get(toolName);
+    const outputSchema = outputSchemas.get(toolName);
+    if (cached || !outputSchema) {
+      return cached;
+    }
+    const validator = createResultValidator(toolName, schemaValidator.getValidator(outputSchema));
+    resultValidators.set(toolName, validator);
+    return validator;
+  };
   for (const [index, sourceTool] of tools.entries()) {
     const toolName = canonicalNames[index] ?? "";
     // One wire name is one operation. Ambiguous aliases are safer omitted than
@@ -86,6 +96,12 @@ export function normalizeMcpToolCatalog(
       included.push(tool);
       if (tool.outputSchema) {
         outputSchemas.set(toolName, tool.outputSchema);
+        // Acquiring a schema also registers its `$id` resources for other
+        // tools' `$ref`s, so a schema that declares one still compiles here,
+        // in catalog order. The key scan may over-match; that only costs laziness.
+        if (JSON.stringify(tool.outputSchema).includes('"$id"')) {
+          validatorForCall(toolName);
+        }
       }
     } else {
       deniedTools.push(tool);
@@ -95,21 +111,7 @@ export function normalizeMcpToolCatalog(
   return {
     tools: included,
     excludedTools,
-    metadata: {
-      validatorForCall(toolName) {
-        const cached = resultValidators.get(toolName);
-        const outputSchema = outputSchemas.get(toolName);
-        if (cached || !outputSchema) {
-          return cached;
-        }
-        const validator = createResultValidator(
-          toolName,
-          schemaValidator.getValidator(outputSchema),
-        );
-        resultValidators.set(toolName, validator);
-        return validator;
-      },
-    },
+    metadata: { validatorForCall },
     deniedTools,
   };
 }

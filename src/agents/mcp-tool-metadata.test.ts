@@ -156,3 +156,20 @@ it("compiles an output schema on its first call only, never at catalog load (#19
     "Structured content does not match the tool's output schema",
   );
 });
+
+it("resolves a reference to another tool's schema whichever tool is called first", () => {
+  const normalized = catalog([
+    tool("base", {
+      outputSchema: { $id: "https://example.test/base", type: "object", required: ["ok"] },
+    }),
+    tool("derived", {
+      outputSchema: { type: "object", allOf: [{ $ref: "https://example.test/base" }] },
+    }),
+  ]);
+
+  const validate = normalized.metadata.validatorForCall("derived")!;
+  expect(() => validate({ content: [], structuredContent: { ok: true } })).not.toThrow();
+  expect(() => validate({ content: [], structuredContent: {} })).toThrow(
+    "Structured content does not match the tool's output schema",
+  );
+});
