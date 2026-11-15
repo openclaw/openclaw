@@ -244,7 +244,8 @@ export function createChatComposerContext(
         ? "queue"
         : "steer"
       : undefined;
-  const showComposer =
+  // Expanded questions keep routine progress quiet without replacing the writing surface.
+  const showComposerProgress =
     !questionPanelProps ||
     questionPanelProps.model.nonBlocking === true ||
     questionPanelProps.model.requestedBySession !== undefined ||
@@ -659,7 +660,7 @@ export function createChatComposerContext(
     cancellationCaveat,
     sendShortcut,
     questionPanelProps,
-    showComposer,
+    showComposerProgress,
     handleKeyDown,
     handleBeforeInput,
     handleInput,

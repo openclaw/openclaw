@@ -17,7 +17,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
   releaseSessionControllerClaim,
@@ -306,17 +305,6 @@ export function backendGatewayClient(): NonNullable<AgentHandlerArgs["client"]> 
   };
 }
 
-export function cronContinuationGatewayClient(): AgentHandlerArgs["client"] {
-  const client = backendGatewayClient();
-  if (!client) {
-    throw new Error("expected backend gateway client");
-  }
-  return {
-    ...client,
-    internal: { ...client.internal, cronRunContinuation: true },
-  };
-}
-
 export function cronMediaCompletionEvent(): AgentInternalEvent {
   return {
     type: "task_completion",
@@ -329,36 +317,6 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
     statusLabel: "completed successfully",
     result: "MEDIA:/tmp/header.png",
     replyInstruction: "Continue the original cron task.",
-  };
-}
-
-export function readyCronContinuationEntry(): SessionEntry {
-  return {
-    sessionId: "run-1",
-    updatedAt: Date.now(),
-    lifecycleRevision: "revision-1",
-    modelProvider: "openai",
-    model: "gpt-5.4",
-    cronRunContinuation: {
-      lifecycleRevision: "revision-1",
-      phase: "ready",
-      basePersisted: true,
-    },
-  };
-}
-
-export function setupCronContinuationReleaseFixture() {
-  const sessionKey = "agent:main:cron:job-1:run:run-1";
-  const entry: SessionEntry = readyCronContinuationEntry();
-  mocks.loadSessionEntry.mockReturnValue({
-    cfg: {},
-    storePath: mocks.userTurnStorePath ?? getAgentTestStorePath(),
-    canonicalKey: sessionKey,
-    entry,
-  });
-  return {
-    sessionKey,
-    store: { [sessionKey]: structuredClone(entry) } as Record<string, SessionEntry>,
   };
 }
 

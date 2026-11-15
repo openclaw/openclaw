@@ -250,8 +250,6 @@ const repositoryScriptEntries = [
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
-  "scripts/bench-media-completion-gateway.mts!",
-  "scripts/bench-media-completion-wait.mts!",
   "scripts/bench-memory-keyword.mjs!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",

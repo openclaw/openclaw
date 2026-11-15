@@ -368,6 +368,9 @@ export type SessionTranscriptWorkerRequest = SessionTranscriptWorkerInput & {
 type SessionHistoryDatabaseWorkerInput = Extract<SessionHistoryWorkerInput, { database: unknown }>;
 
 type PreparedHistoryInput<Input> = Input extends unknown ? Omit<Input, "database"> : never;
+/** `pointRead` places an access check on the worker pool's reserved class-0 lane. */
+export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };
+
 export type SessionHistoryWorkerPreparedInput =
   PreparedHistoryInput<SessionHistoryDatabaseWorkerInput>;
 
