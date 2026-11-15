@@ -14,7 +14,7 @@ it("records setup entry while the owner is still pending, then preserves its res
   const pending = Promise.withResolvers<string>();
   const finishPhase = beginUiE2ePhase("fresh-visit-state-create", true);
   const result = pending.promise.finally(finishPhase);
-  const beforeSettlement = vi.mocked(writeSync).mock.calls.map(([, line]) => String(line));
+  const beforeSettlement = vi.mocked(writeSync).mock.calls.map(([, line]) => line);
 
   pending.resolve("ready");
   await expect(result).resolves.toBe("ready");
@@ -28,7 +28,7 @@ it("records setup entry while the owner is still pending, then preserves its res
     startMs: expect.any(Number),
   });
   expect(writeSync).toHaveBeenCalledTimes(2);
-  const completion = String(vi.mocked(writeSync).mock.calls[1]![1]);
+  const completion = vi.mocked(writeSync).mock.calls[1]![1];
   expect(completion).toMatch(/^\[control-ui-e2e-phase\] /);
   expect(JSON.parse(completion.split("] ")[1]!)).toEqual({
     ...start,
@@ -48,7 +48,7 @@ it("keeps existing phases completion-only by default", () => {
   expect(writeSync).not.toHaveBeenCalled();
   finishPhase();
   expect(writeSync).toHaveBeenCalledOnce();
-  const completion = String(vi.mocked(writeSync).mock.calls[0]![1]);
+  const completion = vi.mocked(writeSync).mock.calls[0]![1];
   expect(completion).toMatch(/^\[control-ui-e2e-phase\] /);
   expect(JSON.parse(completion.split("] ")[1]!)).toEqual({
     phase: "suite-setup",
