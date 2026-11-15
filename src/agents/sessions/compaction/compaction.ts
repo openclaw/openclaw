@@ -1,4 +1,3 @@
-import type { SummarizationConversationSource } from "../../../../packages/agent-core/src/harness/compaction/summarization-completion.js";
 /** Preserves the session SDK's throwing summary API over agent-core results. */
 import type { Model, ModelRequestHeaders } from "../../../llm/types.js";
 import {
@@ -19,7 +18,7 @@ export {
 
 /** Generates a compaction summary through the shared agent-core runtime. */
 export async function generateSummary(
-  currentMessages: AgentMessage[] | SummarizationConversationSource,
+  currentMessages: AgentMessage[],
   model: Model,
   reserveTokens: number,
   apiKey: string | undefined,
