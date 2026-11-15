@@ -187,6 +187,7 @@ describe("media generation detachment admission", () => {
   it.each([
     ["agent:main:cron:daily-media", true],
     ["agent:main:cron:daily-media:run:run-123", false],
+    ["agent:main:subagent:image-worker", false],
     [undefined, undefined],
   ] as const)("admits %s with detach=%s", async (sessionKey, detach) => {
     const handle = await createImageMediaLifecycle().createTaskRun({

@@ -28,7 +28,7 @@ import {
   captureSessionControllerSettlement,
   captureSessionTarget,
 } from "../../sessions/session-controller.lifecycle.js";
-import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
+import { isOneShotRunSessionKey } from "../../sessions/session-key-utils.js";
 import { runOutsideAsyncWorkScope } from "../../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { monotonicNow } from "../../shared/monotonic-time.js";
@@ -75,11 +75,11 @@ const MEDIA_GENERATION_COMPLETION_HANDOFF_TIMEOUT_MS = 120_000;
 
 export type MediaGenerateBackgroundScheduler = (work: () => Promise<void>) => void;
 
-// A cron run is already background work and delivers its own output, so it
-// waits for its media inline instead of resuming after the run has ended.
+// A cron run or subagent ends with its final reply and admits no later turn, so
+// it waits for its media inline and reports it in that reply.
 function shouldDetachMediaGenerationTask(sessionKey: string | undefined): boolean {
   const normalizedSessionKey = sessionKey?.trim();
-  return Boolean(normalizedSessionKey && !parseCronRunScopeSuffix(normalizedSessionKey).runId);
+  return Boolean(normalizedSessionKey && !isOneShotRunSessionKey(normalizedSessionKey));
 }
 
 export type MediaGenerationExecutionResult = {
