@@ -2356,6 +2356,29 @@ div.shell.shell--onboarding {
   font-size: 12px;
 }
 
+/* Customize section: the hub's pages, then the installed plugins. */
+.sidebar-customize {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-customize__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-block-start: 10px;
+}
+
+.sidebar-customize__heading {
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
 /* Activity heads the Users section above its people. */
 .sidebar-online__overview {
   margin-block-end: 6px;

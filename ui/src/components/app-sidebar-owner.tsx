@@ -12,6 +12,7 @@ import {
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import {
   SidebarAutomationsHeader,
+  SidebarCustomizeHeader,
   SidebarDashboardsHeader,
   SidebarOnlineHeader,
 } from "./app-sidebar-panel-headers.tsx";
@@ -73,6 +74,9 @@ const SidebarDashboards = lazy(() => import("./app-sidebar-pages.tsx"), {
 });
 const SidebarAutomations = lazy(() => import("./app-sidebar-automations.tsx"), {
   export: "SidebarAutomations",
+});
+const SidebarCustomize = lazy(() => import("./app-sidebar-customize.tsx"), {
+  export: "SidebarCustomize",
 });
 
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
@@ -565,12 +569,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     const SidebarFrame = () => {
       const scrollRef = scroll.createRef();
       const rail = renderSidebarRail(this);
-      const Dashboards = () => (
-        <SidebarViewBoundary>
-          <SidebarReady />
-          <SidebarDashboards host={this} />
-        </SidebarViewBoundary>
-      );
       const toolbar = renderSessionListToolbar(this);
       const menus = this.sidebarMenus.render(this);
       return (
@@ -603,6 +601,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   <Match when={this.navigationView === "automations"}>
                     <SidebarAutomationsHeader host={this} />
                   </Match>
+                  <Match when={this.navigationView === "customize"}>
+                    <SidebarCustomizeHeader host={this} />
+                  </Match>
                   <Match when={this.navigationView === "online"}>
                     <SidebarOnlineHeader host={this} />
                   </Match>
@@ -612,46 +613,51 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
                   onScroll={scroll.onScroll}
                 >
-                  <Show
-                    when={
-                      this.navigationView === "dashboards" || this.navigationView === "automations"
-                    }
+                  <Switch
                     fallback={
-                      <Show
-                        when={this.navigationView === "online"}
-                        fallback={
-                          <>
-                            <div
-                              ref={scroll.createContentRef()}
-                              class="sidebar-session-content"
-                              hidden={Boolean(this.contextualSidebar)}
-                            >
-                              <SidebarScrollContext value={scroll}>
-                                <Sessions />
-                              </SidebarScrollContext>
-                            </div>
-                            {this.contextualSidebar?.render(
-                              this.contextualSidebar.data,
-                              this.contextualSidebar.loaderPending,
-                              true,
-                            )}
-                          </>
-                        }
-                      >
-                        <SidebarViewBoundary>
-                          <SidebarReady />
-                          <SidebarOnline host={this} />
-                        </SidebarViewBoundary>
-                      </Show>
+                      <>
+                        <div
+                          ref={scroll.createContentRef()}
+                          class="sidebar-session-content"
+                          hidden={Boolean(this.contextualSidebar)}
+                        >
+                          <SidebarScrollContext value={scroll}>
+                            <Sessions />
+                          </SidebarScrollContext>
+                        </div>
+                        {this.contextualSidebar?.render(
+                          this.contextualSidebar.data,
+                          this.contextualSidebar.loaderPending,
+                          true,
+                        )}
+                      </>
                     }
                   >
-                    <Show when={this.navigationView === "automations"} fallback={<Dashboards />}>
+                    <Match when={this.navigationView === "dashboards"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarDashboards host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
+                    <Match when={this.navigationView === "automations"}>
                       <SidebarViewBoundary>
                         <SidebarReady />
                         <SidebarAutomations host={this} />
                       </SidebarViewBoundary>
-                    </Show>
-                  </Show>
+                    </Match>
+                    <Match when={this.navigationView === "customize"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarCustomize host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
+                    <Match when={this.navigationView === "online"}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarOnline host={this} />
+                      </SidebarViewBoundary>
+                    </Match>
+                  </Switch>
                 </div>
                 <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>
                   <PanelRefreshStatus
