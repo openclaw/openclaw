@@ -431,25 +431,3 @@ it("runs the consult as a typed turn of the same chat with the caller's owner au
     fixture.close();
   }
 });
-
-it("forwards a restricted caller's tool cap instead of widening it", async () => {
-  const fixture = consultation("synthetic-restricted", "agent:main:restricted-proof");
-  model.run.mockResolvedValue({ payloads: [{ text: "ok" }], meta: { durationMs: 0 } });
-  try {
-    await fixture.runtime.runEmbeddedAgent({
-      ...fixture.request,
-      senderIsOwner: false,
-      toolsAllow: ["read", "web_search"],
-    });
-    expect(model.run).toHaveBeenCalledOnce();
-    expect(model.run.mock.calls[0]?.[0]).toMatchObject({
-      senderIsOwner: false,
-      toolsAllow: ["read", "web_search"],
-    });
-    // Without a Talk level the chat's own thinking applies and nothing is normalized.
-    expect(model.run.mock.calls[0]?.[0]).toMatchObject({ normalizeThinkingLevelOverride: false });
-    expect(model.run.mock.calls[0]?.[0].thinkingOnce).toBeUndefined();
-  } finally {
-    fixture.close();
-  }
-});

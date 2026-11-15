@@ -22,7 +22,7 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   buildRealtimeVoiceAgentToolAuthorityOverlay,
-  consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime,
 } from "../../talk/agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
 import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
@@ -217,7 +217,7 @@ export function createTalkClientAgentConsultRunner(params: {
     }
     return await admission
       .run(() =>
-        consultRealtimeVoiceAgent({
+        consultRealtimeVoiceAgentInSessionRuntime({
           cfg: config,
           agentRuntime: runtime,
           logger: params.context.logGateway,
@@ -232,8 +232,6 @@ export function createTalkClientAgentConsultRunner(params: {
           surface: params.surface ?? "a browser Talk session",
           userLabel: "User",
           questionSourceLabel: "user",
-          // The Gateway runtime enters the chat's own typed-turn dispatch.
-          dispatchesInSessionRuntime: true,
           thinkLevel: talkConfig?.consultThinkingLevel,
           fastMode: talkConfig?.consultFastMode,
           senderIsOwner: authority.senderIsOwner,

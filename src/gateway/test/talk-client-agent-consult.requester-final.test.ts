@@ -41,15 +41,26 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../agents/admitted-run-context.js", () => ({
+  closeAdmittedRunDelegatedAuthority: vi.fn(),
   createOperationalRunInstanceRef: mocks.createOperationalRunInstanceRef,
   prepareAgentRunAdmission: mocks.prepareAgentRunAdmission,
 }));
 vi.mock("../../agents/embedded-agent.js", () => ({
   runEmbeddedAgent: mocks.runEmbeddedAgentCore,
 }));
+vi.mock("../../agents/agent-command.js", async () => {
+  const { createTalkCommandOwnerStandIn } =
+    await import("../talk/client-agent-runtime.command-owner.test-support.js");
+  return {
+    agentCommandFromGatewayIngress: createTalkCommandOwnerStandIn({
+      run: (params) => mocks.runEmbeddedAgentCore(params),
+      prepareAdmission: (params) => mocks.prepareAgentRunAdmission(params),
+    }),
+  };
+});
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime: mocks.consultRealtimeVoiceAgent,
 }));
 
 const agentId = "researcher";

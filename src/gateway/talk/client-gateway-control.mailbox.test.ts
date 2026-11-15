@@ -35,7 +35,7 @@ vi.mock("../../agents/agent-command.js", async () => {
 });
 vi.mock("../../talk/agent-consult-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../talk/agent-consult-runtime.js")>()),
-  consultRealtimeVoiceAgent: mocks.consultRealtimeVoiceAgent,
+  consultRealtimeVoiceAgentInSessionRuntime: mocks.consultRealtimeVoiceAgent,
 }));
 
 import { parseRealtimeVoiceAgentConsultArgs } from "../../talk/agent-consult-tool.js";
