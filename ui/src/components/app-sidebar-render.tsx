@@ -63,6 +63,14 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
 }
 
 /**
+ * The saved collapse choice. The page decides whether a sidebar shows at all, so a page
+ * without one reads as collapsed; only this choice may expand or collapse the sidebar.
+ */
+export function sidebarCollapsedByChoice(host: AppSidebarRenderHost): boolean {
+  return host.navigationCollapsedByChoice ?? host.navigationCollapsed;
+}
+
+/**
  * The rail's top identity item is the Sessions item. Outside Sessions it opens
  * Sessions; in Sessions with the sidebar closed it opens the sidebar; in
  * Sessions with the sidebar open it opens the agent (or workspace) switcher.
@@ -84,7 +92,7 @@ function railSessionsItem(host: AppSidebarRenderHost) {
       host.navigationView = "sessions";
       if (host.onExitSettings) {
         host.onExitSettings();
-      } else if (!isMobileNavLayout() && host.navigationCollapsed) {
+      } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
         host.onToggleSidebar?.();
       }
       // Off a session page, Sessions returns to the session last open; the mobile drawer

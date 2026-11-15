@@ -6,7 +6,6 @@ import {
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import {
   isRailSectionPin,
-  isSettingsTakeover,
   normalizeSidebarEntries,
   sidebarSectionForRoute,
   parseSidebarEntry,
@@ -21,9 +20,10 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
 import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { rememberSectionLocation } from "../lib/section-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
-import { isSidebarRouteActive } from "./app-sidebar-nav-menus.tsx";
 import {
+  sidebarCollapsedByChoice,
   renderSidebarAgentCard,
   renderAppSidebarFooterBar,
   renderAppSidebarPluginTab,
@@ -52,30 +52,29 @@ const SidebarPagesMenu = lazy(() => import("./app-sidebar-pages.tsx"), {
 });
 
 /**
- * After a rail or menu destination is chosen: a section page opens its own sidebar
- * (clicking the open section's item closes it); any other page runs full width.
+ * Before a rail or menu destination opens. The page decides the sidebar, so choosing a section
+ * only opens a sidebar the user had closed. Choosing the section already open returns to its
+ * start: Automations and Dashboards forget the page they would otherwise reopen.
  */
 function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) {
   if (host.onExitSettings) {
     return;
   }
   const section = entry.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
-  // The drawer closes on navigation; the route's section picks its list for next time.
-  if (isMobileNavLayout()) {
-    return;
-  }
   if (!section) {
-    if (!host.navigationCollapsed) {
-      host.onToggleSidebar?.();
-    }
     return;
   }
-  const current = host.navigationView === section && !host.navigationCollapsed;
-  host.navigationView = section;
-  if (current || host.navigationCollapsed) {
+  const context = host.sessionDataContext;
+  if (
+    context &&
+    host.navigationView === section &&
+    (section === "automations" || section === "dashboards")
+  ) {
+    rememberSectionLocation(context.gateway, section, null);
+  }
+  if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
     host.onToggleSidebar?.();
   }
-  host.invalidate();
 }
 
 const PEEK_DELAY_MS = 300;
@@ -186,27 +185,6 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   let pagesMenu: PopoverHandle | undefined;
   let moreButton: HTMLButtonElement | undefined;
   const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
-  // "More" carries the current-item fill while the open page has no item of its own on the rail.
-  const moreCurrent = createMemo(() => {
-    const route = host.activeRouteId;
-    if (
-      !route ||
-      route === "chat" ||
-      route === "new-session" ||
-      isSettingsTakeover(route) ||
-      // People is Activity's own rail item.
-      sidebarSectionForRoute(route) === "online"
-    ) {
-      return false;
-    }
-    if (route === "plugin") {
-      return !pins().includes(`plugin:${host.activePluginTabId}`);
-    }
-    return !pins().some((entry) => {
-      const pinned = parseSidebarEntry(entry);
-      return pinned?.type === "route" && isSidebarRouteActive(route, pinned.route);
-    });
-  });
   return [
     <nav
       ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
@@ -239,7 +217,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               host.navigationView = "online";
               if (host.onExitSettings) {
                 host.onExitSettings();
-              } else if (!isMobileNavLayout() && host.navigationCollapsed) {
+              } else if (!isMobileNavLayout() && sidebarCollapsedByChoice(host)) {
                 host.onToggleSidebar?.();
               }
               // The mobile drawer closes on navigation, so there People only opens the list.
@@ -259,34 +237,39 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
           { "sidebar-rail__pins--drag-active": host.sessionOrganizer.sidebarZoneDragActive },
         ]}
         aria-label={t("nav.customize")}
-        onClick={(event) => {
-          if (
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey ||
-            !event
+        // Capture runs before the pin's own link navigates.
+        ref={nativeListener(
+          "click",
+          (event: MouseEvent) => {
+            if (
+              event.button !== 0 ||
+              event.metaKey ||
+              event.ctrlKey ||
+              event.shiftKey ||
+              event.altKey ||
+              !event
+                .composedPath()
+                .some(
+                  (target) =>
+                    target instanceof Element &&
+                    target.matches("a[href], button:not([disabled], [data-navigation-view])"),
+                )
+            ) {
+              return;
+            }
+            const pin = event
               .composedPath()
-              .some(
-                (target) =>
-                  target instanceof Element &&
-                  target.matches("a[href], button:not([disabled], [data-navigation-view])"),
-              )
-          ) {
-            return;
-          }
-          const pin = event
-            .composedPath()
-            .find(
-              (target): target is Element =>
-                target instanceof Element && target.hasAttribute("data-sidebar-entry"),
-            );
-          const entry = pin ? parseSidebarEntry(pin.getAttribute("data-sidebar-entry")) : null;
-          if (entry) {
-            revealDestination(host, entry);
-          }
-        }}
+              .find(
+                (target): target is Element =>
+                  target instanceof Element && target.hasAttribute("data-sidebar-entry"),
+              );
+            const entry = pin ? parseSidebarEntry(pin.getAttribute("data-sidebar-entry")) : null;
+            if (entry) {
+              revealDestination(host, entry);
+            }
+          },
+          true,
+        )}
         onDragOver={(event) => host.sessionOrganizer.handleSidebarZoneDragOver(event)}
         onDragLeave={(event) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
@@ -300,7 +283,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             type="button"
             class={[
               "sidebar-rail__button sidebar-rail__more",
-              { "nav-item--active": moreCurrent() },
+              // Like any menu button, it reads as pressed only while its menu is open.
+              { "nav-item--active": pagesMenuOpen() },
             ]}
             data-rail-more=""
             aria-label={t("nav.pages")}

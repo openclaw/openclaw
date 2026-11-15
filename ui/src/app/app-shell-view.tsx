@@ -164,6 +164,7 @@ export function ApplicationShell(props: {
             "shell--chat": view().chatLikeRoute,
             "shell--session": view().sessionRoute,
             "shell--nav-collapsed": view().navCollapsed,
+            "shell--nav-page-hidden": view().navPageHidden,
             "shell--mobile-nav": view().mobileNavLayout,
             "shell--merged-chat-chrome": view().mergedChatChrome,
             "shell--floating-header": view().floatingHeader,
