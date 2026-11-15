@@ -1,15 +1,40 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { writePlan } from "./state-upgrade-tree.js";
-import { upgradeStateDirectory } from "./state-upgrade.js";
+import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
 
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+describe("upgradeStateDirectory version zero", () => {
+  it("leaves a PostgreSQL anchor or empty catalog to the normal bootstrap", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-v0-"));
+    dirs.push(stateDir);
+    fs.mkdirSync(path.join(stateDir, "state"));
+    const anchor = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"));
+    anchor.exec("CREATE TABLE anchor (v TEXT)");
+    anchor.close();
+    const env = {
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json"),
+    };
+    expect(isStateUpgradePending(env)).toBe(false);
+    const result = await upgradeStateDirectory({
+      env,
+      log: { info: () => {}, warn: () => {} },
+      runChain: async () => {
+        throw new Error("the chain must not run");
+      },
+    });
+    expect(result).toEqual({ status: "current" });
+  });
 });
 
 describe("upgradeStateDirectory resume", () => {

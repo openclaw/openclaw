@@ -143,6 +143,11 @@ function discoverDatabases(stateDir: string): DatabaseTarget[] {
 const expectedVersion = (target: Pick<DatabaseTarget, "kind">) =>
   target.kind === "state" ? OPENCLAW_STATE_SCHEMA_VERSION : OPENCLAW_AGENT_SCHEMA_VERSION;
 
+// Version 0 is no released schema (2026.7.1 is v1): a PostgreSQL anchor or a catalog a
+// native client created before the first Gateway. The normal bootstrap owns those.
+const isOutdated = (target: DatabaseTarget) =>
+  target.version > 0 && target.version < expectedVersion(target);
+
 /**
  * Whether this start must take state ownership: an interrupted swap to finish or a
  * database older than this build. Read-only, so a start that another live owner
@@ -153,7 +158,7 @@ export function isStateUpgradePending(env: NodeJS.ProcessEnv): boolean {
   return (
     fs.existsSync(stateDir) &&
     (fs.readdirSync(stateDir).some((entry) => entry.startsWith(WORK_PREFIX)) ||
-      discoverDatabases(stateDir).some((target) => target.version < expectedVersion(target)))
+      discoverDatabases(stateDir).some(isOutdated))
   );
 }
 
@@ -369,9 +374,7 @@ export async function upgradeStateDirectory(params: {
     }
     fs.rmSync(dir, { recursive: true, force: true });
   }
-  const outdated = discoverDatabases(stateDir).filter(
-    (target) => target.version < expectedVersion(target),
-  );
+  const outdated = discoverDatabases(stateDir).filter(isOutdated);
   if (outdated.length === 0) {
     if (resumed) {
       finish(stateDir, undefined, skip);
