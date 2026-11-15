@@ -161,7 +161,7 @@ async function claimManagedRemoval(
 }
 
 export class ManagedWorktreeService {
-  private readonly env: NodeJS.ProcessEnv;
+  private readonly envOverride: NodeJS.ProcessEnv | undefined;
   private readonly getConfig: ServiceOptions["getConfig"];
   private readonly capacity: ReturnType<typeof createWorktreeCapacityOwner>;
   private readonly cleanupDeferrals: WorktreeCleanupDeferrals = new Map();
@@ -169,13 +169,18 @@ export class ManagedWorktreeService {
   readonly maintainGit: ReturnType<typeof createWorktreeGitMaintenance>;
 
   constructor(options: ServiceOptions = {}) {
-    this.env = options.env ?? process.env;
+    this.envOverride = options.env;
     this.getConfig = options.getConfig;
-    this.maintainGit = createWorktreeGitMaintenance(this.env);
+    this.maintainGit = createWorktreeGitMaintenance(this.envOverride);
     this.capacity = createWorktreeCapacityOwner({
-      env: this.env,
+      env: this.envOverride,
       getConfig: this.getConfig,
     });
+  }
+
+  private get env(): NodeJS.ProcessEnv {
+    // Workers can replace process.env; only explicit overrides retain their identity.
+    return this.envOverride ?? process.env;
   }
 
   onWarmPoolNeeded(listener: (request: WorktreeWarmPoolRequest) => void): () => void {
