@@ -317,7 +317,9 @@ it.each(
   async ({ surface, requiresModifier }) => {
     vi.spyOn(navigator, "platform", "get").mockReturnValue("MacIntel");
     vi.spyOn(navigator, "maxTouchPoints", "get").mockReturnValue(5);
-    onTestFinished(() => vi.restoreAllMocks());
+    onTestFinished(() => {
+      vi.restoreAllMocks();
+    });
     await page.viewport(1194, 834);
     const submit = vi.fn();
     const { container } =
