@@ -100,7 +100,7 @@ export const sidebarSnapshotSchema = json.object({
   roster: json.nullable(bootRosterSchema),
   mode: json.enumeration(["chip", "roster"]),
   grouping: json.optional(json.enumeration(["none", "category", "person", "project"])),
-  navigationView: json.enumeration(["dashboards", "sessions", "online"]),
+  navigationView: json.enumeration(["dashboards", "automations", "sessions", "online"]),
   pages: json.array(session),
   pageScopeId: json.nullable(text),
   pinnedSessions: json.array(session),

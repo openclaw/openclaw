@@ -2301,6 +2301,61 @@ div.shell.shell--onboarding {
   border-radius: 0;
 }
 
+/* Automations section: New automation, then grouped rows with a byline. */
+.sidebar-automations {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-automations__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-block-start: 10px;
+}
+
+.sidebar-automations__heading {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.sidebar-automations__heading svg {
+  width: 12px;
+  height: 12px;
+}
+
+.sidebar-automations__row {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  height: auto;
+  padding-block: 6px;
+}
+
+.sidebar-automations__name,
+.sidebar-automations__byline {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-automations__byline {
+  color: var(--muted);
+  font-size: 12px;
+}
+
 /* Activity heads the Users section above its people. */
 .sidebar-online__overview {
   margin-block-end: 6px;

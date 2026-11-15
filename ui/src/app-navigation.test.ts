@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import {
   SIDEBAR_NAV_ROUTES,
+  sidebarSectionForRoute,
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
@@ -169,6 +170,12 @@ it("reads a namespaced tab reference from the generic URL", () => {
   expect(pluginTabKey(ref)).toBe("logbook/logbook");
   // Distinct plugins with the same local tab id stay distinct.
   expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
+});
+
+it("gives Dashboards, Automations and Activity a sidebar section of their own", () => {
+  expect(
+    (["dashboards", "cron", "activity", "usage", "systems"] as const).map(sidebarSectionForRoute),
+  ).toEqual(["dashboards", "automations", "online", undefined, undefined]);
 });
 
 it("recognizes plugin hub routes", () => {

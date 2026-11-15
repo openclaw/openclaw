@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, lazy, onSettled, Show } from "solid-js";
+import { createMemo, lazy, Match, onSettled, Show, Switch } from "solid-js";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { finishBootFrame } from "../app/boot-composer.ts";
@@ -10,7 +10,11 @@ import {
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
-import { SidebarDashboardsHeader, SidebarOnlineHeader } from "./app-sidebar-panel-headers.tsx";
+import {
+  SidebarAutomationsHeader,
+  SidebarDashboardsHeader,
+  SidebarOnlineHeader,
+} from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
@@ -66,6 +70,9 @@ const SidebarPinnedSession = lazy(() => import("./sidebar-agent-roster.tsx"), {
 });
 const SidebarDashboards = lazy(() => import("./app-sidebar-pages.tsx"), {
   export: "SidebarDashboards",
+});
+const SidebarAutomations = lazy(() => import("./app-sidebar-automations.tsx"), {
+  export: "SidebarAutomations",
 });
 
 const SidebarOnline = lazy(() => import("./app-sidebar-online.tsx"), {
@@ -589,23 +596,26 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
               <Show when={!this.connectionPending} fallback={<GatewaySidebarSkeleton />}>
                 {/* Every panel header sits above the scroller so it stays pinned, keeps
                   one geometry across views, and the scroll fade starts below it. */}
-                <Show
-                  when={this.navigationView === "dashboards"}
-                  fallback={
-                    <Show when={this.navigationView === "online"} fallback={toolbar}>
-                      <SidebarOnlineHeader host={this} />
-                    </Show>
-                  }
-                >
-                  <SidebarDashboardsHeader host={this} />
-                </Show>
+                <Switch fallback={toolbar}>
+                  <Match when={this.navigationView === "dashboards"}>
+                    <SidebarDashboardsHeader host={this} />
+                  </Match>
+                  <Match when={this.navigationView === "automations"}>
+                    <SidebarAutomationsHeader host={this} />
+                  </Match>
+                  <Match when={this.navigationView === "online"}>
+                    <SidebarOnlineHeader host={this} />
+                  </Match>
+                </Switch>
                 <div
                   ref={scrollRef}
                   class={["sidebar-shell__body", `sidebar-shell__body--scroll-${scroll.state()}`]}
                   onScroll={scroll.onScroll}
                 >
                   <Show
-                    when={this.navigationView === "dashboards"}
+                    when={
+                      this.navigationView === "dashboards" || this.navigationView === "automations"
+                    }
                     fallback={
                       <Show
                         when={this.navigationView === "online"}
@@ -635,7 +645,12 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                       </Show>
                     }
                   >
-                    <Dashboards />
+                    <Show when={this.navigationView === "automations"} fallback={<Dashboards />}>
+                      <SidebarViewBoundary>
+                        <SidebarReady />
+                        <SidebarAutomations host={this} />
+                      </SidebarViewBoundary>
+                    </Show>
                   </Show>
                 </div>
                 <Show when={!this.contextualSidebar && this.sessionsStatusFilter !== "archived"}>

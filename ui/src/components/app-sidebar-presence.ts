@@ -21,7 +21,7 @@ export type SidebarPresenceScope = {
 };
 
 type SidebarPresenceHost = {
-  navigationView: "sessions" | "online" | "dashboards";
+  navigationView: "sessions" | "online" | "dashboards" | "automations";
   contextualSidebar?: ContextualSidebar;
   sessionDataContext?: { gateway: { snapshot: { selfUser?: AuthenticatedUser | null } } };
   sessionData: { presenceInstanceId?: string; presencePayload: PresencePayload | undefined };
