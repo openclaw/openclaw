@@ -16,6 +16,15 @@ function assertPostgresOperationCurrent(): void {
   }
 }
 
+/** Multi-store fences release every acquired store before retrying a busy writer. */
+export function tryReservePostgresTransactionSync(db: PostgresSqlConnection): boolean {
+  db.exec("BEGIN ISOLATION LEVEL READ COMMITTED");
+  return (
+    db.prepare("SELECT pg_try_advisory_xact_lock(?) AS acquired").get(db.advisoryLockKey)
+      ?.acquired === 1
+  );
+}
+
 export function runPostgresTransactionSync<T>(
   db: PostgresSqlConnection,
   operation: () => T,

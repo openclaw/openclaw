@@ -27,7 +27,10 @@ import {
   prunePluginNativeCaptureDirectories,
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
-import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import {
+  interceptPluginCaptureReclamation,
+  sweepPluginSourceCapturesForTest,
+} from "./plugin-source-capture-directory.test-support.js";
 import { pluginProcessRuntimeEntrypoints } from "./process-runtime.test-support.js";
 
 const temp = createTempDirTracker();
@@ -294,6 +297,7 @@ const legacyChildCapture = `
   const instance = fs.mkdtempSync(path.join(parent, "legacy-"));
   const owner = new DatabaseSync(path.join(instance, "owner.sqlite"));
   owner.exec("PRAGMA busy_timeout=0; PRAGMA journal_mode=MEMORY; BEGIN EXCLUSIVE;");
+  process.on("exit", () => owner.close());
   fs.mkdirSync(path.join(instance, "captures"));
   const boundaryRoot = fs.mkdtempSync(path.join(instance, "captures", "openclaw-plugin-build-"));
   const capturedFile = path.join(boundaryRoot, "index.cjs");
@@ -642,14 +646,16 @@ it.each(["payload", "instance"])(
         inspected.mockRestore();
       }
     }
-    const remove = fsPromises.rm.bind(fsPromises);
-    const failure = Object.assign(new Error("Fixture cleanup cannot finish"), { code: "EACCES" });
-    const fault = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-      if (target === (stage === "payload" ? captures : orphan.instanceRoot)) {
-        throw failure;
-      }
-      await remove(target, options);
-    });
+    const fault = interceptPluginCaptureReclamation(`
+      import promises from 'node:fs/promises';
+      const remove = promises.rm.bind(promises);
+      promises.rm = async (target, options) => {
+        if (target === ${JSON.stringify(stage === "payload" ? captures : orphan.instanceRoot)}) {
+          throw Object.assign(new Error('Fixture cleanup cannot finish'), { code: 'EACCES' });
+        }
+        return remove(target, options);
+      };
+    `);
     try {
       await sweepPluginSourceCapturesForTest(stateDir);
       exists(path.join(orphan.instanceRoot, "owner.sqlite"), true);
@@ -681,15 +687,17 @@ it("metadata retirement joins its sweep, not sibling schedules", async () => {
   acquireSqliteStagingToken(orphan, "create")();
   age(orphan);
   const entered = createDeferred();
-  const release = createDeferred();
-  const remove = fsPromises.rm.bind(fsPromises);
-  const removal = vi.spyOn(fsPromises, "rm").mockImplementation(async (target, options) => {
-    if (path.dirname(String(target)) === root) {
-      entered.resolve();
-      await release.promise;
-    }
-    await remove(target, options);
-  });
+  const barrier = temp.make("capture-sweep-exit-");
+  const release = () => fsPromises.writeFile(path.join(barrier, "release"), "exit");
+  const removal = interceptPluginCaptureReclamation(
+    `
+    import fs from 'node:fs';
+    const watcher = fs.watch(${JSON.stringify(barrier)}, (_event, name) => {
+      if (String(name) === 'release') watcher.close();
+    });
+  `,
+    () => entered.resolve(),
+  );
   const sweep = time.advanceBy(hour);
   let closing: ReturnType<typeof metadata.close> | undefined;
   try {
@@ -706,13 +714,13 @@ it("metadata retirement joins its sweep, not sibling schedules", async () => {
     expect(closed).toBe(false);
     expect(sibling).toHaveBeenCalledOnce();
     expect(scheduler.signal.aborted).toBe(false);
-    release.resolve();
+    await release();
     await Promise.all([sweep, closing]);
     expect(closed).toBe(true);
     expect(fs.readdirSync(root)).toEqual([]);
     expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
-    release.resolve();
+    await release();
     await Promise.allSettled([sweep, closing]);
     removal.mockRestore();
     await metadata.close();

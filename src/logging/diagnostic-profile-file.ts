@@ -5,7 +5,7 @@ import { ProfileFailure } from "./diagnostic-profile.js";
 
 /** Successful operator artifacts are retained until manually removed. */
 export async function reserveDiagnosticProfileFile(
-  kind: "cpu" | "heap",
+  kind: "cpu" | "heap" | "heap-profile",
   assertActive: () => void,
   requiredBytes = 0,
 ) {
@@ -20,7 +20,7 @@ export async function reserveDiagnosticProfileFile(
   assertActive();
   const filename = path.join(
     directory,
-    `${kind}-${new Date().toISOString().replaceAll(":", "-")}.${kind === "cpu" ? "cpuprofile" : "heapsnapshot"}`,
+    `${kind}-${new Date().toISOString().replaceAll(":", "-")}.${kind === "cpu" ? "cpuprofile" : kind === "heap" ? "heapsnapshot" : "heapprofile"}`,
   );
   return { path: filename, handle: await fs.open(filename, "wx", 0o600) };
 }

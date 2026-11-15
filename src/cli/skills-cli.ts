@@ -452,6 +452,10 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
         },
         command: Command,
       ) => {
+        const signal = getAsyncWorkSignal();
+        if (signal?.aborted) {
+          return;
+        }
         let exitCode: number | undefined;
         const reportError =
           hasJsonOutput(opts) || opts.card !== true
@@ -459,7 +463,7 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             : defaultRuntime.error;
         try {
           const workspace = await resolveClawHubTargetWorkspace(command, opts, reportError);
-          if (!workspace) {
+          if (!workspace || signal?.aborted) {
             return;
           }
           const target = await resolveClawHubSkillVerificationTarget({
@@ -468,6 +472,9 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             version: opts.version,
             tag: opts.tag,
           });
+          if (signal?.aborted) {
+            return;
+          }
           if (!target.ok) {
             reportError(target.error);
             exitCode = 1;
@@ -481,7 +488,11 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
               version: target.version,
               tag: target.tag,
               baseUrl: target.baseUrl,
+              signal,
             });
+            if (signal?.aborted) {
+              return;
+            }
             if (!result.ok) {
               reportError(result.error);
               exitCode = 1;
@@ -495,7 +506,11 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
                 const card = await fetchClawHubSkillCard({
                   url: cardUrl.url,
                   baseUrl: target.baseUrl,
+                  signal,
                 });
+                if (signal?.aborted) {
+                  return;
+                }
                 defaultRuntime.writeStdout(card.endsWith("\n") ? card : `${card}\n`);
                 exitCode = shouldFailSkillVerification(verification) ? 1 : undefined;
               }
@@ -506,6 +521,9 @@ export async function registerSkillsCli(program: Command, argv: readonly string[
             }
           }
         } catch (err) {
+          if (signal?.aborted) {
+            return;
+          }
           if (err instanceof ExitError) {
             throw err;
           }

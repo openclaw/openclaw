@@ -106,14 +106,6 @@ export async function prepareAgentRunDispatch(
     });
     return undefined;
   }
-  if (params.restoredCronContinuationIdentity && !params.restoredCronContinuation) {
-    params.io.emitAcceptance([
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, "cron run continuation could not be restored"),
-    ]);
-    return undefined;
-  }
 
   const { resolvedRuntime, ...modelSelection } = resolveAgentRunAdmissionModel(params);
   const { lifecycleStorePath } = modelSelection;
@@ -550,8 +542,6 @@ export async function prepareAgentRunDispatch(
       params.client.internal.operatorRoleActor?.kind === "system" &&
       !params.client.internal.operatorRunAuthority &&
       !params.client.authenticatedUserProfile &&
-      !params.client.internal.cronRunContinuation &&
-      !params.restoredCronContinuation &&
       params.resolvedSessionKey &&
       !isCronSessionKey(params.resolvedSessionKey) &&
       userTurn.inputProvenance?.kind === "internal_system" &&
@@ -647,7 +637,6 @@ export async function prepareAgentRunDispatch(
         spawnedBy: params.sessionEntry?.spawnedBy,
         isCurrent: params.hasCurrentClientAuthority,
         inputProvenance: userTurn.inputProvenance,
-        hasRestoredCronContinuation: params.restoredCronContinuation !== undefined,
       },
       activeRunAbort.controller.signal,
     );
@@ -694,7 +683,6 @@ export async function prepareAgentRunDispatch(
       ...modelSelection,
       imageUnderstandingModel: params.needsImageUnderstanding ? resolvedRuntime : undefined,
       trustedInternalHandoff,
-      restoredCronContinuationLifecycleRevision: params.restoredCronContinuation?.lifecycleRevision,
       resolvedThreadId,
       reactivateSubagent,
       followupCompletion,

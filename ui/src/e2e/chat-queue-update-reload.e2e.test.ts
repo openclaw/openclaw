@@ -83,7 +83,7 @@ async function reviewStaleBuild(page: Page, gateway: Gateway, build: string) {
   await gateway.waitForRequest("connect", { after: previous });
   await gateway.rejectDeferred("connect", {
     code: "UNAVAILABLE",
-    message: "protocol mismatch: Control UI updated; reload this page to continue",
+    message: "protocol mismatch: OpenClaw updated; reload this page to continue",
     details: { code: "PROTOCOL_MISMATCH", gatewayBuildId: build, reloadRequired: true },
     retryable: false,
   });

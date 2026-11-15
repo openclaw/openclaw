@@ -565,7 +565,9 @@ export function markdownToTelegramRichBlocks(
       return [
         {
           type: "paragraph",
-          text: htmlNodes.length ? nodeText(htmlNodes, true) : ir.text.slice(rangeStart, rangeEnd),
+          text: htmlNodes.length
+            ? nodeText(htmlNodes, { preserveMediaSources: true })
+            : ir.text.slice(rangeStart, rangeEnd),
         },
       ];
     }

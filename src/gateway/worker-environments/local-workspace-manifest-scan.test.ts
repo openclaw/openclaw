@@ -55,10 +55,18 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
         sha256: hash("old"),
       }),
     );
-    const directories = ["edited", "edited/deep", "untouched"];
+    const siblings = Array.from({ length: 64 }, (_, index) => `sibling-${index}`);
+    const directories = ["edited", "edited/deep", "untouched", ...siblings];
     const nodes = [
       ...directories.map((entryPath) => ({ path: entryPath, type: "directory" as const })),
       ...files,
+      ...siblings.map((directory) => ({
+        path: `${directory}/kept.txt`,
+        type: "file" as const,
+        mode: 0o644,
+        size: 3,
+        sha256: hash("old"),
+      })),
       ...["a", "b"].map((name) => ({
         path: `untouched/${name}.txt`,
         type: "file" as const,
@@ -141,6 +149,21 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     } finally {
       counter.restore();
     }
+    for (const batch of prepareLocalWorkspaceTreePacks(expected)) {
+      const full = deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation;
+      for (const pack of full.packs!) {
+        expect(
+          db
+            .prepare(
+              "SELECT records_json, children_json FROM local_workspace_tree_packs WHERE tree_digest = ?",
+            )
+            .get(localWorkspaceDigestBytes(pack.treeRef)),
+        ).toEqual({
+          records_json: JSON.stringify(pack.records),
+          children_json: JSON.stringify(pack.children),
+        });
+      }
+    }
     const nextRoot = localWorkspaceDigestBytes(result.treeRoot!);
     const { preparations: _preparations, observation: _observation, ...checkpoint } = result;
     let revision = 0;
@@ -169,6 +192,7 @@ it.each(["edit", "delete one-child root", "delete two-sided root"])(
     assert(accepted.records, "A fresh reader must receive the accepted baseline records");
     expect(decodeLocalWorkspaceTree(accepted.records)).toEqual(expected);
     expect(result.preparations).toHaveLength(1);
+    expect(result.preparations![0]!.byteLength).toBeLessThan(6000);
     const packs = result.preparations!.flatMap(
       (batch) => (deserialize(inflateRawSync(batch)) as LocalWorkspacePreparation).packs!,
     );

@@ -54,3 +54,38 @@ export function unindexSessionActorReplicaCell(pool: ReplicaPool, cell: ReplicaC
     }
   }
 }
+
+// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
+// acyclic plain data; count strings without allocating or scanning their JSON.
+export function estimateSessionActorReplicaBytes(
+  value: unknown,
+  sizes?: WeakMap<object, number>,
+  memoizeDescendants = true,
+): number {
+  if (typeof value === "string") {
+    return 16 + value.length * 2;
+  }
+  if (!value || typeof value !== "object") {
+    return 8;
+  }
+  const known = sizes?.get(value);
+  if (known !== undefined) {
+    return known;
+  }
+  const childSizes = memoizeDescendants ? sizes : undefined;
+  let bytes = 32;
+  if (Array.isArray(value)) {
+    for (let index = 0; index < value.length; index++) {
+      if (index in value) {
+        bytes += 16 + estimateSessionActorReplicaBytes(value[index], childSizes, false);
+      }
+    }
+  } else {
+    for (const key in value) {
+      bytes +=
+        16 + key.length * 2 + estimateSessionActorReplicaBytes(Reflect.get(value, key), childSizes);
+    }
+  }
+  sizes?.set(value, bytes);
+  return bytes;
+}

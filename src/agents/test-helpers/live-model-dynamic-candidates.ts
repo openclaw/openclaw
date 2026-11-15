@@ -425,11 +425,10 @@ export async function appendLiveModelCandidates(
       const normalizeModel =
         params.normalizeModel ??
         (async (entry: Model) =>
-          (await import("../model-discovery-normalize.js")).normalizeDiscoveredAgentModel(
-            entry,
+          (await import("../model-discovery-normalize.js")).createDiscoveredAgentModelNormalizer(
             agentDir,
             { config, workspaceDir },
-          ));
+          )(entry));
       model = await normalizeModel(resolved as Model, agentDir);
     }
     if (!model) {

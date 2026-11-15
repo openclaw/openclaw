@@ -8,7 +8,7 @@ export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, automations, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
-export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
+export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past chats.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SEND_RESULT_GUIDANCE =
   'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later reply delivery state, and neither proves target completion.';
@@ -183,7 +183,8 @@ export function describeSessionStatusTool(): string {
 
 export function describeRequiredHumanActionTool(callableName: string): string {
   return [
-    `When a task needs a supported human-only step such as browser sign-in, use \`${callableName}\` with requiredAction instead of finalizing with prose instructions.`,
+    `Use ${callableName} with requiredAction only for an observed external prerequisite, such as browser sign-in, that the human can complete while this run waits.`,
+    "Do not invent approval or manual prerequisites for already authorized work. An inactive Goal stops automatic pursuit, not the current user-requested turn; continue executable work within its actual permissions without requiring Goal Resume. Never wait in ask_user for a native session control that requires this run to end; if that control is genuinely needed, explain it and finish the turn first.",
     "Give the specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, request credentials in chat, or hide an incorrect denial.",
     "requiredAction parks the original task and returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
   ].join(" ");

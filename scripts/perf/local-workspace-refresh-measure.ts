@@ -178,6 +178,7 @@ const refreshRef = `refs/openclaw/workspace-base-refresh/${"a".repeat(64)}`;
 async function refresh(owner: LocalWorkspaceOwner) {
   phase = "acquisition";
   await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) => {
+    const projectionPath = await localWorkspaceProjectionPath(owner);
     const operations = projectionOperations(
       owner,
       {
@@ -188,6 +189,7 @@ async function refresh(owner: LocalWorkspaceOwner) {
         },
       },
       store.get(),
+      projectionPath,
     );
     phase = "refresh";
     await assert.rejects(operations.applyBaseRefresh(refreshRef), (error) => error === reserved);
@@ -210,14 +212,14 @@ try {
     });
   }
   for (const owner of owners) {
-    await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, (store) =>
+    await withLocalWorkspaceStore({ worktreeId: owner.worktree.id }, async (store) =>
       store.create({
         worktree_id: owner.worktree.id,
         agent_id: owner.agentId,
         session_key: owner.sessionKey,
         session_id: owner.sessionId,
         lifecycle_revision: null,
-        projection_path: localWorkspaceProjectionPath(owner),
+        projection_path: await localWorkspaceProjectionPath(owner),
         base_commit: baseCommit,
         source_paths_json: sourcePaths,
         source_paths_digest: null,

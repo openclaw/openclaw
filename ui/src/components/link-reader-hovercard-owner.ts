@@ -9,6 +9,7 @@ import { anchorFromNavigationEvent, composedParent } from "../lib/navigation-cli
 import { listen } from "../lib/reactive/listener.ts";
 import "../styles/link-reader-hovercard.css";
 import { linkReaderErrorMessage } from "./link-reader-error.ts";
+import { linkPreviewModifiers } from "./link-reader-hovercard-modifiers.ts";
 import type {
   HovercardProperties,
   LinkReaderHovercardProvider,
@@ -330,6 +331,12 @@ export class HovercardOwner {
     this.connected = true;
     this.bindMetadata();
     const stopListeners = [
+      linkPreviewModifiers.subscribe(() => {
+        const anchor = this.activeAnchor;
+        const restore = this.hovercard.card?.contains(this.host.ownerDocument.activeElement);
+        this.close();
+        this.hovercard.returnFocus(restore ? anchor : null);
+      }),
       listen(this.host, "pointerover", this.handlePointerOver),
       listen(this.host, "pointerout", this.handlePointerOut),
       listen(this.host, "focusin", this.handleFocusIn),
@@ -507,7 +514,7 @@ export class HovercardOwner {
     delay: number,
   ): void {
     // Nested providers retain their own agent scope when intent bubbles.
-    if (!this.ownsAnchor(anchor)) {
+    if (linkPreviewModifiers.suppressed || !this.ownsAnchor(anchor)) {
       return;
     }
     if (!target.reader) {
