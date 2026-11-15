@@ -27,7 +27,6 @@ import {
   validatePublicationAdmissionBinding,
   validatePublicationSourceBinding,
 } from "./full-release-publication-contract.mjs";
-import { verifyReceiptRecoveryAuthority } from "./full-release-receipt-recovery.mjs";
 import {
   classifyReleaseGhTransportError,
   evidenceReadRetryDelay,
@@ -61,7 +60,6 @@ import {
   inspectActionsArtifactZip,
 } from "./lib/actions-artifact-archive.mjs";
 import { compareAscii, sortJsonValueKeys } from "./lib/canonical-json.mjs";
-import { releaseChildReuseSha256 } from "./lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "./lib/full-release-child-reuse.mjs";
 import {
   accountGithubRequest,
@@ -79,6 +77,7 @@ import {
   resolveTrustedWorkflowIdentity,
   resolveVerifierIdentity,
   validateTrustedProducerIdentity,
+  verifyReceiptRecoveryAuthority,
 } from "./lib/release-evidence-identity.mjs";
 import { resolveReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
@@ -2150,7 +2149,11 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
   };
   return {
     validateChildReuse(selection, request, { deadlineMs } = {}) {
-      return validateReusableReleaseChild(selection, request, { immutableReads, deadlineMs });
+      return validateReusableReleaseChild(selection, request, {
+        immutableReads,
+        deadlineMs,
+        getJobLog: (id) => parentJobLog(id, normalizedRepository, immutableReads),
+      });
     },
     getWorkflowSource(sha, sourceWorkflowPath = ".github/workflows/full-release-validation.yml") {
       if (
@@ -2421,15 +2424,9 @@ async function validateStrictChildRun({
   );
   const parentLog = await client.getJobLog(parentJob.id);
   if (reused) {
-    const selectionSha256 = releaseChildReuseSha256(childReuse);
-    const witnesses = [
-      ...String(parentLog).matchAll(/\bFRV_CHILD_REUSE_SHA256=([a-f0-9]{64})\b/gu),
-    ];
-    if (witnesses.length !== 1 || witnesses[0][1] !== selectionSha256) {
-      throw new Error(`release child reuse adoption witness mismatch: ${child.name}`);
-    }
     validateReleaseChildDispatchBinding({
       child: plannedChild,
+      childReuse,
       coveragePolicy: parentEvidence.manifest.validationInputs?.coveragePolicy,
       log: parentLog,
       plannedRunAttempt: plannedChild.runAttempt,
@@ -2519,11 +2516,12 @@ async function validateStrictChildRun({
     status: run.status,
   };
   const targetVersion = parentEvidence.manifest.validationInputs?.targetVersion;
-  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion });
+  const targetSha = parentEvidence.manifest.targetSha;
+  const policy = evaluateReleaseChildPolicy({ child: policyChild, targetVersion, targetSha });
   if (
     run.repository?.full_name !== repository ||
     run.head_sha !== (plannedChild?.workflowSha ?? parentEvidence.manifest.workflowSha) ||
-    !terminalPolicyPass(policyChild, targetVersion)
+    !terminalPolicyPass(policyChild, targetVersion, targetSha)
   ) {
     throw new Error(`manifest child run does not pass release policy: ${child.name}`);
   }
@@ -3306,6 +3304,13 @@ export async function validateReleaseRunEvidence(
     !isDeepStrictEqual(rootEvidence.manifestJson.waivers ?? [], sortReleaseJsonValueKeys(waivers))
   ) {
     throw new Error("release manifest waivers differ from checked-in release tooling policy");
+  }
+  // Authenticate root failures against their own candidate above, then enforce
+  // the grant's destination binding even when changelog-only reuse is valid.
+  const destinationTargetSha =
+    reuseRequest?.targetSha ?? expectedTargetSha ?? currentEvidence.manifest.targetSha;
+  if (waivers.some((waiver) => waiver.targetSha && waiver.targetSha !== destinationTargetSha)) {
+    throw new Error("candidate-bound release waiver cannot qualify a different target SHA");
   }
   if (remainingExpectedRunAttempts?.size) {
     throw new Error(

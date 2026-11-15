@@ -2609,16 +2609,15 @@ describe("chat model controls", () => {
         ...(known ? { modelOverrides: { main: null } } : {}),
       });
       const trigger = getChatModelSelect(container);
-      expect(trigger.getAttribute("aria-busy")).toBe(String(!known));
+      expect(trigger.getAttribute("aria-busy")).toBe("false");
+      expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
+      expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
       if (known) {
         expect(trigger.textContent).toContain("gpt-5 · openai");
         expect(trigger.getAttribute("aria-label")).toBe("Chat model: gpt-5 · openai");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).toBeNull();
-        expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
         expect(container.querySelector("[data-chat-model-option]")).toBeNull();
       } else {
         expect(trigger.getAttribute("aria-disabled")).toBe("false");
-        expect(trigger.querySelector(".chat-controls__model-trigger-skeleton")).not.toBeNull();
         expect(trigger.textContent).not.toContain("Loading models");
         const effort = container.querySelector(".chat-controls__effort-picker");
         expect(effort?.getAttribute("aria-hidden")).toBe("true");
@@ -2989,16 +2988,16 @@ describe("chat model controls", () => {
       onThinkingSelect,
     });
 
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLElement>("[data-chat-model-option]"),
-    ).find(
-      (button) =>
-        button.getAttribute("aria-selected") === "false" && button.dataset.chatModelOption !== "",
+    const modelOption = expectDefined(
+      container.querySelector<HTMLElement>(
+        '[data-chat-model-option]:not([data-chat-model-option=""])[aria-selected="false"]',
+      ),
+      "unselected model option",
     );
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
-    modelOption?.click();
+    expect(modelOption.getAttribute("role")).toBe("option");
+    modelOption.click();
     expect(onModelSelect).toHaveBeenCalledWith(
-      modelOption?.dataset.chatModelOption,
+      modelOption.dataset.chatModelOption,
       "main",
       undefined,
     );

@@ -204,7 +204,14 @@ export function rotateTranscriptGenerationInTransaction(
   database: OpenClawAgentDatabase,
   sessionId: string,
 ): string {
-  return writeTranscriptGeneration(database, sessionId, true);
+  const generation = writeTranscriptGeneration(database, sessionId, true);
+  const actor = readSessionActorTransactionState(database, { sessionId });
+  if (actor) {
+    // Later publication in this transaction must carry the rotated token.
+    actor.hot.transcript.version.generation = generation;
+    actor.hot.transcript.watermark.generation = generation;
+  }
+  return generation;
 }
 
 function writeTranscriptGeneration(

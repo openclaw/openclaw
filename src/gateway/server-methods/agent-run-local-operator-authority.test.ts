@@ -59,7 +59,6 @@ function admitAgent({
     runId: "run-local-operator",
     resolvedSessionKey: "agent:main:main",
     client: createClient(),
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
     ...overrides,
     request: { message: "create an automation", idempotencyKey: "run-local-operator", ...request },
@@ -72,7 +71,6 @@ it.each([
   ["ephemeral run", { resolvedSessionKey: "" }],
   ["spawned run", { spawnedBy: "agent:main:parent" }],
   ["external provenance", { inputProvenance: { kind: "external_user" } }],
-  ["cron continuation", { hasRestoredCronContinuation: true }],
   ["model run", { isOneShotModelRun: true }],
   ["internal handoff", { request: { internalRuntimeHandoffId: "handoff-1" } }],
   ["model-run request", { request: { modelRun: true } }],
@@ -235,7 +233,6 @@ it.each([
   ["spawned lineage", { spawnedBy: "agent:main:parent" }],
   ["input provenance", { inputProvenance: { kind: "external_user" } }],
   ["read-only client", { client: createClient({}, ["operator.read"]) }],
-  ["cron continuation client", { client: createClient({ cronRunContinuation: true }) }],
 ] as const)("rejects chat ingress from %s", (_label, overrides) => {
   expect(admitChat(overrides)).toBeUndefined();
 });

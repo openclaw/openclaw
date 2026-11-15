@@ -25,6 +25,13 @@ import {
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
 import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  OpenClawIdPrincipalChangedError,
+  openClawIdRecoveryPrincipalSchema,
+  openclawIdTunnelRolePolicy,
+  prepareOpenClawIdTunnelPrincipal,
+} from "./openclaw-id/tunnel-principal.js";
+import {
   GatewayOperatorAccessDeniedError,
   resumeGatewayOperatorAccessGrant,
 } from "./operator-access-policy.js";
@@ -160,6 +167,7 @@ function prepareRequesterPolicy(
 ) {
   const client = createSyntheticPluginRuntimeClient({
     operatorRoleActor: snapshot.actor,
+    openclawIdPrincipal: snapshot.openclawIdPrincipal,
     scopes: [...snapshot.scopes],
   });
   let retainedAuthority: PluginGatewayAccessAuthority | undefined;
@@ -183,14 +191,20 @@ function prepareRequesterPolicy(
     }
   };
   const assertRole = (profile: UserProfileAccessFacts | undefined, config: OpenClawConfig) => {
-    const role = profile
-      ? resolveOperatorRolePolicyForAssignment(
-          profile.profileId,
-          profile.assignedRole,
-          config,
-          profile.githubLogin ?? null,
-        )
-      : undefined;
+    const principal = snapshot.openclawIdPrincipal;
+    if (principal && !isOpenClawIdTunnelPrincipalCurrent(principal)) {
+      throw new GitHubPublicationRequesterUnavailableError();
+    }
+    const role =
+      openclawIdTunnelRolePolicy(principal) ??
+      (profile
+        ? resolveOperatorRolePolicyForAssignment(
+            profile.profileId,
+            profile.assignedRole,
+            config,
+            profile.githubLogin ?? null,
+          )
+        : undefined);
     if (
       !roleScopesAllow({
         role: "operator",
@@ -277,12 +291,10 @@ function prepareRequesterPolicy(
     const profile = assertPrepared(config);
     if (profile) {
       try {
-        const authority = resumeGatewayOperatorAccessGrant(
-          profile,
-          config,
-          snapshot.grant,
-          retainedAuthority,
-        );
+        const authority = resumeGatewayOperatorAccessGrant(profile, config, snapshot.grant, {
+          retained: retainedAuthority,
+          openclawIdPrincipal: snapshot.openclawIdPrincipal,
+        });
         retainedAuthority = authority;
         onPolicy?.(authority);
       } catch (error) {
@@ -376,6 +388,10 @@ export async function prepareGitHubPublicationRequesterV2(
         });
       }
     }
+    const principal =
+      source?.authority.openclawIdPrincipal?.kind === "member"
+        ? openClawIdRecoveryPrincipalSchema.parse(source.authority.openclawIdPrincipal)
+        : undefined;
     const snapshot: GitHubPublicationRequesterSnapshot = Object.freeze({
       version: 1,
       actor: Object.freeze(
@@ -384,6 +400,14 @@ export async function prepareGitHubPublicationRequesterV2(
           : { kind: "system" as const },
       ),
       scopes: Object.freeze([...(source?.authority.scopes ?? options.client.connect.scopes ?? [])]),
+      ...(principal
+        ? {
+            openclawIdPrincipal: Object.freeze({
+              ...principal,
+              authority: Object.freeze(principal.authority),
+            }),
+          }
+        : {}),
       grant,
     });
     let policyAuthority: PluginGatewayAccessAuthority | undefined;
@@ -511,6 +535,19 @@ export async function restoreGitHubPublicationRequester(
   const snapshot = decodeGitHubPublicationRequester(json);
   if (!snapshot) {
     throw new GitHubPublicationRequesterUnavailableError();
+  }
+  if (snapshot.openclawIdPrincipal) {
+    try {
+      await prepareOpenClawIdTunnelPrincipal(snapshot.openclawIdPrincipal);
+    } catch (error) {
+      if (error instanceof OpenClawIdPrincipalChangedError) {
+        throw new GitHubPublicationRequesterUnavailableError();
+      }
+      throw new GitHubPublicationRecoveryPendingError(
+        "GitHub publication membership is unavailable; retry recovery after membership storage is ready.",
+        { cause: error },
+      );
+    }
   }
   let identity: PreparedProfileIdentity | undefined;
   let sessionFacts: PreparedPublicationSession | undefined;

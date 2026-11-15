@@ -1,6 +1,6 @@
-import { registerHooks } from "node:module";
 import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { MIGRATED_FIXTURE_NO_SERVICE } from "./update-command-migrated-fixture-entrypoint.test-support.js";
+import { registerUpdateFixtureModuleOverrides } from "./update-module-overrides.test-support.js";
 
 const scratch = process.env.OPENCLAW_STATE_DIR;
 const runtimeEntry = process.argv.splice(2, 1)[0];
@@ -91,16 +91,5 @@ replace(
 );
 // Keep the candidate, executor delegation, recovery recording, and terminal ledger real.
 // This fencing fixture owns no native service; probing the host can outlive its test.
-registerHooks({
-  load(url, context, nextLoad) {
-    const replacement = overrides.get(url);
-    return replacement === undefined
-      ? nextLoad(url, context)
-      : {
-          format: "module",
-          source: `export * from ${JSON.stringify(url + "?fixture-original")};\n${replacement}`,
-          shortCircuit: true,
-        };
-  },
-});
+registerUpdateFixtureModuleOverrides(overrides);
 await import("../../infra/update-migrated-finalize.worker.js");

@@ -15,7 +15,7 @@ afterEach(() => vi.restoreAllMocks());
 
 it.each(["renewed", "replaced", "expired", "refused"] as const)(
   "verifies without pinning WAL (%s)",
-  (change) => {
+  async (change) => {
     let now = 10_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const databasePath = path.join(tempDirs.make("lease-verify-"), "state.sqlite");
@@ -89,7 +89,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
       }
       expect(db.isTransaction).toBe(false);
     } finally {
-      admission.finish();
+      await admission.finish();
       peer.close();
       db.close();
     }

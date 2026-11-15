@@ -30,15 +30,17 @@ import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 const endpointPreparation = vi.hoisted(() => ({
   beforeLookup: undefined as (() => void) | undefined,
 }));
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: (...args: Parameters<typeof actual.lookup>) => {
       endpointPreparation.beforeLookup?.();
       return actual.lookup(...args);
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 function createOriginatingRun(

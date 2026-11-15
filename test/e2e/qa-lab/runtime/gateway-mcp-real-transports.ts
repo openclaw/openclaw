@@ -543,7 +543,6 @@ async function runGatewaySmokeProof(options: ProducerOptions): Promise<string> {
   try {
     const gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,
@@ -601,7 +600,6 @@ async function runMcpGatewayStartupRetryProof(options: ProducerOptions): Promise
     };
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
-      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,

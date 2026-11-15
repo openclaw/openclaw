@@ -63,6 +63,13 @@ export function bindOwnerApprovalNotifications(gateway: ApplicationGateway) {
             durationMs: 30_000,
             onAction: () => openDevices(client),
           }),
+        () =>
+          showToast({
+            severity: "info",
+            message: t("openclawId.memberDeviceAddedNotice"),
+            description: t("openclawId.memberDeviceAddedNoticeBody"),
+            durationMs: 30_000,
+          }),
       );
     })
     .catch((error: unknown) => {

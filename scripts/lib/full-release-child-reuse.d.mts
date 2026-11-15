@@ -4,6 +4,8 @@ export interface ReusableReleaseChildRequest {
   workflowSha: string;
   role: string;
   inputs: Record<string, string | boolean | number>;
+  /** Candidate version verified by receipt recovery before applying release policy. */
+  policyTargetVersion?: string;
   /** Exclude children dispatched by this parent run. */
   excludeRunId?: string;
 }
@@ -36,6 +38,7 @@ export interface ReusableReleaseChildDependencies {
     typeof import("./release-evidence-replay.mjs").createReleaseEvidenceReplay
   >;
   report?: (message: string) => void;
+  getJobLog?: (jobId: number) => unknown;
   github?: (endpoint: string) => Promise<unknown>;
   downloadArchive?: (input: Record<string, unknown>) => Promise<{
     artifactMetadata: unknown;

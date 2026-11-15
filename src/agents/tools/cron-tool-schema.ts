@@ -5,6 +5,7 @@ import {
   AutomationOutcomeSchema,
   AutomationResultSummarySchema,
 } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CyberAccessProgramSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
@@ -430,6 +431,12 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             ),
             Type.Null(),
           ]),
+        ),
+        cyberAccessProgram: Type.Optional(
+          Type.Union([CyberAccessProgramSchema, Type.Null()], {
+            description:
+              "Access for this scheduled agent turn: standard, daybreak_blue, or daybreak_red. Subject to current role and account grants at execution. Null clears the override.",
+          }),
         ),
         idleOnly: Type.Optional(
           Type.Union([Type.Boolean(), Type.Null()], {

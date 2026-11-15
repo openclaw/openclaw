@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-inputs.ts";
+import { createPendingSteerLookup, type PendingSteer } from "../chat-pending-input-display.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { createChatMessageHarness, buildItems } from "./chat-message-render.test-support.tsx";
