@@ -1,5 +1,6 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
 import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
+import { readHostExecMemory } from "../../process/child-memory.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { isSessionRunActiveForKey } from "../../sessions/session-controller.queries.js";
@@ -38,15 +39,19 @@ const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
 
 /**
  * How many more runs the memory free now could hold, at the per-run estimate. Host memory counts
- * reclaimable cache as free. Under a container or cgroup limit, the Gateway's resident memory
- * counts against that limit: the cgroup's own usage includes page cache the kernel would reclaim,
- * so on a long-running Gateway it reads as nearly full.
+ * reclaimable cache as free, and the commands jobs run as used. Under a container or cgroup limit,
+ * the Gateway and its watched exec commands count against that limit: the cgroup's own usage
+ * includes page cache the kernel would reclaim, so on a long-running Gateway it reads as nearly
+ * full. Commands also stay within the exec memory budget, past which the exec guard kills them.
  */
 export function resolveCronFreeMemoryRuns(): number {
+  const exec = readHostExecMemory();
+  const commands = exec?.usedBytes ?? 0;
   const limit = process.constrainedMemory();
   const free = Math.min(
     readHostFreeMemoryBytes(),
-    limit > 0 ? limit - process.memoryUsage.rss() : Infinity,
+    limit > 0 ? limit - process.memoryUsage.rss() - commands : Infinity,
+    exec ? exec.budgetBytes - commands : Infinity,
   );
   return Math.max(0, free) / RUN_MEMORY_BYTES;
 }
