@@ -78,14 +78,19 @@ it("does not treat business title arguments as activity descriptions", async () 
   expect(container.querySelector(".chat-tool-row__title")).toBeNull();
 });
 
-it("keeps multiline command previews readable and bounded without changing the source", async () => {
-  const command = "printf '\n--- recovery ---\n'\ncat recovery.md\n" + "echo example\n".repeat(100);
-  const card = { id: "multiline-command", name: "exec", args: { command } };
+it.each([
+  [
+    "printf '\n--- recovery ---\n'\ncat recovery.md\n" + "echo example\n".repeat(100),
+    "printf ' --- recovery --- ' cat recovery.md",
+  ],
+  [`printf ${"long argument ".repeat(25)}`, "printf long argument"],
+])("keeps command previews bounded without changing the source: %s", async (command, prefix) => {
+  const card = { id: "multiline-command", name: "exec", args: { command }, completed: true };
   const container = await mountCard(card, { messageKey: "multiline-command" });
   const preview = text(container, ".chat-tool-row__cmd") ?? "";
-  expect(preview).toContain("printf ' --- recovery --- ' cat recovery.md");
+  expect(preview).toContain(prefix);
   expect(preview.length).toBeLessThanOrEqual(200);
-  expect(text(container, ".chat-tool-msg-body")).toContain(command);
+  expect(container.querySelector(".chat-tool-term__cmd code")?.textContent).toBe(command);
 });
 
 it("uses names already available to chat rows without exposing unresolved routing keys", async () => {

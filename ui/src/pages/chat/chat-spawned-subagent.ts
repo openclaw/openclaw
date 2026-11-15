@@ -127,12 +127,6 @@ export function ownSessionLaunchCalls(cards: readonly ToolCard[]): Set<string> {
   );
 }
 
-/** The name a `sessions_spawn` call gave its subagent, shown instead of its assignment. */
-export function spawnedSubagentLabel(card: LaunchCard): string | undefined {
-  const launch = readLaunch(card);
-  return launch && !launch.ownSession ? launch.label : undefined;
-}
-
 /**
  * The session a call starts or addresses by key: a launch, a message, a history
  * read, or a steer or stop. Undefined when the call names no session by key.

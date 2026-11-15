@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import type { PersonActivityRouting } from "../../../components/person-activity-link.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import type { ForwardedAvatarOptions } from "../chat-avatar-view.tsx";
@@ -5,7 +6,6 @@ import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts
 import type { PendingSteer } from "../chat-pending-inputs.ts";
 import type { TurnRecap } from "../chat-progress.ts";
 import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import type { MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import type { MessageReactionOptions } from "./chat-message-reaction-model.ts";
 import type { ChatSendStatusActions } from "./chat-message-send-status-view.tsx";
@@ -58,6 +58,12 @@ export type RenderMessageGroupOptions = Omit<
     latestAssistant?: boolean;
     pendingSteer?: (message: unknown) => PendingSteer | undefined;
   } & MessageReactionOptions;
+
+export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
+  frameContent?: JSX.Element[];
+  frameHeader?: boolean;
+  frameFooter?: boolean;
+};
 
 export function resolveFileLinkOwnerOptions(
   group: MessageGroup,

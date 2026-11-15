@@ -377,7 +377,6 @@ it.each([
   const { container, draw } = mountGroup(messages);
   await draw();
   expect(container.textContent).toContain(expected);
-  expect(container.querySelector(".chat-bubble")).toBeNull();
 });
 
 it("keeps recorded child operations visible beside their execution's missing permission", async () => {

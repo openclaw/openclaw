@@ -39,7 +39,7 @@ import type {
   ActivityOperationProps,
   ActivityOperationGroup,
 } from "./chat-message-bubble-options.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
 
@@ -294,7 +294,7 @@ type ActivityEntries = (
   groups: () => readonly MessageGroupData[],
 ) => JSX.Element;
 
-export function ActivityGroupBody(props: {
+function ActivityGroupBody(props: {
   state: ActivityState;
   groups: readonly MessageGroupData[];
   options: NativeMessageGroupOptions;

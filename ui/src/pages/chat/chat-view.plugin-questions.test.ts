@@ -176,9 +176,7 @@ it.each([
     await waitForSolid(() => {
       expect(count("openclaw-chat-question-panel")).toBe(1);
       expect(count('textarea[aria-label="Custom draft"]')).toBe(mode === "nondelegating" ? 1 : 0);
-      expect(count(".agent-chat__composer-combobox textarea")).toBe(
-        mode === "nondelegating" ? 0 : 1,
-      );
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(0);
     });
     expect(reportError).toHaveBeenCalledTimes(mode === "failing" ? 1 : 0);
     const answer = provider.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
@@ -201,6 +199,9 @@ it.each([
         expect(submit).not.toHaveBeenCalled();
       }
       expect(provider.querySelector("openclaw-chat-question-panel")).toBeNull();
+      expect(count(".agent-chat__composer-combobox textarea")).toBe(
+        mode === "nondelegating" ? 0 : 1,
+      );
       expect(provider.querySelector(".chat-question-summary")?.textContent).toContain(
         action === "submit" ? "New contributors" : "Dismissed",
       );

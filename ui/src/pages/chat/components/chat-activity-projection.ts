@@ -23,8 +23,10 @@ import type {
   ActivityOperationProps,
   ActivityOperationContext,
 } from "./chat-message-bubble-options.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
-import { resolveFileLinkOwnerOptions } from "./chat-message-group-options.ts";
+import {
+  resolveFileLinkOwnerOptions,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-options.ts";
 
 function activityEntryGroupKey(
   group: MessageGroupData,

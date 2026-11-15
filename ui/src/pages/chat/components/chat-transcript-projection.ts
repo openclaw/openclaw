@@ -25,7 +25,7 @@ import {
 } from "../chat-thread.ts";
 import { readAsyncQuestions } from "./chat-async-question-content.ts";
 import { buildChatArchiveNotice } from "./chat-divider.ts";
-import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+import type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 import { assistantMediaPolicyKey } from "./chat-message-media.ts";
 import type { StreamGroupOptions } from "./chat-message-stream-view.tsx";
 import { projectRealtimeTalkConversation } from "./chat-realtime-controls.ts";

@@ -1,0 +1,6 @@
+# Tool-activity lifecycle coverage after consolidating command preview tests and
+# removing obsolete renderer assertions and tests for an unused argument helper.
+# Distinct owner contracts cover nested calls, execution outcomes, permission
+# boundaries, file ownership, disclosure/focus, live/history/steer identity,
+# persistent browser-cache reload, and inline/composer question continuity.
+1278

@@ -3,7 +3,6 @@ import { safeParseJson, safeParseJsonRecord } from "@openclaw/normalization-core
 import {
   asNullableObjectRecord as readRecord,
   asNullableRecord,
-  isRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
@@ -326,33 +325,6 @@ export function formatCollapsedToolPreviewText(value: string | undefined): strin
     return undefined;
   }
   return truncateUtf16Safe(normalized, 120);
-}
-
-const TOOL_ARGUMENT_PREVIEW_KEYS = [
-  "message",
-  "prompt",
-  "task",
-  "query",
-  "text",
-  "description",
-] as const;
-
-/** First meaningful user-authored line for compact generic tool rows. */
-export function resolveCollapsedToolArgumentPreview(args: unknown): string | undefined {
-  if (!isRecord(args)) {
-    return undefined;
-  }
-  for (const key of TOOL_ARGUMENT_PREVIEW_KEYS) {
-    const value = args[key];
-    if (typeof value !== "string") {
-      continue;
-    }
-    const preview = formatCollapsedToolPreviewText(value.trimStart().split(/[\r\n]/, 1)[0]);
-    if (preview) {
-      return preview;
-    }
-  }
-  return undefined;
 }
 
 let nextPreviewRevision = 0;

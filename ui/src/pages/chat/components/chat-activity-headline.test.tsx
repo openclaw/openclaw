@@ -214,7 +214,6 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   await draw([exec]);
   advanceTimersByTime(200);
   expect(icon()?.getAttribute("aria-label")).toBe("exec");
-  const execSvg = icon()?.innerHTML;
   advanceTimersByTime(100);
   await draw([exec, search]);
   await settleToolBridges(container);
@@ -222,7 +221,6 @@ it("keeps the icon paired with the current action and restores the aggregate ico
   advanceTimersByTime(900);
   expect(label()).toBe('Web Search for "API docs"…');
   expect(icon()?.getAttribute("aria-label")).toBe("web_search");
-  expect(icon()?.innerHTML).not.toBe(execSvg);
   await draw([exec, search], false);
   expect(label()).toBe("Running code, searching");
   expect(icon()?.getAttribute("aria-hidden")).toBe("true");

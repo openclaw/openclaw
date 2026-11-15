@@ -1,4 +1,3 @@
-import type { JSX } from "@solidjs/web";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
@@ -17,7 +16,7 @@ import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import {
   resolveFileLinkOwnerOptions,
-  type RenderMessageGroupOptions,
+  type NativeMessageGroupOptions,
 } from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
@@ -31,12 +30,6 @@ import {
 } from "./chat-message-sender.ts";
 import { extractGroupMeta } from "./chat-message-timestamp-view.tsx";
 import { NO_REPLY_LINE, resolveGroupReplyLine } from "./chat-reply-attribution.ts";
-
-export type NativeMessageGroupOptions = Omit<RenderMessageGroupOptions, "frameContent"> & {
-  frameContent?: JSX.Element[];
-  frameHeader?: boolean;
-  frameFooter?: boolean;
-};
 
 export type GroupMessage = MessageGroupData["messages"][number];
 

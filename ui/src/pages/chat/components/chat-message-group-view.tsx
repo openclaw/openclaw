@@ -23,11 +23,13 @@ import { RewindButton } from "./chat-message-confirmation-view.tsx";
 import {
   type GroupMessage,
   type MessageGroupFrame,
-  type NativeMessageGroupOptions,
   prepareGroupMessage,
   prepareMessageGroupFrame,
 } from "./chat-message-group-frame.ts";
-import { resolveFileLinkOwnerOptions } from "./chat-message-group-options.ts";
+import {
+  resolveFileLinkOwnerOptions,
+  type NativeMessageGroupOptions,
+} from "./chat-message-group-options.ts";
 import {
   FULL_MESSAGE_RETRY_REVISION_LIMIT,
   hasMessageActionButtons,
@@ -51,7 +53,7 @@ import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
 import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
-export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
+export type { NativeMessageGroupOptions } from "./chat-message-group-options.ts";
 
 function MessageActionsRow(props: {
   messageKey?: string;

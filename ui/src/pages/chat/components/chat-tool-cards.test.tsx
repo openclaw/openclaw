@@ -11,10 +11,7 @@ import {
 import { t } from "../../../i18n/index.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import type { DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import {
-  resolveCollapsedToolArgumentPreview,
-  extractToolCardsCached,
-} from "../../../lib/chat/tool-cards.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
 import { mountSolid as mountComponent } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
@@ -351,19 +348,6 @@ it.each(["structured", "serialized"])("keeps %s captions out of collapsed rows",
   const diagnostics = query(container, ".chat-tool-msg-body");
   expect(diagnostics?.textContent).toContain("BEGIN_OPENCLAW_INTERNAL_CONTEXT");
   expect(diagnostics?.textContent).toContain("Private synthetic caption.");
-});
-
-it("previews common intent arguments across generic tools", async () => {
-  expect(resolveCollapsedToolArgumentPreview({ task: "Review the PR" })).toBe("Review the PR");
-  expect(resolveCollapsedToolArgumentPreview({ prompt: "Draw a crab" })).toBe("Draw a crab");
-  expect(resolveCollapsedToolArgumentPreview({ text: "First line\nSecond line" })).toBe(
-    "First line",
-  );
-  expect(resolveCollapsedToolArgumentPreview({ query: " \r\rSecond line" })).toBe("Second line");
-  const credential = ["sk", "1234567890abcdef"].join("-");
-  expect(
-    resolveCollapsedToolArgumentPreview({ description: `OPENAI_API_KEY=${credential}` }),
-  ).toContain(credential);
 });
 
 it("marks expanded raw block-art output so QR whitespace uses block-art rendering", async () => {
@@ -935,20 +919,6 @@ it("previews live command output without inferring completion and retains detail
   await mountCard(card, { ...options, inlineCommands: undefined }, container);
   expect(query(container, ".chat-command-trail__preview")).toBeNull();
 });
-
-it.each(["printf a\n  printf b", `printf ${"long argument ".repeat(25)}`])(
-  "keeps the complete command available when its row uses a compact preview",
-  async (command) => {
-    const container = await mountTool("exec", {
-      args: { command },
-      inputText: JSON.stringify({ command }),
-      outputText: "Result preserved",
-      completed: true,
-    });
-    expect(textOf(container, ".chat-tool-term__cmd code")).toBe(command);
-    expect(container.textContent).toContain("Result preserved");
-  },
-);
 
 it("opens the original execution receipt without repeating it in the expanded child", async () => {
   const execution: ToolCard = {

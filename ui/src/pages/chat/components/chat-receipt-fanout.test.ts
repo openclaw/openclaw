@@ -88,7 +88,12 @@ describe("receipt fanout", () => {
     rerender();
     transcript.start();
     await settleToolBridges(container);
-    click(container, ".chat-activity-group__summary");
+    const summary = await waitForSolid(() => {
+      const element = required(container, ".chat-activity-group__summary");
+      expect(element.closest("[hidden]")).toBeNull();
+      return element;
+    });
+    summary.click();
     await settleToolBridges(container);
     const tools = () => [
       ...container.querySelectorAll<HTMLElement>(".chat-tool-msg-collapse--manual"),
