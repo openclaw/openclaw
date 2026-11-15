@@ -121,6 +121,13 @@ export async function resolveGatewayScopedTools(
     nativeCronCreatorToolAllowlist?: readonly string[];
     disablePluginTools?: boolean;
     gatewayRequestedTools?: string[];
+    /**
+     * Exact tool names a loopback grant can still surface. Narrows the plugin
+     * allowlist before construction so plugins that cannot supply any granted
+     * name are never loaded. The post-resolution grant filter stays
+     * authoritative; this cap only removes unreachable factory work.
+     */
+    constructionToolsAllow?: readonly string[];
     /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
     includeNodeExecTool?: boolean;
     /** Current node inventory predicate; evaluated with the resolved exec binding. */
@@ -300,6 +307,9 @@ export async function resolveGatewayScopedTools(
     completionHandoff ? undefined : inheritedToolPolicy,
     requestedToolPolicy,
   ];
+  const constructionToolPolicy = params.constructionToolsAllow?.length
+    ? { allow: [...params.constructionToolsAllow] }
+    : undefined;
   const gatewayDenyPolicies = [
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
@@ -450,7 +460,9 @@ export async function resolveGatewayScopedTools(
     authProfileStore: params.authProfileStore,
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     sandboxed,
-    pluginToolAllowlist: collectExplicitAllowlist(catalogPolicies),
+    pluginToolAllowlist: collectExplicitAllowlist(
+      constructionToolPolicy ? [...catalogPolicies, constructionToolPolicy] : catalogPolicies,
+    ),
     pluginToolDenylist: catalogDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
