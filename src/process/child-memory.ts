@@ -158,11 +158,17 @@ const owner = resolveGlobalSingleton(
     timer?: NodeJS.Timeout;
     sampling: boolean;
     assessmentPending: boolean;
-    largestCommand?: { bytes: number; atMs: number };
+    /**
+     * Command samples within the window, oldest first, each larger than every later one: the
+     * first is the window's largest, and when it expires the next largest takes its place. At
+     * most the samples of ten minutes; usually a few.
+     */
+    commandSamples: Array<{ bytes: number; atMs: number }>;
   } => ({
     watches: new Set(),
     sampling: false,
     assessmentPending: false,
+    commandSamples: [],
   }),
 );
 
@@ -190,30 +196,38 @@ export function readHostExecMemory():
   | { budgetBytes: number; usedBytes: number; largestCommandBytes: number }
   | undefined {
   const budget = getHostExecMemoryBudget();
-  const largest = owner.largestCommand;
+  dropExpiredCommandSamples(performance.now());
   return (
     budget && {
       budgetBytes: budget.memoryBytes,
       usedBytes: totalUsage().memoryBytes,
-      largestCommandBytes:
-        largest && performance.now() - largest.atMs <= LARGEST_COMMAND_WINDOW_MS
-          ? largest.bytes
-          : 0,
+      largestCommandBytes: owner.commandSamples[0]?.bytes ?? 0,
     }
   );
 }
 
-/** Keeps the largest sample within the window; an older one gives way to any new sample. */
+function dropExpiredCommandSamples(nowMs: number): void {
+  const samples = owner.commandSamples;
+  let expired = 0;
+  while (expired < samples.length && nowMs - samples[expired]!.atMs > LARGEST_COMMAND_WINDOW_MS) {
+    expired++;
+  }
+  samples.splice(0, expired);
+}
+
+/** A sample replaces the older ones it matches or exceeds, which can no longer be the largest. */
 function recordCommandSample({ pids, extra }: Snapshot): void {
   let bytes = extra.memoryBytes;
   for (const usage of pids.values()) {
     bytes += usage.memoryBytes;
   }
   const atMs = performance.now();
-  const largest = owner.largestCommand;
-  if (!largest || bytes >= largest.bytes || atMs - largest.atMs > LARGEST_COMMAND_WINDOW_MS) {
-    owner.largestCommand = { bytes, atMs };
+  const samples = owner.commandSamples;
+  while (samples.length > 0 && samples.at(-1)!.bytes <= bytes) {
+    samples.pop();
   }
+  samples.push({ bytes, atMs });
+  dropExpiredCommandSamples(atMs);
 }
 
 function formatLimit(observed: HostExecMemoryUsage, budget: HostExecMemoryBudget): string {
