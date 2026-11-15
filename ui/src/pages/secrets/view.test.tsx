@@ -26,6 +26,7 @@ function mount(
   const context = { gateway: source.gateway } as ApplicationContext;
   const state = Object.assign(new SecretsPageState(context, vi.fn()), overrides);
   state.store.entries = typeof entries === "function" ? entries() : entries;
+  state.store.loaded = true;
   const read = typeof entries === "function" ? entries : () => state.store.entries;
   return mountSolid(() => (
     <SecretsStore
