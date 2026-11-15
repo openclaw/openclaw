@@ -47,6 +47,7 @@ const ONE_MINUTE_MS = 60 * 1_000;
 const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
 const SWEEP_INTERVAL_MS = 5 * ONE_MINUTE_MS;
 const APPROVAL_DEFAULT_TTL_MS = 30 * ONE_MINUTE_MS;
+const QUEUE_LIMIT = 1_000;
 
 type BridgeInternals = Pick<
   OpenClawChannelBridge,
@@ -217,6 +218,53 @@ describe("OpenClawChannelBridge", () => {
     await subject.handleClaudePermissionRequest({ ...permissionRequest, requestId: "fghij" });
     await requestApproval(subject, { id: "approval-after-close" });
     expectDrained(subject);
+  });
+  test("bounds pending Claude permissions at the queue limit under unique request floods", async () => {
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const total = QUEUE_LIMIT + 200;
+    for (let index = 0; index < total; index += 1) {
+      await subject.handleClaudePermissionRequest({
+        ...permissionRequest,
+        requestId: `perm-${index}`,
+      });
+    }
+    expect(subject.queue.length).toBe(QUEUE_LIMIT);
+    expect(subject.pendingClaudePermissions.size).toBe(QUEUE_LIMIT);
+    expect(subject.pendingClaudePermissions.has("perm-0")).toBe(false);
+    expect(subject.pendingClaudePermissions.has(`perm-${total - 1}`)).toBe(true);
+    expect(writeSpy.mock.calls).toEqual([
+      [
+        `openclaw mcp: pending Claude permission limit ${QUEUE_LIMIT} reached; dropping oldest entries\n`,
+      ],
+    ]);
+
+    await subject.close();
+
+    expectDrained(subject);
+  });
+  test("re-arms the pending Claude permission limit warning after the pending map drains", async () => {
+    const writeSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const flood = async (prefix: string, count: number) => {
+      for (let index = 0; index < count; index += 1) {
+        await subject.handleClaudePermissionRequest({
+          ...permissionRequest,
+          requestId: `${prefix}-${index}`,
+        });
+      }
+    };
+    await flood("perm", QUEUE_LIMIT + 1);
+    expect(writeSpy.mock.calls).toHaveLength(1);
+
+    // Continued overflow while entries stay pending stays low-noise.
+    await flood("more", 50);
+    expect(writeSpy.mock.calls).toHaveLength(1);
+
+    // The TTL sweep drains the map and re-arms the warning.
+    vi.advanceTimersByTime(ONE_HOUR_MS + SWEEP_INTERVAL_MS);
+    expectDrained(subject);
+
+    await flood("again", QUEUE_LIMIT + 1);
+    expect(writeSpy.mock.calls).toHaveLength(2);
   });
 
   test("a rejected gateway event includes error detail with verbose on", async () => {

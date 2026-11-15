@@ -47,6 +47,8 @@ type NotificationDeliveryOutcome = "delivered" | "unavailable" | "failed";
 
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+// Pending Claude permission notices keep the same live bound as the event queue.
+const PENDING_CLAUDE_PERMISSION_LIMIT = QUEUE_LIMIT;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -59,6 +61,7 @@ export class OpenClawChannelBridge {
   private readonly queue: QueueEvent[] = [];
   private readonly pendingWaiters = new Set<PendingWaiter>();
   private readonly pendingClaudePermissions = new Map<string, number>();
+  private pendingPermissionLimitWarned = false;
   private readonly pendingApprovals = new Map<string, PendingApprovalEntry>();
   private pendingSweepInterval: NodeJS.Timeout | null = null;
   private server: McpServer | null = null;
@@ -341,7 +344,11 @@ export class OpenClawChannelBridge {
     if (this.closed) {
       return;
     }
+    // Re-observing a request moves it to the newest slot so the bound and the TTL sweep
+    // both judge it by its latest observation.
+    this.pendingClaudePermissions.delete(params.requestId);
     this.pendingClaudePermissions.set(params.requestId, Date.now());
+    this.trimPendingClaudePermissions();
     this.ensurePendingSweeper();
     this.enqueue({
       cursor: ++this.cursor,
@@ -425,6 +432,25 @@ export class OpenClawChannelBridge {
     }
   }
 
+  /** Keep live pending permission state bounded the same way the event queue is. */
+  private trimPendingClaudePermissions(): void {
+    let dropped = 0;
+    while (this.pendingClaudePermissions.size > PENDING_CLAUDE_PERMISSION_LIMIT) {
+      const oldest = this.pendingClaudePermissions.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.pendingClaudePermissions.delete(oldest);
+      dropped += 1;
+    }
+    if (dropped > 0 && !this.pendingPermissionLimitWarned) {
+      this.pendingPermissionLimitWarned = true;
+      process.stderr.write(
+        `openclaw mcp: pending Claude permission limit ${PENDING_CLAUDE_PERMISSION_LIMIT} reached; dropping oldest entries\n`,
+      );
+    }
+  }
+
   private trackApproval(kind: ChannelApprovalKind, payload: Record<string, unknown>): void {
     if (this.closed) {
       return;
@@ -466,6 +492,10 @@ export class OpenClawChannelBridge {
       if (now - createdAtMs >= PENDING_CLAUDE_PERMISSION_TTL_MS) {
         this.pendingClaudePermissions.delete(id);
       }
+    }
+    // Draining the pending map re-arms the low-noise limit warning.
+    if (this.pendingClaudePermissions.size === 0) {
+      this.pendingPermissionLimitWarned = false;
     }
     for (const [id, entry] of this.pendingApprovals) {
       const expiry =
