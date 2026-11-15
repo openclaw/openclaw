@@ -70,6 +70,38 @@ function resolveOpenClawIdPairingScopes(
   return policy ? intersectOperatorScopes(requestedScopes, policy.scopes) : requestedScopes;
 }
 
+/**
+ * Opt-in (gateway.auth.trustedProxy.narrowToDeviceGrant): an approved CLI or TUI
+ * device behind the trusted proxy that asks for more than its paired grant
+ * connects within that grant instead of filing a scope-upgrade request. The
+ * hello reply reports the narrowed scopes, which is how a newly approved device
+ * learns its grant. Returns null when the lane does not apply or nothing fits.
+ */
+export function resolveTrustedProxyDeviceGrantScopes(params: {
+  state: AuthenticatedGatewayConnect;
+  configSnapshot: GatewayConnectPhaseContext["configSnapshot"];
+  hasBrowserOriginHeader: boolean;
+  pairedDevice: Awaited<ReturnType<typeof getPairedDevice>> | null;
+  devicePublicKey: string;
+  scopes: string[];
+}): string[] | null {
+  const { state, pairedDevice } = params;
+  if (
+    params.configSnapshot.gateway?.auth?.trustedProxy?.narrowToDeviceGrant !== true ||
+    state.authMethod !== "trusted-proxy" ||
+    state.role !== "operator" ||
+    state.isBrowserOperatorUi ||
+    state.isWebchat ||
+    params.hasBrowserOriginHeader ||
+    pairedDevice?.publicKey !== params.devicePublicKey ||
+    !listApprovedPairedDeviceRoles(pairedDevice).includes("operator")
+  ) {
+    return null;
+  }
+  const scopes = intersectOperatorScopes(params.scopes, resolvePairedAccessScopes(pairedDevice));
+  return scopes.length > 0 ? scopes : null;
+}
+
 /** One approval lane per pairing request; exactly one wins, "manual" prompts. */
 export type PairingApprovalPlan = {
   /** Request is created silent and immediately self-approved by its lane. */

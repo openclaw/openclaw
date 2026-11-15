@@ -65,6 +65,7 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Trusted Proxy Device Auto-Approval Enabled",
   "gateway.auth.trustedProxy.deviceAutoApprove.scopes": "Trusted Proxy Device Auto-Approval Scopes",
+  "gateway.auth.trustedProxy.narrowToDeviceGrant": "Trusted Proxy Narrow To Device Grant",
   "gateway.roles": "Gateway Operator Roles",
   "gateway.roles.default": "Default Operator Role (Enables Enforcement)",
   "gateway.roles.assignments": "Operator Role Assignments",

@@ -130,6 +130,7 @@ function deviceIdentityPath(label: string): string {
 async function writeGatewayAuthConfig(params: {
   mode: "token" | "trusted-proxy";
   deviceAutoApprove?: { enabled?: boolean; scopes?: string[] };
+  narrowToDeviceGrant?: boolean;
 }): Promise<void> {
   testState.gatewayAuth = undefined;
   await writeConfigFile({
@@ -147,6 +148,7 @@ async function writeGatewayAuthConfig(params: {
               }
             : {}),
           ...(params.deviceAutoApprove ? { deviceAutoApprove: params.deviceAutoApprove } : {}),
+          ...(params.narrowToDeviceGrant ? { narrowToDeviceGrant: true } : {}),
         },
       },
       trustedProxies: ["127.0.0.1"],
@@ -253,7 +255,7 @@ async function connectOperatorUi(params: {
     params.trustedProxy === false
       ? { origin: BROWSER_ORIGIN, "x-forwarded-for": "203.0.113.50" }
       : trustedProxyHeaders(params.declaredProxyScopes);
-  if (client.mode === GATEWAY_CLIENT_MODES.UI) {
+  if (client.mode === GATEWAY_CLIENT_MODES.UI || client.mode === GATEWAY_CLIENT_MODES.CLI) {
     delete headers.origin;
   }
   return withBrowserWs(params.port, headers, (ws) =>
@@ -589,5 +591,72 @@ describe("trusted-proxy operator device auto-approval", () => {
     const paired = await getPairedDevice(identity.deviceId);
     expect(paired?.approvedScopes).toEqual(["operator.read"]);
     expect(paired?.approvedVia).not.toBe("trusted-proxy");
+  });
+});
+
+describe("trusted-proxy narrowToDeviceGrant", () => {
+  const SESSION_GRANT = ["operator.sessions.write"];
+  const TUI_CLIENT = { ...NATIVE_UI_CLIENT, id: GATEWAY_CLIENT_IDS.TUI };
+  const CLI_CLIENT = {
+    ...NATIVE_UI_CLIENT,
+    id: GATEWAY_CLIENT_IDS.CLI,
+    mode: GATEWAY_CLIENT_MODES.CLI,
+  };
+  const TUI_SCOPES = ["operator.admin", "operator.read", "operator.write", "operator.approvals"];
+
+  // An administrator approved this device for session scopes only, as for a team guest.
+  async function approveSessionOnlyDevice(client: ConnectParams["client"], narrow: boolean) {
+    await writeGatewayAuthConfig({ mode: "trusted-proxy", narrowToDeviceGrant: narrow });
+    const identityPath = deviceIdentityPath("session-guest");
+    const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+    const pending = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+      clientId: client.id,
+      clientMode: client.mode,
+      platform: client.platform,
+      role: "operator",
+      scopes: SESSION_GRANT,
+    });
+    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
+    return { identityPath, identity };
+  }
+
+  test.each([
+    ["TUI", TUI_CLIENT, TUI_SCOPES, SESSION_GRANT, true],
+    ["CLI", CLI_CLIENT, ["operator.read"], ["operator.sessions.read"], false],
+  ] as const)(
+    "connects an approved %s device within its grant without an upgrade request",
+    async (_name, client, requested, connected, issuesToken) => {
+      const { identityPath, identity } = await approveSessionOnlyDevice(client, true);
+      const warnings = await captureWarnings(async () => {
+        const response = await connectSharedUi(identityPath, { client, scopes: [...requested] });
+        expect(response.ok).toBe(true);
+        const auth = (response.payload as { auth?: { scopes?: string[]; deviceToken?: string } })
+          .auth;
+        expect(auth?.scopes).toEqual(connected);
+        if (issuesToken) {
+          expect(auth?.deviceToken).toEqual(expect.any(String));
+        }
+      });
+
+      expect(await pendingFor(identity.deviceId)).toEqual([]);
+      expect(
+        warnings.filter((message) => message.includes("device access upgrade requested")),
+      ).toEqual([]);
+    },
+  );
+
+  test("keeps filing the scope-upgrade request when the option is off", async () => {
+    const { identityPath, identity } = await approveSessionOnlyDevice(TUI_CLIENT, false);
+    const response = await connectSharedUi(identityPath, {
+      client: TUI_CLIENT,
+      scopes: TUI_SCOPES,
+    });
+
+    expect(response.ok).toBe(false);
+    const pending = await pendingFor(identity.deviceId);
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.scopes).toEqual(expect.arrayContaining(TUI_SCOPES));
   });
 });

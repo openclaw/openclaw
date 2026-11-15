@@ -9,6 +9,8 @@ export async function issueGatewayConnectDeviceTokens(params: {
   state: AuthenticatedGatewayConnect;
   scopes: string[];
   hasApprovedDeviceBaseline: boolean;
+  /** Opt-in: a non-browser operator UI (the TUI) behind the trusted proxy keeps a device token. */
+  issueToTrustedProxyCliUi?: boolean;
   isIssuanceCurrent: () => boolean;
 }): Promise<Pick<DeviceAuthorizedGatewayConnect, "deviceToken" | "bootstrapDeviceTokens">> {
   const { state, scopes, hasApprovedDeviceBaseline } = params;
@@ -34,8 +36,10 @@ export async function issueGatewayConnectDeviceTokens(params: {
       : undefined;
   const nodePrincipal = role === "node" ? state.authResult.openclawId : undefined;
   // Manual re-pairing stays manual, but its issued role still belongs to this live listing.
+  const trustedProxyCliUi =
+    params.issueToTrustedProxyCliUi === true && !isBrowserOperatorUi && !isWebchat;
   const issuedDeviceGrant =
-    !trustedProxyAuthOk && device && hasApprovedDeviceBaseline
+    (!trustedProxyAuthOk || trustedProxyCliUi) && device && hasApprovedDeviceBaseline
       ? await ensureDeviceToken({
           deviceId: device.id,
           role,

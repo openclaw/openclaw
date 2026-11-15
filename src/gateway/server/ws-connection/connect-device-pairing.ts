@@ -59,6 +59,7 @@ import { startGatewayNodePairingSshApproval } from "./connect-node-pairing-ssh.j
 import {
   resolveLocalPairingApproval,
   resolvePairingApprovalPlan,
+  resolveTrustedProxyDeviceGrantScopes,
 } from "./connect-pairing-approval-plan.js";
 import type {
   AuthenticatedGatewayConnect,
@@ -214,6 +215,29 @@ export async function authorizeGatewayConnectDevice(
         connectionScopeCap: (capped: string[]) =>
           applyConnectionScopeCap({ role, scopes: capped, upgradeReq: context.handler.upgradeReq }),
       };
+      if (reason === "scope-upgrade") {
+        // Last await before the decision: the live row, not the pre-connect snapshot.
+        const grantScopes = resolveTrustedProxyDeviceGrantScopes({
+          state,
+          configSnapshot,
+          hasBrowserOriginHeader,
+          pairedDevice: await getPairedDevice(device.id),
+          devicePublicKey,
+          scopes,
+        });
+        const capped = grantScopes
+          ? applyConnectionScopeCap({
+              role,
+              scopes: grantScopes,
+              upgradeReq: context.handler.upgradeReq,
+            })
+          : [];
+        if (capped.length > 0) {
+          scopes = capped;
+          connectParams.scopes = scopes;
+          return true;
+        }
+      }
       const plan = await resolvePairingApprovalPlan(pairingPlanParams);
       // Same-key reconnects reuse paired grants without pairing or false upgrade audits.
       if (
@@ -654,6 +678,9 @@ export async function authorizeGatewayConnectDevice(
           state: { ...state, scopes, handoffBootstrapProfile },
           scopes,
           hasApprovedDeviceBaseline: hasServerApprovedDeviceTokenBaseline,
+          issueToTrustedProxyCliUi:
+            configSnapshot.gateway?.auth?.trustedProxy?.narrowToDeviceGrant === true &&
+            !hasBrowserOriginHeader,
           isIssuanceCurrent: isConnectAuthorizationCurrent,
         });
 

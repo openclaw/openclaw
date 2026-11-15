@@ -150,6 +150,9 @@ Update and restart health checks can also reuse the local CLI's existing paired 
 <ParamField path="gateway.auth.trustedProxy.deviceAutoApprove.scopes" type="string[]" default='["operator.read", "operator.write", "operator.approvals", "operator.questions"]'>
   Maximum scopes granted to an auto-approved operator device. Explicitly listing `operator.admin` lets every proxy-authenticated user request an automatic full-admin device grant, makes scope-less requests receive full admin automatically, and triggers the CRITICAL `gateway.trusted_proxy_device_auto_approve_admin` security audit finding plus a Gateway startup warning.
 </ParamField>
+<ParamField path="gateway.auth.trustedProxy.narrowToDeviceGrant" type="boolean" default="false">
+  Lets approved CLI and TUI devices connect within their paired scopes instead of filing a scope-upgrade request, and issues the TUI a device token. See [Approved CLI and TUI grants](#approved-cli-and-tui-grants).
+</ParamField>
 
 <Warning>
 Any local process that can connect to the Gateway can impersonate a loopback reverse proxy by sending identity headers. Only enable `allowLoopback` when the reverse proxy is the sole local listener for incoming user traffic, direct Gateway access is locked down, and you trust local processes. The proxy must authenticate users and strip or overwrite client-supplied identity headers; required headers alone do not distinguish the proxy from another local process.
@@ -361,6 +364,37 @@ The default is `enabled: false`. When enabled, all of these rules apply:
 <Warning>
 Enabling this option delegates new browser and native UI operator device enrollment entirely to the reverse-proxy identity. A compromised proxy account can enroll a persistent device with every configured scope. Listing `operator.admin` makes that device a full administrator without manual approval. Keep the Gateway reachable only through the proxy, require strong proxy authentication, overwrite identity headers, and use a narrow `allowUsers` list.
 </Warning>
+
+## Approved CLI and TUI grants
+
+An administrator can approve a CLI or TUI device for fewer scopes than its
+client requests, for example a guest approved for only
+`operator.sessions.write`. By default, each connection that requests more files
+a scope-upgrade request. Set `narrowToDeviceGrant` to connect within the
+approved grant instead:
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "x-forwarded-user",
+        narrowToDeviceGrant: true,
+      },
+    },
+  },
+}
+```
+
+With this setting, a connection from an approved device whose request exceeds
+its grant receives the intersection of the two, with no pairing request and no
+audit entry. The hello reply reports the resulting scopes, so a newly approved
+device learns its grant on its first connection. The TUI also receives a device
+token, as the CLI already does. The setting applies only to operator devices
+whose paired key matches and that send no browser `Origin`; browser clients and
+new device enrollment keep their existing behavior. If the request and the grant
+share no scope, the Gateway files the upgrade request as before.
 
 ## Control UI pairing behavior
 

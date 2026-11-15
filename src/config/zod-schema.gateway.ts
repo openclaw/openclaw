@@ -367,6 +367,12 @@ export const GatewayConfigSchema = z
                 scopes: z.array(z.string().min(1)).optional(),
               })
               .optional(),
+            /**
+             * Let approved CLI and TUI devices that request more than their paired
+             * scopes connect within them instead of filing a scope-upgrade request,
+             * and issue the TUI a device token. @default false
+             */
+            narrowToDeviceGrant: z.boolean().optional(),
           })
           .optional(),
       })
