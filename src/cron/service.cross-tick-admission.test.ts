@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { stubFreeMemory } from "../../test/helpers/cron/free-memory.js";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import * as hostMemory from "../infra/host-memory.js";
 import * as childMemory from "../process/child-memory.js";
 import {
   enqueueCommandInLane,
@@ -512,6 +514,58 @@ it("keeps half of the open memory spare however often the queue is drained", asy
     await running.wake(state);
     await running.wake(state);
     expect(started).toHaveLength(4);
+  } finally {
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
+it("counts other processes in the Gateway's cgroup against its memory limit", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 16 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  const gib = 1024 ** 3;
+  // An 8 GiB limit on the Gateway's parent cgroup, holding the 512 MiB Gateway, a 5 GiB peer
+  // process and 1 GiB of reclaimable file cache: 2.5 GiB is actually left.
+  vi.spyOn(hostMemory, "readCgroupMemoryHeadroomBytes").mockRestore();
+  vi.spyOn(process, "constrainedMemory").mockReturnValue(8 * gib);
+  vi.spyOn(process.memoryUsage, "rss").mockReturnValue(gib / 2);
+  const files: Record<string, string> = {
+    "/proc/self/cgroup": "0::/openclaw.slice/gateway\n",
+    "/sys/fs/cgroup/openclaw.slice/gateway/memory.max": "max\n",
+    "/sys/fs/cgroup/openclaw.slice/memory.max": `${8 * gib}\n`,
+    "/sys/fs/cgroup/openclaw.slice/memory.current": `${6.5 * gib}\n`,
+    "/sys/fs/cgroup/openclaw.slice/memory.stat": `anon ${5.5 * gib}\ninactive_file ${gib}\n`,
+  };
+  const readFileSync = fs.readFileSync;
+  vi.spyOn(fs, "readFileSync").mockImplementation(((...args: Parameters<typeof fs.readFileSync>) =>
+    typeof args[0] === "string" && args[0] in files
+      ? files[args[0]]
+      : readFileSync(...args)) as typeof fs.readFileSync);
+  setCommandLaneConcurrency(CommandLane.Main, 16);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    // Half of the 2.5 GiB left holds five runs at 256 MiB each, not the fifteen that the limit
+    // minus the Gateway's own memory would allow.
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(5));
+    await running.wake(state);
+    expect(started).toHaveLength(5);
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);
