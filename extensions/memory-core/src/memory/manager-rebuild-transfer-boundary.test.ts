@@ -63,12 +63,12 @@ describe("rebuild staged transfer boundary", () => {
       }
       expect(batches).toBeGreaterThan(1);
       expect(largestBatch).toBeLessThanOrEqual(512 * 1024);
-      let checks = 0;
+      // Beta checks freshness once after staging, not before every transfer.
       expect(
         await owner.mutateEmbeddingCache(
           mutation,
           () => undefined,
-          () => ++checks === 1,
+          () => false,
         ),
       ).toBeUndefined();
       expect(owner.db.prepare("SELECT count(*) AS n FROM memory_embedding_cache").get()).toEqual({
