@@ -1,7 +1,7 @@
 import { installDiscordIngressTestRuntime } from "../test-support/ingress-runtime.js";
 
 installDiscordIngressTestRuntime();
-import { ChannelType, MessageFlags } from "discord-api-types/v10";
+import { ChannelType, ComponentType, MessageFlags } from "discord-api-types/v10";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -740,11 +740,151 @@ describe("discord component interactions", () => {
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
     expect(reply).toHaveBeenCalledWith({
+      allowed_mentions: { parse: [] },
       content: "Handled",
       components: [],
     });
     expect(update).not.toHaveBeenCalled();
     expect(dispatchReplyMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a native handler update a source card without losing buttons or re-pinging mentions", async () => {
+    const pluginId = "qa-discord-card-update";
+    const registry = getActivePluginRegistry();
+    if (!registry) {
+      throw new Error("expected active plugin registry");
+    }
+    const sourceComponents = [
+      {
+        type: ComponentType.Container,
+        components: [
+          { type: ComponentType.TextDisplay, content: "Daily check-in for <@123456789>" },
+          { type: ComponentType.TextDisplay, content: "Recorded: 0" },
+          {
+            type: ComponentType.ActionRow,
+            components: [
+              {
+                type: ComponentType.Button,
+                style: 1,
+                custom_id: "card:record",
+                label: "Record",
+              },
+            ],
+          },
+        ],
+      },
+    ];
+    const handler = vi.fn(async (context: DiscordInteractiveHandlerContext) => {
+      expect(context.interaction.messageComponents).toEqual(sourceComponents);
+      const components = structuredClone(
+        context.interaction.messageComponents,
+      ) as typeof sourceComponents;
+      const progress = components[0]?.components[1];
+      if (!progress) {
+        throw new Error("expected source card progress block");
+      }
+      progress.content = "Recorded: 1";
+      await context.respond.editMessage({ components });
+      return { handled: true };
+    });
+    try {
+      expect(
+        registerPluginInteractiveHandler(pluginId, {
+          channel: "discord",
+          namespace: "card",
+          handler: handler as never,
+        }).ok,
+      ).toBe(true);
+      await registerEntries([createButtonEntry({ callbackData: "card:record" })]);
+      dispatchPluginInteractiveHandlerMock.mockImplementation(async (input) => {
+        const actual = await vi.importActual<typeof import("../interactive-dispatch.js")>(
+          "../interactive-dispatch.js",
+        );
+        return await actual.dispatchDiscordPluginInteractiveHandler(input as never);
+      });
+      const client = createInternalTestClient();
+      const { post, patch } = attachRestMock(client, {});
+      const interaction = createInteraction(
+        client,
+        createInternalComponentInteractionPayload({
+          id: "card-update-interaction",
+          token: "card-update-token",
+          channel_id: "dm-channel",
+          user: {
+            id: "123456789",
+            username: "AgentUser",
+            discriminator: "0001",
+            global_name: null,
+            avatar: null,
+          },
+          message: {
+            id: "msg-1",
+            channel_id: "dm-channel",
+            author: {
+              id: "app1",
+              username: "bot",
+              discriminator: "0000",
+              global_name: null,
+              avatar: null,
+            },
+            flags: MessageFlags.IsComponentsV2,
+            content: "",
+            components: sourceComponents,
+          },
+        }),
+      );
+      if (!(interaction instanceof BaseComponentInteraction)) {
+        throw new Error("expected a component interaction");
+      }
+
+      await createDiscordComponentButton(createComponentContext()).run(interaction, {
+        cid: "btn_1",
+      } as ComponentData);
+
+      expect(handler).toHaveBeenCalledOnce();
+      expect(post.mock.calls).toEqual([
+        ["/interactions/card-update-interaction/card-update-token/callback", { body: { type: 6 } }],
+      ]);
+      expect(patch.mock.calls).toEqual([
+        [
+          "/webhooks/app1/card-update-token/messages/@original",
+          {
+            body: {
+              allowed_mentions: { parse: [] },
+              flags: MessageFlags.IsComponentsV2,
+              components: [
+                {
+                  type: ComponentType.Container,
+                  components: [
+                    { type: ComponentType.TextDisplay, content: "Daily check-in for <@123456789>" },
+                    { type: ComponentType.TextDisplay, content: "Recorded: 1" },
+                    {
+                      type: ComponentType.ActionRow,
+                      components: [
+                        {
+                          type: ComponentType.Button,
+                          style: 1,
+                          custom_id: "card:record",
+                          label: "Record",
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+          { with_components: true },
+        ],
+      ]);
+      expect(dispatchReplyMock).not.toHaveBeenCalled();
+      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    } finally {
+      const index = registry.interactiveHandlers.findIndex((entry) => entry.pluginId === pluginId);
+      if (index >= 0) {
+        registry.interactiveHandlers.splice(index, 1);
+      }
+    }
   });
 
   it.each([0, MessageFlags.IsComponentsV2])(

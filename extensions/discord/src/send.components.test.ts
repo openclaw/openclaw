@@ -185,6 +185,7 @@ it.each(["select", "link emoji"] as const)("refreshes registry on %s edit", asyn
   const body: { flags?: number; components?: APIContainerComponent[] } = JSON.parse(
     patch?.body ?? "{}",
   );
+  expect(body).toMatchObject({ content: null, embeds: [], sticker_ids: [], poll: null });
   const components = body.components?.[0]?.components;
   const row = components?.find((entry) => entry.type === ComponentType.ActionRow);
   if (kind === "select") {

@@ -25,6 +25,8 @@ export type DiscordInteractiveHandlerContext = {
     namespace: string;
     payload: string;
     messageId?: string;
+    /** Source card components, available only to the native plugin handler. */
+    messageComponents?: ChannelStructuredComponents;
     values?: string[];
     fields?: Array<{ id: string; name: string; values: string[] }>;
   };
