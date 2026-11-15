@@ -23,9 +23,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
           models: [],
-          featureMethods: defaultControlUiFeatureMethods.filter(
-            (method) => method !== "acpx.agents.list",
-          ),
+          featureMethods: [...defaultControlUiFeatureMethods],
           deferredMethods: ["models.authStatus"],
           methodResponses: {
             "config.get": sourceConfigSnapshot({}, "provider-readiness"),
