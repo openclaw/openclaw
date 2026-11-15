@@ -117,6 +117,29 @@ function createOpenAiServiceUnavailableError() {
 }
 
 describe("executeAgentTurn: provider failures", () => {
+  it("preserves item-conflict recovery in the Control UI reply and saved notice", async () => {
+    const expected =
+      "⚠️ The AI service rejected saved conversation state (item_conflict). Run /compact, then retry. If it still fails, choose another model and share the Gateway logs with the operator.";
+    state.isInternalMessageChannelMock.mockReturnValue(true);
+    const payload = await rejectedPayload(
+      new FailoverError(expected, {
+        reason: "format",
+        provider: "openai",
+        code: "item_conflict",
+        rawError: "An input item conflicts with an existing record.",
+      }),
+    );
+    expect(payload).toMatchObject({ isError: true, text: expected });
+    const agentEvents = await import("../../infra/agent-events.js");
+    expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "error", errorNotice: expected }),
+      }),
+    );
+    expect(state.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+  });
+
   it("surfaces provider authentication failures in non-direct chats", async () => {
     const rawError =
       "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses";

@@ -19,6 +19,13 @@ const local = "src/tui/tui-pty-local.e2e.test.ts";
 const built = { OPENCLAW_TUI_PTY_USE_BUILT_CLI: "1" };
 const reply = "test/vitest/vitest.auto-reply.config.ts";
 const delivery = "src/auto-reply/reply/dispatch-from-config.delivery.test.ts";
+const gatewayServer = "test/vitest/vitest.gateway-server.config.ts";
+const gatewayDatabase = "test/vitest/vitest.gateway-database-workers.config.ts";
+const gatewayLifecycle = [
+  "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.startup-fixture-lifetime.test.ts",
+];
+const gatewayAcquisition = "src/gateway/test-helpers.acquisition.test.ts";
 const commands = "test/vitest/vitest.commands.config.ts";
 const doctorCommandFiles = [
   "src/commands/doctor-config-preflight.container-upgrade.test.ts",
@@ -28,6 +35,19 @@ const doctorCommandFiles = [
 ];
 
 it.each([
+  { name: "Gateway lifecycle", config: gatewayServer, files: gatewayLifecycle, runtime: true },
+  {
+    name: "Gateway acquisition",
+    config: gatewayDatabase,
+    files: [gatewayAcquisition],
+    runtime: true,
+  },
+  {
+    name: "mixed Gateway lifecycle",
+    config: gatewayServer,
+    files: [...gatewayLifecycle, "src/gateway/unknown.test.ts"],
+    runtime: false,
+  },
   { name: "Doctor commands", config: commands, files: doctorCommandFiles, runtime: true },
   {
     name: "Doctor infra",
@@ -195,6 +215,7 @@ it.each([
 });
 
 it.each([
+  { targets: [...gatewayLifecycle, gatewayAcquisition], extraArgs: false, preset: "runtime" },
   { targets: [execApproval, delivery], extraArgs: false, preset: "runtime" },
   { targets: [execApproval, "unknown.test.ts"], extraArgs: false, preset: "full" },
   { targets: [execApproval], extraArgs: true, preset: "full" },

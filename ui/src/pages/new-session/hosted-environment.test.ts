@@ -194,7 +194,7 @@ it("retains the explicit API-key account through hosted selection and rejects a 
   });
   await choose(subscription.authProfileId);
   expect(control.accountSelectionReady()).toBe(false);
-  expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+  expect(control.modelSelectionBlockedReason(agent)).toBe("Models unavailable");
   late.resolve({
     ...unavailableCatalog("unsupported-runtime"),
     accountSelection: {

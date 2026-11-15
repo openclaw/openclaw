@@ -505,6 +505,24 @@ shows one device code as before.
   Sessions they already created are not rewritten. While signed in, **Turn on remote access**
   gets its link code from your account instead of asking you to paste one.
 
+### Invite someone who already has a profile
+
+On **Access → Invite someone**, optionally choose **Existing person on this claw**.
+The picker lists personal profiles that have no OpenClaw ID linked yet, such as a
+teammate's Tailscale profile. It never offers the shared owner profile.
+
+The approval card says **Will join as** the selected person. Your selection and
+approval are enough: the member does not need to confirm the profile or match its
+email. Approval links their OpenClaw ID to that profile, so their name and existing
+conversations stay together. The selection alone gives no access, and the member's
+permissions still come from their approved membership role.
+
+The selection stays on this Gateway; it is not in the invite link or signed invite.
+If the selected profile was deleted, merged away, or linked to another account
+before approval, the Gateway uses the normal member-profile path and shows why on
+Access. Leave **Create a new person** selected for the usual invite behavior.
+This option is hidden while the OpenClaw ID lab is off.
+
 ### How the tunnel reaches the Gateway
 
 - The Gateway supervises one **tunnel child** process. The child owns the iroh

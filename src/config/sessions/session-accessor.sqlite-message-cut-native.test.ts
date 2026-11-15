@@ -78,11 +78,15 @@ it.each([
   const owner = await nativeOwner();
   expect((await owner.run(mode, entryId)).status).toBe(status);
   const reset = status === "created" && mode !== "fork";
-  expect(owner.read()).toEqual({
-    entry: reset ? expect.objectContaining({ previousSessionId: owner.sourceId }) : owner.before,
+  const read = owner.read();
+  expect({ binding: read.binding, finalized: read.finalized }).toEqual({
     binding: reset ? undefined : "native-history-before-cut",
     finalized: reset,
   });
+  // An in-place cut keeps the transcript identity and retires the old native
+  // context through a rotated lifecycle revision instead.
+  expect(read.entry?.sessionId).toBe(owner.sourceId);
+  expect(read.entry?.lifecycleRevision === owner.before?.lifecycleRevision).toBe(!reset);
 });
 
 it("preserves native context when the worker cut commit is refused", async () => {

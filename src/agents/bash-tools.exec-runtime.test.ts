@@ -655,8 +655,9 @@ it.each([
   ["empty timeout", undefined, undefined],
   [
     "UTF-16 tail boundary",
-    `${"a".repeat(101)}🎉${"b".repeat(179)}${"c".repeat(220)}`,
-    "b".repeat(179),
+    // The retained tail (this fixture's 1,000-char cap) starts inside the emoji's surrogate pair.
+    `${"a".repeat(101)}🎉${"b".repeat(999)}`,
+    "b".repeat(999),
   ],
 ] as const)("preserves timeout notification policy for %s", async (_name, stdout, head) => {
   supervisorMock.spawn.mockImplementationOnce(async (input: SpawnInput) =>
@@ -700,7 +701,8 @@ it.each([
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);
     expect(message).not.toContain("�");
-    expect(message).toContain("…");
+    // The 1,000-char retention cap already dropped the start, so the wake says so.
+    expect(message).toContain("; earlier output was discarded):\n");
     expect(message).toContain(head);
   }
 });

@@ -59,47 +59,126 @@ function isUsefulAnchor(kind: string, value: string): boolean {
  * (newest first under the budget), the most-referenced identifiers, and the last
  * assistant replies. Omitted user messages are counted so the loss is never silent.
  */
+type FloorAnchor = { kind: string; value: string; score: number; last: number };
+export type CompactionFloorMessage = {
+  user?: { label: string; text: string };
+  assistant?: string;
+  anchors: Omit<FloorAnchor, "last">[];
+};
+export type PreparedCompactionFloor = {
+  users: Array<{ label: string; text: string }>;
+  userCount: number;
+  assistants: string[];
+  anchors: FloorAnchor[];
+};
+
+/** Record only bounded excerpts and identifier counts while a payload is resident. */
+export function prepareCompactionFloorMessage(message: AgentMessage): CompactionFloorMessage {
+  if (message.role !== "user" && message.role !== "assistant") {
+    return { anchors: [] };
+  }
+  const text = extractCompactionMessageText(message);
+  if (!text) {
+    return { anchors: [] };
+  }
+  const anchors = new Map<string, Omit<FloorAnchor, "last">>();
+  for (const [kind, pattern] of ANCHOR_PATTERNS) {
+    for (const match of text.matchAll(pattern)) {
+      const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
+      if (!value || !isUsefulAnchor(kind, value)) {
+        continue;
+      }
+      const key = kind + "\u0000" + value;
+      const row = anchors.get(key) ?? { kind, value, score: 0 };
+      row.score += message.role === "user" ? 5 : 1;
+      anchors.set(key, row);
+    }
+  }
+  // Excerpts and regex captures can retain the entire payload as sliced strings.
+  // Detach these bounded facts before the worker caches them across transcript reads.
+  return structuredClone({
+    ...(message.role === "user"
+      ? {
+          user: {
+            label: formatCompactionUserLabel(message),
+            text: clip(text, MAX_FLOOR_USER_MESSAGE_CHARS),
+          },
+        }
+      : { assistant: clip(text, MAX_FLOOR_OUTCOME_CHARS) }),
+    anchors: [...anchors.values()],
+  });
+}
+
+/** Keep only the suffix and ranked identifiers any supported floor budget can emit. */
+export function prepareCompactionFloor(
+  messages: Iterable<CompactionFloorMessage>,
+  maxChars = MAX_COMPACTION_FLOOR_CHARS,
+): PreparedCompactionFloor {
+  const users: PreparedCompactionFloor["users"] = [];
+  const assistants: string[] = [];
+  const anchors = new Map<string, FloorAnchor>();
+  let userCount = 0;
+  let userChars = 120;
+  let index = 0;
+  for (const message of messages) {
+    if (message.user) {
+      userCount++;
+      users.push(message.user);
+      userChars += message.user.label.length + message.user.text.length + 7;
+      while (users.length && userChars > Math.floor(maxChars * USER_SHARE)) {
+        const removed = users.shift();
+        if (removed) {
+          userChars -= removed.label.length + removed.text.length + 7;
+        }
+      }
+    }
+    if (message.assistant) {
+      assistants.push(message.assistant);
+      if (assistants.length > FLOOR_OUTCOMES) {
+        assistants.shift();
+      }
+    }
+    for (const anchor of message.anchors) {
+      const key = anchor.kind + "\u0000" + anchor.value;
+      const previous = anchors.get(key);
+      anchors.set(key, { ...anchor, score: (previous?.score ?? 0) + anchor.score, last: index });
+    }
+    index++;
+  }
+  const ranked = [...anchors.values()].toSorted(
+    (left, right) =>
+      right.score - left.score || right.last - left.last || left.value.localeCompare(right.value),
+  );
+  let anchorChars = 80;
+  const selected: FloorAnchor[] = [];
+  for (const anchor of ranked) {
+    anchorChars += anchor.kind.length + anchor.value.length + 5;
+    if (anchorChars > Math.floor(maxChars * ANCHOR_SHARE)) {
+      break;
+    }
+    selected.push(anchor);
+  }
+  return { users, userCount, assistants, anchors: selected };
+}
+
 export function buildCompactionFloor(
   messages: readonly AgentMessage[],
   maxChars = MAX_COMPACTION_FLOOR_CHARS,
 ): string {
-  const users: Array<{ label: string; text: string }> = [];
-  const assistants: string[] = [];
-  const anchors = new Map<string, { kind: string; value: string; score: number; last: number }>();
-  messages.forEach((message, index) => {
-    if (message.role !== "user" && message.role !== "assistant") {
-      return;
-    }
-    // Extraction redacts credentials before excerpts and anchors are cut from it.
-    const text = extractCompactionMessageText(message);
-    if (!text) {
-      return;
-    }
-    // Keep recorded origin and sender: user-role rows also carry internal and inter-session input.
-    if (message.role === "user") {
-      users.push({ label: formatCompactionUserLabel(message), text });
-    } else {
-      assistants.push(text);
-    }
-    const weight = message.role === "user" ? 5 : 1;
-    for (const [kind, pattern] of ANCHOR_PATTERNS) {
-      for (const match of text.matchAll(pattern)) {
-        const value = (match[1] ?? "").replace(/[.,;:]+$/, "");
-        if (!value || !isUsefulAnchor(kind, value)) {
-          continue;
-        }
-        const key = `${kind}\u0000${value}`;
-        const row = anchors.get(key) ?? { kind, value, score: 0, last: index };
-        row.score += weight;
-        row.last = index;
-        anchors.set(key, row);
-      }
-    }
-  });
-  if (users.length === 0 && assistants.length === 0) {
+  return renderCompactionFloor(
+    prepareCompactionFloor(messages.map(prepareCompactionFloorMessage), maxChars),
+    maxChars,
+  );
+}
+
+export function renderCompactionFloor(
+  prepared: PreparedCompactionFloor,
+  maxChars = MAX_COMPACTION_FLOOR_CHARS,
+): string {
+  const { users, userCount, assistants, anchors } = prepared;
+  if (userCount === 0 && assistants.length === 0) {
     return "";
   }
-
   const sections: string[] = [];
   const userBudget = Math.floor(maxChars * USER_SHARE);
   const shown: string[] = [];
@@ -112,8 +191,8 @@ export function buildCompactionFloor(
     shown.push(line);
     used += line.length + 1;
   }
-  if (users.length > 0) {
-    const omitted = users.length - shown.length;
+  if (userCount > 0) {
+    const omitted = userCount - shown.length;
     sections.push(
       [
         "## User-role messages in the removed region (verbatim with recorded origin, oldest first)",
@@ -125,10 +204,7 @@ export function buildCompactionFloor(
   }
 
   const anchorBudget = Math.floor(maxChars * ANCHOR_SHARE);
-  const ranked = [...anchors.values()].toSorted(
-    (left, right) =>
-      right.score - left.score || right.last - left.last || left.value.localeCompare(right.value),
-  );
+  const ranked = anchors;
   const anchorLines: string[] = [];
   used = 80;
   for (const anchor of ranked) {
@@ -179,7 +255,7 @@ export function commitCompactionSummary(
   result: Pick<CompactionResult, "summary" | "details">,
   preparation: Pick<
     CompactionPreparation,
-    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget"
+    "messagesToSummarize" | "turnPrefixMessages" | "summaryTokenBudget" | "floor"
   > & { settings: { maxSummaryChars?: number } },
   withoutSummary: boolean,
   replayTokenBudget?: () => number | undefined,
@@ -190,9 +266,15 @@ export function commitCompactionSummary(
   if (withoutSummary || parseCompactionDetails(result.details)?.summaryRefused) {
     return summary;
   }
-  const messages = [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages];
+  const prepared =
+    preparation.floor ??
+    prepareCompactionFloor(
+      [...preparation.messagesToSummarize, ...preparation.turnPrefixMessages].map(
+        prepareCompactionFloorMessage,
+      ),
+    );
   const renderFloor = (maxChars: number) =>
-    maxChars >= MIN_SUMMARY_FLOOR_CHARS ? buildCompactionFloor(messages, maxChars) : "";
+    maxChars >= MIN_SUMMARY_FLOOR_CHARS ? renderCompactionFloor(prepared, maxChars) : "";
   const maxFloorChars = resolveSummaryFloorChars(maxSummaryChars) - SUMMARY_FLOOR_HEADING.length;
   const foregroundBudget = preparation.summaryTokenBudget;
   // Accepted edge case: with an unknown window the floor is bounded only by its own budget.

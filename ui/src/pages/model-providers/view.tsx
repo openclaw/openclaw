@@ -259,8 +259,6 @@ function ProviderAccess(props: ModelProvidersViewProps) {
   });
   const connected = () => groups().connected;
   const unconnected = () => groups().unconnected;
-  const refreshLabel = () =>
-    props.refreshing ? t("modelProviders.refreshing") : t("common.refresh");
   // The last refresh time lives in the refresh tooltip instead of the header row.
   const refreshTooltip = () =>
     props.updatedAt && !props.refreshing
@@ -305,7 +303,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}
           </SettingsGroup>
         ) : undefined}
-        {props.cards.length === 0 ? (
+        {props.cards.length === 0 && !props.error ? (
           <SettingsGroup>
             <SettingsEmpty
               message={
@@ -362,9 +360,9 @@ function ProviderAccess(props: ModelProvidersViewProps) {
           {needsModelSetup(props) ? undefined : props.providerScope}
           <RefreshButton
             class="model-providers__refresh-button"
-            label={refreshLabel()}
+            label={t("common.refresh")}
             tooltip={refreshTooltip()}
-            busy={props.refreshing}
+            disabled={props.refreshing}
             onClick={() => props.onRefresh()}
           />
         </>
