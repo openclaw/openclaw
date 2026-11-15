@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -98,5 +100,32 @@ export function registerVideoOutputCapabilityCliTests({
       expect(mocks.runtime.error).not.toHaveBeenCalled();
       expect(mocks.runtime.exit).not.toHaveBeenCalled();
     }
+  });
+
+  it("streams video to the physical parent selected by the output path", async () => {
+    const fixture = await outputFixture(".mp4", "keep-decoy");
+    const physical = path.join(fixture.dir, "physical");
+    await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+    const alias = path.join(fixture.dir, "selected");
+    await fs.symlink(path.join(physical, "nested"), alias, "junction");
+    primeGeneratedVideoUrl("https://example.com/generated-video.mp4");
+    mockVideoFetch(Buffer.from("video-bytes"));
+    await generateVideo("--output", `${alias}${path.sep}..${path.sep}result`);
+    expect(await fs.readFile(path.join(physical, "result.mp4"), "utf8")).toBe("video-bytes");
+    expect(await fs.readFile(fixture.outputPath, "utf8")).toBe("keep-decoy");
+    if (process.platform !== "win32") {
+      expect((await fs.stat(fixture.outputPath)).mode & 0o777).toBe(0o640);
+    }
+    expect((await fs.readdir(fixture.dir)).toSorted()).toEqual([
+      "physical",
+      "result.mp4",
+      "selected",
+    ]);
+    expect((await fs.readdir(physical)).toSorted()).toEqual(["nested", "result.mp4"]);
+    expect(mocks.runtime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        outputs: [expect.objectContaining({ path: path.join(physical, "result.mp4") })],
+      }),
+    );
   });
 }

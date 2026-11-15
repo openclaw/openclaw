@@ -1,10 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { resolvePathPrefix } from "@openclaw/fs-safe/advanced";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
 import { saveMediaBuffer } from "../media/store.js";
 import { publishOutputFileAtomically } from "./output-file.runtime.js";
 
 export { publishOutputFileAtomically };
+
+export async function resolveMediaOutputPath(input: string): Promise<string> {
+  const basename = path.basename(input);
+  if (basename === "." || basename === "..") {
+    throw new Error(`Media output must name a file: ${input}`);
+  }
+  const parent = await resolvePathPrefix(path.dirname(input));
+  if (parent.unresolvedSegments.includes("..")) {
+    throw new Error(`Media output traverses a missing directory: ${input}`);
+  }
+  return path.join(parent.existingPath, ...parent.unresolvedSegments, basename);
+}
 
 export async function writeOutputAsset(params: {
   buffer: Buffer;
@@ -26,7 +39,7 @@ export async function writeOutputAsset(params: {
     return { path: saved.path, mimeType: saved.contentType, size: saved.size };
   }
 
-  const resolvedOutput = path.resolve(params.outputPath);
+  const resolvedOutput = await resolveMediaOutputPath(params.outputPath);
   const parsed = path.parse(resolvedOutput);
   const detectedMime =
     (await detectMime({

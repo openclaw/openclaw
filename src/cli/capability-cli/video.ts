@@ -73,7 +73,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const { readResponseWithLimit } = await import("../../infra/http-body.js");
         const { resolveGeneratedMediaMaxBytes } =
           await import("../../media/configured-max-bytes.js");
-        const { publishOutputFileAtomically, writeOutputAsset } =
+        const { publishOutputFileAtomically, resolveMediaOutputPath, writeOutputAsset } =
           await import("../media-output.js");
         requireProviderModelOverride(model);
         const { cfg, agentDir } = await resolveLocalCapabilityAgent({
@@ -153,7 +153,7 @@ export function registerVideoCapabilityCommands(capability: Command): void {
                     extensionForMime(mimeType) ||
                     path.extname(video.fileName ?? "") ||
                     path.extname(output);
-                  const resolvedOutput = path.resolve(output);
+                  const resolvedOutput = await resolveMediaOutputPath(output);
                   const parsed = path.parse(resolvedOutput);
                   const filePath =
                     result.videos.length <= 1
