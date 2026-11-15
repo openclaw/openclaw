@@ -96,6 +96,27 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
+  it("preserves delivered replies when consumption bookkeeping fails", async () => {
+    setChildren();
+    const failure = new Error("consumption registry write failed");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      const input = [...sessionControllerMailboxes()][0]!.entries[0]!;
+      await expect(input.onTranscriptCommitted!("requester-continuation")).rejects.toBe(failure);
+      expect(input.custody.failure).toBe(failure);
+      return { delivered: true, path: "direct" };
+    });
+    await expectWake({
+      recordRequesterDelivery: async () => {
+        throw failure;
+      },
+    });
+    expect(completeBatchSpy).toHaveBeenCalledExactlyOnceWith(["run-a", "run-b"], undefined, {
+      delivered: true,
+      path: "direct",
+    });
+  });
+
   it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
     setChildren();
     const failure = new Error("Requester wake batch changed before its outcome was recorded");

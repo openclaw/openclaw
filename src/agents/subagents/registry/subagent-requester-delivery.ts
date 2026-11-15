@@ -4,7 +4,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import type { SubagentCompletionDeliveryState } from "./subagent-registry-read.types.js";
 
-/** Join the registry write after transcript commit, before the source settles. */
+/** Source custody owns write failures; this join preserves the transport outcome. */
 export function observeSubagentRequesterDelivery(
   input: SessionControllerInput,
   record: (
@@ -17,5 +17,5 @@ export function observeSubagentRequesterDelivery(
     trackSessionControllerSourceWork(input, consumption);
     return consumption;
   };
-  return () => consumption;
+  return () => consumption?.catch(() => undefined);
 }
