@@ -4,7 +4,11 @@ import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import { mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
-import { openedCronJob, setAutomationsSidebarShown } from "../lib/cron/automations-navigation.ts";
+import {
+  automationsFilter,
+  openedCronJob,
+  setAutomationsSidebarShown,
+} from "../lib/cron/automations-navigation.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { formatCompactMs } from "../lib/format.ts";
@@ -71,6 +75,25 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     },
   );
   onSettled(() => () => setAutomationsSidebarShown(false));
+  // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
+  const shown = createMemo(() => {
+    const filter = automationsFilter();
+    const order = (job: CronCompactJob) =>
+      filter.sort === "nextRunAtMs"
+        ? (job.nextRunAtMs ?? Number.POSITIVE_INFINITY)
+        : -(job.updatedAtMs ?? 0);
+    return jobs()
+      .filter(
+        (job) =>
+          filter.lastRun === "all" ||
+          (filter.lastRun === "error" ? job.lastRunStatus === "error" : job.lastRunStatus === "ok"),
+      )
+      .toSorted((left, right) =>
+        filter.sort === "name"
+          ? (left.displayName ?? left.name).localeCompare(right.displayName ?? right.name)
+          : order(left) - order(right),
+      );
+  });
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // The sidebar learns the route, not its query, so it keeps the job it last opened.
   const [selected, setSelected] = createSignal(
@@ -114,11 +137,19 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
         </span>
         <span class="nav-item__text">{t("cron.list.newTask")}</span>
       </a>
-      <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.active")}>
-        <span class="sidebar-automations__heading">{t("cron.tabs.active")}</span>
-        <For each={jobs().filter((job) => job.enabled)}>{(job) => <Row job={job} />}</For>
-      </div>
-      <Show when={jobs().some((job) => !job.enabled)}>
+      <Show when={automationsFilter().status !== "paused"}>
+        <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.active")}>
+          <span class="sidebar-automations__heading">{t("cron.tabs.active")}</span>
+          <For each={shown().filter((job) => job.enabled)}>{(job) => <Row job={job} />}</For>
+        </div>
+      </Show>
+      <Show when={automationsFilter().status === "paused"}>
+        <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.paused")}>
+          <span class="sidebar-automations__heading">{t("cron.tabs.paused")}</span>
+          <For each={shown().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
+        </div>
+      </Show>
+      <Show when={automationsFilter().status === "all" && shown().some((job) => !job.enabled)}>
         <div class="sidebar-automations__group" role="group" aria-label={t("cron.tabs.paused")}>
           <button
             type="button"
@@ -130,7 +161,7 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
             {t("cron.tabs.paused")}
           </button>
           <Show when={pausedOpen()}>
-            <For each={jobs().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
+            <For each={shown().filter((job) => !job.enabled)}>{(job) => <Row job={job} />}</For>
           </Show>
         </div>
       </Show>
