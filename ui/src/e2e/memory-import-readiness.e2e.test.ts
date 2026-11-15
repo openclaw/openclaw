@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { MigrationsMemoryPlanResult } from "../../../packages/gateway-protocol/src/schema/migrations.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -48,10 +45,6 @@ suite.define(() => {
       const provider = page.locator('[data-provider-id="claude"]');
       const error = provider.getByRole("alert");
       await expect.poll(() => error.textContent()).toContain("permission denied");
-      const frame = await takeControlUiScreenshotFrame(page, provider, [error], {
-        animations: "disabled",
-      });
-      await writeFile(path.join(suite.artifactDir, "provider-failed.png"), frame.png);
       expect(await provider.getByText("Not found", { exact: true }).count()).toBe(0);
       expect(
         await provider
