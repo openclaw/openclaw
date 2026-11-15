@@ -402,7 +402,7 @@ export function buildAgentSystemPrompt(params: {
   const hasAutomations = availableTools.has(AUTOMATIONS_TOOL_NAME);
   const readToolName = resolveToolName("read");
   const waitHints = [
-    hasExec ? `${resolveToolName("exec")} yieldMs` : "",
+    hasExec ? `${resolveToolName("exec")} awaitResults=true` : "",
     hasProcess ? `${resolveToolName("process")}(poll, timeout=<ms>)` : "",
   ].filter(Boolean);
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
