@@ -5,8 +5,9 @@ import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gatew
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
 /**
- * Human replies inherit the retained child's native custody. A tool handoff result
- * continues the task whose own run handed off; other internal turns stay separate follow-ups.
+ * Human replies inherit the retained child's native custody. A tool handoff result or a
+ * background command exit continues the task whose own run yielded; other internal turns stay
+ * separate follow-ups.
  */
 export async function prepareReplySubagentContinuation(
   turn: AgentTurnParams,
@@ -17,7 +18,8 @@ export async function prepareReplySubagentContinuation(
   const entry = turn.getActiveSessionEntry();
   const provenance = turn.followupRun.run.inputProvenance;
   const handoffRunId =
-    provenance?.kind === "internal_system" && provenance.sourceTool === "tool_handoff"
+    provenance?.kind === "internal_system" &&
+    (provenance.sourceTool === "tool_handoff" || provenance.sourceTool === "exec")
       ? provenance.runId
       : undefined;
   if (

@@ -60,25 +60,36 @@ type ExitWakeFacts = {
   notifyOnExitEmptySuccess?: boolean;
   notifySessionTarget?: object;
   assertExitNotificationAcceptanceCurrent?: () => void;
+  exitWakeAfterYield?: true;
+  processActivity?: { deadlineAtMs?: number };
 };
 
-/** Whether every exit, silent success included, wakes the conversation after the originating turn ends. */
+/**
+ * Whether every exit, silent success included, wakes the conversation after the originating turn
+ * ends. In a one-shot run the exit resumes the run only after sessions_yield awaits the command,
+ * so the command's deadline must bound that wait.
+ */
 export function hasExitWake(session: ExitWakeFacts): boolean {
   return (
     session.notifyOnExit === true &&
     // An explicit tools.exec.notifyOnExitEmptySuccess=false opt-out leaves silent success unannounced.
     session.notifyOnExitEmptySuccess === true &&
     session.notifySessionTarget !== undefined &&
-    // Cron completion admission still requires its originating run.
-    session.assertExitNotificationAcceptanceCurrent === undefined
+    (session.exitWakeAfterYield === true
+      ? session.processActivity?.deadlineAtMs !== undefined
+      : // Cron completion admission otherwise requires its originating run.
+        session.assertExitNotificationAcceptanceCurrent === undefined)
   );
 }
 
 /** Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn. */
 export function describeExitWake(session: ExitWakeFacts): string | undefined {
-  return hasExitWake(session)
-    ? "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn"
-    : undefined;
+  if (!hasExitWake(session)) {
+    return undefined;
+  }
+  return session.exitWakeAfterYield
+    ? "This run resumes with its result when it exits, silent success included, if you call sessions_yield. If only waiting remains, call sessions_yield"
+    : "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn";
 }
 
 /** Guidance for a running background handle, read when the handle is returned. */
