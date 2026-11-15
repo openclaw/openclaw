@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sleep } from "../utils/sleep.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
+import { readGatewayOwnerLease } from "./gateway-owner-lease.js";
 import { writeGitReleaseLauncher, type GitReleaseTrial } from "./git-release-launcher.js";
 import { GIT_RELEASE_TRIAL, gitReleaseSlot } from "./git-release-paths.js";
 import { readPackageVersion } from "./package-json.js";
@@ -121,4 +123,28 @@ export async function collectGitReleases(params: {
     await params.prune();
   }
   return collected;
+}
+
+/**
+ * The serving Gateway restarts itself once its maintenance tick (30 s) sees the link
+ * move. Wait up to 90 s for a new Gateway owner before verifying the switched release.
+ */
+export async function waitForGitReleaseSuccessor(
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<void> {
+  const ownerPid = () => {
+    try {
+      return readGatewayOwnerLease({ env, current: true })?.pid;
+    } catch {
+      return undefined;
+    }
+  };
+  const servingPid = ownerPid();
+  for (let waited = servingPid ? 0 : 90; waited < 90; waited++) {
+    await sleep(1_000, signal);
+    if (ownerPid() !== servingPid) {
+      return;
+    }
+  }
 }

@@ -14,6 +14,7 @@ import {
 import { resolveGatewayService } from "../../daemon/service.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
+import { waitForGitReleaseSuccessor } from "../../infra/git-release.js";
 import { readPackageReleaseSlotSync } from "../../infra/package-release-slot-path.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
@@ -472,6 +473,8 @@ export async function maybeRestartService(
     readPackageReleaseSlotSync(activation.result.root ?? "")
   ) {
     recordPhase("restarting");
+    await waitForGitReleaseSuccessor(activation.serviceEnv, run?.deadline?.signal);
+    assertCurrent();
     const outcome = await verifyRestartedGateway(
       normalizeOptionalString(expectedIdentity?.version),
       normalizeOptionalString(expectedIdentity?.buildId),
