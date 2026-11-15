@@ -4,6 +4,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  runSqliteDeferredTransactionSync,
   runSqliteImmediateTransactionSync,
   tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -336,36 +337,42 @@ function reconcileKeywordIndex(
       history.map((r) => [r.id, r.path, r.hash, r.revision]),
     ]),
   );
-  let untracked = false;
-  for (const { table, rows } of tables) {
-    const tracked = tableExists(db, rows) && tableExists(db, table);
-    db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
-    db.exec(
-      `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
-    );
-    // A table without row tracking (built before it existed), or tracking without
-    // its table (partially dropped), has unknown contents: start both over and
-    // repopulate below.
-    if (!tracked) {
-      db.exec(`DELETE FROM ${table}`);
-      db.exec(`DELETE FROM ${rows}`);
-      untracked = true;
-    }
-  }
+  const untracked = tables.filter(
+    ({ table, rows }) => !tableExists(db, rows) || !tableExists(db, table),
+  );
   const state = db.prepare("SELECT * FROM keyword_state_v1 WHERE binding=?").get(binding);
-  let indexedAt = String(state?.indexed_at ?? new Date().toISOString());
-  if (untracked || state?.snapshot !== snapshot) {
-    for (const { table, rows, records: wanted } of tables) {
-      syncFts(db, table, rows, wanted);
-    }
-    indexedAt = new Date().toISOString();
-    const indexed = { snapshot, indexed_at: indexedAt };
-    executeSqliteQuerySync(
+  let indexedAt = String(state?.indexed_at ?? "");
+  if (untracked.length || state?.snapshot !== snapshot) {
+    // The storage worker owns this index. Acquire the writer before reading rows
+    // to update, rather than upgrading a read snapshot after an unrelated commit.
+    indexedAt = runSqliteImmediateTransactionSync(
       db,
-      getNodeSqliteKysely<StorageTables>(db)
-        .insertInto("keyword_state_v1")
-        .values({ binding, ...indexed })
-        .onConflict((oc) => oc.column("binding").doUpdateSet(indexed)),
+      () => {
+        for (const entry of tables) {
+          const { table, rows, records: wanted } = entry;
+          db.exec(`CREATE VIRTUAL TABLE IF NOT EXISTS ${table} USING fts5(${FTS_COLUMNS})`);
+          db.exec(
+            `CREATE TABLE IF NOT EXISTS ${rows} (id TEXT PRIMARY KEY, hash TEXT NOT NULL, fts_rowid INTEGER NOT NULL) STRICT`,
+          );
+          // Missing tracking or FTS means unknown contents; rebuild the pair.
+          if (untracked.includes(entry)) {
+            db.exec(`DELETE FROM ${table}`);
+            db.exec(`DELETE FROM ${rows}`);
+          }
+          syncFts(db, table, rows, wanted);
+        }
+        const updatedAt = new Date().toISOString();
+        const updated = { snapshot, indexed_at: updatedAt };
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<StorageTables>(db)
+            .insertInto("keyword_state_v1")
+            .values({ binding, ...updated })
+            .onConflict((oc) => oc.column("binding").doUpdateSet(updated)),
+        );
+        return updatedAt;
+      },
+      { operationLabel: "knowledge.keyword.reconcile" },
     );
   }
   return { table: tables[0].table, historyTable: tables[1].table, snapshot, indexedAt };
@@ -410,19 +417,13 @@ export function verifyKeywordIndex(
   withdrawn = new Set<string>(),
 ): Set<string> | null {
   try {
-    return runSqliteImmediateTransactionSync(
-      db,
-      () => {
-        const { active, history } = keywordCorpora(data, withdrawn);
-        const { table } = reconcileKeywordIndex(db, data, active, history, binding, generation);
-        return new Set(
-          db
-            .prepare(`SELECT id FROM ${table}`)
-            .all()
-            .map((r) => String(r.id)),
-        );
-      },
-      { operationLabel: "knowledge.keyword.verify" },
+    const { active, history } = keywordCorpora(data, withdrawn);
+    const { table } = reconcileKeywordIndex(db, data, active, history, binding, generation);
+    return new Set(
+      db
+        .prepare(`SELECT id FROM ${table}`)
+        .all()
+        .map((r) => String(r.id)),
     );
   } catch {
     return null;
@@ -467,17 +468,18 @@ export function keywordSearch(
   const selectedIds = new Set(selected.map((r) => r.id)),
     ranked = current ? history.filter((r) => selectedIds.has(targets.get(r.id)!.id)) : [];
   try {
-    return runSqliteImmediateTransactionSync(
+    // Finish persistent-index writes before building query-local corpora.
+    const { table, historyTable, snapshot, indexedAt } = reconcileKeywordIndex(
+      db,
+      data,
+      records,
+      history,
+      binding,
+      generation,
+    );
+    return runSqliteDeferredTransactionSync(
       db,
       (): SearchOutput => {
-        const { table, historyTable, snapshot, indexedAt } = reconcileKeywordIndex(
-          db,
-          data,
-          records,
-          history,
-          binding,
-          generation,
-        );
         // BM25 statistics must come only from the searched corpus. The scope table
         // holds exactly the eligible records, so an unfiltered search queries it
         // directly; a filtered search ranks within just its validated subset.
