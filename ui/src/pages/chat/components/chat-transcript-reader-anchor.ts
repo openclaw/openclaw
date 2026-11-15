@@ -489,7 +489,7 @@ export class TranscriptReaderAnchor {
       if (!owned && this.host.scrollElement?.scrollTop === 0) {
         return false;
       }
-      if (moves && !owned && !held && this.host.prependAnchor.messageKey === null) {
+      if (moves && !owned && !held) {
         // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
         this.owedScroll += delta;
         return false;
