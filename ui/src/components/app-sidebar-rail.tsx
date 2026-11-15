@@ -56,10 +56,18 @@ const SidebarPagesMenu = lazy(() => import("./app-sidebar-pages.tsx"), {
  * (clicking the open section's item closes it); any other page runs full width.
  */
 function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) {
-  if (isMobileNavLayout() || host.onExitSettings) {
+  if (host.onExitSettings) {
     return;
   }
   const section = entry.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  if (isMobileNavLayout()) {
+    // The drawer closes on navigation and shows this section's list when it opens again.
+    if (section) {
+      host.navigationView = section;
+      host.invalidate();
+    }
+    return;
+  }
   if (!section) {
     if (!host.navigationCollapsed) {
       host.onToggleSidebar?.();

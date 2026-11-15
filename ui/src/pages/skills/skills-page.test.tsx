@@ -459,19 +459,6 @@ describe("Skills discovery lifecycle", () => {
     expect(page.querySelector(".settings-row__desc")?.textContent).toBe(stored);
   });
 
-  it("opens Plugins and Skill workshop from the shared tabs", async () => {
-    const { page, context } = mountSkills(async (method) =>
-      method === "skills.library.list" ? personalLibrary : { results: [] },
-    );
-    flush();
-    for (const tab of ["plugins", "skill-workshop"]) {
-      page
-        .querySelector(`#plugins-tab-${tab}`)
-        ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
-      expect(context.navigate).toHaveBeenLastCalledWith(tab);
-    }
-  });
-
   it("keeps typing and local matches responsive through debounce, search failure, and retry", async () => {
     const initial = deferred<unknown>();
     const pending = deferred<unknown>();

@@ -172,10 +172,32 @@ it("reads a namespaced tab reference from the generic URL", () => {
   expect(pluginTabKey({ pluginId: "other", id: "logbook" })).not.toBe(pluginTabKey(ref));
 });
 
-it("gives Dashboards, Automations and Activity a sidebar section of their own", () => {
+it("gives Dashboards, Automations, Customize and Activity a sidebar section of their own", () => {
   expect(
-    (["dashboards", "cron", "activity", "usage", "systems"] as const).map(sidebarSectionForRoute),
-  ).toEqual(["dashboards", "automations", "online", undefined, undefined]);
+    (
+      [
+        "dashboards",
+        "cron",
+        "plugins",
+        "skills",
+        "skill-workshop",
+        "templates",
+        "activity",
+        "usage",
+        "plugin-settings",
+      ] as const
+    ).map(sidebarSectionForRoute),
+  ).toEqual([
+    "dashboards",
+    "automations",
+    "customize",
+    "customize",
+    "customize",
+    "customize",
+    "online",
+    undefined,
+    undefined,
+  ]);
 });
 
 it("recognizes plugin hub routes", () => {

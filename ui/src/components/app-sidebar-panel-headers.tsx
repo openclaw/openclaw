@@ -76,6 +76,14 @@ export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) 
   );
 }
 
+export function SidebarCustomizeHeader(props: { host: AppSidebarRenderHost }) {
+  return (
+    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
+      <span class="sidebar-panel-header__title">{titleForRoute("plugins", t)}</span>
+    </SidebarPanelHeader>
+  );
+}
+
 export function SidebarOnlineHeader(props: { host: AppSidebarRenderHost }) {
   const mobile = createMediaQuery(mobileNavLayoutMediaQuery(), isMobileNavLayout());
   const people = () => props.host.people;
