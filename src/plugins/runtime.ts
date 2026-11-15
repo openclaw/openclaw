@@ -341,6 +341,13 @@ export function commitStagedPluginRegistry(
   }
 }
 
+/** Current plugin registry installation version. Every publication bumps it,
+ * including per-plugin replacement into a retained registry, so cache owners
+ * can detect inventory changes that never retire the retained registry. */
+export function captureActivePluginRegistryVersion(): number {
+  return state.activeVersion;
+}
+
 export function captureActivePluginRegistrySnapshot() {
   return {
     activeRegistry: state.activeRegistry,

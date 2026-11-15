@@ -59,6 +59,16 @@ function createEvaluator(
   };
 }
 
+const { pluginInventoryVersion } = vi.hoisted(() => ({
+  pluginInventoryVersion: { current: 1 },
+}));
+// mock-isolation: Cache validation reads the live plugin installation version;
+// tests pin and bump it instead of publishing real plugin registries.
+vi.mock("../plugins/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/runtime.js")>()),
+  captureActivePluginRegistryVersion: () => pluginInventoryVersion.current,
+}));
+
 const INPUT = { jobId: "probe", script: "return result", state: null };
 const INTERNAL_ERROR = expect.objectContaining({ kind: "error", code: "internal_error" });
 
@@ -475,6 +485,24 @@ it("forwards scheduled provenance and invalidates cached authority when it chang
   }
 
   expect(prepareRuntime.mock.calls.map(([params]) => params.scheduledToolPolicy)).toEqual(policies);
+});
+
+it("re-prepares a job's cached runtime when the plugin inventory version changes", async () => {
+  const { evaluate, prepareRuntime } = createEvaluator();
+
+  await evaluate();
+  await evaluate();
+  expect(prepareRuntime).toHaveBeenCalledOnce();
+
+  // An online enablement publishes a new registry without retiring the retained
+  // one; the next invocation must not reuse the stale preparation.
+  pluginInventoryVersion.current += 1;
+  await evaluate();
+  expect(prepareRuntime).toHaveBeenCalledTimes(2);
+
+  // The fresh preparation is cached again until the next publication.
+  await evaluate();
+  expect(prepareRuntime).toHaveBeenCalledTimes(2);
 });
 
 it.each(["policy change", "capacity eviction"] as const)(

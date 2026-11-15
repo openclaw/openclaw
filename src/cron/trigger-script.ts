@@ -68,6 +68,7 @@ import {
   isPluginRegistryRecordSetAdmitting,
 } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
+import { captureActivePluginRegistryVersion } from "../plugins/runtime.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -171,7 +172,11 @@ type TriggerRuntimeCacheEntry = {
   promise: Promise<CachedTriggerRuntime>;
   configEpoch: OpenClawConfig;
   agentId: string;
-  toolsAllowKey: string;
+  /** Request shape plus the active plugin inventory version: per-plugin
+   * replacement publishes a new registry without retiring the retained one,
+   * so publications must invalidate cached preparations whose request shape
+   * is unchanged. */
+  invalidationKey: string;
   lifetime: ReturnType<typeof createCronTriggerRuntimeLifetime>;
 };
 
@@ -405,18 +410,23 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
     preparationLimits: { cancelSignal?: AbortSignal; wallClockMs: number },
   ): Promise<{ runtime: CachedTriggerRuntime; release: () => void }> => {
     const agentId = resolveTriggerAgentId(request.runtimeConfig, request.agentId);
-    const toolsAllowKey = JSON.stringify([
+    // Per-plugin replacement publishes a new registry without retiring the
+    // retained one, so isCurrent() alone cannot see inventory growth. Fold the
+    // active installation version into the request-shape key: any publication
+    // invalidates cached preparations even when the request is unchanged.
+    const invalidationKey = JSON.stringify([
       request.toolsAllow ?? null,
       request.scheduledToolPolicy ?? null,
       request.callerOrigin ?? null,
       request.execTarget ?? null,
+      captureActivePluginRegistryVersion(),
     ]);
     const cached = runtimeCache.get(request.jobId);
     if (
       cached &&
       cached.configEpoch === request.runtimeConfig &&
       cached.agentId === agentId &&
-      cached.toolsAllowKey === toolsAllowKey
+      cached.invalidationKey === invalidationKey
     ) {
       runtimeCache.delete(request.jobId);
       runtimeCache.set(request.jobId, cached);
@@ -469,7 +479,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
       promise,
       configEpoch: request.runtimeConfig,
       agentId,
-      toolsAllowKey,
+      invalidationKey,
       lifetime: createCronTriggerRuntimeLifetime(),
     };
     runtimeCache.set(request.jobId, entry);
