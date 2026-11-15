@@ -387,7 +387,7 @@ export function createTelegramHandlerAuthorization({
           ...(params.isGroup && resolvedThreadId != null
             ? { parentId: String(params.chatId) }
             : {}),
-          ...(resolvedThreadId != null ? { threadId: String(resolvedThreadId) } : {}),
+          ...(context.threadSpec.id != null ? { threadId: String(context.threadSpec.id) } : {}),
         },
         contextBinding,
         dmPolicy,

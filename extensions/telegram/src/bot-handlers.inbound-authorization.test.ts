@@ -21,24 +21,28 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async (importOriginal) => ({
   readChannelAllowFromStore: async () => [],
 }));
 
-const chatId = -1001234567890;
-const topicId = 99;
+const groupChatId = -1001234567890;
 const participantId = "42";
 const groupConfig = { allowFrom: [participantId], groupPolicy: "allowlist" as const };
 const telegram = {
   groupPolicy: "allowlist" as const,
   groupAllowFrom: [participantId],
-  groups: { [String(chatId)]: groupConfig },
+  groups: { [String(groupChatId)]: groupConfig },
 };
 const cfg: OpenClawConfig = { channels: { telegram } };
 beforeEach(() => setRuntimeConfigSnapshot(cfg));
 afterEach(clearRuntimeConfigSnapshot);
 afterEach(clearTelegramRuntimeForTest);
 
-it("binds forum admission to the finalized parent and topic", () =>
+it.each([
+  { isGroup: true, topicId: 99 },
+  { isGroup: false, topicId: 99 },
+  { isGroup: false, topicId: undefined },
+])("binds conversation admission (group=$isGroup, topic=$topicId)", ({ isGroup, topicId }) =>
   withRegisteredChannelIngress(
     { plugin: telegramPlugin, config: cfg, setRuntime: setTelegramRuntime },
     async (runtime) => {
+      const chatId = isGroup ? groupChatId : Number(participantId);
       const authorization = createTelegramHandlerAuthorization({
         accountId: "default",
         ownerAgentId: "main",
@@ -60,22 +64,24 @@ it("binds forum admission to the finalized parent and topic", () =>
         msg: {
           message_id: 7,
           date: 1_700_000_000,
-          chat: { id: chatId, type: "supergroup", title: "Forum", is_forum: true },
+          chat: isGroup
+            ? { id: chatId, type: "supergroup", title: "Forum", is_forum: true }
+            : { id: chatId, type: "private", first_name: "Pat" },
           from: { id: Number(participantId), is_bot: false, first_name: "Pat" },
           message_thread_id: topicId,
           text: "hello",
         },
         chatId,
-        isGroup: true,
-        isForum: true,
+        isGroup,
+        isForum: isGroup,
         senderId: participantId,
         requireConfiguredGroup: false,
         dmAccess: "silent",
       });
       if (!gate.allowed) {
-        throw new Error("expected forum admission");
+        throw new Error("expected message admission");
       }
-      const sessionKey = "agent:main:telegram:group:forum:topic:99";
+      const sessionKey = `agent:main:telegram:${isGroup ? "group" : "direct"}:${chatId}${topicId == null ? "" : `:topic:${topicId}`}`;
       const ingress = await gate.resolveChannelIngress({
         agentId: "main",
         sessionKey,
@@ -86,13 +92,13 @@ it("binds forum admission to the finalized parent and topic", () =>
         channel: "telegram",
         accountId: "default",
         messageId: "7",
-        from: `telegram:group:${chatId}:topic:${topicId}`,
+        from: isGroup ? `telegram:group:${chatId}:topic:${topicId}` : `telegram:${chatId}`,
         sender: { id: participantId },
         conversation: {
-          kind: "group",
+          kind: isGroup ? "group" : "direct",
           id: String(chatId),
-          parentId: String(chatId),
-          threadId: String(topicId),
+          ...(isGroup ? { parentId: String(chatId) } : {}),
+          ...(topicId != null ? { threadId: String(topicId) } : {}),
         },
         route: { agentId: "main", routeSessionKey: sessionKey },
         reply: { to: `telegram:${chatId}`, messageThreadId: topicId },
@@ -108,4 +114,5 @@ it("binds forum admission to the finalized parent and topic", () =>
         decisionCoverage: "enforced",
       });
     },
-  ));
+  ),
+);
