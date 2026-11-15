@@ -14,6 +14,7 @@ import {
   collectRegistryInvocationInstances,
   PluginInvocationScope,
 } from "../plugins/plugin-invocation-scope.js";
+import { withPluginRetentionOwner } from "../plugins/plugin-retention-diagnostics.js";
 import { getPluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import {
   bindPluginRegistryLifetime,
@@ -274,15 +275,21 @@ export function retainPreparedPluginGeneration(
   };
 }
 
-/** Shared builds outlive their requesting turn: they hold the generation, not the turn's scope. */
+/**
+ * Shared catalog builds outlive their requesting turn: they hold the generation, not the turn's
+ * scope, and retention diagnostics name the agent's catalog discovery rather than that turn.
+ */
 export function runWithPreparedPluginGeneration<T>(
   generation: PreparedModelRuntimePluginGeneration,
+  agentId: string | undefined,
   build: () => Promise<T>,
 ): Promise<T> {
-  return pluginInvocationContext.exit(async () => {
-    await using _ = { [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation) };
-    return await build();
-  });
+  return pluginInvocationContext.exit(() =>
+    withPluginRetentionOwner({ agentId, serviceId: "model-catalog-discovery" }, async () => {
+      await using _ = { [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation) };
+      return await build();
+    }),
+  );
 }
 
 /** Each admitted lease owns callable authority independently of its parent's lifetime. */

@@ -137,6 +137,7 @@ export async function createFullModelCatalogAccess(
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
+  const { agentId } = params.agentFacts.input;
   const hasNativeCatalog = params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
     ({ harness }) => typeof harness.loadModelCatalog === "function",
   );
@@ -405,7 +406,7 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, agentId, async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
@@ -650,7 +651,7 @@ export async function createFullModelCatalogAccess(
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, async () => {
+    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, agentId, async () => {
       if (fullRefresh || providers.length) {
         const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
           (error: unknown) => {

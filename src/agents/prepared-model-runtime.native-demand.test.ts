@@ -22,6 +22,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentHarness } from "./harness/types.js";
 import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
+import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { loadPreparedModelCatalogSnapshot as loadCatalog } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot as readSnapshot,
@@ -436,4 +437,45 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
   const respond = await createPicker(config)();
   expect(loadSecond).toHaveBeenCalledOnce();
   expectModels(respond, [{ provider: second.provider, id: second.id }]);
+});
+
+it("ends hung native discovery at its deadline and names it in sibling plugin holds", async () => {
+  const config = nativeConfig("demo/native-model", {
+    "demo/native-model": { agentRuntime: { id: "native-test" } },
+  });
+  mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
+  // A provider plugin that only shares the generation with the hung harness (#199521).
+  const sibling = createOwnedTestInstance("sibling-provider");
+  const registry = sibling.owner!.registry!;
+  const started = createDeferredCore();
+  registry.agentHarnesses.push(
+    ...harnessRegistry("native-test", {
+      loadModelCatalog: () => {
+        started.resolve();
+        return new Promise<never>(() => {});
+      },
+    }).agentHarnesses,
+  );
+  mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
+  mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
+  const owner = await prepareOwner(config);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const served = owner.loadNativeModelCatalog!();
+    await started.promise;
+    const holds = sibling
+      .retentionSnapshot()
+      .references.filter(({ reason }) => reason === "prepared-generation-lease");
+    expect(holds.length).toBeGreaterThan(0);
+    for (const hold of holds) {
+      expect(hold.owner).toEqual({ agentId: "pro", serviceId: "model-catalog-discovery" });
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect((await served).entries).toContainEqual(expect.objectContaining(saved));
+    expect(sibling.retainedWorkCount).toBeGreaterThan(0);
+    await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
+    expect(sibling.retainedWorkCount).toBe(0);
+  } finally {
+    vi.useRealTimers();
+  }
 });
