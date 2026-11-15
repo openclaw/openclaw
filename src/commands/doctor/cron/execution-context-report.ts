@@ -9,6 +9,7 @@ import type {
   ScheduledAdmissionFacts,
   ScheduledExecutionContextResult,
 } from "../../../cron/execution-context.js";
+import { resolvePausedOccurrence } from "../../../cron/service/occurrence-admission.js";
 import type { CronStoredJob } from "../../../cron/types.js";
 import { countLabel as pluralize } from "../../doctor-state-integrity-format.js";
 
@@ -70,13 +71,13 @@ export function classifyScheduledJob(
 ): void {
   const { job, facts, result } = observation;
   const ref = jobRef(job);
-  // Command payloads run host commands without the parent's access and never pause.
+  // Plain command payloads run without parent access; triggers or scoped grants may depend on it.
   const runsCommand = job.payload.kind === "command";
   // Only a trigger script or a detached/custom-session run executes under the minted context;
   // a main-target job runs in the agent's own session, though a missing parent still pauses it.
   const usesContext = Boolean(job.trigger) || (!runsCommand && job.sessionTarget !== "main");
   if (result.status === "pause") {
-    if (!runsCommand) {
+    if (resolvePausedOccurrence(job, { pause: result })) {
       report.pauses.push({
         job: ref,
         parentSessionKey: result.parentSessionKey,

@@ -107,6 +107,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
   const sessionsHandlers = await getSessionsHandlers();
   const { getRuntimeConfig } = await getGatewayConfigModule();
   const directContext = {
+    cron: { list: async () => [], getDefaultAgentId: () => "main" },
     broadcastToConnIds: vi.fn(),
     dedupe: new Map(),
     getSessionEventSubscriberConnIds: () => new Set<string>(),

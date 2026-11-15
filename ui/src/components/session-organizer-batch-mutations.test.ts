@@ -732,10 +732,12 @@ describe("session organizer destructive confirmations", () => {
         .soft(document.body.textContent)
         .toContain(
           count === 1
-            ? 'Automations linked to "Batch 0" will be disabled.'
-            : "Automations linked to 2 of these conversations will be disabled.",
+            ? 'Automations that depend on "Batch 0" will be disabled.'
+            : "Automations that depend on the deleted conversations will be disabled.",
         );
-      expect.soft(document.body.textContent).toContain("Commands already running may finish.");
+      expect
+        .soft(document.body.textContent)
+        .toContain("Independent automations keep running, but reports to");
       expect(document.body.textContent).toContain("Nightly digest (job-1)");
       expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
       expect(actions.textContent).toContain("Delete anyway");

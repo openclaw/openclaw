@@ -31,18 +31,22 @@ import {
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const key = "agent:main:dashboard:command-owner";
 const sessionId = "command-owner";
+const reportingKey = "agent:main:dashboard:reports";
 
 async function withAutomations(
   run: (cron: CronService, command: ReturnType<typeof vi.fn>) => Promise<void>,
 ) {
   const { dir } = await createSessionStoreDir();
-  await writeSessionStore({ entries: { [key]: sessionStoreEntry(sessionId) } });
+  await writeSessionStore({
+    entries: { [key]: sessionStoreEntry(sessionId), [reportingKey]: sessionStoreEntry("reports") },
+  });
   const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
   const command = vi.fn(async () => ({ status: "ok" as const }));
   const cron = new CronService({
     storePath: path.join(dir, "cron", "jobs.json"),
     scheduler: createTestGatewayScheduler(),
     cronEnabled: true,
+    cronConfig: { triggers: { enabled: true } },
     defaultAgentId: "main",
     log: { debug() {}, info() {}, warn() {}, error() {} },
     enqueueSystemEvent() {},
@@ -71,39 +75,92 @@ const definition = {
   payload: { kind: "command" as const, argv: ["echo", "synthetic backup"] },
 };
 
-test("deletion disables bound jobs, preserves standalone jobs, and cannot restart an orphaned command", async () => {
+const dependentDefinition = {
+  ...definition,
+  payload: { kind: "agentTurn" as const, message: "Use this conversation's workspace" },
+};
+
+test("deleting the creator disables execution dependencies but preserves independent reporting elsewhere", async () => {
   await withAutomations(async (cron, command) => {
-    const bound = await cron.add(definition, {
+    const dependent = await cron.add(dependentDefinition, {
       sourceConversation: { sessionKey: key, sessionId },
     });
-    const standalone = await cron.add({ ...definition, name: "Standalone backup" });
+    const independent = await cron.add(
+      {
+        ...definition,
+        sessionKey: reportingKey,
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      },
+      { sourceConversation: { sessionKey: key, sessionId } },
+    );
     const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
     expect(sessionHasAutomation(key, cfg, "main")).toBe(true);
     const deleted = await directSessionReq("sessions.delete", { key }, { context: { cron } });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect((await loadSessionEntryAsync(key)).entry).toBeUndefined();
-    expect.soft(cron.getJob(bound.id)?.enabled).toBe(false);
-    expect(sessionHasAutomation(key, cfg, "main")).toBe(false);
-    expect(cron.getJob(standalone.id)?.enabled).toBe(true);
-    await cron.update(bound.id, { enabled: true });
-    await cron.run(bound.id, "force");
-    expect.soft(command).not.toHaveBeenCalled();
-    expect
-      .soft(cron.getJob(bound.id))
-      .toMatchObject({ enabled: false, state: { lastRunStatus: "skipped" } });
+    expect(cron.getJob(dependent.id)?.enabled).toBe(false);
+    expect.soft(cron.getJob(independent.id)?.enabled).toBe(true);
+    await cron.run(independent.id, "force");
+    expect.soft(command).toHaveBeenCalledOnce();
+    expect(cron.getJob(independent.id)).toMatchObject({
+      enabled: true,
+      delivery: { channel: "telegram", to: "123" },
+      state: { lastRunStatus: "ok" },
+    });
     command.mockClear();
-    await cron.run(standalone.id, "force");
+    await cron.update(dependent.id, { enabled: true });
+    await cron.run(dependent.id, "force");
+    expect(command).not.toHaveBeenCalled();
+    expect(cron.getJob(dependent.id)).toMatchObject({
+      enabled: false,
+      state: { lastRunStatus: "skipped" },
+    });
+  });
+});
+
+test("deleting a reporting conversation leaves execution elsewhere enabled", async () => {
+  await withAutomations(async (cron, command) => {
+    const job = await cron.add(
+      { ...dependentDefinition, sessionKey: reportingKey },
+      { sourceConversation: { sessionKey: key, sessionId } },
+    );
+    const deleted = await directSessionReq(
+      "sessions.delete",
+      { key: reportingKey },
+      { context: { cron } },
+    );
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(cron.getJob(job.id)?.enabled).toBe(true);
+    await cron.run(job.id, "force");
     expect(command).toHaveBeenCalledOnce();
+    expect((await loadSessionEntryAsync(reportingKey)).entry).toBeUndefined();
+  });
+});
+
+test("deleting an explicit execution target disables its automation, not its creator", async () => {
+  await withAutomations(async (cron) => {
+    const job = await cron.add(
+      { ...dependentDefinition, sessionTarget: `session:${reportingKey}` },
+      { sourceConversation: { sessionKey: key, sessionId } },
+    );
+    const deleted = await directSessionReq(
+      "sessions.delete",
+      { key: reportingKey },
+      { context: { cron } },
+    );
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(cron.getJob(job.id)?.enabled).toBe(false);
+    expect((await loadSessionEntryAsync(key)).entry?.sessionId).toBe(sessionId);
   });
 });
 
 test("a failed automation disable keeps the conversation and reports partial progress", async () => {
   await withAutomations(async (cron) => {
-    const first = await cron.add(definition, {
+    const first = await cron.add(dependentDefinition, {
       sourceConversation: { sessionKey: key, sessionId },
     });
     const second = await cron.add(
-      { ...definition, name: "Second backup" },
+      { ...dependentDefinition, name: "Second backup" },
       { sourceConversation: { sessionKey: key, sessionId } },
     );
     const update = cron.updateWithPrecondition.bind(cron);
@@ -141,7 +198,7 @@ test.each([
       const other = ensureProfileForEmail("automation-other@example.test");
       // Normal Gateway admission prepares the resident catalog before handlers run.
       await prepareUserProfileCatalog();
-      const job = await cron.add(definition, {
+      const job = await cron.add(dependentDefinition, {
         sourceConversation: { sessionKey: key, sessionId },
         createdActor: { type: "human", source: "profile", id: owner.id },
       });
@@ -170,9 +227,12 @@ test.each([false, true])(
   "deletion honors model command-job policy (allowed=%s)",
   async (allowed) => {
     await withAutomations(async (cron) => {
-      const job = await cron.add(definition, {
-        sourceConversation: { sessionKey: key, sessionId },
-      });
+      const job = await cron.add(
+        { ...definition, trigger: { script: "return { fire: true };" } },
+        {
+          sourceConversation: { sessionKey: key, sessionId },
+        },
+      );
       const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
       const client = createCronCallerClient("main", "default", key);
       client.connect = gatewayConnect(["operator.admin"]);

@@ -27,10 +27,10 @@ export async function admitCronOccurrence(
  */
 export function resolvePausedOccurrence(
   job: CronStoredJob,
-  occurrence: ScheduledOccurrence,
+  occurrence: Pick<ScheduledOccurrence, "pause">,
 ): CronJobExecutionResult | undefined {
-  // Commands need no parent workspace, but an explicitly deleted parent ends
-  // future runs just as it does for other parent-bound payloads.
+  // Admission only names real execution dependencies. A plain command has none;
+  // a command with a parent-scoped grant or trigger must stop after that parent is removed.
   if (
     !occurrence.pause ||
     (job.payload.kind === "command" && occurrence.pause.reason !== "removed")

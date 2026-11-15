@@ -566,6 +566,31 @@ describe("completion announcement", () => {
     },
   );
 
+  it("records missing conversation delivery without recreating it or redirecting the report", async () => {
+    await withCompletionFixture("command", async (fixture) => {
+      fixture.job.delivery = { mode: "announce", channel: "last" };
+      await deleteSessionEntryLifecycle({
+        archiveTranscript: false,
+        storePath: fixture.source.storePath,
+        target: { canonicalKey: fixture.source.sessionKey, storeKeys: [fixture.source.sessionKey] },
+      });
+      const result = await fixture.finalize();
+      expect(result).toMatchObject({
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: expect.any(String),
+      });
+      expect(fixture.sendText).not.toHaveBeenCalled();
+      expect(loadSessionEntryReadOnly(fixture.source)).toBeUndefined();
+      await fixture.assertNoResults();
+      const history = await fixture.recordHistory(result);
+      expect(history).toMatchObject({
+        status: "ok",
+        deliveryError: expect.any(String),
+      });
+    });
+  });
+
   it("refuses destination output without an occurrence identity", async () => {
     await withCompletionFixture("script", async (fixture) => {
       await expect(fixture.finalize({ runStartedAtMs: undefined })).resolves.toMatchObject({

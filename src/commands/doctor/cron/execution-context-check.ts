@@ -204,8 +204,8 @@ async function reviewJob(
   const actor = job.createdActor;
   const profile =
     actor?.type === "human" && actor.id ? await readCreatorProfile(env, actor.id) : undefined;
-  // Read the parent row and requester only for a job linked to an exact incarnation.
-  const parentKey = scheduledParentKeyOf(job);
+  // Execution dependencies and requester provenance are separate.
+  const parentKey = scheduledParentKeyOf(job, agentId);
   let entry: SessionEntry | undefined;
   let parentRow;
   let owner: OwnerResult = { owner: undefined, check: "not-needed" };
@@ -213,6 +213,8 @@ async function reviewJob(
     entry = await readParentEntry(cfg, agentId, parentKey);
     const worktreePath = entry?.worktree ? entry.spawnedCwd : undefined;
     parentRow = parentRowFactsFromEntry(entry, worktreePath ? await exists(worktreePath) : false);
+  }
+  if (parentKey || job.sourceConversation) {
     owner = checkRequesterOwnerReadOnly(cfg, resolveScheduledRequester(job), profile);
   }
   const runSessionKey =

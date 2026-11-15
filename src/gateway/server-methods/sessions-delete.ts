@@ -25,6 +25,8 @@ import { assertCapturedSessionEntryReadSource } from "../../config/sessions/sess
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import { disableCronJobsBoundToSessions } from "../../cron/job-session-bindings.js";
+import { withLocalCronService } from "../../cron/local-service.js";
+import type { CronServiceContract } from "../../cron/service-contract.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -463,32 +465,44 @@ async function deleteGatewaySessionInScope(
             // to recover from, rather than silently orphaning a still-enabled job.
             const callerScope = readCronCallerScope(client);
             try {
-              await disableCronJobsBoundToSessions({
-                cron: context.cron,
-                cfg,
-                sessionKeys: [target.canonicalKey],
-                agentId: target.agentId,
-                assertCanDisable: (job) => {
-                  commitGuard();
-                  if (
-                    client &&
-                    !operatorScopeSatisfied("operator.cron", client.connect.scopes ?? [])
-                  ) {
-                    throw new Error("Automation management access is required");
-                  }
-                  assertHumanCronJobAccess(client, job);
-                  assertCronModelJobAllowed(client, cfg, job, { enabled: false });
-                  if (
-                    !cronJobMatchesCallerScope({
-                      job,
-                      callerScope,
-                      defaultAgentId: context.cron.getDefaultAgentId(),
-                    })
-                  ) {
-                    throw new Error("Automation is outside the caller's management scope");
-                  }
-                },
-              });
+              const disable = (
+                cron: Pick<
+                  CronServiceContract,
+                  "list" | "updateWithPrecondition" | "getDefaultAgentId"
+                >,
+              ) =>
+                disableCronJobsBoundToSessions({
+                  cron,
+                  cfg,
+                  sessionKeys: [target.canonicalKey],
+                  agentId: target.agentId,
+                  executionOnly: true,
+                  assertCanDisable: (job) => {
+                    commitGuard();
+                    if (
+                      client &&
+                      !operatorScopeSatisfied("operator.cron", client.connect.scopes ?? [])
+                    ) {
+                      throw new Error("Automation management access is required");
+                    }
+                    assertHumanCronJobAccess(client, job);
+                    assertCronModelJobAllowed(client, cfg, job, { enabled: false });
+                    if (
+                      !cronJobMatchesCallerScope({
+                        job,
+                        callerScope,
+                        defaultAgentId: cron.getDefaultAgentId(),
+                      })
+                    ) {
+                      throw new Error("Automation is outside the caller's management scope");
+                    }
+                  },
+                });
+              if (context.localEmbedded) {
+                await withLocalCronService(() => cfg, disable);
+              } else {
+                await disable(context.cron);
+              }
             } catch (error) {
               sessionLog.warn(
                 `sessions.delete: failed to disable linked automations: ${formatErrorMessage(error)}`,
@@ -496,7 +510,7 @@ async function deleteGatewaySessionInScope(
               throw new SessionDeletionError(
                 errorShape(
                   ErrorCodes.UNAVAILABLE,
-                  `Session ${key} was not deleted because its linked automations could not all be disabled. Some automations may already be disabled. Disable them from Automations, or ask their owner or an administrator, then retry.`,
+                  `Session ${key} was not deleted because automations that depend on it could not all be disabled. Some automations may already be disabled. Disable them from Automations, or ask their owner or an administrator, then retry.`,
                   { retryable: true },
                 ),
               );

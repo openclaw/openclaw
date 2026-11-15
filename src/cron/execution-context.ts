@@ -42,6 +42,8 @@ export type ScheduledRequesterRef =
   | Readonly<{ kind: "unknown" }>;
 
 type ParentlessScheduledPrincipal =
+  /** A recorded requester without a dependency on the creating conversation. */
+  | Readonly<{ kind: "requester"; requester: ScheduledRequesterRef }>
   /** A parent key without a link. Every decision equals the legacy one until bound. */
   | Readonly<{ kind: "unbound-parent"; parentSessionKey: string }>
   | Readonly<{ kind: "operator"; basis: "trusted-policy" | "unlinked-legacy" | "operator-source" }>
@@ -180,6 +182,7 @@ type BuilderJob = Pick<
   | "owner"
   | "scheduledToolPolicy"
   | "payload"
+  | "trigger"
   | "operatorSource"
   | "sourceConversation"
   | "ownerProfileId"
@@ -235,7 +238,14 @@ export function resolveScheduledPrincipal(
     } catch {
       return { error: "stored operator source is invalid" };
     }
-    const parent = source.kind === "gateway" ? job.sourceConversation : source;
+    // A plain host command uses its stored process definition and requester grant,
+    // not the creating chat. Session-scoped grants and script triggers still depend on it.
+    const parent =
+      source.kind === "gateway"
+        ? job.payload.kind === "command" && !job.trigger
+          ? undefined
+          : job.sourceConversation
+        : source;
     if (!parent) {
       return { kind: "operator", basis: "operator-source" };
     }
@@ -247,6 +257,9 @@ export function resolveScheduledPrincipal(
   }
   const source = job.sourceConversation;
   if (source) {
+    if (job.payload.kind === "command" && !job.trigger) {
+      return { kind: "requester", requester: resolveScheduledRequester(job) };
+    }
     return {
       kind: "parent",
       parent: { agentId: facts.agentId, sessionKey: source.sessionKey },
@@ -298,7 +311,7 @@ function resolveAuthority(
     const owner = facts.requesterCheck?.owner === true;
     return withSource(owner, owner ? "profile-role" : "none");
   }
-  if (principal.kind === "parent") {
+  if (principal.kind === "parent" || principal.kind === "requester") {
     const { requester } = principal;
     if (requester.kind === "unknown") {
       // v2026.10.6 recorded a trusted policy, but no requester, for jobs an

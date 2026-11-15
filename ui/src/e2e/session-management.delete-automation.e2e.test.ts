@@ -85,7 +85,7 @@ suite.define(() => {
         expect
           .soft(await dialog.textContent())
           .toContain(
-            'Automations linked to "Backup maintenance" will be disabled. Commands already running may finish.',
+            'Automations that depend on "Backup maintenance" will be disabled. Independent automations keep running, but reports to this conversation will stop.',
           );
         await ui.button(dialog, "Cancel").click();
         await dialog.waitFor({ state: "detached" });
