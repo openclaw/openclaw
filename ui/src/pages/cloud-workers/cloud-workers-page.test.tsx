@@ -99,11 +99,121 @@ function osSelect(page: Element) {
   return page.querySelector<HTMLSelectElement>('select[aria-label="Operating system"]');
 }
 
+it("selects advertised classes for the draft OS and retains custom values across backend changes", async () => {
+  let config: Record<string, unknown> = {
+    cloudWorkers: { profiles: { worker: machineProfile() } },
+  };
+  let hash = "initial";
+  const patches: ConfigPatchParams[] = [];
+  const request = createGatewayRequestMock(async (method, params) => {
+    if (method === "config.get") {
+      return configSnapshot(config, hash);
+    }
+    if (method === "environments.list") {
+      return {
+        environments: [],
+        profiles: [
+          {
+            id: "worker",
+            providerId: "crabbox",
+            operatingSystems,
+            machines: [
+              { id: "standard", label: "Standard", os: "linux", default: true },
+              { id: "large", label: "Large", os: "linux" },
+              { id: "windows-build", label: "Windows build", os: "windows/wsl2" },
+            ],
+          },
+        ],
+      };
+    }
+    if (method !== "config.patch" || !validateConfigPatchParams(params)) {
+      throw new Error("Unexpected request " + method);
+    }
+    patches.push(params);
+    const merged = applyMergePatch(config, JSON.parse(params.raw));
+    if (!isRecord(merged)) {
+      throw new Error("Expected configuration");
+    }
+    config = merged;
+    hash = "saved";
+    return { ok: true, config, hash };
+  });
+  const { runtimeConfig, view, page } = mountProfiles(createTestGatewayClient(request));
+  try {
+    await waitForSolid(() =>
+      expect(profileRow(page, "worker").textContent).toContain("Advertised"),
+    );
+    click(profileRow(page, "worker"), "Edit");
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")?.tagName).toBe("BUTTON"),
+    );
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="large"]')).not.toBeNull(),
+    );
+    expect(page.querySelector('[role="option"][data-value="windows-build"]')).toBeNull();
+    page.querySelector<HTMLElement>('[role="option"][data-value="large"]')!.click();
+    flush();
+    change(osSelect(page)!, "windows/wsl2");
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="windows-build"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="windows-build"]')!.click();
+    flush();
+    click(page, "Save");
+    await waitForSolid(() => expect(patches).toHaveLength(1));
+    expect(JSON.parse(patches[0]!.raw)).toMatchObject({
+      cloudWorkers: {
+        profiles: { worker: { settings: { class: "windows-build", target: "windows/wsl2" } } },
+      },
+    });
+    await waitText(() => page, "Profile saved");
+    click(profileRow(page, "worker"), "Edit");
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")?.textContent).toContain(
+        "Windows build",
+      ),
+    );
+    page.querySelector<HTMLButtonElement>("#cloud-worker-machine-class")!.click();
+    await waitForSolid(() =>
+      expect(page.querySelector('[role="option"][data-value="__custom_class__"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="__custom_class__"]')!.click();
+    const custom = await waitForSolid(() =>
+      expectDefined(
+        page.querySelector<HTMLInputElement>('input[aria-label="Device class"]'),
+        "Custom class",
+      ),
+    );
+    custom.focus();
+    change(custom, "provider-special");
+    change(
+      page.querySelector<HTMLInputElement>('input[aria-label="Crabbox backend"]')!,
+      "other-provider",
+    );
+    expect(page.querySelector('input[aria-label="Device class"]')).toBe(custom);
+    expect(custom.value).toBe("provider-special");
+    expect(page.querySelector("#cloud-worker-machine-class")).toBeNull();
+    expect(document.activeElement).toBe(custom);
+  } finally {
+    view.unmount();
+    runtimeConfig.dispose();
+  }
+});
+
 it("keeps the profile draft and accepted catalog through refresh failure and retry", async () => {
   const config = { cloudWorkers: { profiles: { worker: machineProfile() } } };
   const catalog = {
     environments: [],
-    profiles: [{ id: "worker", providerId: "crabbox", operatingSystems }],
+    profiles: [
+      {
+        id: "worker",
+        providerId: "crabbox",
+        operatingSystems,
+        machines: [{ id: "standard", label: "Standard", os: "linux" }],
+      },
+    ],
   };
   let hash = "initial";
   let response = Promise.resolve<EnvironmentsListResult>(catalog);
@@ -145,7 +255,17 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
       await waitForSolid(() => expect(catalogCalls()).toBeGreaterThan(before));
       return pending;
     };
+    await waitForSolid(() =>
+      expect(page.querySelector("#cloud-worker-machine-class")).not.toBeNull(),
+    );
     const pending = await refresh("second");
+    expect(page.querySelector("#cloud-worker-machine-class")).toBeNull();
+    const machine = expectDefined(
+      page.querySelector<HTMLInputElement>('input[aria-label="Device class"]'),
+      "Pending catalog class",
+    );
+    machine.focus();
+    change(machine, "vendor-refresh");
     expect(profileRow(page, "worker").textContent).toContain("Advertised");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
@@ -163,6 +283,9 @@ it("keeps the profile draft and accepted catalog through refresh failure and ret
     expect(profileRow(page, "worker").textContent).toContain("Advertised");
     expect(page.querySelector('input[aria-label="Max lifetime"]')).toBe(lifetime);
     expect(lifetime.value).toBe("9h");
+    expect(page.querySelector('input[aria-label="Device class"]')).toBe(machine);
+    expect(machine.value).toBe("vendor-refresh");
+    expect(document.activeElement).toBe(machine);
   } finally {
     view.unmount();
     runtimeConfig.dispose();
