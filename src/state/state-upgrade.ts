@@ -377,6 +377,8 @@ export async function upgradeStateDirectory(params: {
       top.startsWith(WORK_PREFIX) ||
       top === "locks" ||
       top === "tmp" ||
+      // Git release installations are code, never state; copying them doubles every release.
+      top === "git-install" ||
       workspaces.some((dir) => absolute === dir || absolute.startsWith(`${dir}${path.sep}`))
     );
   };
