@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawChatUI
 import Observation
 import OpenClawKit
 import SwiftUI
@@ -209,11 +210,11 @@ enum AuthenticatedControlUI {
         value.addingPercentEncoding(withAllowedCharacters: self.queryComponentAllowed)
     }
 
-    private static func originString(for url: URL) -> String {
+    fileprivate static func originString(for url: URL) -> String {
         GatewayTLSAuthority(url: url)?.serialized ?? ""
     }
 
-    private static func jsStringLiteral(_ value: String) -> String {
+    fileprivate static func jsStringLiteral(_ value: String) -> String {
         guard let data = try? JSONSerialization.data(withJSONObject: [value]),
               let raw = String(data: data, encoding: .utf8),
               raw.hasPrefix("["),
@@ -525,10 +526,12 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         if shouldReportFailure { self.onAccessCookieBoundaryFailure?() }
     }
 
+    var appearanceScript: String?
+
     func installUserScripts(in controller: WKUserContentController) {
         controller.removeAllUserScripts()
         let embedScript = self.usesNativeEmbed ? Self.embedScript(url: self.url) : nil
-        for script in [self.authScript, embedScript, self.deviceSettingsBridge?.seedScript(for: self.url)] {
+        for script in [self.authScript, embedScript, self.appearanceScript, self.deviceSettingsBridge?.seedScript(for: self.url)] {
             guard let script else { continue }
             controller.addUserScript(WKUserScript(
                 source: script,
@@ -825,6 +828,7 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
 /// Ephemeral, script-hardened WKWebView for a self-contained Control UI page.
 struct AuthenticatedControlUIWebView: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.openClawNativeAppearance) private var nativeAppearance
 
     let url: URL
     let authScript: String?
@@ -900,6 +904,7 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         configuration.websiteDataStore = .nonPersistent()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
+        context.coordinator.appearanceScript = self.appearanceScript
         context.coordinator.installUserScripts(in: configuration.userContentController)
         if self.nativeGatewayAuthProvider != nil {
             configuration.userContentController.addScriptMessageHandler(
@@ -918,15 +923,15 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             guard let coordinator, let webView else { return }
             coordinator.installUserScripts(in: webView.configuration.userContentController)
         }
-        self.applyAppearance(to: webView)
+        self.applyAppearance(to: webView, coordinator: context.coordinator)
         webView.navigationDelegate = context.coordinator
         webView.isOpaque = true
-        webView.backgroundColor = .black
+        webView.backgroundColor = OpenClawBrand.uiVoid
         webView.allowsLinkPreview = false
         webView.allowsBackForwardNavigationGestures = true
 
         let scrollView = webView.scrollView
-        scrollView.backgroundColor = .black
+        scrollView.backgroundColor = OpenClawBrand.uiVoid
         scrollView.contentInsetAdjustmentBehavior = .never
         scrollView.contentInset = .zero
         scrollView.verticalScrollIndicatorInsets = .zero
@@ -988,12 +993,41 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
             context.coordinator.retireAccess(in: webView)
             return
         }
-        self.applyAppearance(to: webView)
+        self.applyAppearance(to: webView, coordinator: context.coordinator)
         // Connection changes recreate the view via `.id`; unrelated SwiftUI passes must not reload it.
     }
 
-    private func applyAppearance(to webView: WKWebView) {
+    private var appearanceScript: String? {
+        guard self.usesNativeEmbed, let nativeAppearance else { return nil }
+        let palette = self.colorScheme == .dark ? nativeAppearance.dark : nativeAppearance.light
+        let payload: [String: Any] = [
+            "theme": nativeAppearance.themeID,
+            "themeMode": self.colorScheme == .dark ? "dark" : "light",
+            "variables": palette.webVariables,
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
+              let json = String(data: data, encoding: .utf8)
+        else { return nil }
+        return """
+        (() => {
+          if (location.origin !== \(AuthenticatedControlUI.jsStringLiteral(AuthenticatedControlUI.originString(for: self.url)))) return;
+          const appearance = \(json);
+          window.__OPENCLAW_NATIVE_APPEARANCE__ = appearance;
+          for (const [name, value] of Object.entries(appearance.variables)) {
+            document.documentElement.style.setProperty(name, value);
+          }
+          window.dispatchEvent(new Event("openclaw:native-appearance-changed"));
+        })();
+        """
+    }
+
+    private func applyAppearance(to webView: WKWebView, coordinator: AuthenticatedControlUIWebViewCoordinator) {
         webView.overrideUserInterfaceStyle = self.colorScheme == .dark ? .dark : .light
+        let script = self.appearanceScript
+        guard coordinator.appearanceScript != script else { return }
+        coordinator.appearanceScript = script
+        coordinator.installUserScripts(in: webView.configuration.userContentController)
+        if let script { webView.evaluateJavaScript(script, completionHandler: nil) }
     }
 
     static func dismantleUIView(

@@ -24,7 +24,10 @@ enum IOSDeviceSettingsActions {
         else { return false }
         switch (key, value) {
         case let (.appearance, .string(raw)):
-            if let preference = AppAppearancePreference(rawValue: raw) { appearanceModel.select(preference) }
+            if let preference = AppAppearancePreference(rawValue: raw) {
+                appearanceModel.select(preference)
+                await appModel.syncAppearancePreferences()
+            }
         case let (.notificationsEnabled, .boolean(enabled)):
             _ = await self.setNotificationsEnabled(
                 enabled, confirmDisclosure: { await confirm(.notificationEnrollment) }, isCurrent: isCurrent)

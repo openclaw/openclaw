@@ -8,6 +8,7 @@ import { resolveThemeColor, resolveThemeColors } from "../lib/theme-color.ts";
 import { controlUiAccentFocus, controlUiAccentStates } from "./accent-contrast.ts";
 import { controlUiDocumentHead } from "./control-ui-document-head.ts";
 import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
+import { nativeAppearance } from "./native-web-chrome.ts";
 
 const ACCENT_CSS_VARIABLES = [
   "--ring",
@@ -232,6 +233,10 @@ export function syncControlUiSystemChrome(
 }
 
 export function applyControlUiAccent(userAccent?: string): void {
+  // The native host already resolved profile and Gateway accent precedence.
+  if (nativeAppearance()) {
+    return;
+  }
   userAccentOverride = userAccent;
   const root = document.documentElement;
   // An explicit theme selection must not expose the lower-precedence seam color.

@@ -8,7 +8,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationGateway, ApplicationTheme, ApplicationThemePalette } from "./context.ts";
 import { applyControlUiAccent, syncControlUiSystemChrome } from "./control-ui-presentation.ts";
 import { syncCustomThemeStyleTag } from "./custom-theme.ts";
-import { nativeEmbedHost } from "./native-web-chrome.ts";
+import { nativeAppearance, nativeEmbedHost } from "./native-web-chrome.ts";
 import { backgroundPreferenceStorageKey } from "./settings-background.ts";
 import {
   bindUiPreferences,
@@ -65,7 +65,14 @@ function applyThemePresentation(settings: UiPreferences, catalogTheme?: CatalogT
   syncTypefaceStylesheets(typefaces);
   applyTypefaceOverrides(settings.fontUi, settings.fontChat);
   syncCustomThemeStyleTag(catalogTheme?.palette ?? settings.customTheme);
-  applyControlUiAccent(settings.accent);
+  const native = nativeAppearance();
+  if (native) {
+    for (const [key, value] of Object.entries(native.variables)) {
+      root.style.setProperty(key, value);
+    }
+  } else {
+    applyControlUiAccent(settings.accent);
+  }
   // Custom palette CSS can change while the theme ID and inline styles stay the same.
   syncControlUiSystemChrome(true);
 }
@@ -108,8 +115,8 @@ export function createApplicationTheme(
     nativeIOS
       ? {
           ...settings,
-          theme: "claw",
-          themeMode: "system",
+          theme: nativeAppearance()?.theme ?? "claw",
+          themeMode: nativeAppearance()?.themeMode ?? "system",
           accent: "theme",
           fontUi: "system",
           fontChat: "system",
@@ -276,6 +283,12 @@ export function createApplicationTheme(
       refresh();
     }
   });
+  const stopNativeAppearance = nativeIOS
+    ? listen(window, "openclaw:native-appearance-changed", () => {
+        publish();
+        syncSystemThemeListener();
+      })
+    : undefined;
   syncSystemThemeListener();
   publish();
   void loadCatalog();
@@ -319,6 +332,7 @@ export function createApplicationTheme(
       disposed = true;
       catalog?.dispose();
       stopPreferences();
+      stopNativeAppearance?.();
       stopStorage?.();
       stopGateway();
       presentationGeneration += 1;

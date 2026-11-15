@@ -38,6 +38,47 @@ describe("parseThemeSelection", () => {
   });
 });
 
+it("paints embedded iOS from native appearance without changing web preferences", async () => {
+  const html = await readFile(new URL("../../index.html", import.meta.url), "utf8");
+  const saved = JSON.stringify({ theme: "rose", themeMode: "light", accent: "#abcdef" });
+  const page = new JSDOM(html, {
+    url: "https://gateway.example/",
+    runScripts: "dangerously",
+    beforeParse(window) {
+      Object.assign(window, {
+        __OPENCLAW_NATIVE_EMBED__: { platform: "ios", formFactor: "phone" },
+        __OPENCLAW_NATIVE_APPEARANCE__: {
+          theme: "tide",
+          themeMode: "dark",
+          accent: "#5a9bef",
+          variables: { "--bg": "#10151b", "--primary": "#5a9bef" },
+        },
+      });
+      window.matchMedia = (query) => ({
+        matches: true,
+        media: query,
+        onchange: null,
+        addListener() {},
+        removeListener() {},
+        addEventListener() {},
+        removeEventListener() {},
+        dispatchEvent() {
+          return true;
+        },
+      });
+      window.localStorage.setItem("openclaw.control.settings.v1", saved);
+    },
+  });
+  try {
+    const root = page.window.document.documentElement;
+    expect(root.dataset.theme).toBe("tide");
+    expect(root.dataset.themeMode).toBe("dark");
+    expect(page.window.localStorage.getItem("openclaw.control.settings.v1")).toBe(saved);
+  } finally {
+    page.window.close();
+  }
+});
+
 // Exercise the real document-start owner, not just its runtime counterpart.
 it.each([
   ["claw", "dark", "light"],

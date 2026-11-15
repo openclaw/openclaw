@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { BuiltinThemeId } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 
 export const NATIVE_HISTORY_STATE_EVENT = "openclaw:native-history-state";
 
@@ -9,6 +10,7 @@ export type NativeHistoryState = {
 
 type NativeWebChromeWindow = Window & {
   __OPENCLAW_NATIVE_EMBED__?: unknown;
+  __OPENCLAW_NATIVE_APPEARANCE__?: NativeAppearance;
   __OPENCLAW_NATIVE_WEB_CHROME__?: boolean;
   __OPENCLAW_NATIVE_HISTORY__?: NativeHistoryState;
 };
@@ -83,4 +85,20 @@ export function readNativeHistoryState(): NativeHistoryState {
   return state && typeof state.canGoBack === "boolean" && typeof state.canGoForward === "boolean"
     ? state
     : { canGoBack: false, canGoForward: false };
+}
+
+export type NativeAppearance = {
+  theme: BuiltinThemeId;
+  themeMode: "light" | "dark";
+  variables: Record<string, string>;
+};
+
+/** Native supplies its resolved built-in palette; saved web preferences stay untouched. */
+export function nativeAppearance(): NativeAppearance | null {
+  if (typeof window === "undefined" || nativeEmbedHost()?.platform !== "ios") {
+    return null;
+  }
+  // This is the typed projection emitted by the native built-in palette owner,
+  // not page/user supplied CSS or a second theme catalog.
+  return (window as NativeWebChromeWindow)["__OPENCLAW_NATIVE_APPEARANCE__"] ?? null;
 }

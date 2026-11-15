@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi, type Mock } from "vitest";
 import { collectMcpAppStyleVariables } from "../components/mcp-app-theme.ts";
 import { projectTheme } from "../lib/reactive/theme.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { applyControlUiAccent } from "./control-ui-presentation.ts";
 import { createGatewayStoreTestStore } from "./gateway-store.test-support.ts";
 import { loadSettings, patchSettings, saveSettings } from "./settings.ts";
 
@@ -42,6 +43,42 @@ beforeEach(({ onTestFinished }) => {
 });
 
 const pendingPalette = () => document.getElementById("openclaw-theme-palette-tide")!;
+
+it("keeps native palette authoritative across web edits, Gateway branding, and native updates", () => {
+  theme.dispose();
+  const { gateway } = createGatewayStoreTestStore({ settings: loadSettings() });
+  const host = { platform: "ios", formFactor: "phone" };
+  const appearance = {
+    theme: "tide",
+    themeMode: "dark",
+    variables: { "--bg": "#10151b", "--primary": "#5ab6d8", "--text": "#c9d2da" },
+  };
+  vi.stubGlobal("__OPENCLAW_NATIVE_EMBED__", host);
+  vi.stubGlobal("__OPENCLAW_NATIVE_APPEARANCE__", appearance);
+  document.documentElement.classList.add("openclaw-native-ios");
+  try {
+    theme = createApplicationTheme(loadSettings(), gateway);
+    document.getElementById("openclaw-theme-palette-native-ios")!.dispatchEvent(new Event("load"));
+    expect(document.documentElement.dataset.theme).toBe("tide");
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("#5ab6d8");
+    patchSettings({ theme: "rose", themeMode: "light", accent: "#abcdef" });
+    applyControlUiAccent("#ffffff");
+    expect(theme.settings.theme).toBe("rose");
+    expect(document.documentElement.dataset.theme).toBe("tide");
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("#5ab6d8");
+    appearance.theme = "beacon";
+    appearance.variables["--primary"] = "#ffc233";
+    window.dispatchEvent(new Event("openclaw:native-appearance-changed"));
+    document.getElementById("openclaw-theme-palette-native-ios")!.dispatchEvent(new Event("load"));
+    expect(document.documentElement.dataset.theme).toBe("beacon");
+    expect(document.documentElement.style.getPropertyValue("--primary")).toBe("#ffc233");
+  } finally {
+    theme.dispose();
+    gateway.stop();
+    document.documentElement.classList.remove("openclaw-native-ios");
+    vi.unstubAllGlobals();
+  }
+});
 
 it("publishes authored selection without reapplying the previous document appearance", () => {
   const root = document.documentElement;
