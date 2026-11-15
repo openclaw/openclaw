@@ -44,9 +44,7 @@ async function runStateStoreGuard(commandPath: string[]): Promise<void> {
     outcome = await checkCliGatewayStateDir({ command: `openclaw ${commandPath.join(" ")}` });
   } catch (error) {
     // A cancelled guard read is the CLI stopping, not a guard failure to diagnose.
-    if (getAsyncWorkSignal()?.aborted) {
-      return;
-    }
+    getAsyncWorkSignal()?.throwIfAborted();
     const { formatErrorMessage } = await import("../../infra/errors.js");
     const { logDebug } = await import("../../logger.js");
     logDebug(`state-store guard unavailable: ${formatErrorMessage(error)}`);

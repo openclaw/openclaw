@@ -143,23 +143,13 @@ describe("state-dir-gateway-check", () => {
     }
   });
 
-  it("forwards this command's interrupt signal to the live status read", async () => {
-    const work = new AsyncWorkScope();
-    await work.run(() => check());
-
-    expect(mocks.callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({ method: "status", signal: work.signal }),
-    );
-  });
-
   it("stops an interrupted status read before offline service diagnostics", async () => {
     const work = new AsyncWorkScope();
     mocks.callGateway.mockImplementation(async (options: { signal?: AbortSignal }) => {
-      // The command is cancelled while its live status read is still in flight.
+      expect(options.signal).toBe(work.signal);
       work.beginClose();
       options.signal?.throwIfAborted();
     });
-
     await expect(work.run(() => check())).rejects.toMatchObject({ name: "AbortError" });
     expect(mocks.readServiceCommand).not.toHaveBeenCalled();
     expect(mocks.probeGateway).not.toHaveBeenCalled();
