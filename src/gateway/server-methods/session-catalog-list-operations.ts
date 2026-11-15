@@ -1,5 +1,6 @@
 import type {
   SessionCatalog,
+  SessionCatalogSourceProfileRelation,
   SessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
@@ -32,6 +33,18 @@ type CatalogListOperations = {
   providers: Map<string, CatalogListOperation & { release: () => void }>;
   pages: Map<string, { page?: CatalogListEnumeration; error?: SessionCatalog["error"] }>;
   retirement: AbortController;
+  pollIntents: Map<
+    string,
+    {
+      selection: string;
+      generation: number;
+      resolution: number;
+      lastUsedAt: number;
+      controller: AbortController;
+      normalizedSelection?: string;
+    }
+  >;
+  nextPollGeneration: number;
 };
 
 type CatalogListGeneration = CatalogListOperations & {
@@ -59,6 +72,7 @@ export function sessionCatalogListKey(params: {
   search?: string;
   allowProcessHomeFallback: boolean;
   visibilityKey: string;
+  pollGenerations?: number[];
 }): string {
   const cursors = params.request.cursors
     ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
@@ -68,6 +82,9 @@ export function sessionCatalogListKey(params: {
   return JSON.stringify([
     params.agentId,
     params.request.catalogId ?? null,
+    params.request.profileRelation ?? null,
+    params.request.pollId ?? null,
+    params.pollGenerations ?? null,
     params.allowPartialResults,
     params.search ?? null,
     params.request.limitPerHost ?? null,
@@ -111,6 +128,8 @@ export function getSessionCatalogListOperations(
     state = {
       registrations,
       gatewaySignal,
+      pollIntents: new Map(),
+      nextPollGeneration: 0,
       pending: new Map(),
       providers: new Map(),
       pages: new Map(),
@@ -129,10 +148,13 @@ export function getSessionCatalogListOperations(
     caller = {
       registrations,
       gatewaySignal,
-      connectionSignal: client.connectionSignal
-        ? AbortSignal.any([state.retirement.signal, client.connectionSignal])
-        : undefined,
+      connectionSignal: AbortSignal.any([
+        state.retirement.signal,
+        ...(client.connectionSignal ? [client.connectionSignal] : []),
+      ]),
       retirement: state.retirement,
+      pollIntents: new Map(),
+      nextPollGeneration: 0,
       pending: new Map(),
       providers: new Map(),
       pages: new Map(),
@@ -140,6 +162,10 @@ export function getSessionCatalogListOperations(
     state.callers.set(client, caller);
     const owned = caller;
     const close = () => {
+      for (const intent of owned.pollIntents.values()) {
+        intent.controller.abort();
+      }
+      owned.pollIntents.clear();
       owned.pending.clear();
       for (const entry of owned.providers.values()) {
         entry.release();
@@ -152,6 +178,119 @@ export function getSessionCatalogListOperations(
     }
   }
   return caller;
+}
+
+/** Capture replacement intent before identity preparation or provider discovery can yield. */
+export function beginSessionCatalogPollIntent(
+  operations: CatalogListOperations,
+  params: {
+    agentId: string;
+    catalogId: string;
+    request: SessionsCatalogListParams;
+    profileId?: string;
+  },
+):
+  | {
+      generation: number;
+      signal: AbortSignal;
+      resolveSelection: (query: SessionCatalogSourceProfileRelation | undefined) => void;
+      rejectSelection: () => void;
+    }
+  | undefined {
+  if (!params.request.pollId) {
+    return undefined;
+  }
+  const now = performance.now();
+  // Reclaim abandoned IDs without evicting active peers or adding another timer owner.
+  for (const [key, intent] of operations.pollIntents) {
+    if (now - intent.lastUsedAt >= 2 * SESSION_CATALOG_LIST_LIFETIME_MS) {
+      intent.controller.abort();
+      operations.pollIntents.delete(key);
+    }
+  }
+  // One connected consumer retains its poll ID across agent switches. Retire the
+  // previous selection before resolving identity, rather than sharing its receiver lifetime.
+  const key = JSON.stringify([params.catalogId, params.request.pollId]);
+  const relation = params.request.profileRelation;
+  const selection = JSON.stringify([
+    params.agentId,
+    relation
+      ? [
+          relation.relationship,
+          relation.target.type,
+          relation.target.type === "me" ? null : relation.target.id,
+          params.profileId ?? null,
+        ]
+      : null,
+  ]);
+  let intent = operations.pollIntents.get(key);
+  if (intent?.selection !== selection) {
+    if (!intent && operations.pollIntents.size >= 128) {
+      throw new Error("Too many catalog polling scopes. Reuse an existing polling scope.");
+    }
+    intent?.controller.abort();
+    intent = {
+      selection,
+      generation: ++operations.nextPollGeneration,
+      resolution: 0,
+      lastUsedAt: now,
+      controller: new AbortController(),
+    };
+    operations.pollIntents.set(key, intent);
+  }
+  intent.lastUsedAt = now;
+  let currentIntent = intent;
+  const resolution = ++currentIntent.resolution;
+  const lifetime = AbortSignal.any([
+    operations.retirement.signal,
+    ...(operations.gatewaySignal ? [operations.gatewaySignal] : []),
+    ...(operations.connectionSignal ? [operations.connectionSignal] : []),
+  ]);
+  return {
+    get generation() {
+      return currentIntent.generation;
+    },
+    get signal() {
+      return AbortSignal.any([currentIntent.controller.signal, lifetime]);
+    },
+    resolveSelection(query) {
+      lifetime.throwIfAborted();
+      currentIntent.controller.signal.throwIfAborted();
+      const normalizedSelection = JSON.stringify(query ?? null);
+      // An existing local person's verified primary account can change without
+      // changing the public "me" query. Retire its previous portable target too.
+      if (
+        currentIntent.normalizedSelection !== undefined &&
+        currentIntent.normalizedSelection !== normalizedSelection
+      ) {
+        if (resolution !== currentIntent.resolution) {
+          throw new Error("Profile selection resolution was superseded; refresh the catalog");
+        }
+        currentIntent.controller.abort();
+        currentIntent = {
+          selection,
+          generation: ++operations.nextPollGeneration,
+          resolution,
+          lastUsedAt: currentIntent.lastUsedAt,
+          controller: new AbortController(),
+          normalizedSelection,
+        };
+        operations.pollIntents.set(key, currentIntent);
+      } else {
+        currentIntent.normalizedSelection = normalizedSelection;
+      }
+    },
+    rejectSelection() {
+      // A late failed resolver cannot cancel a newer request's selection.
+      if (
+        operations.pollIntents.get(key) === currentIntent &&
+        currentIntent.resolution === resolution
+      ) {
+        currentIntent.controller.abort();
+        operations.pollIntents.delete(key);
+      }
+    },
+  };
 }
 
 export function retireSessionCatalogLists(config: OpenClawConfig): void {

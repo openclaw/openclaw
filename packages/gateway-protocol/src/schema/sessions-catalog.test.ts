@@ -44,6 +44,40 @@ const catalog = {
 };
 const listed = (overrides: object) => ({ catalogs: [{ ...catalog, ...overrides }] });
 describe("session catalog schemas", () => {
+  it("accepts typed relationship targets without expanding caller authority", () => {
+    const targets = [
+      { type: "me" },
+      { type: "local-profile", id: "viewer-profile" },
+      { type: "profile", id: "source-profile" },
+      { type: "github-account", id: "1234" },
+    ];
+    const locator = { catalogId: "openclaw", hostId: "node:source", threadId: "agent:main:shared" };
+    for (const relationship of ["owned", "involving"]) {
+      for (const selectedTarget of targets) {
+        const profileRelation = { relationship, target: selectedTarget };
+        checkCatalog(Catalog.SessionsCatalogListParamsSchema, {
+          profileRelation,
+          pollId: "sidebar",
+        });
+        checkCatalog(Catalog.SessionsCatalogReadParamsSchema, { ...locator, profileRelation });
+        checkCatalog(Catalog.SessionsCatalogImportParamsSchema, { ...locator, profileRelation });
+      }
+    }
+    for (const profileRelation of [
+      { relationship: "created", target: { type: "me" } },
+      { relationship: "involving", target: { type: "github-login", id: "person" } },
+      { relationship: "owned", target: { type: "github-account", id: "001" } },
+      { relationship: "owned", target: { type: "profile", id: "" } },
+      { relationship: "involving", target: { type: "me", id: "forged" } },
+      { relationship: "involving", target: { type: "me" }, authenticated: true },
+    ]) {
+      expect(Value.Check(Catalog.SessionsCatalogListParamsSchema, { profileRelation })).toBe(false);
+    }
+    checkCatalog(Catalog.SessionsCatalogListParamsSchema, {}, [
+      { pollId: "" },
+      { pollId: "x".repeat(129) },
+    ]);
+  });
   it("accepts only the closed prefix-search contract", () => {
     checkCatalog(Catalog.SessionCatalogShareRouteSchema, SHARE_ROUTE, [
       { kind: "future-route" },

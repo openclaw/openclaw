@@ -269,6 +269,7 @@ export function registerCodexSessionCatalog(params: {
         waitUntil,
         signal,
         sessionEntries,
+        caller: _caller,
         ...gatewayQuery
       } = query;
       const agentId = resolveRequestAgentId(requestedAgentId);

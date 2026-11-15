@@ -13000,8 +13000,9 @@ describe("ci workflow guards", () => {
         groups_gzip_base64: expect.any(String),
       });
       if (eventName === "pull_request") {
+        // The unfiltered infra group includes the retained-runtime Bun child proof.
+        expect(row.requires_bun).toBe(grouped ? true : undefined);
         for (const field of [
-          "requires_bun",
           "requires_dist",
           "requires_go",
           "requires_ripgrep",
@@ -13552,18 +13553,30 @@ describe("ci workflow guards", () => {
     ]);
   });
 
-  it("provisions pinned Bun for Node-hosted standalone code generation", () => {
-    const codegen = "test/scripts/bun-standalone-codegen.test.ts";
-    const unrelated = "test/scripts/ci-git-owner.test.ts";
-    const tooling = "test/vitest/vitest.tooling.config.ts";
+  it.each([
+    {
+      name: "standalone code generation",
+      childTest: "test/scripts/bun-standalone-codegen.test.ts",
+      config: "test/vitest/vitest.tooling.config.ts",
+      glob: "test/scripts/bun-*.test.ts",
+      unrelated: "test/scripts/ci-git-owner.test.ts",
+    },
+    {
+      name: "retained-runtime imports",
+      childTest: "src/infra/update-retained-runtime-imports.process.test.ts",
+      config: "test/vitest/vitest.infra.config.ts",
+      glob: "src/infra/update-retained-*.test.ts",
+      unrelated: "src/infra/env.test.ts",
+    },
+  ])("provisions pinned Bun for Node-hosted $name", ({ childTest, config, glob, unrelated }) => {
     const selections = [
-      { targets: [codegen] },
-      { includePatterns: [codegen] },
-      { includePatterns: ["test/scripts/bun-*.test.ts"] },
-      { groups: [{ configs: [tooling], includePatterns: [codegen] }] },
-      { configs: [tooling] },
+      { targets: [childTest] },
+      { includePatterns: [childTest] },
+      { includePatterns: [glob] },
+      { groups: [{ configs: [config], includePatterns: [childTest] }] },
+      { configs: [config] },
       { includePatterns: [unrelated] },
-      { groups: [{ configs: [tooling], includePatterns: [unrelated] }] },
+      { groups: [{ configs: [config], includePatterns: [unrelated] }] },
       { configs: ["test/vitest/vitest.tooling-isolated.config.ts"] },
     ];
     const result = runCiManifestFixture({
@@ -13572,8 +13585,8 @@ describe("ci workflow guards", () => {
       nodeTestShards: selections.map((selection, index) =>
         Object.assign(
           {
-            checkName: `codegen-${index}`,
-            configs: [tooling],
+            checkName: `child-bun-${index}`,
+            configs: [config],
             requiresDist: false,
             runner: "ubuntu-24.04",
             shardName: "core-tooling-1",

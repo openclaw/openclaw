@@ -1482,7 +1482,6 @@
   "ui/src/lib/text-direction.ts",
   "ui/src/lib/text-match.ts",
   "ui/src/pages/chat/browser-annotation-admission.ts",
-  "ui/src/pages/chat/catalog-message-id.ts",
   "ui/src/pages/chat/chat-abort-request.ts",
   "ui/src/pages/chat/chat-agent-id.ts",
   "ui/src/pages/chat/chat-agent-run-grouping.ts",

@@ -1524,6 +1524,11 @@ const nodeTestShards = targetNodeTestShards
           // Node-hosted packaging proof also launches a pinned Bun child.
           shardRequiresTests(shard, ["test/scripts/bun-standalone-codegen.test.ts"], (plan) =>
             plan.configs?.includes(goToolingConfig),
+          ) ||
+          shardRequiresTests(
+            shard,
+            ["src/infra/update-retained-runtime-imports.process.test.ts"],
+            (plan) => plan.configs?.includes("test/vitest/vitest.infra.config.ts"),
           )),
       shard_name: shard.shardName,
       groups_gzip_base64: packedGroups,

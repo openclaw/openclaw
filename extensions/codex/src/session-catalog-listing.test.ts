@@ -526,6 +526,7 @@ it("exposes every local source as an actionable host for the selected owner", as
     const completions: Promise<void>[] = [];
     const hosts = await provider.list({
       agentId: "beta",
+      caller: { id: "catalog-viewer", pollId: "sidebar", signal: new AbortController().signal },
       listNodes: async () => ({ nodes: [] }),
       onHost,
       waitUntil: (completion) => {

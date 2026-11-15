@@ -18,6 +18,7 @@ import {
   readSessionTranscriptCatalogTitleAsync,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sessionShareSelection } from "./config.js";
+import type { SessionCatalogSourceProfileRelation } from "./wire.js";
 
 export const SESSION_SHARE_LIST_COMMAND = "openclaw.sessions.list.v1";
 export const SESSION_SHARE_READ_COMMAND = "openclaw.sessions.read.v1";
@@ -55,6 +56,7 @@ function isSharedEntry(
 function withSharedEntries<T>(
   api: OpenClawPluginApi,
   selected: readonly { agentId: string; storePath: string; sessionKey: string }[],
+  profileRelation: SessionCatalogSourceProfileRelation | undefined,
   consume: (entries: SessionStoreSelectedEntry[]) => T,
 ): Promise<T> {
   const config = api.runtime.config.current();
@@ -74,7 +76,12 @@ function withSharedEntries<T>(
       return sessionKeys.length ? [{ agentId, storePath, sessionKeys }] : [];
     });
   return api.runtime.agent.session.withSessionEntriesAsync(
-    { stores, involvingProfileId: selection?.involvingProfileId },
+    {
+      stores,
+      involvingProfileId: selection?.involvingProfileId,
+      profileRelation,
+      ...(profileRelation ? { config: api.runtime.config.current({ clone: true }) } : {}),
+    },
     (entries) => {
       // Configuration can be edited in place while either worker prepares its facts.
       const current = api.runtime.config.current();
@@ -104,7 +111,10 @@ export function createSessionShareNodeCommands(
     string,
     ReturnType<typeof api.runtime.agent.session.createSessionEntryListReader>
   >();
-  async function readSharedEntries() {
+  async function readSharedEntries(
+    profileRelation?: SessionCatalogSourceProfileRelation,
+    threadId?: string,
+  ) {
     const config = api.runtime.config.current();
     if (config !== readersConfig) {
       readers.clear();
@@ -138,7 +148,10 @@ export function createSessionShareNodeCommands(
         throw new Error("Session sharing configuration changed. Refresh the session catalog.");
       }
       for (const session of snapshot.entries) {
-        if (isSharedEntry(groups, session)) {
+        if (
+          (threadId === undefined || session.sessionKey === threadId) &&
+          isSharedEntry(groups, session)
+        ) {
           sessions.push({
             ...session,
             agentId,
@@ -153,12 +166,12 @@ export function createSessionShareNodeCommands(
         readers.delete(key);
       }
     }
-    if (selection?.involvingProfileId === undefined) {
+    if (selection?.involvingProfileId === undefined && profileRelation === undefined) {
       return sessions;
     }
     // Inventory stays worker-owned. The selected cohort gets current canonical
     // person membership before pagination, then is checked again at disclosure.
-    return withSharedEntries(api, sessions, (current) => {
+    return withSharedEntries(api, sessions, profileRelation, (current) => {
       sessions.forEach((session) => session.assertSourceCurrent());
       const selected = new Set(
         current.map(({ agentId, storePath, sessionKey, entry }) =>
@@ -181,8 +194,9 @@ export function createSessionShareNodeCommands(
         const params = sessionCatalogPaging.parseListParams(parseNodeParams(paramsJSON), {
           searchMaxLength: 500,
           messages: parameterMessages,
+          supportsProfileRelation: true,
         });
-        const offset = sessionCatalogPaging.decodeCursor(params.cursor);
+        const offset = sessionCatalogPaging.decodeCursor(params.cursor, params.profileRelation);
         const search = params.searchTerm?.toLowerCase().normalize("NFC");
         const sessions = [];
         for (const {
@@ -191,7 +205,7 @@ export function createSessionShareNodeCommands(
           storePath,
           entry,
           assertSourceCurrent,
-        } of await readSharedEntries()) {
+        } of await readSharedEntries(params.profileRelation)) {
           const name = search
             ? await readSessionTranscriptCatalogTitleAsync({
                 agentId,
@@ -249,6 +263,7 @@ export function createSessionShareNodeCommands(
             storePath: session.storePath,
             sessionKey: session.threadId,
           })),
+          params.profileRelation,
           (current) => {
             sourceAssertions.forEach((assertCurrent) => assertCurrent());
             if (
@@ -297,7 +312,12 @@ export function createSessionShareNodeCommands(
             return JSON.stringify({
               sessions: page,
               ...(offset + page.length < sessions.length
-                ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
+                ? {
+                    nextCursor: sessionCatalogPaging.encodeCursor(
+                      offset + page.length,
+                      params.profileRelation,
+                    ),
+                  }
                 : {}),
             });
           },
@@ -314,10 +334,11 @@ export function createSessionShareNodeCommands(
         const params = sessionCatalogPaging.parseReadParams(parseNodeParams(paramsJSON), {
           threadIdMaxLength: 512,
           threadIdPattern: /^[^\0\r\n]+$/,
-          cursorMaxLength: 1200,
+          cursorMaxLength: 2048,
           messages: parameterMessages,
+          supportsProfileRelation: true,
         });
-        const session = (await readSharedEntries()).find(
+        const session = (await readSharedEntries(params.profileRelation, params.threadId)).find(
           ({ sessionKey }) => sessionKey === params.threadId,
         );
         if (!session) {
@@ -334,7 +355,7 @@ export function createSessionShareNodeCommands(
             sessionKey: session.sessionKey,
             storePath: session.storePath,
             limit: params.limit,
-            cursor: params.cursor,
+            cursor: sessionCatalogPaging.decodeScopedCursor(params.cursor, params.profileRelation),
           },
           (assertCurrent) => {
             assertActorsCurrent = assertCurrent;
@@ -342,7 +363,7 @@ export function createSessionShareNodeCommands(
         );
         session.assertSourceCurrent();
         // The final worker callback retains all sources through synchronous serialization.
-        return withSharedEntries(api, [session], (current) => {
+        return withSharedEntries(api, [session], params.profileRelation, (current) => {
           session.assertSourceCurrent();
           if (
             !current.some(
@@ -356,7 +377,18 @@ export function createSessionShareNodeCommands(
             throw new Error("Session is no longer shared. Refresh the session catalog.");
           }
           assertActorsCurrent();
-          return JSON.stringify({ threadId: params.threadId, ...page });
+          return JSON.stringify({
+            threadId: params.threadId,
+            ...page,
+            ...(page.nextCursor
+              ? {
+                  nextCursor: sessionCatalogPaging.encodeScopedCursor(
+                    page.nextCursor,
+                    params.profileRelation,
+                  ),
+                }
+              : {}),
+          });
         });
       },
     },

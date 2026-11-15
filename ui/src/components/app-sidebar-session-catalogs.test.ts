@@ -126,3 +126,19 @@ it.each(["mine", "adopted"])("filters by effective %s owner", (id) => {
     ),
   ).toEqual([]);
 });
+
+it("does not re-filter source relationship matches by creator or missing local backing rows", () => {
+  const shared = catalog([
+    session("mentioned", { createdActor: { type: "human", id: "someone-else" } }),
+  ]);
+  shared.capabilities.profileRelation = true;
+  expect(
+    projectSidebarSessionCatalogs(
+      [shared],
+      "selected-owner",
+      [],
+      undefined,
+      new Set(),
+    )[0]?.visibleHosts[0]?.sessions.map((row) => row.threadId),
+  ).toEqual(["mentioned"]);
+});

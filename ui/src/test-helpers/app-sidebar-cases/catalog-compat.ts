@@ -34,6 +34,7 @@ describe("AppSidebar session catalog pagination", () => {
     );
 
     expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+      pollId: expect.any(String),
       agentId: "main",
       limitPerHost: 40,
       progressId: expect.any(String),
@@ -51,6 +52,7 @@ describe("AppSidebar session catalog pagination", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+      pollId: expect.any(String),
       agentId: "research",
       limitPerHost: 40,
       progressId: expect.any(String),
@@ -188,10 +190,19 @@ describe("AppSidebar session catalog pagination", () => {
       const laterPage = catalogPage([{ threadId: "thread-1", name: "Later session" }]);
       laterPage.catalogs[0]!.hosts[0]!.sessions[0]!.createdActor = ada;
       const pending = deferred<typeof laterPage>();
-      const request = vi.fn((_method, params: { cursors?: Record<string, string> }) =>
-        params.cursors?.["gateway:local"] === "page-2"
-          ? pending.promise
-          : Promise.resolve(firstPage),
+      const request = vi.fn(
+        (_method, params: { metadataOnly?: boolean; cursors?: Record<string, string> }) => {
+          if (params.metadataOnly) {
+            return Promise.resolve({
+              catalogs: firstPage.catalogs.map((catalog) =>
+                Object.assign({}, catalog, { hosts: [] }),
+              ),
+            });
+          }
+          return params.cursors?.["gateway:local"] === "page-2"
+            ? pending.promise
+            : Promise.resolve(firstPage);
+        },
       );
       const gateway = catalogGateway({ request } as unknown as GatewayBrowserClient);
       const sessions = createSessions("main", ["agent:main:main"]);
@@ -201,10 +212,25 @@ describe("AppSidebar session catalog pagination", () => {
       sidebar.setSessionOwnerFilter(ada.id);
       await sidebar.updateComplete;
       await startCatalog(sidebar);
+      await vi.dynamicImportSettled();
+      await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(3));
       await sidebar.updateComplete;
 
       expect(dom.query('[data-session-section="catalog:codex"]')).toBeNull();
+      expect(request).toHaveBeenNthCalledWith(1, "sessions.catalog.list", {
+        agentId: "main",
+        metadataOnly: true,
+      });
       expect(request).toHaveBeenNthCalledWith(2, "sessions.catalog.list", {
+        agentId: "main",
+        catalogId: "codex",
+        pollId: expect.any(String),
+        limitPerHost: 40,
+        progressId: expect.any(String),
+        allowPartialResults: true,
+      });
+      expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+        pollId: expect.any(String),
         agentId: "main",
         catalogId: "codex",
         hostIds: ["gateway:local"],
@@ -250,6 +276,7 @@ describe("AppSidebar session catalog pagination", () => {
     await settleCatalog(sidebar);
 
     expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
+      pollId: expect.any(String),
       agentId: "main",
       catalogId: "codex",
       hostIds: ["gateway:local"],

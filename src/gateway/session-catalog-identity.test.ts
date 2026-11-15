@@ -7,6 +7,8 @@ import { linkEmail, syncGitHubIdentity } from "../state/user-profile-writes.work
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createSessionCatalogGitHubLinker as createLinker,
+  resolveSessionCatalogProfileRelation,
+  prepareSessionCatalogRelationIdentity,
   createSessionCatalogSourceActorProjector as createActorProjector,
   prepareSessionCatalogGitHubLinker as prepareLinker,
   prepareSessionCatalogSourceActorProjector as prepareActorProjector,
@@ -107,5 +109,51 @@ it("projects lazy, merged and refreshed identities through legacy and prepared r
     });
     expect(changed.resolveOwner("github:SECONDARY")).toBeUndefined();
     expect(changed.resolveOwner("github:RENAMED-SECONDARY")?.label).toBe("Changed Person");
+  });
+});
+
+it("expands authenticated me to a numeric query target and rejects missing links without fallback", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const person = profile(701, "selection");
+    const query = { relationship: "involving", target: { type: "me" } } as const;
+    const portable = await resolveSessionCatalogProfileRelation(query, person.id);
+    expect(portable).toEqual({
+      relationship: "involving",
+      target: { type: "github-account", id: "701" },
+    });
+    expect((await prepareSessionCatalogRelationIdentity(portable!)).profile.profileId).toBe(
+      person.id,
+    );
+    await expect(resolveSessionCatalogProfileRelation(query)).rejects.toThrow("authenticated");
+    await expect(resolveSessionCatalogProfileRelation(query, "gateway-owner")).rejects.toThrow(
+      "verified",
+    );
+    await expect(
+      prepareSessionCatalogRelationIdentity({
+        relationship: "owned",
+        target: { type: "github-account", id: "702" },
+      }),
+    ).rejects.toThrow("unresolved");
+    expect(await resolveSessionCatalogProfileRelation(undefined)).toBeUndefined();
+  });
+});
+
+it("maps a portable query to a different canonical profile on another Gateway", async () => {
+  const receiver = await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const person = profile(801, "receiver-person");
+    return {
+      id: person.id,
+      query: await resolveSessionCatalogProfileRelation(
+        { relationship: "owned", target: { type: "me" } },
+        person.id,
+      ),
+    };
+  });
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const person = profile(801, "source-person");
+    expect(person.id).not.toBe(receiver.id);
+    expect((await prepareSessionCatalogRelationIdentity(receiver.query!)).profile.profileId).toBe(
+      person.id,
+    );
   });
 });

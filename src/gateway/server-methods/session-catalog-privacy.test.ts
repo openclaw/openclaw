@@ -413,6 +413,11 @@ describe("catalog delivery uses current canonical privacy", () => {
   it("rechecks published read visibility after a role cap changes during provider read", () =>
     withCatalog(async ({ call, config, provider, read }) => {
       provider.audience = "session-viewers";
+      provider.supportsProfileRelation = true;
+      const profileRelation = {
+        relationship: "owned",
+        target: { type: "profile", id: "source-person" },
+      } as const;
       const role = config.gateway!.roles!.definitions.writer!;
       role.sessions!.others = "view";
       const entered = createDeferredCore();
@@ -426,8 +431,9 @@ describe("catalog delivery uses current canonical privacy", () => {
           items: [{ type: "userMessage", text: "published transcript" }],
         };
       });
-      const pending = call("read");
+      const pending = call("read", { profileRelation });
       await entered.promise;
+      expect(read).toHaveBeenCalledWith(expect.objectContaining({ profileRelation }));
       role.sessions!.others = "none";
       release.resolve();
       const denied = await pending;

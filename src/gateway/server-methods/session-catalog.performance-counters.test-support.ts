@@ -10,49 +10,64 @@ const workerCounter = vi.hoisted(() => ({
   reads: 0,
   operations: 0,
   catalogPersisted: undefined as ((namespace: string) => void) | undefined,
+  catalogPersistenceFailed: undefined as ((error: unknown) => void) | undefined,
 }));
 vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../../plugin-state/plugin-state-worker-client.js")>();
-  const counted = Object.fromEntries(
-    Object.entries(actual).map(([name, value]) => [
-      name,
-      typeof value !== "function"
-        ? value
-        : (...args: unknown[]) => {
-            if (workerCounter.enabled) {
-              workerCounter.operations++;
-              if (
-                [
-                  "lookupPluginStateInWorker",
-                  "lookupManyPluginStateInWorker",
-                  "listPluginStateInWorker",
-                  "listPluginStateInKeyRangeInWorker",
-                  "countPluginStateInWorker",
-                  "observePluginStateInWorker",
-                ].includes(name)
-              ) {
-                workerCounter.reads++;
-              }
-            }
-            return Reflect.apply(value, undefined, args);
-          },
-    ]),
-  );
+  function count<Args extends unknown[], Result>(
+    operation: (...args: Args) => Result,
+    read = false,
+  ) {
+    return (...args: Args): Result => {
+      if (workerCounter.enabled) {
+        workerCounter.operations++;
+        if (read) {
+          workerCounter.reads++;
+        }
+      }
+      return operation(...args);
+    };
+  }
   return {
-    ...counted,
+    ...actual,
+    executePluginStateOperationInWorker: count(actual.executePluginStateOperationInWorker),
+    replacePluginStateInWorker: count(actual.replacePluginStateInWorker),
+    replacePluginStateEntryInWorker: count(actual.replacePluginStateEntryInWorker),
+    observePluginStateRowInWorker: count(actual.observePluginStateRowInWorker),
+    observePluginStateInWorker: count(actual.observePluginStateInWorker, true),
+    comparePluginStateUpdateInWorker: count(actual.comparePluginStateUpdateInWorker),
+    comparePluginStateDeleteInWorker: count(actual.comparePluginStateDeleteInWorker),
+    registerPluginStateIfAbsentInWorker: count(actual.registerPluginStateIfAbsentInWorker),
+    deletePluginStateIfEqualInWorker: count(actual.deletePluginStateIfEqualInWorker),
+    lookupPluginStateInWorker: count(actual.lookupPluginStateInWorker, true),
+    lookupManyPluginStateInWorker: count(actual.lookupManyPluginStateInWorker, true),
+    consumePluginStateInWorker: count(actual.consumePluginStateInWorker),
+    deletePluginStateInWorker: count(actual.deletePluginStateInWorker),
+    listPluginStateInWorker: count(actual.listPluginStateInWorker, true),
+    clearPluginStateInWorker: count(actual.clearPluginStateInWorker),
+    clearRuntimeHealthInWorker: count(actual.clearRuntimeHealthInWorker),
+    countPluginStateInWorker: count(actual.countPluginStateInWorker, true),
+    registerPluginStateJournalInWorker: count(actual.registerPluginStateJournalInWorker),
+    listPluginStateInKeyRangeInWorker: count(actual.listPluginStateInKeyRangeInWorker, true),
+    movePluginStateEntriesInWorker: count(actual.movePluginStateEntriesInWorker),
     registerPluginStateInWorker: async (
       params: Parameters<typeof actual.registerPluginStateInWorker>[0],
     ) => {
       if (workerCounter.enabled) {
         workerCounter.operations++;
       }
-      await actual.registerPluginStateInWorker(params);
-      if (
-        params.pluginId === "codex" &&
-        params.namespace.startsWith("session-catalog-resident.") &&
-        params.key === "complete"
-      ) {
+      const catalogState =
+        params.pluginId === "codex" && params.namespace.startsWith("session-catalog-resident.");
+      try {
+        await actual.registerPluginStateInWorker(params);
+      } catch (error) {
+        if (catalogState) {
+          workerCounter.catalogPersistenceFailed?.(error);
+        }
+        throw error;
+      }
+      if (catalogState && params.key === "complete") {
         workerCounter.catalogPersisted?.(params.namespace);
       }
     },
@@ -77,7 +92,19 @@ export function createCatalogIoCounters() {
   let counts = empty();
   let ownershipFile: Pick<fsSync.BigIntStats, "dev" | "ino"> | undefined;
   const catalogPersistence = createDeferredCore<string>();
-  workerCounter.catalogPersisted = catalogPersistence.resolve;
+  const catalogStarted = createDeferredCore();
+  // Persistence may fail before the public setup request returns and joins this promise.
+  void catalogPersistence.promise.catch(() => {});
+  void catalogStarted.promise.catch(() => {});
+  workerCounter.catalogPersistenceFailed = (error) => {
+    catalogStarted.reject(error);
+    catalogPersistence.reject(error);
+  };
+  const setupProgress = { nativeListRequests: 0, catalogPersisted: false };
+  workerCounter.catalogPersisted = (namespace) => {
+    setupProgress.catalogPersisted = true;
+    catalogPersistence.resolve(namespace);
+  };
   const restore: Array<() => void> = [];
   const isOwnershipFile = (fd: unknown): boolean => {
     if (!ownershipFile || typeof fd !== "number") {
@@ -158,7 +185,13 @@ export function createCatalogIoCounters() {
       ownershipFile = fsSync.statSync(pathname, { bigint: true });
     },
     catalogPersisted: catalogPersistence.promise,
-    nativeRequest(_method: string) {
+    catalogStarted: catalogStarted.promise,
+    setupProgress: () => ({ ...setupProgress }),
+    nativeRequest(method: string) {
+      if (method === "thread/list") {
+        setupProgress.nativeListRequests++;
+        catalogStarted.resolve();
+      }
       if (!workerCounter.enabled) {
         return;
       }
@@ -176,6 +209,7 @@ export function createCatalogIoCounters() {
     },
     close() {
       workerCounter.catalogPersisted = undefined;
+      workerCounter.catalogPersistenceFailed = undefined;
       workerCounter.enabled = false;
       for (const undo of restore.toReversed()) {
         undo();

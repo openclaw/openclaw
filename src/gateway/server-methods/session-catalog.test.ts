@@ -582,7 +582,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
   await service?.start(context);
   bindPluginRegistryRuntime(hoisted.activeRegistry as PluginRegistry, runtime);
   hoisted.hasMultipleSessionSharingIdentities.mockReturnValue(true);
-  const clients = Array.from({ length: 6 }, (_, index) => ({
+  const connections = Array.from({ length: 6 }, () => new AbortController());
+  const clients = connections.map((connection, index) => ({
+    connectionSignal: connection.signal,
     connId: `viewer-${index}`,
     connect: gatewayConnect(["operator.admin"]),
   }));
@@ -616,12 +618,15 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         elapsed.push(Date.now() - started);
       }),
     );
+    const duplicate = request({ ...progressiveQuery, progressId: "duplicate-0" });
     const metadata = request({ hostIds: ["node:source"] });
     await vi.advanceTimersByTimeAsync(49);
     expect(elapsed).toHaveLength(6);
     expect(Math.max(...elapsed)).toBe(baselineMs);
     expect(Math.max(...elapsed)).toBeLessThan(50);
-    expect(invokeNode).toHaveBeenCalledTimes(1);
+    await duplicate.completion;
+    // Distinct callers retain independent source authority; only four refreshes run at once.
+    expect(invokeNode).toHaveBeenCalledTimes(4);
     for (const pendingCall of calls) {
       expectCatalogHost(pendingCall.respond, {
         hostId: "node:source",
@@ -650,11 +655,16 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         { dropIfSlow: true },
       );
     }
+    // The duplicate and metadata request share viewer-0's pending source, not a peer's.
+    expect(invokeNode).toHaveBeenCalledTimes(clients.length);
+    for (const connection of connections.slice(1)) {
+      connection.abort();
+    }
     const current = request();
     await vi.advanceTimersByTimeAsync(0);
     await current.completion;
     expect(current.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]?.sessions).toEqual([row]);
-    expect(invokeNode).toHaveBeenCalledTimes(2);
+    expect(invokeNode).toHaveBeenCalledTimes(clients.length + 1);
     invokeNode
       .mockRejectedValueOnce(new Error("Paired node did not respond"))
       .mockImplementation(async () => {
@@ -662,7 +672,7 @@ it("keeps a delayed source off the catalog RPC path", async () => {
         throw new Error("Paired node did not respond");
       });
     await vi.advanceTimersByTimeAsync(60_005);
-    expect(invokeNode).toHaveBeenCalledTimes(4);
+    expect(invokeNode).toHaveBeenCalledTimes(clients.length + 3);
     const refreshing = request(progressiveQuery, clients[0], broadcasts[0]);
     await refreshing.completion;
     expect(refreshing.respond.mock.calls[0]?.[1]?.catalogs[0]?.hosts[0]).toMatchObject({

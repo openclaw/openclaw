@@ -105,7 +105,9 @@ describe("AppSidebar session catalog pagination", () => {
     expect(sidebar.sessionData.sessionCatalogPageDepths.size).toBe(1);
 
     const staleLoad = sidebar.sessionData.loadMoreSessionCatalog("codex");
+    await vi.dynamicImportSettled();
     await sidebar.updateComplete;
+    expect(requestedThirdPages).toBe(1);
     expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
 
     gateway.publish({ phase: "reconnecting", hello: null });
@@ -122,7 +124,9 @@ describe("AppSidebar session catalog pagination", () => {
     const loadMore = moreButton(sidebar);
     expect(loadMore?.disabled).toBe(false);
     loadMore?.click();
+    await vi.dynamicImportSettled();
     await sidebar.updateComplete;
+    expect(requestedThirdPages).toBe(2);
     expect(sidebar.sessionData.loadingMoreSessionCatalogIds.has("codex")).toBe(true);
 
     pendingStalePage.resolve(page("stale", "Stale page"));
@@ -242,6 +246,7 @@ describe("AppSidebar session catalog pagination", () => {
     loadMore()?.click();
     await advance(sidebar);
     expect(request).toHaveBeenNthCalledWith(4, "sessions.catalog.list", {
+      pollId: expect.any(String),
       agentId: "main",
       catalogId: "codex",
       hostIds: ["gateway:local"],

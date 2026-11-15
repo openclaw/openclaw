@@ -3,10 +3,12 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   ErrorCodes,
   type SessionCatalog,
+  type SessionCatalogSourceProfileRelation,
   validateSessionsCatalogListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { prepareShellPathFromLoginShell } from "../../infra/shell-env.js";
 import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admission.js";
+import { resolveSessionCatalogProfileRelation } from "../session-catalog-identity.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { respondError } from "./response.js";
@@ -20,6 +22,7 @@ import {
   type CatalogListProgressSubscriber,
 } from "./session-catalog-list-lifetime.js";
 import {
+  beginSessionCatalogPollIntent,
   getSessionCatalogListOperations,
   listSessionCatalogWithinBudget,
   retainSessionCatalogHostStatus,
@@ -99,6 +102,67 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       });
       return;
     }
+    const config = context.getRuntimeConfig();
+    const resolvedAgent = resolveAgentIdOrRespondError({
+      rawAgentId: request.agentId,
+      respond,
+      cfg: config,
+    });
+    if (!resolvedAgent) {
+      return;
+    }
+    const operations = getSessionCatalogListOperations(
+      config,
+      catalogRegistrations,
+      context.requestEntryLifetime?.signal,
+      client,
+    );
+    const pollIntents = new Map<string, ReturnType<typeof beginSessionCatalogPollIntent>>();
+    try {
+      for (const provider of selected) {
+        pollIntents.set(
+          provider.id,
+          beginSessionCatalogPollIntent(operations, {
+            agentId: resolvedAgent.agentId,
+            catalogId: provider.id,
+            request,
+            profileId: client?.authenticatedUserProfile?.profileId,
+          }),
+        );
+      }
+    } catch (error) {
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "Catalog polling scope is unavailable",
+      );
+      return;
+    }
+    let profileRelation: SessionCatalogSourceProfileRelation | undefined;
+    try {
+      if (request.profileRelation) {
+        profileRelation = await resolveSessionCatalogProfileRelation(
+          request.profileRelation,
+          client?.authenticatedUserProfile?.profileId,
+        );
+      }
+      for (const intent of pollIntents.values()) {
+        intent?.resolveSelection(profileRelation);
+      }
+    } catch (error) {
+      for (const intent of pollIntents.values()) {
+        intent?.rejectSelection();
+      }
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        error instanceof Error ? error.message : "Profile selection is unresolved",
+      );
+      return;
+    }
+    const pollSignals = [...pollIntents.values()].flatMap((intent) =>
+      intent ? [intent.signal] : [],
+    );
     const providerAudiences = new Map(selected.map((provider) => [provider.id, provider.audience]));
     const projection = requireSessionRowProjection(context);
     const diagnostics = startSessionCatalogRequestDiagnostics();
@@ -110,15 +174,6 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
       }
     } finally {
       finishInitialProjection?.();
-    }
-    const config = context.getRuntimeConfig();
-    const resolvedAgent = resolveAgentIdOrRespondError({
-      rawAgentId: request.agentId,
-      respond,
-      cfg: config,
-    });
-    if (!resolvedAgent) {
-      return;
     }
     const searchInput = normalizeOptionalString(request.search);
     const search = searchInput
@@ -221,18 +276,15 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
     const listKey = sessionCatalogListKey({
       agentId: resolvedAgent.agentId,
       client,
-      request,
+      request: { ...request, profileRelation },
       allowPartialResults,
       search,
       allowProcessHomeFallback: allowHomeFallback,
       visibilityKey: resolveSessionCatalogVisibility(client, config).cacheKey,
+      pollGenerations: [...pollIntents.values()].flatMap((intent) =>
+        intent ? [intent.generation] : [],
+      ),
     });
-    const operations = getSessionCatalogListOperations(
-      config,
-      catalogRegistrations,
-      context.requestEntryLifetime?.signal,
-      client,
-    );
     const pending = operations.pending.get(listKey);
     // An in-flight list may finish with its original registry after a hot reload.
     // Delivery still applies current caller visibility; the next request refreshes registrations.
@@ -243,6 +295,7 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
           getGatewayRestartDrainSignal(),
           context.requestEntryLifetime?.signal,
           operations.retirement.signal,
+          ...pollSignals,
           signal,
         ].filter((candidate): candidate is AbortSignal => candidate !== undefined),
       );
@@ -313,9 +366,23 @@ export const listSessionCatalogHandler = defineValidatedGatewayHandler(
                 };
                 let catalog: SessionCatalog;
                 try {
+                  if (profileRelation && !provider.supportsProfileRelation) {
+                    throw new Error("This catalog does not support relationship queries");
+                  }
                   const hosts = await progress.runProvider(onHost, (lifetime) => {
                     const providerParams = {
                       agentId: resolvedAgent.agentId,
+                      ...(profileRelation ? { profileRelation } : {}),
+                      ...(client?.connId
+                        ? {
+                            caller: {
+                              id: client.connId,
+                              pollId: request.pollId,
+                              pollSignal: pollIntents.get(provider.id)?.signal,
+                              signal: client.connectionSignal,
+                            },
+                          }
+                        : {}),
                       allowPartialResults,
                       allowProcessHomeFallback: allowHomeFallback,
                       search,

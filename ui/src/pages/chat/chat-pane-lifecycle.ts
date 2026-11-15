@@ -566,7 +566,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
 
   override synchronizeInputs(changes: ChatPaneInputChanges) {
     this.captureArchivePresentationFocus();
-    if (changes.sessionKey && this.state) {
+    if ((changes.sessionKey || changes.catalogProfileRelation) && this.state) {
       const catalogKey = parseCatalogSessionKey(this.sessionKey);
       const nextSessionKey = catalogKey
         ? this.sessionKey
@@ -585,7 +585,10 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // after its transcript commit in deferSessionHydrationUntilTranscript.
         this.sessionDiscussion.forgetState(nextSessionKey);
       }
-      if (catalogKey && this.catalogRequestedSessionKey !== this.sessionKey) {
+      if (
+        catalogKey &&
+        (this.catalogRequestedSessionKey !== this.sessionKey || changes.catalogProfileRelation)
+      ) {
         this.catalogLoadGeneration += 1;
         this.openCatalogSession(catalogKey, this.state);
       } else if (nextSessionKey) {
@@ -604,12 +607,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         // stay hidden until the transcript bootstrap resolved.
         admitInitialChatTurn(this.state, initialRun);
       }
-      if (nextSessionKey) {
-        const handoff = this.takeSessionHandoff(nextSessionKey);
-        if (handoff) {
-          this.applySessionHandoff(nextSessionKey, handoff);
-        }
-      }
+      this.consumeSessionHandoff(nextSessionKey);
     }
     if (changes.sessionKey || changes.inputRegion) {
       this.syncActiveBindings();
