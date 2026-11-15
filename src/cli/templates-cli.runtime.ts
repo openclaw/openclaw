@@ -227,7 +227,7 @@ export async function runTemplatesAddCommand(
         throw error;
       }
       const message = error instanceof Error ? error.message : String(error);
-      emitTemplateFailure(opts.json, message, {
+      emitTemplateFailure(opts.json, sanitizeTerminalText(message), {
         schemaVersion: TEMPLATE_ADD_PLAN_SCHEMA_VERSION,
         stability: TEMPLATE_OUTPUT_STABILITY,
         ok: false,
