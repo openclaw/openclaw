@@ -558,6 +558,102 @@ describe("scripts/pr wrappers", () => {
     };
   }
 
+  itPosix.each(["same-commit", "same-tree", "workflow-drift", "dependency-drift"] as const)(
+    "reads each proof workflow commit once during %s admission",
+    (scenario) => {
+      const fixture = workflowFixture();
+      useOfficialOrigin(fixture);
+      const admitted = fixture.run();
+      expect(admitted.status, admitted.stdout + admitted.stderr).toBe(0);
+      const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
+      const binding = fixture.gitText(["rev-parse", bindingRef]);
+      seedReadyReview(fixture);
+      const reviewPath = join(fixture.canonical, ".worktrees/pr-123/.local/source-review.json");
+      const review = {
+        ...validReview(fixture.localRevision),
+        correction: { proofPublication: { workflowSource: fixture.source } },
+      };
+      writeFileSync(reviewPath, JSON.stringify(review));
+      const reviewOid = fixture.gitText(["hash-object", "--no-filters", reviewPath]);
+      if (scenario === "same-tree") {
+        fixture.git(fixture.canonical, [
+          "commit",
+          "--allow-empty",
+          "-m",
+          "test: advance main without changing its tree",
+        ]);
+        fixture.git(fixture.canonical, ["push", "origin", "main"]);
+      } else if (scenario === "workflow-drift") {
+        const path = "scripts/pr-lib/gates.sh";
+        fixture.write(path, readScript(join(fixture.canonical, path)) + "\n# changed policy\n");
+        fixture.commit([path], true);
+      } else if (scenario === "dependency-drift") {
+        fixture.write("pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+        fixture.commit(["pnpm-lock.yaml"], true);
+      }
+      const main = fixture.gitText(["rev-parse", "refs/remotes/origin/main"]);
+      expect(main === fixture.source).toBe(scenario === "same-commit");
+      const guard = delegatingGitFixture(fixture.root, fixture.env);
+      // Execute the intact native owner with real Git objects and a native
+      // binding. The read budget catches duplicate immutable-input work.
+      const bootstrap = readScript("scripts/pr")
+        .split("<<'EOF_WRAPPER_GIT'\n")[1]!
+        .split("\nEOF_WRAPPER_GIT")[0]!;
+      const result = spawnSync(
+        requireNodeTool("node"),
+        [
+          "--input-type=module",
+          "-",
+          guard.selected,
+          "workflow-proof-select",
+          fixture.canonical,
+          "123",
+          String(process.pid),
+          reviewPath,
+          reviewOid,
+          fixture.localRevision,
+        ],
+        { cwd: fixture.canonical, env: guard.env, input: bootstrap, encoding: "utf8" },
+      );
+      if (scenario.endsWith("-drift")) {
+        expect(result.status, result.stdout + result.stderr).not.toBe(0);
+        expect(result.stderr).toContain(
+          "Reviewed proof workflow differs from current main code, dependency or runtime policy",
+        );
+      } else {
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          source: fixture.source,
+          binding,
+          admission: "proof-baseline",
+          proof: { reviewOid },
+        });
+      }
+      const calls = readScript(guard.calls).trim().split("\n");
+      for (const revision of new Set([fixture.source, main])) {
+        expect(
+          calls.filter((line) =>
+            line.endsWith(` show ${revision}:scripts/pr-lib/wrapper-components.txt`),
+          ),
+        ).toHaveLength(1);
+        expect(
+          calls.filter((line) => line.includes(` ls-tree -r -z --full-tree ${revision} -- `)),
+        ).toHaveLength(1);
+        const dependencyReads = scenario === "workflow-drift" && revision === main ? 0 : 1;
+        for (const suffix of [
+          ` ls-tree -r -z ${revision}`,
+          ` rev-parse ${revision}^{tree}`,
+          ` show ${revision}:scripts/pr-lib/dependency-inputs.json`,
+        ]) {
+          expect(calls.filter((line) => line.endsWith(suffix))).toHaveLength(dependencyReads);
+        }
+      }
+      expect(fixture.gitText(["rev-parse", bindingRef])).toBe(binding);
+      expect(fixture.gitText(["for-each-ref", "refs/openclaw/pr-operation-locks/123"])).toBe("");
+      expect(readFileSync(reviewPath, "utf8")).toBe(JSON.stringify(review));
+    },
+  );
+
   itPosix("qualifies current recovery once and resumes the unchanged older binding", () => {
     const fixture = reviewRecoveryFixture();
     const recovered = fixture.recover();

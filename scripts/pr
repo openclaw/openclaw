@@ -498,7 +498,10 @@ try {
       requireSource(source, main);
       const closure = workflowClosure(source);
       const dependencies = dependencyIdentity(source);
-      if (!closure.equals(workflowClosure(main)) || dependencies !== dependencyIdentity(main)) {
+      // Equal commit OIDs already name the same immutable inputs. Reuse only
+      // these facts; every admission still authenticates main and the review.
+      if (source !== main &&
+          (!closure.equals(workflowClosure(main)) || dependencies !== dependencyIdentity(main))) {
         throw new Error("Reviewed proof workflow differs from current main code, dependency or runtime policy");
       }
       const stat = lstatSync(proof.path);
