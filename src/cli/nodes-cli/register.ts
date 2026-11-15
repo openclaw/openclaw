@@ -486,7 +486,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .option("--screen <index>", "Screen index (0 = primary)", "0")
       .option("--duration <ms|10s>", "Clip duration (ms or 10s)", "10000")
-      .option("--fps <fps>", "Frames per second", "10")
+      .option("--fps <fps>", "Frames per second (0-120)", "10")
       .option("--no-audio", "Disable microphone audio capture")
       .option("--out <path>", "Output path")
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 120000)", "120000")
@@ -500,6 +500,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
           );
           const fps = parseOptionalNodeFiniteNumber(opts.fps ?? "10", "--fps", {
             minExclusive: 0,
+            maxInclusive: 120,
           });
           const timeoutMs = parseOptionalNodeInteger(opts.invokeTimeout, "--invoke-timeout");
           const nodeId = await resolveCliNodeId(opts, opts.node ?? "");
