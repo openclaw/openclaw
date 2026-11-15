@@ -18,6 +18,7 @@ const catalog = {
       weekdays: "Weekdays",
       weekly: "Weekly",
       monthly: "Monthly",
+      today: "Today {time}",
       withCwd: "{value} (cwd: {cwd})",
       withTimeZone: "{value} ({timeZone})",
       nextRunToday: "Next run today at {time}",

@@ -2311,45 +2311,23 @@ div.shell.shell--onboarding {
 .sidebar-automations__group {
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  margin-block-start: 12px;
-}
-
-/* Group headings read as sentence-case labels; the chevron follows the label. */
-.sidebar-automations__heading {
-  display: flex;
-  align-items: center;
   gap: 2px;
-  align-self: flex-start;
-  padding: 2px 8px 4px;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
-  font: inherit;
-  font-size: 12px;
-  font-weight: 500;
+  margin-block-start: 14px;
 }
 
-.sidebar-automations__heading:hover {
-  color: var(--text);
-}
-
-.sidebar-automations__heading svg {
-  width: 12px;
-  height: 12px;
-}
-
+/* Rows start where the group chevron does: a title in the text color over a quieter byline. */
 .sidebar-automations__row {
   align-items: center;
   gap: 8px;
   height: auto;
-  padding-block: 5px;
+  padding: 6px 8px 6px calc(var(--sidebar-inset) + 2px);
 }
 
 .sidebar-automations__copy {
   display: flex;
   flex: 1 1 auto;
   flex-direction: column;
+  gap: 2px;
   min-width: 0;
 }
 
@@ -2361,12 +2339,13 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-automations__name {
+  color: var(--text);
   font-size: 13px;
   line-height: 18px;
 }
 
 .sidebar-automations__byline {
-  color: var(--muted);
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
   font-size: 12px;
   line-height: 16px;
 }
