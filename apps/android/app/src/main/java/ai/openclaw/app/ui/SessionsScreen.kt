@@ -515,7 +515,7 @@ internal fun SessionsScreen(
   deleteSessionTarget?.let { session ->
     SessionDeleteDialog(
       title = nativeString("Delete chat?"),
-      text = nativeString("Messages are backed up, except in Incognito."),
+      text = nativeString("A copy of this chat is kept."),
       onDismiss = { deleteSessionTarget = null },
       onConfirm = {
         deleteSessionTarget = null

@@ -120,7 +120,7 @@ class SessionsScreenDeletionTest {
           )
         }
       }
-      composeRule.onNodeWithText("Messages are backed up, except in Incognito.").assertIsDisplayed()
+      composeRule.onNodeWithText("A copy of this chat is kept.").assertIsDisplayed()
       assertTrue(deletes.isEmpty())
       composeRule.onNodeWithText("Cancel").performClick()
       composeRule.onNode(isDialog()).assertDoesNotExist()
