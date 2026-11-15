@@ -16,6 +16,7 @@ const suite = createControlUiE2eSuite({ name: "Native iOS Dashboard appearance" 
 declare global {
   interface Window {
     nativeAppearanceFrames: string[];
+    nativeAppearanceBackgrounds: string[];
   }
 }
 
@@ -28,6 +29,12 @@ suite.define(() => {
       await suite.withPage(
         { viewport: device, colorScheme: device.mode, hasTouch: true, serviceWorkers: "block" },
         async ({ page, context }) => {
+          const paletteRequests: string[] = [];
+          page.on("request", (request) => {
+            if (new URL(request.url()).pathname.endsWith("/themes/native-ios.css")) {
+              paletteRequests.push(request.url());
+            }
+          });
           await installNativeEmbed(page, { platform: "ios", formFactor: device.formFactor });
           const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
           const saved = {
@@ -41,10 +48,17 @@ suite.define(() => {
             ({ key, settings }) => {
               localStorage.setItem(key, JSON.stringify(settings));
               window.nativeAppearanceFrames = [];
+              window.nativeAppearanceBackgrounds = [];
               const sample = () => {
                 const theme = document.documentElement?.dataset.theme;
                 if (theme && !window.nativeAppearanceFrames.includes(theme)) {
                   window.nativeAppearanceFrames.push(theme);
+                }
+                if (theme) {
+                  const color = getComputedStyle(document.documentElement).backgroundColor;
+                  if (!window.nativeAppearanceBackgrounds.includes(color)) {
+                    window.nativeAppearanceBackgrounds.push(color);
+                  }
                 }
                 requestAnimationFrame(sample);
               };
@@ -84,6 +98,10 @@ suite.define(() => {
           });
           expect((await appearance()).font).not.toContain("Lora");
           expect(await page.evaluate(() => window.nativeAppearanceFrames)).toEqual([device.mode]);
+          expect(await page.evaluate(() => window.nativeAppearanceBackgrounds)).toEqual([
+            device.mode === "dark" ? "rgb(11, 12, 17)" : "rgb(246, 247, 249)",
+          ]);
+          expect(paletteRequests).toHaveLength(1);
           await page.goto(new URL("settings/talk", suite.server.baseUrl).toString());
           await waitForControlUiRoute(page, { routeId: "talk" });
           await expect.poll(appearance).toMatchObject({ mode: device.mode, theme: device.mode });
@@ -115,6 +133,12 @@ suite.define(() => {
 
           // A normal browser sharing the same storage must still render the selected theme.
           const browser = await context.newPage();
+          const browserPalettes: string[] = [];
+          browser.on("request", (request) => {
+            if (new URL(request.url()).pathname.endsWith("/themes/native-ios.css")) {
+              browserPalettes.push(request.url());
+            }
+          });
           await installMockGateway(browser, {
             operatorScopes: ["operator.admin", "operator.read"],
           });
@@ -126,6 +150,7 @@ suite.define(() => {
           expect(
             await browser.locator("body").evaluate((body) => getComputedStyle(body).fontFamily),
           ).toContain("Lora");
+          expect(browserPalettes).toEqual([]);
         },
       );
     });

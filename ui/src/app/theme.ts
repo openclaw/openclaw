@@ -39,13 +39,21 @@ export function resolveTheme(theme: ThemeName, mode: ThemeMode): ResolvedTheme {
 
 /** Publish theme colors only after their stylesheet is available. */
 export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void): void {
-  if (typeof document === "undefined" || theme === "claw" || !isBuiltinThemeId(theme)) {
+  // Consume the document-start host marker without changing the saved theme ID.
+  const nativeIOS =
+    typeof document !== "undefined" &&
+    document.documentElement.classList.contains("openclaw-native-ios");
+  if (
+    typeof document === "undefined" ||
+    (!nativeIOS && (theme === "claw" || !isBuiltinThemeId(theme)))
+  ) {
     ready();
     return;
   }
-  // Retain the six built-in families once visited. Their exclusive selectors
+  // Retain visited palettes, including the private iOS embed palette. Their exclusive selectors
   // leave the previous theme intact during loading and make repeat switches synchronous.
-  const id = `openclaw-theme-palette-${theme}`;
+  const palette = nativeIOS ? "native-ios" : theme;
+  const id = `openclaw-theme-palette-${palette}`;
   const existing = document.getElementById(id);
   if (existing instanceof HTMLLinkElement && existing.sheet) {
     ready();
@@ -66,7 +74,7 @@ export function syncThemePaletteStylesheet(theme: ThemeName, ready: () => void):
   if (!existing) {
     link.id = id;
     link.rel = "stylesheet";
-    link.href = inferControlUiPublicAssetPath(`themes/${theme}.css`);
+    link.href = inferControlUiPublicAssetPath(`themes/${palette}.css`);
     document.head.append(link);
   }
 }

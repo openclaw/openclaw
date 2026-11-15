@@ -158,51 +158,32 @@
           if (mode === "system") {
             mode = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
           }
-          // family -> [dark, light] resolved names. Kept in lockstep with
-          // resolveTheme() in app/theme.ts and the files in public/themes.
-          var FAMILIES = {
-            knot: ["openknot", "openknot-light"],
-            dash: ["dash", "dash-light"],
-            absolutely: ["absolutely", "absolutely-light"],
-            tide: ["tide", "tide-light"],
-            beacon: ["beacon", "beacon-light"],
-            phosphor: ["phosphor", "phosphor-light"],
-            crt: ["crt", "crt-light"],
-            manuscript: ["manuscript", "manuscript-light"],
-            rose: ["rose", "rose-light"],
-            miami: ["miami", "miami-light"],
-          };
-          var pair = FAMILIES[theme];
-          var resolved = pair
-            ? pair[mode === "light" ? 1 : 0]
-            : mode === "light"
-              ? "light"
-              : "dark";
-          if (pair) {
+          // Keep resolved names in lockstep with app/theme.ts.
+          var family = theme === "knot" ? "openknot" : theme;
+          var resolved = theme === "claw" ? mode : family + (mode === "light" ? "-light" : "");
+          if (theme !== "claw" || nativeIOS) {
             // Script-created links need explicit render blocking before first paint.
             // The gateway stamps the mount prefix and asset version before this runs.
-            var base =
-              document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
             var buildId = document.documentElement.getAttribute(
               "data-openclaw-control-ui-build-id",
             );
             // Keep the first-paint URL identical to app/public-assets.ts.
             var version = buildId ? "?v=" + encodeURIComponent(buildId.slice(-64)) : "";
+            var paletteName = nativeIOS ? "native-ios" : theme;
             var palette = document.createElement("link");
             palette.rel = "stylesheet";
             palette.setAttribute("blocking", "render");
-            palette.id = "openclaw-theme-palette-" + theme;
+            palette.id = "openclaw-theme-palette-" + paletteName;
             palette.onerror = function () {
               palette.remove();
             };
-            palette.href = base + "/themes/" + theme + ".css" + version;
+            palette.href = bootBase + "/themes/" + paletteName + ".css" + version;
             document.head.appendChild(palette);
           }
           document.documentElement.setAttribute("data-theme", resolved);
-          var resolvedMode = resolved.includes("light") ? "light" : "dark";
-          document.documentElement.setAttribute("data-theme-mode", resolvedMode);
+          document.documentElement.setAttribute("data-theme-mode", mode);
           // Plugin semantic styles select on [data-theme-resolved]; keep in lockstep.
-          document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
+          document.documentElement.setAttribute("data-theme-resolved", mode);
         } catch (e) {}
       })();
     </script>
@@ -302,14 +283,6 @@
 
       html[data-theme="miami-light"] {
         background: #f2eef1;
-      }
-
-      html.openclaw-native-ios {
-        background: #0b0c11;
-      }
-
-      html.openclaw-native-ios[data-theme-mode="light"] {
-        background: #f6f7f9;
       }
 
       body {
