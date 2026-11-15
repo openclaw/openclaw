@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
-import {
-  resolveUpdateInstallRoot,
-  updateInstallRootsMatch,
-} from "../../infra/update-install-root.js";
+import { resolvePackageReleaseSlotForRootSync } from "../../infra/package-release-slot-path.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
   captureManagedUpdateLeaseDatabaseIdentity,
   prepareManagedHandoffLeaseDatabaseIdentity,
@@ -212,8 +210,12 @@ export async function withUpdateCommandExecutor<T>(
           return;
         }
         const key = occupiedSlotKey(root);
-        // The release a package link selects is that installation, by its real path.
-        if (key === installLease.key || updateInstallRootsMatch(root, installLease.key)) {
+        // The release the installation's package link selects is that installation by its
+        // real path; any other spelling of it is an occupied slot and takes its own lease.
+        if (
+          key === installLease.key ||
+          resolvePackageReleaseSlotForRootSync(root) === installLease.key
+        ) {
           return;
         }
         if (slotLease) {

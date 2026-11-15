@@ -66,7 +66,9 @@ export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
 /** Install a verified stage: the release switch where it can be used, otherwise the swap below. */
 export const swapStagedPackageInstall = (params: StagedPackageSwapParams) =>
-  installStagedPackage(params, swapStagedPackageDirectory);
+  params.stage.release || params.stage.releaseUnavailable
+    ? installStagedPackage(params, swapStagedPackageDirectory)
+    : swapStagedPackageDirectory(params);
 
 async function swapStagedPackageDirectory(
   params: StagedPackageSwapParams,
