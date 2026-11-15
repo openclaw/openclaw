@@ -14,6 +14,11 @@ import {
   CommandExplanationWorkLimitError,
   explainShellCommand,
 } from "./command-explainer/extract.js";
+import {
+  CommandExplanationParseTimeoutError,
+  CommandExplanationSourceSizeLimitError,
+  CommandExplanationUnsupportedControlCharacterError,
+} from "./command-explainer/tree-sitter-runtime.js";
 import type { CommandExplanation } from "./command-explainer/types.js";
 import { isPathInside } from "./path-guards.js";
 
@@ -21,11 +26,14 @@ type UnsafeExecControlShellCommandKind =
   | "approve"
   | "channel-login"
   | "live-state-sqlite"
-  | "incomplete-analysis";
+  | "incomplete-analysis"
+  | "parser-failure"
+  | "unsupported-control-character";
 
 type ExecControlShellCommandContext = {
   stateDir?: string;
   workdir?: string;
+  platform?: string | null;
 };
 
 const SQLITE_OPTIONS_WITH_VALUES = new Map<string, number>([
@@ -267,30 +275,60 @@ function targetsLiveStateSqliteDatabase(
   });
 }
 
+function isShellBoundaryWhitespace(charCode: number): boolean {
+  return charCode === 0x20 || charCode === 0x09 || charCode === 0x0a;
+}
+
+function trimShellBoundaryWhitespace(command: string): string {
+  let start = 0;
+  let end = command.length;
+  while (start < end && isShellBoundaryWhitespace(command.charCodeAt(start))) {
+    start += 1;
+  }
+  while (end > start && isShellBoundaryWhitespace(command.charCodeAt(end - 1))) {
+    end -= 1;
+  }
+  return command.slice(start, end);
+}
+
 export async function detectUnsafeExecControlShellCommand(
   command: string,
   context: ExecControlShellCommandContext = {},
 ): Promise<UnsafeExecControlShellCommandKind | null> {
-  const rawCommand = command.trim();
-  let explanation: CommandExplanation | null = null;
+  // Only trim shell whitespace; CR, VT, and FF must reach the parser for rejection.
+  const windows = normalizeLowercaseStringOrEmpty(context.platform).startsWith("win");
+  // Windows shells accept CRLF as a line ending. Normalize only the inspection copy;
+  // the caller still executes the original command unchanged.
+  const inspectionCommand = windows ? command.replaceAll("\r\n", "\n") : command;
+  const rawCommand = trimShellBoundaryWhitespace(inspectionCommand);
+  let explanation: CommandExplanation;
   try {
     explanation = await explainShellCommand(rawCommand);
   } catch (error) {
-    if (error instanceof CommandExplanationWorkLimitError) {
+    if (
+      error instanceof CommandExplanationWorkLimitError ||
+      error instanceof CommandExplanationParseTimeoutError ||
+      error instanceof CommandExplanationSourceSizeLimitError
+    ) {
       return "incomplete-analysis";
     }
-    // Fall back to line-local shell splitting below.
-  }
-  const argvCandidates = (() => {
-    if (explanation?.ok) {
-      const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
-      return commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
+    if (error instanceof CommandExplanationUnsupportedControlCharacterError) {
+      return "unsupported-control-character";
     }
-    return normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
-      const argv = splitShellArgs(line);
-      return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
-    });
-  })();
+    // A parser exception leaves no reliable command inventory for the fallback.
+    return "parser-failure";
+  }
+  const commands = [...explanation.topLevelCommands, ...explanation.nestedCommands];
+  const argvCandidates = commands.flatMap((step) => buildCommandPayloadArgvCandidates(step.argv));
+  if (!explanation.ok) {
+    // Error recovery can omit a command; approval planning still fails closed on ok:false.
+    argvCandidates.push(
+      ...normalizeStringEntries(rawCommand.split(/\r?\n/)).flatMap((line) => {
+        const argv = splitShellArgs(line);
+        return argv ? buildCommandPayloadArgvCandidates(argv) : [[line]];
+      }),
+    );
+  }
   const controlCandidates = uniqueStrings(argvCandidates.map((argv) => argv.join(" ")));
   for (const candidate of controlCandidates) {
     if (isExecApprovalShellCommand(candidate)) {
@@ -313,13 +351,34 @@ function rejectIncompleteCommandAnalysis(
 ): void {
   if (unsafeKind === "incomplete-analysis") {
     throw new Error(
-      "exec cannot run a shell command that exceeds the command explanation work limit. Simplify the command so its complete syntax can be inspected before execution.",
+      "exec cannot run a shell command that exceeds the command explanation work limit: it is longer than 131,072 characters, nests more than two shell wrappers such as bash -c, or is too complex to inspect. Split or simplify the command, or write large content with a file tool or script file.",
+    );
+  }
+  if (unsafeKind === "unsupported-control-character") {
+    throw new Error(
+      "exec cannot run a shell command containing unsupported control characters: a raw carriage return, vertical tab, or form feed, even inside quotes. The shell and OpenClaw's command inspector read these bytes differently, so the command cannot be inspected safely. Remove them, convert CRLF line endings to LF (Windows hosts accept CRLF), or write the bytes as escape sequences such as printf '\\r'.",
+    );
+  }
+  if (unsafeKind === "parser-failure") {
+    throw new Error(
+      "exec cannot inspect this shell command because the Bash command parser failed to load or to parse it, and exec does not run commands it cannot inspect. The next exec call retries loading the parser. If only this command fails, simplify it. If every command fails, restart OpenClaw, then reinstall or update it if that does not help.",
     );
   }
 }
 
-export async function rejectUnsafeExecControlShellCommand(command: string): Promise<void> {
-  const unsafeKind = await detectUnsafeExecControlShellCommand(command);
+export async function rejectUnsafeExecControlShellCommand(
+  command: string,
+  host: "gateway" | "node" | "sandbox" | ExecControlShellCommandContext = "sandbox",
+): Promise<void> {
+  if (host === "node") {
+    // The destination platform is resolved in executeNodeHostCommand.
+    return;
+  }
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command, {
+    ...(typeof host === "object"
+      ? host
+      : { platform: host === "gateway" ? process.platform : null }),
+  });
   rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind === "approve") {
     throw new Error(
@@ -341,9 +400,12 @@ export async function rejectUnsafeExecControlShellCommand(command: string): Prom
 
 export async function rejectUnsafeExecLiveStateSqliteShellCommand(
   command: string,
-  context: Required<ExecControlShellCommandContext>,
+  context: ExecControlShellCommandContext & { stateDir: string; workdir: string },
 ): Promise<void> {
-  const unsafeKind = await detectUnsafeExecControlShellCommand(command, context);
+  const unsafeKind = await detectUnsafeExecControlShellCommand(command, {
+    ...context,
+    platform: process.platform,
+  });
   rejectIncompleteCommandAnalysis(unsafeKind);
   if (unsafeKind !== "live-state-sqlite") {
     return;

@@ -14,6 +14,7 @@ import {
   formatExecAutoReviewAssessment,
   resolveExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
+import { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 import {
   captureAgentToolSourceExecutionGuard,
   runWithAgentToolSourceExecutionScope,
@@ -66,6 +67,9 @@ export async function executeNodeHostCommand(
   const assertSourceActive = captureAgentToolSourceExecutionGuard(params.signal);
   const target = await resolveNodeExecutionTarget(params);
   params.signal?.throwIfAborted();
+  await rejectUnsafeExecControlShellCommand(params.command, {
+    platform: target.platform,
+  });
   const { hostSecurity, hostAsk, askFallback } = params.bypassHostApprovalFloors
     ? { hostSecurity: params.security, hostAsk: params.ask, askFallback: "deny" as const }
     : await execHostShared.resolveExecHostApprovalContext({

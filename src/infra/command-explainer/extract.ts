@@ -26,6 +26,7 @@ import {
   type RecordedCommandStep,
 } from "./topology.js";
 import {
+  assertExplainableShellSource,
   getBashParserForCommandExplanation,
   type BashCommandParser,
 } from "./tree-sitter-runtime.js";
@@ -648,7 +649,12 @@ function visitNode(
       if (step.executable) {
         output.commands.push(step);
         const wrapperPayload = recordCommandRisks(parsed, span, output);
-        if (wrapperPayload && state.wrapperPayloadDepth < MAX_WRAPPER_PAYLOAD_DEPTH) {
+        if (wrapperPayload && state.wrapperPayloadDepth >= MAX_WRAPPER_PAYLOAD_DEPTH) {
+          throw new CommandExplanationWorkLimitError(
+            "Shell wrapper nesting exceeds the command explanation work limit",
+          );
+        }
+        if (wrapperPayload) {
           const wrapperTree = state.parse(wrapperPayload.command);
           const wrapperSpanBase = wrapperPayload.spanBase;
           try {
@@ -708,6 +714,7 @@ function walk(
 }
 
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
+  assertExplainableShellSource(source);
   // Finish and delete each tree without yielding: overlapping walks grow the WASM high-water mark.
   const parse = await getBashParserForCommandExplanation();
   const tree = parse(source);
