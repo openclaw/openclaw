@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { writePlan } from "./state-upgrade-tree.js";
+import { ChainStepError } from "./state-upgrade-validate.js";
 import {
   createDoctorChain,
   isStateUpgradePending,
@@ -75,6 +77,37 @@ describe("createDoctorChain", () => {
       path.join(root, "shadow", "agents", "main", "agent"),
       null,
     ]);
+  });
+});
+
+describe("upgradeStateDirectory external config", () => {
+  it("publishes a config outside the state directory by a rename within its directory", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-config-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    const corpus = fileURLToPath(
+      new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
+    );
+    fs.cpSync(corpus, stateDir, { recursive: true });
+    const configPath = path.join(root, "config", "openclaw.json");
+    fs.mkdirSync(path.dirname(configPath));
+    fs.writeFileSync(configPath, "{}");
+    const renames = vi.spyOn(fs, "renameSync");
+    try {
+      await upgradeStateDirectory({
+        env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        log: { info: () => {}, warn: () => {} },
+        runChain: async (chain) => {
+          fs.writeFileSync(chain.configPath, JSON.stringify({ migrated: true }));
+          throw new ChainStepError("injected", "fail after the config rewrite");
+        },
+      });
+      const publish = renames.mock.calls.find(([, to]) => to === configPath);
+      expect(path.dirname(String(publish?.[0]))).toBe(path.dirname(configPath));
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).toEqual({ migrated: true });
+    } finally {
+      renames.mockRestore();
+    }
   });
 });
 

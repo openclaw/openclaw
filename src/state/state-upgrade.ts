@@ -555,10 +555,17 @@ export async function upgradeStateDirectory(params: {
         ops.push({ kind: original ? "replace" : "add", live: configPath, next: shadowConfig });
       }
     }
+    // A config outside the state directory may be on another filesystem; its new
+    // bytes are staged beside it so the plan's rename stays on one filesystem.
+    let stagedConfig: string | undefined;
     if (!configInside && fs.existsSync(shadowConfig)) {
       const original = fs.existsSync(configPath) ? fs.readFileSync(configPath) : undefined;
       if (!original?.equals(fs.readFileSync(shadowConfig))) {
-        ops.push({ kind: original ? "replace" : "add", live: configPath, next: shadowConfig });
+        stagedConfig = path.join(
+          path.dirname(configPath),
+          `.${path.basename(configPath)}.upgrade-${VERSION}`,
+        );
+        ops.push({ kind: original ? "replace" : "add", live: configPath, next: stagedConfig });
       }
     }
     ops.push(...companionRemovals(ops));
@@ -572,6 +579,10 @@ export async function upgradeStateDirectory(params: {
       fs.rmSync(workDir, { recursive: true, force: true });
       params.log.warn(`State upgrade to ${VERSION} not applied: ${refusal}`);
       return { status: "refused", reason: refusal };
+    }
+    if (stagedConfig) {
+      fs.copyFileSync(shadowConfig, stagedConfig);
+      fsyncPath(stagedConfig);
     }
     await params.beforeSwap?.();
     writePlan(workDir, { appVersion: VERSION, ops });
