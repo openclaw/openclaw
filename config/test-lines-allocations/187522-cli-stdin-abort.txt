@@ -1,0 +1,2 @@
+98
+# #187522 CLI stdin cancellation: 82 lines for the new reader cases (pre-aborted signal, held-open native stream, Web ReadableStream read/stalled-cancel/overflow-cancel) plus the 16-line overage the ratchet base already carried on 2026-11-08. Raising the ceiling by exactly this change's net test-line growth plus that inherited debt adds no headroom; the reader cases are the cancellation proof this PR ships, so the growth is recorded instead of paid for by deleting unrelated coverage.

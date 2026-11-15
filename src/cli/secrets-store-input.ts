@@ -8,12 +8,15 @@ import {
   SECRET_STORE_VALUE_MAX_BYTES,
   SecretStoreValidationError,
 } from "../secrets/store/secret-store.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 const SECRET_STORE_IMPORT_MAX_BYTES = 16 * 1024 * 1024;
 
 async function readBoundedStdin(maxBytes: number): Promise<string> {
+  const signal = getAsyncWorkSignal();
   const bytes = await readByteStreamWithLimit(process.stdin, {
     maxBytes,
+    signal,
     // Oversized input is the same validation failure as an oversized stored value,
     // so it must carry the typed code the CLI maps to exit 2 on every input path.
     onOverflow: ({ maxBytes: limit }) =>
@@ -22,6 +25,8 @@ async function readBoundedStdin(maxBytes: number): Promise<string> {
         `Stdin input exceeds ${limit} bytes.`,
       ),
   });
+  // A cancellation accepted after EOF must not hand the read secret to the store writer.
+  signal?.throwIfAborted();
   return decodeUtf8Input(bytes, "Stdin input");
 }
 
