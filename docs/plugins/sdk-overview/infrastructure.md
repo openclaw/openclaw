@@ -747,6 +747,16 @@ the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
 
+Discord native interactive handlers receive the source card's structured
+components in `interaction.messageComponents` (an empty array when the interaction
+has no source components). To update one part of a card, copy that snapshot,
+change the relevant block, and pass the complete component tree to
+`respond.editMessage({ components })`. Preserve buttons and other unchanged blocks
+in that tree. Source-message edits through `respond.editMessage` and
+`respond.clearComponents` suppress mention parsing, so retained mentions do not
+notify users again. The component snapshot stays in the native handler context;
+it is not added to the assistant's prompt.
+
 ### Doctor plugin-state repairs
 
 `PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`

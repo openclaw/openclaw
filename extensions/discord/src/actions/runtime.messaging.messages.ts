@@ -1,3 +1,5 @@
+import type { APIMessageComponent } from "discord-api-types/v10";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import {
   jsonResult,
   readPositiveIntegerParam,
@@ -5,7 +7,16 @@ import {
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
 import { createChannelProgressDraftCompositor } from "openclaw/plugin-sdk/channel-outbound";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asOptionalRecord, isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveDefaultDiscordAccountId } from "../accounts.js";
+import { resolveDiscordComponentEntryWithPersistence } from "../components-registry.js";
+import {
+  coerceDiscordComponentParam,
+  parseDiscordComponentCustomId,
+  readDiscordComponentSpec,
+  type DiscordComponentEntry,
+} from "../components.js";
+import { editDiscordComponentMessage } from "../send.components.js";
 import * as discordMessagingActionRuntime from "../send.js";
 import { buildDiscordTextChunks } from "../send.shared.js";
 import { resolveDiscordChannelId } from "../target-parsing.js";
@@ -120,6 +131,73 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
       const messageId = readStringParam(ctx.params, "messageId", {
         required: true,
       });
+      if (ctx.params.components !== undefined) {
+        const record = asOptionalRecord(coerceDiscordComponentParam(ctx.params.components));
+        if (!record || Object.keys(record).length === 0) {
+          throw new Error("Discord component edits require a structured component specification.");
+        }
+        const parsedSpec = readDiscordComponentSpec(record);
+        if (!parsedSpec) {
+          throw new Error("Invalid Discord component edit specification.");
+        }
+        if (ctx.options?.progressSnapshot) {
+          throw new Error("Discord component edits cannot include a progress snapshot.");
+        }
+        await ctx.assertReadTargetAllowed({ channelId });
+        const original = await discordMessagingActionRuntime.fetchMessageDiscord(
+          channelId,
+          messageId,
+          ctx.withOpts(),
+        );
+        const pending: APIMessageComponent[] = [...(original.components ?? [])];
+        let route: Pick<DiscordComponentEntry, "sessionKey" | "agentId"> | undefined;
+        const accountId = normalizeAccountId(
+          ctx.accountId ?? resolveDefaultDiscordAccountId(ctx.cfg),
+        );
+        // Editing a card must not redirect its callbacks to the editor's session.
+        while (pending.length > 0) {
+          const component = pending.pop()!;
+          if ("components" in component) {
+            pending.push(...component.components);
+          }
+          if ("accessory" in component) {
+            pending.push(component.accessory);
+          }
+          if (!("custom_id" in component)) {
+            continue;
+          }
+          const parsed = parseDiscordComponentCustomId(component.custom_id);
+          if (!parsed) {
+            continue;
+          }
+          const entry = await resolveDiscordComponentEntryWithPersistence({
+            id: parsed.componentId,
+            consume: false,
+          });
+          if (!entry) {
+            continue;
+          }
+          if (
+            entry.messageId !== messageId ||
+            (entry.accountId && normalizeAccountId(entry.accountId) !== accountId)
+          ) {
+            throw new Error("Discord component registration does not match edit target.");
+          }
+          if (route && (route.sessionKey !== entry.sessionKey || route.agentId !== entry.agentId)) {
+            throw new Error("Discord component edit cannot merge different callback routes.");
+          }
+          route = { sessionKey: entry.sessionKey, agentId: entry.agentId };
+        }
+        const fallback = readStringParam(ctx.params, "content", { trim: false, allowEmpty: true });
+        const spec =
+          parsedSpec.text || !fallback?.trim() ? parsedSpec : { ...parsedSpec, text: fallback };
+        const result = await editDiscordComponentMessage(`channel:${channelId}`, messageId, spec, {
+          ...ctx.withOpts(),
+          ...route,
+          allowedMentions: { parse: [] },
+        });
+        return jsonResult({ ok: true, result });
+      }
       const snapshot = ctx.options?.progressSnapshot;
       const content = snapshot
         ? (buildDiscordTextChunks(

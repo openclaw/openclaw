@@ -41,6 +41,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
     components?: TopLevelComponents[];
   }) => {
     const payload = {
+      allowed_mentions: { parse: [] },
       ...(input.text !== undefined ? { content: input.text } : {}),
       ...(input.components !== undefined ? { components: input.components } : {}),
     };
@@ -151,6 +152,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       interaction: {
         kind: params.kind,
         messageId: params.messageId,
+        messageComponents: params.interaction.message?.components ?? [],
         values: params.values,
         fields: params.fields,
       },

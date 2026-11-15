@@ -211,6 +211,8 @@ async function writeDiscordComponentMessage(
   };
   const componentBody = {
     ...serializePayload(payload),
+    // Discord requires classic fields to be cleared when converting to Components V2.
+    ...(!creating ? { content: null, embeds: [], sticker_ids: [], poll: null } : {}),
     ...(messageReference ? { message_reference: messageReference } : {}),
   };
   // Nonce enforcement belongs to Create Message, not edits.
