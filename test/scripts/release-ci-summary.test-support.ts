@@ -1,12 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, vi } from "vitest";
 import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
-import { verifyReceiptRecoveryAuthority } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
   composeReleaseAttemptJobs,
   type ReleaseExecutionPlan,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
 import { expectedChildDispatches } from "../../scripts/release-ci-summary.mjs";
 
 export function rawManifest({

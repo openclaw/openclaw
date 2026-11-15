@@ -67,7 +67,7 @@ const baseManifest = {
   automations: [
     {
       id: "weekday-triage",
-      name: "Weekday triage",
+      name: "a".repeat(200),
       schedule: { cron: "0 9 * * 1-5", timezone: "America/New_York" },
       session: "isolated",
       message: "Review new issues.",
@@ -259,29 +259,27 @@ describe("parseTemplateManifest", () => {
     expect(duplicateCron.ok).toBe(false);
   });
 
-  it("rejects invalid heartbeat durations and cron expressions", () => {
-    const heartbeat = parseTemplateManifest({
-      schemaVersion: 1,
-      agent: { id: "worker", heartbeat: { every: "eventually" } },
+  it.each(["eventually", "104000000d", "100000000d"])("rejects invalid heartbeat %s", (every) => {
+    const result = parseTemplateManifest({
+      ...minimalManifest,
+      agent: { id: "worker", heartbeat: { every } },
     });
-    expect(heartbeat.ok).toBe(false);
-    expect(heartbeat.diagnostics).toContainEqual(
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ path: "$.agent.heartbeat.every" }),
     );
+  });
 
-    const cron = parseTemplateManifest({
+  it.each([
+    [{ schedule: { cron: "invalid", timezone: "UTC" } }, "$.automations[0].schedule.cron"],
+    [{ name: "a".repeat(201) }, "$.automations[0].name"],
+  ])("rejects invalid automation %#", (override, path) => {
+    const result = parseTemplateManifest({
       ...baseManifest,
-      automations: [
-        {
-          ...baseManifest.automations[0],
-          schedule: { cron: "not a cron expression", timezone: "UTC" },
-        },
-      ],
+      automations: [{ ...baseManifest.automations[0], ...override }],
     });
-    expect(cron.ok).toBe(false);
-    expect(cron.diagnostics).toContainEqual(
-      expect.objectContaining({ path: "$.automations[0].schedule.cron" }),
-    );
+    expect(result.ok).toBe(false);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({ path }));
   });
 });
 

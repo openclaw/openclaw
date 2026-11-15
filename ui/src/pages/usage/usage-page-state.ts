@@ -22,7 +22,7 @@ import {
 import { createProviderUsageLoader } from "./provider-usage-load.ts";
 import { UsageRefreshPolicy } from "./refresh-policy.ts";
 import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
-import { createUsageDetails } from "./usage-details.ts";
+import { createUsageDetails, resolveUsageConversationTarget } from "./usage-details.ts";
 import type {
   UsageDetailPresentation,
   UsagePresentation,
@@ -47,17 +47,14 @@ export function createUsagePage(context: ApplicationContext) {
     scope: "family",
     creatorKey: null,
     selectedDays: [],
-    selectedHours: [],
     query: "",
     queryDraft: "",
     timeZone: "local",
   };
-  // Sorting and recent selection belong to the next request, before Solid commits.
+  // Sorting belongs to the next request, before Solid commits.
   let display: Omit<UsageDisplayState, keyof UsagePresentation["display"]> = {
     sessionSort: DEFAULT_USAGE_SESSION_SORT.sort,
     sessionSortDir: DEFAULT_USAGE_SESSION_SORT.sortDirection,
-    recentSessions: [],
-    sessionsTab: "all",
   };
   const [presentation, setPresentation] = createStore<UsagePresentation>({
     display: {
@@ -71,8 +68,6 @@ export function createUsagePage(context: ApplicationContext) {
       timeSeriesBreakdownMode: "by-type",
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
-      sessionLogsExpanded: false,
-      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
   });
   let usageSelectedSessions: string[] = [];
@@ -323,9 +318,7 @@ export function createUsagePage(context: ApplicationContext) {
       creatorKey: filters.creatorKey ?? undefined,
       query: filters.query,
       selectedDays: filters.selectedDays,
-      selectedHours: filters.selectedHours,
       selectedSessions: usageSelectedSessions,
-      recentKeys: display.sessionsTab === "recent" ? display.recentSessions : undefined,
       offset: usageOffset,
       sort: display.sessionSort,
       sortDirection: display.sessionSortDir,
@@ -347,11 +340,8 @@ export function createUsagePage(context: ApplicationContext) {
       (projection === "filterOptions" || query.query === current.query) &&
       (projection === "calendar" ||
         JSON.stringify(query.selectedDays) === JSON.stringify(current.selectedDays)) &&
-      JSON.stringify(query.selectedHours) === JSON.stringify(current.selectedHours) &&
       (projection === "roster" ||
         JSON.stringify(query.selectedSessions) === JSON.stringify(current.selectedSessions)) &&
-      (projection === "calendar" ||
-        JSON.stringify(query.recentKeys) === JSON.stringify(current.recentKeys)) &&
       // Chart/filter projections describe the whole selection, not its roster page or order.
       (projection === "calendar" ||
         projection === "filterOptions" ||
@@ -423,7 +413,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function clearSelectionsAndDetails() {
     usageExportRequest.reset();
-    setFilters({ selectedDays: [], selectedHours: [] });
+    setFilters({ selectedDays: [] });
     usageSelectedSessions = [];
     selectedSession = null;
     usageOffset = 0;
@@ -488,11 +478,6 @@ export function createUsagePage(context: ApplicationContext) {
       usageRosterResult()?.sessions.find((session) => session.key === key) ??
       usageResult()?.overview?.selectedRows.find((session) => session.key === key);
     details.clear();
-    display = {
-      ...display,
-      recentSessions: [key, ...display.recentSessions.filter((entry) => entry !== key)].slice(0, 8),
-    };
-
     usageSelectedSessions = toggleUsageRangeSelection(
       usageSelectedSessions,
       key,
@@ -524,6 +509,7 @@ export function createUsagePage(context: ApplicationContext) {
 
   function read() {
     const timeSeries = details.timeSeries.data;
+    const conversation = resolveUsageConversationTarget(context, selectedSession);
     return {
       result: usageResult(),
       data: {
@@ -560,6 +546,7 @@ export function createUsagePage(context: ApplicationContext) {
       filters: { ...filters, selectedSessions: usageSelectedSessions },
       display,
       detail: {
+        conversationHref: conversation?.href ?? null,
         context: {
           weight: details.session.data?.contextWeight,
           read: details.session.read,
@@ -596,18 +583,6 @@ export function createUsagePage(context: ApplicationContext) {
               draft.display.headerPinned = !draft.display.headerPinned;
             });
           },
-          onSelectHour: (hour: number, shiftKey: boolean) => {
-            setFilters({
-              selectedHours: toggleUsageRangeSelection(
-                filters.selectedHours,
-                hour,
-                Array.from({ length: 24 }, (_, index) => index),
-                shiftKey,
-                "append",
-              ),
-            });
-            refreshOverview();
-          },
           onQueryDraftChange: (query: string) => {
             setFilters({ queryDraft: query });
             clearDebounce("queryDebounceTimer");
@@ -638,10 +613,6 @@ export function createUsagePage(context: ApplicationContext) {
             setFilters({ selectedDays: [] });
             refreshOverview();
           },
-          onClearHours: () => {
-            setFilters({ selectedHours: [] });
-            refreshOverview();
-          },
           onClearSessions: () => {
             usageSelectedSessions = [];
             selectedSession = null;
@@ -662,40 +633,29 @@ export function createUsagePage(context: ApplicationContext) {
             void loadUsage();
           },
           onChange: (next: Partial<UsageDisplayState>) => {
-            const { sessionSort, sessionSortDir, sessionsTab, recentSessions, ...local } = next;
+            const { sessionSort, sessionSortDir, ...local } = next;
             display = {
               sessionSort: sessionSort ?? display.sessionSort,
               sessionSortDir: sessionSortDir ?? display.sessionSortDir,
-              sessionsTab: sessionsTab ?? display.sessionsTab,
-              recentSessions: recentSessions ?? display.recentSessions,
             };
             setPresentation((draft) => {
               Object.assign(draft.display, local);
             });
-            if (
-              next.sessionSort !== undefined ||
-              next.sessionSortDir !== undefined ||
-              next.sessionsTab !== undefined
-            ) {
+            if (next.sessionSort !== undefined || next.sessionSortDir !== undefined) {
               refreshOverview();
             }
             notify();
           },
         },
         details: {
+          onOpenConversation: () => {
+            if (conversation) {
+              context.navigate("chat", conversation.options);
+            }
+          },
           onToggleContextExpanded: () => {
             setPresentation((draft) => {
               draft.display.contextExpanded = !draft.display.contextExpanded;
-            });
-          },
-          onToggleSessionLogsExpanded: () => {
-            setPresentation((draft) => {
-              draft.detail.sessionLogsExpanded = !draft.detail.sessionLogsExpanded;
-            });
-          },
-          onLogFiltersChange: (next: Partial<UsageDetailPresentation["logFilters"]>) => {
-            setPresentation((draft) => {
-              Object.assign(draft.detail.logFilters, next);
             });
           },
           onSelectSession: selectSession,

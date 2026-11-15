@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import childProcess, { type ChildProcess } from "node:child_process";
 import { closeSync, createWriteStream } from "node:fs";
 import { setTimeout as delay } from "node:timers/promises";
 import { stripNodeStartupHooks } from "../../../node-runtime-env.mjs";
@@ -167,7 +167,7 @@ function runServiceChildRelay(): void {
         // The admitted host owns this entry; portable relays have no embedded image inventory.
         delete env.BUN_BE_BUN;
       }
-      anchor = spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
+      anchor = childProcess.spawn(executable, resolveRuntimeWorkerArgv(anchorUrl, executable), {
         stdio,
         detached: true,
         windowsHide: true,

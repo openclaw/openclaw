@@ -317,8 +317,8 @@ const ToolExecBaseShape = {
   /** Emit a system event and heartbeat when a backgrounded exec exits. */
   notifyOnExit: z.boolean().optional(),
   /**
-   * Also emit success exit notifications when a backgrounded exec has no output.
-   * Default false to reduce context noise.
+   * Also wake the session when a backgrounded exec succeeds with no output.
+   * Default true, so every exit of a wake-armed command reports back.
    */
   notifyOnExitEmptySuccess: z.boolean().optional(),
   applyPatch: ToolExecApplyPatchSchema,

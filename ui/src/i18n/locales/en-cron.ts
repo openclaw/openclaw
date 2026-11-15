@@ -20,7 +20,6 @@ const enCron = {
     runQueued: "Run queued. Run ID: {runId}",
     adminRequired: "Only the owner with automation access or an admin can change this automation.",
     runNotStarted: {
-      notDue: "This automation is not due yet.",
       alreadyRunning: "This automation is already running.",
       recoveryPending: "The scheduler is recovering. Try again shortly.",
       invalidSpec: "Couldn’t start this automation. Check its schedule and instructions.",
@@ -34,7 +33,7 @@ const enCron = {
       scheduleAtInvalid: "Enter a valid date and time.",
       everyAmountInvalid: "Interval must be greater than 0.",
       triggerIntervalTooShort:
-        "Condition-triggered automations must run at least every 30 seconds.",
+        "Set an interval of at least 30 seconds for condition-triggered automations.",
       cronExprRequired: "Cron expression is required.",
       cronExprInvalid: "Enter 5 fields like 0 9 * * * or 6 fields like 0 0 9 * * *.",
       cronTzInvalid: "Enter a valid IANA timezone, such as America/New_York.",
@@ -87,7 +86,6 @@ const enCron = {
     actions: {
       runNow: "Start now",
       runNowJob: "Start now: {name}",
-      runIfDue: "Start if due",
       pauseJob: "Pause: {name}",
       resumeJob: "Resume: {name}",
       clone: "Clone",
@@ -139,20 +137,20 @@ const enCron = {
       noMatching: "No activity matches the current filters.",
       emptyTitle: "No activity yet.",
       emptyHint: "Start an automation to see its activity here.",
-      conditionActivity: "Condition activity",
-      conditionActivityHint: "Checks run on schedule before the payload starts.",
+      conditionActivity: "Condition checks",
+      conditionActivityHint: "Scheduled checks decide whether to start the task.",
       checks: "Checks",
       lastChecked: "Last checked",
-      lastFired: "Last fired",
+      lastFired: "Last matched",
       notChecked: "Not checked yet",
       neverFired: "Never",
-      emptyConditionTitle: "No payload runs yet",
+      emptyConditionTitle: "No run history to show",
       emptyConditionHint:
-        "The condition has been checked {count} times without matching. Activity history starts when the payload executes.",
+        "The condition has been checked {count} times. Scheduled checks with no match are not listed here.",
       emptyConditionHintOne:
-        "The condition has been checked once without matching. Activity history starts when the payload executes.",
+        "The condition has been checked once. Scheduled checks with no match are not listed here.",
       emptyConditionUnchecked:
-        "The condition has not been checked yet. Activity history starts when the payload executes.",
+        "The condition has not been checked yet. Scheduled checks with no match are not listed here.",
       loadMore: "Load more activity",
       loading: "Loading runs…",
       runStatusOk: "Completed",
@@ -257,6 +255,7 @@ const enCron = {
       timeoutHelp: "Leave blank to use the default timeout for this reply.",
       mainTimelineMessage: "Main timeline message",
       assistantTaskPrompt: "Prompt",
+      promptPreview: "Prompt preview",
       deliveryModeLabel: "Mode",
       selectDeliveryMode: "Choose a delivery mode",
       announceDefault: "Announce summary",
@@ -276,13 +275,14 @@ const enCron = {
         "Optional condition checks, delivery guarantees, schedule jitter, and model controls.",
       conditionTrigger: "Condition trigger",
       conditionTriggerHelp:
-        "Run a quiet headless check before the task and call the model only when it matches.",
+        "On scheduled runs, check the condition without calling the model. Start the task only if it matches.",
       triggerConfigured: "Trigger configured",
       triggerScript: "Trigger script",
       triggerScriptHelp:
         "Runs unattended with this automation's tool policy. Return json({ fire, message?, state? }); limits: 30 seconds, 5 tool calls, 16 KB state.",
-      triggerOnce: "Disable after first match",
-      triggerOnceHelp: "Disable this automation after the first successful fired task.",
+      triggerOnce: "Disable after first successful triggered task",
+      triggerOnceHelp:
+        "A match alone does not disable this automation. The triggered task must finish successfully.",
       triggerDisabled: "Condition triggers are disabled by cron.triggers.enabled.",
       triggerDisabledConfigured:
         "Condition triggers are disabled. Existing configuration is preserved until you clear it.",

@@ -5,6 +5,7 @@ import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-ou
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 type SessionsCompactResult = {
   ok?: boolean;
@@ -71,6 +72,7 @@ export async function sessionsCompactCommand(
   if (opts.agent !== undefined && !agent) {
     throw new Error("--agent must not be blank");
   }
+  const signal = getAsyncWorkSignal();
   const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {
     url: opts.url,
     token: opts.token,
@@ -90,8 +92,12 @@ export async function sessionsCompactCommand(
   try {
     result = (await callGatewayFromCliWithTransport("sessions.compact", rpcOpts, params, {
       defaultTimeoutMs: 10_000,
+      signal,
     })) as SessionsCompactResult;
   } catch (err) {
+    // A Ctrl+C settles the pending compaction wait; keep the canonical abort
+    // outcome instead of reporting the cancelled compaction as a failure.
+    signal?.throwIfAborted();
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {

@@ -74,6 +74,7 @@ function resolveCatalogTriggerStatus(
 function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
+  showEffort: boolean;
 }> {
   const catalogEntries = createMemo(() => props.modelCatalog);
   const catalogIndex = createMemo(() => prepareChatModelCatalog(catalogEntries()));
@@ -598,9 +599,14 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         (!hasResolvableModel ||
           ((effortMutationDisabled || (thinking.options.length === 0 && fastMode.disabled)) &&
             (!showAccessProgram || accessProgramDisabled))));
-    // Keep the effort control mounted but hidden until its catalog resolves.
+    // An empty catalog must not expose fallback speed controls for an unavailable model.
+    const confirmedEmptyCatalog =
+      catalogState.hasSnapshot &&
+      modelOptions.length === 0 &&
+      !catalogState.pendingProviders?.length;
     const reserveEffortPicker = !hasResolvableModel && !(showAccessProgram && hasAccessSelection);
     return {
+      showEffort: !confirmedEmptyCatalog || Boolean(showAccessProgram && hasAccessSelection),
       model: {
         providerAuth: props.modelAuthStatusResult ? providerAuth : undefined,
         accountSection: props.renderAccountSection?.(currentOverride || defaultModel),
@@ -685,7 +691,9 @@ export function ChatModelControls(props: ChatModelControlsProps & { showEffort?:
   return (
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       <ChatModelPicker {...controls().model} />
-      {props.showEffort !== false ? <ChatEffortPicker {...controls().effort} /> : undefined}
+      {props.showEffort !== false && controls().showEffort ? (
+        <ChatEffortPicker {...controls().effort} />
+      ) : undefined}
     </div>
   );
 }
