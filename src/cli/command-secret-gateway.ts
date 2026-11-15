@@ -33,6 +33,7 @@ import { createResolverContext } from "../secrets/runtime-shared.js";
 import { resolveRuntimeWebTools } from "../secrets/runtime-web-tools.js";
 import { assertExpectedResolvedSecretValue } from "../secrets/secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { formatConcreteConfigPath } from "../shared/dot-path.js";
 
 type ResolveCommandSecretsResult = {
@@ -167,6 +168,7 @@ async function callGatewaySecretsResolve(
         : {}),
     },
     timeoutMs: params.gatewaySecretResolveTimeoutMs ?? 30_000,
+    signal: getAsyncWorkSignal(),
     clientName: GATEWAY_CLIENT_NAMES.CLI,
     mode: GATEWAY_CLIENT_MODES.CLI,
   };
@@ -539,6 +541,8 @@ export async function resolveCommandSecretRefsViaGateway(
   try {
     payload = await callGatewaySecretsResolve(params);
   } catch (err) {
+    // An interrupted read is the CLI stopping, not a gateway failure to fall back from.
+    getAsyncWorkSignal()?.throwIfAborted();
     const forcedActiveCompatFailure =
       Boolean(params.forcedActivePaths?.size) && isAllowedPathsSecretsResolveCompatError(err);
     let localFailure = "Local resolution also failed.";

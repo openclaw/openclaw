@@ -12,6 +12,7 @@ import { resolveManifestContractOwnerPluginId } from "../plugins/plugin-registry
 import { collectConfigAssignments as collectRuntimeConfigAssignments } from "../secrets/runtime-config-collectors.js";
 import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js";
 import { withSecureTestNodeExecPath } from "../secrets/test-node-command.test-support.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import {
   buildTalkTestProviderConfig,
   readTalkTestProviderApiKey as readTalkProviderApiKey,
@@ -674,4 +675,22 @@ it("limits local fallback to targeted refs in read-only modes", async () => {
   expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("target-only");
   expect(result.hadUnresolvedTargets).toBe(false);
   expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
+});
+
+it("stops an interrupted gateway secret read before local exec resolution", async () => {
+  await withSecureTestNodeExecPath(async () => {
+    const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
+    const work = new AsyncWorkScope();
+    callGateway.mockImplementationOnce(async (options: { signal?: AbortSignal }) => {
+      // The command is cancelled while the gateway snapshot read is still in flight.
+      expect(options.signal).toBe(work.signal);
+      work.beginClose();
+      options.signal?.throwIfAborted();
+    });
+
+    await expect(
+      work.run(() => resolveTalkProviderApiKey({ config, mode: "read_only_status" })),
+    ).rejects.toMatchObject({ name: "AbortError" });
+    expect(await markerExists(markerPath)).toBe(false);
+  });
 });
