@@ -2175,13 +2175,20 @@ async function main() {
     throw new Error("Parallels registry package artifacts must have unique package names");
   }
   const expectedState = buildReleaseCandidateState(options, { targetSha, toolingSha });
+  const savedState = existsSync(statePath)
+    ? readJson(statePath, "release candidate state")
+    : undefined;
   let candidateState = reconcileReleaseCandidateState(
-    existsSync(statePath) ? readJson(statePath, "release candidate state") : undefined,
+    savedState,
     expectedState,
     hasRetainedRequest,
   );
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
+  // Keep previously accepted IDs immutable, but do not persist a new npm ID
+  // until its workflow role and trusted source have passed validation below.
+  candidateState.npmPreflightRunId =
+    typeof savedState?.npmPreflightRunId === "string" ? savedState.npmPreflightRunId : "";
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const version = parseReleaseVersion(options.tag.replace(/^v/u, ""));
     const train = version && classifyReleaseTrain(version);
@@ -2257,7 +2264,6 @@ async function main() {
   options.npmPreflightRunId ||= options.fullReleaseRunId;
   candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
     fullReleaseRunId: options.fullReleaseRunId,
-    npmPreflightRunId: options.npmPreflightRunId,
   });
 
   // The validation run continues in GitHub while trusted local tooling computes
@@ -2311,6 +2317,9 @@ async function main() {
             workflowRef: options.workflowRef,
           }),
       });
+  candidateState = updateReleaseCandidateState(statePath, candidateState, "waiting", {
+    npmPreflightRunId: options.npmPreflightRunId,
+  });
 
   const npmDir = join(options.outputDir, "npm-preflight");
   const pluginSdkApiDir = join(options.outputDir, "plugin-sdk-api-evidence");

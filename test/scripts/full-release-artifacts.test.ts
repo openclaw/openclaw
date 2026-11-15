@@ -142,13 +142,18 @@ function fixture(sourceSha = SOURCE_SHA, workflowRef = "main") {
   writeFileSync(
     join(bin, "gh"),
     `#!/usr/bin/env node
-const { readFileSync } = require("node:fs");
+const { readFileSync, writeFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 if (args[0] !== "api" || args.includes("POST")) throw new Error("Unexpected GitHub mutation");
-const { responses } = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const fixture = JSON.parse(readFileSync(process.env.FIXTURE_RESPONSES, "utf8"));
+const { responses, calls } = fixture;
 if (!Object.hasOwn(responses, args[1])) throw new Error("Unexpected GitHub endpoint: " + args[1]);
 const response = responses[args[1]];
-if (response.fixtureError) { process.stderr.write(response.fixtureError); process.exit(1); }
+calls[args[1]] = (calls[args[1]] ?? 0) + 1;
+const failure = calls[args[1]] >= (response.fixtureErrorOnRead ?? 1)
+  ? response.fixtureError : undefined;
+writeFileSync(process.env.FIXTURE_RESPONSES, JSON.stringify(fixture));
+if (failure) { process.stderr.write(failure); process.exit(1); }
 process.stdout.write(JSON.stringify(response));
 `,
     { mode: 0o755 },
@@ -193,7 +198,7 @@ globalThis.fetch = async (input) => {
     mkdirSync(directory);
     const outputPath = join(directory, "github-output");
     const callsPath = join(directory, "calls.jsonl");
-    writeFileSync(responsesPath, JSON.stringify({ responses, downloads }));
+    writeFileSync(responsesPath, JSON.stringify({ responses, downloads, calls: {} }));
     const result = spawnSync(
       process.execPath,
       ["--import", pathToFileURL(preloadPath).href, SCRIPT, command],
@@ -826,6 +831,21 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
       );
     },
   );
+
+  it("preserves jobs API diagnostics while authenticating the raw producer", () => {
+    const test = fixture();
+    test.rawArtifact();
+    // The first read authenticates the producer; fail the preservation lookup.
+    test.api("actions/runs/81/attempts/1/jobs?per_page=100&page=1", {
+      total_count: test.jobs.length,
+      jobs: test.jobs,
+      fixtureErrorOnRead: 2,
+      fixtureError: "gh: Forbidden (HTTP 403): fixture jobs permission denied",
+    });
+    const result = test.wait("raw");
+    expectRejected(result, "HTTP 403");
+    expect(result.stderr).toContain("fixture jobs permission denied");
+  });
 
   it.each([
     ["failed unrelated qualifier", {}, { ...completed, conclusion: "failure" }, false, ""],
