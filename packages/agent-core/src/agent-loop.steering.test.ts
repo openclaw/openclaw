@@ -23,10 +23,8 @@ import {
 import { Agent, type AgentOptions } from "./agent.js";
 import {
   attachInternalSyncSteeringGetter,
-  attachInternalToolBatchLifecycle,
   attachInternalToolExecutionPreparer,
   getInternalToolTurnInputScope,
-  setInternalBeforeToolBatch,
   setInternalToolTurnCompletion,
   type InternalToolExecutionPreparation,
 } from "./internal-hooks.js";
@@ -80,15 +78,6 @@ function expectInjectedOnce(events: AgentEvent[], message: AgentMessage) {
 
 function expectHook(hook: unknown, args: object) {
   expect(hook).toHaveBeenCalledWith(expect.objectContaining(args), expect.any(AbortSignal));
-}
-
-function trackBatch(agent: Agent) {
-  const commitReadyCalls = vi.fn();
-  const releaseSkippedCalls = vi.fn();
-  setInternalBeforeToolBatch(agent, async () =>
-    attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
-  );
-  return { commitReadyCalls, releaseSkippedCalls };
 }
 
 async function steerDuring(
@@ -324,14 +313,11 @@ describe("agentLoop steering", () => {
       toolExecution: "sequential",
       afterToolOutcome,
     });
-    const { commitReadyCalls, releaseSkippedCalls } = trackBatch(agent);
     const steer = user("redirect", 2);
 
     await steerDuring(agent, preflight, steer);
 
     expect(execute).not.toHaveBeenCalled();
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([{ toolCallId: "first", args: {} }]);
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["delayed"]);
     expect(dispose).toHaveBeenCalledOnce();
     expect(requests[1]?.slice(-3)).toMatchObject([
       expectedToolResult("first", false),
@@ -357,13 +343,8 @@ describe("agentLoop steering", () => {
       afterToolCall,
       afterToolOutcome,
     });
-    const { commitReadyCalls } = trackBatch(agent);
-
     await agent.prompt("start");
 
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
-      { toolCallId: "rewritten", args: finalArgs },
-    ]);
     expectHook(afterToolCall, { args: finalArgs });
     expectHook(afterToolOutcome, { args: finalArgs, executionStarted: true });
     expect(execute).toHaveBeenCalledOnce();
@@ -533,27 +514,11 @@ describe("agentLoop steering", () => {
           done,
         ],
       );
-      const commitReadyCalls = vi.fn();
-      const releaseSkippedCalls = vi.fn();
-      setInternalBeforeToolBatch(agent, async ({ calls }) => {
-        expect(calls.map((call) => call.toolCall.id)).toEqual(["invalid", "prepared", "tail"]);
-        return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
-      });
       const steer = user("before launch", 2);
 
       await steerDuring(agent, preparation, steer);
 
       expect(execute).toHaveBeenCalledTimes(toolExecution === "parallel" ? 2 : 1);
-      expect(commitReadyCalls.mock.calls.flatMap(([calls]) => calls)).toEqual([
-        { toolCallId: "invalid", args: {} },
-        { toolCallId: "prepared", args: {} },
-        ...(toolExecution === "parallel" ? [{ toolCallId: "tail", args: {} }] : []),
-      ]);
-      if (toolExecution === "parallel") {
-        expect(releaseSkippedCalls).not.toHaveBeenCalled();
-      } else {
-        expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["tail"]);
-      }
       expect(requests[1]?.slice(-5)).toMatchObject([
         { role: "assistant", stopReason: "toolUse" },
         expectedToolResult("invalid", true, { details: { observed: "pre-execution" } }),
