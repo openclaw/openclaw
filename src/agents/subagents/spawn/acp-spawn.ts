@@ -45,6 +45,7 @@ import {
   formatAcpInheritedToolDenyError,
   inheritedToolAllowPatch,
   inheritedToolDenyPatch,
+  inheritedToolPolicySourcePatch,
 } from "../../inherited-tool-deny.js";
 import { requesterCreatorProfileId } from "../../requester-origin.js";
 import { runSpawnPipeline, type SpawnBackendAdapter } from "../../spawn-pipeline.js";
@@ -504,15 +505,7 @@ export async function spawnAcpDirect(
             parentSessionKey: requesterInternalKey,
             ...childSessionPatch,
             inheritedToolPolicyVersion: 1,
-            ...(ctx.inheritedToolPolicySource === "sender"
-              ? { inheritedToolPolicySource: "sender" as const }
-              : ctx.inheritedToolPolicySource === "scheduled-run" &&
-                  ctx.inheritedToolPolicyRunSessionKey
-                ? {
-                    inheritedToolPolicySource: "scheduled-run" as const,
-                    inheritedToolPolicyRunSessionKey: ctx.inheritedToolPolicyRunSessionKey,
-                  }
-                : {}),
+            ...inheritedToolPolicySourcePatch(ctx),
             ...inheritedToolAllowPatch(ctx.inheritedToolAllowlist),
             ...inheritedToolDenyPatch(ctx.inheritedToolDenylist),
             ...(senderRestricted

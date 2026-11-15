@@ -1,7 +1,8 @@
 /**
- * Normalizes inherited tool allow/deny lists and ACP compatibility errors.
+ * Normalizes inherited tool allow/deny lists, the spawn's tool-policy source and ACP compatibility errors.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { createToolPolicyMatcher } from "./tool-policy-match.js";
 import { normalizeToolPolicyName } from "./tool-policy-shared.js";
 
@@ -55,6 +56,23 @@ export function normalizeInheritedToolAllowlist(value: unknown): string[] {
 export function inheritedToolAllowPatch(value: unknown): { inheritedToolAllow?: string[] } {
   const inheritedToolAllow = normalizeInheritedToolAllowlist(value);
   return inheritedToolAllow.length > 0 ? { inheritedToolAllow } : {};
+}
+
+/** A spawn's tool-policy source; a scheduled-run mark is persisted only with the run it names. */
+export function inheritedToolPolicySourcePatch(input: {
+  inheritedToolPolicySource?: "sender" | "scheduled-run";
+  inheritedToolPolicyRunSessionKey?: string;
+}): Pick<SessionEntry, "inheritedToolPolicySource" | "inheritedToolPolicyRunSessionKey"> {
+  if (input.inheritedToolPolicySource === "sender") {
+    return { inheritedToolPolicySource: "sender" };
+  }
+  return input.inheritedToolPolicySource === "scheduled-run" &&
+    input.inheritedToolPolicyRunSessionKey
+    ? {
+        inheritedToolPolicySource: "scheduled-run",
+        inheritedToolPolicyRunSessionKey: input.inheritedToolPolicyRunSessionKey,
+      }
+    : {};
 }
 
 export function findAcpUnsupportedInheritedToolDeny(value: unknown): string | undefined {

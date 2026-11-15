@@ -244,7 +244,7 @@ describe("runCronIsolatedAgentTurn session identity", () => {
       },
     };
     let seen: { sessionKey?: string; fresh?: string } | undefined;
-    h.runEmbeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
+    embeddedAgentMock.mockImplementationOnce(async (input: AgentRequest) => {
       const run = await input.preparedRunAdmission!.admit("gateway", input.runId);
       seen = { sessionKey: input.sessionKey, fresh: readScheduledFreshRunSessionKey(run) };
       return embeddedResult(input.sessionId);

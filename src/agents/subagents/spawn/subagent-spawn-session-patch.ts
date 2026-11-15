@@ -47,7 +47,11 @@ import {
 } from "../../../utils/delivery-context.shared.js";
 import { captureDelegatedToolPolicyAssertion } from "../../delegated-tool-policy.js";
 import { getSessionToolUsageRanking } from "../../embedded-agent-runner/session-prompt-state.js";
-import { inheritedToolAllowPatch, inheritedToolDenyPatch } from "../../inherited-tool-deny.js";
+import {
+  inheritedToolAllowPatch,
+  inheritedToolDenyPatch,
+  inheritedToolPolicySourcePatch,
+} from "../../inherited-tool-deny.js";
 import { readSessionToolUsageRankingSnapshot } from "../../session-tool-usage-snapshot.js";
 import type { resolveSpawnAdmission } from "../../spawn-plan.js";
 import type { PreparedSessionPermissionPolicy } from "../../tool-fs-policy.types.js";
@@ -128,16 +132,7 @@ export async function createInitialSubagentSession(input: {
     blindPrompt: params.blind ? true : undefined,
     inheritedToolPolicyVersion: 1,
     ...(params.delegatedToolPolicy ? { delegatedToolPolicy: params.delegatedToolPolicy } : {}),
-    // A scheduled-run mark is persisted only with the run it names.
-    ...(params.inheritedToolPolicySource === "sender"
-      ? { inheritedToolPolicySource: "sender" as const }
-      : params.inheritedToolPolicySource === "scheduled-run" &&
-          params.inheritedToolPolicyRunSessionKey
-        ? {
-            inheritedToolPolicySource: "scheduled-run" as const,
-            inheritedToolPolicyRunSessionKey: params.inheritedToolPolicyRunSessionKey,
-          }
-        : {}),
+    ...inheritedToolPolicySourcePatch(params),
     ...inheritedToolAllowPatch(params.inheritedToolAllowlist),
     ...inheritedToolDenyPatch(params.inheritedToolDenylist),
     ...params.modelPatch,
