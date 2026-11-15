@@ -9,10 +9,10 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   RECEIPT_RECOVERY_SCHEMA,
-  receiptRecoveryChildInputs,
   receiptRecoverySourceRequest,
 } from "../../scripts/full-release-receipt-recovery.mjs";
 import {
+  qualificationChildDispatchInputs,
   composeReleaseChildAttemptEvidence,
   releaseChildSpec,
   releaseCompositeJobsSha256,
@@ -377,7 +377,7 @@ export function addRecoveryGraph({
     const spec = releaseChildSpec(role);
     const workflowSource = readFileSync(".github/workflows/" + spec.workflow, "utf8");
     source(".github/workflows/" + spec.workflow, f.q, workflowSource);
-    const inputs = receiptRecoveryChildInputs(
+    const inputs = qualificationChildDispatchInputs(
       role,
       f.admission.receipt,
       candidateBinding,

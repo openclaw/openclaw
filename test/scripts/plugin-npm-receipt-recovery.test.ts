@@ -35,7 +35,16 @@ it("uses original Q plugin bytes and policy after the aggregate owner authentica
       schema: "openclaw.full-release-receipt-recovery/v1",
       originalParent: { runId: "100" },
       candidateBinding: { request: { targetSha: q, toolingSha: q } },
-      children: { normalCi: { workflowRef: descriptor.workflowHeadBranch } },
+      children: { normalCi: { workflowRef: "another-adopted-child-transport" } },
+      publicationArtifacts: {
+        npmPreflight: {
+          producer: {
+            workflowRef:
+              ".github/workflows/full-release-artifacts.yml@refs/heads/" +
+              descriptor.workflowHeadBranch,
+          },
+        },
+      },
     },
     publicationArtifacts: { pluginNpm: descriptor },
   };

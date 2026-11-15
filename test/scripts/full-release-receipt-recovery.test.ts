@@ -30,13 +30,17 @@ import {
 import { validateFullReleaseNpmPreflight } from "../../scripts/npm-preflight-tooling-identity.mjs";
 import { createReleaseEvidenceClient } from "../../scripts/release-ci-summary.mjs";
 import * as qualificationAuthority from "../../scripts/release-qualification-admission.mjs";
+import { qualificationRequiredChildJobs } from "../../scripts/release-qualification-coverage.mjs";
 import * as toolingAuthority from "../../scripts/release-tooling-identity.mjs";
 import {
   canonicalTestSha256,
   fullReleaseCandidateBindingFixture,
 } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
-import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
+import {
+  recoveryCandidateFixture,
+  recoveryProfiles as profiles,
+} from "./channel-recovery.test-support.js";
 
 const roles = [
   "normalCi",
@@ -45,8 +49,9 @@ const roles = [
   "releaseChecksCandidate",
   "pluginPrereleaseCandidate",
 ];
-function fixture() {
-  const candidate = candidatePublicationFixture();
+function fixture(selectedProfile: Parameters<typeof recoveryCandidateFixture>[0] = "beta") {
+  const candidate = recoveryCandidateFixture(selectedProfile);
+  const profile = selectedProfile === "extended-stable" ? "stable" : selectedProfile;
   const old = {
     ...candidate,
     client: { ...createReleaseEvidenceClient(candidate.repository), ...candidate.client },
@@ -70,13 +75,13 @@ function fixture() {
     candidateBinding: fullReleaseCandidateBindingFixture({
       targetSha: old.q,
       toolingSha: old.q,
-      releaseProfile: "beta",
-      releaseSoak: false,
+      releaseProfile: profile,
+      releaseSoak: profile !== "beta",
       upgradeSurvivorBaseline: baselines.upgradeBaseline,
       upgradeSurvivorBaselines: baselines.upgradeSurvivorBaselines.join(" "),
     }),
     children: Object.fromEntries(
-      roles.map((role, index) => [
+      old.admission.receipt.coverage.children.map(({ key: role }, index) => [
         role,
         {
           runId: String(910 + index),
@@ -92,9 +97,21 @@ function fixture() {
       pluginNpm: { runId: "902", runAttempt: 1 },
     },
   };
+  recovery.candidateBinding.package.version = old.admission.receipt.baselinePolicy.candidateVersion;
+  const {
+    schema: _bindingSchema,
+    evidenceArtifact: _bindingArtifact,
+    manifestSha256: _bindingDigest,
+    ...bindingFields
+  } = recovery.candidateBinding;
+  recovery.candidateBinding.manifestSha256 = canonicalTestSha256({
+    schema: "openclaw.full-release-candidate/v2",
+    ...bindingFields,
+  });
   const {
     executionPlanSha256: _plan,
     qualificationCoverage: _coverage,
+    candidateBinding: _candidate,
     ...originalManifest
   } = old.manifest;
   const manifest = {
@@ -237,6 +254,22 @@ afterEach(() => {
 });
 
 describe("receipt-backed aggregate recovery", () => {
+  it.each(profiles)(
+    "authenticates a complete %s admission before checking original parent jobs",
+    async (profile) => {
+      const { old, recovery } = fixture(profile);
+      const callsBefore = old.admission.calls.length;
+      await expect(
+        verifyOriginalReceiptQualification(recovery, {
+          client: { ...old.client, getRunAttemptJobs: async () => [] },
+        }),
+      ).rejects.toThrow("required job did not succeed exactly once");
+      expect(old.admission.calls.slice(callsBefore)).toContain(
+        `repos/${old.repository}/actions/artifacts/70`,
+      );
+    },
+  );
+
   it.each(["failed seal", "reordered seal", "changed observations", "valid"] as const)(
     "authenticates aggregate seal and observation bytes before original qualification: %s",
     async (fault) => {
@@ -314,8 +347,8 @@ describe("receipt-backed aggregate recovery", () => {
     );
   });
 
-  it("bounds transfers and verifies adopted child receipts", async () => {
-    const { old, recovery } = fixture();
+  it.each(profiles)("bounds transfers and verifies all %s child receipts", async (profile) => {
+    const { old, recovery } = fixture(profile);
     const selected = expectDefined(recovery.children.normalCi, "normal CI");
     selected.sourceParentRunId = "800";
     selected.workflowRef = "release-ci/earlier-same-candidate";
@@ -323,6 +356,46 @@ describe("receipt-backed aggregate recovery", () => {
     const verifyChild = vi
       .fn<typeof childReuse.validateReusableReleaseChild>()
       .mockImplementation(async (_, request) => {
+        const input = old.admission.receipt.request.inputs;
+        if (request.role === "normalCi") {
+          expect(request.inputs).toMatchObject({
+            target_ref: old.q,
+            release_scope:
+              profile === "beta" ? "npm-beta" : profile === "stable" ? "npm-stable" : "full",
+            include_android: profile === "full" || profile === "extended-stable" ? "true" : "false",
+            target_context_ref: input.target_context_ref,
+          });
+        } else if (request.role === "productPerformance") {
+          expect(request.inputs).toEqual({
+            mode: "kova",
+            target_ref: old.q,
+            baseline_ref: "",
+            profile: "release",
+            repeat: "3",
+            deep_profile: "false",
+            live_openai_candidate: "false",
+            fail_on_regression: "true",
+            publish_reports: "false",
+            kova_ref: "",
+            kova_config_contract: "",
+          });
+        } else {
+          expect(request.inputs).toMatchObject({
+            expected_sha: old.q,
+            target_context_ref: input.target_context_ref,
+            qualification_baselines_json: JSON.parse(input.trusted_workflow_json).laneInputs
+              .qualification_baselines_json,
+          });
+          if (request.role.startsWith("releaseChecks")) {
+            expect(request.inputs).toMatchObject({
+              release_profile: profile === "extended-stable" ? "stable" : profile,
+              run_release_soak: profile === "beta" ? "false" : "true",
+              skip_package_telegram_e2e: profile === "beta" ? "true" : "false",
+              mode: "both",
+              rerun_group: "all",
+            });
+          }
+        }
         const coverage = expectDefined(
           old.admission.receipt.coverage.children.find((child) => child.key === request.role),
           "child coverage",
@@ -351,7 +424,14 @@ describe("receipt-backed aggregate recovery", () => {
           run: { status: "completed", conclusion: "success" },
           jobs: [],
           receipt: {
-            jobs: coverage.requiredJobs.map((name) => ({
+            jobs: [
+              ...coverage.requiredJobs,
+              ...qualificationRequiredChildJobs({
+                role: request.role,
+                inputs: request.inputs,
+                getSource: (path) => readFileSync(path, "utf8"),
+              }),
+            ].map((name) => ({
               name,
               status: "completed",
               conclusion: "success",
@@ -375,6 +455,7 @@ describe("receipt-backed aggregate recovery", () => {
       validateChildReuse: verifyChild,
       getWorkflowSource: (_sha: string, path: string) => readFileSync(path, "utf8"),
       getRunAttemptJobs: async () => parentJobs,
+      getRunArtifacts: async () => [],
       getJobLog: async (id: number) => {
         const child = expectDefined(
           dispatches.find((entry) => entry.id === id),
@@ -384,7 +465,13 @@ describe("receipt-backed aggregate recovery", () => {
           child.runId === selected.runId
             ? `FRV_CHILD_REUSE_SHA256=${releaseChildReuseSha256(selected)}\n`
             : "";
-        return `${witness}TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: npm-beta\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
+        const scope =
+          old.source.coverage.coverage_policy === "npm-beta-v1"
+            ? "npm-beta"
+            : old.source.coverage.coverage_policy === "npm-stable-v1"
+              ? "npm-stable"
+              : "full";
+        return `${witness}TARGET_SHA: ${old.q}\nCI_RELEASE_SCOPE: ${scope}\n-f publish_reports=false\nhttps://github.com/${old.repository}/actions/runs/${child.runId} (attempt 1)`;
       },
     };
     const adoptedLog = client.getJobLog;
@@ -436,7 +523,7 @@ describe("receipt-backed aggregate recovery", () => {
     const pluginPackage = {
       ...pluginProducer,
       artifactId: 905,
-      artifactName: "plugin-npm-package-codex-2026.8.28-beta.1-npm-oidc-902-1",
+      artifactName: `plugin-npm-package-codex-${recovery.candidateBinding.package.version}-npm-oidc-902-1`,
       artifactDigest: "sha256:" + digest(pluginPackageBytes),
       artifactSizeBytes: pluginPackageBytes.length,
     };
@@ -444,7 +531,7 @@ describe("receipt-backed aggregate recovery", () => {
       schema: "openclaw.plugin-npm-prepared/v1",
       runtimeQualification: "packed-runtime-v1",
       sourceSha: old.q,
-      npmDistTag: "default",
+      npmDistTag: profile === "extended-stable" ? "extended-stable" : "default",
       selectionMode: "all-publishable",
       publisherPolicySha256: digest(readFileSync(pluginProducer.workflowPath)),
       producer: pluginProducer,
@@ -453,10 +540,15 @@ describe("receipt-backed aggregate recovery", () => {
           extensionId: "codex",
           packageDir: "extensions/codex",
           packageName: "@openclaw/codex",
-          version: "2026.8.28-beta.1",
-          channel: "beta",
-          publishTag: "beta",
-          installNpmSpec: "@openclaw/codex@2026.8.28-beta.1",
+          version: recovery.candidateBinding.package.version,
+          channel: profile === "beta" ? "beta" : "stable",
+          publishTag:
+            profile === "extended-stable"
+              ? "extended-stable"
+              : profile === "beta"
+                ? "beta"
+                : "latest",
+          installNpmSpec: `@openclaw/codex@${recovery.candidateBinding.package.version}`,
           route: "npm-oidc",
           artifact: pluginPackage,
         },
@@ -537,7 +629,9 @@ describe("receipt-backed aggregate recovery", () => {
     );
     const inventoryClient = {
       ...client,
-      getRunArtifacts: vi.fn(async () => [expectDefined(metadata.get("905"), "plugin metadata")]),
+      getRunArtifacts: vi.fn(async (id: string | number) =>
+        String(id) === "902" ? [expectDefined(metadata.get("905"), "plugin metadata")] : [],
+      ),
       getArtifact: vi.fn(async (id: string | number) =>
         expectDefined(metadata.get(String(id)), "metadata"),
       ),
@@ -566,7 +660,12 @@ describe("receipt-backed aggregate recovery", () => {
       client: inventoryClient,
       authenticatedPayloads: expectedPayloads,
     });
-    expect(result.children[0]?.sourceParentRunId).toBe("800");
+    expect(
+      result.children.map((child) => child.role).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual((profile === "beta" ? roles : [...roles, "productPerformance"]).toSorted());
+    expect(result.children.find((child) => child.role === "normalCi")?.sourceParentRunId).toBe(
+      "800",
+    );
     expect(result.publication.payloads).toEqual(expectedPayloads);
     expect(downloads).toEqual(["904"]);
     expect(inventoryClient.getArtifact.mock.calls.map(([id]) => String(id))).toEqual([
@@ -575,7 +674,9 @@ describe("receipt-backed aggregate recovery", () => {
       "102",
       "101",
     ]);
-    expect(inventoryClient.getRunArtifacts).toHaveBeenCalledOnce();
+    expect(
+      inventoryClient.getRunArtifacts.mock.calls.filter(([id]) => String(id) === "902"),
+    ).toHaveLength(1);
     for (const authenticatedPayloads of [
       expectedPayloads.slice(1),
       [...expectedPayloads, expectedPayloads[0]],
@@ -611,28 +712,31 @@ describe("receipt-backed aggregate recovery", () => {
     expect(downloads).toEqual(["904", "905", "103", "102", "101"]);
   });
 
-  it("retains original selection, baselines and Q artifacts under a distinct P admission", () => {
-    const { old, source, recovery, manifest, producer } = fixture();
-    expect(validateReceiptRecoveryRequest(recovery)).toBe(recovery);
-    expect(source.candidateSha).toBe(old.q);
-    expect(source.workflow).toEqual({ ref: producer.fullRef, sha: producer.sha });
-    expect(source.publicationSelection).toEqual(old.source.publicationSelection);
-    expect(source.coverage).toEqual(old.source.coverage);
-    expect(source.qualificationAdmission).toBeUndefined();
-    expect(retainedPublicationArtifactSource(manifest)?.workflow.sha).toBe(old.q);
-    const expected = {
-      manifest,
-      repository: old.repository,
-      runId: producer.runId,
-      runAttempt: 1,
-      sourceSha: old.q,
-      toolingSha: producer.sha,
-    };
-    expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(old.npmQualified.producer);
-    expect(() =>
-      validateFullReleaseNpmPreflight({ ...expected, sourceSha: "d".repeat(40) }),
-    ).toThrow();
-  });
+  it.each(profiles)(
+    "retains original %s selection, baselines and Q artifacts under a distinct P admission",
+    (profile) => {
+      const { old, source, recovery, manifest, producer } = fixture(profile);
+      expect(validateReceiptRecoveryRequest(recovery)).toBe(recovery);
+      expect(source.candidateSha).toBe(old.q);
+      expect(source.workflow).toEqual({ ref: producer.fullRef, sha: producer.sha });
+      expect(source.publicationSelection).toEqual(old.source.publicationSelection);
+      expect(source.coverage).toEqual(old.source.coverage);
+      expect(source.qualificationAdmission).toBeUndefined();
+      expect(retainedPublicationArtifactSource(manifest)?.workflow.sha).toBe(old.q);
+      const expected = {
+        manifest,
+        repository: old.repository,
+        runId: producer.runId,
+        runAttempt: 1,
+        sourceSha: old.q,
+        toolingSha: producer.sha,
+      };
+      expect(validateFullReleaseNpmPreflight(expected).producer).toEqual(old.npmQualified.producer);
+      expect(() =>
+        validateFullReleaseNpmPreflight({ ...expected, sourceSha: "d".repeat(40) }),
+      ).toThrow();
+    },
+  );
 
   it("requires a new explicit admission path and never loosens the historical default", () => {
     const { old, source } = fixture();
@@ -692,13 +796,44 @@ describe("receipt-backed aggregate recovery", () => {
     },
   );
 
-  it("rejects historical-plan substitution and incomplete role selection", () => {
+  it("rejects historical-plan substitution", () => {
     const { recovery } = fixture();
     expect(() => validateReceiptRecoveryRequest({ ...recovery, executionPlan: {} })).toThrow();
-    const missing = structuredClone(recovery);
-    delete missing.children.normalCi;
-    expect(() => validateReceiptRecoveryRequest(missing)).toThrow();
   });
+
+  it.each(profiles)(
+    "rejects missing required %s coverage after authenticating admission",
+    async (profile) => {
+      const { old, recovery } = fixture(profile);
+      const callsBefore = old.admission.calls.length;
+      delete recovery.children[profile === "beta" ? "normalCi" : "productPerformance"];
+      const candidate = vi
+        .spyOn(candidateReuse, "verifySealedFullReleaseCandidate")
+        .mockImplementation(vi.fn());
+      await expect(
+        verifyOriginalReceiptQualification(recovery, { client: old.client }),
+      ).rejects.toThrow(/children|roles|coverage/u);
+      expect(old.admission.calls.slice(callsBefore)).toContain(
+        `repos/${old.repository}/actions/artifacts/70`,
+      );
+      expect(candidate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["profile", "soak"] as const)(
+    "rejects candidate %s differing from the authenticated full admission",
+    async (fault) => {
+      const { old, recovery } = fixture("full");
+      if (fault === "profile") {
+        recovery.candidateBinding.request.releaseProfile = "beta";
+      } else {
+        recovery.candidateBinding.request.releaseSoak = false;
+      }
+      await expect(
+        verifyOriginalReceiptQualification(recovery, { client: old.client }),
+      ).rejects.toThrow("candidate profile");
+    },
+  );
 
   it("rechecks every current producer tuple and rejects a superseding attempt", async () => {
     const { recovery, old } = fixture();
@@ -718,6 +853,8 @@ describe("receipt-backed aggregate recovery", () => {
     };
     await revalidateReceiptRecoveryRuns(recovery, client);
     expect(new Set(calls).size).toBe(8);
+    expect(calls).toHaveLength(8);
+    expect(calls[0]).toBe(recovery.originalParent.runId);
     const normalCi = recovery.children.normalCi;
     if (!normalCi) {
       throw new Error("fixture is missing the normal CI child");
@@ -750,6 +887,7 @@ describe("receipt-backed aggregate recovery", () => {
         .filter((step: { run?: string }) => step.run?.includes("full-release-receipt-recovery.mjs"))
         .map((step: { run: string }) => step.run),
     ).toEqual([
+      "node scripts/full-release-receipt-recovery.mjs request",
       "node scripts/full-release-receipt-recovery.mjs admit",
       "node scripts/full-release-receipt-recovery.mjs seal",
     ]);

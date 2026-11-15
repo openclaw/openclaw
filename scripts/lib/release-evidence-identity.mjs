@@ -106,7 +106,9 @@ export function retainedPublicationArtifactSource(manifest) {
       runId: recovery.originalParent.runId,
       candidateSha: manifest.targetSha,
       workflow: {
-        ref: `refs/heads/${recovery.children.normalCi.workflowRef}`,
+        // The strict recovery owner binds this retained producer to the original
+        // parent. An adopted child may have a different qualification transport.
+        ref: recovery.publicationArtifacts.npmPreflight.producer.workflowRef.split("@")[1],
         sha: manifest.targetSha,
       },
     };

@@ -49,6 +49,7 @@ import {
   terminalPolicyPass,
   validateReleaseManifestAdvisoryJobs,
   validateReleaseChildDispatchBinding,
+  qualificationChildDispatchInputs,
   validateReleaseCoveragePolicyBinding,
   validateReleaseExecutionPlanArtifact,
   validateRetiredReleaseRetryFields,
@@ -92,6 +93,7 @@ import {
 import {
   qualificationAdmissionContract,
   validateQualificationCoverage,
+  validateQualificationChildCompleteness,
   validateQualificationJobs,
 } from "./release-qualification-coverage.mjs";
 
@@ -2164,6 +2166,26 @@ export function createReleaseEvidenceClient(repository = DEFAULT_REPO, { immutab
           ".github/workflows/plugin-prerelease.yml",
           ".github/workflows/openclaw-release-checks.yml",
           ".github/workflows/full-release-receipt-recovery.yml",
+          ".github/workflows/openclaw-performance.yml",
+          ".github/workflows/package-acceptance.yml",
+          ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+          ".github/workflows/npm-telegram-beta-e2e.yml",
+          "scripts/lib/cross-os-release-checks/config.ts",
+          "scripts/plan-release-workflow-matrix.mjs",
+          "scripts/lib/update-compat-inventory.json",
+          ".github/workflows/install-smoke-reusable.yml",
+          ".github/workflows/qa-live-transports-convex.yml",
+          "scripts/plan-targeted-docker-lane-groups.mjs",
+          "scripts/lib/update-first-hop-lanes.mjs",
+          "scripts/e2e/lib/upgrade-survivor/installed-recovery-cases.mjs",
+          "scripts/lib/release-version.mjs",
+          "scripts/lib/numeric-options.mjs",
+          "scripts/lib/upgrade-survivor-policy.mjs",
+          "scripts/lib/upgrade-survivor-scenarios.json",
+          "scripts/e2e/lib/upgrade-survivor/legacy-operator-state.mjs",
+          "scripts/e2e/lib/upgrade-survivor/custom-plugin-siblings.mjs",
+          "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
+          "package.json",
         ].includes(sourceWorkflowPath)
       ) {
         throw new Error("Unsupported immutable release workflow path");
@@ -2371,6 +2393,7 @@ function normalizedParentTuple(evidence, identity) {
 }
 
 async function validateStrictChildRun({
+  qualification,
   child,
   childEvidence,
   childReuse,
@@ -2531,6 +2554,23 @@ async function validateStrictChildRun({
   });
   if (child.requiredJobs) {
     validateQualificationJobs(jobs, child.requiredJobs, child.name, policy.waivedJobNames);
+  }
+  if (qualification) {
+    validateQualificationChildCompleteness({
+      role: child.manifestKey,
+      inputs: qualificationChildDispatchInputs(
+        child.manifestKey,
+        qualification,
+        executionPlan.candidate,
+        client.getWorkflowSource(
+          parentEvidence.manifest.workflowSha,
+          ".github/workflows/" + child.workflow,
+        ),
+      ),
+      jobs,
+      waivedJobNames: policy.waivedJobNames,
+      getSource: (path) => client.getWorkflowSource(parentEvidence.manifest.workflowSha, path),
+    });
   }
   if (child.manifestKey === "productPerformance") {
     // The authenticated composite selects the newest executed attempt per job,
@@ -3272,6 +3312,7 @@ export async function validateReleaseRunEvidence(
   const childResults = await Promise.allSettled(
     childEntries.map(({ child, runId: childRunId }) =>
       validateStrictChildRun({
+        qualification,
         child,
         childEvidence: rootEvidence.manifest.childEvidence?.[child.manifestKey],
         childReuse: executionPlan?.childReuse?.[child.manifestKey],

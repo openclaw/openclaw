@@ -218,20 +218,78 @@ at publication cannot retroactively authorize a failed FRV; produce successful
 validation under the pinned policy first. Beta confidence deferrals remain
 separate and are recorded as **not run**, never as passed or waived failures.
 
-## Receipt-backed beta aggregate recovery
+<a id="receipt-backed-beta-aggregate-recovery" />
 
-When a full beta qualification's original execution-plan artifact is unavailable,
-.github/workflows/full-release-receipt-recovery.yml is a separate, explicit
-trusted-main operation. It does not repair, recreate, or reinterpret the
-historical plan, registry observations, or failed parent conclusion.
+## Receipt-backed aggregate recovery
+
+When a reviewed P-only policy or tooling change requires a new aggregate,
+`.github/workflows/full-release-receipt-recovery.yml` is a separate, explicit
+trusted-main operation over existing qualification receipts. It also supports
+recovery when the original execution-plan artifact is unavailable. It does not
+repair, recreate, or reinterpret the historical plan, registry observations, or
+failed parent conclusion.
+
+The original admission determines the profile and complete child inventory:
+`beta`, `stable`, and `full` are supported, including extended-stable publication.
+A profile is not a release track: regular stable can use `npm-stable-v1`, while
+full and extended-stable retain their unreduced coverage. Extended-stable retains
+its original branch/version rules, dist-tag, publication selection, and frozen
+upgrade baselines.
+
+Use the retained operator entry point (this dispatches only the recovery workflow,
+not tests or artifact preparation):
+
+```bash
+pnpm frv recover --run <original-parent-run-id> \
+  --workflow-sha <exact-trusted-main-P> --request-file <private-request-path>
+pnpm frv recover --reconcile-request <private-request-path> --json
+```
+
+The helper derives descriptors from the original source admission, authenticated
+execution plan when available, and sealed child/publication artifacts. With no
+plan, it requires original exact dispatch logs plus candidate, npm, Docker, and
+plugin preparation receipts. Missing or ambiguous evidence fails closed; there
+is no manual tuple-entry override. An existing but invalid plan does not enable
+the missing-plan fallback. Adopted children are also discoverable without a
+retained plan: the exact original `Reused` run/attempt witness and
+`FRV_CHILD_REUSE_SHA256` must match the selection reconstructed from the original
+child receipt and artifact metadata. The existing receipt owner still verifies
+its origin, admitted inputs, current attempt, and sealed workload; missing or
+changed adoption witnesses are refused.
+
+The private request records a new UUID and exact P before dispatch; the helper
+marks it attempted durably before its single POST. P must still be the main tip;
+the workflow independently requires its actual SHA to equal requested P. A move
+in that small API window fails rather than silently adopting newer tooling.
+Reopening the request or using `--reconcile-request` only reads the bounded
+100-run recovery inventory, matching exact title, P, repository, workflow, and
+attempt. An exact title is only a candidate: authenticated request observation
+requires the canonical `request.json` bytes from the exact P/attempt, with the
+ordered successful retain/upload steps and artifact timestamp. The early
+`full-release-recovery-request-<run>-<attempt>` artifact can establish request
+identity even if later recovery fails; it does not establish qualification or
+publication authority. Missing witnesses stay unconfirmed, never permission to
+retry. A successful aggregate additionally passes the existing strict recovery
+authenticator, and reconciliation rechecks the current attempt after reads.
+Preserve the file after interruptions or rejected requests; neither a running
+nor a successful recovery run alone replaces strict publication verification.
 
 Its request input is a closed openclaw.full-release-receipt-recovery/v1 record:
 a new request UUID, repository, original qualification-admission descriptor,
-original parent run/attempt, complete sealed candidate binding, all five original
-beta child selections, and original publication-artifact descriptors. Original C
-must equal Q. The admission's original publication selection, complete coverage,
+original parent run/attempt, complete sealed candidate binding, original admitted
+child selections, and original publication-artifact descriptors. New operator
+requests also bind the exact recovery workflow SHA; historical v1 requests without
+that optional field remain readable. Original C must equal Q. The admission's original publication selection, complete coverage,
 and frozen upgrade baselines remain authoritative; there is no new test selection
 or current-registry baseline resolution.
+
+Required workload inventory is checked for both direct and recovered qualification,
+including selected soak, install, platform, package, and live-channel work. Advisory
+failures and authenticated waivers retain their existing policy. The Docker package
+planner currently supports the same frozen policy implementation as P: if Q’s
+planner or its policy dependencies differ, verification fails explicitly and needs
+a reviewed frozen-policy adapter. It never substitutes P’s package-recovery pins,
+support floors, or expansion rules for a different Q policy.
 
 The recovery owner authenticates the original admission and dispatches, each
 current policy-passing child attempt and its complete composite receipt, the sealed

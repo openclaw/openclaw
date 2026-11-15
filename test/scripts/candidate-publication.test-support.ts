@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { parse } from "yaml";
 import { dockerReleaseArtifactName } from "../../scripts/docker-release-artifacts.mjs";
+import { buildFullReleaseCandidateBinding } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   createPublicationAdmission,
   createPublicationObservations,
@@ -14,6 +15,7 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   composeReleaseAttemptJobs,
+  qualificationChildDispatchInputs,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { verifyReceiptRecoveryAuthority } from "../../scripts/lib/release-evidence-identity.mjs";
@@ -21,6 +23,8 @@ import {
   revalidateQualificationAdmissionAuthority,
   verifyQualificationAdmission,
 } from "../../scripts/release-qualification-admission.mjs";
+import { qualificationRequiredChildJobs } from "../../scripts/release-qualification-coverage.mjs";
+import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { trustedMainNpmFixture } from "./release-ci-summary.test-support.js";
 import {
@@ -199,22 +203,58 @@ export function candidatePublicationFixture(
     upgradeBaseline: qualificationBaselines.upgradeBaseline,
     upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines,
   });
+  const candidate = fullReleaseCandidateManifestFixture({
+    targetSha: q,
+    toolingSha: q,
+    releaseProfile: inputs.release_profile,
+    releaseSoak: inputs.run_release_soak === "true",
+    upgradeSurvivorBaseline: qualificationBaselines.upgradeBaseline,
+    upgradeSurvivorBaselines: qualificationBaselines.upgradeSurvivorBaselines.join(" "),
+    upgradeSurvivorScenarios: "",
+  });
+  candidate.package.version = version;
+  const candidateBinding = buildFullReleaseCandidateBinding({
+    manifest: candidate,
+    artifact: {
+      id: "104",
+      name: "full-release-candidate-v2-" + candidate.requestSha256,
+      digest: "a".repeat(64),
+      expiresAt: "2099-01-01T00:00:00Z",
+      runId: "77",
+      runAttempt: "1",
+    },
+  });
+  plan.candidate = candidateBinding;
+  plan.candidateRequest = candidate.request;
   const jobsFor = (requestedRunId: string) => {
-    const child = plan.children.find((entry) => entry.runId === requestedRunId);
+    const planned = plan.children.find((entry) => entry.runId === requestedRunId);
+    const child = coverage.children.find((entry) => entry.key === planned?.key);
     const names =
       requestedRunId === runId
         ? coverage.requiredParentJobs
-        : expectDefined(
-            coverage.children.find((entry) => entry.key === child?.key),
-            "covered child",
-          ).requiredJobs;
-    return names.map((name, index) =>
+        : expectDefined(child, "covered child").requiredJobs;
+    const required = child
+      ? [
+          ...names,
+          ...qualificationRequiredChildJobs({
+            role: child.key,
+            inputs: qualificationChildDispatchInputs(
+              child.key,
+              admission.receipt,
+              candidateBinding,
+              readFileSync(".github/workflows/" + child.workflow, "utf8"),
+            ),
+            getSource: (path) => readFileSync(path, "utf8"),
+          }),
+        ]
+      : names;
+    return [...new Set(required)].map((name, index) =>
       Object.assign(mapped(fixture.parentJob), { id: 600 + index, name }),
     );
   };
   const manifest = Object.assign(mapped(fixture.manifest), {
-    // Fresh qualification has no reused evidence or shared candidate artifact.
-    candidateBinding: undefined,
+    // Fresh qualification uses its own sealed candidate, not reused evidence.
+    candidateBinding,
     evidenceReuse: undefined,
     ...admissionFields,
     qualificationCoverage: structuredClone(coverage),
@@ -223,7 +263,6 @@ export function candidatePublicationFixture(
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
   });
-  delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
   Object.assign(
     manifest.validationInputs,
@@ -321,7 +360,8 @@ export function candidatePublicationFixture(
     revalidateQualificationAdmissionAuthority: (
       authority: Parameters<typeof revalidateQualificationAdmissionAuthority>[0],
     ) => revalidateQualificationAdmissionAuthority({ ...authority, runGh: admission.runGh }),
-    getWorkflowSource: () => workflowSource,
+    getWorkflowSource: (_sha: string, path = ".github/workflows/full-release-validation.yml") =>
+      readFileSync(path, "utf8"),
     getRef: (ref: string) => ({ ref, object: { sha: admission.authority.tagSha } }),
     getRunView: async (_id: string) => mapped(fixture.client.getRunView(legacyRunId)),
     getRun: async (id: string) => (id === runId ? parent : mapped(fixture.client.getRun(id))),

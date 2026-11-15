@@ -11,4 +11,17 @@ export function validateQualificationJobs(
   jobs: unknown,
   requiredNames: string[],
   label?: string,
+  waivedJobNames?: Set<string>,
+): void;
+export type QualificationChildCompletenessContext = {
+  role: string;
+  inputs: Record<string, string>;
+  /** Read immutable Q source, not the current publisher checkout. */
+  getSource: (path: string) => string;
+};
+export function qualificationRequiredChildJobs(
+  context: QualificationChildCompletenessContext,
+): string[];
+export function validateQualificationChildCompleteness(
+  context: QualificationChildCompletenessContext & { jobs: unknown; waivedJobNames?: Set<string> },
 ): void;
