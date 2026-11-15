@@ -278,15 +278,16 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
 }
 
 export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
+  const signal = getAsyncWorkSignal();
   let nodes: NodeListNode[];
   try {
-    const res = await callNodesGatewayCli("node.list", opts, {});
+    const res = await callNodesGatewayCli("node.list", opts, {}, { signal });
     nodes = parseNodeList(res);
   } catch (error) {
     if (!isUnknownGatewayMethodError(error, "node.list")) {
       throw error;
     }
-    const res = await callNodesGatewayCli("node.pair.list", opts, {});
+    const res = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
     const { paired } = parsePairingList(res);
     nodes = paired.map((n) => ({
       nodeId: n.nodeId,

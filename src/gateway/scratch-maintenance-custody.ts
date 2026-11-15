@@ -284,6 +284,7 @@ export async function prepareScratchMaintenanceTargets(
         runsChanged = pending;
       }
       return (
+        (runsChanged && worktreeIds.length === 0) ||
         worktreeIds.some((id) => liveScopes.has(`worktree-run:${id}`)) ||
         liveRoots.has(root) ||
         (unboundSince < Infinity && createdAtByRoot.get(root)! >= unboundSince)

@@ -57,7 +57,6 @@ import { resolveGatewayInputParticipant } from "../session-input-participant.js"
 import { readSessionSendDeliveryAdmission } from "../session-send-delivery.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { formatForLog } from "../ws-log.js";
-import type { RestoredCronContinuation } from "./agent-handler-helpers.js";
 import type { RequesterSettleWakeReplay } from "./internal-facade.types.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
 
@@ -168,7 +167,6 @@ export async function prepareAgentRunUserTurn(params: {
   resolvedThreadId?: string | number;
   suppressVisibleSessionEffects: boolean;
   requestedPromptPersistenceSuppression: boolean;
-  restoredCronContinuation?: RestoredCronContinuation;
   canUseInternalRuntimeHandoff: boolean;
   execApprovalFollowupApprovalId?: string;
   message: string;
@@ -194,7 +192,7 @@ export async function prepareAgentRunUserTurn(params: {
         })
       : undefined;
   const resolveRuntimeSenderIsOwner = () =>
-    Boolean(params.restoredCronContinuation || hasGatewayAdminScope(params.client)) &&
+    hasGatewayAdminScope(params.client) &&
     (!requesterOrigin ||
       Boolean(requesterOrigin.operatorProfileId) ||
       ((!requesterOrigin.messageProvider ||

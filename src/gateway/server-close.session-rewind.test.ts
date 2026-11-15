@@ -92,7 +92,7 @@ it("persists an accepted fork and queued rewind across the close prelude before 
   let rewinding: Promise<SessionsRewindResult> | undefined;
   try {
     const database = await seedTranscript(fixture);
-    const wrapExecution = (owner: DatabaseExecution): DatabaseExecution => ({
+    const wrapExecution = <Execution extends DatabaseExecution>(owner: Execution): Execution => ({
       ...owner,
       get fileIdentity() {
         return owner.fileIdentity;
@@ -119,9 +119,9 @@ it("persists an accepted fork and queued rewind across the close prelude before 
     vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecution").mockImplementation(
       (...args) => wrapExecution(capture(...args)),
     );
-    const capturePreparation = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
-    vi.spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution").mockImplementation(
-      (...args) => wrapExecution(capturePreparation(...args)),
+    const captureAsync = agentExecution.captureOpenClawAgentDatabaseExecutionAsync;
+    vi.spyOn(agentExecution, "captureOpenClawAgentDatabaseExecutionAsync").mockImplementation(
+      async (...args) => wrapExecution(await captureAsync(...args)),
     );
     const dispatch = createDispatch(kernel);
     const params = { sessionKey: scope.sessionKey, entryId: "user-2" };

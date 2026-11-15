@@ -26,7 +26,7 @@ export async function withSessionCompactionSource(
     ({ reply }) => reply,
     signal,
     undefined,
-    timeoutMs,
+    { timeoutMs },
   );
   if (planned.kind === "skipped") {
     return planned.reason;
@@ -59,7 +59,7 @@ export async function withSessionCompactionSource(
           },
           signal,
           undefined,
-          timeoutMs,
+          { timeoutMs },
         ),
     };
   };

@@ -125,7 +125,7 @@ for (const routeId of APP_ROUTE_IDS) {
 
 const NATIVE_ROUTE_SEGMENTS = new Set(APP_ROUTE_PATHS.map((path) => path.split("/")[1]));
 
-export const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
+const INTERNAL_PLUGIN_PATH_PARAM = "__openclawPluginPath";
 export type PluginTab = { pluginId: string; id: string; slug?: string; placement?: string };
 const tabsBySlug = new Map<string, PluginTab>();
 const warnedSlugs = new Set<string>();

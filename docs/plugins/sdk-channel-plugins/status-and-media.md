@@ -78,6 +78,13 @@ It accepts only `GET` and `HEAD` with one `<prefix>_<24-character lowercase hex 
 parameter. `resolveOutboundMediaAccess(params)` combines current `mediaAccess`
 with legacy local-root and reader parameters before loading.
 
+Host `mediaAccess` also carries the operator's
+`tools.web.fetch.ssrfPolicy.blockedHostnames` as `blockedHostnames`, and the
+shared outbound loaders deny those hosts on remote downloads. Forward the host
+`mediaAccess` unchanged. On plugin-owned send paths that hold config but no
+host `mediaAccess`, such as inbound reply delivery, pass
+`resolveOutboundMediaAccessForConfig(cfg)` from `openclaw/plugin-sdk/outbound-media`.
+
 `prepareUrl({ mediaAccess })` forwards host-authorized local media access to
 the shared outbound loader. Hosted media capacity defaults to
 `overflowPolicy: "evict-oldest"` for compatibility. Use `"reject-new"` when

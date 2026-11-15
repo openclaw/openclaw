@@ -15,6 +15,7 @@ import type {
   SessionActorOutcome,
 } from "./session-actor-contract.js";
 import {
+  estimateSessionActorReplicaBytes,
   indexSessionActorReplicaCell,
   retainSessionActorReplicaCell,
   sessionActorReplicaTargetKey,
@@ -55,40 +56,6 @@ const MAX_BYTES = 8 * 1024 * 1024;
 // Transcript producers replace changed rows and envelopes. Memoize array items
 // (rows or exact-context events), not their immutable payload descendants.
 const transcriptSizes = new WeakMap<object, number>();
-
-// Residency is a heap estimate, not a wire-size limit. Trusted postimages are
-// acyclic plain data; count strings without allocating or scanning their JSON.
-function estimateReplicaBytes(
-  value: unknown,
-  sizes?: WeakMap<object, number>,
-  memoizeDescendants = true,
-): number {
-  if (typeof value === "string") {
-    return 16 + value.length * 2;
-  }
-  if (!value || typeof value !== "object") {
-    return 8;
-  }
-  const known = sizes?.get(value);
-  if (known !== undefined) {
-    return known;
-  }
-  const childSizes = memoizeDescendants ? sizes : undefined;
-  let bytes = 32;
-  if (Array.isArray(value)) {
-    for (let index = 0; index < value.length; index++) {
-      if (index in value) {
-        bytes += 16 + estimateReplicaBytes(value[index], childSizes, false);
-      }
-    }
-  } else {
-    for (const key in value) {
-      bytes += 16 + key.length * 2 + estimateReplicaBytes(Reflect.get(value, key), childSizes);
-    }
-  }
-  sizes?.set(value, bytes);
-  return bytes;
-}
 
 const pool = resolveGlobalSingleton<ReplicaPool>(
   Symbol.for("openclaw.sessionActorReplicas"),
@@ -318,7 +285,7 @@ function retainEntry(cell: ReplicaCell, entry: SessionActorEntryFacts): void {
   discard(cell);
   entry.entry = shareEntrySkills(entry.entry);
   cell.entry = freezeTrustedJsonSnapshot(entry);
-  cell.bytes = estimateReplicaBytes(entry);
+  cell.bytes = estimateSessionActorReplicaBytes(entry);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   touch(cell);
@@ -345,7 +312,7 @@ function retainSnapshot(
   Object.freeze(state.transcript.watermark);
   cell.snapshot = state;
   cell.generation = generation;
-  cell.bytes = estimateReplicaBytes(state);
+  cell.bytes = estimateSessionActorReplicaBytes(state);
   pool.snapshots += 1;
   pool.bytes += cell.bytes;
   if (
@@ -363,7 +330,7 @@ function retainTranscript(cell: ReplicaCell, transcript: SessionActorTranscriptR
     pool.snapshots += 1;
   }
   const previousBytes = cell.transcriptBytes;
-  const bytes = estimateReplicaBytes(transcript, transcriptSizes);
+  const bytes = estimateSessionActorReplicaBytes(transcript, transcriptSizes);
   cell.transcript = transcript;
   cell.transcriptBytes = bytes;
   cell.bytes += bytes - previousBytes;
@@ -416,6 +383,20 @@ function touch(cell: ReplicaCell): void {
     // Live handles retain empty cells; only resident payloads consume the cache budget.
     if (pool.snapshots <= MAX_SNAPSHOTS && (pool.bytes <= MAX_BYTES || pool.snapshots === 1)) {
       break;
+    }
+    if (
+      pool.snapshots <= MAX_SNAPSHOTS &&
+      candidate.transcript &&
+      (candidate.snapshot || candidate.entry)
+    ) {
+      // Drop reloadable history before the entry reference that keeps append receipts compact.
+      pool.bytes -= candidate.transcriptBytes;
+      candidate.bytes -= candidate.transcriptBytes;
+      candidate.transcript = undefined;
+      candidate.transcriptBytes = 0;
+      if (pool.bytes <= MAX_BYTES) {
+        break;
+      }
     }
     discard(candidate);
     forgetUnused(candidate);
