@@ -274,7 +274,12 @@ Cleanup stops when the groups disappear or their cleanup budgets expire; it does
 not periodically scan the host's process table.
 
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
-before loading its main runtime.
+before loading its main runtime. On hosts with 1 GiB of RAM or less, or a process
+memory limit of 1 GiB or less, it uses in-process spawning instead. This leaves
+more memory for requests but retains Linux's per-command fork cost. Commands
+spawned in-process do not use the broker's optional agent-exec cgroup placement;
+shared command memory monitoring still applies. Native database resource brokers
+keep their separate ownership and cleanup.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
 entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.

@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/cron/store/save.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceCronRuntimeAuthorityRows"],
+        evidence:
+          "Moved unchanged from runtime-authority-store.ts. Save calls run in save.worker.ts and guarded-mutation.worker.ts; native callers retain Doctor store-repair transactions and the heartbeat task/cadence migration owners.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/transcript-payload.ts",
     [
       {

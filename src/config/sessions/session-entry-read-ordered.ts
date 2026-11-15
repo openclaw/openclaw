@@ -31,7 +31,7 @@ import type {
 import type { SessionEntryCohortRequest } from "./session-entry-read.types.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "./session-sqlite-target-paths.js";
 import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type { SessionHistoryWorkerDatabase } from "./session-transcript-worker.types.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
@@ -109,7 +109,7 @@ export function createAdmittedSessionEntryCohortReader(params: {
         withSessionHistoryWorkerDatabase(
           database,
           (reader) => reader.readExactEntries({ ...request, env: database.env }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         ),
       );
       assertCurrent();

@@ -309,8 +309,9 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
   });
 
   it("keeps newly generated thinking after repairing rejected Anthropic replay", async () => {
-    const { SessionManager: ActualSessionManager } =
-      await vi.importActual<typeof import("../../sessions/index.js")>("../../sessions/index.js");
+    const { SessionManager: ActualSessionManager } = await vi.importActual<
+      typeof import("../../sessions/session-manager.js")
+    >("../../sessions/session-manager.js");
     const staleAssistant = signedAssistant(
       "historical stale thinking",
       "stale-signature",
