@@ -105,11 +105,7 @@ suite.define(() => {
         expect.soft(await facts()).not.toContain("Linked");
         const refresh = async () => {
           await detail.getByRole("button", { name: "Close", exact: true }).click();
-          await page
-            .locator(".settings-section")
-            .filter({ has: page.getByRole("heading", { name: "Connected channels", exact: true }) })
-            .getByRole("button", { name: "Refresh", exact: true })
-            .click();
+          await page.locator(".channels-refresh").first().click();
           await page
             .locator("button.channels-item, button.channels-item__detail")
             .filter({ hasText: "WhatsApp" })
