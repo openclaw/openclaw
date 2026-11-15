@@ -2,7 +2,7 @@
 import { stripVTControlCharacters } from "node:util";
 import { readLoggingConfig } from "./config.js";
 import type { LogLevel } from "./levels.js";
-import { redactLogRecordForTransport } from "./redact.js";
+import { redactLogRecordForTransport, redactSensitiveText } from "./redact.js";
 import { loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 
@@ -27,6 +27,16 @@ export function formatConsoleDiagnosticLine(params: { level: LogLevel; message: 
   const override = loggingState.overrideSettings as { consoleStyle?: unknown } | null;
   const style = override?.consoleStyle ?? readLoggingConfig()?.consoleStyle;
   return style === "json" ? formatJsonConsoleLine(params) : params.message;
+}
+
+export function writeConsoleDiagnosticWarning(message: string): void {
+  const override = loggingState.overrideSettings as { consoleStyle?: unknown } | null;
+  const style = override?.consoleStyle ?? readLoggingConfig()?.consoleStyle;
+  const line =
+    style === "json"
+      ? formatJsonConsoleLine({ level: "warn", message })
+      : redactSensitiveText(message);
+  process.stderr.write(`${line}\n`);
 }
 
 /** Preserves human diagnostic blocks while serializing the whole block as one JSONL record. */

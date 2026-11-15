@@ -8,6 +8,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vite
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { resolveStateDir } from "../config/paths.js";
+import { fileLogTransport } from "../logging/logger-file-transport.js";
+import {
+  getLogger,
+  isFileLogLevelEnabled,
+  resetLogger,
+  setLoggerOverride,
+} from "../logging/logger.js";
+import { loggingState } from "../logging/state.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { readGatewayLockProcessNamespace } from "./gateway-lock-payload.js";
@@ -133,7 +141,7 @@ function mockProcessIdentity(cmdline: string[] | null, startTime: number | null 
   vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(startTime);
 }
 
-async function holdLifecycleCoordinator(signal: AbortSignal) {
+async function holdLifecycleCoordinator(signal: AbortSignal, foreignNamespace = false) {
   const stateDir = await fixtureRootTracker.make("lifecycle-handoff");
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
@@ -149,7 +157,7 @@ async function holdLifecycleCoordinator(signal: AbortSignal) {
        const pathname = process.argv[1];
        const lock = acquireFileLockSync(pathname, {
          lockPath: pathname, retry: { retries: 0 },
-         payload: () => ({ pid: process.pid, createdAt: new Date().toISOString(), configPath: "synthetic", role: "gateway", processNamespace: ${JSON.stringify(readGatewayLockProcessNamespace())} }),
+         payload: () => ({ pid: process.pid, createdAt: new Date().toISOString(), configPath: "synthetic", role: "gateway", processNamespace: ${JSON.stringify(foreignNamespace ? { ...readGatewayLockProcessNamespace(), host: "foreign-host" } : readGatewayLockProcessNamespace())} }),
        });
        process.on("message", () => {
          lock.release(); process.disconnect();
@@ -531,6 +539,100 @@ it("acquires promptly when the predecessor releases during a prolonged startup w
     await lock?.release();
   }
 });
+
+it.for([
+  { foreign: false, output: "plain" },
+  { foreign: false, output: "json" },
+  { foreign: false, output: "callback" },
+  { foreign: true, output: "plain" },
+  { foreign: true, output: "pretty" },
+  { foreign: true, output: "json" },
+  { foreign: true, output: "callback" },
+] as const)(
+  "keeps $output wait diagnostics out of file logging (foreign=$foreign)",
+  async ({ foreign, output }, { signal }) => {
+    const { child, options } = await holdLifecycleCoordinator(signal, foreign);
+    const paths = resolveGatewayLockPaths(options.env, options.lockDir);
+    const original = await fs.readFile(paths.ownerLockPath, "utf8");
+    const logFile = path.join(options.env.OPENCLAW_STATE_DIR, "waiter.log");
+    const previousLoggingConfig = loggingState.appliedConfig;
+    loggingState.appliedConfig = { redactPatterns: ["foreign-host"] };
+    setLoggerOverride({
+      level: "warn",
+      consoleLevel: "warn",
+      consoleStyle: output === "json" || output === "pretty" ? output : "compact",
+      file: logFile,
+    });
+    // Exercise the real enabled file transport before testing the unowned waiter.
+    getLogger().warn("file logging control");
+    fileLogTransport.drainSync();
+    expect(await fs.readFile(logFile, "utf8")).toContain("file logging control");
+    await fs.unlink(logFile);
+    expect(isFileLogLevelEnabled("warn")).toBe(true);
+    const enqueue = vi.spyOn(fileLogTransport, "enqueue");
+    const prepare = vi.spyOn(fileLogTransport, "prepareTarget");
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const callback = vi.fn();
+    let elapsed = 0;
+    const delays: number[] = [];
+    try {
+      await expect(
+        acquireGatewayLock({
+          ...options,
+          timeoutMs: 600,
+          now: () => elapsed,
+          sleep: async (ms) => {
+            delays.push(ms);
+            elapsed += ms;
+          },
+          ...(output === "callback" ? { onWait: callback } : {}),
+        }),
+      ).rejects.toThrow(foreign ? "cannot verify Gateway ownership" : "waited 600ms");
+      fileLogTransport.drainSync();
+      expect(delays).toEqual(foreign ? [600] : [250, 250, 100]);
+      expect(elapsed).toBe(600);
+      expect(await fs.readFile(paths.ownerLockPath, "utf8")).toBe(original);
+      expect(enqueue).not.toHaveBeenCalled();
+      expect(prepare).not.toHaveBeenCalled();
+      expect(fsSync.existsSync(logFile)).toBe(false);
+      const visible = stderr.mock.calls.map(([line]) => String(line)).join("");
+      if (output === "callback") {
+        expect(callback).toHaveBeenCalledTimes(1);
+        expect(callback).toHaveBeenCalledWith(
+          expect.stringContaining(
+            foreign ? "unverifiable owner" : "waiting for Gateway state ownership",
+          ),
+        );
+        if (foreign) {
+          expect(callback).toHaveBeenCalledWith(expect.stringContaining("foreign-host"));
+        }
+        expect(visible).toBe("");
+      } else {
+        if (foreign) {
+          expect(visible).not.toContain("foreign-host");
+          expect(visible).toContain("***");
+        }
+        expect(visible).toContain(
+          foreign ? "unverifiable owner" : "waiting for Gateway state ownership",
+        );
+        if (output === "json") {
+          expect(JSON.parse(visible)).toMatchObject({ level: "warn", message: expect.any(String) });
+        }
+      }
+    } finally {
+      fileLogTransport.drainSync();
+      resetLogger();
+      loggingState.appliedConfig = previousLoggingConfig;
+      child.send("release");
+      await lifecycleChildren.get(child);
+    }
+    const owner = await acquireGatewayLock({ ...options, timeoutMs: 0 });
+    expect(owner).not.toBeNull();
+    owner?.assertCurrent();
+    await owner?.release();
+    expect(fsSync.existsSync(paths.ownerLockPath)).toBe(false);
+  },
+);
 
 it("bounds a live owner's wait at five minutes and names state ownership", async ({ signal }) => {
   const { options } = await holdLifecycleCoordinator(signal);
