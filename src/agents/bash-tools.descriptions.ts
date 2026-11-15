@@ -11,6 +11,7 @@ export function describeExecTool(params?: {
       ? ["Run shell and wait for completion."]
       : [
           "Run shell now; background continuation supported.",
+          "For bounded tests/builds whose result is needed before continuing, use awaitResults=true instead of a short yieldMs followed by polling.",
           "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
           "Long run: automatic completion wake, when enabled, occurs only after exit; otherwise process confirms completion. Output while still running does not automatically start another turn. Background commands can outlive the turn; use process kill when no longer needed. Completion and the configured timeout still apply; this is not a saved, restartable automation.",
         ];
