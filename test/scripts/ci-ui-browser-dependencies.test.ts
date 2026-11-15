@@ -15,6 +15,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 it.each([
   "ui/src/pages/workboard/workboard-native-bundle.e2e.test.ts",
   "ui/src/e2e/tooltip-first-activation.e2e.test.ts",
+  "ui/src/e2e/overlay-menu-swap-webkit.e2e.test.ts",
   "ui/src/e2e/chat-loading-animation-retention.e2e.test.ts",
 ])("installs WebKit only for the shard owning %s", (suite) => {
   const step = readCiWorkflow().jobs["checks-ui-e2e"].steps.find(

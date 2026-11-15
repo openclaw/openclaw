@@ -4710,3 +4710,12 @@ td.data-table-key-col {
   display: block;
   line-height: 0;
 }
+
+/* WebKit can loop forever in style resolution when a closing anchored surface keeps
+   trying position fallbacks while another surface opens (openclaw/openclaw#196820).
+   A closing surface is only fading out, so it may return to its primary side for that
+   exit. !important overrides the surface-specific fallback lists. Kept out of the
+   shadow-inlined overlay.css: its JS-embedded copy would grow the boot bundles. */
+[data-phase="closing"] {
+  position-try-fallbacks: none !important;
+}
