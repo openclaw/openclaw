@@ -514,6 +514,7 @@ const enSettings = {
     schemaUnavailable: "Schema unavailable.",
     unsupportedSchema: "Unsupported schema. Use Raw.",
     unsupportedNode: "Unsupported schema node. Use Raw mode.",
+    editInAdvancedRaw: "Edit this setting in the Raw tab of Advanced settings.",
     noSettingsMatch: "No settings match your search.",
     noSettingsInSection: "No settings in this section.",
     sections: {
