@@ -60,8 +60,7 @@ export function enqueueBatchedSessionEventForHost(
   options: SessionEventOptions,
 ): SessionEventReceipt {
   const target = options.expectedTarget;
-  // Cron-run completions keep their acceptance-time origin check; they never wait here.
-  if (!target || options.occurrences || options.assertAcceptanceCurrent) {
+  if (!target || options.occurrences) {
     return enqueueSessionEventForHost(text, options);
   }
   const key = JSON.stringify([options.agentId, options.sessionKey]);

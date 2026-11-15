@@ -358,7 +358,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
           expect(await withinTest(receipt.settled, signal)).toMatchObject({
             status: "failed",
             executionStarted: false,
-            error: expect.stringContaining("Originating cron run ended"),
+            error: expect.stringContaining("cron run has ended"),
           });
         } else {
           expect(receipts).toHaveLength(0);

@@ -7,6 +7,7 @@ import {
 } from "../../config/sessions.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CRON_RUN_ENDED_ERROR, isEndedCronRun } from "../../infra/agent-run-registry.automation.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
@@ -126,6 +127,11 @@ async function prepareAdmittedAgentSession(
   const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
   if (archivedSessionError) {
     respondError(params.respond, ErrorCodes.INVALID_REQUEST, archivedSessionError);
+    return undefined;
+  }
+  // The cron executor resumes its own yields in place; nothing else starts a turn on its run.
+  if (isEndedCronRun(canonicalKey, entry?.sessionId)) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, CRON_RUN_ENDED_ERROR);
     return undefined;
   }
 
