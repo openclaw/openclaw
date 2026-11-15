@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -64,7 +61,6 @@ suite.define(() => {
       await page.locator('[data-test-id="cron-new-task"]').click();
       await page.locator('[data-test-id="cron-schedule-kind-event"]').getByRole("radio").click();
       await gateway.waitForRequest("config.get");
-      const section = page.locator("openclaw-cron-page");
       const refresh = page.locator('[data-test-id="cron-events-refresh"]');
       await refresh.waitFor();
       await refresh.click();
@@ -72,11 +68,6 @@ suite.define(() => {
       const hint = page.getByText("No enabled MCP servers yet. Add one in Settings → MCP.", {
         exact: true,
       });
-      const frame = await takeControlUiScreenshotFrame(page, section, [refresh], {
-        animations: "disabled",
-        scrollTo: refresh,
-      });
-      await writeFile(path.join(suite.artifactDir, "config-pending.png"), frame.png);
       expect(await hint.count()).toBe(0);
       await gateway.rejectDeferred("config.get", {
         message: "Cannot read event server configuration",
