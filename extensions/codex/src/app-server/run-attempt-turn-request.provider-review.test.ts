@@ -175,6 +175,16 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
       context: {
         workspaceBootstrapContext: { promptContext: "workspace reference" },
         watchedSessionsContext: "watched reference",
+        buildOpenClawPromptContext: (include: {
+          includeWorkspace: boolean;
+          includeWatchedSessions: boolean;
+        }) =>
+          [
+            include.includeWorkspace ? "workspace reference" : "",
+            include.includeWatchedSessions ? "watched reference" : "",
+          ]
+            .filter(Boolean)
+            .join("\n"),
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {
           nativeExecutionPolicy: {},
@@ -290,6 +300,19 @@ describe("native acknowledged turn requests", () => {
     });
   });
 
+  it("does not acknowledge partial context even if its reference text appears in user input", async () => {
+    const attempt = await prepare();
+    // Simulate prompt fitting stripping part of the emitted block while keeping
+    // the same reference strings elsewhere in the native turn input.
+    attempt.resources.prompt.context.buildOpenClawPromptContext = () =>
+      "workspace reference\nwatched reference\nmissing header";
+    await attempt.start();
+    expect(references.accepted).toHaveBeenCalledExactlyOnceWith({
+      workspaceAccepted: false,
+      watchedSessionsAccepted: false,
+    });
+  });
+
   it.each<SelectionChange>(["thread", "thread ID", "owner", "released owner", "model", "provider"])(
     "rejects a changed %s after reading the native provider review",
     async (kind) => {
@@ -325,7 +348,13 @@ describe("native acknowledged turn requests", () => {
         "new-turn",
       );
       expectInterrupted(attempt);
-      expectNotAccepted(attempt);
+      // The native turn was accepted before ownership changed, so suppressing
+      // acknowledgment would replay the same references on a retry.
+      expect(references.accepted).toHaveBeenCalledExactlyOnceWith({
+        workspaceAccepted: true,
+        watchedSessionsAccepted: true,
+      });
+      expect(attempt.host.acceptNativeTurn).not.toHaveBeenCalled();
     },
   );
 

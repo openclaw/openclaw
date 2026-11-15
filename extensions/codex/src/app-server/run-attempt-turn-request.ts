@@ -384,22 +384,25 @@ export async function prepareCodexAttemptTurnRequest(
         }),
       );
       acceptedTurnId = startedTurn.turn.id;
+      // Native turn/start already accepted this input. Record the complete context
+      // before ownership checks/cleanup, which may fail after Codex persisted it.
+      // Matching the whole rendered block avoids mistaking user-text echoes of an
+      // individual reference for successful context delivery after prompt fitting.
+      const submittedContext = context.buildOpenClawPromptContext({
+        includeWorkspace: references.includeWorkspace,
+        includeWatchedSessions: references.includeWatchedSessions,
+      });
+      const completeContextAccepted = Boolean(
+        submittedContext && upstreamUserText.includes(submittedContext),
+      );
+      references.accepted({
+        workspaceAccepted: completeContextAccepted && references.includeWorkspace,
+        watchedSessionsAccepted: completeContextAccepted && references.includeWatchedSessions,
+      });
       recordCodexTurnForkSettings(turnClient, turnStartParams);
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
-      // Acknowledge only complete sections accepted by Codex. Cancellation after
-      // turn/start acceptance must not cause the same reference to be resent.
-      const workspacePrompt = workspaceBootstrapContext.promptContext?.trim();
-      const watchedPrompt = watchedSessionsContext?.trim();
-      references.accepted({
-        workspaceAccepted: Boolean(
-          references.includeWorkspace && workspacePrompt && upstreamUserText.includes(workspacePrompt),
-        ),
-        watchedSessionsAccepted: Boolean(
-          references.includeWatchedSessions && watchedPrompt && upstreamUserText.includes(watchedPrompt),
-        ),
-      });
       if (runAbortController.signal.aborted) {
         const reason = runAbortController.signal.reason;
         if (reason instanceof Error) {
