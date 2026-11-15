@@ -336,11 +336,14 @@ const TalkCatalogProviderGroupSchema = closedObject(TalkCatalogProviderGroupProp
 const TalkCatalogTranscriptionGroupSchema = closedObject({
   ...TalkCatalogProviderGroupProperties,
   // Which path Talk transcription uses: a streaming transcription provider
-  // (Voice Call streaming config or automatic pick), the
+  // named by the Voice Call streaming config (`streaming`) or picked
+  // automatically from configured keys (`streaming-auto`), the
   // `agents.defaults.voiceModel` default, or the media-understanding audio
   // models (`tools.media`). Optional: older Gateways and the projection for
   // callers without operator.read omit it.
-  source: Type.Optional(stringLiteralUnion(["streaming", "voice-model", "media-understanding"])),
+  source: Type.Optional(
+    stringLiteralUnion(["streaming", "streaming-auto", "voice-model", "media-understanding"]),
+  ),
   // Readiness of the media-understanding audio providers (voice notes) when
   // Talk uses another path; on that path they are `providers` already.
   mediaProviders: Type.Optional(Type.Array(TalkCatalogProviderSchema)),

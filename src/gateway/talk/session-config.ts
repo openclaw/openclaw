@@ -214,12 +214,15 @@ export async function buildTalkTranscriptionConfig(
     model: voiceModelDefault?.model,
     file,
     // The path chosen above, reported by talk.catalog so clients need not
-    // re-derive this precedence from config.
+    // re-derive this precedence from config. `streaming-auto`: nothing names a
+    // provider, so the runtime picks the first realtime provider with a key.
     source: file
       ? ("media-understanding" as const)
       : !provider && voiceModelDefault
         ? ("voice-model" as const)
-        : ("streaming" as const),
+        : provider || Object.keys(providerConfigs).length > 0
+          ? ("streaming" as const)
+          : ("streaming-auto" as const),
   };
 }
 

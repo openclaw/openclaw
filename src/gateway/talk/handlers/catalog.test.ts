@@ -616,6 +616,7 @@ describe("talk.catalog handler", () => {
 
     expect(mockCallArg(respond, 0, 1)).toMatchObject({
       transcription: {
+        source: "streaming",
         ready: true,
         activeProvider: "xai",
         providers: [
@@ -717,6 +718,10 @@ describe("talk.catalog handler", () => {
           : {},
       });
       const catalog = mockCallArg(respond, 0, 1) as Record<string, Record<string, unknown>>;
+      // Without a named provider the runtime picks one automatically.
+      expect(catalog.transcription).toMatchObject({
+        source: explicit ? "streaming" : "streaming-auto",
+      });
       for (const kind of ["transcription", "realtime"]) {
         expect(catalog[kind]).toMatchObject({ ready: false });
         if (explicit) {

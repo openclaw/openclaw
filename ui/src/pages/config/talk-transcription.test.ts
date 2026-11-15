@@ -96,9 +96,7 @@ it("keeps Talk speech-to-text status on the active route when the preferred mode
       .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
       ?.querySelector<HTMLElement>(".settings-row");
   await waitForSolid(() =>
-    expect(statusRow()?.textContent).toContain(
-      t("talkPage.transcription.sourceMediaUnderstanding", { provider: "openai" }),
-    ),
+    expect(statusRow()?.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes")),
   );
   expect(statusRow()?.textContent).toContain(t("talkPage.status.ready"));
   expect(page.textContent).toContain(
@@ -140,18 +138,20 @@ it.each([
       },
     };
     await waitForSolid(() =>
-      expect(page.textContent).toContain("Talk uses openai, a streaming transcription provider."),
+      expect(page.textContent).toContain(
+        t("talkPage.transcription.talkVoiceCall", { provider: "OpenAI" }),
+      ),
     );
-    // One row carries the picker, its readiness and the key hint.
+    // The Voice notes row carries the picker, its readiness and the key hint.
     const modelRow = [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
-      row.textContent?.includes(t("talkPage.transcription.modelDescriptionVoiceNotes")),
+      row.textContent?.startsWith(t("talkPage.transcription.voiceNotesTitle")),
     );
     expect(modelRow?.textContent).toContain(
       t(warns ? "talkPage.transcription.providerNotReady" : "talkPage.status.ready"),
     );
     expect(
       modelRow?.textContent?.includes(
-        t("talkPage.transcription.providerNotReadyDescription", { provider: "deepgram" }),
+        t("talkPage.transcription.providerNotReadyDescription", { provider: "Deepgram" }),
       ),
     ).toBe(warns);
     expect(
@@ -186,7 +186,7 @@ it("does not check the picked model against providers of an unreported path", as
     },
   };
   await waitForSolid(() =>
-    expect(page.textContent).toContain(t("talkPage.transcription.modelDescriptionVoiceNotes")),
+    expect(page.textContent).toContain(t("talkPage.transcription.voiceNotesDescription")),
   );
   expect(page.textContent).not.toContain(t("talkPage.transcription.providerNotReady"));
 });
@@ -276,6 +276,63 @@ it("does not report a ready provider-less transcription route as unconfigured", 
       .find((section) => section.textContent?.includes(t("talkPage.transcription.title")))
       ?.querySelector<HTMLElement>(".settings-row");
   await waitForSolid(() => expect(statusRow()?.textContent).toContain(t("talkPage.status.ready")));
-  expect(statusRow()?.textContent).not.toContain(t("talkPage.transcription.noProvider"));
-  expect(statusRow()?.textContent).toContain(t("talkPage.transcription.readyWithoutProvider"));
+  expect(statusRow()?.textContent).toContain(t("talkPage.transcription.talkUsesVoiceNotes"));
 });
+
+it.each([
+  {
+    source: "streaming",
+    activeProvider: "openai",
+    button: "talkPage.transcription.change",
+    route: ["plugin-settings", { pathname: "/settings/plugins/voice-call", search: "" }],
+  },
+  {
+    source: "voice-model",
+    activeProvider: "openai",
+    button: "talkPage.transcription.change",
+    route: ["ai-agents", { search: "?section=agents" }],
+  },
+  {
+    source: "streaming-auto",
+    activeProvider: "deepgram",
+    button: "talkPage.transcription.openModels",
+    route: ["model-providers", { search: "?provider=deepgram" }],
+  },
+  {
+    source: "streaming-auto",
+    activeProvider: undefined,
+    button: "talkPage.transcription.openModels",
+    route: ["model-providers", { search: "" }],
+  },
+] as const)(
+  "links the Talk row to the setting that chose its $source provider ($activeProvider)",
+  async ({ source, activeProvider, button, route }) => {
+    const navigate = vi.fn();
+    const { page } = createTalkMutationHarness({
+      navigate,
+      catalogRequest: (_index, catalog) => ({
+        ...catalog,
+        transcription: {
+          source,
+          ready: activeProvider !== undefined,
+          ...(activeProvider ? { activeProvider } : {}),
+          providers: [],
+          mediaProviders: [],
+        },
+      }),
+    });
+    const talkRow = () =>
+      [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
+        row.textContent?.startsWith(t("talkPage.transcription.talkTitle")),
+      );
+    const link = await waitForSolid(() => {
+      const found = [...(talkRow()?.querySelectorAll("button") ?? [])].find(
+        (candidate) => candidate.textContent === t(button),
+      );
+      expect(found).toBeDefined();
+      return found!;
+    });
+    link.click();
+    expect(navigate).toHaveBeenCalledWith(...route);
+  },
+);
