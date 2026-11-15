@@ -456,7 +456,6 @@ export async function deliverCompletionDirect(params: {
         ? {
             transcriptExpectedGeneration: {
               sessionKey: params.requesterSessionKey,
-              sessionId: params.requesterSessionId,
               lifecycleRevision: params.requesterLifecycleRevision,
             },
           }

@@ -61,7 +61,8 @@ const controlUiPerformanceBudgets = {
   // Coordinator-accepted shipped feature cost after paydown #199196.
   // Measured on main 5328b275: exact route totals, with no added headroom.
   // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
-  chatBootJsGzipBytes: 1_310_894,
+  // Chat reader stability (#199080): its anchor and row-admission code, measured +1,333 B.
+  chatBootJsGzipBytes: 1_312_227,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
   newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,

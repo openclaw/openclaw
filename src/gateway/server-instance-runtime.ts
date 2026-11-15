@@ -199,7 +199,6 @@ export function createGatewayInstanceRuntime(
         const needsDedicatedPrincipal = Boolean(
           dispatchOptions.allowModelOverride === true ||
           dispatchOptions.allowSyntheticModelOverride === true ||
-          dispatchOptions.allowSyntheticCronRunContinuation === true ||
           dispatchOptions.runtimeContextFragments ||
           dispatchOptions.internalDeliverySuppressErrors === true ||
           delegatedToolPolicyHandoffId ||
@@ -225,7 +224,6 @@ export function createGatewayInstanceRuntime(
                 allowModelOverride:
                   dispatchOptions.allowModelOverride === true ||
                   dispatchOptions.allowSyntheticModelOverride === true,
-                cronRunContinuation: dispatchOptions.allowSyntheticCronRunContinuation === true,
                 runtimeContextFragments: dispatchOptions.runtimeContextFragments,
                 internalDeliverySuppressErrors: dispatchOptions.internalDeliverySuppressErrors,
                 delegatedToolPolicyHandoffId,

@@ -280,6 +280,10 @@ operating-system processes.
 
 ## Child process bridging
 
+An unreadable previously recorded process identity does not prove exit. OpenClaw keeps
+that process tracked and reports its stop as unconfirmed instead of signaling an
+unverified PID. Retry `process kill` when process inspection is available again.
+
 After a host exec command exits normally, OpenClaw releases its process owner
 before it reports completion. The owner exits without signalling the processes
 that the command left running (shell backgrounding with `&`, `nohup`, `setsid`,

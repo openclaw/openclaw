@@ -355,6 +355,15 @@ export const finalizeSubagentCleanup = async (
       completedAt: now,
       stateContext,
     });
+  } else if (
+    // Descendants may settle while this attempt still owns the deferred-state write.
+    decision.value?.kind === "defer-descendants" &&
+    (await params.countPendingDescendantRuns(entry.childSessionKey, assertCurrent, {
+      excludeSuspendedDelivery: true,
+    })) === 0
+  ) {
+    assertCurrent();
+    params.resumeSubagentRun(entry.runId);
   } else if (resumeDelayMs != null) {
     scheduleResumeSubagentRun(context, entry, resumeDelayMs, cleanupGeneration, stateContext);
   }

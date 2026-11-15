@@ -33,10 +33,12 @@ const noop = () => {};
 const asyncNoop = async () => {};
 
 afterEach(async () => {
-  for (const current of jobs.splice(0)) {
-    current.admission.finish();
+  const finishing = jobs.splice(0).map((current) => {
+    const completion = current.admission.finish();
     current.settled.resolve({ kind: "completed" });
-  }
+    return Promise.resolve(completion);
+  });
+  await Promise.all(finishing);
   for (const owner of owners.splice(0)) {
     await owner.settle();
     owner.close();
@@ -302,8 +304,9 @@ describe("state lease group admission", () => {
         expectReleasable(false);
         expect(current.request("commit", facts(scope.identities))).toBe(1);
       } finally {
-        current.admission.finish();
+        const finishing = current.admission.finish();
         current.settled.resolve({ kind: "completed" });
+        await finishing;
       }
     });
     await Promise.all(draining);

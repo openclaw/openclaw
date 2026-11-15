@@ -5,6 +5,7 @@ import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import {
   createConfigIO,
@@ -113,7 +114,7 @@ export function resolveRequiredBackupPath(
 ): string {
   const trimmed = value?.trim();
   if (!trimmed) {
-    throw new Error(`Missing required ${label} value.`);
+    throwExpectedCliError(`Missing required ${label} value.`);
   }
   return resolveUserPath(trimmed);
 }
@@ -123,7 +124,7 @@ export function resolveBackupArchivePath(
   label: "--output" | "<archive>" | "--target",
 ): string {
   if (!value?.trim()) {
-    throw new Error(`Missing required ${label} value.`);
+    throwExpectedCliError(`Missing required ${label} value.`);
   }
   return path.resolve(expandHomePrefix(value));
 }
