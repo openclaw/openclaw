@@ -136,7 +136,7 @@ Run the waiter below as a single background `exec` (`background: true`, `timeout
 Pin the commit you pushed. A waiter that reads the PR head live can see the old head as settled right after a push and exit at once; `gh pr checks --watch` has this race ([#199663](https://github.com/openclaw/openclaw/pull/199663)).
 
 ```bash
-# Exit 0: every check passed. 1: a check failed. 11: the PR head moved.
+# Exit 0: every check passed. 1: a check failed. 11: the PR head moved. 12: no check ran.
 pr=55 repo=owner/repo sha=$(git rev-parse HEAD) # the exact commit you pushed
 seen=0 n=0
 while :; do
@@ -147,9 +147,9 @@ while :; do
       --jq '.check_runs[] | "\(.status) \(.conclusion) \(.name)"')
     bad=$(printf '%s\n' "$runs" | grep -E '^completed (failure|timed_out|action_required|startup_failure) ')
     [ -n "$bad" ] && { echo "FAIL $sha"; echo "$bad"; exit 1; }
-    if ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) ' &&
-      printf '%s\n' "$runs" | grep -q '^completed success '; then
-      echo "PASS $sha"; exit 0
+    if [ -z "$runs" ] || ! printf '%s\n' "$runs" | grep -Eqv '^completed (success|skipped|neutral|cancelled) '; then
+      printf '%s\n' "$runs" | grep -q '^completed success ' && { echo "PASS $sha"; exit 0; }
+      [ "$n" -ge 4 ] && { echo "NO-RUN $sha"; exit 12; }
     fi
   elif [ -n "$head" ] && { [ "$seen" = 1 ] || [ "$n" -ge 4 ]; }; then
     echo "HEAD-MOVED expected=$sha actual=$head"; exit 11
@@ -158,7 +158,7 @@ while :; do
 done
 ```
 
-The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, needs at least one success, and ignores cancelled runs, because concurrency groups cancel superseded runs. It reads check runs only, not legacy commit statuses. A draft PR can skip most CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
+The loop gives GitHub about 2 minutes to show the new head. It waits on queued, running and `stale` runs, and ignores cancelled runs, because concurrency groups cancel superseded runs. It reads check runs only, not legacy commit statuses. It exits 12 when no run succeeded, for example when every run was skipped or none started, because draft PRs skip CI. For one known run, `gh run watch <run-id> --repo owner/repo --exit-status` exits non-zero when the run fails.
 
 ## API
 
