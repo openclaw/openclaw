@@ -75,11 +75,7 @@ export function hasWorkspaceGitCheckout(start: string): Promise<boolean> {
             invalidate(filename, event);
           }
         }),
-        observeOwnedDirectory(path.join(current, ".git"), (filename, event) => {
-          if (!filename || event !== "change") {
-            invalidate(filename, event);
-          }
-        }),
+        observeOwnedDirectory(path.join(current, ".git"), invalidate),
       );
       if (path.dirname(current) === current) {
         break;
