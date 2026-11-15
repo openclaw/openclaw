@@ -2,6 +2,7 @@ import { createEffect, createMemo, Loading } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
+import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -10,6 +11,7 @@ import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
 import { buildCronViewProps } from "./view-props.ts";
@@ -58,6 +60,25 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
   function canPresentJob(job: CronJob): boolean {
     permissionFacts();
     return props.page.canManageJob(job);
+  }
+
+  // The owner conversation is where the automatic fix for a failing job runs.
+  function openConversation(job: CronJob) {
+    const sessionKey = job.owner?.sessionKey?.trim();
+    if (!sessionKey) {
+      return;
+    }
+    const context = props.page.context();
+    selectApplicationSession({
+      selection: context.agentSelection,
+      gateway: context.gateway,
+      sessionKey,
+      agentId: job.owner?.agentId,
+    });
+    context.navigate(
+      "chat",
+      sessionNavigationTarget({ context, face: "chat", sessionKey }).options,
+    );
   }
 
   const viewProps = createMemo(() => {
@@ -112,6 +133,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
         <CronView
           {...viewProps()}
           canManageJob={canPresentJob}
+          onOpenConversation={openConversation}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
           toolbarScope={phoneList() && !pageHeader().filtered ? scopeControl() : undefined}

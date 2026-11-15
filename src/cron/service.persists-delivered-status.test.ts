@@ -377,7 +377,8 @@ describe("CronService persists delivered status", () => {
         lastRunStatus: "error",
         lastDelivered: verified,
         lastDeliveryStatus: deliveryStatus,
-        lastDeliveryError: verified ? undefined : error,
+        // The run error is reported once, as the run error; it is not a delivery error.
+        lastDeliveryError: undefined,
       });
       expectFields(event, {
         completionStatus: "failed",

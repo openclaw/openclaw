@@ -335,10 +335,11 @@ export type CronServiceDeps = {
   /** Uses the same resolved timeout as the owner-conversation agent turn. */
   failureRepairTimeoutMs?: number;
   /**
-   * Runs one ordinary turn in the conversation that owns a failing job, resolving
-   * only after settlement; its authored reply goes to the conversation's own route.
+   * Runs one ordinary turn in the conversation that owns a failing job, resolving after
+   * it settles or its timeout cancels it; its authored reply goes to the conversation's
+   * own route. Rejects only when the turn could not start.
    */
-  runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
+  runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<"settled" | "timed-out">;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
   onDefinitionChange?: (previous: CronJob | undefined, next: CronJob | undefined) => void;
   onProvisionedJobsReloaded?: () => Promise<void>;

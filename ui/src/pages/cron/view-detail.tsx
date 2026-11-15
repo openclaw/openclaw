@@ -3,9 +3,8 @@ import type { CronJob } from "../../api/types.ts";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsSection, SettingsPage } from "../../components/solid/settings-ui.tsx";
-import { isCronJobActiveFailure } from "../../lib/cron-status.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { FailureDetails } from "./view-attention.tsx";
+import { FailureBanner } from "./view-attention.tsx";
 import {
   AdminRequired,
   ErrorBanner,
@@ -28,10 +27,6 @@ export function DetailView(
     () => (props.mode === "job" ? (props.editingJob ?? undefined) : undefined),
     { equals: false },
   );
-  const failedJob = () => {
-    const job = selectedJob();
-    return job && isCronJobActiveFailure(job) ? job : undefined;
-  };
   const hasDetailTabs = () => props.mode === "job" && Boolean(selectedJob());
   const showHistory = () => props.mode === "job" && props.detailTab === "history";
   const conditionActivity = () => {
@@ -61,13 +56,17 @@ export function DetailView(
         </div>
         <div class="stack">
           <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
-          <Show when={failedJob()}>
+          <Show when={selectedJob()}>
             {(job) => (
-              // History exposes the full saved-job cause without requiring a retained run.
-              <FailureDetails
+              <FailureBanner
                 job={job()}
-                fullCause={showHistory()}
                 onReviewRun={showHistory() ? undefined : () => props.onSelectJob(job())}
+                onOpenConversation={() => props.onOpenConversation?.(job())}
+                onRun={
+                  props.canManage && props.connected && !props.busy
+                    ? () => props.onRun(job())
+                    : undefined
+                }
               />
             )}
           </Show>

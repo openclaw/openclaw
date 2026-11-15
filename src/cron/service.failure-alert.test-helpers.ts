@@ -37,7 +37,7 @@ export function setupFailureAlertSuite() {
         ok: true,
       })),
       requestHeartbeat: vi.fn(),
-      runCronFailureRepair: vi.fn<NonNullable<Deps["runCronFailureRepair"]>>(async () => undefined),
+      runCronFailureRepair: vi.fn<NonNullable<Deps["runCronFailureRepair"]>>(async () => "settled"),
       runIsolatedAgentJob: vi.fn<JobRunner>(async () => runResult),
       runScriptJob: vi.fn<NonNullable<Deps["runScriptJob"]>>(async () => runResult),
     };

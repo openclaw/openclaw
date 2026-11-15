@@ -91,7 +91,9 @@ export function cronFailureDetailLines(
     return [`Cause: ${classification}`, ...guidance];
   }
   const label =
-    failureNotificationDetail.source === "payload" ? "automation script" : "trigger script";
+    failureNotificationDetail.source === "payload"
+      ? "automation script"
+      : "condition check (trigger script)";
   if (failureNotificationDetail.code === "plugin_reload_failed") {
     return [
       "Cause: tools could not be refreshed after a plugin reload.",
@@ -99,5 +101,10 @@ export function cronFailureDetailLines(
       "Check automation history and plugin status, then retry the automation.",
     ];
   }
-  return [`Cause: ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}`];
+  return [
+    failureNotificationDetail.source === "payload"
+      ? `Cause: its ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}.`
+      : `Cause: its ${label} ${SCRIPT_FAILURE_COPY[failureNotificationDetail.code]}, so the task did not run.`,
+    `Check the ${failureNotificationDetail.source === "payload" ? "script" : "condition script"} in automation history, then run it again.`,
+  ];
 }

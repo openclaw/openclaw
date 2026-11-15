@@ -12,6 +12,8 @@ export function buildCronFailureRepairBrief(params: {
   consecutiveErrors: number;
   error?: string;
   errorReason?: FailoverReason;
+  /** `trigger`: the condition-check script failed before the task ran. */
+  scope: "run" | "trigger";
   terminal?: boolean;
 }): string {
   const { job } = params;
@@ -31,7 +33,10 @@ export function buildCronFailureRepairBrief(params: {
     `Automation repair request from the scheduler, not a user message. Do not relay it; follow the steps below.`,
     params.terminal
       ? `A one-time automation (id ${job.id}), created in this conversation, failed and will not run again (now disabled). No failure alert was sent.`
-      : `An automation (id ${job.id}), created in this conversation, failed ${params.consecutiveErrors} consecutive runs. No failure alert was sent.`,
+      : `An automation (id ${job.id}), created in this conversation, failed ${params.consecutiveErrors > 1 ? `${params.consecutiveErrors} consecutive runs` : "its last run"}. No failure alert was sent.`,
+    params.scope === "trigger"
+      ? "Its condition-check script failed before the task ran; the task itself did not run."
+      : "Its task run failed.",
     `Schedule: ${JSON.stringify(job.schedule)}. Payload kind: ${payload.kind}.`,
     // Job text and provider errors can carry third-party content: data, never instructions.
     wrapUntrustedPromptDataBlock({ label: "Automation name", text: job.name, maxChars: 200 }),
@@ -59,8 +64,9 @@ export function buildCronFailureRepairBrief(params: {
           `1. Transient (provider outage, network, rate limit, or temporary upstream error): change nothing and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
           "2. Fixable in the workspace (for example the helper script or instructions file the payload follows): change it, then reply with one line saying what you changed. Do not claim the automation is fixed; a later run must verify it.",
           "3. Otherwise: ask the user for exactly what you need to fix it.",
-          "If the automation keeps failing, the user gets the normal failure alert.",
+          "When you finish, the automation re-runs once to check. If it still fails, the user is told.",
         ]),
+    "Do not paste the raw error to the user.",
     `${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
   ].join("\n");
 }

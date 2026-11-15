@@ -83,16 +83,16 @@ export function createGatewayCronFailureRepair(
  * The owner conversation receives the repair request as a host system turn, with the reply
  * delivered to its last route (thread included). The turn acts for the job's requester, as
  * the job's own runs do, so an owner requester can inspect and update the job it repairs.
- * Runtime error payloads (timeouts, provider errors) are not posted; the job's next failure
- * alert owns escalation.
+ * Runtime error payloads (timeouts, provider errors) are not posted; the scheduler's
+ * verification run owns escalation.
  */
 async function runGatewayCronFailureRepair(
   request: CronFailureRepairRequest,
   resolveGatewayContext: GatewayContextResolver | undefined,
-): Promise<void> {
+): Promise<"settled" | "timed-out"> {
   const deadlineAtMs = performance.now() + request.timeoutMs;
   // The cron run may retire its async scope before this independent repair settles.
-  await runWithGatewayDetachedWorkContinuation(async () => {
+  return await runWithGatewayDetachedWorkContinuation(async () => {
     const context = resolveGatewayContext?.();
     const job = context?.cron.getJob(request.jobId);
     if (!context || !job) {
@@ -116,7 +116,7 @@ async function runGatewayCronFailureRepair(
         source: "cron_failure_repair",
         contextKey: `cron-failure-repair:${request.repairId}`,
         expectedTarget: target,
-        // Only the agent's authored reply reaches the chat; the next alert owns escalation.
+        // Only the agent's authored reply reaches the chat; the verification run owns escalation.
         suppressErrorDelivery: true,
         // The scheduler's repair brief permits silence; public provenance does not grant it.
         replyExpectation: "optional",
@@ -129,18 +129,27 @@ async function runGatewayCronFailureRepair(
       // The accepted event retains its own custody of the restored operator source.
       release();
     }
+    const timedOut = new Error("cron failure repair timed out");
     const outcome = await withTimeout(
       receipt.settled,
       Math.max(1, deadlineAtMs - performance.now()),
-      "cron failure repair",
+      { createError: () => timedOut },
     ).catch((error: unknown) => {
       receipt.cancel();
+      if (error === timedOut) {
+        return undefined;
+      }
       throw error;
     });
-    // A turn that ran settles the repair whatever it concluded; the next run verifies it.
+    if (!outcome) {
+      // The turn started but ran out of time; the next natural run verifies whatever it did.
+      return "timed-out";
+    }
+    // A turn that ran settles the repair whatever it concluded; the verification run checks it.
     if (outcome.status === "cancelled" || !outcome.executionStarted) {
       throw new Error(`Cron failure repair did not run: ${outcome.error ?? outcome.status}`);
     }
+    return "settled";
   }, "cron:failure-repair");
 }
 

@@ -357,7 +357,7 @@ function createCronFailureAlertSchema(): TSchema {
       ],
       {
         description:
-          "Failure alert policy/route override; null clears. Route-backed jobs default to after=2 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not the auto-disable safety notice.",
+          "Failure alert policy/route override; null clears. Route-backed jobs default to after=1 for execution failures and cooldownMs=3600000 for all failure alerts; false disables execution/delivery alerts but not owner-conversation repair or the auto-disable safety notice.",
       },
     ),
   );

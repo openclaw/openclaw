@@ -679,6 +679,18 @@ Gateway `cron.add` and `cron.update` requests still accept the deprecated
 `announce`. This request adapter does not repair stored `deliver` values; those
 still require Doctor.
 
+## Cron automatic-repair records
+
+OpenClaw 2026.10 releases stored an owner-conversation repair inside the failure
+incident as `failureAlertIncident.repair`. The scheduler now reads only
+`state.failureRepair`. `openclaw doctor --fix` moves each stored record after a
+verified state backup: `atMs` becomes `startedAtMs`, `deadlineAtMs` keeps its value
+(or uses `atMs` when absent), `settledAtMs` is copied, and a record marked
+`alerted` gets `escalatedAtMs` set to `atMs`. Other job state is unchanged. The
+normal `openclaw update` Doctor phase runs this repair. An unmigrated record is
+ignored at runtime, so the worst case is one more repair turn for a streak that
+was already repaired.
+
 ## Exec approval policy
 
 Doctor normalizes legacy exec approval policy already stored in SQLite as well

@@ -486,7 +486,7 @@ export function authorCronRunCompletion<
       delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
-      error: result.deliveryError ?? result.error,
+      error: result.deliveryError,
       deliverySuppressionReason: result.deliverySuppressionReason,
     });
   return {

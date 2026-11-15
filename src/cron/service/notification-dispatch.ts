@@ -12,6 +12,7 @@ import {
   type CronNotificationIntent,
   type CronNotificationRouting,
 } from "./notification-intents.js";
+import { wakeCronRunQueues } from "./run-queue-wake.js";
 import { runCronRuntimeMutation } from "./runtime-mutation.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
@@ -52,24 +53,19 @@ export async function dispatchCronNotification(
 }
 
 /**
- * Starts the repair turn in the conversation that owns the job. Request failures are logged;
- * terminal one-shots send their fallback alert, while recurring jobs retain the repair deadline.
+ * Starts the repair turn in the conversation that owns the job. If the turn cannot start, the
+ * fallback alert goes out instead. A settled turn queues the one verification run; a turn that
+ * ran out of time leaves verification to the next natural run.
  */
 async function requestFailureRepair(
   state: CronServiceState,
   notification: Extract<CronNotificationIntent, { kind: "failure-repair" }>,
 ): Promise<void> {
-  const jobId = notification.job.id;
-  const job = state.store?.jobs.find((candidate) => candidate.id === jobId);
-  const owner = job?.owner;
-  const sessionKey = owner?.sessionKey?.trim();
-  const repairId = notification.job.state.lastFailureNotificationId;
-  const repairAtMs = job?.state.failureAlertIncident?.repair?.atMs;
+  const { job, startedAtMs } = notification;
+  const jobId = job.id;
+  const sessionKey = job.owner?.sessionKey?.trim();
   const lifecycleGeneration = state.lifecycleGeneration;
   const recordSettlement = async () => {
-    if (repairAtMs === undefined || !repairId) {
-      return;
-    }
     const settledAtMs = state.deps.nowMs();
     await locked(state, async () => {
       if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
@@ -79,7 +75,7 @@ async function requestFailureRepair(
       await runCronRuntimeMutation({
         context: captureOpenClawStateWorkerContext(),
         type: "cron.recordFailureRepairSettlement",
-        input: { storeKey, jobId, repairId, repairAtMs, settledAtMs },
+        input: { storeKey, jobId, startedAtMs, settledAtMs },
         snapshot: {},
         assertCurrent() {
           if (state.stopped || state.lifecycleGeneration !== lifecycleGeneration) {
@@ -89,11 +85,12 @@ async function requestFailureRepair(
         publish(committed) {
           if (committed.job) {
             noteCronJobsStoreCommit(storeKey);
-            applyCronRuntimeRowsToState(state, [committed.job], [], { publish: false });
+            applyCronRuntimeRowsToState(state, [committed.job], []);
           }
         },
       });
     });
+    wakeCronRunQueues(state);
   };
   const failed = async (err: unknown) => {
     state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair request failed");
@@ -104,21 +101,31 @@ async function requestFailureRepair(
       });
     }
   };
-  if (!sessionKey || !repairId || !state.deps.runCronFailureRepair) {
-    await failed(new Error("Missing failure repair runner, owner session, or repair ID"));
+  if (!sessionKey || !state.deps.runCronFailureRepair) {
+    await failed(new Error("Missing failure repair runner or owner session"));
     return;
   }
   void state.deps
     .runCronFailureRepair({
       jobId,
-      repairId,
+      repairId: `${jobId}:${startedAtMs}`,
       timeoutMs: state.deps.failureRepairTimeoutMs ?? DEFAULT_AGENT_TIMEOUT_MS,
-      agentId: owner?.agentId,
+      agentId: job.owner?.agentId,
       sessionKey,
       message: notification.text,
     })
-    .then(recordSettlement)
-    .catch(failed)
+    .then(
+      (outcome) =>
+        outcome === "settled"
+          ? recordSettlement().catch((err: unknown) =>
+              state.deps.log.warn(
+                { jobId, err: String(err) },
+                "cron: failed to record failure repair settlement",
+              ),
+            )
+          : undefined,
+      failed,
+    )
     .catch((err: unknown) =>
       state.deps.log.warn({ jobId, err: String(err) }, "cron: failure repair fallback failed"),
     );

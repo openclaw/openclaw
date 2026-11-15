@@ -34,6 +34,19 @@ export function buildCronAutoDisableNotice(params: {
   ].join("\n");
 }
 
+/** The in-app safety notice for the owning agent. */
+export function cronAutoDisableNotification(params: {
+  job: CronJob;
+  reason: CronAutoDisableReason;
+  consecutiveErrors: number;
+}): Extract<DeferredCronNotifications[number], { kind: "auto-disabled" }> {
+  return {
+    kind: "auto-disabled",
+    job: cronNotificationJob(params.job),
+    text: buildCronAutoDisableNotice(params),
+  };
+}
+
 /** Queues the in-app safety notice for the owning agent. */
 export function queueCronAutoDisableNotification(params: {
   job: CronJob;
@@ -41,11 +54,7 @@ export function queueCronAutoDisableNotification(params: {
   consecutiveErrors: number;
   deferredNotifications: DeferredCronNotifications;
 }): void {
-  params.deferredNotifications.push({
-    kind: "auto-disabled",
-    job: cronNotificationJob(params.job),
-    text: buildCronAutoDisableNotice(params),
-  });
+  params.deferredNotifications.push(cronAutoDisableNotification(params));
 }
 
 /** Records one canonical auto-disable fact and queues its owning-agent notification. */

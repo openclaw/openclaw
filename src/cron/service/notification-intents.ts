@@ -84,13 +84,22 @@ type CronFailureAlertNotification = {
   route: CronFailureAlertRoute;
 };
 
+type CronAutoDisabledNotification = {
+  kind: "auto-disabled";
+  job: CronNotificationJob;
+  text: string;
+};
+
 export type CronNotificationIntent = { routing?: CronNotificationRouting } & (
-  | { kind: "auto-disabled"; job: CronNotificationJob; text: string }
+  | CronAutoDisabledNotification
   | {
       kind: "failure-repair";
       job: CronNotificationJob;
+      /** Identifies the repair whose settlement this request may record. */
+      startedAtMs: number;
       text: string;
-      fallback?: CronFailureAlertNotification;
+      /** Sent instead when the repair turn cannot start. */
+      fallback?: CronFailureAlertNotification | CronAutoDisabledNotification;
     }
   | CronFailureAlertNotification
 );

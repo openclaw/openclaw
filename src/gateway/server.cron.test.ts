@@ -1035,7 +1035,7 @@ describe("gateway server cron", () => {
       await prepareGatewayReplyRuntimeForTest({ force: true });
       const repairTurnStarted = createDeferred();
       const finishRepairTurn = createDeferred();
-      // A repair's runtime error stays out of the owner chat; the next alert escalates.
+      // A repair's runtime error stays out of the owner chat; the verification run escalates.
       const chatDelivery = vi.spyOn(sessionEventDelivery, "prepareSessionEventDelivery");
       const repairTurn = installCronRepairTurn(async () => {
         repairTurnStarted.resolve();
@@ -1089,8 +1089,7 @@ describe("gateway server cron", () => {
       }
       await vi.waitFor(async () => {
         const stored = await loadCronStore(path.join(caseDir, "cron", "jobs.json"));
-        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureAlertIncident
-          ?.repair;
+        const repair = stored.jobs.find((job) => job.id === jobId)?.state.failureRepair;
         expect(repair?.settledAtMs).toEqual(expect.any(Number));
       });
       expect(chatDelivery).not.toHaveBeenCalled();

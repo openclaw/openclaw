@@ -18,6 +18,8 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
     gateway: CronViewProps["gateway"] | null;
     canCreate?: boolean;
     canManageJob?: (job: CronJob) => boolean;
+    /** Opens the conversation that owns a job, where its automatic fix runs. */
+    onOpenConversation?: (job: CronJob) => void;
     /** Phone list layout: the toolbar opens with the agent scope and create action. */
     phoneLayout?: boolean;
     toolbarScope?: JSX.Element;

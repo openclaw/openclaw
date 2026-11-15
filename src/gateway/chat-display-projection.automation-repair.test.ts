@@ -29,6 +29,7 @@ it.each(["cron_failure_repair", "restart"] as const)(
         job: makeCronJob({ id: "queue-check" }),
         consecutiveErrors: 2,
         error: "The queue helper is unavailable.",
+        scope: "run",
       });
       const repair = buildPersistedUserTurnMessage({
         text: brief,

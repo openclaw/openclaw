@@ -21,13 +21,13 @@ const desktop = { width: 1280, height: 900 };
 
 suite.define(() => {
   it.each([
-    { name: "desktop", viewport: desktop, colorScheme: "light" as const, maxHeight: 96 },
-    { name: "dark", viewport: desktop, colorScheme: "dark" as const, maxHeight: 96 },
+    { name: "desktop", viewport: desktop, colorScheme: "light" as const, maxHeight: 160 },
+    { name: "dark", viewport: desktop, colorScheme: "dark" as const, maxHeight: 160 },
     {
       name: "phone",
       viewport: { width: 390, height: 844 },
       colorScheme: "light" as const,
-      maxHeight: 140,
+      maxHeight: 220,
     },
   ])(
     "explains the failed run on arrival and while editing on $name",
@@ -91,19 +91,25 @@ suite.define(() => {
           const attention = page.locator(".cron-failure-details");
           await attention.waitFor();
           const review = attention.locator("[data-test-id=cron-review-failed-run]");
-          const cause = attention.locator(".cron-failure-details__cause");
-          const clipped = () =>
-            cause.evaluate((element) => element.scrollHeight > element.clientHeight);
+          const details = attention.locator(".cron-error-details");
+          const raw = attention.locator(".cron-error-details__text");
           const fitsViewport = () =>
             page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth);
-          expect(await cause.textContent()).toContain(failure);
-          expect(await cause.textContent()).toContain(diagnostic);
-          expect(await clipped()).toBe(false);
-          expect(
-            await cause.evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
+          expect(await attention.getAttribute("data-phase")).toBe("disabled");
+          expect(await attention.textContent()).toContain("Turned off after a failed run");
+          // The raw error waits behind a collapsed disclosure, then wraps to the banner width.
+          expect(await details.evaluate((element) => (element as HTMLDetailsElement).open)).toBe(
+            false,
+          );
+          await details.locator("summary").click();
+          expect(await raw.textContent()).toContain(failure);
+          expect(await raw.textContent()).toContain(diagnostic);
+          expect(await raw.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+            true,
+          );
           expect(await fitsViewport()).toBe(true);
-          // History already exposes the saved job's full cause, even without a retained run.
+          await details.locator("summary").click();
+          // History already lists the run, so the banner does not offer to open it.
           expect(await review.count()).toBe(0);
           expect(await page.locator(".cron-detail-header").textContent()).not.toContain("Paused");
           if (name === "phone") {
@@ -115,11 +121,9 @@ suite.define(() => {
           const prompt = page.locator(".cron-tab-panel textarea").first();
           const draft = "Keep this unsaved release instruction while reviewing the failure.";
           await prompt.fill(draft);
-          expect(await clipped()).toBe(true);
           expect((await attention.boundingBox())?.height).toBeLessThan(maxHeight);
           await review.click();
           await expect.poll(() => history.getAttribute("aria-selected")).toBe("true");
-          expect(await clipped()).toBe(false);
           await page.locator("[data-test-id=cron-detail-tab-settings]").click();
           expect(await prompt.inputValue()).toBe(draft);
           expect(await fitsViewport()).toBe(true);

@@ -13,6 +13,7 @@ import {
   saveCronStore,
 } from "../../../cron/store.js";
 import { cronStoreKey } from "../../../cron/store/key.js";
+import { resolveCronStoreKeyInDatabase } from "../../../cron/store/paths.js";
 import { makeCronStreamSandboxTarget } from "../../../cron/stream-sandbox.test-support.js";
 import type { CronJob } from "../../../cron/types.js";
 import { buildUpdateRehearsalPathEnv } from "../../../infra/update-rehearsal-paths.js";
@@ -25,7 +26,9 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
+import * as doctor from "../../doctor-config-flow.test-support.js";
 import { externalDoctorEnv } from "../../doctor-update.test-support.js";
+import { maybeRepairLegacyCronFailureRepairState } from "./failure-repair-state-migration.js";
 import { collectLegacyCronStoreHealthFindings, maybeRepairLegacyCronStore } from "./index.js";
 import {
   applyLegacyCronStoreRepair,
@@ -611,4 +614,71 @@ it.each(["load", "commit"])(
         expect(await fs.readFile(`${file}.migrated`)).toEqual(bytes);
       }
     })(),
+);
+
+it(
+  "moves 2026.10 automatic-repair markers to failureRepair",
+  withState(async (state) => {
+    const storePath = state.statePath("cron", "jobs.json");
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: ["pending", "settled", "alerted", "healthy"].map((id) => job(id)),
+    });
+    // Shapes written by the released 2026.10.x scheduler.
+    const legacyStates: Record<string, unknown> = {
+      pending: {
+        consecutiveErrors: 2,
+        failureAlertIncident: { scope: "trigger", signature: "sig", repair: { atMs: 100 } },
+      },
+      settled: {
+        consecutiveErrors: 3,
+        failureAlertIncident: {
+          scope: "run",
+          repair: { atMs: 200, deadlineAtMs: 500, settledAtMs: 300 },
+        },
+      },
+      alerted: {
+        consecutiveErrors: 4,
+        failureAlertIncident: { scope: "run", repair: { atMs: 400, alerted: true } },
+      },
+      healthy: { consecutiveErrors: 0 },
+    };
+    const db = openOpenClawStateDatabase().db;
+    const storeKey = resolveCronStoreKeyInDatabase(db, storePath);
+    for (const [id, legacy] of Object.entries(legacyStates)) {
+      db.prepare("UPDATE cron_jobs SET state_json = ? WHERE store_key = ? AND job_id = ?").run(
+        JSON.stringify(legacy),
+        storeKey,
+        id,
+      );
+    }
+
+    const result = await doctor.withDoctorConfigMaintenance(() =>
+      maybeRepairLegacyCronFailureRepairState({ shouldRepair: true }),
+    );
+    expect(result.warnings).toEqual([]);
+    expect(result.changes[0]).toContain("3 automation(s)");
+
+    const states = Object.fromEntries(
+      (await loadCronStore(storePath)).jobs.map((entry) => [entry.id, entry.state]),
+    );
+    expect(states).toEqual({
+      pending: {
+        consecutiveErrors: 2,
+        failureAlertIncident: { scope: "trigger", signature: "sig" },
+        failureRepair: { startedAtMs: 100, deadlineAtMs: 100 },
+      },
+      settled: {
+        consecutiveErrors: 3,
+        failureAlertIncident: { scope: "run" },
+        failureRepair: { startedAtMs: 200, deadlineAtMs: 500, settledAtMs: 300 },
+      },
+      alerted: {
+        consecutiveErrors: 4,
+        failureAlertIncident: { scope: "run" },
+        failureRepair: { startedAtMs: 400, deadlineAtMs: 400, escalatedAtMs: 400 },
+      },
+      healthy: { consecutiveErrors: 0 },
+    });
+  }),
 );

@@ -51,6 +51,8 @@ type DeliveryValidationOptions = { configuredChannels?: readonly string[] };
 
 function resetJobFailureState(job: CronStoredJob): void {
   delete job.state.autoDisabled;
+  // Explicit recovery starts a new streak, which may be repaired again.
+  delete job.state.failureRepair;
   job.state.consecutiveErrors = 0;
   job.state.scheduleErrorCount = 0;
   if (job.schedule.kind === "stream") {
@@ -217,6 +219,8 @@ export function createJob(
   delete initialState.runningScheduleChangeId;
   delete initialState.autoDisabled;
   delete initialState.admissionDeferred;
+  delete initialState.failureRepair;
+  delete initialState.failureRetryAtMs;
   delete initialState.lastMeaningfulResult;
   delete initialState.sourceIdentity;
   delete initialState.streamSourceIdentity;
@@ -457,6 +461,8 @@ export function applyJobPatch(
     delete statePatch.runningScheduleChangeId;
     delete statePatch.autoDisabled;
     delete statePatch.admissionDeferred;
+    delete statePatch.failureRepair;
+    delete statePatch.failureRetryAtMs;
     delete statePatch.lastMeaningfulResult;
     delete statePatch.sourceIdentity;
     delete statePatch.streamSourceIdentity;

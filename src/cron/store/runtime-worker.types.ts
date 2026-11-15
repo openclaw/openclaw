@@ -143,8 +143,7 @@ export type CronRuntimeMutationInputs = {
   "cron.recordFailureRepairSettlement": {
     storeKey: string;
     jobId: string;
-    repairAtMs: number;
-    repairId: string;
+    startedAtMs: number;
     settledAtMs: number;
   };
 };

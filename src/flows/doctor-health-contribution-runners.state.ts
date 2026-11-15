@@ -108,6 +108,16 @@ export async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise
   );
   noteDoctorRepairResult(inference);
   recordDoctorHealthWarnings(ctx, [], inference.warnings);
+  const { maybeRepairLegacyCronFailureRepairState } =
+    await import("../commands/doctor/cron/failure-repair-state-migration.js");
+  const failureRepair = await measureGatewayBootstrapStep("doctor.legacy-cron.failure-repair", () =>
+    maybeRepairLegacyCronFailureRepairState({
+      env: ctx.env,
+      shouldRepair: ctx.prompter.shouldRepair,
+    }),
+  );
+  noteDoctorRepairResult(failureRepair);
+  recordDoctorHealthWarnings(ctx, [], failureRepair.warnings);
   const { noteScheduledContextReport } =
     await import("../commands/doctor/cron/execution-context-check.js");
   await measureGatewayBootstrapStep("doctor.legacy-cron.execution-context", () =>

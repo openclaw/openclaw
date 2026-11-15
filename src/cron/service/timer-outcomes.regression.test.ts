@@ -374,11 +374,8 @@ it.each([
       failureAlert: { ...failureAlert },
       state: {
         consecutiveErrors: 9,
-        failureAlertIncident: repairPending
-          ? {
-              scope: "run",
-              repair: { atMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 },
-            }
+        failureRepair: repairPending
+          ? { startedAtMs: startedAt - 60_000, deadlineAtMs: startedAt + 60_000 }
           : undefined,
       },
     } as Partial<CronJob>);
@@ -391,9 +388,6 @@ it.each([
     expect(notification?.kind === "failure-alert" && notification.payload.text).toContain(
       "was auto-disabled after 10 consecutive run failures",
     );
-    if (repairPending) {
-      expect(job.state.failureAlertIncident?.repair?.alerted).toBe(true);
-    }
   },
 );
 

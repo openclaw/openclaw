@@ -466,6 +466,19 @@ export const CronJobStateSchema = closedObject({
   scheduleErrorCount: Type.Optional(Type.Integer({ minimum: 0 })),
   // Report-only scheduler ownership fact; callers cannot patch this field.
   autoDisabled: Type.Optional(CronAutoDisabledSchema),
+  // Report-only owner-conversation repair of the current failure streak, at most one per
+  // streak; success clears it. Callers cannot patch this field.
+  failureRepair: Type.Optional(
+    closedObject({
+      startedAtMs: CronDateTimestampMsSchema,
+      deadlineAtMs: CronDateTimestampMsSchema,
+      settledAtMs: Type.Optional(CronDateTimestampMsSchema),
+      escalatedAtMs: Type.Optional(CronDateTimestampMsSchema),
+    }),
+  ),
+  // Report-only: a quick re-run after a transient failure is scheduled at this time; alerts and
+  // repair wait for its outcome. Callers cannot patch this field.
+  failureRetryAtMs: Type.Optional(CronDateTimestampMsSchema),
   consecutiveSkipped: Type.Optional(Type.Integer({ minimum: 0 })),
   lastDelivered: Type.Optional(Type.Boolean()),
   lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
@@ -493,6 +506,8 @@ const CronJobStatePatchSchema = closedObject(
     "lastDiagnosticSummary",
     "scheduleErrorCount",
     "autoDisabled",
+    "failureRepair",
+    "failureRetryAtMs",
     "deliverySuppressionReason",
     "streamSourceIdentity",
     "sourceIdentity",

@@ -147,6 +147,56 @@ export async function repairLegacyCronJobOwnersForDoctor(
   return { changed: changes.length, ...backup };
 }
 
+/**
+ * Rewrites only the selected jobs' runtime state. Definitions, grants and ordering stay
+ * byte-identical, and a row whose state changed since inspection refuses the repair.
+ */
+export async function repairCronJobStatesForDoctor(
+  scope: DoctorCronScope,
+  authority: PluginDoctorRepairAuthority,
+  changes: readonly { storeKey: string; jobId: string; from: string; to: string }[],
+): Promise<{ changed: number; backupPath?: string; warnings?: string[] }> {
+  authority.assertCurrent();
+  if (changes.length === 0) {
+    return { changed: 0 };
+  }
+  const readState = (db: EngineConnection, change: (typeof changes)[number]) =>
+    executeSqliteQuerySync(
+      db,
+      getCronStoreKysely(db)
+        .selectFrom("cron_jobs")
+        .select("state_json")
+        .where("store_key", "=", change.storeKey)
+        .where("job_id", "=", change.jobId),
+    ).rows[0]?.state_json;
+  const backup = await commitCronDoctorRepair(scope, authority, {
+    plan: ["job-state", changes],
+    assertRowsUnchanged(db) {
+      if (changes.some((change) => readState(db, change) !== change.from)) {
+        throw new Error(
+          "Cron job state changed during Doctor repair; inspect again before retrying.",
+        );
+      }
+    },
+    write(db) {
+      for (const change of changes) {
+        executeSqliteQuerySync(
+          db,
+          getCronStoreKysely(db)
+            .updateTable("cron_jobs")
+            .set({ state_json: change.to })
+            .where("store_key", "=", change.storeKey)
+            .where("job_id", "=", change.jobId),
+        );
+      }
+      for (const storeKey of new Set(changes.map((change) => change.storeKey))) {
+        deferSqlitePostCommitPublication(db, () => noteCronJobsStoreCommit(storeKey));
+      }
+    },
+  });
+  return { changed: changes.length, ...backup };
+}
+
 /** Explicit selection changes only the binding, retaining every partition and receipt byte. */
 export async function repairCronDefaultStoreSelectionForDoctor(
   scope: DoctorCronScope,

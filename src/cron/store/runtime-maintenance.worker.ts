@@ -3,7 +3,12 @@ import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-con
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
-import { recomputeSingleJobForMaintenance } from "../service/jobs-scheduling.js";
+import {
+  hasScheduledNextRunAtMs,
+  isJobEnabled,
+  recomputeSingleJobForMaintenance,
+  resolveJobErrorBackoffUntilMs,
+} from "../service/jobs-scheduling.js";
 import type { CronJobPolicyContext } from "../service/state.js";
 import { loadedCronStoreFromRows, loadCronRows, updateCronRuntimeRow } from "./row-codec.js";
 import {
@@ -218,17 +223,30 @@ export function recordCronFailureRepairSettlementInWorker(
         jobIds: new Set([input.jobId]),
         mutate({ jobs }) {
           const job = jobs.get(input.jobId);
-          const repair = job?.state.failureAlertIncident?.repair;
+          const repair = job?.state.failureRepair;
           if (
             !job ||
             !repair ||
-            repair.alerted ||
-            repair.atMs !== input.repairAtMs ||
-            job.state.lastFailureNotificationId !== input.repairId
+            repair.startedAtMs !== input.startedAtMs ||
+            repair.settledAtMs !== undefined ||
+            repair.escalatedAtMs !== undefined
           ) {
             return { value: {} };
           }
           repair.settledAtMs = input.settledAtMs;
+          const nextRunAtMs = job.state.nextRunAtMs;
+          if (
+            isJobEnabled(job) &&
+            (job.schedule.kind === "cron" || job.schedule.kind === "every") &&
+            hasScheduledNextRunAtMs(nextRunAtMs)
+          ) {
+            // One verification run, after any error backoff so maintenance keeps it. The run's
+            // outcome recomputes the natural schedule from its unchanged anchor.
+            job.state.nextRunAtMs = Math.min(
+              nextRunAtMs,
+              Math.max(input.settledAtMs, resolveJobErrorBackoffUntilMs(job) ?? 0),
+            );
+          }
           return { upsertJobIds: [job.id], value: { job } };
         },
       });

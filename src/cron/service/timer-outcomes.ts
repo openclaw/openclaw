@@ -154,7 +154,7 @@ export function applyJobResult(
       delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
-      error: result.deliveryError ?? result.error,
+      error: result.deliveryError,
       deliverySuppressionReason: result.deliverySuppressionReason,
     });
   job.state.lastDelivered = deliveryState.delivered;
@@ -264,6 +264,8 @@ export function applyJobResult(
       // A failed check has not consumed the paced occurrence; its backoff retry still owns it.
       job.state.pacedNextRunAtMs = job.state.nextRunAtMs;
     }
+    // Clients show a held failure as "will try again" until the quick re-run settles.
+    job.state.failureRetryAtMs = pendingTransientRetry ? job.state.nextRunAtMs : undefined;
     // A parent pause is not a failure: its own notice below replaces the skipped-run alert.
     const failureNotification = result.parentUnavailable
       ? undefined
@@ -650,6 +652,8 @@ export function applyTriggerNoFireResult(
   delete job.state.runningScheduleChangeId;
   // A completed quiet check ends any waiting episode, like a payload run's completion.
   delete job.state.admissionDeferred;
+  // The quick re-run this check may have been settles here too.
+  job.state.failureRetryAtMs = undefined;
   job.updatedAtMs = result.endedAt;
   if (opts.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
