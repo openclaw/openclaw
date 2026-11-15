@@ -1155,7 +1155,10 @@ A context window retains its header and at most the requested event limit plus
 including the header. Reads still honor the caller's original limits. The separate
 committed tail retains at most 128 events and 512 KiB; selected anchors retain at
 most 128 entries and 128 KiB of estimated memory. These bounded facts share the
-actor's eviction and write-receipt invalidation lifecycle.
+actor's eviction and write-receipt invalidation lifecycle. Under byte pressure,
+the replica releases reloadable transcript bodies before discarding the entry
+reference used to compact append receipts. Entry and transcript facts keep the
+same shared memory and count limits, revision checks, and invalidation lifecycle.
 
 The history worker retains visible marker positions for recently read sessions.
 Repeated pages reuse that projection, and ordinary appends extend it from new
