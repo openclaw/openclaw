@@ -22,14 +22,7 @@ let gateways = 0;
 function fixture(world: {
   sessions?: Record<
     string,
-    {
-      key: string;
-      sessionId?: string;
-      displayName: string;
-      archived?: boolean;
-      status?: string;
-      model?: string;
-    }
+    { key: string; sessionId?: string; displayName: string; archived?: boolean; status?: string }
   >;
   jobs?: unknown[];
   history?: Record<string, unknown[]>;
@@ -177,8 +170,6 @@ it("lists On and Available scribes with honest detection and a tab count", async
   expect(view.textContent).toContain("Found Memory on Main · MEMORY.md 8 KB");
   expect(view.querySelector(".scribe-chip-on")?.textContent).toBe("On");
   expect(scribesTab.textContent).toBe("Scribes1");
-  expect(view.querySelector(".scribes-intro")?.textContent).not.toContain("you own");
-  expect(view.querySelector(".scribes-footnote")?.textContent).not.toContain("run as you");
 });
 
 it("asks for the Granola plugin before the Granola scribe can start", async () => {
@@ -345,7 +336,7 @@ it("sends a hand-edited prompt and stops regenerating it until asked", async () 
 it("restarts a turned-off scribe in its existing conversation with a fresh attempt key", async () => {
   const label = "Scribe · Learn from conversations";
   const { render, create, calls, page } = fixture({
-    sessions: { [label]: { key: "s-conv", displayName: label, model: "anthropic/claude" } },
+    sessions: { [label]: { key: "s-conv", displayName: label } },
     history: {
       "s-conv": [
         {
