@@ -318,11 +318,12 @@ export async function hydrateChatHistory(
     const retainsTranscriptIdentity =
       !requests.windowReset?.isCurrent() &&
       res.windowReset !== true &&
-      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId) &&
-      (previousDisplayedLeafEntryId === undefined ||
-        previousDisplayedLeafEntryId === nextDisplayedLeafEntryId);
+      (!previousSessionId || !nextSessionId || previousSessionId === nextSessionId);
     const reconciledHistory = retainsTranscriptIdentity
       ? reconcileHistoryTail({
+          sameLeaf:
+            previousDisplayedLeafEntryId === undefined ||
+            previousDisplayedLeafEntryId === nextDisplayedLeafEntryId,
           nextMessages: visibleMessages,
           nextPagination,
           nextSessionId,
