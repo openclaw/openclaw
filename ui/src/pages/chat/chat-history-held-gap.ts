@@ -1,4 +1,12 @@
+import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
+  readTranscriptDisplayPosition,
+  type TranscriptDisplayPosition,
+} from "../../../../src/chat/transcript-display-position.ts";
+import {
+  nativeHistoryMessageIdentity,
+  nativeHistoryMessageSourceIdentity,
   nativeHistoryMessageSourceId,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
@@ -11,10 +19,148 @@ import {
   type ChatHistoryResult,
   historySessionId,
   resolveChatHistoryPagination,
-  nativeHistoryMessagePosition,
-  oldestPositionedHistoryMessage,
 } from "./chat-history-snapshot.ts";
 import type { ChatState } from "./chat-state-contract.ts";
+
+function nativeHistoryMessagePosition(message: unknown) {
+  return readTranscriptDisplayPosition(
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+  );
+}
+
+/** Display order can relocate activity; cursor coverage follows physical rows. */
+function oldestPositionedHistoryMessage(messages: unknown[]) {
+  let oldest: { message: unknown; position: TranscriptDisplayPosition } | undefined;
+  for (const message of messages) {
+    const position = nativeHistoryMessagePosition(message);
+    if (
+      position &&
+      (!oldest ||
+        (position.source === oldest.position.source && position.rawSeq < oldest.position.rawSeq))
+    ) {
+      oldest = { message, position };
+    }
+  }
+  return oldest;
+}
+
+function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {
+  const totalMessages = asSafeIntegerInRange(pagination.totalMessages, { min: 0 });
+  if (totalMessages === undefined) {
+    return null;
+  }
+  const retainedDepth = pagination.hasMore ? pagination.nextOffset : totalMessages;
+  if (retainedDepth === undefined) {
+    return null;
+  }
+  const start = totalMessages - retainedDepth + 1;
+  return asSafeIntegerInRange(start, { min: 1 }) ?? null;
+}
+
+export function reconcileHistoryTail(options: {
+  sameLeaf: boolean;
+  nextMessages: unknown[];
+  nextPagination: ChatHistoryPagination;
+  nextSessionId: string | null;
+  previousMessages: unknown[];
+  previousPagination: ChatHistoryPagination;
+  previousSessionId: string | null;
+}): { messages: unknown[]; pagination: ChatHistoryPagination } | null {
+  if (!options.previousSessionId || options.previousSessionId !== options.nextSessionId) {
+    return null;
+  }
+  // Pending/live rows without a native anchor remain owned by their reducer.
+  const previousMessages = options.sameLeaf
+    ? options.previousMessages
+    : options.previousMessages.filter(nativeHistoryMessageSourceId);
+  const previousByIdentity = new Map<string, unknown[]>();
+  for (const message of previousMessages) {
+    const identity = nativeHistoryMessageIdentity(message);
+    if (identity) {
+      const matches = previousByIdentity.get(identity) ?? [];
+      matches.push(message);
+      previousByIdentity.set(identity, matches);
+    }
+  }
+  // Identical history rows keep their render identity, including projected siblings.
+  const messages = options.nextMessages.map((message) => {
+    const identity = nativeHistoryMessageIdentity(message);
+    return (identity ? previousByIdentity.get(identity)?.shift() : undefined) ?? message;
+  });
+  const reconciled = { messages, pagination: options.nextPagination };
+  const edge = oldestPositionedHistoryMessage(messages);
+  const previousEdge = oldestPositionedHistoryMessage(previousMessages);
+  if (
+    !options.nextPagination.hasMore ||
+    (!options.sameLeaf && !edge) ||
+    (edge && previousEdge && edge.position.source !== previousEdge.position.source)
+  ) {
+    return reconciled;
+  }
+  const previousTotal = options.previousPagination.totalMessages;
+  const nextTotal = options.nextPagination.totalMessages;
+  if (previousTotal !== undefined && nextTotal !== undefined && nextTotal < previousTotal) {
+    return reconciled;
+  }
+  const nextStart = retainedRawHistoryStart(options.nextPagination);
+  const edgeMessage = edge?.message ?? messages[0];
+  const firstSource = nativeHistoryMessageSourceIdentity(edgeMessage);
+  const overlap = firstSource
+    ? previousMessages.findIndex((message) => {
+        const position = nativeHistoryMessagePosition(message);
+        return (
+          nativeHistoryMessageSourceIdentity(message) === firstSource &&
+          (!edge ||
+            (position?.source === edge.position.source && position.rawSeq === edge.position.rawSeq))
+        );
+      })
+    : previousMessages.indexOf(edgeMessage);
+  // Matching source IDs prove overlap without interpreting native sequences as
+  // CLI ordinals. An empty visible window needs authoritative raw coverage;
+  // a hidden page still advances the admitted oldest edge.
+  const adjoining =
+    options.sameLeaf &&
+    typeof previousTotal === "number" &&
+    nextStart !== null &&
+    (previousMessages.length === 0
+      ? nextStart <= previousTotal + 1
+      : nextStart === previousTotal + 1);
+  if (overlap < 0 && !adjoining) {
+    return reconciled;
+  }
+  // Shared ancestry ends at the physical anchor, not its relocated display index.
+  const prefix = edge
+    ? previousMessages.filter((message) => {
+        const position = nativeHistoryMessagePosition(message);
+        return position?.source === edge.position.source && position.rawSeq < edge.position.rawSeq;
+      })
+    : overlap >= 0
+      ? previousMessages.slice(0, overlap)
+      : previousMessages;
+  const unavailable =
+    options.previousPagination.hasMore &&
+    !options.previousPagination.olderCursor &&
+    !options.previousPagination.needsBoundary;
+  // A missing edge never certified traversal. A fresh edge covers this tail
+  // only; any older held prefix must reopen its own source boundary.
+  if (unavailable && prefix.length === 0) {
+    return reconciled;
+  }
+  const previousStart = retainedRawHistoryStart(options.previousPagination);
+  const nextOffset =
+    previousStart !== null && typeof nextTotal === "number"
+      ? nextTotal - previousStart + 1
+      : undefined;
+  return {
+    messages: [...prefix, ...messages],
+    pagination: {
+      ...options.previousPagination,
+      ...(unavailable ? { needsBoundary: true as const } : {}),
+      ...(nextTotal !== undefined ? { totalMessages: nextTotal } : {}),
+      ...(options.previousPagination.hasMore && nextOffset !== undefined ? { nextOffset } : {}),
+    },
+  };
+}
 
 /**
  * Older cursor for the rows between the pane's held oldest edge
