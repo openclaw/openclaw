@@ -23,6 +23,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
@@ -993,12 +994,14 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY;
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG;
+          const auditConfig = resolveCiTestAuditConfig(selectedArgs);
           const auditCli =
             observeAuditCli &&
             !observedAuditCli &&
-            selectedArgs.length === 1 &&
-            selectedArgs[0] === "test/vitest/vitest.cli-process.config.ts" &&
-            selectedVitestArgs.length === 0;
+            auditConfig &&
+            vitestExtraArgs.length === 0 &&
+            (auditConfig === "test/vitest/vitest.cli-process.config.ts" || runtime === "bun");
           if (
             !nativeBun &&
             (auditCli ||
@@ -1013,6 +1016,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
               childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(join(root, `${runtime}-`));
               if (auditCli) {
                 childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY = "1";
+                childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG = auditConfig;
               }
               // Runtime membership and native sharding are already decided. Adding
               // experimental flags before that boundary changes Bun eligibility.

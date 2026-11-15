@@ -6,7 +6,7 @@ import type { PendingInputSourceRead } from "./session-pending-input-operations.
 import type { PendingInputScope } from "./session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import { captureSessionStoreReadTarget } from "./session-store-read-target.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -92,7 +92,7 @@ async function readPendingInputSource(
         env: captured.env,
         source,
       }),
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
   assertCurrent();
   return { path: identity.canonicalPath, snapshot, assertCurrent };

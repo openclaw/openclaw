@@ -198,7 +198,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")}`,
+          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
           details: (
             <p>
               {item.schedule} · {item.timezone}
@@ -206,7 +206,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
               {t(
                 item.enabled
                   ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationPaused",
+                  : "templatesCatalog.automationDisabled",
               )}
             </p>
           ),

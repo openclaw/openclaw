@@ -274,6 +274,7 @@ const coreCommands = new Set([
   "session.maintenance.size",
   "session.messageCut.commit",
   "session.messageCut.fork",
+  "session.messageCut.preflight",
   "session.messageRewrite.commit",
   "session.messageRewrite.modelPrompt",
   "session.messageRewrite.prepare",

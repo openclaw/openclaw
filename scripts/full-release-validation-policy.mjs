@@ -71,6 +71,7 @@ export function validateReleaseManifestAdvisoryJobs(manifest) {
       evaluateReleaseChildPolicy({
         child: { ...normalCi, key: "normalCi" },
         targetVersion: manifest.validationInputs?.targetVersion,
+        targetSha: manifest.targetSha,
       }).blockingJobs.length > 0
     ) {
       throw new Error("Release manifest contains failed selected job evidence");
@@ -1608,8 +1609,8 @@ function blockerIndex(issues) {
   return issues.map((issue) => jsonSha256(blockerEvidence(issue))).toSorted();
 }
 
-export function terminalPolicyPass(child, targetVersion) {
-  const policy = evaluateReleaseChildPolicy({ child, targetVersion });
+export function terminalPolicyPass(child, targetVersion, targetSha) {
+  const policy = evaluateReleaseChildPolicy({ child, targetVersion, targetSha });
   return (
     child.status === "completed" &&
     child.jobs.every((job) => job.status === "completed") &&
@@ -1690,9 +1691,9 @@ function releaseState(cancelled, activeRunIds, blockers, errors) {
   );
 }
 
-function releaseChildBlockers(selected, targetVersion) {
+function releaseChildBlockers(selected, targetVersion, targetSha) {
   const childJobBlockers = selected.flatMap((child) =>
-    evaluateReleaseChildPolicy({ child, targetVersion }).blockingJobs.map((job) => ({
+    evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).blockingJobs.map((job) => ({
       child: child.key,
       conclusion: job.conclusion,
       job: job.name,
@@ -1714,7 +1715,7 @@ function releaseChildBlockers(selected, targetVersion) {
         child.runId &&
         child.runAttempt &&
         child.status === "completed" &&
-        !terminalPolicyPass(child, targetVersion) &&
+        !terminalPolicyPass(child, targetVersion, targetSha) &&
         !childJobBlockerKeys.has(`${child.key}:${child.runId}`),
     )
     .map((child) => ({
@@ -1737,6 +1738,7 @@ export function classifyReleaseSnapshot({
   extraErrors = [],
   localFailures = [],
   targetVersion,
+  targetSha,
 }) {
   const selected = children.filter((child) => child.selected);
   const active = selected.filter(
@@ -1745,7 +1747,7 @@ export function classifyReleaseSnapshot({
   const childErrors = selected.flatMap((child) =>
     (child.errors ?? []).filter((error) => error.kind !== "dispatch_missing"),
   );
-  const childBlockers = releaseChildBlockers(selected, targetVersion);
+  const childBlockers = releaseChildBlockers(selected, targetVersion, targetSha);
   const rawBlockers = [
     ...localFailures,
     ...extraBlockers,
@@ -1763,7 +1765,7 @@ export function classifyReleaseSnapshot({
     activeRunIds,
     advisoryJobs: selected.flatMap(releaseChildAdvisories),
     waivers: selected.flatMap((child) =>
-      evaluateReleaseChildPolicy({ child, targetVersion }).waivers.map((waiver) =>
+      evaluateReleaseChildPolicy({ child, targetVersion, targetSha }).waivers.map((waiver) =>
         Object.assign({}, waiver, { runId: child.runId, runAttempt: child.runAttempt }),
       ),
     ),
@@ -2490,6 +2492,7 @@ function verifyStateStructure(state, executionPlan, label, effectiveGates) {
     extraErrors: executionPlan.errors,
     localFailures: releasePlanGateFailures(effectiveGates),
     targetVersion: executionPlan.targetVersion,
+    targetSha: executionPlan.targetSha,
   });
   if (!isDeepStrictEqual(state.waivers, baseline.waivers)) {
     throw new Error(`${label} waivers differ from checked-in release tooling policy`);
@@ -2569,6 +2572,8 @@ function verifyStateTransition(decision, drain, executionPlan) {
         Object.entries(state.children).map(([key, child]) =>
           Object.assign({}, child, { key, jobs: child.timing.jobs }),
         ),
+        executionPlan.targetVersion,
+        executionPlan.targetSha,
       ).map((issue) => normalizeIssue(issue, "release_blocker")),
     ];
     const previous = new Map(

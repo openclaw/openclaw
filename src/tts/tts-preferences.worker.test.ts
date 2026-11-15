@@ -1,5 +1,4 @@
 import fs, { existsSync, writeFileSync } from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -23,6 +22,17 @@ import { setTtsMaxLength } from "./tts-settings-writes.js";
 import { buildTtsSystemPromptHint, buildTtsSystemPromptHintAsync } from "./tts-settings.js";
 import { resolveTtsConfig, resolveTtsPrefsPath, resolveTtsPrefsPathAsync } from "./tts.js";
 
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:fs") & { default: typeof import("node:fs") }
+  >();
+  const overrides = {
+    readFileSync: vi.fn(actual.readFileSync),
+    fsyncSync: vi.fn(actual.fsyncSync),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
+
 const tempDirs = useStateDatabaseTempDirs();
 let root: string;
 beforeEach(() => {
@@ -33,13 +43,18 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.mocked(fs.readFileSync).mockClear();
+  vi.mocked(fs.fsyncSync).mockClear();
   vi.unstubAllEnvs();
 });
 
 it("persists TTS RPC changes without main-thread flushes and preserves queued settings", async () => {
   const prefsPath = path.join(root, "settings", "tts.json");
   vi.stubEnv("OPENCLAW_TTS_PREFS", prefsPath);
-  const flush = vi.spyOn(fs, "fsyncSync");
+  const flush = vi.mocked(fs.fsyncSync).mockClear();
+  const { default: nativeFs } = await vi.importActual<{ default: typeof fs }>("node:fs");
+  // Cover native-loaded and Vitest-imported main-thread calls with the same observer.
+  vi.spyOn(nativeFs, "fsyncSync").mockImplementation(flush);
   const respond = vi.fn();
   await expectDefined(
     ttsHandlers["tts.enable"],
@@ -138,8 +153,7 @@ it("carries the worker-read path through delivery and plugin prompts without cal
     expect(await prepareTtsPreferences()).toEqual(preparedTtsPreferences);
     expect(reads).toHaveBeenCalledTimes(1);
     const input = { cfg, preparedTtsPreferences };
-    const syncReads = vi.spyOn(fs, "readFileSync");
-    syncBuiltinESMExports();
+    const syncReads = vi.mocked(fs.readFileSync).mockClear();
     try {
       expect(buildTtsSystemPromptHint(cfg, "main", { preparedTtsPreferences })).toContain(
         "Keep spoken text ≤321 chars",
@@ -153,8 +167,7 @@ it("carries the worker-read path through delivery and plugin prompts without cal
       );
       expect(syncReads.mock.calls.filter(([file]) => file === firstPath)).toEqual([]);
     } finally {
-      syncReads.mockRestore();
-      syncBuiltinESMExports();
+      syncReads.mockReset();
     }
     expect([
       resolveTtsPrefsPath(config, preparedTtsPreferences),

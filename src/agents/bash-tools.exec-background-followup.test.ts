@@ -38,6 +38,11 @@ import {
 } from "./admitted-run-context.js";
 import { waitForExecScope } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import {
+  awaitExecsForYield,
+  listYieldAwaitableExecs,
+  openExecYieldResume,
+} from "./bash-tools.exec-notify.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import {
@@ -308,6 +313,7 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
         const { sessionId: processSessionId, followUp } = runningSession(started.details);
         await withinTest(waitForExecScope(sessionKey), signal);
         if (cron) {
+          // Without sessions_yield on this run, its exit cannot resume it.
           expect(followUp).toContain("collect it before ending the turn");
           expect(followUp).not.toContain("end this turn now");
         }
@@ -582,7 +588,9 @@ test("wakes a dashboard conversation on silent success, with exit, duration and 
   }
 });
 
-test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
+test("does not promise a hidden subagent without sessions_yield an exit wake", async ({
+  signal,
+}) => {
   const sessionKey = "agent:main:dashboard:hidden-waiter";
   await seedOrigin(sessionKey, "agent:main:main");
   const release = path.join(state.workspaceDir, "release-hidden-waiter");
@@ -600,6 +608,69 @@ test("does not promise a hidden subagent an exit wake", async ({ signal }) => {
     expect(idle.details).toMatchObject({
       followUp: expect.stringContaining("poll with a timeout"),
     });
+  } finally {
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+  }
+});
+
+test("resumes a hidden subagent on exit only after sessions_yield awaits the command", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:dashboard:hidden-waiter";
+  await seedOrigin(sessionKey, "agent:main:main");
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "hidden-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  const wakes = vi.mocked(sessionEvents.enqueueSessionEventForHost);
+  for (const yielded of [false, true]) {
+    const release = path.join(state.workspaceDir, `release-hidden-${yielded}`);
+    const started = runningSession(
+      (await exec(`hidden-${yielded}`, waitForRelease(release))).details,
+    );
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    expect(started.followUp).not.toContain("wakes this conversation");
+    if (yielded) {
+      const awaited = listYieldAwaitableExecs("hidden-run");
+      expect(awaited.map((session) => session.id)).toEqual([started.sessionId]);
+      awaitExecsForYield(awaited);
+    }
+    await fs.writeFile(release, "release");
+    await withinTest(waitForExecScope(sessionKey), signal);
+    // A run that ended without yielding gets a passive notice; a yielded run gets a wake turn.
+    expect(
+      wakes.mock.calls.filter(([, options]) => options.sessionKey === sessionKey),
+    ).toHaveLength(yielded ? 1 : 0);
+  }
+  expect(wakes.mock.calls.at(-1)?.[1]).toMatchObject({ source: "exec", sourceRunId: "hidden-run" });
+  expect(wakes.mock.calls.at(-1)?.[0]).toMatch(/^Exec completed \([^)]*\):\nWAITER_DONE$/);
+});
+
+test("resumes a yielded cron run in place with the exit instead of a session event", async ({
+  signal,
+}) => {
+  const sessionKey = "agent:main:cron:nightly:run:yielded";
+  await seedOrigin(sessionKey);
+  const exec = backgroundExec(sessionKey, {
+    agentId: "main",
+    runId: "cron-yield-run",
+    sessionsYieldAvailabilityRef: { value: true },
+  });
+  using resume = openExecYieldResume("cron-yield-run");
+  const release = path.join(state.workspaceDir, "release-cron-yield");
+  try {
+    const started = runningSession((await exec("cron-yield", waitForRelease(release))).details);
+    expect(started.followUp).toContain("If only waiting remains, call sessions_yield now");
+    awaitExecsForYield(listYieldAwaitableExecs("cron-yield-run"));
+    await fs.writeFile(release, "release");
+    expect(await withinTest(resume.next(signal), signal)).toMatch(
+      /^Exec completed \([^)]*\):\nWAITER_DONE$/,
+    );
+    // Nothing awaited remains, so the run finishes with its resumed turn.
+    expect(await resume.next(signal)).toBeUndefined();
+    expect(vi.mocked(sessionEvents.enqueueSessionEventForHost)).not.toHaveBeenCalled();
   } finally {
     await fs.writeFile(release, "release");
     await withinTest(waitForExecScope(sessionKey), signal);

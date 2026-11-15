@@ -26,6 +26,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
+import { reserveServiceSlot } from "./bash-process-adopted.js";
 import { listActiveProcessSessionReferences } from "./bash-process-references.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -75,7 +76,7 @@ import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
-  resolveExecDefaultTimeoutSec,
+  resolveExecTimeoutDefaults,
 } from "./exec-tool-timeout.js";
 import { resolveStoredSubagentCapabilities } from "./subagents/spawn/subagent-capabilities.js";
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
@@ -131,7 +132,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   );
   const backgroundAvailable =
     defaults?.processToolAvailabilityRef?.value ?? defaults?.allowBackground ?? true;
-  const defaultTimeoutSec = resolveExecDefaultTimeoutSec(defaults?.timeoutSec);
+  const [defaultTimeoutSec, serviceTimeoutSec] = resolveExecTimeoutDefaults(defaults);
   const defaultPathPrepend = normalizePathPrepend(defaults?.pathPrepend);
   let safeBinPolicy: ReturnType<typeof resolveExecSafeBinRuntimePolicy> | undefined;
   const {
@@ -278,6 +279,10 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       const host = resolveExecHost(params, defaults);
       assertDurableExecAvailable(params, host, allowBackground);
+      // host=node ignores background and runs synchronously: it keeps ordinary timeouts.
+      const startsService = allowBackground && params.background === true && host !== "node";
+      // Hold a service slot through approval and startup; a running session then counts itself.
+      using _ = reserveServiceSlot(defaults?.scopeKey, startsService);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -395,7 +400,6 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       }
       let run: ExecProcessHandle;
       let settled = false;
-      const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
           logInfo("exec: elevated command");
@@ -463,7 +467,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           commandHighlighting: defaults?.commandHighlighting,
           trigger: defaults?.trigger,
           timeoutSec: params.timeoutSeconds,
-          defaultTimeoutSec,
+          defaultTimeoutSec: startsService ? (serviceTimeoutSec(false) ?? 0) : defaultTimeoutSec,
           approvalRunningNoticeMs,
           warnings,
           notifySessionKey,
@@ -568,14 +572,18 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           cleanupMs,
           notifyOnExit,
           subagentSession,
+          sessionsYieldAvailable: defaults?.sessionsYieldAvailabilityRef?.value === true,
           notifyOnExitEmptySuccess,
           requestOwners: params.background === true ? undefined : requestOwners,
+          independentService: params.background === true,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,
-          timeoutSec: effectiveTimeout,
+          timeoutSec:
+            params.timeoutSeconds ??
+            (startsService ? serviceTimeoutSec(subagentSession) : defaultTimeoutSec),
           processContinuationAvailable: allowBackground,
           startupSignal: signal,
           onUpdate,
