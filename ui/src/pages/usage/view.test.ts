@@ -548,6 +548,26 @@ describe("renderUsage", () => {
     expect(textAt(container, ".cost-window--range .cost-window__value")).toBe("$10.00");
   });
 
+  it("shows unpriced cost instead of $0.00 when every cost entry is missing", () => {
+    const container = mountFixture({
+      totals: usageTotals(1_000, 0, { missingCostEntries: 2 }),
+    });
+    expect(texts(container, ".usage-metric-badge strong", false).slice(0, 2)).toEqual([
+      "1.0K",
+      "Unpriced",
+    ]);
+  });
+
+  it("keeps $0.00 when cost is known zero", () => {
+    const container = mountFixture({
+      totals: usageTotals(1_000, 0),
+    });
+    expect(texts(container, ".usage-metric-badge strong", false).slice(0, 2)).toEqual([
+      "1.0K",
+      "$0.00",
+    ]);
+  });
+
   it("retains an accepted zero overview and guards refresh until settlement, but not an error or retired result", async () => {
     const props = usageFixture({ totals: createEmptyCostUsageTotals() });
     const refresh = vi.fn();
