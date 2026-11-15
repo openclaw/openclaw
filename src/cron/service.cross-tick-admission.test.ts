@@ -1,8 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { stubFreeMemory } from "../../test/helpers/cron/free-memory.js";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import * as childMemory from "../process/child-memory.js";
 import {
   enqueueCommandInLane,
   getCommandLaneSnapshot,
@@ -437,7 +439,7 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     },
   });
   const gib = 1024 ** 3;
-  cron.stubFreeMemory(0);
+  stubFreeMemory(0);
   setCommandLaneConcurrency(CommandLane.Main, 32);
   const running = await captureCronSchedulerWakeForTest(() => start(state));
   try {
@@ -449,16 +451,24 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     expect(started).toHaveLength(1);
 
     // 1 GiB free holds four runs at 256 MiB each; with one running, automation takes half of five.
-    cron.stubFreeMemory(gib);
+    stubFreeMemory(gib);
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(2));
     // The runs took that memory: no more start.
-    cron.stubFreeMemory(gib / 2);
+    stubFreeMemory(gib / 2);
     await running.wake(state);
     expect(started).toHaveLength(2);
 
-    // Memory is freed: the rest start, up to the agent limit.
-    cron.stubFreeMemory(16 * gib);
+    // The host has memory again, but the jobs' exec commands hold the whole exec budget.
+    stubFreeMemory(16 * gib);
+    const exec = vi
+      .spyOn(childMemory, "readHostExecMemory")
+      .mockReturnValue({ budgetBytes: 2 * gib, usedBytes: 2 * gib });
+    await running.wake(state);
+    expect(started).toHaveLength(2);
+
+    // The commands end: the rest start, up to the agent limit.
+    exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0 });
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(12));
   } finally {
