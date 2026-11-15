@@ -395,6 +395,37 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
   },
 );
 
+test("admits every completion that arrives while its cron run is live", async ({ signal }) => {
+  const sessionKey = "agent:main:cron:nightly:run:two-live";
+  const sessionId = sessionKey.replaceAll(":", "-");
+  await seedOrigin(sessionKey);
+  const claim = claimAgentRunContext(
+    "cron-run-two-live",
+    { sessionKey, sessionId, agentId: "main" },
+    { trackOwner: true },
+  );
+  vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+    const receipt = enqueue(text, options);
+    receipts.push(receipt);
+    return receipt;
+  });
+  const exec = backgroundExec(sessionKey, { agentId: "main" });
+  try {
+    await exec("cron-two-a", 'process.stdout.write("A")');
+    await exec("cron-two-b", 'process.stdout.write("B")');
+    await withinTest(
+      vi.waitFor(() => expect(receipts).toHaveLength(2)),
+      signal,
+    );
+    // Both were admitted while the run was live, so ending it refuses neither.
+    for (const receipt of receipts) {
+      expect(await withinTest(receipt.accepted, signal)).toEqual({ ok: true });
+    }
+  } finally {
+    releaseAgentRunContext("cron-run-two-live", claim);
+  }
+});
+
 test.for([
   { label: "starting run", runId: "origin-run", expected: { runId: "origin-run" } },
   { label: "no run", runId: undefined, expected: {} },
