@@ -192,11 +192,7 @@ const HISTORY_UPWARD_KEYS = new Set(["ArrowUp", "PageUp", "Home"]);
 const HISTORY_DOWNWARD_KEYS = new Set(["ArrowDown", "PageDown", "End"]);
 
 /** Nested/native controls own their gesture before transcript boundary paging. */
-function ownsTranscriptGesture(
-  event: Event,
-  direction: number,
-  transcript: HTMLElement,
-): boolean {
+function ownsTranscriptGesture(event: Event, direction: number, transcript: HTMLElement): boolean {
   if (event.defaultPrevented) {
     return false;
   }
@@ -237,11 +233,7 @@ export class TranscriptHistoryInput {
     this.touchY = null;
   }
 
-  readBoundaryDirection(
-    event: Event,
-    margin: number,
-    transcript: HTMLElement | null,
-  ): -1 | 0 | 1 {
+  readBoundaryDirection(event: Event, margin: number, transcript: HTMLElement | null): -1 | 0 | 1 {
     const direction = this.readDirection(event, transcript);
     if (transcript === null || direction === 0) {
       return 0;
@@ -293,7 +285,9 @@ export class TranscriptHistoryInput {
       if (previousTouchY !== null && Math.abs(touchY - previousTouchY) >= HISTORY_TOUCH_INTENT_PX) {
         this.touchY = touchY;
         const direction = touchY > previousTouchY ? -1 : 1;
-        return transcript !== null && ownsTranscriptGesture(event, direction, transcript) ? direction : 0;
+        return transcript !== null && ownsTranscriptGesture(event, direction, transcript)
+          ? direction
+          : 0;
       }
     }
     return 0;

@@ -10,7 +10,7 @@ import {
   resetComposerFixture,
 } from "../chat-composer.test-support.ts";
 import { ChatPaneModelControl } from "../chat-pane-model-control.tsx";
-import type { ChatComposerSnapshot } from "../session-message-cache.ts";
+import type { ChatComposerSnapshot } from "../session-snapshot-contract.ts";
 import { prepareComposerWidthEdge } from "./chat-composer-width-ref.tsx";
 import "../../../styles/chat.ts";
 import "../../../styles/chat/composer.css";

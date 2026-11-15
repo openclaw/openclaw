@@ -114,16 +114,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   };
   private readonly scrollRestoreHost: TranscriptScrollRestoreHost;
   private readonly messageReveal = new ChatMessageReveal(this.messageElements.elements);
-  // The caller can insert this root after its first native commit. Resolve the
-  // scroll parent lazily or a stable ref can permanently capture null.
   get scrollElement(): HTMLDivElement | null {
-    const parent = this.threadInnerElement?.parentElement;
-    const viewport = parent?.classList.contains("chat-thread-content")
-      ? parent.parentElement
-      : parent;
-    return this.connected && viewport instanceof HTMLDivElement && viewport.isConnected
-      ? viewport
-      : null;
+    return TranscriptViewportRect.resolveScrollElement(this.threadInnerElement, this.connected);
   }
   get contentElement(): HTMLDivElement | null {
     return this.threadInnerElement;

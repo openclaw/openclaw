@@ -59,7 +59,7 @@ describe("chat history pagination", () => {
     const historyInput = new TranscriptHistoryInput();
     const onBoundaryRead = vi.fn();
     const onHistoryIntent = (event: Event) => {
-      const direction = historyInput.readBoundaryDirection(event, 0);
+      const direction = historyInput.readBoundaryDirection(event, 0, transcript.scrollElement);
       if (direction) {
         onBoundaryRead(direction);
       }

@@ -12,7 +12,7 @@ import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
-import { retireChatGroupingSources } from "./chat-thread-grouping.ts";
+import { retireChatGroupingSources } from "./chat-thread-grouping-data.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsDisplayTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";

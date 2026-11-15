@@ -1,5 +1,6 @@
 import { Virtualizer } from "@tanstack/virtual-core";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptOffsetState } from "./chat-transcript-offset-observer.ts";
 import { TranscriptReaderAnchor } from "./chat-transcript-reader-anchor.ts";
@@ -180,7 +181,9 @@ it("keeps a new predecessor stable after another row's owned measurement", async
   prependAnchor.messageKey = "2";
   const previousHeight = owned.offsetHeight;
   owned.style.height = "210px";
-  virtualizer.resizeItem(1, owned.offsetHeight);
+  expect(
+    readConnectedTranscriptRows(viewport, virtualizer, [owned], anchor.recordOwnedMeasurement)?.(),
+  ).toBe(true);
   viewport.scrollTop += owned.offsetHeight - previousHeight;
   prependAnchor.messageKey = null;
 
