@@ -2,6 +2,7 @@ import path from "node:path";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
+import { throwExpectedCliError } from "../../cli/expected-cli-error.js";
 import { loadConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -39,7 +40,7 @@ function resolveMigrationTargetAgentId(
 ): string | undefined {
   const raw = rawAgentId?.trim();
   if (rawAgentId !== undefined && !raw) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
   if (!raw) {
     return undefined;

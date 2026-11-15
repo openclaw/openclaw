@@ -39,13 +39,12 @@ describe("migration context helpers", () => {
       'Invalid agent id "research/../main"',
     );
     expect(() => migrationTarget(config, "missing")).toThrow('Unknown agent id "missing"');
+    expect(() => migrationTarget(config, "")).toThrow(
+      expect.objectContaining({ name: "ExpectedCliError", message: "--agent must not be blank" }),
+    );
   });
 
   it("keeps the configured default when no migration target is supplied", () => {
     expect(migrationTarget({})).toBeUndefined();
-  });
-
-  it("rejects an explicitly blank migration target", () => {
-    expect(() => migrationTarget({}, "")).toThrow("--agent must not be blank");
   });
 });
