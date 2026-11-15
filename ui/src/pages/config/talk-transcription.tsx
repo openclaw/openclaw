@@ -117,7 +117,10 @@ function loadedCatalog(catalog: CatalogState) {
   return typeof catalog === "object" && !("failed" in catalog) ? catalog : undefined;
 }
 
-type TalkLink = "voice-call" | "voice-model" | "models";
+// Every streaming transcription provider reads its key from the Voice Call
+// streaming config; only some also accept a Models key, so Talk's setup and
+// change links go there rather than to Models.
+type TalkLink = "voice-call" | "voice-model";
 
 /** How Talk listens, in user terms, plus the one place a user changes it. */
 function talkRowState(catalog: CatalogState) {
@@ -161,7 +164,7 @@ function talkRowState(catalog: CatalogState) {
       : {
           ...status,
           description: t("talkPage.transcription.talkNotSetUp"),
-          link: "models" as TalkLink,
+          link: "voice-call" as TalkLink,
         };
   }
   if (!loaded.source) {
@@ -189,11 +192,11 @@ function talkRowState(catalog: CatalogState) {
   return {
     ...status,
     description: t("talkPage.transcription.talkAutomatic", { provider }),
-    link: "models" as TalkLink,
+    link: "voice-call" as TalkLink,
   };
 }
 
-function TalkRow(props: { catalog: CatalogState; talkAgentId: string | null }) {
+function TalkRow(props: { catalog: CatalogState }) {
   const context = useApplication();
   const state = createMemo(() => talkRowState(props.catalog));
   const open = (link: TalkLink) => {
@@ -201,16 +204,10 @@ function TalkRow(props: { catalog: CatalogState; talkAgentId: string | null }) {
       context.navigate("plugin-settings", {
         pathname: pathForPluginSettings("voice-call", context.basePath),
         search: "",
+        hash: "#configuration",
       });
-    } else if (link === "voice-model") {
-      context.navigate("ai-agents", { search: "?section=agents" });
     } else {
-      const active = loadedCatalog(props.catalog)?.activeProvider;
-      if (active) {
-        navigateToModelProvider(context, props.talkAgentId, active);
-      } else {
-        context.navigate("model-providers", { search: "" });
-      }
+      context.navigate("ai-agents", { search: "?section=agents" });
     }
   };
   return (
@@ -224,8 +221,8 @@ function TalkRow(props: { catalog: CatalogState; talkAgentId: string | null }) {
             {(link) => (
               <button type="button" class="btn" onClick={() => open(link())}>
                 {t(
-                  link() === "models"
-                    ? "talkPage.transcription.openModels"
+                  state().kind === "warn"
+                    ? "talkPage.transcription.setUp"
                     : "talkPage.transcription.change",
                 )}
               </button>
@@ -292,7 +289,7 @@ export function TalkTranscriptionSection(props: TranscriptionProps) {
       title={t("talkPage.transcription.title")}
       description={t("talkPage.transcription.description")}
     >
-      <TalkRow catalog={props.catalog} talkAgentId={selection().talkAgentId} />
+      <TalkRow catalog={props.catalog} />
       <SettingsRow
         title={t("talkPage.transcription.voiceNotesTitle")}
         description={

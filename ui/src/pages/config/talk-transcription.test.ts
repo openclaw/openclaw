@@ -280,33 +280,12 @@ it("does not report a ready provider-less transcription route as unconfigured", 
 });
 
 it.each([
-  {
-    source: "streaming",
-    activeProvider: "openai",
-    button: "talkPage.transcription.change",
-    route: ["plugin-settings", { pathname: "/settings/plugins/voice-call", search: "" }],
-  },
-  {
-    source: "voice-model",
-    activeProvider: "openai",
-    button: "talkPage.transcription.change",
-    route: ["ai-agents", { search: "?section=agents" }],
-  },
-  {
-    source: "streaming-auto",
-    activeProvider: "deepgram",
-    button: "talkPage.transcription.openModels",
-    route: ["model-providers", { search: "?provider=deepgram" }],
-  },
-  {
-    source: "streaming-auto",
-    activeProvider: undefined,
-    button: "talkPage.transcription.openModels",
-    route: ["model-providers", { search: "" }],
-  },
+  { source: "streaming", activeProvider: "openai", button: "talkPage.transcription.change" },
+  { source: "streaming-auto", activeProvider: "deepgram", button: "talkPage.transcription.change" },
+  { source: "streaming-auto", activeProvider: undefined, button: "talkPage.transcription.setUp" },
 ] as const)(
-  "links the Talk row to the setting that chose its $source provider ($activeProvider)",
-  async ({ source, activeProvider, button, route }) => {
+  "sends the Talk row to Voice Call settings, where every streaming key is read ($source, $activeProvider)",
+  async ({ source, activeProvider, button }) => {
     const navigate = vi.fn();
     const { page } = createTalkMutationHarness({
       navigate,
@@ -325,14 +304,42 @@ it.each([
       [...page.querySelectorAll<HTMLElement>(".settings-row")].find((row) =>
         row.textContent?.startsWith(t("talkPage.transcription.talkTitle")),
       );
-    const link = await waitForSolid(() => {
-      const found = [...(talkRow()?.querySelectorAll("button") ?? [])].find(
-        (candidate) => candidate.textContent === t(button),
-      );
-      expect(found).toBeDefined();
-      return found!;
+    const buttons = await waitForSolid(() => {
+      const found = [...(talkRow()?.querySelectorAll("button") ?? [])];
+      expect(found.map((candidate) => candidate.textContent)).toEqual([t(button)]);
+      return found;
     });
-    link.click();
-    expect(navigate).toHaveBeenCalledWith(...route);
+    buttons[0]!.click();
+    // A Models key cannot enable Deepgram streaming, so the row never links there.
+    expect(navigate).toHaveBeenCalledWith("plugin-settings", {
+      pathname: "/settings/plugins/voice-call",
+      search: "",
+      hash: "#configuration",
+    });
   },
 );
+
+it("sends the Talk row to AI Agents settings when the voice model chose its provider", async () => {
+  const navigate = vi.fn();
+  const { page } = createTalkMutationHarness({
+    navigate,
+    catalogRequest: (_index, catalog) => ({
+      ...catalog,
+      transcription: {
+        source: "voice-model",
+        ready: true,
+        activeProvider: "openai",
+        providers: [],
+      },
+    }),
+  });
+  const change = await waitForSolid(() => {
+    const found = [...page.querySelectorAll("button")].find(
+      (candidate) => candidate.textContent === t("talkPage.transcription.change"),
+    );
+    expect(found).toBeDefined();
+    return found!;
+  });
+  change.click();
+  expect(navigate).toHaveBeenCalledWith("ai-agents", { search: "?section=agents" });
+});
