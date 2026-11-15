@@ -7,6 +7,7 @@ import {
   expectComplete,
 } from "../../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { toPluginCronChangedEvent } from "../../gateway/server-cron-plugin-job.js";
+import { onAgentEvent } from "../../infra/agent-events.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -163,21 +164,28 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   );
 
   it("preserves a run-level error with partial text when delivery is pending", async () => {
-    mockAgentRun({
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 0, output: 0 },
-      payloads: [{ text: "Partial success-looking text" }],
-      meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
+    harness.mockRunCronFallbackPassthrough();
+    const message = "Auto-compaction could not reach the model provider.";
+    harness.runEmbeddedAgentMock.mockImplementationOnce(async (params) => {
+      // A failed recovery's cause replaces the precheck's tentative overflow.
+      const errorObservation = { failoverReason: "context_overflow" };
+      const data = { phase: "finishing", error: "context length exceeded", errorObservation };
+      params.onAgentEvent({ stream: "lifecycle", data });
+      const payloads = [{ text: "Partial success-looking text" }];
+      return { payloads, meta: { error: { kind: "compaction_failure", message } } };
     });
+    const terminals: Record<string, unknown>[] = [];
+    const stop = onAgentEvent((evt) => evt.data.phase === "error" && terminals.push(evt.data));
     mockDelivery({
       disposition: { kind: "pending" },
       deliveryError: "delivery failed",
       summary: "Pending child summary",
       outputText: "Pending child output",
     });
-    const result = await runTurn();
-    const expectedError = "cron isolated run failed: retry limit exceeded";
+    const result = await runTurn().finally(stop);
+    const notice = { error: message, errorNotice: message, errorObservation: undefined };
+    expect(terminals).toEqual([expect.objectContaining(notice)]);
+    const expectedError = `cron isolated run failed: ${message}`;
     expectObjectFields(result, {
       status: "error",
       error: expectedError,
