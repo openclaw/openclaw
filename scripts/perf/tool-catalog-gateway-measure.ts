@@ -190,6 +190,7 @@ async function main() {
   config.tools = { codeMode: { enabled: true, executor: "node" } };
   config.session = { ...config.session, maintenance: { maxEntries: 20000 } };
   writeFileSync(configPath, JSON.stringify(config, null, 2));
+  const campaign = `CATALOG_${randomUUID()}`;
   const requests: Array<{ scenario: string; model: string; tools: number }> = [];
   const issued = new Set<string>();
   const provider = createServer((req, res) => {
@@ -204,7 +205,9 @@ async function main() {
         .map((m: { content: unknown }) => JSON.stringify(m.content))
         .join("\n");
       const requestMarker = [
-        ...text.matchAll(/CATALOG_(interactive|spawn|child|cron|fallback)_([a-f0-9-]+)/g),
+        ...text.matchAll(
+          new RegExp(`${campaign}_(interactive|spawn|child|cron|fallback)_([a-f0-9-]+)`, "g"),
+        ),
       ].at(-1);
       const scenario = requestMarker?.[1] ?? "utility";
       const token = requestMarker?.[0] ?? "utility";
@@ -229,7 +232,7 @@ async function main() {
       issued.add(token);
       const code =
         scenario === "spawn"
-          ? `return await sessions_spawn(${JSON.stringify({ task: `CATALOG_child_${randomUUID()}`, agentId: "main", runtime: "subagent", mode: "run", context: "isolated", cleanup: "keep", completionTarget: "parent", runTimeoutSeconds: 120 })});`
+          ? `return await sessions_spawn(${JSON.stringify({ task: `${campaign}_child_${randomUUID()}`, agentId: "main", runtime: "subagent", mode: "run", context: "isolated", cleanup: "keep", completionTarget: "parent", runTimeoutSeconds: 120 })});`
           : 'return (await catalog.search("read", { limit: 1 })).length;';
       const delta = call
         ? {
@@ -344,7 +347,7 @@ async function main() {
       const started = performance.now();
       await rpc("chat.send", {
         sessionKey,
-        message: `CATALOG_${scenario}_${randomUUID()}`,
+        message: `${campaign}_${scenario}_${randomUUID()}`,
         idempotencyKey: runId,
       });
       const result = await rpc("agent.wait", { runId, timeoutMs: 110000 });
@@ -369,7 +372,7 @@ async function main() {
       schedule: { kind: "every", everyMs: 3600000 },
       sessionTarget: "isolated",
       wakeMode: "now",
-      payload: { kind: "agentTurn", message: `CATALOG_cron_${randomUUID()}` },
+      payload: { kind: "agentTurn", message: `${campaign}_cron_${randomUUID()}` },
       delivery: { mode: "none" },
     });
     assert(isRecord(job) && typeof job.id === "string");
