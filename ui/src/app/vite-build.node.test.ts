@@ -291,7 +291,7 @@ it("fetches a locale's co-registered error catalogs in one lazy request", async 
   expect(html).not.toContain(errorsChunk.fileName);
 });
 
-it("preloads only the selected locale's Chat catalogs before body parsing", async () => {
+it("preloads only the selected locale's Chat catalogs after the entry graph is admitted", async () => {
   const config = createConfig();
   await writeRoot(
     "main.js",
@@ -328,7 +328,15 @@ it("preloads only the selected locale's Chat catalogs before body parsing", asyn
     try {
       const beforeBody = Reflect.get(page.window, "beforeBody");
       expect(beforeBody.body).toBeNull();
-      const hints = beforeBody.hints.filter((href: string) => !href.includes("/index-"));
+      expect(beforeBody.hints.filter((href: string) => !href.includes("/index-"))).toEqual([]);
+      await new Promise<void>((resolve) =>
+        page.window.document.addEventListener("DOMContentLoaded", () => resolve(), { once: true }),
+      );
+      const hints = [
+        ...page.window.document.querySelectorAll<HTMLLinkElement>('link[rel="modulepreload"]'),
+      ]
+        .map((link) => link.getAttribute("href")!)
+        .filter((href) => href.startsWith(`${base}/assets/`));
       expect(hints).toHaveLength(expected ? 14 : 0);
       for (const href of hints) {
         expect(href.startsWith(`${base}/assets/`)).toBe(true);
