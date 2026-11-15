@@ -11,6 +11,7 @@ import type { NativeRuntimeConfig } from "../worker/native-runtime-config.js";
 import { createNativeRuntime, type NativeRuntime } from "../worker/native-runtime.js";
 import { closeNativeServers, nativeProviderFixture } from "../worker/native-worker.test-support.js";
 import { resolveBootstrapContextForRun } from "./bootstrap-files.js";
+import { markBootstrapMissingContextFile } from "./embedded-agent-helpers/bootstrap.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,11 +32,14 @@ describe("Cross-workspace provider cache proof", () => {
       await fs.writeFile(`${ws}/AGENTS.md`, "# Agent Instructions\nBe helpful.");
       await fs.writeFile(`${ws}/SOUL.md`, "[MISSING] Expected at: /old/TOOLS.md\n# Soul\nConcise.");
       await fs.writeFile(`${ws}/IDENTITY.md`, "# Identity\nv1.0");
+      await fs.writeFile(`${ws}/USER.md`, "[MISSING] Expected at: /tmp");
       const { contextFiles } = await resolveBootstrapContextForRun({ workspaceDir: ws });
-      contextFiles.push({
-        path: `${ws}/TOOLS.md`,
-        content: `[MISSING] Expected at: ${ws}/TOOLS.md`.slice(0, 27) + "…",
-      });
+      contextFiles.push(
+        markBootstrapMissingContextFile({
+          path: `${ws}/TOOLS.md`,
+          content: `[MISSING] Expected at: ${ws}/TOOLS.md`.slice(0, 27) + "…",
+        }),
+      );
       const p = await nativeProviderFixture(
         servers,
         "local-model",
@@ -98,10 +102,12 @@ describe("Cross-workspace provider cache proof", () => {
         "## AGENTS.md",
         "## SOUL.md",
         "## IDENTITY.md",
+        "## USER.md",
         "## BOOTSTRAP.md",
         "## TOOLS.md",
         "[MISSING] Expected at: BOOTSTRAP.md",
         "[MISSING] Expected at: TOOL…",
+        "[MISSING] Expected at: /tmp",
         "# Soul\nConcise.",
         "[MISSING] Expected at: /old/TOOLS.md",
         dirMarker,

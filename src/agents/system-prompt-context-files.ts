@@ -1,5 +1,6 @@
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { isBootstrapMissingContextFile } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
 import { filterProjectScopedCuratedContextFiles } from "./project-memory-bootstrap.js";
 import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
@@ -30,25 +31,6 @@ export function isBootstrapContextFile(pathValue: string): boolean {
 function sanitizeContextFileContentForPrompt(content: string): string {
   // Old workspace templates otherwise route Claude subscriptions to paid extra usage.
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
-}
-
-const MISSING_BOOTSTRAP_MARKER_PREFIX = "[MISSING] Expected at:";
-
-function isMissingBootstrapMarker(content: string, filePath: string): boolean {
-  if (!content.trimStart().startsWith(MISSING_BOOTSTRAP_MARKER_PREFIX)) {
-    return false;
-  }
-  if (content.includes("\n") || content.includes("\r")) {
-    return false;
-  }
-  const rawExpected = content.trimStart().slice(MISSING_BOOTSTRAP_MARKER_PREFIX.length).trimStart();
-  const expectedPath = rawExpected.endsWith("…") ? rawExpected.slice(0, -1) : rawExpected;
-  const normalizedExpected = normalizeContextFilePath(expectedPath);
-  const normalizedFile = normalizeContextFilePath(filePath);
-  return (
-    normalizedFile === normalizedExpected ||
-    (normalizedExpected.length > 0 && normalizedFile.startsWith(normalizedExpected))
-  );
 }
 
 export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
@@ -94,10 +76,7 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
         }
       }
       let content = file.content;
-      const isMissing =
-        (file as { missing?: boolean }).missing === true ||
-        isMissingBootstrapMarker(file.content, file.path);
-      if (isMissing && roots.length > 0) {
+      if (isBootstrapMissingContextFile(file) && roots.length > 0) {
         const fullMarker = `[MISSING] Expected at: ${headingPath}`;
         content =
           fullMarker.length <= content.length
