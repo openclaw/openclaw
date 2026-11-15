@@ -613,7 +613,6 @@ serveOwnedWorkerTasks(
             };
           }
           if (
-            request.kind === "compaction-source" ||
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||
@@ -681,8 +680,9 @@ serveOwnedWorkerTasks(
             : undefined;
       const deflated = value.kind === "rpc" ? value.page.encodedMessagesDeflate : undefined;
       const activity = value.kind === "rpc" ? value.page.encodedResponse?.activity : undefined;
-      const buffers = [body?.buffer, deflated?.buffer, activity?.buffer];
-      return buffers.filter((buffer) => buffer !== undefined);
+      return [body?.buffer, deflated?.buffer, activity?.buffer].filter(
+        (buffer) => buffer !== undefined,
+      );
     },
     closeResource: (key) => {
       const request = decodeAgentDatabaseReaderRequest(key);
