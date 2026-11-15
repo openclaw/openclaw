@@ -155,13 +155,15 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
           props.host.getSessionNavigationState().toSidebarSession(row),
         ),
   );
+  // The author the filter offers, read the same way: whoever created the dashboard's session.
+  const authors = createMemo(() => {
+    const fallbackAgentId = resolveSessionNavigationAgentId(app);
+    return new Map(
+      filteredDashboards().map((row) => [row.key, dashboardAuthor(row, fallbackAgentId).label]),
+    );
+  });
   const byline = (row: SidebarRecentSession) => {
-    const actor = row.owner?.actor;
-    const author = actor
-      ? props.host.sessionOwnerOptions.find(
-          (option) => option.type === actor.type && option.id === actor.id,
-        )?.label
-      : undefined;
+    const author = authors().get(row.key);
     const updated = row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : undefined;
     return [author, updated].filter(Boolean).join(" · ") || undefined;
   };
