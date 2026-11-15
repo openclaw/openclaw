@@ -44,7 +44,6 @@ it("lets a handed-over run finish once while its replacement recovers the store"
       defaultAgentId: "main",
       log: logger,
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
       runCommandJob,
       onEvent,
