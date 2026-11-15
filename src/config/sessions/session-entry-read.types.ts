@@ -131,6 +131,8 @@ export type SessionExactEntriesWorkerRequest = (
   includeMembers?: boolean;
   includeParticipantRecords?: boolean;
   includeAuthorization?: boolean;
+  /** Admission class only: the transport uses the reserved lane and never sends this field. */
+  pointRead?: true;
   /** Inspect authority facts without opening the original SQLite family. */
   preserveSourceArtifacts?: true;
   inspectionSourcePath?: string;

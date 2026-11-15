@@ -623,7 +623,7 @@ export function SkillsPage(props: SkillsPageProps) {
             readClawHubSearch={readClawHubSearch}
             clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
-            libraryEntries={library.entries()}
+            libraryEntries={library.state.list ? library.entries() : undefined}
             onLibraryOpen={(skillId) => void library.open(skillId)}
             library={
               surface() === "discovery" ? (

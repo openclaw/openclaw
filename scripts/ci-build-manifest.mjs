@@ -10,6 +10,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -1507,11 +1508,7 @@ const nodeTestShards = targetNodeTestShards
       isCanonicalRepository &&
       !frozenTarget &&
       !shard.requiresDist &&
-      groups?.some(
-        (group) =>
-          group.configs?.length === 1 &&
-          group.configs[0] === "test/vitest/vitest.cli-process.config.ts",
-      ) &&
+      groups?.some((group) => resolveCiTestAuditConfig(group.configs)) &&
       !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,

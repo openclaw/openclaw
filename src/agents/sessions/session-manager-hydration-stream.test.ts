@@ -11,7 +11,7 @@ import { prepareSessionTranscriptHydration } from "../../config/sessions/session
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
 } from "../../config/sessions/session-transcript-worker-resources.js";
 import * as sqliteAdmission from "../../infra/sqlite-database-admission.js";
 import { snapshotSqliteReaderMetrics } from "../../infra/sqlite-reader-metrics.js";
@@ -45,7 +45,7 @@ it("preserves deferred and interleaved hydration callers through real worker rea
       new Map(snapshotSqliteReaderMetrics().map(({ operation, count }) => [operation, count]));
     const before = counts();
     const callers: Array<string | undefined> = [];
-    const spies = [historyLane, targetDiscoveryLane].map(({ pool }) => {
+    const spies = [historyLane, sessionStoreLane].map(({ pool }) => {
       const run = pool.run.bind(pool);
       return vi.spyOn(pool, "run").mockImplementation((input, options) =>
         run(async () => {
@@ -269,7 +269,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
     });
     const { manager, before } = retainedManager(2);
     // The closed database makes this a cold read, which runs on the target-discovery lane.
-    const dispatch = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const dispatch = vi.spyOn(sessionStoreLane.pool, "run");
     try {
       const failure = await manager.setSessionTargetAsync(target).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
@@ -283,7 +283,7 @@ it("rejects a persisted quarantine through the history worker without retargetin
         error: { kind: "read-error" },
       });
       expect(managerView(manager)).toEqual(before);
-      expect(targetDiscoveryLane.pool.getSnapshot()).toMatchObject({
+      expect(sessionStoreLane.pool.getSnapshot()).toMatchObject({
         activeTasks: 0,
         pendingTasks: 0,
       });

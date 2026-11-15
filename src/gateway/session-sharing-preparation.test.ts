@@ -13,10 +13,12 @@ import { publishSessionEntryCacheInvalidation } from "../config/sessions/session
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as entryReads from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import * as worker from "../infra/sqlite-worker-store.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   registerOpenClawAgentDatabase,
@@ -186,6 +188,33 @@ it("discovers sharing facts after an already-opening writer publishes registrati
   }
 });
 
+it("prepares access facts on the reserved lane while bulk reads fill the session store pool", async ({
+  harness,
+  signal,
+}) => {
+  harness.write(restrictedEntry("under-load", "original"));
+  const run = vi.spyOn(sessionStoreLane.pool, "run");
+  const held = createDeferred<never>();
+  const bulk = Array.from({ length: DEFAULT_WORKER_PENDING_TASKS }, () =>
+    sessionStoreLane.pool.run(() => held.promise, { diagnosticOperation: "synthetic-bulk" }),
+  );
+  try {
+    await expect(sessionStoreLane.pool.run(() => held.promise, {})).rejects.toMatchObject({
+      code: "overloaded",
+      message: expect.stringContaining("worker task capacity reached"),
+    });
+    using prepared = releasing(await withinTest(harness.prepare(), signal));
+    expect(prepared.readCurrent(harness.cfg).target.entry.sessionId).toBe("under-load");
+    expect(run).toHaveBeenCalledWith(
+      expect.any(Function),
+      expect.objectContaining({ pointRead: true }),
+    );
+  } finally {
+    held.reject(new Error("synthetic bulk released"));
+    await Promise.allSettled(bulk);
+  }
+});
+
 it.for(["runtime", "automation"])(
   "retains sharing facts across metadata but invalidates broad %s changes",
   async (scope, { harness }) => {
@@ -342,6 +371,34 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   ).rejects.toThrow(unavailableMessage);
   expect(forged).toBe(true);
 });
+
+it.for(["main", "other"])(
+  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
+  async (agentId, { harness }) => {
+    const { cfg, sessionKey } = harness;
+    harness.write(restrictedEntry("acquiring-topology", "original"));
+    const read = entryReads.readSessionEntriesFromStoreInWorker;
+    let published = false;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await read(...args);
+        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
+          published = true;
+          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    if (agentId === "main") {
+      await expect(pending).rejects.toThrow(unavailableMessage);
+    } else {
+      using prepared = releasing(await pending);
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    }
+    expect(published).toBe(true);
+  },
+);
 
 it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",

@@ -10,10 +10,8 @@ import type { Agent, AgentMessage } from "../../runtime/index.js";
 import type { NextUserMessagePersistence } from "../../session-tool-result-guard.js";
 import { buildSessionsYieldContextMessage } from "../../sessions-yield-context.js";
 import { agentSessionQueuePromptContext } from "../../sessions/agent-session-prompting.js";
-import {
-  attachPromptCompactionRequestBudget,
-  type CompactionRequestBudget,
-} from "../../sessions/compaction/request-budget.js";
+import { attachPromptCompactionRequestBudget } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../sessions/compaction/request-budget.types.js";
 import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";

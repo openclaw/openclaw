@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { t } from "../../../i18n/index.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
 import { prepareChatMessageRender } from "../../../lib/chat/message-display.ts";
+import { extractThinkingCached } from "../../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { gatewayClientKind } from "../../../lib/gateway-client-kind.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
@@ -164,10 +165,15 @@ export function prepareMessageGroupFrame(
       : undefined;
 
   const ownsRunFrame = opts.frameContent !== undefined;
-  // Tool activity and live narration are blocks of the turn whose answer follows:
-  // no identity, footer or actions of their own, only the run-block gap.
+  // Tool activity, reasoning-only steps and live narration are blocks of the turn
+  // whose answer follows: no identity, footer or actions of their own, only the
+  // run-block gap.
   const isTurnBlock =
     normalizedRole === "tool" ||
+    (normalizedRole === "assistant" &&
+      group.visibleContent === "none" &&
+      group.messages.length > 0 &&
+      group.messages.every(({ message }) => Boolean(extractThinkingCached(message)))) ||
     (group.messages.length > 0 &&
       group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
     (normalizedRole === "assistant" &&

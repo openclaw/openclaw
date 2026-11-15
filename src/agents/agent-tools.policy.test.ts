@@ -15,12 +15,16 @@ import {
 import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 
+const sessionConversation = vi.hoisted(() => ({
+  parents: {} as Record<string, { base: string; parents: string[] }>,
+}));
+// mock-isolation: Per-test parent candidates stand in for each channel's session grammar.
 vi.mock("../channels/plugins/session-conversation.js", () => ({
   resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
     id: rawId,
     threadId: undefined,
-    baseConversationId: rawId,
-    parentConversationCandidates: [],
+    baseConversationId: sessionConversation.parents[rawId]?.base ?? rawId,
+    parentConversationCandidates: sessionConversation.parents[rawId]?.parents ?? [],
   }),
 }));
 vi.mock("../channels/plugins/index.js", () => ({
@@ -109,6 +113,31 @@ describe("resolveGroupToolPolicy group context validation", () => {
     expect(groupPolicy({ sessionKey: `agent:main:${session}`, groupId, spawnedBy })).toEqual(
       allow ? { allow } : undefined,
     );
+  });
+
+  it("prefers the topic policy over the base group for a topic-sender session", () => {
+    // Feishu reports parents narrowest first; the first matching policy wins.
+    sessionConversation.parents["oc_team:topic:om_42:sender:ou_alice"] = {
+      base: "oc_team",
+      parents: ["oc_team:topic:om_42", "oc_team"],
+    };
+    const feishuCfg = {
+      channels: {
+        feishu: {
+          groups: {
+            oc_team: { tools: { allow: ["exec", "read"] } },
+            "oc_team:topic:om_42": { tools: { allow: ["read"] } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    expect(
+      resolveGroupToolPolicy({
+        config: feishuCfg,
+        sessionKey: "agent:main:feishu:group:oc_team:topic:om_42:sender:ou_alice",
+        messageProvider: "feishu",
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 
   it("trusts the session channel, not the caller", () => {

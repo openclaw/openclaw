@@ -4449,24 +4449,9 @@ type ProtectedPreflightConsumerParams = {
 };
 
 function writePreflightConsumerTooling(toolingDir: string) {
-  mkdirSync(resolve(toolingDir, "lib"), { recursive: true });
-  for (const source of [
-    "npm-preflight-tooling-identity.mjs",
-    "npm-prepared-bundle.mjs",
-    "openclaw-npm-extended-stable-release.mjs",
-    "plugin-sdk-api-release-evidence.mjs",
-    "release-tooling-identity.mjs",
-    "lib/actions-artifact-archive.mjs",
-    "lib/plain-gh.mjs",
-    "lib/npm-core-release-packages.mjs",
-    "lib/npm-core-release-packages.json",
-    "lib/npm-shrinkwrap-dependencies.mjs",
-    "lib/record-shared.mjs",
-    "lib/release-evidence-identity.mjs",
-    "lib/release-version.mjs",
-  ]) {
-    copyFileSync(resolve(REPO_ROOT, "scripts", source), resolve(toolingDir, source));
-  }
+  // Both trusted consumer checkouts use `sparse-checkout: scripts`, so mirror the
+  // complete tree instead of a hand-kept list of transitive imports.
+  copyTreeCloseOnExec(resolve(REPO_ROOT, "scripts"), toolingDir);
 }
 
 const PREFLIGHT_PRODUCER_GH_CASES = `
@@ -13922,9 +13907,16 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "${{ steps.plugin_compatibility.outputs.required }}",
     );
     expect(pluginCompatibilityJob.needs).toEqual(["resolve_target"]);
-    expect(pluginCompatibilityJob.if).toBe(
+    expect(pluginCompatibilityJob.if).toBeUndefined();
+    expect(enforcePluginCompatibility.if).toBe(
       "needs.resolve_target.outputs.plugin_compatibility_required == 'true'",
     );
+    const mockExports = workflowStep(pluginCompatibilityJob, "Check target mock exports");
+    expect(mockExports.env).toMatchObject({
+      TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
+    });
+    expect(mockExports.run).toContain('pnpm check:test-mock-exports --base "$TARGET_SHA"');
+    expect(mockExports.if).toBeUndefined();
     expect(enforcePluginCompatibility.run).toBe("pnpm plugins:boundary-report:ci");
     for (const jobName of [
       "normal_ci",
@@ -13946,7 +13938,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     for (const [compatibilityResult, admitted] of [
       ["success", true],
-      ["skipped", true],
+      ["skipped", false],
       ["failure", false],
       ["cancelled", false],
     ] as const) {

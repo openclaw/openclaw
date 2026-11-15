@@ -92,6 +92,7 @@ export async function prepareSessionMutationFacts(
   let beforeDiscovery = params.storageReady !== undefined;
   let waitingForStorage = false;
   let invalidated = false;
+  let pendingTopologyChanges: SessionRowChange[] | undefined;
   let facts: PreparedSessionSourceFacts | undefined;
   let assertRegistryPublication: (() => void) | undefined;
   let followRegistration: ((change: AgentDatabaseRegistryChange) => void) | undefined;
@@ -170,6 +171,11 @@ export async function prepareSessionMutationFacts(
             change.scope.agentId !== agentId &&
             change.scope.agentId !== facts.sourceAgentId)
         ) {
+          return;
+        }
+        // Bind the physical owner before deciding which startup publications affect this read.
+        if (!facts) {
+          (pendingTopologyChanges ??= []).push(change);
           return;
         }
         if (isOpenClawAgentDatabaseRegistryChange(change) && assertRegistryPublication) {
@@ -402,6 +408,8 @@ export async function prepareSessionMutationFacts(
         preparedSources,
         registryDiscovery: inventory.registryDiscovery,
       }),
+      undefined,
+      true,
     );
     followRegistration = inventoryRead.followRegistration;
     assertRegistryPublication = inventoryRead.assertRegistryCurrent;
@@ -535,7 +543,6 @@ export async function prepareSessionMutationFacts(
       assertDiscoveryCurrent();
       return target;
     });
-    assertActive();
     const storageTarget: SessionFactsRead<PreparedSessionMutationFacts>["storageTarget"] =
       Object.freeze({
         agentId: selected.agentId,
@@ -652,6 +659,9 @@ export async function prepareSessionMutationFacts(
         return facts!;
       };
     }
+    pendingTopologyChanges?.forEach(changed);
+    pendingTopologyChanges = undefined;
+    assertActive();
     assertSource = inventoryRead.assertRegistryCurrent;
     const readCurrent = (cfg: OpenClawConfig) => {
       try {

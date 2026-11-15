@@ -1,16 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import {
-  closeSync,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import fs, { lstatSync, readFileSync } from "node:fs";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { workflowRunsApiArgs } from "../lib/plain-gh.mjs";
 import {
@@ -198,31 +189,31 @@ function pendingGateReceipt(record, allowCompleted) {
           .map(([key, value]) => `PENDING_CRABBOX_${key}=${value}\n`)
           .join("");
       const temporary = `${path}.${process.pid}.tmp`;
-      const fd = openSync(temporary, "wx", 0o600);
+      const fd = fs.openSync(temporary, "wx", 0o600);
       // Cleanup owns only the file we created. Preserve persistence failures even
       // when closing or removing that file also fails; dispatch must not continue.
       const errors = [];
       try {
-        writeFileSync(fd, updated);
-        fsyncSync(fd);
+        fs.writeFileSync(fd, updated);
+        fs.fsyncSync(fd);
       } catch (error) {
         errors.push(error);
       }
       try {
-        closeSync(fd);
+        fs.closeSync(fd);
       } catch (error) {
         errors.push(error);
       }
       if (errors.length === 0) {
         try {
-          renameSync(temporary, path);
+          fs.renameSync(temporary, path);
         } catch (error) {
           errors.push(error);
         }
       }
       if (errors.length) {
         try {
-          unlinkSync(temporary);
+          fs.unlinkSync(temporary);
         } catch (error) {
           if (error.code !== "ENOENT") {
             errors.push(error);

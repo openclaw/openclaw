@@ -28,6 +28,8 @@ export type UsageValuePickerConfig = {
   /** Unique within one menu tree; prefixes every row id. */
   id: string;
   options: () => readonly UsageValueOption[];
+  /** Async inventories can withhold empty claims while keeping selected rows usable. */
+  optionsReady?: () => boolean;
   isSelected: (value: string) => boolean;
   multiple: boolean;
   searchLabel: () => string;
@@ -171,7 +173,7 @@ export function createUsageValuePicker(config: UsageValuePickerConfig, closeMenu
   const entries = createMemo((): MenuEntry[] => {
     const { pinned, rest, all } = rows();
     const list: MenuEntry[] =
-      all.length === 0
+      all.length === 0 && (config.optionsReady?.() ?? true)
         ? [
             {
               kind: "content",
