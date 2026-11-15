@@ -91,7 +91,6 @@ type TableInfo = {
 };
 
 const SET_ASIDE_SCOPE = "upgrade.set-aside";
-const MAX_FK_PASSES = 8;
 const RECENCY_COLUMNS = [
   "updated_at_ms",
   "updated_at",
@@ -362,6 +361,8 @@ function copyTable(
         putAside(`key collision: ${error.message}`, original(row));
         continue;
       }
+      // The displaced row comes back if the newer row still collides on another key.
+      target.exec("SAVEPOINT swap_replace");
       try {
         target
           .prepare(
@@ -375,11 +376,13 @@ function copyTable(
               : existing.key.map((c) => existing.row[c] ?? null)),
           );
         insert.run(...values);
+        target.exec("RELEASE swap_replace");
         const displaced = { ...existing.row };
         delete displaced.swaprowid;
         putAside(`key collision: replaced by a newer row`, displaced);
         // The displaced row was counted as copied; the incoming one replaces it.
       } catch (retryError) {
+        target.exec("ROLLBACK TO swap_replace; RELEASE swap_replace");
         if (!isConstraintError(retryError)) {
           throw retryError;
         }
@@ -436,50 +439,79 @@ function findCollision(
   return undefined;
 }
 
-/** Remove rows that point at missing parents; foreign keys are off during the copy. */
+/**
+ * Set aside rows that point at missing parents; foreign keys are off during the copy.
+ * Rows are located by their declared keys (WITHOUT ROWID tables report no rowid),
+ * and removing a parent can orphan its children, so this repeats until the check is clean.
+ */
 function setAsideForeignKeyViolations(
   db: DatabaseSync,
   tables: Map<string, TableInfo>,
   reports: Map<string, SqliteSwapTableReport>,
   setAside: SetAsideRow[],
 ): void {
-  for (let pass = 0; pass < MAX_FK_PASSES; pass += 1) {
+  for (;;) {
     // SAFETY: the statement fixes the column names and types of each row.
     const violations = db.prepare("PRAGMA main.foreign_key_check").all() as Array<{
       table: string;
-      rowid: number | bigint | null;
       parent: string;
+      fkid: number;
     }>;
     if (violations.length === 0) {
       return;
     }
     let removed = 0;
-    for (const violation of violations) {
-      if (violation.rowid === null || !tables.get(violation.table)) {
+    const seen = new Set<string>();
+    for (const { table, parent, fkid } of violations) {
+      if (seen.has(`${table}\0${fkid}`)) {
         continue;
       }
-      const statement = db.prepare(`SELECT * FROM ${quote(violation.table)} WHERE rowid = ?`);
-      statement.setReadBigInts(true);
-      // SAFETY: the statement fixes the column names and types of each row.
-      const row = statement.get(violation.rowid) as Record<string, SQLOutputValue> | undefined;
-      if (!row) {
+      seen.add(`${table}\0${fkid}`);
+      const parentKey = (tables.get(parent)?.columns ?? [])
+        .filter((column) => column.pk > 0)
+        .toSorted((a, b) => a.pk - b.pk)
+        .map((column) => column.name);
+      const pairs = readSqliteRows<{ id: number; seq: number; from: string; to: string | null }>(
+        db,
+        `PRAGMA main.foreign_key_list(${quote(table)})`,
+      )
+        .filter((entry) => entry.id === fkid)
+        .toSorted((a, b) => a.seq - b.seq)
+        .map((entry, index) => ({ from: entry.from, to: entry.to ?? parentKey[index] }));
+      if (pairs.some((pair) => pair.to === undefined)) {
         continue;
       }
-      db.prepare(`DELETE FROM ${quote(violation.table)} WHERE rowid = ?`).run(violation.rowid);
-      removed += 1;
-      const report = [...reports.values()].find((entry) => entry.target === violation.table);
-      setAside.push({
-        table: report?.table ?? violation.table,
-        reason: `missing ${violation.parent} parent`,
-        row: jsonRow(row),
-      });
+      // MATCH SIMPLE: a child with any NULL key column references nothing.
+      const orphan = `${pairs.map((p) => `c.${quote(p.from)} IS NOT NULL`).join(" AND ")}
+        AND NOT EXISTS (SELECT 1 FROM ${quote(parent)} p WHERE ${pairs
+          .map((p) => `p.${quote(p.to!)} = c.${quote(p.from)}`)
+          .join(" AND ")})`;
+      const select = db.prepare(`SELECT * FROM ${quote(table)} c WHERE ${orphan}`);
+      select.setReadBigInts(true);
+      // SAFETY: SELECT * returns one value per column of this table.
+      const rows = select.all() as Array<Record<string, SQLOutputValue>>;
+      db.prepare(`DELETE FROM ${quote(table)} AS c WHERE ${orphan}`).run();
+      removed += rows.length;
+      const report = [...reports.values()].find((entry) => entry.target === table);
+      for (const row of rows) {
+        setAside.push({
+          table: report?.table ?? table,
+          reason: `missing ${parent} parent`,
+          row: jsonRow(row),
+        });
+      }
       if (report) {
-        report.copied -= 1;
-        report.setAside += 1;
+        report.copied -= rows.length;
+        report.setAside += rows.length;
       }
     }
     if (removed === 0) {
-      return;
+      throw new Error(
+        `Rebuilt database still fails foreign_key_check: ${violations
+          .slice(0, 3)
+          .map((v) => `${v.table} -> ${v.parent}`)
+          .join(", ")}`,
+      );
     }
   }
 }

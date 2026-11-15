@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { VERSION } from "../version.js";
 import { backfillSessionConversations } from "./openclaw-agent-db-session-migrations.js";
 import { migrateSessionNodesAndWindows } from "./openclaw-agent-db-session-nodes-migration.js";
+import { migrateAgentJsonPredicatesInTransaction } from "./openclaw-agent-json-predicate-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-schema-versions.js";
 import {
@@ -56,8 +57,11 @@ export function createAgentSwapTarget(agentId: string): SqliteSwapTarget {
            agent_id = excluded.agent_id, app_version = excluded.app_version, updated_at = excluded.updated_at`,
       ).run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId, VERSION, now, now);
     },
-    // Full-text indexes rebuild from their content tables.
     rebuild: (db) => {
+      // Session reference predicates derive from entry_json; a schema default would
+      // hide a retained transcript from reclamation's reference check.
+      migrateAgentJsonPredicatesInTransaction(db);
+      // Full-text indexes rebuild from their content tables.
       for (const table of ["standing_intents_fts", "session_transcript_fts"]) {
         try {
           db.exec(`INSERT INTO ${table}(${table}) VALUES ('rebuild')`);

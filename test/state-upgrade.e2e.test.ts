@@ -68,12 +68,20 @@ function sqliteFiles(root: string): string[] {
 
 const sha256 = (file: string) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 
-/** Every text value in the upgraded tree, excluding preserved generations. */
+/**
+ * Every text value in the upgraded tree, excluding preserved generations, logs and
+ * diagnostics (set-aside rows are not readable user data).
+ */
 function upgradedText(stateDir: string): string {
   const parts: string[] = [];
   for (const { dirent, relativePath } of listDirectoryTreeStrictSync(stateDir)) {
     const file = path.join(stateDir, relativePath);
-    if (!dirent.isFile() || file.includes(".pre-") || file.endsWith("-shm")) {
+    if (
+      !dirent.isFile() ||
+      file.includes(".pre-") ||
+      file.endsWith("-shm") ||
+      relativePath.startsWith("logs")
+    ) {
       continue;
     }
     const bytes = fs.readFileSync(file);
@@ -84,7 +92,9 @@ function upgradedText(stateDir: string): string {
     const db = new DatabaseSync(file, { readOnly: true });
     try {
       for (const { name } of db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name != 'diagnostic_events'",
+        )
         .all() as Array<{ name: string }>) {
         try {
           for (const row of db.prepare(`SELECT * FROM "${name}"`).all()) {
@@ -162,6 +172,40 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
           });
         }
         await instance.startGateway();
+        // Canonical readers serve the upgraded data through the Gateway.
+        const call = async (method: string, params: object = {}): Promise<string> => {
+          const result = await instance.cli([
+            "gateway",
+            "call",
+            method,
+            "--json",
+            "--params",
+            JSON.stringify(params),
+          ]);
+          expect(result.code, `${method}: ${result.stderr}`).toBe(0);
+          return result.stdout;
+        };
+        const manifest: Manifest = JSON.parse(
+          fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"),
+        );
+        const values = (surface: string) =>
+          (manifest.verification[surface] ?? []).map((entry) => entry.value);
+        expect(await call("agents.list")).toContain('"ops"');
+        const cron = await call("cron.list", { includeDisabled: true });
+        for (const value of values("cron").filter((v) => v.startsWith("corpus-"))) {
+          expect(cron).toContain(value);
+        }
+        const sessionKeys = values("sessions").filter((v) => /^agent:[^:]+:corpus-/u.test(v));
+        expect(sessionKeys.length).toBeGreaterThan(0);
+        let history = "";
+        for (const sessionKey of sessionKeys) {
+          history += await call("chat.history", { sessionKey });
+        }
+        for (const message of values("sessions").filter((v) =>
+          v.startsWith("Synthetic user message"),
+        )) {
+          expect(history).toContain(JSON.stringify(message).slice(1, -1));
+        }
         await instance.stopGateway();
 
         // The old bytes survive unchanged under the preserved name.
@@ -191,10 +235,7 @@ describe("Gateway start upgrades prior-release state by copy and swap", () => {
         } finally {
           state.close();
         }
-        // Every value the release wrote is still readable after the upgrade.
-        const manifest: Manifest = JSON.parse(
-          fs.readFileSync(path.join(corpusDir, release, "manifest.json"), "utf8"),
-        );
+        // Every value the release wrote is still stored outside diagnostics after the upgrade.
         const text = upgradedText(instance.stateDir);
         const missing = Object.values(manifest.verification)
           .flat()

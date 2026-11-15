@@ -158,6 +158,101 @@ describe("generic rebuild data rules", () => {
     expect(report.tables).toEqual([expect.objectContaining({ source: 3, copied: 1, setAside: 2 })]);
   });
 
+  it("restores the displaced row when the newer row also collides on another key", () => {
+    const { rows, report } = build(
+      `CREATE TABLE t (id TEXT, email TEXT, updated_at INTEGER);
+       INSERT INTO t VALUES ('a', 'x', 1), ('b', 'y', 2), (CAST('a' AS BLOB), CAST('y' AS BLOB), 3);`,
+      "CREATE TABLE t (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, updated_at INTEGER NOT NULL) STRICT;",
+    );
+    expect(rows).toEqual([
+      { id: "a", email: "x", updated_at: 1 },
+      { id: "b", email: "y", updated_at: 2 },
+    ]);
+    expect(report.setAside.map((row) => row.row.updated_at)).toEqual(["3"]);
+    expect(report.conservationMismatches).toEqual([]);
+  });
+
+  it("sets aside orphans of a WITHOUT ROWID child and publishes a clean foreign_key_check", () => {
+    const dir = tempDir();
+    const source = path.join(dir, "source.sqlite");
+    const db = new DatabaseSync(source);
+    db.exec(`CREATE TABLE p (id TEXT); CREATE TABLE c (k TEXT, f TEXT, v TEXT);
+      INSERT INTO p VALUES ('kept'), (NULL);
+      INSERT INTO c VALUES ('kept', 'a', '1'), ('gone', 'a', '2'), ('gone', 'b', '3');`);
+    db.close();
+    const out = path.join(dir, "next.sqlite");
+    const report = buildSqliteByCopy(
+      {
+        label: "test",
+        version: 2,
+        createSchema: (target) =>
+          target.exec(`CREATE TABLE p (id TEXT PRIMARY KEY NOT NULL) STRICT;
+            CREATE TABLE c (k TEXT NOT NULL, f TEXT NOT NULL, v TEXT NOT NULL, PRIMARY KEY (k, f),
+              FOREIGN KEY (k) REFERENCES p(id) ON DELETE CASCADE) STRICT, WITHOUT ROWID;`),
+        stamp: () => {},
+        map: {},
+      },
+      source,
+      out,
+    );
+    const built = new DatabaseSync(out, { readOnly: true });
+    try {
+      expect(built.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(built.prepare("SELECT k, f FROM c").all()).toEqual([{ k: "kept", f: "a" }]);
+    } finally {
+      built.close();
+    }
+    expect(
+      report.setAside
+        .filter((row) => row.table === "c")
+        .map((row) => `${String(row.row.k)}:${String(row.row.f)}`)
+        .toSorted(),
+    ).toEqual(["gone:a", "gone:b"]);
+    expect(report.tables.find((entry) => entry.table === "c")).toEqual(
+      expect.objectContaining({ source: 3, copied: 1, setAside: 2 }),
+    );
+    expect(report.conservationMismatches).toEqual([]);
+  });
+
+  it("derives session reference predicates for a pre-v26 agent database", () => {
+    const dir = tempDir();
+    const source = path.join(dir, "agent.sqlite");
+    fs.copyFileSync(
+      path.join(
+        corpusDir,
+        "2026.8.35",
+        "state",
+        "agents",
+        "main",
+        "agent",
+        "openclaw-agent.sqlite",
+      ),
+      source,
+    );
+    const db = new DatabaseSync(source);
+    db.prepare(
+      "INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+    ).run(
+      "agent:main:refs",
+      "current",
+      JSON.stringify({ sessionId: "current", previousSessionId: "previous", updatedAt: 1 }),
+      1,
+    );
+    db.close();
+    const out = path.join(dir, "next.sqlite");
+    buildAgentDatabaseByCopy("main", source, out, dir);
+    const built = new DatabaseSync(out, { readOnly: true });
+    try {
+      expect(
+        built
+          .prepare("SELECT has_optional_references FROM session_nodes WHERE session_key = ?")
+          .get("agent:main:refs"),
+      ).toEqual({ has_optional_references: 1 });
+    } finally {
+      built.close();
+    }
+  });
+
   it("sets constraint-violating rows and removed tables aside instead of failing", () => {
     const { rows, report } = build(
       `CREATE TABLE t (id TEXT, n TEXT); CREATE TABLE gone (v TEXT);

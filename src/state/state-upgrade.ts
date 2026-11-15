@@ -354,6 +354,8 @@ export async function upgradeStateDirectory(params: {
     const dir = path.join(stateDir, entry);
     const plan = readPlan(dir);
     if (plan) {
+      // Environment selection may already hold the shared database being replaced.
+      await params.beforeSwap?.();
       applyPlan(plan);
       params.log.info(`Finished an interrupted state upgrade to ${plan.appVersion}.`);
       resumed = true;
