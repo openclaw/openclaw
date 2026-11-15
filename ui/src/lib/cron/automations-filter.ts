@@ -1,6 +1,8 @@
 import { createSignal } from "solid-js";
 
 export type AutomationsFilter = {
+  /** One agent's automations; null is every agent, and unset follows the selected agent. */
+  agentId?: string | null;
   status: "all" | "active" | "paused";
   lastRun: "all" | "ok" | "error";
   sort: "name" | "nextRunAtMs" | "updatedAtMs";
@@ -20,6 +22,7 @@ export { automationsFilter, setAutomationsFilter };
 export function automationsFiltered(): boolean {
   const filter = automationsFilter();
   return (
+    filter.agentId !== undefined ||
     filter.status !== DEFAULT_AUTOMATIONS_FILTER.status ||
     filter.lastRun !== DEFAULT_AUTOMATIONS_FILTER.lastRun ||
     filter.sort !== DEFAULT_AUTOMATIONS_FILTER.sort

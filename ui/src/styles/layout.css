@@ -2311,23 +2311,27 @@ div.shell.shell--onboarding {
 .sidebar-automations__group {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-block-start: 10px;
+  gap: 1px;
+  margin-block-start: 12px;
 }
 
+/* Group headings read as sentence-case labels; the chevron follows the label. */
 .sidebar-automations__heading {
   display: flex;
   align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
+  gap: 2px;
+  align-self: flex-start;
+  padding: 2px 8px 4px;
   border: 0;
   background: transparent;
   color: var(--muted);
   font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.sidebar-automations__heading:hover {
+  color: var(--text);
 }
 
 .sidebar-automations__heading svg {
@@ -2336,24 +2340,44 @@ div.shell.shell--onboarding {
 }
 
 .sidebar-automations__row {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+  align-items: center;
+  gap: 8px;
   height: auto;
-  padding-block: 6px;
+  padding-block: 5px;
+}
+
+.sidebar-automations__copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
 }
 
 .sidebar-automations__name,
 .sidebar-automations__byline {
-  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.sidebar-automations__name {
+  font-size: 13px;
+  line-height: 18px;
+}
+
 .sidebar-automations__byline {
   color: var(--muted);
   font-size: 12px;
+  line-height: 16px;
+}
+
+/* A failed or auto-disabled automation carries a dot instead of a word. */
+.sidebar-automations__failed {
+  flex: 0 0 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--danger);
 }
 
 /* Customize section: the hub's pages, then the installed plugins. */

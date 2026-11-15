@@ -1,4 +1,4 @@
-import { createEffect, createMemo, Loading } from "solid-js";
+import { createEffect, createMemo, Loading, Show } from "solid-js";
 import type { CronJob } from "../../api/types.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
@@ -87,35 +87,39 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
   );
   // The phone list seats the scope beside its create action; detail views keep it here.
   const phoneList = () => phoneLayout() && !viewProps().editingJob && !viewProps().createOpen;
+  // Beside the open sidebar the page is the automation itself, so it drops the section header.
+  const sidebarLists = () => !pageHeader().filtered && sectionSidebarShown("automations");
   return (
     <>
-      <HubPageHeader
-        active="cron"
-        subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
-        docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
-        actions={
-          pageHeader().filtered ? (
-            <a
-              class="btn"
-              href={pathForRoute("cron", props.page.context().basePath)}
-              onClick={(event: MouseEvent) => {
-                if (shouldHandleNavigationClick(event)) {
-                  event.preventDefault();
-                  props.page.context().navigate("cron", { search: "" });
-                }
-              }}
-            >
-              {t("cron.list.showAll")}
-            </a>
-          ) : phoneList() ? undefined : (
-            scopeControl()
-          )
-        }
-      />
+      <Show when={!sidebarLists()}>
+        <HubPageHeader
+          active="cron"
+          subtitle={pageHeader().filtered ? t("cron.list.sessionFilter") : undefined}
+          docsUrl="https://docs.openclaw.ai/automation/cron-jobs"
+          actions={
+            pageHeader().filtered ? (
+              <a
+                class="btn"
+                href={pathForRoute("cron", props.page.context().basePath)}
+                onClick={(event: MouseEvent) => {
+                  if (shouldHandleNavigationClick(event)) {
+                    event.preventDefault();
+                    props.page.context().navigate("cron", { search: "" });
+                  }
+                }}
+              >
+                {t("cron.list.showAll")}
+              </a>
+            ) : phoneList() ? undefined : (
+              scopeControl()
+            )
+          }
+        />
+      </Show>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
-          sidebarListsJobs={!pageHeader().filtered && sectionSidebarShown("automations")}
+          sidebarListsJobs={sidebarLists()}
           onClosePanel={() => {
             // Closing the automation leaves Automations on its empty state for this tab.
             viewProps().onClosePanel();

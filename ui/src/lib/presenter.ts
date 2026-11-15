@@ -82,6 +82,54 @@ export function formatCronSchedule(job: Pick<CronJob, "schedule">) {
   return s.tz ? t("cron.scheduleLabel.withTimeZone", { value, timeZone: s.tz }) : value;
 }
 
+/**
+ * A short cadence for compact rows: common cron shapes read as words ("Weekly", "Every 6h"),
+ * other expressions stay as written, without their time zone.
+ */
+export function formatCronCadence(job: Pick<CronJob, "schedule">) {
+  const s = job.schedule;
+  if (s.kind === "at") {
+    return t("cron.scheduleLabel.once");
+  }
+  if (s.kind !== "cron") {
+    return formatCronSchedule(job);
+  }
+  const [minute = "", hour = "", day = "", month = "", weekday = "", ...rest] = s.expr
+    .trim()
+    .split(/\s+/u);
+  const fixed = (field: string) => /^\d+$/u.test(field);
+  const step = (field: string) => /^\*\/(\d+)$/u.exec(field)?.[1];
+  if (rest.length > 0 || month !== "*") {
+    return s.expr;
+  }
+  const minuteStep = step(minute);
+  if (minuteStep && hour === "*" && day === "*" && weekday === "*") {
+    return t("cron.scheduleLabel.every", { duration: `${minuteStep}m` });
+  }
+  const hourStep = step(hour);
+  if (fixed(minute) && hourStep && day === "*" && weekday === "*") {
+    return t("cron.scheduleLabel.every", { duration: `${hourStep}h` });
+  }
+  if (fixed(minute) && hour === "*" && day === "*" && weekday === "*") {
+    return t("cron.scheduleLabel.hourly");
+  }
+  if (fixed(minute) && fixed(hour)) {
+    if (day === "*" && weekday === "*") {
+      return t("cron.scheduleLabel.daily");
+    }
+    if (day === "*" && weekday === "1-5") {
+      return t("cron.scheduleLabel.weekdays");
+    }
+    if (day === "*" && /^[0-7]$/u.test(weekday)) {
+      return t("cron.scheduleLabel.weekly");
+    }
+    if (fixed(day) && weekday === "*") {
+      return t("cron.scheduleLabel.monthly");
+    }
+  }
+  return s.expr;
+}
+
 function withCwd(value: string, cwd: string | undefined) {
   return cwd ? t("cron.scheduleLabel.withCwd", { value, cwd }) : value;
 }

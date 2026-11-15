@@ -47,18 +47,21 @@ export function DetailView(
   return (
     <section class="cron-page cron-page--detail" data-panel-mode={props.mode}>
       <SettingsPage wide>
-        <div class="cron-back-row">
-          <button
-            ref={props.focus?.ref("back")}
-            type="button"
-            class="cron-back"
-            data-test-id="cron-back"
-            disabled={props.busy}
-            onClick={() => props.onClosePanel()}
-          >
-            <Icon name="arrowLeft" /> {t("cron.detail.back")}
-          </button>
-        </div>
+        {/* Beside the Automations sidebar its list is the way back. */}
+        <Show when={!props.sidebarListsJobs}>
+          <div class="cron-back-row">
+            <button
+              ref={props.focus?.ref("back")}
+              type="button"
+              class="cron-back"
+              data-test-id="cron-back"
+              disabled={props.busy}
+              onClick={() => props.onClosePanel()}
+            >
+              <Icon name="arrowLeft" /> {t("cron.detail.back")}
+            </button>
+          </div>
+        </Show>
         <div class="stack">
           <DetailHeader {...props} mode={props.mode} selectedJob={selectedJob()} />
           <Show when={failedJob()}>
