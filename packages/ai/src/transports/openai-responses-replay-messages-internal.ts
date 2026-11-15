@@ -660,7 +660,9 @@ function convertResponsesMessagesWithStyle(
         (immutable.isDeeplyFrozenPlainData(msg) &&
           (typeof msg.content === "string" ||
             !msg.content.some((block) => block.type === "image"))));
-    const key = `${projectionKey}:${msgIndex}:${recoveryAnchor ?? ""}`;
+    const key = recoveryAnchor
+      ? `${projectionKey}:${msgIndex}:${recoveryAnchor}`
+      : `${projectionKey}:${msgIndex}`;
     let output = reusable ? projections?.get(key) : undefined;
     if (!output) {
       output = convertMessage(msg, msgIndex);
