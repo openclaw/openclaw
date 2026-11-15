@@ -73,7 +73,8 @@ Set both triggers to `0` to turn reviews off.
 Behavior and limits:
 
 - User-triggered runs are reviewed, including subagent runs, each in its own
-  session. Heartbeat, cron and other automatic runs are not.
+  session. Heartbeat and cron runs are not, but subagents they spawn are, like
+  any other subagent.
 - After a correction steers a run, later reviews in that run are told what was
   already said and stay quiet unless they find a different problem.
 - A due review waits until every running tool call has its result, so the fork

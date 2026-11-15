@@ -31,9 +31,9 @@ run already ended, the correction is dropped. Reviews run when a trigger is due:
 
 A due review waits until every running tool call has its result, so the fork never
 sees a missing or synthetic tool outcome. User-triggered runs are reviewed,
-including subagent runs, each in its own session. A later review in the same run
-is told the correction it already gave and does not repeat it. Each conversation has at most one review
-in flight; the run ending or a new user message cancels it. Gateway info logs
+including subagent runs (also those a cron run spawns), each in its own session.
+A later review in the same run is told the correction it already gave and does
+not repeat it. Each conversation has at most one review in flight; the run ending or a new user message cancels it. Gateway info logs
 record review token usage, whether a correction was steered, and each cancelled
 review with its reason and running time.
 
