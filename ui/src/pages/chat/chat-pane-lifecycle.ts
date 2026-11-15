@@ -122,6 +122,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
               launch: this.mcpAppLaunch,
               replaceAttachments: this.chatState.attachmentInputProps(state).onAttachmentsChange,
               openFile: (path) => openSessionWorkspaceFile(state, { path }),
+              openAppPanel: () => this.navigateMobileHost({ area: "panels", slot: "detail" }),
             }
           : null;
       },

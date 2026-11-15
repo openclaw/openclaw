@@ -9,6 +9,7 @@ type BootstrapFixtureScenario = Pick<
   ControlUiBootstrapConfig,
   | "basePath"
   | "assistantName"
+  | "assistantAvatar"
   | "assistantAgentId"
   | "serverVersion"
   | "serverBuildId"
@@ -44,7 +45,7 @@ export function buildControlUiMockBootstrapConfig(
     automaticallyFetchFavicons: normalizedScenario.automaticallyFetchFavicons,
     communityInvite: normalizedScenario.communityInvite,
     assistantAgentId: normalizedScenario.assistantAgentId,
-    assistantAvatar: "",
+    assistantAvatar: normalizedScenario.assistantAvatar,
     assistantName: normalizedScenario.assistantName,
     basePath: normalizedScenario.basePath,
     devGitBranch: normalizedScenario.devGitBranch || undefined,

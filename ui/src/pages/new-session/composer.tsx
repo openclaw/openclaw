@@ -6,6 +6,7 @@ import {
   onSettled,
   Show,
   useContext,
+  type Element as SolidElement,
 } from "solid-js";
 import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import {
@@ -439,6 +440,7 @@ function NewSessionComposerInput(props: {
 }
 
 export function NewSessionComposer(props: {
+  contextControls?: SolidElement;
   options: NewSessionComposerOptions;
   surroundings?: () => Pick<LobsterComposerElements, "root" | "obstacles"> | undefined;
 }) {
@@ -680,6 +682,7 @@ export function NewSessionComposer(props: {
         </div>
       </div>
       <ComposerWidthEdge options={options} />
+      <div class="new-session-page__context-tray">{props.contextControls}</div>
     </div>
   );
 }

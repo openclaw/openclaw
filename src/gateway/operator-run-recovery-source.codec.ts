@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway.js";
+import { GatewayOperatorRoleDefinitionSchema } from "../config/zod-schema.gateway-roles.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import { userChannelAuthorizationReferenceSchema } from "../state/user-channel-authorization-reference.js";
 import { openClawIdRecoveryPrincipalSchema } from "./openclaw-id/tunnel-principal.js";
@@ -72,7 +72,8 @@ const parentSourceSchema = z.strictObject({
   version: z.literal(1),
   agentId: boundedString,
   sessionKey: boundedString,
-  sessionId: boundedString,
+  // Older sources also recorded the conversation's transcript id and revision; both are ignored.
+  sessionId: boundedString.optional(),
   lifecycleRevision: boundedString.optional(),
   sourceRunId: boundedString,
   snapshot: operatorRunRecoverySnapshotSchema,

@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
@@ -35,13 +34,11 @@ import {
 import type { InstallSafetyOverrides } from "./install-security-scan.types.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import type { OperatorManagedPluginUpdate } from "./installed-plugin-package-ownership.js";
-import { checkMinHostVersion } from "./min-host-version.js";
 import * as officialInstallRecords from "./official-external-install-records.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
-import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package-compat.js";
 
 /** Logger surface used by plugin update flows. */
 export type PluginUpdateLogger = {
@@ -176,6 +173,8 @@ export type UpdateInstalledPluginsParams = {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   beforePersistentEffect?: () => void | Promise<void>;
   packagePluginIds?: Readonly<Record<string, readonly string[]>>;
+  /** Once aborted, no further plugin update starts; this loop does not stop one in progress. */
+  signal?: AbortSignal;
 };
 
 export type UpdatablePluginInstallRecord = PluginInstallRecord & {
@@ -389,31 +388,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
     return undefined;
   }
   return { packageName: parsed.name, registryLine, version };
-}
-
-export function isNpmMetadataCompatibleWithCurrentHost(
-  metadata: NpmSpecResolution,
-  options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
-): boolean {
-  const hostVersion = options.hostVersion ?? resolveCompatibilityHostVersion();
-  const installMetadata = metadata.packageOpenClaw?.install;
-  const minHostVersionCheck = checkMinHostVersion({
-    currentVersion: hostVersion,
-    minHostVersion: isRecord(installMetadata) ? installMetadata.minHostVersion : undefined,
-    allowLegacyBareSemver: options.allowLegacyBareSemver,
-  });
-  if (!minHostVersionCheck.ok) {
-    return false;
-  }
-  const pluginApiRangeCheck = resolvePackagePluginApiRange(metadata.packageOpenClaw);
-  if (!pluginApiRangeCheck.ok) {
-    return false;
-  }
-  const pluginApiRange = pluginApiRangeCheck.range;
-  if (!pluginApiRange) {
-    return true;
-  }
-  return satisfiesPluginApiRange(hostVersion, pluginApiRange);
 }
 
 export function formatChannelFallbackOutcomeSuffix(params: {

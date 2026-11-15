@@ -1,7 +1,5 @@
 /** Extension that safeguards compaction with structured summaries and quality repair. */
 
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   capCompactionSummary,
   fitCompactionSummary,
@@ -14,10 +12,8 @@ import {
   computeFileLists,
   extractCurrentCompactionUserRequest,
   extractCompactionMessageText as extractMessageText,
-  formatCompactionUserLabel,
   formatFileOperations,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
-import { classifyToolUseResultPairing } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
@@ -34,11 +30,9 @@ import {
   type AgentMessage,
   type SessionTreeEntry as CoreSessionTreeEntry,
 } from "../runtime/index.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
-import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import { resolveCompactionInstructions } from "./compaction-instructions.js";
 import {
   budgetCompactionSummary,
@@ -46,6 +40,13 @@ import {
   type CompactionSuffix,
   type SummaryQualityRetention,
 } from "./compaction-safeguard-budget.js";
+import {
+  buildPreservedTurnsSection,
+  buildSplitTurnContextSection,
+  resolveRecentTurnsPreserve,
+  splitPreservedRecentTurns,
+  type ContextSection,
+} from "./compaction-safeguard-context.js";
 import {
   appendSummarySection,
   auditSummaryQuality,
@@ -71,15 +72,6 @@ import { readWorkspaceContextForSummary } from "./compaction-workspace-context.j
 const log = createSubsystemLogger("compaction-safeguard");
 
 const missedModelWarningSessions = new WeakSet<object>();
-// Split-turn context supplements the generated summary and must not claim its
-// guaranteed half of the final artifact before common finalization runs.
-const MAX_SPLIT_TURN_CONTEXT_CHARS = Math.floor(MAX_COMPACTION_SUMMARY_CHARS / 2);
-const SPLIT_TURN_TRUNCATED_MARKER = "[Earlier split-turn messages truncated]\n";
-const PRESERVED_TURNS_TRUNCATED_MARKER = "[Earlier preserved messages truncated]\n";
-const DEFAULT_RECENT_TURNS_PRESERVE = 3;
-const MAX_RECENT_TURNS_PRESERVE = 12;
-const MAX_RECENT_TURN_TEXT_CHARS = 600;
-const MAX_PRESERVED_TOOL_RESULT_CHARS = 160;
 const compactionSafeguardDeps = {
   summarizeCompactionHistory,
 };
@@ -132,18 +124,6 @@ function containsRealConversation(messages: AgentMessage[]): boolean {
     isRealConversationMessage(message, allMessages, index),
   );
 }
-
-/**
- * Build the reserved suffix that follows the summary body. Both the provider
- * and LLM paths use this so diagnostic sections survive truncation.
- */
-type ContextSection = {
-  text: string;
-  segmentStarts: number[];
-  // Keep producer loss attached to the bounded artifact so every finalizer path
-  // emits the same redacted diagnostic when the section already dropped context.
-  truncatedLoss?: CompactionLoss;
-};
 
 async function resolveModelAuth(
   ctx: ExtensionContext,
@@ -198,236 +178,6 @@ function buildCompactionSummaryHeaders(params: {
     }),
     ...params.headers,
   };
-}
-
-function clampNonNegativeInt(value: number | undefined, fallback: number, max: number): number {
-  return Math.min(max, Math.max(0, Math.floor(value ?? fallback)));
-}
-
-function resolveRecentTurnsPreserve(value: number | undefined): number {
-  return clampNonNegativeInt(value, DEFAULT_RECENT_TURNS_PRESERVE, MAX_RECENT_TURNS_PRESERVE);
-}
-
-function formatNonTextPlaceholder(content: unknown): string | null {
-  if (content == null || typeof content === "string") {
-    return null;
-  }
-  if (!Array.isArray(content)) {
-    return "[non-text content]";
-  }
-  const typeCounts = new Map<string, number>();
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typeRaw = (block as { type?: unknown }).type;
-    const type = typeof typeRaw === "string" && typeRaw.trim().length > 0 ? typeRaw : "unknown";
-    if (type === "text") {
-      continue;
-    }
-    typeCounts.set(type, (typeCounts.get(type) ?? 0) + 1);
-  }
-  return typeCounts.size > 0
-    ? `[non-text content: ${Array.from(typeCounts, ([type, count]) =>
-        count > 1 ? `${type} x${count}` : type,
-      ).join(", ")}]`
-    : null;
-}
-
-function splitPreservedRecentTurns(params: {
-  messages: AgentMessage[];
-  recentTurnsPreserve: number;
-}): { summarizableMessages: AgentMessage[]; preservedMessages: AgentMessage[] } {
-  const preserveTurns = params.recentTurnsPreserve;
-  if (preserveTurns <= 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-  const conversationIndexes = params.messages.flatMap((message, index) =>
-    message.role === "user" || message.role === "assistant" ? [index] : [],
-  );
-  if (conversationIndexes.length === 0) {
-    return { summarizableMessages: params.messages, preservedMessages: [] };
-  }
-
-  const userIndexes = conversationIndexes.filter(
-    (index) => params.messages[index]?.role === "user",
-  );
-  const boundaryStartIndex = userIndexes.at(-preserveTurns);
-  const preservedIndexSet = new Set(
-    boundaryStartIndex === undefined
-      ? userIndexes
-      : conversationIndexes.filter((index) => index >= boundaryStartIndex),
-  );
-  if (boundaryStartIndex === undefined) {
-    for (const index of conversationIndexes.toReversed()) {
-      preservedIndexSet.add(index);
-      if (preservedIndexSet.size >= preserveTurns * 2) {
-        break;
-      }
-    }
-  }
-  const preservedToolCallIds = new Set<string>();
-  for (const index of preservedIndexSet) {
-    const message = params.messages[index];
-    if (message?.role === "assistant") {
-      for (const toolCall of extractToolCallsFromAssistant(message)) {
-        preservedToolCallIds.add(toolCall.id);
-      }
-    }
-  }
-  if (preservedToolCallIds.size > 0) {
-    const preservedStartIndex = conversationIndexes.find((index) => preservedIndexSet.has(index))!;
-    for (let index = preservedStartIndex; index < params.messages.length; index += 1) {
-      const message = params.messages[index];
-      if (message?.role !== "toolResult") {
-        continue;
-      }
-      const toolResultId = extractToolResultId(message);
-      if (toolResultId && preservedToolCallIds.has(toolResultId)) {
-        preservedIndexSet.add(index);
-      }
-    }
-  }
-  const summarizableMessages: AgentMessage[] = [];
-  const preservedMessages: AgentMessage[] = [];
-  for (const [index, message] of params.messages.entries()) {
-    (preservedIndexSet.has(index) ? preservedMessages : summarizableMessages).push(message);
-  }
-  // Preserving recent assistant turns can orphan downstream toolResult messages.
-  // Repair pairings here so compaction summarization doesn't trip strict providers.
-  return {
-    summarizableMessages: sanitizeToolUseResultPairing(summarizableMessages),
-    preservedMessages,
-  };
-}
-
-function formatContextMessage(message: AgentMessage): string | null {
-  let roleLabel: string;
-  if (message.role === "assistant") {
-    roleLabel = "Assistant";
-  } else if (message.role === "user") {
-    roleLabel = formatCompactionUserLabel(message);
-  } else if (message.role === "toolResult") {
-    const toolName = (message as { toolName?: unknown }).toolName;
-    const safeToolName = typeof toolName === "string" && toolName.trim() ? toolName : "tool";
-    roleLabel = `Tool result (${safeToolName})`;
-  } else {
-    return null;
-  }
-  const rendered = [
-    extractMessageText(message),
-    formatNonTextPlaceholder((message as { content?: unknown }).content),
-  ]
-    .filter(Boolean)
-    .join("\n");
-  if (!rendered) {
-    return null;
-  }
-  // Tool output is bulk the summary already distills; keep only a head excerpt
-  // so it cannot crowd generated facts out of the bounded artifact.
-  const limit =
-    message.role === "toolResult" ? MAX_PRESERVED_TOOL_RESULT_CHARS : MAX_RECENT_TURN_TEXT_CHARS;
-  const trimmed =
-    rendered.length <= limit
-      ? rendered
-      : message.role === "toolResult"
-        ? `${truncateUtf16Safe(rendered, limit)} [${rendered.length - limit} more chars omitted at compaction]`
-        : `${truncateUtf16Safe(rendered, limit)}...`;
-  return `- ${roleLabel}: ${trimmed}`;
-}
-
-function formatContextSegments(messages: AgentMessage[]): string[] {
-  const frames = classifyToolUseResultPairing(messages);
-  // A call-bearing assistant and all occurrence-matched results are one context
-  // atom; keeping remainder messages separate lets later terminal text survive.
-  const toolSegments = new Map<AgentMessage, AgentMessage[]>(
-    frames.map((frame) => [
-      frame.assistant,
-      [
-        frame.assistant,
-        ...frame.occurrences.flatMap((occurrence) =>
-          occurrence.sourceResult ? [occurrence.sourceResult] : [],
-        ),
-      ],
-    ]),
-  );
-  return messages.flatMap((message) => {
-    if (message.role === "toolResult") {
-      // Paired results render with their assistant message; unclaimed results
-      // are unsafe context because their owning call is absent or ambiguous.
-      return [];
-    }
-    const lines = (toolSegments.get(message) ?? [message])
-      .map(formatContextMessage)
-      .filter((line): line is string => Boolean(line));
-    return lines.length > 0 ? [lines.join("\n")] : [];
-  });
-}
-
-function formatBoundedContextSection(params: {
-  messages: AgentMessage[];
-  heading: string;
-  truncatedMarker: string;
-  truncatedLoss: CompactionLoss;
-  maxChars: number;
-}): ContextSection {
-  const segments = formatContextSegments(params.messages);
-  if (segments.length === 0) {
-    return { text: "", segmentStarts: [] };
-  }
-
-  let prefix = `${params.heading}\n`;
-  let retained = segments;
-  const truncated = !(prefix.length + segments.join("\n").length <= params.maxChars);
-  if (truncated) {
-    prefix += params.truncatedMarker;
-    retained = [];
-    let usedChars = prefix.length;
-    for (const segment of segments.toReversed()) {
-      const segmentChars = segment.length + (retained.length > 0 ? 1 : 0);
-      if (usedChars + segmentChars > params.maxChars) {
-        break;
-      }
-      retained.unshift(segment);
-      usedChars += segmentChars;
-    }
-  }
-  let offset = prefix.length;
-  return {
-    text: `${prefix}${retained.join("\n")}`,
-    segmentStarts: retained.map((segment) => {
-      const start = offset;
-      offset += segment.length + 1;
-      return start;
-    }),
-    ...(truncated ? { truncatedLoss: params.truncatedLoss } : {}),
-  };
-}
-
-function buildPreservedTurnsSection(
-  messages: AgentMessage[],
-  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
-): ContextSection {
-  return formatBoundedContextSection({
-    maxChars,
-    messages,
-    heading: "\n\n## Recent turns preserved verbatim",
-    truncatedMarker: PRESERVED_TURNS_TRUNCATED_MARKER,
-    truncatedLoss: "preserved-turn-head",
-  });
-}
-
-function buildSplitTurnContextSection(
-  messages: AgentMessage[],
-  maxChars = MAX_SPLIT_TURN_CONTEXT_CHARS,
-): ContextSection {
-  return formatBoundedContextSection({
-    maxChars,
-    messages,
-    heading: "**Turn Context (split turn):**\n",
-    truncatedMarker: SPLIT_TURN_TRUNCATED_MARKER,
-    truncatedLoss: "split-turn-head",
-  });
 }
 
 /** Registers compaction hooks that summarize, preserve recent turns, and audit output quality. */

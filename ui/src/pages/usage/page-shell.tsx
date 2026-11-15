@@ -86,7 +86,7 @@ export function UsageEmptyState(props: { loading: boolean; onRefresh: () => void
 export function renderUsageRefreshStatus(
   status: PanelRefreshStatus,
   detailKey: string,
-  kind: "timeline" | "conversation" | "context",
+  kind: "timeline" | "interval-counts" | "context",
 ) {
   return (
     <PanelRefreshStatusView

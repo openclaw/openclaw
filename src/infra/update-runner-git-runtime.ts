@@ -528,6 +528,17 @@ export function createGitRuntimeTransaction({
         const snapshots = `${transaction.databaseBackupRoot}.databases`;
         assertCurrent();
         try {
+          // Server-side captures go first; their manifests stay until the drop succeeds.
+          await transaction.discardDatabaseCaptures?.();
+        } catch (error) {
+          assertCurrent();
+          return retention(
+            `Git verification succeeded; PostgreSQL capture cleanup remains pending at ${snapshots}: ${formatErrorMessage(error)}`,
+            true,
+          );
+        }
+        assertCurrent();
+        try {
           await fs.rm(snapshots, { recursive: true, force: true });
         } catch (error) {
           if (!isErrno(error)) {

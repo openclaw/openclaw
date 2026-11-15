@@ -31,6 +31,8 @@ export class TranscriptInitialRange {
   // keeping inactive rows outside the visible range's flow.
   readonly preparedRowKeys = new Set<string>();
   private preparingRowKey: string | undefined;
+  // Rows waiting out of the flow for known sizes, and rows outside it not yet painted.
+  private hold: ReturnType<typeof forecast.hold> = { held: new Set(), unsettled: new Set() };
   readonly rowIndexes = new Map<string, number>();
   private cancelPreparation?: () => void;
   private preparationIsIdle = false;
@@ -172,35 +174,15 @@ export class TranscriptInitialRange {
     this.retainViewportRows();
     const active = this.activeIndexes();
     const virtualizer = this.virtualizer();
-    const first = active[0];
-    // Ordinary rows would pay another commit on every wheel step. Retained fragments
-    // need preparation before their cold, estimated height can enter the flow.
-    const predecessor =
-      !this.pending &&
-      !this.preparingEnd &&
-      first !== undefined &&
-      rows[first]?.retainDom &&
-      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
-      !this.cachedRowSize(first) &&
-      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
-      !this.rowsMeasured([first])
-        ? active.shift()
-        : undefined;
-    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
-      // Incoming overscan takes priority over speculative background preparation.
-      this.preparingRowKey = rows[predecessor]!.key;
-      // A resumed reader can have a cached moving range without this predecessor.
-      this.refresh();
-    }
+    const keys = forecast.rowKeys(virtualizer, this.forecastViewport(), rows, this.preparedRowKeys);
+    // Arriving rows wait out of the flow only while the reader moves through laid-out content.
+    const arriving = this.reading && !this.preparingEnd ? active : [];
+    this.hold = forecast.hold(virtualizer, arriving, keys, this.rowsMeasured);
     return {
       activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
-      forecastRowKeys: forecast.rowKeys(
-        virtualizer,
-        this.forecastViewport(),
-        rows,
-        this.preparedRowKeys,
-      ),
+      forecastRowKeys: keys,
+      unsettledRowKeys: this.hold.unsettled,
     };
   }
 
@@ -492,6 +474,10 @@ export class TranscriptInitialRange {
   ): number => {
     const size = this.measure(element, entry);
     const key = element.dataset.virtualRowKey;
+    // A size equal to its estimate changes nothing virtual-core reports; admit the row anyway.
+    if (key !== undefined && entry && this.hold.held.has(key)) {
+      queueMicrotask(() => this.hold.held.has(key) && this.invalidate());
+    }
     if (
       key !== undefined &&
       key === this.preparingRowKey &&

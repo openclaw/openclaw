@@ -15,6 +15,7 @@ import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,
@@ -330,7 +331,8 @@ export function prepareSessionSharingRole(
   if (!identity) {
     const role =
       params.client?.authenticatedGitHubIdentitySync ||
-      (params.cfg?.gateway?.roles && !isSessionSharingOwnerEquivalent(params.client, operatorActor))
+      (isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+        !isSessionSharingOwnerEquivalent(params.client, operatorActor))
         ? "viewer"
         : "owner";
     return () => role;
@@ -434,7 +436,11 @@ export async function authorizeResolvedSessionMutationAsync(params: {
   sessionKey: string;
   agentId?: string;
 }): Promise<ErrorShape | null> {
-  if (isGatewayAdmin(params.client) && !params.cfg.gateway?.roles) {
+  if (
+    isGatewayAdmin(params.client) &&
+    !isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+    resolveOperatorRolePolicy(params.client, params.cfg)?.sandbox !== "required"
+  ) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
@@ -469,7 +475,12 @@ export function authorizePreparedSessionMutation(
   },
 ): ErrorShape | null {
   const authorizesAgentRun = prepared.authorizesAgentRun !== false;
-  if (isGatewayAdmin(params.client) && (!authorizesAgentRun || !params.cfg.gateway?.roles)) {
+  if (
+    isGatewayAdmin(params.client) &&
+    (!authorizesAgentRun ||
+      (!isNamedOperatorRoleEnforcementEnabled(params.cfg) &&
+        prepared.policy?.sandbox !== "required"))
+  ) {
     return null;
   }
   if (isGatewayClientProfilePending(params.client)) {
@@ -557,7 +568,6 @@ export function authorizeSessionAgentRun(
     return agentError;
   }
   if (
-    params.cfg.gateway?.roles &&
     params.target.entry?.sandbox !== "required" &&
     (prepared ? prepared.policy : resolveOperatorRolePolicy(params.client, params.cfg))?.sandbox ===
       "required"

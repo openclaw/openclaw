@@ -497,7 +497,7 @@ export async function killAllControlledSubagentRuns(params: {
       }
       const origin = params.requestSelection?.sessionGeneration;
       if (origin) {
-        generation = await prepareSessionGenerationFacts(origin);
+        generation = await prepareSessionGenerationFacts({ ...origin, exactTranscript: true });
       }
       prepared = true;
     })());

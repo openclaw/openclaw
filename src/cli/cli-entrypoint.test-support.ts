@@ -85,6 +85,12 @@ export const mcpImportBoundaryEntrypoints = {
   }),
 } as const;
 
+// Keep service inspection imports observable in a cold child process.
+export const cliServiceInspectionImportEntrypoint = legacy({
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "run-main-service-installation",
+});
+
 // Preserve module boundaries so a child can retire only its own cleanup source copies.
 export const cliCleanupRetirementEntrypoints = {
   scope: legacy({ currentModuleUrl: import.meta.url, sourceWorkerName: "runtime-cleanup-scope" }),

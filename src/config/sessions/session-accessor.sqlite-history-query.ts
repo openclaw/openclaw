@@ -203,7 +203,7 @@ function resolveRecentHistoryStart(
       }
       if (allowOversizedFirst && selectedCount === 0 && serializedBytes > SOURCE_PAGE_MAX_BYTES) {
         throw new Error(
-          `Transcript history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
+          `Chat history message exceeds the ${SOURCE_PAGE_MAX_BYTES}-byte page limit`,
         );
       }
       if ((!allowOversizedFirst || selectedCount > 0) && bytes + serializedBytes > maxBytes) {

@@ -75,7 +75,9 @@ describe("linked owner device authority", () => {
 
   it("resumes a linked owner's grantless work without the person's access policy", () => {
     const profile = { profileId: "person", emails: [], assignedRole: null };
-    expect(resumeGatewayOperatorAccessGrant(profile, cfg, null, undefined, OWNER)).toBeUndefined();
+    expect(
+      resumeGatewayOperatorAccessGrant(profile, cfg, null, { openclawIdPrincipal: OWNER }),
+    ).toBeUndefined();
     expect(() => resumeGatewayOperatorAccessGrant(profile, cfg, null)).toThrow();
   });
 

@@ -338,7 +338,6 @@ function ChatComposerView(input: ChatViewInput) {
 function ChatComposerCompanion(input: ChatViewInput) {
   const questionPanel = createComposerQuestionPanel(
     () => input.questions,
-    undefined,
     () => input.getTranscriptElement,
   );
   return (

@@ -33,6 +33,7 @@ import {
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
 const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
+const linkedRoot = process.env.OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT === "1";
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
 const accountHome = os.userInfo().homedir;
@@ -91,6 +92,44 @@ for (const directory of [env.HOME, env.TMPDIR, state, bin]) {
 
 function writeJson(name, value) {
   fs.writeFileSync(path.join(artifacts, `${name}.json`), `${JSON.stringify(value, null, 2)}\n`);
+}
+
+/**
+ * Where the package path points, and what each release directory holds. This is a record of
+ * what an updater left, so it never throws: an unreadable part is recorded as such.
+ */
+function describeLinkedRoot() {
+  const read = (inspect) => {
+    try {
+      return inspect();
+    } catch (error) {
+      return { unreadable: error?.code ?? String(error) };
+    }
+  };
+  return {
+    packageRoot: read(() => {
+      const stat = fs.lstatSync(packageRoot);
+      return stat.isSymbolicLink()
+        ? { type: "link", target: fs.readlinkSync(packageRoot) }
+        : { type: stat.isDirectory() ? "directory" : "file" };
+    }),
+    resolved: read(() => path.relative(prefix, fs.realpathSync(packageRoot))),
+    releases: read(() =>
+      Object.fromEntries(
+        fs.readdirSync(path.join(prefix, "releases")).map((name) => [
+          name,
+          read(() => {
+            const modules = path.join(prefix, "releases", name, "lib/node_modules");
+            const manifest = path.join(modules, "openclaw/package.json");
+            return {
+              version: fs.existsSync(manifest) ? readJson(manifest).version : null,
+              entries: fs.readdirSync(modules).toSorted(),
+            };
+          }),
+        ]),
+      ),
+    ),
+  };
 }
 
 async function run(name, command, args, allowFailure = false) {
@@ -242,6 +281,17 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       ]);
     }
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
+    if (linkedRoot) {
+      // Proposed layout, not shipped: each release in its own directory behind a linked
+      // package path. A downgrade from such a release would leave a published updater on that
+      // layout, and it must still update.
+      const releaseRoot = path.join(prefix, "releases", driverVersion, "lib/node_modules/openclaw");
+      fs.mkdirSync(path.dirname(releaseRoot), { recursive: true });
+      fs.renameSync(packageRoot, releaseRoot);
+      fs.symlinkSync(path.relative(path.dirname(packageRoot), releaseRoot), packageRoot);
+      assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
+      writeJson("linked-root-before", describeLinkedRoot());
+    }
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     let build = output("candidate-build");
     let candidatePackage = candidate;
@@ -391,10 +441,18 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       sessions.push({ kind, marker, params, sessionId: created.sessionId });
     }
     const inspectIncognito = (name) => {
-      const backups = fs
-        .readdirSync(path.dirname(packageRoot))
-        .filter((entry) => /^\.openclaw[.-]package-(?:backup|activation)-/u.test(entry))
-        .map((entry) => path.join(path.dirname(packageRoot), entry));
+      // Published updaters swap inside the directory behind a linked package path, so their
+      // backups land beside the link's target.
+      const packageParents = [
+        path.dirname(packageRoot),
+        ...(linkedRoot ? [path.dirname(fs.realpathSync(packageRoot))] : []),
+      ];
+      const backups = packageParents.flatMap((parent) =>
+        fs
+          .readdirSync(parent)
+          .filter((entry) => /^\.openclaw[.-]package-(?:backup|activation)-/u.test(entry))
+          .map((entry) => path.join(parent, entry)),
+      );
       writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
     };
     inspectIncognito("incognito-artifacts-before");
@@ -436,6 +494,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     } catch (error) {
       updateFailure = toErrorObject(error, "Published updater failed");
     }
+    // Record the layout the updater left whether or not it succeeded: a published updater that
+    // cannot handle a linked package path is the failure this mode exists to explain.
+    if (linkedRoot) {
+      writeJson("linked-root-after", describeLinkedRoot());
+    }
     // Public status belongs after updater settlement and before fixture teardown.
     // A failed query is secondary to the original update outcome.
     if (updateFailure) {
@@ -473,8 +536,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     assert.equal(result.after?.version, build.version);
     assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
     // This driver degrades past the walk cap that 2026.9.x updaters enforce, so check the tree
-    // it installed against the release budget those updaters still need.
-    const installedTree = await measureInstalledPackageTree(packageRoot);
+    // it installed against the release budget those updaters still need. The budget refuses a
+    // link, so the linked mode measures the link's target.
+    const installedTree = await measureInstalledPackageTree(
+      linkedRoot ? fs.realpathSync(packageRoot) : packageRoot,
+    );
     writeJson("installed-tree", {
       entries: installedTree.entries,
       bytes: installedTree.bytes,

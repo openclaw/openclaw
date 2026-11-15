@@ -233,6 +233,9 @@ export class OAuthRefreshFailureError extends Error {
   }
 }
 
+/** A running Gateway owns the shared credential; this process may not refresh it. */
+export class OAuthRefreshOwnerError extends OAuthRefreshFailureError {}
+
 function createOAuthRefreshUserFacingCause(cause: unknown): unknown {
   if (cause instanceof Error && "code" in cause && cause.code === "refresh_contention") {
     // The structured error retains diagnostics; public cause traversal must not expose lock paths.

@@ -1,10 +1,12 @@
 // Failed compaction must exit nonzero so automation cannot mistake a silent no-op for success.
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createCompactionNoticePayload } from "../auto-reply/reply/compaction-notice.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { formatCliJsonFailure, rethrowExpectedCliError } from "../cli/failure-output.js";
 import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 type SessionsCompactResult = {
   ok?: boolean;
@@ -69,8 +71,9 @@ export async function sessionsCompactCommand(
 ): Promise<void> {
   const agent = opts.agent?.trim();
   if (opts.agent !== undefined && !agent) {
-    throw new Error("--agent must not be blank");
+    throwExpectedCliError("--agent must not be blank");
   }
+  const signal = getAsyncWorkSignal();
   const rpcOpts: Parameters<typeof callGatewayFromCliWithTransport>[1] = {
     url: opts.url,
     token: opts.token,
@@ -90,8 +93,12 @@ export async function sessionsCompactCommand(
   try {
     result = (await callGatewayFromCliWithTransport("sessions.compact", rpcOpts, params, {
       defaultTimeoutMs: 10_000,
+      signal,
     })) as SessionsCompactResult;
   } catch (err) {
+    // A Ctrl+C settles the pending compaction wait; keep the canonical abort
+    // outcome instead of reporting the cancelled compaction as a failure.
+    signal?.throwIfAborted();
     rethrowExpectedCliError(err);
     const message = formatErrorMessage(err);
     if (opts.json) {

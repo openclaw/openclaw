@@ -216,14 +216,16 @@ async function respondDesktopObserve(params: {
   );
 }
 
-async function respondDesktopLaunch(params: {
-  environmentId: string;
-  app: "browser" | "terminal";
-  respond: RespondFn;
-  context: GatewayRequestContext;
-}) {
-  await respondWorkerDesktop(params, "launch", (service) =>
-    service.launchDesktopApp({ environmentId: params.environmentId, app: params.app }),
+async function respondDesktopLaunch(
+  options: GatewayRequestHandlerOptions,
+  environmentId: string,
+  app: "browser" | "terminal",
+) {
+  await respondWorkerDesktop(options, "launch", (service) =>
+    service.launchDesktopApp(
+      { environmentId, app },
+      readGatewayRequestMutationAuthority(options).assertCurrent,
+    ),
   );
 }
 
@@ -671,13 +673,7 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "worker.desktop.launch": defineValidatedGatewayHandler(
     "worker.desktop.launch",
     validateWorkerDesktopLaunchParams,
-    ({ params, respond, context }) =>
-      respondDesktopLaunch({
-        environmentId: params.environmentId,
-        app: params.app,
-        respond,
-        context,
-      }),
+    (options) => respondDesktopLaunch(options, options.params.environmentId, options.params.app),
   ),
   "desktop.observe": defineValidatedGatewayHandler(
     "desktop.observe",
@@ -693,13 +689,8 @@ export const environmentsHandlers: GatewayRequestHandlers = {
   "desktop.launch": defineValidatedGatewayHandler(
     "desktop.launch",
     validateDesktopLaunchParams,
-    ({ params, respond, context }) =>
-      respondDesktopLaunch({
-        environmentId: params.source.environmentId,
-        app: params.app,
-        respond,
-        context,
-      }),
+    (options) =>
+      respondDesktopLaunch(options, options.params.source.environmentId, options.params.app),
   ),
   "desktop.release": defineValidatedGatewayHandler(
     "desktop.release",

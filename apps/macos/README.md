@@ -23,6 +23,13 @@ SecurityAgent prompt during unattended work. The primary Gateway route still
 comes from the normal environment/config endpoint. Combine it with
 `--attach-only` when an external process owns the local Gateway.
 
+Gateway ownership and GUI presentation are independent: `--attach-only` does
+not require `--background-only` or `--no-activate`. Use those presentation flags
+only for an intentional unattended or nonactivating launch, not merely because
+an agent task runs in the background or should stay quiet. When an interactive
+app relaunch is authorized, preserve its normal windows, onboarding, and
+permission UI unless a different presentation mode is intended.
+
 For background Accessibility automation and window-ID capture, launch the app
 binary with `--no-activate --chat` (or `--dashboard`). Windows remain behind the
 active app; macOS permission/file dialogs and interactive Keychain access are

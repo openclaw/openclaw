@@ -10,6 +10,7 @@ import {
 } from "./lib/ci-ios-smoke-plan.mjs";
 import { resolveBoatNodeTestCapacity } from "./lib/ci-node-test-capacity.mts";
 import { resolveSkillsPythonTargets } from "./lib/ci-skills-python-plan.mjs";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import { resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 
@@ -658,6 +659,20 @@ process.env.OPENCLAW_CI_TEST_RUNTIME_POLICY = testRuntimeMode;
 const nodeSelectionMode = process.env.OPENCLAW_CI_NODE_SELECTION === "full" ? "full" : "aggressive";
 const nodeSelectionReasons = [];
 let selectedTestTargets;
+// Preserve the original policy independently of later execution opt-ins.
+const nodeVolumeContext =
+  runtimePullRequest && changedPaths !== null
+    ? Object.freeze({
+        revision: checkoutRevision,
+        runtimePolicy: testRuntimeMode,
+        environment: Object.freeze({ ...process.env }),
+        eligibility: Object.freeze({
+          changedPaths: Object.freeze([...changedPaths]),
+          includeReleaseOnlyRuntimeTests,
+          includePrExemptRuntimeTests,
+        }),
+      })
+    : undefined;
 if (runtimePullRequest && runNodeFull) {
   if (changedPaths === null) {
     throw new Error("Current PR CI requires complete changed paths for Node test planning");
@@ -677,7 +692,10 @@ if (runtimePullRequest && runNodeFull) {
       !frozenTarget &&
       !compatibilityTarget &&
       nodeSelectionMode === "aggressive",
-    onSelection: (selection) => nodeSelectionReasons.push(selection),
+    onSelection: (selection) => {
+      nodeSelectionReasons.push(selection);
+      console.log(`Node test selection provenance: ${JSON.stringify(selection)}`);
+    },
   });
 }
 const fullIosSimulatorPr = parseCiEnvFlag(process.env.OPENCLAW_CI_IOS_SIMULATOR_FULL);
@@ -919,6 +937,7 @@ if (runtimePullRequest && runNodeFull) {
     throw new Error("Current PR CI target does not export createChangedNodeTestShards");
   }
   changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
+    volumeContext: nodeVolumeContext,
     baseRef: process.env.OPENCLAW_CI_CHANGED_BASE,
     compactNodeJobCap: compactPlanMode ? nodeMatrixLimit : undefined,
     selectedTestTargets,
@@ -1390,6 +1409,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 }) => ({
   configs,
   env,
@@ -1398,6 +1418,7 @@ const projectNodeTestGroup = ({
   minTotalMemoryBytes,
   shard_name,
   timing_key,
+  volume,
 });
 const uiTestRuntimePolicy =
   (!compatibilityTarget || Boolean(dispatchRuntimePolicy)) &&
@@ -1499,8 +1520,16 @@ const nodeTestShards = targetNodeTestShards
             ...(shard.groups ?? []).flatMap((group) => group.includePatterns ?? []),
           ])
         : undefined;
+    const auditCliObservations =
+      eventName === "schedule" &&
+      isCanonicalRepository &&
+      !frozenTarget &&
+      !shard.requiresDist &&
+      groups?.some((group) => resolveCiTestAuditConfig(group.configs)) &&
+      !groups.some((group) => group.configs?.includes("test/vitest/vitest.unit-fast.config.ts"));
     const row = {
       check_name: shard.checkName,
+      audit_cli_observations: auditCliObservations || undefined,
       test_runtime_policy: shard.requiresDist ? "node" : testRuntimeMode,
       adaptive_observations:
         (shard.groups ?? [shard]).some((group) =>
@@ -1603,6 +1632,15 @@ const nodeTestShards = targetNodeTestShards
     }
     return row;
   });
+// Vary the single audit capture across runs instead of always observing the first row.
+const auditCliRows = nodeTestShards.filter((row) => row.audit_cli_observations);
+if (auditCliRows.length > 0) {
+  const runId = process.env.GITHUB_RUN_ID ?? "";
+  const auditIndex = /^\d+$/u.test(runId) ? Number(BigInt(runId) % BigInt(auditCliRows.length)) : 0;
+  auditCliRows.forEach((row, index) => {
+    row.audit_cli_observations = index === auditIndex || undefined;
+  });
+}
 const nodeTestGroupPools = {};
 if (
   typeof nodeTestGroupsCodec?.decodeNodeTestGroups === "function" &&

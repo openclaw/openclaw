@@ -263,13 +263,15 @@ it.each([false, true])(
         frame={frame}
         options={{
           streamOptions: { bubbleMode },
-          workPreviews: new Map(),
           partDependencies: (part) => [part],
           renderGroupOptions: () => ({
             bubbleMode,
             showReasoning: false,
             onReply,
             onReact: vi.fn(),
+            messageReactions: new Map([
+              ["mixed-answer", [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }]],
+            ]),
           }),
           isWorkExpanded: () => false,
           onToggleWork: () => {},
@@ -289,6 +291,7 @@ it.each([false, true])(
     });
     expect(view.container.querySelector('button[aria-label="Copy as markdown"]')).not.toBeNull();
     expect(view.container.querySelector(".chat-reaction-action")).not.toBeNull();
+    expect(view.container.querySelectorAll(".chat-message-reactions")).toHaveLength(1);
   },
 );
 
@@ -396,6 +399,7 @@ it("keeps frame stream options narrow and live through replacement and first-bub
     '.chat-bubble[data-message-id="answer-stream"]',
   );
   expect(answerBubble).not.toBeNull();
+  expect(view.container.querySelector(".chat-avatar.assistant")).not.toBeNull();
   expect(answerBubble?.classList.contains("chat-bubble--first")).toBe(true);
   setFrame(withStreams("An earlier live item."));
   flush();

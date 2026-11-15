@@ -6,7 +6,11 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
 import { subscriptionRoute as selectedRoute } from "./model-auth-availability.test-support.js";
-import { providerConfig, row } from "./model-catalog-fixtures.test-support.js";
+import {
+  model as modelFixture,
+  providerConfig,
+  row,
+} from "./model-catalog-fixtures.test-support.js";
 import {
   prepareLogicalVisibleModelCatalog,
   resolveLogicalModelCatalogEntryState,
@@ -340,6 +344,35 @@ describe("resolveLogicalVisibleModelCatalog", () => {
     });
 
     expect(result).toEqual([{ ...chatGPT, alias: "selected" }]);
+  });
+
+  it("excludes discovered non-chat models even when their provider rows are configured", async () => {
+    const cfg = providerConfig("demo", {
+      api: "openai-completions",
+      baseUrl: "https://example.test/v1",
+      models: [modelFixture("voice")],
+    });
+    const catalog = [
+      row("demo", "voice", {
+        api: "openai-completions",
+        baseUrl: "https://example.test/v1",
+        inference: { chat: false },
+      }),
+    ];
+    for (const view of ["default", "configured", "all"] as const) {
+      expect(await visible(catalog, { cfg, view })).toEqual([]);
+    }
+  });
+
+  it("excludes a selected non-chat route even when its logical sibling supports chat", async () => {
+    const catalog = [platform, { ...chatGPT, inference: { chat: false } }];
+    expect(
+      await visible(catalog, {
+        routeVariants: catalog,
+        defaultProvider: "openai",
+        evaluateEntry: evaluateSelectedEntry,
+      }),
+    ).toEqual([]);
   });
 
   it("uses the selected route's deprecated lifecycle status", async () => {

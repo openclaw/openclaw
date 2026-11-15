@@ -443,6 +443,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/cron/store/save.kernel.ts",
+    [
+      {
+        tier: "T3",
+        operations: ["replaceCronRuntimeAuthorityRows"],
+        evidence:
+          "Moved unchanged from runtime-authority-store.ts. Save calls run in save.worker.ts and guarded-mutation.worker.ts; native callers retain Doctor store-repair transactions and the heartbeat task/cadence migration owners.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/transcript-payload.ts",
     [
       {
@@ -1479,6 +1490,12 @@ const reviewedOperations = new Map([
   [
     "src/config/sessions/session-accessor.sqlite-transcript-anchor.ts",
     [
+      {
+        tier: "T3",
+        operations: ["readActivePathNavigationMovedFromProjection"],
+        evidence:
+          "Only session-transcript-anchor-read.kernel.ts reads this fact, beside the active-path relation it already resolves there; that kernel is reached by entry-read, entry-cohort, hydration-read and history-read-operation workers, plus openclaw-agent-execution-operations.ts registered in execution.worker.ts. chat-send admission consumes the prepared boolean, never this query, and the incognito route resolves it in the memory actor before SQLite opens.",
+      },
       {
         tier: "T3",
         operations: ["readActiveTranscriptEntryIdentityInSnapshot"],
@@ -3535,9 +3552,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["appendSqliteTrajectoryRuntimeEventsWithWriter"],
+        operations: [
+          "appendSqliteTrajectoryRuntimeEventsWithWriter",
+          "prepareSqliteTrajectoryRuntimeWindow",
+        ],
         evidence:
-          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
+          "Durable sinks dispatch trajectory.events.append through openclaw-agent-execution-operations.ts. Its append kernel is the sole caller of the private window preparation helper. Incognito sinks append through the session actor memory backend without SQLite. Synchronous fixture append and retention exist only in runtime-store.test-support.ts.",
       },
       {
         tier: "T3",
@@ -3565,6 +3585,8 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-message-cut-in-place.kernel.ts", // session-message-cut.worker.ts owns both callers: commitSessionMessageCut installs the cut inside its write transaction, and preflightSessionMessageCut reads through session.messageCut.preflight. The remaining native caller in session-accessor.sqlite-message-cut.ts runs only when agent-database execution is unavailable (worker thread or unserved store) and passes its own handle.
+  "src/config/sessions/session-transcript-active-path-repoint.ts", // Only session-message-cut-in-place.kernel.ts plans and applies the repoint, inside the message-cut write transaction; the full-rebuild owner shares its projection fact columns by type.
   "src/config/sessions/session-transcript-replay.kernel.ts", // Only session-history-read-operation.worker.ts and openclaw-agent-execution-transcript.worker.ts import and call this reader.
   "src/plugins/installed-plugin-snapshot-candidates.kernel.ts", // Only plugins/state.worker.ts mutates the journal; installed-index commits transfer ownership inside that worker's transaction.
   "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
@@ -3621,6 +3643,7 @@ const workerModules = new Set([
 
   "extensions/memory-core/src/memory/manager-index-metadata.ts", // Only the SQLite/PostgreSQL publication worker adapters write metadata and promote legacy cache identities.
   "extensions/memory-core/src/memory/manager-embedding-cache.ts", // Cache SQL, including iterator reads, is called only by manager-publication.worker.ts.
+  "extensions/memory-core/src/memory/manager-embedding-cache-retire.ts", // cache.retire only: called by manager-publication.worker.ts and its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-rebuild-embeddings.ts", // Only manager-index-read.ts calls this lookup, from manager-search.worker.ts, manager-publication.worker.ts, or its worker-bound manager-publication-postgres.ts adapter.
   "extensions/memory-core/src/memory/manager-chunk-writer.ts", // Only manager-source-index-kernel.ts calls this writer, from manager-publication.worker.ts.
   "extensions/memory-core/src/memory/manager-source-index-kernel.ts", // Hash reads and source mutations are called only by manager-publication.worker.ts.

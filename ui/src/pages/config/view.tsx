@@ -404,25 +404,17 @@ export function Config(props: ConfigProps) {
                     <span class="settings-count">
                       {rawSecretsLabel(sensitiveCount(), view().rawRevealed, props.raw)}
                     </span>
-                    <openclaw-tooltip
-                      prop:content={t(
-                        view().rawRevealed
-                          ? "configView.hideSensitive"
-                          : "configView.revealSensitive",
-                      )}
+                    <button
+                      class={["btn btn--icon config-raw-toggle", { active: view().rawRevealed }]}
+                      aria-label={t("configView.toggleRawRedaction")}
+                      aria-pressed={view().rawRevealed ? "true" : "false"}
+                      onClick={() => {
+                        view().rawRevealed = !view().rawRevealed;
+                        refresh();
+                      }}
                     >
-                      <button
-                        class={["btn btn--icon config-raw-toggle", { active: view().rawRevealed }]}
-                        aria-label={t("configView.toggleRawRedaction")}
-                        aria-pressed={view().rawRevealed ? "true" : "false"}
-                        onClick={() => {
-                          view().rawRevealed = !view().rawRevealed;
-                          refresh();
-                        }}
-                      >
-                        <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
-                      </button>
-                    </openclaw-tooltip>
+                      <Icon name={view().rawRevealed ? "eye" : "eyeOff"} />
+                    </button>
                   </>
                 ) : null}
               </span>

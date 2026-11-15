@@ -8,8 +8,11 @@ import {
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
+import { getCommandPositionalsWithRootOptions } from "../infra/cli-root-options.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
+import { splitBrowserPairCodeProfile } from "../shared/browser-pair.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
+import { parseCliContainerArgs } from "./container-target.js";
 import {
   isValidProfileName,
   resolveProfileGatewayPort,
@@ -18,8 +21,13 @@ import {
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
 
+/**
+ * `containerTarget` is for callers that already stripped `--container` from argv;
+ * otherwise the target comes from argv and OPENCLAW_CONTAINER.
+ */
 export function parseCliProfileArgs(
   argv: string[],
+  containerTarget?: string | null,
 ): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
   // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
@@ -68,7 +76,51 @@ export function parseCliProfileArgs(
     return { kind: "pass" };
   });
 
-  return scanned.ok ? { ok: true, profile, argv: scanned.argv } : scanned;
+  if (!scanned.ok) {
+    return scanned;
+  }
+  const parsedContainer = containerTarget === undefined ? parseCliContainerArgs(argv) : null;
+  const container =
+    containerTarget ??
+    (parsedContainer?.ok ? parsedContainer.container : null) ??
+    normalizeOptionalString(process.env.OPENCLAW_CONTAINER);
+  // A container target forwards argv to the CLI inside it, which routes the code there.
+  return container
+    ? { ok: true, profile, argv: scanned.argv }
+    : selectPairCodeProfile(scanned.argv, profile);
+}
+
+/** `openclaw pair work:ABCD-EFGH` selects the issuing Gateway's profile before paths are pinned. */
+function selectPairCodeProfile(
+  argv: string[],
+  profile: string | null,
+): { ok: true; profile: string | null; argv: string[] } | { ok: false; error: string } {
+  const [pairCode] =
+    getCommandPositionalsWithRootOptions(argv, {
+      commandPath: ["pair"],
+      booleanFlags: ["--yes", "--json", "--expect-final"],
+      valueFlags: ["--url", "--port", "--token", "--password", "--timeout"],
+      maxPositionals: 1,
+      // Commander's reading: required values consume the next token, and `--` keeps operands.
+      mode: "command-path",
+    }) ?? [];
+  const codeProfile = pairCode ? splitBrowserPairCodeProfile(pairCode).profile : null;
+  if (codeProfile === null) {
+    return { ok: true, profile, argv };
+  }
+  if (!isValidProfileName(codeProfile)) {
+    return {
+      ok: false,
+      error: `The pairing code names an invalid profile "${codeProfile}". Copy the code shown in the browser again.`,
+    };
+  }
+  if (profile && profile !== codeProfile) {
+    return {
+      ok: false,
+      error: `This pairing code is for profile "${codeProfile}", but profile "${profile}" was selected. Drop --profile or use the matching one.`,
+    };
+  }
+  return { ok: true, profile: codeProfile, argv };
 }
 
 export function applyCliProfileEnv(params: {

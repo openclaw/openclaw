@@ -74,7 +74,7 @@ const reasoningReplayIdentity = { sessionId: "session-a", authProfileId: "profil
 
 type LifecycleParams = Parameters<typeof runResponsesStreamLifecycle>[0];
 type RequestOptions = Parameters<
-  ReturnType<LifecycleParams["createClient"]>["responses"]["create"]
+  Awaited<ReturnType<LifecycleParams["createClient"]>>["responses"]["create"]
 >[1];
 
 function startLifecycle(

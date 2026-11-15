@@ -152,15 +152,16 @@ it.each(["Looks fine to me.", "CORRECTION", "NO_CHANGE"])(
   },
 );
 
-it("ignores non-user and subagent runs and does not review at run end", async () => {
+it("reviews subagent runs, ignores non-user runs and does not review at run end", async () => {
   const run = await startAdvisor(1, "NO_CHANGE", "cron");
   await run.tool();
   await run.send("lifecycle", "end", {}, 0);
   await run.startRun("run-sub", "user", "agent:main:subagent:child");
   await run.send("tool", "start", { toolCallId: "sub" }, undefined, "run-sub");
-  await run.send("tool", "result", { toolCallId: "sub" }, 0, "run-sub");
+  await run.send("tool", "result", { toolCallId: "sub" }, 1, "run-sub");
+  expect(run.forkSession.mock.calls[0]?.[0].sessionKey).toBe("agent:main:subagent:child");
   await run.startRun("run-2");
-  await run.send("lifecycle", "end", {}, 0, "run-2");
+  await run.send("lifecycle", "end", {}, 1, "run-2");
 });
 
 it.each(["run_end", "run_aborted"])("cancels in-flight reviews at run end (%s)", async (reason) => {

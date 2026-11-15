@@ -220,9 +220,10 @@ export async function prepareLogicalVisibleModelCatalog(
         ).entry;
         // A selected native runtime owns its opaque model; a donor label does not.
         if (
-          !state.nativeRuntime &&
-          suppression({ provider: row.provider, id: row.id, api: row.api, baseUrl: row.baseUrl })
-            ?.retirement
+          row.inference?.chat === false ||
+          (!state.nativeRuntime &&
+            suppression({ provider: row.provider, id: row.id, api: row.api, baseUrl: row.baseUrl })
+              ?.retirement)
         ) {
           return [];
         }

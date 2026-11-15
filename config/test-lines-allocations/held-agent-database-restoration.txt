@@ -1,0 +1,3 @@
+# Distinct held-store startup, runtime admission, explicit backed-up restoration,
+# and pre-switch refusal regressions after consolidating duplicated fixtures.
+104
