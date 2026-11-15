@@ -207,6 +207,7 @@ describe("buildAgentSystemPrompt", () => {
       { bootstrapMode: "limited" },
       ["## Bootstrap Pending", "cannot safely finish full BOOTSTRAP.md"],
     ],
+    ["notes recorded setup completion", { bootstrapCompleted: true }, ["## Bootstrap Complete"]],
     [
       "includes bootstrap truncation notice in system prompt without raw diagnostics",
       {

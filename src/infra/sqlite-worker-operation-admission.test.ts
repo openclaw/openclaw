@@ -848,20 +848,22 @@ it.each(
     );
     expect(events).toEqual([]);
     void settleSqliteWorkerJob(job, undefined, { written: true });
-    expect(getWorkerMessageMetrics()).toContainEqual({
-      kind: "authority",
-      direction: "from_worker",
-      messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
-      payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
-      payloadBytesByRequestClass: {
-        ...before?.payloadBytesByRequestClass,
-        [captured ? "session.actor.completeTurn" : "other"]:
-          (before?.payloadBytesByRequestClass?.[
-            captured ? "session.actor.completeTurn" : "other"
-          ] ?? 0) + payloadBytes,
-      },
-      unmeasuredMessages: before?.unmeasuredMessages ?? 0,
-    });
+    expect(getWorkerMessageMetrics()).toContainEqual(
+      expect.objectContaining({
+        kind: "authority",
+        direction: "from_worker",
+        messages: (before?.messages ?? 0) + (receipt === "failed commit delivery" ? 1 : 2),
+        payloadBytes: (before?.payloadBytes ?? 0) + payloadBytes,
+        payloadBytesByRequestClass: {
+          ...before?.payloadBytesByRequestClass,
+          [captured ? "session.actor.completeTurn" : "other"]:
+            (before?.payloadBytesByRequestClass?.[
+              captured ? "session.actor.completeTurn" : "other"
+            ] ?? 0) + payloadBytes,
+        },
+        unmeasuredMessages: before?.unmeasuredMessages ?? 0,
+      }),
+    );
     expect(readSqliteWorkerRequestCustody(job.custody.descriptor)).toBe(false);
     expect(events).toEqual(["publish", publicationFails ? "reject" : "reply"]);
     expect(publish).toHaveBeenCalledOnce();

@@ -484,6 +484,7 @@ src/process/supervisor/cleanup-budget.ts
 src/sessions/communication-admission.ts
 src/sessions/communication-policy.ts
 src/config/sessions/session-actor-command.ts
+src/config/sessions/session-actor-entry-fields.ts
 src/config/sessions/session-actor-context-metadata.ts
 src/config/sessions/session-actor-executor.ts
 src/config/sessions/session-actor-sqlite.ts
