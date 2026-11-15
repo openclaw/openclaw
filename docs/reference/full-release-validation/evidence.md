@@ -216,6 +216,18 @@ Kova grant is unchanged. FRV `43641896010/1` tested the older `005030` candidate
 it remains historical evidence, not qualification of `5eb2`. New admission and
 exact-candidate qualification under the reviewed P are required.
 
+On November 15, 2026 at 15:03 UTC, Dallin Romney authorized the two
+`releaseChecksIndependent` native-live failures for unchanged C/Q
+`e283dccf68ba35ef1af5b3fa31571db7f4b6bc74`: `Native live gateway core` and
+`Native live test harnesses`, under `Run repo/live E2E validation / Native live suites`.
+Child `43719709063/1` records the unresolved original failures; preserve its raw
+logs and artifacts. These exact-candidate grants also cover fresh executions of
+those named jobs. They are not bound to the old run because ordinary child reuse
+remains green-only, and they do not authorize skipped tests or evidence reuse.
+The downstream `Verify release checks` failure must contain only the existing
+`live_repo_e2e_release_checks ended with failure` cause. All other grants,
+including the earlier `5eb2` normal-CI grants and Kova, remain unchanged.
+
 Only exact terminal **failed** live-provider or Telegram leaves, the
 operator-accepted beta.3 and candidate-bound `2026.11.4` jobs, or the Kova
 threshold exceptions above are eligible.
