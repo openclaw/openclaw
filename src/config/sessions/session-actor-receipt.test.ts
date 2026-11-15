@@ -25,8 +25,11 @@ import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-tu
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:v8")>();
-  return { ...actual, serialize: vi.fn(actual.serialize) };
+  const actual = await importOriginal<
+    typeof import("node:v8") & { default: typeof import("node:v8") }
+  >();
+  const overrides = { serialize: vi.fn(actual.serialize) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 // mock-isolation: The fixture owns its database lifetime without background maintenance.
