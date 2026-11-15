@@ -180,7 +180,16 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
 the Gateway's current seq in decimal (`parseSeqConflictRef`). Discovery delivers it only to a
-device of the claw's owner account, in the control lane. Every other event goes to `owners`.
+device of the claw's owner account, in the control lane. The Gateway sends every other event
+through its owner-notification path.
+
+There is no per-redemption success/refusal response to the redeeming browser. A mailbox ACK
+only settles delivery; `redemption_resolved` carries an invite reference, not an outcome.
+Although the generic notice recipient validator permits a device fingerprint for that hint,
+it does not define a redeeming-browser outcome contract. An approved same-account/key replay
+is therefore accepted silently; a refused reused invite is diagnosed in Gateway logs. Clients
+must confirm admission from the current membership snapshot rather than treat mailbox
+submission as a fresh pending request.
 
 The Gateway accepts only `GATEWAY_MAILBOX_KINDS` (`invite_redemption`, `root_statement`,
 `node_redemption`, `revocation`) from the mailbox. **A device-signed MembershipChange that arrives through the
