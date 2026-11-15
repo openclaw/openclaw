@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Errored, Loading, Show, createMemo } from "solid-js";
+import { Errored, Loading, Show, createMemo, isPending } from "solid-js";
 import { flattenConfigLeafFields } from "../../components/config-form.leaf-fields.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -144,7 +144,8 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
   if (!options.inspection) {
     return {
       fields: [],
-      loading: true,
+      known: false,
+      loading: isPending(options.inspectionRead.value),
     };
   }
   const fields: PluginSettingsField[] =
