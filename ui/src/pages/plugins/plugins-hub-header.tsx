@@ -18,6 +18,8 @@ export function PluginsHubHeader(props: {
   return (
     <HubPageHeader<PluginsHubTab>
       active={props.active}
+      // The section is named Customize; its Plugins tab keeps the Plugins heading.
+      title={props.active === "plugins" ? t("tabs.plugins") : undefined}
       tabs={{
         id: "plugins",
         items: [
