@@ -4,7 +4,6 @@ import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { buildTemplateAddPlan } from "./lifecycle.js";
@@ -255,10 +254,10 @@ describe("Template project packages", () => {
     } satisfies Partial<TemplateProjectError>);
   });
 
-  it("builds byte-identical artifacts containing only declared project inputs", async () => {
+  it.each([32, 1_680_008])("builds reproducible selected inputs (%i bytes)", async (size) => {
     const firstPath = output;
     const secondPath = join(dirname(output), "second.tgz");
-
+    await writeFile(join(project, "BOOTSTRAP.md"), Buffer.alloc(size, 0x78));
     const first = await buildTemplateProject(project, firstPath);
     const second = await buildTemplateProject(project, secondPath);
     const validation = await validateTemplateProject(join(project, "workspace", "reference.md"));
@@ -274,30 +273,6 @@ describe("Template project packages", () => {
       "package/package.json",
       "package/workspace/reference.md",
     ]);
-  });
-
-  it("builds package-root BOOTSTRAP.md within the workspace file limit", async () => {
-    await writeFile(join(project, "BOOTSTRAP.md"), Buffer.alloc(1_680_008, 0x78));
-
-    const validated = await validateTemplateProject(project);
-    assert(validated.ok, JSON.stringify(validated.diagnostics));
-    const result = await buildTemplateProject(project, output);
-
-    expect(result.files).toContain("BOOTSTRAP.md");
-    expect(await archiveEntries(output)).toContain("package/BOOTSTRAP.md");
-  });
-
-  it("keeps package-root BOOTSTRAP.md above the workspace file limit as a Template diagnostic", async () => {
-    await writeFile(
-      join(project, "BOOTSTRAP.md"),
-      Buffer.alloc(MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES + 1, 0x78),
-    );
-
-    await expectInvalidProject(project, "package_bootstrap_too_large");
-    await expect(buildTemplateProject(project, output)).rejects.toMatchObject({
-      code: "project_invalid",
-      message: expect.stringContaining("package_bootstrap_too_large"),
-    } satisfies Partial<TemplateProjectError>);
   });
 
   it("preserves license metadata and a package-root LICENSE in the artifact", async () => {
