@@ -62,7 +62,9 @@ function resolveCompactionSource<T extends ReplayMessage>(
   const selected = (() => {
     if (OPENAI_RESPONSES_APIS.has(model.api)) {
       const responses = resolveNewestOpenAIResponsesCompactionReplay(assistants, model, identity);
-      return responses ? { family: "responses" as const, ...responses } : undefined;
+      return responses && responses.mode !== "item-recovery"
+        ? { family: "responses" as const, ...responses }
+        : undefined;
     }
     if (identity.enabled !== true) {
       return undefined;

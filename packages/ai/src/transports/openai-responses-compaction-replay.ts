@@ -34,6 +34,7 @@ type OpenAIResponsesCompactionSuppressionState = ProviderReplayState & {
   type: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE;
   data: typeof OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   baseUrlHash: string;
+  itemRecovery?: string;
 };
 
 function isOpenAIResponsesCompactionState(
@@ -132,6 +133,7 @@ export function suppressOpenAIResponsesCompaction(
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
   rejectedCheckpoint?: CompactionReplayRejection,
+  itemRecovery?: string,
 ): void {
   const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
@@ -143,6 +145,7 @@ export function suppressOpenAIResponsesCompaction(
     data: OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA,
     ...context,
     baseUrlHash: context.baseUrlHash,
+    ...(itemRecovery ? { itemRecovery } : {}),
   };
   if (rejectedCheckpoint) {
     options?.onCompactionRejected?.(rejectedCheckpoint);
@@ -217,6 +220,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       replayIndex: number;
     }
   | { owner: AssistantMessage; mode: "refresh-required" }
+  | { owner: AssistantMessage; mode: "item-recovery"; anchor: string }
   | undefined {
   const context = buildProviderReplayContext(model, options);
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -229,7 +233,9 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       // A successful encrypted-content fallback records this provider-owned
       // tombstone so later turns never retry an already rejected compaction.
       if (providerReplayContextMatches(replay, context)) {
-        return undefined;
+        return typeof replay.itemRecovery === "string"
+          ? { owner: message, mode: "item-recovery", anchor: replay.itemRecovery }
+          : undefined;
       }
       continue;
     }
@@ -292,13 +298,14 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
   return undefined;
 }
 
-export type OpenAIResponsesReplayMode = "checkpoint" | "full-history";
+export type OpenAIResponsesReplayMode = "checkpoint" | "full-history" | { itemRecovery: string };
 
 type OpenAIResponsesCompactionReplayPlan = {
   messages: Context["messages"];
   compactedWindow?: OpenAIResponsesCompactionOutput;
   compaction?: ResponseCompactionItemParam;
   preserveUnframedToolResults: boolean;
+  itemRecovery?: { anchor: string; owner?: AssistantMessage };
 };
 
 export class CompactionReplayRefreshRequiredError extends Error {
@@ -317,13 +324,27 @@ export function buildOpenAIResponsesCompactionReplayPlan(
     mode?: OpenAIResponsesReplayMode;
   },
 ): OpenAIResponsesCompactionReplayPlan {
-  if (options?.mode === "full-history") {
+  if (typeof options?.mode === "object") {
     // Checkpoint rejection must rebuild from the untouched transcript; consulting
     // providerReplay here would recreate the same rejected compaction window.
-    return { messages, preserveUnframedToolResults: false };
+    return {
+      messages,
+      preserveUnframedToolResults: false,
+      itemRecovery: { anchor: options.mode.itemRecovery },
+    };
   }
   const compaction = resolveNewestOpenAIResponsesCompactionReplay(messages, model, options);
   if (!compaction) {
+    return { messages, preserveUnframedToolResults: false };
+  }
+  if (compaction.mode === "item-recovery") {
+    return {
+      messages,
+      preserveUnframedToolResults: false,
+      itemRecovery: { anchor: compaction.anchor, owner: compaction.owner },
+    };
+  }
+  if (options?.mode === "full-history") {
     return { messages, preserveUnframedToolResults: false };
   }
   if (compaction.mode === "refresh-required") {

@@ -25,6 +25,7 @@ import {
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
 import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
+import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
@@ -184,43 +185,6 @@ function orderResponsesAsyncToolResults(source: Context["messages"]): Context["m
     }
   }
   return ordered;
-}
-
-function parseOpenAIResponsesTextSignature(
-  signature: string | undefined,
-): { id?: string; phase?: "commentary" | "final_answer"; sources?: string } | undefined {
-  if (!signature) {
-    return undefined;
-  }
-  if (signature.startsWith("{")) {
-    try {
-      const parsed = JSON.parse(signature) as {
-        v?: unknown;
-        id?: unknown;
-        phase?: unknown;
-        sources?: unknown;
-      };
-      if (parsed.v === 1) {
-        const id = typeof parsed.id === "string" ? parsed.id : undefined;
-        const phase =
-          parsed.phase === "commentary" || parsed.phase === "final_answer"
-            ? parsed.phase
-            : undefined;
-        // A reasoning-dropped replay keeps the phase but omits the paired id.
-        if (id !== undefined || phase !== undefined) {
-          return {
-            id,
-            phase,
-            ...(typeof parsed.sources === "string" ? { sources: parsed.sources } : {}),
-          };
-        }
-        return undefined;
-      }
-    } catch {
-      // Keep legacy plain-string behavior below.
-    }
-  }
-  return { id: signature };
 }
 
 const responsesInputSource = Symbol("openclaw.responsesInputSource");
@@ -412,12 +376,16 @@ function convertResponsesMessagesWithStyle(
     replayMessages = anchored;
   }
   let msgIndex = 0;
+  let recoveryAnchor = replayPlan.itemRecovery?.anchor;
+  const replayCallId = (id: string) =>
+    recoveryAnchor ? `call_${shortHash(`${recoveryAnchor}:${id}`)}` : id;
   const appendAssistant = createResponsesInputReplay(model);
   const inHistorySystemUpdates = supportsNativeOpenAIResponsesEndpoint(model);
   const convertMessage = (
     msg: Context["messages"][number],
     messageIndex: number,
   ): ResponseInput => {
+    const replayItemIds = shouldReplayResponsesItemIds && !recoveryAnchor;
     const converted: ResponseInput = [];
     if (inHistorySystemUpdates && isRuntimeContextMessage(msg)) {
       converted.push(
@@ -471,6 +439,9 @@ function convertResponsesMessagesWithStyle(
         msg.model !== model.id && msg.provider === model.provider && msg.api === model.api;
       for (const block of msg.content) {
         if (block.type === "thinking") {
+          if (recoveryAnchor) {
+            continue;
+          }
           if (
             block.thinkingSignature &&
             (providerStyle || block.thinkingSignature.startsWith("{"))
@@ -492,7 +463,7 @@ function convertResponsesMessagesWithStyle(
               readOpenAIResponsesReasoningReplayBlockMetadata(isRecord(block) ? block : {}),
               providerStyle ? { preserveUnattributedEncryptedContent: true } : undefined,
             );
-            if (!shouldReplayResponsesItemIds) {
+            if (!replayItemIds) {
               delete replayableReasoningItem.id;
               // Summaries alone cannot verify stateless reasoning and poison
               // the next cached continuation, even if this request succeeds.
@@ -501,7 +472,7 @@ function convertResponsesMessagesWithStyle(
               }
             }
             if (
-              shouldReplayResponsesItemIds &&
+              replayItemIds &&
               !providerStyle &&
               model.provider === "github-copilot" &&
               !isSafeResponsesReplayItemId(replayableReasoningItem.id)
@@ -517,7 +488,7 @@ function convertResponsesMessagesWithStyle(
         } else if (block.type === "text") {
           const textSignature = parseOpenAIResponsesTextSignature(block.textSignature);
           let msgId: string | undefined;
-          if (shouldReplayResponsesItemIds) {
+          if (replayItemIds) {
             if (textSignature?.id) {
               // Signed text can only replay its ID after reasoning.
               msgId = previousReplayItemWasReasoning ? textSignature.id : undefined;
@@ -569,14 +540,14 @@ function convertResponsesMessagesWithStyle(
           const itemIdRaw = separatorIndex === -1 ? undefined : block.id.slice(separatorIndex + 1);
           // Orphan fc_* ids can be rejected; omit them on the wire without rewriting history.
           const itemId =
-            shouldReplayResponsesItemIds &&
+            replayItemIds &&
             (!itemIdRaw?.startsWith("fc_") || (seenReplayableReasoning && !isDifferentModel))
               ? itemIdRaw
               : undefined;
           output.push({
             type: "function_call",
             ...(itemId ? { id: itemId } : {}),
-            call_id: callId,
+            call_id: replayCallId(callId),
             name: block.name,
             ...(block.async ? { async: true } : {}),
             arguments: providerStyle
@@ -649,7 +620,7 @@ function convertResponsesMessagesWithStyle(
       }
       converted.push({
         type: "function_call_output",
-        call_id: callId,
+        call_id: replayCallId(callId),
         output,
       });
     }
@@ -666,6 +637,15 @@ function convertResponsesMessagesWithStyle(
     options?.retainUserProvenance === true,
   ]);
   for (const msg of replayMessages) {
+    // The recovery receipt anchors only the rejected past. New output keeps its IDs.
+    if (
+      "role" in msg &&
+      msg.role === "assistant" &&
+      replayPlan.itemRecovery?.owner &&
+      msg.providerReplay === replayPlan.itemRecovery.owner.providerReplay
+    ) {
+      recoveryAnchor = undefined;
+    }
     if (!("role" in msg)) {
       messages.push(...(options?.mutableInput ? cloneResponsesInputForPayloadHook([msg]) : [msg]));
       continue;
@@ -680,7 +660,7 @@ function convertResponsesMessagesWithStyle(
         (immutable.isDeeplyFrozenPlainData(msg) &&
           (typeof msg.content === "string" ||
             !msg.content.some((block) => block.type === "image"))));
-    const key = `${projectionKey}:${msgIndex}`;
+    const key = `${projectionKey}:${msgIndex}:${recoveryAnchor ?? ""}`;
     let output = reusable ? projections?.get(key) : undefined;
     if (!output) {
       output = convertMessage(msg, msgIndex);
