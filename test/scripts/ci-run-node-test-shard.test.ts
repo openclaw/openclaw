@@ -143,11 +143,17 @@ async function recordPlans(
 
 const readList = (file: string): unknown => JSON.parse(readFileSync(file, "utf8"));
 
+function createChild() {
+  return Object.defineProperties(new childProcess.ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 function captureChild() {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
-  const child = new childProcess.ChildProcess();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  const child = createChild();
   const started = createDeferred();
   vi.spyOn(childProcess, "spawn").mockImplementation(() => {
     started.resolve();
@@ -1864,9 +1870,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
     let invocations = 0;
     const spawn = vi.spyOn(processOwner, "spawnOwnedVitestProcess").mockImplementation((spec) => {
-      const child = new childProcess.ChildProcess();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
+      const child = createChild();
       const scratch = path.dirname(spec.options.env!.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT!);
       if (!scratchDirs.includes(scratch)) {
         scratchDirs.push(scratch);
