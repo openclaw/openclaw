@@ -15,18 +15,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  proof:
-    name: ${{ matrix.proof }}
+  billing:
+    name: billing-${{ matrix.group }}-${{ matrix.variant }}
     strategy:
       fail-fast: false
+      max-parallel: 4
       matrix:
-        include:
-          - proof: audio
-            runner: xcode-27
-            deadline: 30
-            sha: a9a084486e3df10193dfa9ac5ab9faa9f53a4619
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: ${{ matrix.deadline }}
+        group: [state, chat, reload, startup, compaction]
+        variant: [baseline, candidate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
     steps:
       - name: Checkout reviewed proof tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,14 +35,14 @@ jobs:
       - name: Checkout immutable product source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.sha }}
+          ref: ${{ matrix.variant == 'baseline' && '489774034984cd3ef78706125f20f4b25723288b' || '8cb8b3e98da2980e1312480decf3079e0ddd0a0c' }}
           path: source
           persist-credentials: false
-      - name: Checkout immutable pre-fix module
+      - name: Checkout immutable original runtime tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: e80a6dd9fdb4c7ce724472dd5d1b216afb4e70a7
-          path: baseline
+          ref: b27440329b4c450ec4c572e40ed338ed98f3d9c7
+          path: original
           persist-credentials: false
       - name: Install pinned Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -56,22 +54,20 @@ jobs:
           package-manager-file: source/package.json
           node-version: 24.22.1
           cache-mode: off
-      - name: Provision native audio tool from Homebrew
-        if: matrix.proof == 'audio'
-        timeout-minutes: 8
+      - name: Execute bounded paired observation
         env:
-          HOMEBREW_NO_AUTO_UPDATE: "1"
-          HOMEBREW_NO_ANALYTICS: "1"
-        run: brew install ffmpeg
-      - name: Execute only the selected proof
-        env:
-          GOAL24_PROOF: ${{ matrix.proof }}
-        run: node tooling/scripts/goal24-focused-proof.mjs
-      - name: Preserve allowlisted proof evidence
+          GOAL24_GROUP: ${{ matrix.group }}
+          GOAL24_VARIANT: ${{ matrix.variant }}
+        run: node tooling/scripts/goal24-billing-proof.mjs
+      - name: Preserve only synthetic proof evidence
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: goal24-${{ matrix.proof }}-${{ github.run_id }}
-          path: proof-output/
+          name: goal24-billing-${{ matrix.group }}-${{ matrix.variant }}-${{ github.run_id }}
+          path: |
+            proof-output/summary.json
+            proof-output/node.json
+            proof-output/bun.json
+            proof-output/*.log
           if-no-files-found: error
           retention-days: 7
