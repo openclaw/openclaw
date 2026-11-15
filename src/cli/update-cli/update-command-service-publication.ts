@@ -2,6 +2,7 @@
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { discoverManagedGatewayBindings } from "../../daemon/managed-gateway-bindings.js";
 import { resolveTaskName } from "../../daemon/schtasks-layout.js";
 import {
   isScheduledTaskDefinitelyNotRunning,
@@ -12,12 +13,14 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import { withGatewayServiceOperationLock } from "../../daemon/service-operation-lock.js";
 import type { GatewayServiceState } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
+import { readSystemdServiceCommandLocation } from "../../daemon/systemd-service-files.js";
 import { ignoreMissingPath } from "../../infra/errno.js";
 import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   createOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -146,15 +149,6 @@ export async function withGatewayRuntimeArtifactPublication<T>(
         outputPaths.map((output) => outputIdentity(path.join(params.root, output))),
       );
       assertCurrent();
-      const state = await readGatewayServiceState(service, {
-        env: params.env,
-        requireEffective: true,
-        requireLoadedCommand: true,
-        timeoutMs: params.timeoutMs,
-      });
-      assertCurrent();
-      const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
-      assertCurrent();
       const inspectServing = async (command: GatewayServiceState["command"]) => {
         const layout = await summarizeGatewayServiceLayout(command);
         assertCurrent();
@@ -185,6 +179,52 @@ export async function withGatewayRuntimeArtifactPublication<T>(
           );
         return { serving: { root: installed, entrypoint }, disjoint };
       };
+      if (process.platform === "linux") {
+        // Discover both managers: an unloaded user unit cannot hide a live system unit.
+        // Artifact separation needs loaded commands, not service credentials.
+        const serving = await (async () => {
+          const bindings = await discoverManagedGatewayBindings(params.env, {
+            requireComplete: true,
+            includeInvoking: true,
+          });
+          assertCurrent();
+          let observedServing: Awaited<ReturnType<typeof inspectServing>>;
+          for (const binding of bindings) {
+            const location = await readSystemdServiceCommandLocation(
+              binding.env,
+              binding.systemdReadTarget,
+            );
+            assertCurrent();
+            if (location.kind === "not-loaded") {
+              continue;
+            }
+            const located = await inspectServing(location.command);
+            if (!located?.disjoint || !located.serving.entrypoint.stat) {
+              return undefined;
+            }
+            observedServing ??= located;
+          }
+          return observedServing?.serving;
+        })().catch((error: unknown) => {
+          if (hasCommandProcessCleanupError(error)) {
+            throw error;
+          }
+          return undefined;
+        });
+        assertCurrent();
+        if (serving) {
+          return { disjoint: true as const, serving, root: target.real, destinations };
+        }
+      }
+      const state = await readGatewayServiceState(service, {
+        env: params.env,
+        requireEffective: true,
+        requireLoadedCommand: true,
+        timeoutMs: params.timeoutMs,
+      });
+      assertCurrent();
+      const database = await outputIdentity(resolveOpenClawStateSqlitePath(state.env));
+      assertCurrent();
       const inspected = await inspectServing(state.command);
       const serving = inspected?.serving;
       const disjoint = inspected?.disjoint ?? false;
