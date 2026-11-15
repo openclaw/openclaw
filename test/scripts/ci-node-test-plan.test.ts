@@ -3336,11 +3336,16 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
     fileTimings?: Readonly<Record<string, number>>;
+    githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
+    expectedSourcePatterns?: { file: string; patterns: string[] };
     options: {
       compactMode: "push" | "pull-request";
       runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
+      includeReleaseOnlyToolingShards?: boolean;
+      includePrExemptRuntimeTests?: boolean;
+      includeProofTests?: boolean;
       compactNodeJobCap?: number;
     };
   }) {
@@ -3349,7 +3354,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
-      ...(params.fileTimings ? { readToolingFileTimings: () => params.fileTimings! } : {}),
+      ...(params.fileTimings
+        ? {
+            readToolingFileTimings: (profile?: CiTimingProfile) =>
+              profile === "github"
+                ? (params.githubFileTimings ?? params.fileTimings!)
+                : params.fileTimings!,
+          }
+        : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3357,7 +3369,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     mockTrackedFiles((rootDir: string) => (rootDir === "test" ? params.files.toSorted() : []));
     return await withPlanModule(
-      ({ createNodeTestShardBundles: createPlan }) => {
+      ({ createNodeTestShardBundles: createPlan, createNodeTestShards: createShards }) => {
+        if (params.expectedSourcePatterns) {
+          const expected = params.expectedSourcePatterns;
+          const sources = createShards({
+            ...params.options,
+            includeReleaseOnlyToolingShards: true,
+          });
+          expect(
+            sources
+              .filter((source) => source.includePatterns?.includes(expected.file))
+              .map((source) => source.includePatterns),
+          ).toEqual([expected.patterns]);
+        }
         // These fixtures exercise a caller's 90-row reservation independently
         // of the profile ceiling; explicit tighter reservations remain authoritative.
         return createPlan({
@@ -3368,6 +3392,78 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each<{
+    label: string;
+    runnerBackend?: string;
+    compactMode?: "push" | "pull-request";
+    retainedSeconds?: number;
+    githubSeconds?: number;
+    known?: boolean;
+    discardSiblings?: boolean;
+    expectedSeconds: number;
+  }>([
+    { label: "scaled Blacksmith fallback", expectedSeconds: 32 },
+    { label: "direct GitHub timing", githubSeconds: 30, expectedSeconds: 30 },
+    { label: "startup floor", retainedSeconds: 1, expectedSeconds: 25 },
+    { label: "unknown retained file", known: false, expectedSeconds: 128 },
+    {
+      label: "nonbinding retained cost",
+      retainedSeconds: 80,
+      expectedSeconds: 128,
+    },
+    {
+      label: "unchanged selection",
+      retainedSeconds: 80,
+      discardSiblings: false,
+      expectedSeconds: 128,
+    },
+    { label: "Blacksmith parent floor", runnerBackend: "blacksmith", expectedSeconds: 80 },
+    { label: "hybrid parent floor", runnerBackend: "hybrid", expectedSeconds: 80 },
+    { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
+  ])("prices implicit reduced tooling with $label", async (params) => {
+    const retained = "test/vitest-pr-exempt-retention.test.ts";
+    // Two workers pair equal-cost files: fill fifteen pairs and one singleton first.
+    const discarded =
+      params.discardSiblings === false
+        ? []
+        : Array.from({ length: 31 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+    const retainedSeconds = params.retainedSeconds ?? 20;
+    const discardedSeconds = 80;
+    const jobs = await createToolingFixturePlan({
+      files: [...discarded, retained],
+      shards: [
+        fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+      ],
+      timings: {},
+      fileTimings: {
+        ...Object.fromEntries(discarded.map((file) => [file, discardedSeconds])),
+        ...(params.known === false ? {} : { [retained]: retainedSeconds }),
+      },
+      githubFileTimings:
+        params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
+      fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      expectedSourcePatterns: {
+        file: retained,
+        patterns: discarded.length ? [discarded.toSorted().at(-1)!, retained] : [retained],
+      },
+      options: {
+        compactMode: params.compactMode ?? "push",
+        runnerBackend: params.runnerBackend ?? "github",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includePrExemptRuntimeTests: true,
+        includeProofTests: true,
+      },
+    });
+    expectPlanFiles(jobs, [retained]);
+    const job = only(jobs);
+    expect(job.predictedTestSeconds).toBeCloseTo(params.expectedSeconds);
+    expect(job.planConcurrency).toBe(1);
+    expect(workers(only(job.groups))).toBe("2");
+    expect(job.requiresDist).toBe(false);
+    expect(job.pretestBuildMode).toBeUndefined();
+  });
 
   it.each([undefined, "blacksmith"])(
     "preserves compiler/artifact capacity (%s)",

@@ -374,7 +374,7 @@ it("does not disclose hidden session keys in cron.history errors", () =>
           undefined,
           {
             code: "UNAVAILABLE",
-            message: "The recorded cron transcript is unavailable. Refresh the run and try again.",
+            message: "The chat for this run is unavailable. Refresh the run and try again.",
           },
         ],
       ]);

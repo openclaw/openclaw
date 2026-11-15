@@ -184,16 +184,38 @@ it("keeps admitted paths and checkpoint documents out of root-publication reques
       currentManifestRaw: rawManifest,
       currentManifestRef: manifestRef,
       buildCacheInputs,
+      fingerprints: {
+        target: "projection",
+        blob: Buffer.alloc(8192, 7).toString("base64"),
+        oppositeBlob: Buffer.alloc(8192, 9).toString("base64"),
+      },
     };
     const reserved = await store.update(baseline, { checkpoint_json: JSON.stringify(checkpoint) });
-    return store.update(reserved, { pending_target: null }, undefined, checkpoint);
+    return store.update(reserved, { pending_target: null }, undefined, {
+      ...checkpoint,
+      fingerprintsFromCheckpoint: true,
+    });
   });
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
   expect(accepted.source_paths_json).toBe(sourcePaths);
   expect(JSON.parse(accepted.checkpoint_json!)).toMatchObject({ buildCacheInputs });
+  expect(Buffer.from(accepted.projection_fingerprints!)).toEqual(Buffer.alloc(8192, 7));
+  expect(Buffer.from(accepted.canonical_fingerprints!)).toEqual(Buffer.alloc(8192, 9));
   expect(bytes).toHaveLength(4);
   expect.soft(bytes[0], "create request bytes").toBeLessThan(2048);
   expect.soft(bytes[3], "settlement request bytes").toBeLessThan(2048);
+  // SAFETY: The store just persisted this owner-written checkpoint.
+  const checkpoint = JSON.parse(accepted.checkpoint_json!) as LocalWorkspaceManifestCheckpoint;
+  await expect(
+    withLocalWorkspaceStore({ worktreeId, env }, (store) =>
+      store.update(store.get()!, {}, undefined, {
+        ...checkpoint,
+        resultingRoot: `sha256:${"f".repeat(64)}`,
+        fingerprintsFromCheckpoint: true,
+      }),
+    ),
+  ).rejects.toThrow("checkpoint changed before acceptance");
+  expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(accepted);
 });
 
 it("looks up workspace identity without returning pending recovery payloads", async () => {

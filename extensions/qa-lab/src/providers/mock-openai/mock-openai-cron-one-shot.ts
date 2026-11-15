@@ -3,9 +3,9 @@ import { buildAssistantEvents } from "./mock-openai-events.js";
 
 const QA_CRON_ONE_SHOT_RE = /Cron one-shot QA mode=(yield|service|spawn)/;
 const QA_CRON_ONE_SHOT_CHILD_MARKER = "Cron one-shot QA child";
-export const QA_CRON_ONE_SHOT_YIELD_OUTPUT = "QA-ONE-SHOT-YIELD-DONE";
-export const QA_CRON_ONE_SHOT_SERVICE_OUTPUT = "QA-ONE-SHOT-SERVICE-EXIT";
-export const QA_CRON_ONE_SHOT_CHILD_RESULT = "QA-ONE-SHOT-CHILD-RESULT";
+const QA_CRON_ONE_SHOT_YIELD_OUTPUT = "QA-ONE-SHOT-YIELD-DONE";
+const QA_CRON_ONE_SHOT_SERVICE_OUTPUT = "QA-ONE-SHOT-SERVICE-EXIT";
+const QA_CRON_ONE_SHOT_CHILD_RESULT = "QA-ONE-SHOT-CHILD-RESULT";
 
 function inputText(content: unknown): string {
   if (typeof content === "string") {
