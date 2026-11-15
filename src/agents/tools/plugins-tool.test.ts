@@ -98,6 +98,21 @@ it.each([
       expectedIntegrity: "sha256:" + "a".repeat(64),
     },
   },
+  {
+    args: {
+      action: "update",
+      source: "clawhub",
+      packageName: "local-tool",
+      version: "1.0.1",
+    },
+    method: "plugins.install",
+    params: { source: "clawhub", packageName: "local-tool", version: "1.0.1", mode: "update" },
+  },
+  {
+    args: { action: "update", source: "official", pluginId: "local-tool" },
+    method: "plugins.install",
+    params: { source: "official", pluginId: "local-tool", mode: "update" },
+  },
 ])(
   "routes $args.action through the authorized management owner",
   async ({ args, method, params }) => {

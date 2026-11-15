@@ -332,10 +332,15 @@ checks only.
 
 ## Manage plugins from an agent conversation
 
-The owner-only `plugins` tool can list, inspect, search, install, enable, disable,
-uninstall, and reload plugins through the running Gateway. Agent installs accept
-official catalog plugin IDs or ClawHub package names. The `version` option applies
-only to ClawHub installs; official installs use the catalog selection. To activate edits to an
+The owner-only `plugins` tool can list, inspect, search, install, update, enable,
+disable, uninstall, and reload plugins through the running Gateway. Agent installs
+and updates accept official catalog plugin IDs or ClawHub package names. The
+`version` option applies only to ClawHub packages; official plugins use the catalog
+selection. `install` stops without changes when the plugin is already installed.
+`update` deliberately replaces that install from the requested source, for example to
+move a ClawHub plugin to a newer version, like `/plugins install --force` in chat. It
+keeps plugin configuration and an authored `plugins.entries.<id>.enabled: false`, and
+still applies capability consent and `security.installPolicy`. To activate edits to an
 already-installed local TypeScript plugin, use `reload` with its plugin ID.
 Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
