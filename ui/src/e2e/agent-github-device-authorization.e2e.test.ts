@@ -80,6 +80,10 @@ suite.define(() => {
         const help = page.locator(".settings-section__help-panel");
         await expect(help).toContainText("My GitHub is used only when");
         await expect(help).toContainText("Your account when you choose it to publish a PR.");
+        await expect(help).toContainText("cloud devices keep the agent’s account.");
+        await expect(help).not.toContainText("keep the shared account");
+        await expect(help).not.toContainText("on this computer");
+        await expect(help).not.toContainText("bring it back");
         await helpButton.click();
         await expect(help).toHaveCount(0);
         const button = (name: string) => section.getByRole("button", { name, exact: true });
