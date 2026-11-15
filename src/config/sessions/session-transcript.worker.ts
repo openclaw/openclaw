@@ -608,6 +608,7 @@ serveOwnedWorkerTasks(
             };
           }
           if (
+            request.kind === "compaction-source" ||
             request.kind === "transcript-hydration" ||
             request.kind === "transcript-maintenance" ||
             request.kind === "current-turn-entry" ||

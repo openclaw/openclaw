@@ -1,4 +1,7 @@
+import type { CompactionResult } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
 import { MAX_COMPACTION_SUMMARY_CHARS } from "../../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
+import type { SessionTreeEntry } from "../../../../packages/agent-core/src/harness/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import type { PromptOptions } from "../agent-session-types.js";
 import {
@@ -111,7 +114,7 @@ export function createStandaloneCompactionRequestBudget(
 /** Reconcile only queued context; prepared user, image, and transient costs stay owned upstream. */
 export function withCompactionQueuedContext(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
 ): CompactionRequestBudget {
   const pendingQueuedContextTokens = estimateCompactionHistoryTokens(messages);
   const previousQueuedTokens = budget.pendingQueuedContextTokens ?? 0;
@@ -128,7 +131,7 @@ export function withCompactionQueuedContext(
 }
 
 export function estimateCompactedRequestTokens(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget,
 ): number {
   return (
@@ -137,7 +140,7 @@ export function estimateCompactedRequestTokens(
 }
 
 export function assertCompactionRequestCanFit(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget: CompactionRequestBudget | undefined,
   hasCompactableHistory: boolean,
 ): void {
@@ -157,7 +160,7 @@ export function assertCompactionRequestCanFit(
 
 export function resolveCompactionRetentionBudget(
   budget: CompactionRequestBudget,
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   maxSummaryChars = MAX_COMPACTION_SUMMARY_CHARS,
 ) {
   const preferredTokens =
@@ -183,4 +186,24 @@ export function resolveCompactionRetentionBudget(
         : maxTokens,
     reserveTokens: summaryTokens,
   };
+}
+
+/** Project the complete post-compaction request before committing its summary. */
+export function projectCompactionReplacement(
+  entries: SessionTreeEntry[],
+  itemId: string,
+  result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
+  summary: string,
+) {
+  return buildSessionContext([
+    ...entries,
+    {
+      ...result,
+      type: "compaction",
+      id: itemId,
+      parentId: entries.at(-1)?.id ?? null,
+      timestamp: new Date().toISOString(),
+      summary,
+    },
+  ]).messages;
 }

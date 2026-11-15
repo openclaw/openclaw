@@ -3,6 +3,7 @@ import type { SessionEntryCohortRequest } from "../../config/sessions/session-en
 import type { SessionTranscriptContextSelection } from "../../config/sessions/session-history-read.types.js";
 import type { PreparedSessionTranscriptHydration } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
+import type { SessionManager } from "./session-manager.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptTargetBinding;
 export type SessionManagerBoundedContextLimits = SessionTranscriptContextSelection;
@@ -25,3 +26,26 @@ export type SessionManagerBoundedContext = SessionManagerBoundedView &
     SessionTranscriptBoundedActiveContext,
     "persistedSuffixStartSeq" | "boundaryCount" | "transcriptMutationAt"
   > & { limits: SessionManagerBoundedContextLimits };
+
+/** @internal A compaction-only retained-tail view under its captured transcript version. */
+export const sessionManagerFromCompactionSource: unique symbol = Symbol.for(
+  "openclaw.session-manager.from-compaction-source",
+);
+
+export type ReadonlySessionManager = Pick<
+  SessionManager,
+  | "getCwd"
+  | "getSessionId"
+  | "getSessionTarget"
+  | "getLeafId"
+  | "getAppendParentId"
+  | "getAppendMode"
+  | "getLeafEntry"
+  | "getEntry"
+  | "getLabel"
+  | "getBranch"
+  | "getHeader"
+  | "getEntries"
+  | "getTree"
+  | "getSessionName"
+>;

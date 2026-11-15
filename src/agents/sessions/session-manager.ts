@@ -60,7 +60,7 @@ import {
 } from "./session-manager-current-turn.js";
 import { prepareSessionManagerSync } from "./session-manager-incognito-scope.js";
 import {
-  prepareSessionManagerHydration,
+  loadSessionManagerEntries,
   readSessionManagerContextAsync,
   readSessionManagerModelContextAsync,
 } from "./session-manager-incognito.js";
@@ -72,6 +72,7 @@ import type {
   FileEntry,
   SessionEntry,
 } from "./session-manager-types.js";
+import { sessionManagerFromCompactionSource } from "./session-manager-view-types.js";
 import type {
   SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
@@ -447,38 +448,19 @@ export class SessionManager extends SessionManagerBranching {
         signal,
       });
     }
-    const hydration = prepareSessionManagerHydration(target, { signal });
-    const cwd = cwdOverride ?? process.cwd();
-    const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
-    assertOwned();
-    const prepared = await hydration.read().catch((error: unknown) => {
-      assertOwned();
-      throw error;
-    });
-    signal?.throwIfAborted();
-    assertOwned();
-    hydration.assertCurrent();
-    if (prepared.kind !== "full") {
-      throw new Error("Expected a full transcript snapshot");
-    }
-    const entries = prepared.snapshot.events;
-    const header = findSessionTranscriptHeader(entries);
-    return new SessionManager(
-      cwdOverride ?? header?.cwd ?? cwd,
-      hydration.target,
-      entries,
-      undefined,
-      prepared.snapshot.version,
-    );
+    const loaded = await loadSessionManagerEntries(target, cwdOverride, signal);
+    return new SessionManager(loaded.cwd, loaded.target, loaded.entries, undefined, loaded.version);
   }
 
   /** @internal Read complete current context and compaction facts in one owner snapshot. */
   static async [sessionManagerOpenCompaction](
     target: SessionTranscriptRuntimeTarget,
-    options: { cwd?: string; signal?: AbortSignal } = {},
+    options: { cwd?: string; signal?: AbortSignal; metadataOnly?: boolean } = {},
   ) {
     const { cwd, signal } = options;
-    const limits = { compaction: true } as const;
+    const limits = options.metadataOnly
+      ? { maxEvents: 256, maxBytes: 1024 * 1024 }
+      : { compaction: true as const };
     const hydration = prepareSessionTranscriptHydration(target, limits, signal);
     const prepared = await hydration.read({ compaction: true });
     if (prepared.kind !== "bounded" || !prepared.compaction) {
@@ -489,6 +471,7 @@ export class SessionManager extends SessionManagerBranching {
     return {
       ...prepared.compaction,
       eventCount: context.totalEvents,
+      metadataOnly: options.metadataOnly === true && context.truncated,
       sessionManager: new SessionManager(
         cwd ?? header?.cwd ?? process.cwd(),
         prepared.compaction.sessionTarget,
@@ -496,6 +479,25 @@ export class SessionManager extends SessionManagerBranching {
         { ...context, limits },
       ),
     };
+  }
+
+  /** @internal The read worker supplies only the exact retained tail, under the original version. */
+  static [sessionManagerFromCompactionSource](
+    target: SessionTranscriptRuntimeTarget,
+    entries: readonly unknown[],
+    version: SessionTranscriptContextVersion,
+    cwd: string,
+  ): SessionManager {
+    const manager = new SessionManager(cwd, target, entries, undefined, version);
+    // The omitted prefix is not writable through this retained-tail view.
+    manager.boundedContextIncomplete = true;
+    manager.boundedContextLimits = { compaction: true };
+    const ids = [...manager.byId.keys()];
+    manager.adoptSelectedTranscriptPath(
+      manager.appendParentId,
+      ids.map((id, index) => [id, ids[index - 1] ?? null]),
+    );
+    return manager;
   }
 
   /** @deprecated Await openAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -756,20 +758,4 @@ export class SessionManager extends SessionManagerBranching {
   }
 }
 
-export type ReadonlySessionManager = Pick<
-  SessionManager,
-  | "getCwd"
-  | "getSessionId"
-  | "getSessionTarget"
-  | "getLeafId"
-  | "getAppendParentId"
-  | "getAppendMode"
-  | "getLeafEntry"
-  | "getEntry"
-  | "getLabel"
-  | "getBranch"
-  | "getHeader"
-  | "getEntries"
-  | "getTree"
-  | "getSessionName"
->;
+export type { ReadonlySessionManager } from "./session-manager-view-types.js";

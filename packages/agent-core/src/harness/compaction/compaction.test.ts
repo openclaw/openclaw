@@ -2,6 +2,8 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import { iterateSessionContextMessages } from "../session/session.js";
+import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
   InvalidSummaryOutputError,
   SummaryOutputBudgetError,
@@ -16,6 +18,9 @@ import {
   findCutPoint,
   getLastAssistantUsage,
   prepareCompaction,
+  prepareCompactionFromSource,
+  prepareCompactionFallback,
+  iterateCompactionMessages,
   shouldCompact,
 } from "./compaction.js";
 import {
@@ -623,6 +628,47 @@ describe("split-turn compaction", () => {
 });
 
 describe("compactWithoutSummary", () => {
+  it("fits the same beta fallback after indexed payloads have been released", () => {
+    const history = [user("old request")];
+    const prefix = [user("preserve this split-turn request")];
+    const preparation = {
+      firstKeptEntryId: "kept",
+      messagesToSummarize: history,
+      turnPrefixMessages: prefix,
+      isSplitTurn: true,
+      previousSummary: "Previous facts.",
+      tokensBefore: 100,
+      fileOps: createFileOps(),
+      settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
+    };
+    let released = false;
+    const source = (messages: AgentMessage[]) => ({
+      length: messages.length,
+      entryId: (index: number) => "entry-" + index,
+      get(index: number) {
+        if (released) {
+          throw new Error("released transcript payload");
+        }
+        return messages[index];
+      },
+    });
+    const indexed = {
+      ...preparation,
+      messagesToSummarize: source(history),
+      turnPrefixMessages: source(prefix),
+      turnPrefixSourceAskIndex: 0,
+      totalEstimatedTokens: 100,
+      messageCount: 2,
+    };
+    const fallback = prepareCompactionFallback(indexed);
+    const expected = compactWithoutSummary({ ...preparation, summaryTokenBudget: 400 });
+    released = true;
+    const result = compactWithoutSummary({ ...indexed, summaryTokenBudget: 400 }, fallback);
+    expect(result).toEqual(expected);
+    expect(fallback.historySummary).toBe("Previous facts.");
+    expect(fallback.requiredContext).toContain("ask the user if older details matter.");
+  });
+
   const lossNotice = "2 earlier message(s) were removed without a summary";
   // About 1,200 characters with the constraint in the middle: inside the 2,000-character
   // split-turn ask bound, beyond the 800-character unresolved-request bound.
@@ -652,3 +698,106 @@ describe("compactWithoutSummary", () => {
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
   });
 });
+
+it.each(["none", "compaction", "reset"] as const)(
+  "plans a %s boundary from transient payloads without losing file outcomes or the request",
+  (boundary) => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry(user("past", 1), 0),
+      createMessageEntry(assistant("done", { timestamp: 2 }), 1),
+    ];
+    if (boundary === "reset") {
+      entries.push(resetEntry(2, "entry-0"));
+    } else if (boundary === "compaction") {
+      entries.push({
+        type: "compaction",
+        id: "entry-2",
+        parentId: "entry-1",
+        timestamp: new Date(3).toISOString(),
+        summary: "checkpoint",
+        firstKeptEntryId: "entry-0",
+        tokensBefore: 100,
+      });
+    }
+    const requestIndex = entries.length;
+    for (const message of [
+      user("Keep this exact pending request.", 4),
+      assistant(
+        [
+          toolCall("read", { path: "read.ts" }, "read"),
+          toolCall(
+            "edit",
+            { file_path: "unchanged.ts", newText: "large payload".repeat(100) },
+            "edit",
+          ),
+        ],
+        { timestamp: 5 },
+      ),
+      toolResult("large result".repeat(100), {
+        toolCallId: "edit",
+        toolName: "edit",
+        details: { changed: false },
+        timestamp: 6,
+      }),
+      assistant("latest response", { timestamp: 7 }),
+    ]) {
+      entries.push(createMessageEntry(message, entries.length));
+    }
+    let release = () => {};
+    const source = {
+      length: entries.length,
+      metadata: (index: number) => entries[index],
+      get(index: number): SessionTreeEntry | undefined {
+        release();
+        const entry = entries[index];
+        if (entry?.type !== "message") {
+          return entry;
+        }
+        const { proxy, revoke } = Proxy.revocable(structuredClone(entry.message), {});
+        release = revoke;
+        return { ...entry, message: proxy };
+      },
+    };
+    const result = prepareCompactionFromSource(
+      source,
+      {
+        messages: () =>
+          iterateSessionContextMessages(entries, (entry) => {
+            const hydrated = source.get(entries.indexOf(entry));
+            assert(hydrated);
+            return hydrated;
+          }),
+        resetKeptEntryIndices: (start, end) =>
+          selectResetKeptEntries(entries.slice(start, end)).map((entry) => entries.indexOf(entry)),
+      },
+      { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      "unresolved",
+      {
+        requestBoundary: { entryId: `entry-${requestIndex}`, preserve: false },
+      },
+    );
+    assert(result.ok && result.value);
+    const preparation = result.value;
+    expect(preparation.firstKeptEntryId).toBe(`entry-${entries.length - 1}`);
+    expect(preparation.isSplitTurn).toBe(true);
+    expect(preparation.latestUnresolvedUserRequest).toBe("Keep this exact pending request.");
+    expect(preparation.previousSummary).toBe(boundary === "compaction" ? "checkpoint" : undefined);
+    expect(preparation.fileOps).toEqual({
+      read: new Set(["read.ts"]),
+      written: new Set(),
+      // Beta conservatively records attempted edits even when the tool reports no change.
+      edited: new Set(["unchanged.ts"]),
+    });
+    expect(
+      Array.from(iterateCompactionMessages(preparation.messagesToSummarize), (message) =>
+        structuredClone(message.role === "user" ? message.content : message.role),
+      ),
+    ).toEqual(["past", "assistant"]);
+    expect(
+      Array.from(
+        iterateCompactionMessages(preparation.turnPrefixMessages),
+        (message) => message.role,
+      ),
+    ).toEqual(["user", "assistant", "toolResult"]);
+  },
+);

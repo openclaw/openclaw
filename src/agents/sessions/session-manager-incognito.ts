@@ -2,6 +2,7 @@ import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import type { readSessionTranscriptModelContext } from "../../config/sessions/session-accessor.sqlite-model-context.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.types.js";
+import { findSessionTranscriptHeader } from "../../config/sessions/session-entry-codec.js";
 import type {
   SessionContextSeedRequest,
   SessionModelContextLimits,
@@ -234,4 +235,34 @@ export async function readSessionManagerContextAsync<T>(
       signal,
     );
   });
+}
+
+/** Acquire a complete initial view while retaining the caller's live write fence. */
+export async function loadSessionManagerEntries(
+  target: SessionTranscriptRuntimeTarget,
+  cwdOverride?: string,
+  signal?: AbortSignal,
+) {
+  const hydration = prepareSessionManagerHydration(target, { signal });
+  const cwd = cwdOverride ?? process.cwd();
+  const assertOwned = captureOwnedTranscriptWriteAssertion(hydration.target);
+  assertOwned();
+  const prepared = await hydration.read().catch((error: unknown) => {
+    assertOwned();
+    throw error;
+  });
+  signal?.throwIfAborted();
+  assertOwned();
+  hydration.assertCurrent();
+  if (prepared.kind !== "full") {
+    throw new Error("Expected a full transcript snapshot");
+  }
+  const entries = prepared.snapshot.events;
+  const header = findSessionTranscriptHeader(entries);
+  return {
+    cwd: cwdOverride ?? header?.cwd ?? cwd,
+    target: hydration.target,
+    entries,
+    version: prepared.snapshot.version,
+  };
 }
