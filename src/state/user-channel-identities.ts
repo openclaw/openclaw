@@ -218,18 +218,14 @@ export function userChannelIdentitySubject(identity: UserChannelIdentity): strin
   return JSON.stringify([identity.channelId, identity.accountId, identity.senderId]);
 }
 
-function readIdentity(subject: string): UserChannelIdentity | undefined {
+/** Decode a stored channel-identity subject back into its channel identity. */
+export function parseUserChannelIdentitySubject(subject: string): UserChannelIdentity | undefined {
   const tuple = safeParseJson(subject);
   if (!Array.isArray(tuple) || tuple.length !== 3) {
     return undefined;
   }
   const identity = { channelId: tuple[0], accountId: tuple[1], senderId: tuple[2] };
   return Check(UserChannelIdentitySchema, identity) ? identity : undefined;
-}
-
-/** Decode a stored channel-identity subject back into its channel identity. */
-export function parseUserChannelIdentitySubject(subject: string): UserChannelIdentity | undefined {
-  return readIdentity(subject);
 }
 
 function selectLink(db: EngineConnection, subject: string) {
@@ -350,7 +346,7 @@ export function listUserChannelIdentitiesInDatabase(
         .where("profile_id", "=", profile.id)
         .orderBy("subject", "asc"),
     ).rows.flatMap(({ subject }) => {
-      const identity = readIdentity(subject);
+      const identity = parseUserChannelIdentitySubject(subject);
       return identity ? [{ profileId: profile.id, identity }] : [];
     });
   });
