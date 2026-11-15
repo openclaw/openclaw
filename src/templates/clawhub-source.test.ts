@@ -285,6 +285,104 @@ afterEach(async () => {
 });
 
 describe("public ClawHub Template catalog", () => {
+  it.each([
+    { every: "30m", enabled: true },
+    { every: "0m", enabled: false },
+  ])(
+    "includes heartbeat $every with its retained cadence and enabled state",
+    async ({ every, enabled }) => {
+      const manifest = {
+        ...emptyManifest,
+        agent: { ...emptyManifest.agent, heartbeat: { every } },
+      } satisfies TemplateManifest;
+      await fs.writeFile(
+        path.join(fixtureRoot, "CLAW.md"),
+        "---\n" + JSON.stringify(manifest) + "\n---\n",
+      );
+      const detail = await readClawHubTemplateDetail({ packageName, version });
+      expect(detail.scheduledJobs).toBe(1);
+      expect(detail.contents.automations).toEqual([
+        {
+          name: "Proactive check (research-briefing)",
+          enabled,
+          schedule: "every 30m",
+          timezone: "timezone-independent",
+        },
+      ]);
+      expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    },
+  );
+
+  it.each(["bootstrap", "file"] as const)(
+    "includes heartbeat tasks from a %s source alongside declared cron",
+    async (location) => {
+      const manifest = {
+        ...emptyManifest,
+        workspace:
+          location === "bootstrap"
+            ? {
+                bootstrapFiles: { "HEARTBEAT.md": { source: "heartbeat-checklist.md" } },
+                files: [],
+              }
+            : {
+                bootstrapFiles: {},
+                files: [{ source: "heartbeat-checklist.md", path: "HEARTBEAT.md" }],
+              },
+        automations: [
+          {
+            id: "daily",
+            enabled: false,
+            schedule: { cron: "0 9 * * *", timezone: "UTC" },
+            session: "isolated",
+            message: "Prepare a brief.",
+          },
+        ],
+      } satisfies TemplateManifest;
+      await fs.writeFile(
+        path.join(fixtureRoot, "heartbeat-checklist.md"),
+        "# Checklist\nCheck active incidents.\ntasks:\n- name: Summary\n  interval: 15m\n  prompt: Prepare a summary.\n- name: Exact interval\n  interval: 65s\n  prompt: Check the fixture.\n",
+      );
+      await fs.writeFile(
+        path.join(fixtureRoot, "CLAW.md"),
+        "---\n" + JSON.stringify(manifest) + "\n---\n",
+      );
+      const detail = await readClawHubTemplateDetail({ packageName, version });
+      expect(detail.scheduledJobs).toBe(4);
+      expect(detail.contents.automations).toEqual([
+        {
+          name: "Proactive check (research-briefing)",
+          enabled: true,
+          schedule: "every 30m",
+          timezone: "timezone-independent",
+        },
+        { name: "Summary", enabled: true, schedule: "every 15m", timezone: "timezone-independent" },
+        {
+          name: "Exact interval",
+          enabled: true,
+          schedule: "every 1m 5s",
+          timezone: "timezone-independent",
+        },
+        { name: "daily", enabled: false, schedule: "0 9 * * *", timezone: "UTC" },
+      ]);
+      expect(validateTemplatesCatalogDetailResult({ detail })).toBe(true);
+    },
+  );
+
+  it("includes an empty HEARTBEAT.md without explicit heartbeat settings", async () => {
+    const manifest = {
+      ...emptyManifest,
+      workspace: { bootstrapFiles: {}, files: [{ source: "empty.md", path: "HEARTBEAT.md" }] },
+    } satisfies TemplateManifest;
+    await fs.writeFile(path.join(fixtureRoot, "empty.md"), "");
+    await fs.writeFile(
+      path.join(fixtureRoot, "CLAW.md"),
+      "---\n" + JSON.stringify(manifest) + "\n---\n",
+    );
+    const detail = await readClawHubTemplateDetail({ packageName, version });
+    expect(detail.scheduledJobs).toBe(1);
+    expect(detail.contents.automations[0]).toMatchObject({ enabled: true, schedule: "every 30m" });
+  });
+
   it("projects an overview in one HTTP read, retaining featured order and category ranking", async () => {
     const official = { ...officialPackage(), stats: { installs: 20 } };
     const community = { ...communityPackage(), stats: { installs: 1 } };

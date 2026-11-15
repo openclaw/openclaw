@@ -26,6 +26,7 @@ import {
 } from "../infra/clawhub-packages.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { projectTemplateCatalogDependencies } from "./catalog-dependencies.js";
+import { projectClawHubCatalogAutomations } from "./clawhub-catalog-automations.js";
 import { parseTemplateManifestSummary } from "./clawhub-manifest-summary.js";
 import {
   readClawHubCatalogPreview,
@@ -550,12 +551,11 @@ async function readClawHubTemplateContents(
               instructions: describedInstructions,
               skills: describedSkills,
               integrations,
-              automations: manifest.automations.map((job) => ({
-                name: job.name || job.id,
-                enabled: job.enabled ?? true,
-                schedule: job.schedule.cron,
-                timezone: job.schedule.timezone,
-              })),
+              automations: await projectClawHubCatalogAutomations({
+                verified,
+                rootDir,
+                instructions,
+              }),
             },
             ...(preview ? { preview } : {}),
           },
