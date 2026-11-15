@@ -5,6 +5,7 @@ const entrypoint = createTestEntrypoint(import.meta.url, "infra");
 // Native storage probes share the invocation build before their child deadlines begin.
 export const storageProcessTestEntrypoints = {
   nodeSqlite: entrypoint("node-sqlite"),
+  sqliteDatabaseAdmission: entrypoint("sqlite-database-admission"),
   sqliteRuntimeInitialize: entrypoint("sqlite-runtime-initialize"),
   auditRecovery: entrypoint("state-migrations.audit-recovery-protocol.test-support"),
   acpMetadataWriter: entrypoint(

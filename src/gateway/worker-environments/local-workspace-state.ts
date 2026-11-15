@@ -1,15 +1,14 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
-import type { LocalWorkspacePausePhase } from "../../agents/sandbox/local-workspace-quiescence.js";
+import type { LocalWorkspacePausePhase } from "../../agents/sandbox/types.js";
+import { nativeWorktreeFilesystem } from "../../agents/worktrees/filesystem-native.js";
 import { requireGit, runGit } from "../../agents/worktrees/git.js";
-import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertLocalWorkspaceDirectory,
   initializeLocalWorkspaceProjection,
-  localWorkspaceProjectionPath,
 } from "./local-workspace-checkout.js";
 import {
   pendingLocalWorkspaceDirection as pendingDirection,
@@ -30,13 +29,17 @@ import {
   selectLocalWorkspaceCanonicalPaths,
   readLocalWorkspaceGitExclusions,
 } from "./local-workspace-inventory.js";
+import {
+  assertLocalWorkspaceProjectionOwner,
+  bindLocalWorkspaceAuthority,
+} from "./local-workspace-owner-identity.js";
+import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type {
+  LocalWorkspaceCapture,
   LocalWorkspaceManifestAction,
   LocalWorkspaceManifestCheckpoint,
-} from "./local-workspace-manifest-scan.js";
-import { assertLocalWorkspaceProjectionOwner } from "./local-workspace-owner-identity.js";
-import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
-import type { LocalWorkspaceCapture, LocalWorkspaceOwner } from "./local-workspace-types.js";
+} from "./local-workspace-store.types.js";
+import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import {
   loadStagedWorkspaceManifest,
   captureWorkspaceManifestDocument,
@@ -67,6 +70,7 @@ export function projectionOperations(
   owner: LocalWorkspaceOwner,
   store: LocalWorkspaceStore,
   initialRow: LocalWorkspaceProjection | undefined,
+  projectionPath: string,
   quiescence?: {
     pause: () => Promise<void>;
     resume: () => Promise<void>;
@@ -75,7 +79,6 @@ export function projectionOperations(
   },
 ) {
   const signal = store.signal;
-  const projectionPath = localWorkspaceProjectionPath(owner);
   let row = initialRow;
   const selectCurrent = (assertCurrent: (() => void) | undefined) => {
     if (!row) {
@@ -91,15 +94,7 @@ export function projectionOperations(
   const current = () => selectCurrent(owner.assertCurrent);
   // Subprocess input admission requires an undefined result.
   const assertCurrent = () => void current();
-  const workerAuthority: WorktreeWorkerAuthority = {
-    ...store.workerAuthority,
-    predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-    assertCurrent: () => {
-      selectCurrent(
-        owner.workerAuthority ? owner.workerAuthority.assertCurrent : owner.assertCurrent,
-      );
-    },
-  };
+  const workerAuthority = bindLocalWorkspaceAuthority(owner, store.workerAuthority, selectCurrent);
   const update = async (
     patch: Parameters<typeof store.update>[1],
     manifest?: Parameters<typeof store.update>[3],
@@ -264,6 +259,7 @@ export function projectionOperations(
         journal: { ...plan, basePack: selected.journal_pack },
         buildCacheInputs: await buildCacheInputs(),
         assertCurrent,
+        workerAuthority,
       });
     }
     await update({ journal_json: null, journal_pack: null });
@@ -278,6 +274,7 @@ export function projectionOperations(
       root: owner.worktree.repoRoot,
       stagedResultRef: selected.pending_ref,
       assertCurrent,
+      workerAuthority,
     });
     await update({
       pending_ref: null,
@@ -285,179 +282,179 @@ export function projectionOperations(
       ...(selected.tree_root_digest ? { baseline_json: null } : {}),
     });
   };
-  const settle = (...args: Parameters<typeof settlePending>) =>
-    rejection.settle(() => settlePending(...args), args[1]?.currentManifestRef);
-  const settlePending = async (
+  const settle = (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
     afterCapture?: () => Promise<void>,
     source?: LocalWorkspaceCapture,
-  ) => {
-    await recover();
-    const conversionSource = current();
-    if (conversionSource.baseline_ref && !conversionSource.tree_root_digest) {
-      const prepared = await readManifest({ kind: "convert" });
-      if (prepared.kind === "rescan") {
-        log.warn(
-          "Local workspace baseline conversion changed its reference; preserved source data and requesting full-scan baseline repair",
-        );
-        // The existing full-scan repair accepts only the exact saved baseline;
-        // source data stays intact until that replacement is accepted.
-        await repairBaseline();
-      } else if (prepared.kind === "replace") {
-        row = await store.accept(prepared.update, owner.workerAuthority);
-      } else {
-        throw new Error("Local workspace conversion preparation is missing");
+  ): Promise<void> =>
+    rejection.settle(async () => {
+      await recover();
+      const conversionSource = current();
+      if (conversionSource.baseline_ref && !conversionSource.tree_root_digest) {
+        const prepared = await readManifest({ kind: "convert" });
+        if (prepared.kind === "rescan") {
+          log.warn(
+            "Local workspace baseline conversion changed its reference; preserved source data and requesting full-scan baseline repair",
+          );
+          // The existing full-scan repair accepts only the exact saved baseline;
+          // source data stays intact until that replacement is accepted.
+          await repairBaseline();
+        } else if (prepared.kind === "replace") {
+          row = await store.accept(prepared.update, owner.workerAuthority);
+        } else {
+          throw new Error("Local workspace conversion preparation is missing");
+        }
       }
-    }
-    if (!retainAccepted) {
-      await cleanupAccepted();
-    }
-    const selected = current();
-    if (!selected.pending_ref) {
-      return;
-    }
-    const { target, refresh } = selectLocalWorkspaceCheckpoint(selected, selected.pending_ref);
-    // Reservation precedes staging. A crash before its Git effect leaves the
-    // source bytes untouched and resumes capture into this exact reserved ref.
-    if (
-      !(await hasWorkerWorkspaceResultRef({
-        root: owner.worktree.path,
-        stagedResultRef: selected.pending_ref,
-      }))
-    ) {
-      if (refresh) {
-        throw new Error(
-          "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
+      if (!retainAccepted) {
+        await cleanupAccepted();
+      }
+      const selected = current();
+      if (!selected.pending_ref) {
+        return;
+      }
+      const { target, refresh } = selectLocalWorkspaceCheckpoint(selected, selected.pending_ref);
+      // Reservation precedes staging. A crash before its Git effect leaves the
+      // source bytes untouched and resumes capture into this exact reserved ref.
+      if (
+        !(await hasWorkerWorkspaceResultRef({
+          root: owner.worktree.path,
+          stagedResultRef: selected.pending_ref,
+        }))
+      ) {
+        if (refresh) {
+          throw new Error(
+            "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
+          );
+        }
+        let snapshot = preparedSnapshot;
+        if (!snapshot && (selected.checkpoint_json || owner.worktree.removedAt === undefined)) {
+          // No Git receipt owns these bytes yet. After interruption, recapture the
+          // still-owned source into the same reservation before staging its delta.
+          snapshot = await scan(target);
+          await update({ checkpoint_json: JSON.stringify(snapshot) });
+        }
+        const baseline = snapshot ? undefined : await baselineDocument();
+        const baselineManifest =
+          baseline &&
+          parseWorkerWorkspaceManifest(
+            baseline.rawManifest,
+            baseline.manifestRef,
+            await buildCacheInputs(),
+          );
+        const legacy =
+          baselineManifest && (await capture(target, new Set(baselineManifest.directories)));
+        // Eviction can retain an archive reservation after staging fails. The
+        // restored Git snapshot omits the accepted overlay, unlike the saved baseline.
+        const stagingBase =
+          baselineManifest && owner.worktree.removedAt !== undefined && owner.worktree.snapshotRef
+            ? await captureLocalWorkspaceArchiveBaseline({
+                root: owner.worktree.repoRoot,
+                snapshotCommit: await requireGit(
+                  owner.worktree.repoRoot,
+                  ["rev-parse", `${owner.worktree.snapshotRef}^{commit}`],
+                  { signal, beforeRun: assertCurrent },
+                ),
+                manifest: baselineManifest,
+                signal,
+                assertCurrent,
+              })
+            : baseline;
+        quiescence?.markPhase("staging");
+        await stageLocalWorkspaceCheckpoint(
+          {
+            root: owner.worktree.path,
+            stagingRoot: source?.root ?? sourcePath(target),
+            stagedResultRef: selected.pending_ref,
+            baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
+            currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
+            baseManifestRaw: snapshot?.baseManifestRaw ?? stagingBase!.rawManifest,
+            currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
+            buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
+            assertCurrent,
+            workerAuthority,
+          },
+          { target, refresh, snapshot, current, signal },
         );
       }
-      let snapshot = preparedSnapshot;
-      if (!snapshot && (selected.checkpoint_json || owner.worktree.removedAt === undefined)) {
-        // No Git receipt owns these bytes yet. After interruption, recapture the
-        // still-owned source into the same reservation before staging its delta.
-        snapshot = await scan(target);
-        await update({ checkpoint_json: JSON.stringify(snapshot) });
+      const checkpoint = current().checkpoint_json
+        ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+        : undefined;
+      if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
+        throw new Error("Local workspace checkpoint no longer matches its baseline");
       }
-      const baseline = snapshot ? undefined : await baselineDocument();
-      const baselineManifest =
-        baseline &&
-        parseWorkerWorkspaceManifest(
-          baseline.rawManifest,
-          baseline.manifestRef,
-          await buildCacheInputs(),
-        );
-      const legacy =
-        baselineManifest && (await capture(target, new Set(baselineManifest.directories)));
-      // Eviction can retain an archive reservation after staging fails. The
-      // restored Git snapshot omits the accepted overlay, unlike the saved baseline.
-      const stagingBase =
-        baselineManifest && owner.worktree.removedAt !== undefined && owner.worktree.snapshotRef
-          ? await captureLocalWorkspaceArchiveBaseline({
-              root: owner.worktree.repoRoot,
-              snapshotCommit: await requireGit(
-                owner.worktree.repoRoot,
-                ["rev-parse", `${owner.worktree.snapshotRef}^{commit}`],
-                { signal, beforeRun: assertCurrent },
-              ),
-              manifest: baselineManifest,
-              signal,
-              assertCurrent,
-            })
-          : baseline;
-      quiescence?.markPhase("staging");
-      await stageLocalWorkspaceCheckpoint(
+      // The Git result now owns the command's bytes. Canonical-only reconciliation
+      // can run beside later guest writes; command completion still awaits acceptance.
+      await afterCapture?.();
+      // A base refresh owns both namespaces until its two-sided transfer settles.
+      // Ordinary results already own immutable Git bytes, so materialization and
+      // patch generation need no guest freeze. Imports re-fence before confirmation.
+      if (!refresh) {
+        await quiescence?.resume();
+      }
+      quiescence?.markPhase("materialization");
+      const refreshBaseline = refresh ? await baselineDocument() : undefined;
+      await withStagedWorkerWorkspaceManifest(
         {
           root: owner.worktree.path,
-          stagingRoot: source?.root ?? sourcePath(target),
           stagedResultRef: selected.pending_ref,
-          baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
-          currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
-          baseManifestRaw: snapshot?.baseManifestRaw ?? stagingBase!.rawManifest,
-          currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
-          buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
-          assertCurrent,
+          buildCacheInputs: checkpoint?.buildCacheInputs ?? (await buildCacheInputs()),
         },
-        { target, refresh, snapshot, current, signal },
+        async (snapshot) => {
+          current();
+          if (
+            refresh &&
+            (!snapshot.current.baseCommit ||
+              snapshot.baseManifestRef !== refreshBaseline!.manifestRef)
+          ) {
+            throw new Error("Local workspace result no longer matches its accepted baseline");
+          }
+          if (
+            checkpoint &&
+            (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
+              snapshot.currentManifestRef !== checkpoint.currentManifestRef)
+          ) {
+            throw new Error("Local workspace checkpoint payload changed");
+          }
+          await applyStagedWorkerWorkspace({
+            root: targetPath(target),
+            stagingRoot: snapshot.stagingRoot,
+            baseManifestRef: snapshot.baseManifestRef,
+            currentManifestRef: snapshot.currentManifestRef,
+            reconciliation: snapshot.reconciliation,
+            current: snapshot.current,
+            assertCurrent,
+            workerAuthority,
+            freezeTarget: target === "projection" ? quiescence?.pause : undefined,
+            onPhase: quiescence?.markPhase,
+            ...createLocalWorkspaceCheckpointAcceptance({
+              current,
+              update,
+              replaceBaseline,
+              checkpoint,
+              target,
+              refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
+              rawManifest: snapshot.currentManifestRaw,
+              manifestRef: snapshot.currentManifestRef,
+              beforeCommit: () => quiescence?.markPhase("acceptance"),
+            }),
+          });
+          if (!refresh) {
+            await quiescence?.resume();
+          }
+          quiescence?.markPhase("cleanup");
+        },
       );
-    }
-    const checkpoint = current().checkpoint_json
-      ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
-      : undefined;
-    if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
-      throw new Error("Local workspace checkpoint no longer matches its baseline");
-    }
-    // The Git result now owns the command's bytes. Canonical-only reconciliation
-    // can run beside later guest writes; command completion still awaits acceptance.
-    await afterCapture?.();
-    // A base refresh owns both namespaces until its two-sided transfer settles.
-    // Ordinary results already own immutable Git bytes, so materialization and
-    // patch generation need no guest freeze. Imports re-fence before confirmation.
-    if (!refresh) {
-      await quiescence?.resume();
-    }
-    quiescence?.markPhase("materialization");
-    const refreshBaseline = refresh ? await baselineDocument() : undefined;
-    await withStagedWorkerWorkspaceManifest(
-      {
-        root: owner.worktree.path,
-        stagedResultRef: selected.pending_ref,
-        buildCacheInputs: checkpoint?.buildCacheInputs ?? (await buildCacheInputs()),
-      },
-      async (snapshot) => {
-        current();
-        if (
-          refresh &&
-          (!snapshot.current.baseCommit ||
-            snapshot.baseManifestRef !== refreshBaseline!.manifestRef)
-        ) {
-          throw new Error("Local workspace result no longer matches its accepted baseline");
-        }
-        if (
-          checkpoint &&
-          (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
-            snapshot.currentManifestRef !== checkpoint.currentManifestRef)
-        ) {
-          throw new Error("Local workspace checkpoint payload changed");
-        }
-        await applyStagedWorkerWorkspace({
-          root: targetPath(target),
-          stagingRoot: snapshot.stagingRoot,
-          baseManifestRef: snapshot.baseManifestRef,
-          currentManifestRef: snapshot.currentManifestRef,
-          reconciliation: snapshot.reconciliation,
-          current: snapshot.current,
-          assertCurrent,
-          freezeTarget: target === "projection" ? quiescence?.pause : undefined,
-          onPhase: quiescence?.markPhase,
-          ...createLocalWorkspaceCheckpointAcceptance({
-            current,
-            update,
-            replaceBaseline,
-            checkpoint,
-            target,
-            refreshBaseCommit: refresh ? snapshot.current.baseCommit! : undefined,
-            rawManifest: snapshot.currentManifestRaw,
-            manifestRef: snapshot.currentManifestRef,
-            beforeCommit: () => quiescence?.markPhase("acceptance"),
-          }),
-        });
-        if (!refresh) {
-          await quiescence?.resume();
-        }
-        quiescence?.markPhase("cleanup");
-      },
-    );
-    if (refresh && target === "canonical" && current().pending_target === "projection") {
-      await settle(retainAccepted);
-      return;
-    }
-    if (current().pending_target) {
-      throw new LocalWorkspaceConflictError();
-    }
-    if (!retainAccepted) {
-      await cleanupAccepted();
-    }
-  };
+      if (refresh && target === "canonical" && current().pending_target === "projection") {
+        return await settle(retainAccepted);
+      }
+      if (current().pending_target) {
+        throw new LocalWorkspaceConflictError();
+      }
+      if (!retainAccepted) {
+        await cleanupAccepted();
+      }
+    }, preparedSnapshot?.currentManifestRef);
   const synchronize = async (target: Direction, options?: LocalWorkspaceSyncOptions) => {
     await rejection.synchronize({
       target,
@@ -525,6 +522,7 @@ export function projectionOperations(
         baseCommit: selected.base_commit,
         signal,
         assertCurrent,
+        workerAuthority,
         buildCacheInputs,
         dependencies,
       });
@@ -651,6 +649,7 @@ export function projectionOperations(
             currentManifestRef: accepted.manifestRef,
             buildCacheInputs: await buildCacheInputs(),
             assertCurrent,
+            workerAuthority,
           });
         }, current().baseline_ref ?? undefined);
         current();
@@ -726,8 +725,11 @@ export function projectionOperations(
         });
         await cleanupAccepted();
       }
-      current();
-      await fs.rm(parent, { recursive: true, force: true });
+      await nativeWorktreeFilesystem.remove(parent, {
+        commitGuard: composeSessionSourceAssertion([assertCurrent, workerAuthority.assertCurrent]),
+        signal,
+        workerAuthority,
+      });
       await store.delete(current(), owner.workerAuthority);
     },
     rememberPaused: (value: string | null) => update({ paused_runtimes_json: value }),

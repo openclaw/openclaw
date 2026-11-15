@@ -877,6 +877,55 @@ rows and the bare-WebSocket mock that exposes its Bun transport regression.
 Its sequential cleanup can skip remaining closers after an earlier failure;
 that is a separate source-only follow-up, not a measured leak or applied repair.
 
+### Realtime proxy fixture cleanup
+
+At `98556d69bfb13ac141ba4db884cbc92ab727b7ed`, the realtime proxy fixture
+forgets its remaining closers when an earlier reverse-order cleanup throws.
+The fixture now uses the existing shared cleanup runner, which attempts all
+closers and preserves single or multiple failures. Both admission/refusal rows,
+their assertions and the runtime WebSocket mock remain: one declaration, two
+expanded cases. Test code changes by +4/-5 lines; production and shared support
+are unchanged.
+
+With an injected error after the real bridge closes, the baseline leaves its
+managed proxy registered and both network listeners open in both rows. The
+candidate clears the registration and closes both listeners in reverse order,
+preserving the original error. A second injected failure after proxy shutdown
+preserves both errors in an aggregate without skipping either listener.
+Environment restoration passes throughout. Observations precede emergency
+cleanup, and every temporary probe was restored byte for byte.
+
+The clean baseline passes both cases in 163.76 seconds wall time, including cold
+worker compilation. The warm candidate passes both in 22.06 seconds wall time
+(16.29 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation review found no lost contract. This closes the earlier
+source-only realtime cleanup follow-up; no production change is claimed.
+
+### Secrets CLI plan fixture setup custody
+
+At `69c3acaca6854826a03e7e6ee2a1cf0334959282`, `withPlanFile` writes its
+temporary plan before entering its cleanup block. A partial write followed by
+failure therefore leaves the file behind. Move that write into the existing
+`try`; retain the callback, contents, error propagation and removal operation.
+All 22 declarations / 23 expanded cases remain, including malformed UTF-8,
+literal replacement characters, size limits, FIFO rejection and error causes.
+Test code changes by +1/-1 line; production and shared support are unchanged.
+
+With a real partial write followed by injected `ENOSPC` inside the existing
+valid-Unicode Vitest case, the baseline leaves the file present. The candidate
+removes it, preserves the exact write error and never invokes the apply handler.
+Both observations precede emergency cleanup. Temporary instrumentation was
+restored byte for byte. A separate direct invocation of the unchanged helper
+body confirms the same result and that baseline removal was never called.
+
+The clean baseline and candidate each pass all 23 cases. Baseline wall time was
+54.35 seconds including cold worker compilation; the warm candidate took 6.71
+seconds (4.47 seconds reported by Vitest). These are not speed-comparison data.
+Independent preservation and local ClawSweeper review found no lost contract
+or actionable finding. Source-only follow-ups remain for FIFO setup cleanup,
+failed MCP temporary-directory removal and environment restoration after
+channel/model fixture removal errors.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.

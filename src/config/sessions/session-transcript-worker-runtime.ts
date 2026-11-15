@@ -25,17 +25,17 @@ import {
   armDatabaseWorkerIdleRetirement,
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   pruneHistoryDatabases,
   refreshDatabaseWorkerPressureSubscription,
   rotateDatabaseWorkers,
   settleSessionHistoryWorkerEviction,
-  targetDiscoveryLane,
   type HistoryDatabaseResource,
   type SessionHistoryDatabaseTarget,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import type {
+  SessionHistoryWorkerRequestOptions,
   SessionHistoryWorkerRequestRunner,
   SessionHistoryWorkerDatabase,
   SessionHistoryWorkerInput,
@@ -84,7 +84,7 @@ export function runSessionBranchSummaryWorkerRequest(
   return withSessionHistoryWorkerDatabase(
     database,
     (owner) => owner.readBranchSummaries({ request: read }, signal),
-    maintenanceLane,
+    sessionStoreLane,
   );
 }
 
@@ -173,7 +173,7 @@ export function retainSessionHistoryWorkerDatabase(
       receive,
       signal,
       onRequest,
-      timeoutMs = 60_000,
+      { timeoutMs = 60_000, pointRead }: SessionHistoryWorkerRequestOptions = {},
     ) => {
       let retirement: Promise<void> | undefined;
       const preserveSourceArtifacts = isArtifactPreservingStateRead("agent", database.path);
@@ -210,7 +210,7 @@ export function retainSessionHistoryWorkerDatabase(
           !(options.readIdentity
             ? hasSqliteDatabaseSchemaAdmissionForIdentity(options.readIdentity)
             : hasSqliteDatabaseSchemaAdmissionForPath(readOptions.path));
-        const requestLane = cold ? targetDiscoveryLane : requestedLane;
+        const requestLane = cold ? sessionStoreLane : requestedLane;
         if (requestLane !== requestedLane) {
           clearDatabaseWorkerIdleRetirement(requestLane);
           requestLane.pending++;
@@ -260,14 +260,15 @@ export function retainSessionHistoryWorkerDatabase(
           const reply = await admit((requestSignal, remaining) => {
             return runWithAgentDatabaseReadAdmissionTurn(
               [database.path],
-              () => {
+              async () => {
                 // A preceding writer can renew this physical proof while admission waits.
                 const validation = preserveSourceArtifacts
                   ? undefined
-                  : captureOpenClawAgentDatabaseReadValidation(
+                  : await captureOpenClawAgentDatabaseReadValidation(
                       database,
                       owned.nativeLanes.has(requestLane) ? "retained" : "admission",
                     );
+                await options.prepareRead?.(validation);
                 return requestLane.pool.run(
                   () => {
                     assertCurrent();
@@ -277,7 +278,6 @@ export function retainSessionHistoryWorkerDatabase(
                     } else if (!preserveSourceArtifacts) {
                       assertAgentAdmitted();
                     }
-                    options.prepareRead?.();
                     const input = prepare();
                     if (preserveSourceArtifacts && input.kind === "session-exact-entries") {
                       inspectionIdentity =
@@ -318,6 +318,7 @@ export function retainSessionHistoryWorkerDatabase(
                       ...input,
                       database,
                       validation: validation?.validation,
+                      readCustody: options.readCustody,
                       projectionReceipt:
                         projectionReceipt &&
                         (input.kind === "history-page"
@@ -331,9 +332,13 @@ export function retainSessionHistoryWorkerDatabase(
                     } satisfies SessionTranscriptWorkerRequest;
                   },
                   {
-                    inputBytes: inputBytes + (validation?.inputBytes ?? 0),
+                    inputBytes:
+                      inputBytes +
+                      (validation?.inputBytes ?? 0) +
+                      (options.readCustody ? JSON.stringify(options.readCustody).length * 2 : 0),
                     timeoutMs: remaining,
                     signal: requestSignal,
+                    pointRead,
                     onRequest: onRequest
                       ? (value, context) => {
                           const effect = (async () => {

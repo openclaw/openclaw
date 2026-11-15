@@ -71,8 +71,9 @@ import {
 } from "./send.js";
 import { TELEGRAM_SUPPORTED_REACTION_EMOJI_LIST } from "./status-reaction-variants.js";
 import { getCacheStats, searchStickers } from "./sticker-cache.js";
-import { formatTelegramDeliveryTarget, normalizeTelegramOutboundTarget } from "./targets.js";
+import { normalizeTelegramOutboundTarget } from "./targets.js";
 import { resolveTelegramToken } from "./token.js";
+import { formatTelegramDeliveryTarget } from "./topic-conversation.js";
 import { resolveTelegramTopicNameCacheScope, updateTopicName } from "./topic-name-cache.js";
 
 const TELEGRAM_EMOJI_LIST_LIMIT = 100;
