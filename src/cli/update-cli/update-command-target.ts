@@ -302,9 +302,7 @@ export async function resolveUpdateCommandTarget(
           timeoutMs: updateStepTimeoutMs,
         });
         if (unsupportedGit) {
-          await refuseUpdate("git-version-unsupported", unsupportedGit, [
-            { check: "git-runtime", code: "git-version-unsupported", message: unsupportedGit },
-          ]);
+          await refuseUpdate("git-version-unsupported", unsupportedGit);
           return undefined;
         }
       }
@@ -667,21 +665,14 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      // Registry metadata without dist.unpackedSize (mirrors, older registries) skips this check.
-      if (
-        updateInstallKind === "package" &&
-        !opts.dryRun &&
-        !packageAlreadyCurrent &&
-        packageUnpackedSize
-      ) {
+      // Only package targets read dist.unpackedSize; registries without it skip this check.
+      if (!opts.dryRun && !packageAlreadyCurrent && packageUnpackedSize) {
         const diskShortfall = describePackageStagingShortfall(
           packageInstallTarget?.packageRoot ? path.dirname(packageInstallTarget.packageRoot) : root,
           packageUnpackedSize,
         );
         if (diskShortfall) {
-          await refuseUpdate("preflight-insufficient-space", diskShortfall, [
-            { check: "disk-space", code: "preflight-insufficient-space", message: diskShortfall },
-          ]);
+          await refuseUpdate("preflight-insufficient-space", diskShortfall);
           return undefined;
         }
       }
