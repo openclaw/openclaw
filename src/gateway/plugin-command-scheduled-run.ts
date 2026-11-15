@@ -273,15 +273,13 @@ export async function runPluginCommandScheduledTurn(params: {
     try {
       assertSource();
       const entry = currentSession.entry;
-      if (entry && entry.lifecycleRevision !== schedule.parent.lifecycleRevision) {
-        // Every reset (`/new`, `/reset`, automatic rollover) mints a fresh random revision. A
-        // restored archive keeps its own revision, so an archived parent stays an ordinary refusal.
-        throw new PluginCommandScheduleEndedError(
-          "Scheduled plugin command's parent conversation was reset; the schedule ended.",
-        );
-      }
-      if (!entry || entry.archivedAt || entry.sessionId !== schedule.parent.sessionId) {
-        throw new Error("Scheduled plugin command parent was deleted, archived or replaced.");
+      if (
+        !entry ||
+        entry.archivedAt ||
+        entry.sessionId !== schedule.parent.sessionId ||
+        entry.lifecycleRevision !== schedule.parent.lifecycleRevision
+      ) {
+        throw new Error("Scheduled plugin command parent was deleted, reset or archived.");
       }
       const assertParent = composeSessionSourceAssertion(
         [currentSession.source],

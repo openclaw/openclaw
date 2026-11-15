@@ -320,10 +320,9 @@ and stays visible for inspection. One invocation can create at most 4
 schedules, and each plugin can keep at most 8 active schedules per parent
 session. Enabled schedules bound to the loaded plugin instance count toward that
 cap, as do unexpired schedules of the same plugin code that a restart can
-re-arm. Schedules bound to a replaced plugin instance or to different code, or
-created before their parent conversation was reset (with `/new`, `/reset`, or an
-automatic session reset), can never run plugin code again, so they do not block
-re-enrollment; each one retires at its next occurrence.
+re-arm. Schedules bound to a replaced plugin instance or to different code can
+never run plugin code again, so they do not block re-enrollment; each one
+retires at its next occurrence.
 
 The stored ceiling is the requester's whole native tool surface, at most 256
 plain tool names. A larger surface refuses scheduling with an explicit error.
