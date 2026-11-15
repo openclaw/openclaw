@@ -8,6 +8,7 @@ describe("model provider labels", () => {
     ["__proto__", "Proto"],
     ["openai", "OpenAI"],
     ["xai", "xAI"],
+    ["elevenlabs", "ElevenLabs"],
     ["acp-opencode", "OpenCode (ACP)"],
     ["acp-qwen", "Qwen Code (ACP)"],
     ["acp-pi", "Pi (ACP)"],
