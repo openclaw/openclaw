@@ -20,6 +20,11 @@ import {
   readInstalledTerminalMetadata,
 } from "./installed-terminal-contracts.mjs";
 import {
+  captureDirectoryWatchLaunch,
+  captureRetainedDirectoryWatchRuntime,
+  directoryWatchCoverage,
+} from "./installed-terminal-directory-watch.mjs";
+import {
   assertWorkerCellPackageIdentity,
   readWorkerCellPackageIdentity,
 } from "./worker-cell-package.mjs";
@@ -1286,6 +1291,20 @@ function install(spec) {
   };
   childProcess.spawn = function (...args) {
     const launch = childLaunchSnapshot(args[1], args[2]);
+    let directoryWatch;
+    let retainedRuntime;
+    // Registration is owned by the spawning process, not the retained child.
+    // Capture it before native launch; never initialize the product registry.
+    observe("directory-watch-custody", () => {
+      if (args[0] === process.execPath) {
+        retainedRuntime = captureRetainedDirectoryWatchRuntime(launch, qualifiedApplication, spec);
+        directoryWatch = captureDirectoryWatchLaunch(
+          args[0],
+          launch,
+          launch.options ? publishedEnvironment(launch.options, spec) : undefined,
+        );
+      }
+    });
     const child = Reflect.apply(original.spawn, this, args);
     observe("spawn", () => {
       const id = spawnId++;
@@ -1307,6 +1326,8 @@ function install(spec) {
         command: args[0],
         argv,
         packageEntry,
+        directoryWatch,
+        retainedRuntime,
         nativeOperation: nativeOperation(args[0], argv, launch.options),
       });
       // Native exit owns process lifetime. Parent-side IPC disconnect can omit
@@ -1338,6 +1359,7 @@ function install(spec) {
     ppid: process.ppid,
     argv: process.argv,
     node: process.version,
+    executableIdentity: fileIdentity(process.execPath),
     entry: process.argv[1],
   });
   observe("heartbeat-package", qualifyHeartbeatPackage);
@@ -1567,6 +1589,15 @@ function readObservation(directory, spec = {}) {
   }
   const candidate = handoff ? installedTerminalDescendants(rows, handoff.child) : new Set();
   const heartbeatCoverage = new Map();
+  const directoryWatches = new Map();
+  for (const row of rows) {
+    if (row.event === "spawn" && row.directoryWatch) {
+      directoryWatches.set(
+        row,
+        directoryWatchCoverage(row, rows, spec, (root) => isHeartbeatPackageRoot(root, spec)),
+      );
+    }
+  }
   const lifetimeBounds = new Map();
   const fullTraceProcesses = new Set();
   const ownerExit = (owner) =>
@@ -1652,7 +1683,9 @@ function readObservation(directory, spec = {}) {
     );
     const started = startups.filter((start) => start.pid === created.child && start.thread === 0);
     assert(
-      created.nodeChild === true && started.length === 1 && started[0].ppid === created.pid,
+      created.nodeChild === true &&
+        ((started.length === 1 && started[0].ppid === created.pid) ||
+          (started.length === 0 && directoryWatches.has(created))),
       "OS child absence requires exact preload startup",
     );
     assert(
@@ -1660,7 +1693,9 @@ function readObservation(directory, spec = {}) {
         rows.every((event) => BigInt(event.time) < BigInt(receipt.time)),
       "OS child observation exceeds kernel absence bound",
     );
-    fullTraceProcesses.add(created.child);
+    if (!directoryWatches.has(created)) {
+      fullTraceProcesses.add(created.child);
+    }
     lifetimeBounds.set(created, receipt);
     return receipt;
   };
@@ -1843,6 +1878,11 @@ function readObservation(directory, spec = {}) {
     }
     if (row.event === "spawn" && row.nodeChild && row.child !== null) {
       assert(row.argv !== null, "Node child argv observation is unqualified");
+      if (directoryWatches.has(row)) {
+        // This finite helper has no JS preload. Its native exit or post-join
+        // ESRCH bound proves teardown only; it never enters fullTraceProcesses.
+        heartbeatCoverage.set(row, directoryWatches.get(row));
+      }
       const ownerStarts = startups.filter(
         (start) => start.pid === row.pid && start.thread === row.thread,
       );
