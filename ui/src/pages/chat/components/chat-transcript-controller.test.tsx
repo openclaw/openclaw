@@ -952,6 +952,9 @@ it("rebinds a retained tool row when its invocation source changes", async () =>
   rerender();
   transcript.start();
   await settleToolBridges(container);
+  requireElement(container, ".chat-activity-group__summary").click();
+  rerender();
+  await settleToolBridges(container);
   const row = requireElement(container, ".chat-tool-row");
   const output = () => container.querySelector(".chat-tool-term__out code")?.textContent;
   expect(output()).toBe("Initial source output.");

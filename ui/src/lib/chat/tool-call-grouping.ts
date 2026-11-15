@@ -23,7 +23,7 @@ type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
   ownSessionLaunches?: ReadonlySet<string>;
   activityKeys?: ReadonlyMap<AgentActivityItem, string>;
-  /** Canonical command results with an exit code prove execution, including nonzero exits. */
+  /** Exit codes or code-mode bridge dispatch receipts prove execution, not success. */
   executedCommands?: ReadonlySet<string>;
   /** Executions with source but no shell command have their own factual category. */
   codeExecutions?: ReadonlySet<string>;

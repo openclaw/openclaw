@@ -239,15 +239,18 @@ function ToolGroup(props: { entry: Extract<Entry, { kind: "tools" }> }) {
       if (card.callId && launches.has(card.callId)) {
         ownSessionLaunches.add(key);
       }
-      if (card.exitCode !== undefined) {
-        executedCommands.add(key);
-      }
       if (
         call.name.trim().toLowerCase() === "exec" &&
         !(typeof args?.command === "string" && args.command.trim()) &&
         [args?.code, args?.input].some((code) => typeof code === "string" && code.trim())
       ) {
         codeExecutions.add(key);
+      }
+      if (
+        card.exitCode !== undefined ||
+        (codeExecutions.has(key) && asNullableRecord(card.details)?.bridgeDispatchStarted === true)
+      ) {
+        executedCommands.add(key);
       }
       return {
         ...card.activity,

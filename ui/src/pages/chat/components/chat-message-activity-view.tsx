@@ -1,7 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
 import { createMemo, For, Show } from "solid-js";
-import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { groupToolCalls } from "../../../../../src/chat/tool-call-grouping.js";
 import { fnv1aUtf16 } from "../../../../../src/shared/fnv1a.js";
@@ -27,10 +26,7 @@ import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/cha
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { activityEntryGroupKey, isInlineCommandCard } from "../chat-activity-segments.ts";
-import {
-  ownSessionLaunchCalls,
-  resolveSessionLaunchPresentation,
-} from "../chat-spawned-subagent.ts";
+import { ownSessionLaunchCalls } from "../chat-spawned-subagent.ts";
 import { transcriptRunId } from "../chat-thread-run-identity.ts";
 import { selectActivityHeadline } from "./chat-activity-headline-selection.ts";
 import {
@@ -41,6 +37,7 @@ import {
   ActivityOperation,
   PreparedActivityRow,
   descendantCards,
+  isStandaloneActivity,
   projectActivityOperations,
 } from "./chat-message-activity-operation.tsx";
 import type {
@@ -50,13 +47,6 @@ import type {
 import type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { ToolReviewOutcome } from "./chat-tool-outcome-summary.solid.tsx";
-
-function isStandaloneActivity(card: ToolCard): boolean {
-  return (
-    resolveSessionLaunchPresentation(card) !== null ||
-    Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
-  );
-}
 
 export function prepareActivityGroup(
   groups: readonly MessageGroupData[],
@@ -224,7 +214,10 @@ export function prepareActivityGroup(
     ) {
       codeExecutions.add(key);
     }
-    if (card.exitCode !== undefined) {
+    if (
+      card.exitCode !== undefined ||
+      (codeExecutions.has(key) && asNullableRecord(card.details)?.bridgeDispatchStarted === true)
+    ) {
       executedCommands.add(key);
     }
   }
@@ -576,10 +569,13 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
             `${entry.key}:activity`,
           );
         }
+        const visibleContent = nativeMessage
+          ? null
+          : resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message));
         if (
           !nativeMessage &&
-          resolveMessageVisibleContent(entry.message, normalizeMessage(entry.message)) ===
-            "non-text"
+          (visibleContent === "non-text" ||
+            (visibleContent === "text" && !isStandaloneToolMessageForDisplay(entry.message)))
         ) {
           result.push({
             key: `${entry.key}:output`,

@@ -321,6 +321,22 @@ it("settles an earlier activity headline when narration follows in the same live
   activityRoot.render([activity], { ...liveOptions, ...steering });
   expect(query("label")).toBe(headline);
   expect(container.querySelector(".text-shimmer")).not.toBeNull();
+  const indicator = {
+    kind: "reading-indicator" as const,
+    key: "working",
+    startedAt: 10_000,
+    runId: "active-run",
+  };
+  const queued = createToolGroup(
+    "queued",
+    [createMessageEntry("queued:entry", { role: "user", content: "A later task" })],
+    { role: "user" },
+  );
+  const pending = projectTranscriptActivity([activity, steer, indicator, queued], props);
+  activityRoot.render([activity], { ...liveOptions, ...pending });
+  expect(pending.activityGroupKey).toBe("current");
+  expect(query("label")).toBe(headline);
+  expect(container.querySelector(".text-shimmer")).not.toBeNull();
   const after = projectTranscriptActivity([activity, steer, narration], props);
   expect(after.activityGroupKey).toBeNull();
   activityRoot.render([activity], { ...liveOptions, ...after });

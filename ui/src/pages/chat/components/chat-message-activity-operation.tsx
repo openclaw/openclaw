@@ -9,6 +9,7 @@ import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveToolDisplayIcon } from "../../../lib/chat/tool-display-icon.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+import { resolveSessionLaunchPresentation } from "../chat-spawned-subagent.ts";
 import type {
   ActivityOperationGroup,
   ActivityOperationProps,
@@ -17,6 +18,13 @@ import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 import { ChatToolCard } from "./chat-tool-cards.solid.tsx";
 
 registerEnglishCatalog(registerChatToolLabelsEnglish);
+
+export function isStandaloneActivity(card: ToolCard): boolean {
+  return (
+    resolveSessionLaunchPresentation(card) !== null ||
+    Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
+  );
+}
 
 export function descendantCards(group: ToolCallGroup<ToolCard>) {
   const cards: ToolCard[] = [];
@@ -62,10 +70,14 @@ export function projectActivityOperations(
       visible.add(group);
     }
   }
-  const pending = roots.toReversed().map((group) => ({
+  const pending: {
+    group: ToolCallGroup<ToolCard>;
+    target: ActivityOperationGroup[];
+    executionCards: ToolCard[];
+  }[] = roots.toReversed().map((group) => ({
     group,
     target: groups,
-    executionCards: [] as ToolCard[],
+    executionCards: [],
   }));
   while (pending.length) {
     const { group, target, executionCards } = pending.pop()!;

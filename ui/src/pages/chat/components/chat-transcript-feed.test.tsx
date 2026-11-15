@@ -185,6 +185,23 @@ it("preserves mixed-block order and associates late failure results with their c
   expect(JSON.parse(successful!.querySelector("code")!.textContent!)).toEqual(args);
 });
 
+it.each([true, false])(
+  "keeps failed code execution distinct from rejection (dispatch: %s)",
+  (bridgeDispatchStarted) => {
+    const container = mount([
+      assistant(toolCall("code", "exec", { code: "return await read({path: 'missing.txt'});" })),
+      {
+        ...toolResult("code", true),
+        details: { status: "failed", bridgeDispatchStarted },
+      },
+    ]);
+    expect(container.one(part("tool-group") + " summary")?.textContent?.trim()).toBe(
+      bridgeDispatchStarted ? "Ran code" : "Run code",
+    );
+    expect(container.one(part("error"))).not.toBeNull();
+  },
+);
+
 it.each(["tool", "function", "toolResult", "tool_result", undefined])(
   "omits an orphan %s result when the page starts after its call",
   (role) => {

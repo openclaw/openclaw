@@ -30,10 +30,13 @@ export function projectTranscriptActivity(
       // A steer does not finish the operation it addresses. A later narrative,
       // question, or notice still closes the activity segment.
       // The working indicator is status for the run, not another transcript action.
+      // Queued inputs after it belong to later work and cannot settle this action.
+      const workingIndex = workingIndicator ? chatItems.indexOf(workingIndicator) : -1;
       const group =
         props.runActive && activityRunId
           ? chatItems.findLast(
-              (item) =>
+              (item, index) =>
+                (workingIndex < 0 || index < workingIndex) &&
                 item.kind !== "reading-indicator" &&
                 !(
                   item.kind === "group" &&

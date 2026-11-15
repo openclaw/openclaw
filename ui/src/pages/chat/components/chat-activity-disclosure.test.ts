@@ -329,6 +329,8 @@ it.each([
   { source: "prepared outcome", expected: "Blocked" },
   { source: "paginated shell results", expected: "Ran commands" },
   { source: "recorded code inputs", expected: "Ran code" },
+  { source: "failed code after dispatch", expected: "Ran code" },
+  { source: "failed code before dispatch", expected: "Run code" },
 ])("renders $source through transcript grouping", async ({ source, expected }) => {
   const messages =
     source === "prepared outcome"
@@ -345,7 +347,17 @@ it.each([
                   })
                 : createAssistantMessage([
                     createToolCall(id, "exec", { code: "return 1;" }),
-                    createToolResultBlock(id, "exec", "1", { isError: false }),
+                    createToolResultBlock(id, "exec", "1", {
+                      isError: source.startsWith("failed code"),
+                      ...(source.startsWith("failed code")
+                        ? {
+                            details: {
+                              status: "failed",
+                              bridgeDispatchStarted: source === "failed code after dispatch",
+                            },
+                          }
+                        : {}),
+                    }),
                   ]);
             }),
           ),
