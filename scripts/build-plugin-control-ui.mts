@@ -15,7 +15,7 @@ async function buildBundledPluginControlUi(
       await fs.readFile(path.join(rootDir, "dist/openclaw.plugin.json"), "utf8"),
     );
     const repoRoot = options.repoRoot ?? resolveRepoRoot(import.meta.url);
-    const pluginDir = path.relative(path.join(repoRoot, "extensions"), rootDir);
+    const pluginDir = path.relative(path.join(repoRoot, "extensions"), path.resolve(packageDir));
     if (!pluginDir || pluginDir.includes(path.sep) || pluginDir.startsWith(".")) {
       throw new Error("Bundled UI copy must run inside one bundled plugin package.");
     }

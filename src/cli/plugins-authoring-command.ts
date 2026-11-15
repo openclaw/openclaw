@@ -8,11 +8,7 @@ import { root } from "../infra/fs-safe.js";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import { loadPluginControlUiDeclaration } from "../plugins/control-ui-build-manifest.js";
-import {
-  loadPluginManifest,
-  PLUGIN_MANIFEST_FILENAME,
-  resolvePackageExtensionEntries,
-} from "../plugins/manifest.js";
+import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
 import { controlUiSource } from "../plugins/package-manifest.js";
 import { createPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
@@ -31,7 +27,7 @@ import {
   createConfigSchema,
   validateToolPluginProject,
 } from "./plugins-authoring-metadata.js";
-import { resolveRootPath } from "./plugins-authoring-root.js";
+import { resolveEntryPath, resolveRootPath } from "./plugins-authoring-root.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -76,30 +72,6 @@ function normalizeRelativePath(rootDir: string, targetPath: string): string {
     throwExpectedCliError(`entry must stay inside plugin root: ${targetPath}`);
   }
   return relative.startsWith(".") ? relative : `./${relative}`;
-}
-
-function resolveEntryPath(rootDir: string, entry: string | undefined): string {
-  let selected = entry;
-  if (!selected) {
-    const packagePath = path.join(rootDir, "package.json");
-    if (fs.existsSync(packagePath)) {
-      const resolution = resolvePackageExtensionEntries(readJsonFile(packagePath));
-      if (resolution.status === "ok") {
-        selected = resolution.entries[0];
-      }
-    }
-  }
-  selected ??= "src/index.ts";
-  const candidate = path.isAbsolute(selected) ? selected : `${rootDir}${path.sep}${selected}`;
-  try {
-    return fs.realpathSync.native(candidate);
-  } catch (error) {
-    const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-    if (code !== "ENOENT" && code !== "ENOTDIR") {
-      throw error;
-    }
-    return candidate;
-  }
 }
 
 function readPackageManifest(rootDir: string): JsonObject {
@@ -148,7 +120,7 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
 
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
   const rootDir = resolveRootPath(opts.root);
-  const entryPath = resolveEntryPath(rootDir, opts.entry);
+  const entryPath = resolveEntryPath(rootDir, opts.entry, opts.root);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packagePath = path.join(rootDir, "package.json");
   const packageManifest = readPackageManifest(rootDir);
@@ -223,7 +195,7 @@ export async function collectPluginsValidationResult(
   opts: PluginsValidateOptions,
 ): Promise<PluginsValidationResult> {
   const rootDir = resolveRootPath(opts.root);
-  const entryPath = resolveEntryPath(rootDir, opts.entry);
+  const entryPath = resolveEntryPath(rootDir, opts.entry, opts.root);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
   const manifestResult = withPluginCache(createPluginCache(), () =>

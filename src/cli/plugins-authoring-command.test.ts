@@ -549,6 +549,40 @@ describe("plugin authoring commands", () => {
     expect(cwdRemoved).toBe(true);
   });
 
+  it.skipIf(process.platform === "win32").each(["file", "directory"])(
+    "preserves the declared %s alias and sibling runtime mapping",
+    async (kind) => {
+      const { root: rootDir, entry: entryPath } = sourceProject("entry-alias");
+      const declared = kind === "file" ? "./src/alias.ts" : "./declared/index.ts";
+      fs.symlinkSync(
+        kind === "file" ? "index.ts" : "src",
+        path.join(rootDir, kind === "file" ? "src/alias.ts" : "declared"),
+        kind === "file" ? "file" : "dir",
+      );
+      const packagePath = path.join(rootDir, "package.json");
+      const runtimeExtensions = ["./dist/main.js", "./dist/sibling.js"];
+      const packageManifest = readJson(rootDir, "package.json");
+      packageManifest.openclaw = {
+        extensions: [declared, "./src/sibling.ts"],
+        runtimeExtensions,
+        setupEntry: runtimeExtensions[0],
+      };
+      writeFixtureJsonSync(packagePath, packageManifest);
+      using log = silenceRuntime("log");
+      await runPluginsBuildCommand({ root: rootDir });
+      const generated = readJson(rootDir, "package.json");
+      expect(generated.openclaw).toEqual(packageManifest.openclaw);
+      const manifest = fs.readFileSync(path.join(rootDir, "openclaw.plugin.json"));
+      const source = fs.readFileSync(entryPath);
+      await runPluginsValidateCommand({ root: rootDir });
+      expect(log).toHaveBeenCalledWith("Plugin entry-alias is valid.");
+      await runPluginsBuildCommand({ root: rootDir, entry: declared, check: true });
+      expect(readJson(rootDir, "package.json")).toEqual(generated);
+      expect(fs.readFileSync(path.join(rootDir, "openclaw.plugin.json"))).toEqual(manifest);
+      expect(fs.readFileSync(entryPath)).toEqual(source);
+    },
+  );
+
   it.each([false, true])(
     "builds and checks metadata through a symlink root with parent=%s",
     async (parent) => {
@@ -591,7 +625,7 @@ describe("plugin authoring commands", () => {
         await expect(
           runPluginsBuildCommand({
             root: selectedRoot,
-            entry: `missing${path.sep}..${path.sep}src${path.sep}index.ts`,
+            entry: "./missing.ts",
           }),
         ).rejects.toThrow("plugin entry not found");
         await runPluginsBuildCommand({ ...opts, check: true });
