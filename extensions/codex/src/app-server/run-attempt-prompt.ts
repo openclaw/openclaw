@@ -232,7 +232,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
           prompt: joinPresentSections(
             params.prompt,
             params.currentInboundContext?.text,
-            buildOpenClawPromptContext(true),
+            buildOpenClawPromptContext({ includeWorkspace: true, includeWatchedSessions: true }),
             inputAttachmentNote,
           ),
         }
