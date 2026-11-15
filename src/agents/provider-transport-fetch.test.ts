@@ -7,6 +7,9 @@ import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-
 import { withinTest } from "../../test/helpers/promise.js";
 import { makeStallingStream } from "../infra/http-body.test-support.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
+import { withModelTransportContext } from "../llm/model-transport-context.js";
+import { admitProviderRateLimitStream } from "../llm/provider-rate-limit-stream.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { testApi as loggerTestApi } from "../logging/logger.test-support.js";
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
@@ -25,6 +28,7 @@ import {
   resolveProviderRequestPolicyConfigMock,
   shouldUseEnvHttpProxyForUrlMock,
 } from "./provider-transport-fetch.test-harness.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const model = makeProviderModelFixture<"openai-responses">({
@@ -690,5 +694,124 @@ describe("buildGuardedModelFetch SSE readability", () => {
     await expect((await buildGuardedModelFetch(completionModel)(url)).text()).resolves.toBe(
       expected,
     );
+  });
+});
+
+describe("buildGuardedModelFetch shared rate-limit deadlines", () => {
+  installProviderTransportFetchTestHooks();
+
+  // A peer run's 429 publishes the deadline through the real admission observer.
+  async function publishDeadline(apiKey: string, retryAfterMs: number) {
+    const limited = await admitProviderRateLimitStream(model, { apiKey }, () => {
+      const stream = createAssistantMessageEventStream();
+      stream.end(
+        makeAgentAssistantMessage({
+          content: [],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "error",
+          retryAfterMs,
+          errorMessage: "Rate limit reached in organization org-synthetic on tokens per min (TPM).",
+        }),
+      );
+      return stream;
+    });
+    await limited.result();
+  }
+
+  const resend = (apiKey: string, signal?: AbortSignal) =>
+    request({ method: "POST", headers: { authorization: `Bearer ${apiKey}` }, signal });
+
+  it("holds an admitted resend until a deadline learned after admission", async () => {
+    fetchWithSsrFGuardMock.mockImplementation(async () => ({
+      response: new Response("ok"),
+      finalUrl: `${model.baseUrl}/responses`,
+      release: async () => undefined,
+    }));
+    vi.useFakeTimers();
+    try {
+      await publishDeadline("synthetic-resend-key", 1_000);
+      const pending = resend("synthetic-resend-key");
+      const unrelated = resend("synthetic-other-key");
+      await vi.advanceTimersByTimeAsync(999);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+      expect(latestGuardedFetchParams().init).toMatchObject({
+        headers: { authorization: "Bearer synthetic-other-key" },
+      });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+      await expect((await pending).text()).resolves.toBe("ok");
+      await (await unrelated).text();
+    } finally {
+      await vi.advanceTimersByTimeAsync(61_000);
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { cap: 120_000, timeoutMs: undefined, held: true },
+    { cap: 1_000, timeoutMs: undefined, held: false },
+    { cap: 120_000, timeoutMs: 30_000, held: false },
+  ])(
+    "applies the call's retry cap $cap, timeout $timeoutMs and wait status to a 90s deadline",
+    async ({ cap, timeoutMs, held }) => {
+      fetchWithSsrFGuardMock.mockImplementation(async () => ({
+        response: new Response("ok"),
+        finalUrl: `${model.baseUrl}/responses`,
+        release: async () => undefined,
+      }));
+      const stopWaiting = vi.fn();
+      const onRateLimitWait = vi.fn(() => stopWaiting);
+      vi.useFakeTimers();
+      try {
+        const apiKey = `synthetic-cap-${cap}-${timeoutMs}`;
+        await publishDeadline(apiKey, 90_000);
+        const outcome = withModelTransportContext(
+          {
+            requestId: apiKey,
+            priority: "interactive",
+            maxRetryDelayMs: cap,
+            timeoutMs,
+            onRateLimitWait,
+          },
+          () => resend(apiKey),
+        ).then(
+          async (response) => response.text(),
+          (error: unknown) => error,
+        );
+        await vi.advanceTimersByTimeAsync(89_999);
+        // Beyond the cap or timeout, the provider's own 429 drives recovery as before the wait.
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(held ? 0 : 1);
+        expect(onRateLimitWait).toHaveBeenCalledTimes(held ? 1 : 0);
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(outcome).resolves.toBe("ok");
+        expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+        expect(stopWaiting).toHaveBeenCalledTimes(held ? 1 : 0);
+      } finally {
+        await vi.advanceTimersByTimeAsync(200_000);
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("sends nothing when the resend is cancelled during the wait", async () => {
+    vi.useFakeTimers();
+    try {
+      await publishDeadline("synthetic-cancel-key", 1_000);
+      const controller = new AbortController();
+      const outcome = resend("synthetic-cancel-key", controller.signal).then(
+        async (response) => response.text(),
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      controller.abort(new Error("run cancelled"));
+      await expect(outcome).resolves.toMatchObject({ message: "run cancelled" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    } finally {
+      await vi.advanceTimersByTimeAsync(61_000);
+      vi.useRealTimers();
+    }
   });
 });

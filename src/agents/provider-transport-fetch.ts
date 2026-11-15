@@ -12,7 +12,11 @@ import {
 import { withTrustedEnvProxyGuardedFetchMode } from "../infra/net/fetch-guard.js";
 import { wrapGuardedBodyStream } from "../infra/net/guarded-body-stream.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
-import { formatModelTransportContext } from "../llm/model-transport-context.js";
+import {
+  formatModelTransportContext,
+  getModelTransportContext,
+} from "../llm/model-transport-context.js";
+import { waitForProviderRateLimitDeadline } from "../llm/provider-rate-limit.js";
 import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProviderAuthAuthority } from "../plugins/provider-auth-authority.js";
@@ -328,6 +332,22 @@ export function buildGuardedModelFetch(
       requestInit ??
       (swappedEgress.headers && init ? { ...init, headers: swappedEgress.headers } : init);
     const baseSignal = baseInit?.signal ?? undefined;
+    // Internal resends skip stream admission; a peer's later 429 must still hold them.
+    const transportContext = getModelTransportContext();
+    const rateLimitWait = waitForProviderRateLimitDeadline(
+      model,
+      rawHeaders,
+      {
+        signal: baseSignal,
+        maxRetryDelayMs: transportContext?.maxRetryDelayMs,
+        // The SDK applies this same timeout through baseSignal.
+        timeoutMs: resolveModelRequestTimeoutMs(model, transportContext?.timeoutMs),
+      },
+      transportContext,
+    );
+    if (rateLimitWait) {
+      await rateLimitWait;
+    }
     const timeoutSignal =
       requestTimeoutMs === undefined ? undefined : AbortSignal.timeout(requestTimeoutMs);
     const localServiceSignal =

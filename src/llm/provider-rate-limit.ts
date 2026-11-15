@@ -46,6 +46,7 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.providerRateLimit"), (
 }));
 const { gates } = state;
 const admittedAccount = Symbol.for("openclaw.providerRateLimit.admittedAccount");
+const DEFAULT_MAX_RETRY_DELAY_MS = 60_000;
 const retryDeadlineContext = new AsyncContext<{ pendingUntil?: number }>(
   Symbol.for("openclaw.providerRateLimit.retryDeadline"),
 );
@@ -237,6 +238,51 @@ export function getProviderRateLimitState(
   };
 }
 
+/**
+ * Holds a physical send behind a shared deadline learned after its stream admission.
+ * Returns undefined, without a microtask hop, when no such deadline applies.
+ */
+export function waitForProviderRateLimitDeadline(
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
+  headers: HeadersInit | undefined,
+  options: Pick<SimpleStreamOptions, "signal" | "maxRetryDelayMs" | "timeoutMs">,
+  context?: {
+    priority?: "interactive" | "background";
+    onRateLimitWait?: (retryAt: number) => () => void;
+  },
+): Promise<void> | undefined {
+  if (!gates.size) {
+    return undefined;
+  }
+  // The caller's request timeout already runs during this wait; never hold past it.
+  const cap = options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS;
+  const request = {
+    signal: options.signal,
+    maxRetryDelayMs:
+      options.timeoutMs === undefined
+        ? cap
+        : cap > 0
+          ? Math.min(cap, options.timeoutMs)
+          : options.timeoutMs,
+    headers: Object.fromEntries(new Headers(headers)),
+  };
+  const { key } = requestIdentity(model, request);
+  const gate = key ? gates.get(key) : undefined;
+  // Admission already waited out earlier deadlines; only a later 429 holds this send.
+  if (!gate || gate.retryAt <= monotonicNow()) {
+    return undefined;
+  }
+  return createProviderRateLimitRequest(model, request)
+    .wait(context?.onRateLimitWait, context?.priority)
+    .catch((error: unknown) => {
+      // An SDK fetch would report this as a connection error; let the provider's own 429
+      // drive recovery for floors beyond the call's cap or timeout, as before this wait.
+      if (!(error instanceof FailoverError)) {
+        throw error;
+      }
+    });
+}
+
 /** Coordinates known shared rate limits; the caller remains the sole retry owner. */
 export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
   model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
@@ -267,7 +313,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
         const waiter: Waiter = {
           order: state.waiterOrder++,
           priority,
-          maxRetryDelayMs: options.maxRetryDelayMs ?? 60_000,
+          maxRetryDelayMs: options.maxRetryDelayMs ?? DEFAULT_MAX_RETRY_DELAY_MS,
           provider: model.provider,
           model: model.id,
           retryDeadline: retryDeadline?.pendingUntil,

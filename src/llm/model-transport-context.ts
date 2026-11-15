@@ -6,6 +6,9 @@ type ModelTransportContext = {
   requestId: string;
   priority?: "interactive" | "background";
   onRateLimitWait?: (retryAt: number) => () => void;
+  /** The call's stream options, for physical sends that cannot see them. */
+  maxRetryDelayMs?: number;
+  timeoutMs?: number;
 };
 
 // Retained process-wide transport hosts must read context entered by later SDK module copies.

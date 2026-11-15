@@ -210,6 +210,8 @@ export function createModelLifecycle(params: {
     runId: params.ctx.runId,
     requestId: callId,
     priority: params.ctx.priority,
+    maxRetryDelayMs: params.options?.maxRetryDelayMs,
+    timeoutMs: params.options?.timeoutMs,
     onRateLimitWait: (retryAt: number) => {
       const delayMs = Math.max(0, retryAt - Date.now());
       reportStatus({
