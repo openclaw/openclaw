@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Enforces a hard-zero policy for Knip's unused exports.
 import { fileURLToPath } from "node:url";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { stripVTControlCharacters } from "node:util";
+import { checkUnusedFiles } from "./check-deadcode-unused-files.mts";
 import {
   isLikelyRepoFilePath,
   runKnipScans,
@@ -196,83 +197,35 @@ const KNIP_REPORT_SCANS = [
   },
 ];
 
-/** Reads one complete built-in Knip JSON report, never stderr or partial output. */
-export function checkKnipReport(result: KnipRunResult) {
-  const invalid = (reason: string) => ({ ok: false, entries: [] as string[], message: reason });
-  if (result.errorCode || result.signal || (result.status !== 0 && result.status !== 1)) {
-    return invalid(result.errorCode ?? result.signal ?? `exit status ${String(result.status)}`);
-  }
-  try {
-    const report: unknown = JSON.parse(result.stdout);
-    if (!isRecord(report) || !Array.isArray(report.issues)) {
-      throw new Error("expected issues array");
-    }
-    const entries: string[] = [];
-    let hardZeroFinding = false;
-    for (const row of report.issues) {
-      if (!isRecord(row) || typeof row.file !== "string") {
-        throw new Error("expected issue file");
-      }
-      for (const [kind, values] of Object.entries(row)) {
-        if (kind === "file" || kind === "owners") {
-          continue;
-        }
-        if (!Array.isArray(values)) {
-          throw new Error(`expected ${kind} array`);
-        }
-        for (const value of values.flat()) {
-          if (
-            !isRecord(value) ||
-            typeof value.name !== "string" ||
-            (value.namespace !== undefined && typeof value.namespace !== "string")
-          ) {
-            throw new Error(`invalid ${kind} finding`);
-          }
-          entries.push(
-            `${kind}: ${row.file}: ${value.name}${value.namespace ? ` (${value.namespace})` : ""}`,
-          );
-          hardZeroFinding ||= kind === "files" || KNIP_ISSUES.split(",").includes(kind);
-        }
-      }
-    }
-    // Files and exports keep their hard-zero policy; Knip owns dependency
-    // severity, including configured warnings that legitimately exit zero.
-    return {
-      ok: result.status === 0 && !hardZeroFinding,
-      entries: uniqueSorted(entries),
-      message: "",
-    };
-  } catch (error) {
-    return invalid(
-      `invalid Knip JSON report: ${error instanceof Error ? error.message : String(error)}`,
-    );
-  }
-}
-
+// Keep Knip's native diagnostics and dependency severity. The existing parsers
+// add the repository's hard-zero file/export policy, including warning rules.
 function reportKnipScan(scan: (typeof KNIP_REPORT_SCANS)[number], result: KnipRunResult) {
-  const check = checkKnipReport(result);
-  if (result.stderr) {
-    process.stderr.write(result.stderr);
-  }
-  if (!check.ok) {
+  const exports = checkExportScan(scan.name, stripVTControlCharacters(result.output));
+  const files = checkUnusedFiles(stripVTControlCharacters(result.stdout));
+  process.stdout.write(result.stdout);
+  process.stderr.write(result.stderr);
+  const ok = !result.errorCode && !result.signal && result.status === 0 && exports.ok && files.ok;
+  if (!ok) {
     console.error(
-      `deadcode ${scan.name} failed: ${check.message || `exit status ${result.status}; files and exports require zero findings`}`,
+      `deadcode ${scan.name} failed: ${result.errorCode ?? result.signal ?? `exit status ${result.status}`}${result.errorMessage ? `: ${result.errorMessage}` : ""}`,
     );
+    if (exports.message) {
+      console.error(exports.message);
+    }
+    if (files.message) {
+      console.error(files.message);
+    }
+  } else {
+    console.log(`[deadcode] Knip ${scan.name} passed.`);
   }
-  for (const entry of check.entries) {
-    console.log(`[deadcode] ${scan.name}: ${entry}`);
-  }
-  if (check.ok) {
-    console.log(`[deadcode] Knip ${scan.name} passed with ${check.entries.length} entries.`);
-  }
-  return check.ok;
+  return ok;
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (process.argv.includes("--all")) {
     await runKnipScans(
       KNIP_REPORT_SCANS,
-      ["--no-progress", "--reporter", "json", "--no-config-hints"],
+      ["--no-progress", "--reporter", "compact", "--no-config-hints"],
       reportKnipScan,
     );
   } else {

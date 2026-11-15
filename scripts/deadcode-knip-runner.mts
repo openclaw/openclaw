@@ -146,7 +146,6 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
     let timedOut = false;
     let bufferExceeded = false;
     let outputBytes = 0;
-    const output: string[] = [];
     const stdout: string[] = [];
     const stderr: string[] = [];
     const stdoutDecoder = new StringDecoder("utf8");
@@ -223,11 +222,10 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
         const stderrEnd = stderrDecoder.end();
         stdout.push(stdoutEnd);
         stderr.push(stderrEnd);
-        output.push(stdoutEnd, stderrEnd);
       }
       resolve({
         ...result,
-        output: output.join(""),
+        output: stdout.join("") + stderr.join(""),
         stdout: stdout.join(""),
         stderr: stderr.join(""),
       });
@@ -253,14 +251,12 @@ export async function runKnip(knipArgs: string[], params: KnipRunParams = {}) {
       const remainingBytes = maxBufferBytes - outputBytes;
       if (buffer.length <= remainingBytes) {
         const decoded = decoder.write(buffer);
-        output.push(decoded);
         stream.push(decoded);
         outputBytes += buffer.length;
         return;
       }
       if (remainingBytes > 0) {
         const decoded = decoder.write(buffer.subarray(0, remainingBytes));
-        output.push(decoded);
         stream.push(decoded);
         outputBytes = maxBufferBytes;
       }

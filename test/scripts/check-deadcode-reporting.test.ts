@@ -25,7 +25,8 @@ it.for([
   { wrapper: "exports", outcomes: ["failure", "finding", "success"] },
   { wrapper: "report", outcomes: ["failure", "finding", "success"] },
   { wrapper: "report", outcomes: ["success", "success", "success"] },
-  { wrapper: "report", outcomes: ["malformed", "empty-failure", "warning"] },
+  { wrapper: "report", outcomes: ["file-warning", "export-warning", "warning"] },
+  { wrapper: "report", outcomes: ["empty-failure", "resolution-error", "success"] },
   { wrapper: "unused-files", outcomes: ["failure", "finding"] },
   { wrapper: "unused-files", outcomes: ["success", "finding"] },
   { wrapper: "exports", outcomes: ["success", "success", "success"] },
@@ -61,15 +62,17 @@ const outcome = outcomes[index];
 if (outcome === "failure") {
   console.error("SYNTHETIC_SCAN_FAILURE_" + index);
   process.exitCode = 2;
-} else if (args[args.indexOf("--reporter") + 1] === "json") {
-  console.error("COLD_DLX_WARNING_" + index);
-  console.log(outcome === "malformed" ? '{"issues":' : JSON.stringify({ issues: outcome === "finding" ? [{ file: "src/diagnostic-fixture.ts", files: [{ name: "src/diagnostic-fixture.ts" }], exports: [{ name: "syntheticFinding" }] }] : [] }));
+} else {
+  if (${JSON.stringify(wrapper)} === "report") console.error("COLD_DLX_WARNING_" + index);
+  if (outcome === "finding" || outcome === "file-warning") {
+    console.log(args.includes("--files") || outcome === "file-warning"
+      ? "\\x1b[33mUnused files (1)\\x1b[0m\\nsrc/diagnostic-fixture.ts"
+      : "Unused exports (1)\\nsrc/diagnostic-fixture.ts: syntheticFinding");
+  }
+  if (outcome === "export-warning") console.log("\\x1b[33mExports in used namespace (1)\\x1b[0m\\nsrc/namespace.ts: syntheticFinding");
+  if (outcome === "warning") console.log("Unused dependencies (1)\\npackage.json: synthetic-dependency");
+  if (outcome === "resolution-error") console.error("ERROR: Error loading vitest.config.ts");
   if (outcome === "finding" || outcome === "empty-failure") process.exitCode = 1;
-} else if (outcome === "finding") {
-  console.log(args.includes("--files")
-    ? "Unused files (1)\\nsrc/diagnostic-fixture.ts: src/diagnostic-fixture.ts"
-    : "Unused exports (1)\\nsrc/diagnostic-fixture.ts: syntheticFinding");
-  process.exitCode = 1;
 }
 fs.writeFileSync(marker(index, "completed"), outcome);
 sendReceipt(String(index), "completed");
@@ -116,7 +119,7 @@ sendReceipt(String(index), "completed");
     expect({ ...result, signal: child?.signalCode }, output).toMatchObject({
       error: undefined,
       signal: null,
-      status: outcomes.every((outcome) => outcome === "success") ? 0 : 1,
+      status: outcomes.every((outcome) => outcome === "success" || outcome === "warning") ? 0 : 1,
     });
 
     for (const [index, outcome] of outcomes.entries()) {
@@ -129,11 +132,11 @@ sendReceipt(String(index), "completed");
         .filter(
           (line) =>
             line.includes(scanName) &&
-            (wrapper !== "report" || line.includes(" failed:") || line.includes(" passed with ")),
+            (wrapper !== "report" || line.includes(" failed:") || line.includes(" passed.")),
         );
       expect(reported, output).toHaveLength(1);
       if (wrapper === "report") {
-        expect(args).toContain("json");
+        expect(args).toContain("compact");
         expect(args[args.indexOf("--include") + 1]).toBe(
           index === 0
             ? "nsExports,nsTypes"
@@ -146,7 +149,7 @@ sendReceipt(String(index), "completed");
           expect(args).toContain("--include-entry-exports");
         }
         if (outcome === "success" || outcome === "warning") {
-          expect(result.stdout).toContain(`[deadcode] Knip ${scanName} passed with 0 entries.`);
+          expect(result.stdout).toContain(`[deadcode] Knip ${scanName} passed.`);
         } else {
           expect(result.stderr).toContain(`deadcode ${scanName} failed:`);
         }
@@ -154,7 +157,9 @@ sendReceipt(String(index), "completed");
           expect(result.stderr).toContain(`COLD_DLX_WARNING_${index}`);
         }
         if (outcome === "finding") {
-          expect(result.stdout).toContain("exports: src/diagnostic-fixture.ts: syntheticFinding");
+          expect(result.stdout).toContain(
+            "Unused exports (1)\nsrc/diagnostic-fixture.ts: syntheticFinding",
+          );
         }
       } else if (outcome === "success") {
         expect(result.stdout).toContain(`[deadcode] Knip ${scanName} passed with 0 entries.`);

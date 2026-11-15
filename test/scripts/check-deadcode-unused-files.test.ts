@@ -141,7 +141,7 @@ it("keeps unused-file findings inside their own adjacent compact section", () =>
         "Unused dependencies (1)",
         "not-a-file: src/dependency.ts",
         "Unused files (1)",
-        "src/unused.ts: src/unused.ts",
+        "src/unused.ts",
         "Unused exports (1)",
         "src/export.ts: src/not-a-file.ts",
         "Unlisted dependencies (1)",
