@@ -71,8 +71,6 @@ it("prepares active/failed sessions and rejects archives without host row reads"
         const prepared = await prepareAgentSession({
           ...common,
           requestedSessionKey: sessionKey,
-          canUseCronRunContinuation: false,
-          lifecycleGeneration: "preparation",
           preAttachmentSession: routing?.preAttachmentSession,
         });
         assert(prepared, "Session preparation did not return a candidate");
@@ -84,7 +82,6 @@ it("prepares active/failed sessions and rejects archives without host row reads"
           canonicalSessionKey: prepared.canonicalKey,
           normalizedSpawned: {},
           requestDeliveryHint: undefined,
-          hasRestoredCronContinuation: false,
         });
         expect(patch.patch.sessionId === kind).toBe(kind !== "failed-missing");
         expect(respond).not.toHaveBeenCalled();

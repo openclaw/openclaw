@@ -1,7 +1,4 @@
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { getCliSessionBinding } from "../../agents/cli-session.js";
-import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import { isCliProvider } from "../../agents/model-selection.js";
 import {
   resolveSessionWorkStartError,
   type InternalSessionEntry,
@@ -13,13 +10,10 @@ import {
   resolveAgentHarnessSessionContextError,
   resolveAgentHarnessSessionIdMismatchError,
 } from "../../sessions/agent-harness-session-key.js";
-import { setSafeTimeout } from "../../utils/timer-delay.js";
 import { respondError } from "../server-methods/response.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import type { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
-
-export const CRON_CONTINUATION_RELEASE_RECOVERY_DELAYS_MS = [250, 1_000, 4_000, 15_000] as const;
 
 export function canPrepareAgentSessionWorktree(
   sessionKey: string | undefined,
@@ -38,22 +32,6 @@ export function resolveAgentSessionWorkStartError(
     canPrepareAgentSessionWorktree(sessionKey, entry) ? { allowPendingWorkspace: true } : undefined,
   );
 }
-
-export type RestoredCronContinuation = Pick<
-  NonNullable<SessionEntry["cronRunContinuation"]>,
-  | "lifecycleRevision"
-  | "toolsAllow"
-  | "toolsAllowIsDefault"
-  | "scheduledToolPolicy"
-  | "scheduledToolCallerOrigin"
-  | "toolsAllowExecTarget"
-  | "cliSessionBindingFacts"
-> & {
-  sessionId: string;
-  provider: string;
-  model: string;
-  thinking?: string;
-};
 
 export function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;
@@ -130,39 +108,8 @@ export function respondUnavailableAgentSession(params: {
     : respondUnavailable(deleted);
 }
 
-export function cronContinuationHasReusableRuntime(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  agentId: string;
-  provider: string;
-  model: string;
-}): boolean {
-  const executionProvider =
-    resolveCliRuntimeExecutionProvider({
-      provider: params.provider,
-      cfg: params.cfg,
-      agentId: params.agentId,
-      modelId: params.model,
-    }) ?? params.provider;
-  return (
-    !isCliProvider(executionProvider, params.cfg) ||
-    Boolean(getCliSessionBinding(params.entry, executionProvider)?.sessionId)
-  );
-}
-
-export function withoutCronRunContinuation(entry: SessionEntry): SessionEntry {
-  const { cronRunContinuation: _cronRunContinuation, ...baseEntry } = entry;
-  return baseEntry;
-}
-
 export function yieldAfterAgentAcceptedAck(): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, 10);
-  });
-}
-
-export function waitForCronContinuationReleaseRecovery(delayMs: number): Promise<void> {
-  return new Promise((resolve) => {
-    setSafeTimeout(resolve, delayMs).unref();
   });
 }
