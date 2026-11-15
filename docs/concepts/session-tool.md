@@ -131,7 +131,7 @@ Use the filters together to narrow the inventory before paging:
 - `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
 - `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
-- `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both.
+- `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both. The strings `"true"` and `"false"` work like the booleans; any other value is rejected.
 
 `limit` defaults to 100. Larger positive requests accepted by earlier versions remain valid, but each response applies at most 200 rows and reports that bound in `limitApplied`. `count` is the number of returned rows, not the inventory total. While `hasMore` is true, pass `nextOffset` as `offset` with the same filters. An empty page can still have a continuation. Each call is bounded to five internal pages and a 64 KiB serialized result; `truncationReason` identifies a `scan-limit` or `byte-limit` partial result. A byte-limited continuation resumes at the first omitted row.
 

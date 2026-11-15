@@ -1,3 +1,4 @@
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
@@ -178,7 +179,12 @@ export function createSessionsListTool(opts?: {
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
-      const archived = params.archived === "all" ? "all" : params.archived === true;
+      // Models can send this union-typed selector as "true"/"false". Any other
+      // explicit value must fail instead of silently listing active sessions.
+      const archived = params.archived === "all" ? "all" : parseBoolean(params.archived ?? false);
+      if (archived === undefined) {
+        throw new Error('archived must be true, false, or "all"');
+      }
       const relationship = readToolStringParam(params, "relationship", {
         required: params.relationship !== undefined,
       });
