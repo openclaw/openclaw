@@ -38,6 +38,10 @@ import type {
   SessionActorPhaseResults,
   SessionActorTarget,
 } from "./session-actor-contract.js";
+import {
+  restoreSessionActorEntryFields,
+  type SessionActorEntryFieldReferences,
+} from "./session-actor-entry-fields.js";
 import type { SessionActorExecutor, SessionActorExecutorGuards } from "./session-actor-executor.js";
 import { SessionActorReadInvalidatedError } from "./session-actor-read-error.js";
 import {
@@ -45,7 +49,10 @@ import {
   type SessionActorCommittedWireOutcome,
   type SessionActorEntryReference,
 } from "./session-actor-receipt.js";
-import type { createSessionActorReplica } from "./session-actor-replica.js";
+import {
+  pinSessionActorEntryFields,
+  type createSessionActorReplica,
+} from "./session-actor-replica.js";
 import { publishCommittedSessionTranscriptReceipts } from "./session-transcript-authority.js";
 
 type NativeAdmission = {
@@ -85,7 +92,11 @@ const executePhase: {
   [Phase in SessionActorPhase]: (
     scope: TransportScope,
     input: SessionActorCommandContext &
-      SessionActorPhaseInputs[Phase] & { target: SessionActorTarget; entryReference?: string },
+      SessionActorPhaseInputs[Phase] & {
+        target: SessionActorTarget;
+        entryReference?: string;
+        entryFieldKeys?: string[];
+      },
   ) => Promise<SessionActorOperations[`session.actor.${Phase}`]["output"]>;
 } = {
   acceptInput: (scope, input) => scope.execute({ type: "session.actor.acceptInput", input }),
@@ -126,6 +137,7 @@ export function createSqliteSessionActorExecutor(
     ) => void,
     beforeFinalGrant?: (conversationPublication: unknown) => void,
     entryReference?: () => SessionActorEntryReference | undefined,
+    entryFields?: () => ReadonlyMap<string, object>,
   ) => {
     let actorAdmissionSeen = false;
     return (
@@ -158,6 +170,13 @@ export function createSqliteSessionActorExecutor(
             throw new Error("Session actor admission entry reference is unavailable");
           }
           snapshot = { target: preimage.target, entry: preimage.entry };
+        }
+        if ("entryFields" in facts.snapshot) {
+          restoreSessionActorEntryFields(
+            snapshot.entry,
+            facts.snapshot.entryFields as SessionActorEntryFieldReferences,
+            entryFields!(),
+          );
         }
         const publication = facts.publication;
         observe?.(native, publication, request.stage, snapshot);
@@ -242,6 +261,7 @@ export function createSqliteSessionActorExecutor(
     let previousEntry: SessionActorAuthorityFacts["entry"];
     let capturedPreviousEntry = false;
     let entryReference: SessionActorEntryReference | undefined;
+    let entryFields = new Map<string, object>();
     let running: Promise<Outcome> | undefined;
     let committed: Extract<Outcome, { kind: "committed" }> | undefined;
     let candidate: unknown;
@@ -306,10 +326,12 @@ export function createSqliteSessionActorExecutor(
             }
             const pending = params.replica.beginCommand();
             entryReference = pending.preimage;
+            entryFields = pinSessionActorEntryFields();
             const reply = await executePhase[name](scope, {
               ...captured,
               target,
               entryReference: entryReference?.writeToken,
+              entryFieldKeys: [...entryFields.keys()],
             }).then(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
@@ -533,6 +555,7 @@ export function createSqliteSessionActorExecutor(
             conversation?.begin(receipts);
           },
           () => entryReference,
+          () => entryFields,
         ),
         (name === "appendTranscriptEvent" || name === "appendToolResult") &&
           "append" in captured &&

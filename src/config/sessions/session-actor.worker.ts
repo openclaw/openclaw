@@ -27,7 +27,10 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
-import { projectSessionActorAuthority } from "./session-actor-command.js";
+import {
+  projectSessionActorAdmission,
+  projectSessionActorAuthority,
+} from "./session-actor-command.js";
 import { initializeSessionActorContextStats } from "./session-actor-context-stats.worker.js";
 import type {
   SessionActorAuthorityFacts,
@@ -502,19 +505,16 @@ export function createSessionActorWorker(
           const resident = residents.get(target.sessionKey);
           const before = read(opened, target);
           const preimage = before.hot;
+          const knownFields = new Set(command.input.entryFieldKeys);
           const projectAuthority = (state: SessionActorAuthorityFacts) =>
-            projectSessionActorAuthority(state, preimage);
+            projectSessionActorAuthority(state, preimage, knownFields);
           recordPhase("actorReadMs");
           diagnosticContext.actorResident = before === resident;
           diagnosticContext.actorTranscriptEvents = before.transcript.identities.size;
           diagnosticContext.actorActiveEvents = before.transcript.active.size;
           admit("transaction", {
             kind: "session-actor-admission",
-            // Reuse the admitted preimage at settlement even after replica eviction.
-            snapshot:
-              command.input.entryReference === before.hot.writeToken
-                ? projectAuthority(before.hot)
-                : { ...projectSessionActorAuthority(preimage), writeToken: preimage.writeToken },
+            snapshot: projectSessionActorAdmission(preimage, command.input, knownFields),
           });
           if (
             command.input.expected !== undefined &&

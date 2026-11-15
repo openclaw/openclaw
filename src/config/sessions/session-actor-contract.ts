@@ -283,6 +283,7 @@ export type SessionActorOperations = {
         target: SessionActorTarget;
         /** Command-local immutable preimage retained by the host; never grants authority. */
         entryReference?: string;
+        entryFieldKeys?: string[];
       };
     /** Native settlement owns committed data; the reply only acknowledges it. */
     output:

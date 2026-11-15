@@ -27,7 +27,11 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { readSessionActorEntryFacts } from "./session-actor-replica.js";
+import {
+  createSessionActorReplica,
+  retainSessionActorEntryFacts,
+  readSessionActorEntryFacts,
+} from "./session-actor-replica.js";
 import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
@@ -656,63 +660,118 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
   });
 });
 
-it("admits tool appends once per transaction boundary without transferring replica state", async () => {
-  await withActor(async ({ actor, admissions, seedTransferEntry }) => {
-    seedTransferEntry(32 * 1024);
-    const initial = await actor.read(authority);
-    const append = messageAppend(actor, initial.entry!.sessionId, {
-      role: "toolResult",
-      toolCallId: "call",
-      toolName: "synthetic",
-      content: [{ type: "text", text: "tool output" }],
-      isError: false,
-      timestamp: 1,
-    });
-    admissions.length = 0;
-    const result = await actor.appendToolResult(
-      { commandId: "tool", phaseId: "turn", append },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-    expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
-    for (const request of admissions) {
-      const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-      assert(isRecord(facts) && isRecord(facts.snapshot));
-      expect(facts.snapshot.target).toEqual(actor.target);
-      expect(serialize(facts.snapshot).byteLength).toBeLessThan(1024);
-    }
-    const committed = actor.snapshot(authority)!;
-    expect(committed.entry).toBe(initial.entry);
-    expect(Object.isFrozen(committed.entry)).toBe(true);
-    expect(Object.isFrozen(committed.entry?.skillsSnapshot)).toBe(true);
-    expect(committed.transcript.version.rawSeq).toBeGreaterThan(
-      initial.transcript.version.rawSeq ?? -1,
-    );
-    const refused = await actor.appendToolResult(
-      {
-        commandId: "refused-tool",
-        phaseId: "turn",
-        append: { ...append, input: { ...append.input, freshMessageCheck: true } },
-      },
-      {
-        assertCurrent() {},
-        authorize(stage, _facts, publication) {
-          if (isRecord(publication) && publication.check === "fresh") {
-            throw new Error("Fresh-message authority revoked");
-          }
-          if (stage === "commit") {
-            throw new Error("Commit authority revoked");
-          }
+it.each(["resident", "evicted", "unadvertised", "different-content"] as const)(
+  "admits %s tool appends without changing policy facts",
+  async (mode) => {
+    await withActor(async ({ actor, admissions, seedTransferEntry, readEntry }) => {
+      seedTransferEntry(128 * 1024, true);
+      assert(actor.target.database.kind === "file");
+      const initial = await actor.read(authority);
+      const siblingTarget = {
+        database: actor.target.database,
+        sessionKey: "agent:main:shared-fields",
+      };
+      const sibling = createSessionActorReplica({
+        target: siblingTarget,
+        lifetime: { assertCurrent() {}, assertReadable() {} },
+        currentGeneration: () => "sibling",
+      });
+      if (mode === "evicted" || mode === "different-content") {
+        const advertised = structuredClone(initial.entry)!;
+        if (mode === "different-content") {
+          advertised.skillsSnapshot!.prompt += "changed";
+          advertised.systemPromptReport!.tools.entries[0]!.name = "changed";
+        }
+        retainSessionActorEntryFacts(
+          actor.target.database,
+          [
+            {
+              sessionKey: siblingTarget.sessionKey,
+              facts: { entry: advertised, snapshots: "full" },
+            },
+          ],
+          "sibling",
+        );
+      }
+      if (mode !== "resident") {
+        const handle = createSessionActorReplica({
+          target: { ...actor.target, database: actor.target.database },
+          lifetime: { assertCurrent() {}, assertReadable() {} },
+          currentGeneration: () => "unused",
+        });
+        handle.invalidate();
+        handle.close();
+        expect(actor.snapshot(authority)).toBeUndefined();
+      }
+      const policyEntries: unknown[] = [];
+      const checkingAuthority = {
+        ...authority,
+        authorize(_stage: string, facts: { entry?: unknown }) {
+          policyEntries.push(structuredClone(facts.entry));
+          expect(JSON.stringify(facts.entry)).toBe(JSON.stringify(initial.entry));
+          // Eviction after advertising cannot release the command's pinned values.
+          sibling.invalidate();
         },
-      },
-    );
-    expect(refused).toMatchObject({
-      kind: "rolled-back",
-      error: { message: "Fresh-message authority revoked" },
+      };
+      const append = messageAppend(actor, initial.entry!.sessionId, {
+        role: "toolResult",
+        toolCallId: "call",
+        toolName: "synthetic",
+        content: [{ type: "text", text: "tool output" }],
+        isError: false,
+        timestamp: 1,
+      });
+      admissions.length = 0;
+      const result = await actor.appendToolResult(
+        { commandId: "tool", phaseId: "turn", append },
+        checkingAuthority,
+      );
+      sibling.close();
+      expect(result.kind).toBe("committed");
+      expect(policyEntries).toEqual([initial.entry, initial.entry]);
+      expect(readEntry()).toEqual(initial.entry);
+      expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
+      for (const request of admissions) {
+        const facts = isRecord(request.facts) ? request.facts.publication : undefined;
+        assert(isRecord(facts) && isRecord(facts.snapshot));
+        expect(facts.snapshot.target).toEqual(actor.target);
+        if (mode === "resident" || mode === "evicted") {
+          expect(serialize(facts.snapshot).byteLength).toBeLessThan(16 * 1024);
+        }
+      }
+      const committed = actor.snapshot(authority)!;
+      expect(committed.entry).toEqual(initial.entry);
+      expect(Object.isFrozen(committed.entry)).toBe(true);
+      expect(Object.isFrozen(committed.entry?.skillsSnapshot)).toBe(true);
+      expect(committed.transcript.version.rawSeq).toBeGreaterThan(
+        initial.transcript.version.rawSeq ?? -1,
+      );
+      const refused = await actor.appendToolResult(
+        {
+          commandId: "refused-tool",
+          phaseId: "turn",
+          append: { ...append, input: { ...append.input, freshMessageCheck: true } },
+        },
+        {
+          assertCurrent() {},
+          authorize(stage, _facts, publication) {
+            if (isRecord(publication) && publication.check === "fresh") {
+              throw new Error("Fresh-message authority revoked");
+            }
+            if (stage === "commit") {
+              throw new Error("Commit authority revoked");
+            }
+          },
+        },
+      );
+      expect(refused).toMatchObject({
+        kind: "rolled-back",
+        error: { message: "Fresh-message authority revoked" },
+      });
+      expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
     });
-    expect((await actor.read(authority)).transcript).toEqual(committed.transcript);
-  });
-});
+  },
+);
 
 it.each([false, true])(
   "appends prepared session-manager messages without snapshot disclosure (toolResult=%s)",

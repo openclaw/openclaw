@@ -123,7 +123,7 @@ function createFixture() {
           const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
           const retained = { settled: completion.promise };
           const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-            admissions.push(request);
+            admissions.push(structuredClone(request));
             authorize(request, { admission, retained }, grant);
           });
           const dropped = fault.reply === "unknown" || fault.reply === "unknown-result";
@@ -231,7 +231,40 @@ function createFixture() {
       commands,
       emptyReducerCommands,
       fault,
-      seedTransferEntry: (bytes?: number) => seedSessionActorOutcomeTransferEntry(fixture, bytes),
+      seedTransferEntry(this: void, bytes?: number, withReport = false) {
+        seedSessionActorOutcomeTransferEntry(fixture, bytes);
+        if (withReport) {
+          runOpenClawAgentWriteTransaction(
+            (db) =>
+              writeSessionEntry(db, target.sessionKey, {
+                ...fixture.read()!,
+                systemPromptReport: {
+                  source: "run",
+                  generatedAt: 123,
+                  sessionId: fixture.scope.sessionId,
+                  systemPrompt: {
+                    chars: 131072,
+                    projectContextChars: 0,
+                    nonProjectContextChars: 131072,
+                  },
+                  injectedWorkspaceFiles: [],
+                  skills: { promptChars: 131072, entries: [] },
+                  tools: {
+                    listChars: 30000,
+                    schemaChars: 0,
+                    entries: Array.from({ length: 300 }, (_, index) => ({
+                      name: `tool-${index}`,
+                      summaryChars: 100,
+                      schemaChars: 0,
+                      schemaHash: "f".repeat(64),
+                    })),
+                  },
+                },
+              }),
+            options,
+          );
+        }
+      },
       readEntry: fixture.read,
       retireGeneration(this: void) {
         epoch += 1;
