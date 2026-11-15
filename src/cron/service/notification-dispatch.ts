@@ -5,6 +5,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { noteCronJobsStoreCommit } from "../store.js";
 import type { CronFailureNotificationDelivery } from "../types.js";
+import { renderSettledFailureAlertDeliveryNote } from "./failure-repair-brief.js";
 import { locked } from "./locked.js";
 import {
   captureCronNotificationRouting,
@@ -236,10 +237,16 @@ async function transportFailureAlert(
           outcome,
         );
         if (recordResult !== "stale" && outcome.status === "not-delivered") {
+          // The streak's repair brief was emitted before this alert was attempted, so
+          // this fallback notice is the operator surface that can still carry why the
+          // delivery failed (#186990). The transport error is untrusted third-party
+          // content and is rendered through the same bounded data boundary as the brief.
           await enqueueCronNotification(
             state,
             params.job,
-            params.payload.text ?? "",
+            [params.payload.text ?? "", renderSettledFailureAlertDeliveryNote(outcome)]
+              .filter(Boolean)
+              .join("\n"),
             "failure-alert",
             routing,
           );
