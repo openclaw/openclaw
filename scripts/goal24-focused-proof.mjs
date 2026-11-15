@@ -134,6 +134,16 @@ try {
       "inbound-context",
       "src/channels/inbound-event/session-transcript-context.sqlite.test.ts",
     );
+    const prefix = vitest("prefix-stability", "src/agents/agent-tools.prefix-stability.test.ts");
+    assert.equal(prefix.executed.length, 14, "the pinned prefix suite must execute all 14 cases");
+    assert.ok(
+      prefix.executed.some((test) =>
+        test.fullName.includes(
+          "offers the session's tool definitions and refuses tools outside the replayed authority",
+        ),
+      ),
+      "missing completion-handoff prefix regression",
+    );
     for (const required of [
       "bounds candidate coverage in physical rows",
       "does not bridge an oversized user barrier",

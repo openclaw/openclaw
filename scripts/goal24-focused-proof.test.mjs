@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const driver = fileURLToPath(new URL("./goal24-focused-proof.mjs", import.meta.url));
-for (const scenario of ["pass", "zero", "install-failure"]) {
+for (const scenario of ["pass", "zero", "prefix-zero", "prefix-partial", "install-failure"]) {
   test("history orchestration: " + scenario, () => {
     const fixture = fs.mkdtempSync(path.join(path.dirname(driver), ".goal24-test-"));
     try {
@@ -31,7 +31,14 @@ if (path.basename(process.argv[1]) === "git") {
   const names = args[1].includes("transcript-recent-text") ? [
     "bounds candidate coverage in physical rows", "does not bridge an oversized user barrier",
     "shares the 64 MiB candidate budget",
-  ] : ["suppresses already-replayed DM turns while preserving delivery-only context after restart"];
+  ] : args[1] === "src/agents/agent-tools.prefix-stability.test.ts"
+    ? ["offers the session's tool definitions and refuses tools outside the replayed authority",
+       ...Array.from({length:13}, (_, i) => "prefix case " + i)]
+    : ["suppresses already-replayed DM turns while preserving delivery-only context after restart"];
+  if (args[1].includes("prefix-stability")) {
+    if (fs.readFileSync("scenario", "utf8") === "prefix-zero") names.length = 0;
+    if (fs.readFileSync("scenario", "utf8") === "prefix-partial") names.pop();
+  }
   const scenario = fs.readFileSync("scenario", "utf8");
   const tests = scenario === "zero" ? [] : names.map(fullName => ({fullName,status:"passed",failureMessages:[]}));
   fs.writeFileSync(args.find(arg => arg.startsWith("--outputFile=")).slice(13), JSON.stringify({testResults:[{assertionResults:tests}]}));
@@ -67,13 +74,26 @@ if (path.basename(process.argv[1]) === "git") {
       assert.equal(result.status, scenario === "pass" ? 0 : 1, JSON.stringify(summary));
       assert.equal(
         summary.outcome,
-        scenario === "pass" ? "pass" : scenario === "zero" ? "test-failure" : "setup-failure",
+        scenario === "pass"
+          ? "pass"
+          : scenario === "install-failure"
+            ? "setup-failure"
+            : "test-failure",
       );
-      if (scenario === "zero") {
+      if (["zero", "prefix-zero"].includes(scenario)) {
         assert.match(summary.error, /selected zero tests/);
       }
+      if (scenario === "prefix-partial") {
+        assert.match(summary.error, /must execute all 14 cases/);
+      }
       if (scenario === "pass") {
-        assert.equal(summary.stages.filter((stage) => stage.tests).length, 2);
+        const stages = summary.stages.filter((stage) => stage.tests);
+        assert.equal(stages.length, 3);
+        assert.deepEqual(stages[2].args.slice(0, 2), [
+          "test",
+          "src/agents/agent-tools.prefix-stability.test.ts",
+        ]);
+        assert.equal(stages[2].tests.length, 14);
       }
     } finally {
       fs.rmSync(fixture, { recursive: true, force: true });
