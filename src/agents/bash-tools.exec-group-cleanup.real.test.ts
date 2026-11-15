@@ -7,7 +7,6 @@ import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MAX_SERVICES_PER_SESSION } from "./bash-process-adopted.js";
 import {
   registerOneShotExecScopeCleanup,
   stopSessionExecProcesses,
@@ -61,6 +60,7 @@ const byNumber = (left: number | undefined, right: number | undefined) =>
   (left ?? 0) - (right ?? 0);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const node = quote(process.execPath);
+const SESSION_SERVICE_LIMIT = 16;
 const sleeper = `${node} -e 'setTimeout(() => {}, 60000)'`;
 
 async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
@@ -160,7 +160,7 @@ child.once("spawn", () => {
         ).toBe(true);
         started.push(survivor!);
         // Every survivor is reported with its pid and what happened to it.
-        if (call < MAX_SERVICES_PER_SESSION) {
+        if (call < SESSION_SERVICE_LIMIT) {
           expect(output).toMatch(
             new RegExp(`pid ${survivor} .*keeps running as background session`),
           );
@@ -168,7 +168,7 @@ child.once("spawn", () => {
         } else {
           expect(output).toMatch(
             new RegExp(
-              `Stopped 1 process .*pid ${survivor} .*${MAX_SERVICES_PER_SESSION} allowed services`,
+              `Stopped 1 process .*pid ${survivor} .*${SESSION_SERVICE_LIMIT} allowed services`,
             ),
           );
           stopped.push(survivor!);
@@ -411,7 +411,7 @@ it.skipIf(process.platform === "win32")(
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
-      expect(tracked).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(tracked).toHaveLength(SESSION_SERVICE_LIMIT);
       expect(output).toContain(`Stopped 4 processes`);
       // No survivor escapes: each one is either tracked or confirmed gone, and named.
       expect(
@@ -446,12 +446,12 @@ it.skipIf(process.platform === "win32")(
     await withEnvAsync(testEnv(cwd, "exec-reserve-test"), async () => {
       const exec = hostExec(cwd, scopeKey, true);
       const fill = await exec.execute("fill", {
-        command: `for i in $(seq ${MAX_SERVICES_PER_SESSION - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
+        command: `for i in $(seq ${SESSION_SERVICE_LIMIT - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
       });
       started.push(
         ...[...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((m) => Number(m[1])),
       );
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION - 1);
+      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT - 1);
       const starts = await Promise.allSettled(
         ["a", "b"].map((id) =>
           exec.execute(`start-${id}`, {
@@ -463,7 +463,7 @@ it.skipIf(process.platform === "win32")(
       expect(starts.filter((start) => start.status === "fulfilled")).toHaveLength(1);
       expect(starts.filter((start) => start.status === "rejected")).toHaveLength(1);
       started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT);
     });
   },
   60_000,

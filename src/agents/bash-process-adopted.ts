@@ -15,8 +15,8 @@ import {
 } from "./bash-process-registry.js";
 
 /** Services are admitted, never evicted: background sessions plus adopted survivors. */
-export const MAX_SERVICES_PER_SESSION = 16;
-export const MAX_SERVICES_PER_GATEWAY = 64;
+const MAX_SERVICES_PER_SESSION = 16;
+const MAX_SERVICES_PER_GATEWAY = 64;
 
 // Background starts hold a slot from admission until their session is running
 // or startup fails, so concurrent starts cannot pass the limit together.
@@ -26,7 +26,7 @@ const reservations = resolveGlobalSingleton(
 );
 
 /** Explain the limit when a new service would cross it; undefined when there is room. */
-export function serviceCapacityError(scopeKey: string | undefined): string | undefined {
+function serviceCapacityError(scopeKey: string | undefined): string | undefined {
   const running = listRunningSessions().filter((session) => !session.exited);
   const reserved = [...reservations];
   const inSession =
