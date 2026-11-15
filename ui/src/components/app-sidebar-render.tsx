@@ -523,6 +523,24 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost): SolidJSX.
             </Show>
           </button>
         </openclaw-tooltip>
+        {/* Search sits with the footer controls, above Inbox. */}
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.openCommandPalette")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
+            />
+          </span>
+          <button
+            type="button"
+            class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
+            aria-label={t("chat.openCommandPalette")}
+            disabled={!host.onOpenPalette}
+            onClick={() => host.onOpenPalette?.()}
+          >
+            <Icon name="search" />
+          </button>
+        </openclaw-tooltip>
         <SidebarAttention
           cachedCount={host.sidebarSnapshot?.issuesCount}
           activeRouteId={host.activeRouteId}

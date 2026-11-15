@@ -146,8 +146,9 @@ suite.define(() => {
             expect(Math.abs(measured.offset), measured.control).toBeLessThanOrEqual(0.5);
             expect(measured.size, measured.control).toBe(geometry[0]!.size);
           }
-          // The top stack (agent card, People, search, Pages) keeps one 8px pitch.
-          for (let index = 1; index < 4; index += 1) {
+          // The top stack (agent card, People, Pages) keeps one 8px pitch; search sits in
+          // the footer with Home and Inbox.
+          for (let index = 1; index < 3; index += 1) {
             const control = geometry[index]!;
             expect(control.top - geometry[index - 1]!.bottom, control.control).toBeCloseTo(8, 1);
           }

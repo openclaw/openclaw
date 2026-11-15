@@ -14,7 +14,6 @@ import {
 } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
-import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
@@ -31,7 +30,6 @@ import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { personActivityLink, personActivityRouting } from "./person-activity-link.ts";
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { ShortcutHint } from "./solid/kbd.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
@@ -112,23 +110,6 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       <div class="sidebar-rail__views">
         <ViewButton view="online" />
       </div>
-      <openclaw-tooltip>
-        <span slot="content">
-          <ShortcutHint
-            label={t("chat.openCommandPalette")}
-            combo={KEYBOARD_SHORTCUT_COMBOS.commandPalette}
-          />
-        </span>
-        <button
-          type="button"
-          class="sidebar-rail__button sidebar-brand__search sidebar-brand__desktop-control"
-          aria-label={t("chat.openCommandPalette")}
-          disabled={!host.onOpenPalette}
-          onClick={() => host.onOpenPalette?.()}
-        >
-          <Icon name="search" />
-        </button>
-      </openclaw-tooltip>
       <div
         class={[
           "sidebar-rail__pins",
