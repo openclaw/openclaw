@@ -169,6 +169,7 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     thinkingSuggestions: THINKING_SUGGESTIONS,
     timezoneSuggestions,
     deliveryToSuggestions,
+    deliveryConversations: page.deliveryDirectory.conversations,
     failureAlertToSuggestions,
     accountSuggestions,
   };
