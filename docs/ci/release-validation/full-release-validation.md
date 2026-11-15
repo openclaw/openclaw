@@ -57,8 +57,10 @@ not by expecting a fresh model request to return identical words.
 
 `Full Release Validation` is the manual release umbrella. Every run binds an
 exact candidate C, qualification Q, and admission/publication P tuple and rejects
-an `expected_sha` mismatch before child dispatch. Fresh publication uses Q=C;
-P is independently trusted and cannot supply substitute tests. Validation SHA maps to the Code SHA for product
+an `expected_sha` mismatch before child dispatch. Fresh publication defaults to
+Q=C; an explicit reviewed main-ancestor Q can be independently admitted against
+unchanged C through the candidate route. P owns authority and verification,
+not substitute tests. Validation SHA maps to the Code SHA for product
 validation or the Release SHA for changelog-only validation; it is not a third
 release identity. Beta-publish maps to `release_profile=beta` with
 `run_release_soak=false`. Regular stable releases use `release_profile=stable`.
@@ -225,7 +227,7 @@ publication selection; profile and filters still select the actual coverage.
 GitHub workflow dispatch refs must be branches or tags, not raw commit SHAs. The
 helper first proves GitHub serves the exact Validation SHA by bare-SHA fetch in a
 fresh temporary repository, including in dry runs. After independent admission,
-it pushes one immutable `release-ci/*` workflow ref at Q=C and passes C through
+it pushes one immutable `release-ci/*` workflow ref at the admitted Q and passes C through
 `ref` and `expected_sha`. Reused evidence must retain its original Q and coverage;
 every new child workflow `headSha` must match Q. Record all three roles and never
 refresh qualification from moving `main`. Regular release branches accept only their final package
@@ -254,7 +256,10 @@ needed.
 
 For recovery, decide blocker or flake for every failed test, then classify product, harness/tooling/provenance,
 infrastructure/credential, and wrapper failures before editing. Only confirmed
-product or qualification-harness failure changes C/Q. Diagnose and fix the owning defect before an explicit narrow `rerun_group`
+product failures require changing C. A qualification-only repair can preserve C
+and admit a new reviewed main-ancestor Q through a new request and successful
+parent; see [tooling recovery](/reference/full-release-validation/dispatch#recover-qualification-tooling-without-changing-the-candidate).
+Diagnose and fix the owning defect before an explicit narrow `rerun_group`
 validation run; never retry a failed test automatically or widen to `all`.
 Flakes get at most two explicit same-SHA reruns and a tracked fix on `main`;
 record an eligible still-failing job instead of changing tooling, re-cutting,

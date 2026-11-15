@@ -1860,7 +1860,6 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     if (
       payload.attemptEvidenceVersion !== 3 ||
-      payload.targetSha !== payload.workflowSha ||
       payload.releaseProfile !== coverage.profile ||
       payload.rerunGroup !== "all" ||
       !payload.sourceAdmission?.qualificationAdmission ||
@@ -1888,9 +1887,12 @@ function validateExecutionPlanChildBindings(children, payload, expectedCoverage)
     }
     for (const spec of coverage.children) {
       const child = children.find((entry) => entry.key === spec.key);
-      // Reuse retains the original producer; strict chain validation separately
-      // authenticates that root and proves the complete changelog-only delta.
-      const producer = child.source === "reused" && reusedProducer ? reusedProducer : payload;
+      // Reuse retains the original producer. Strict validation authenticates
+      // either its child workload closure or the whole-root changelog delta.
+      const producer =
+        child.source === "reused"
+          ? (payload.childReuse?.[spec.key] ?? reusedProducer ?? payload)
+          : payload;
       if (
         !child.required ||
         !child.selected ||

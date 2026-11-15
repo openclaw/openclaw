@@ -24,8 +24,9 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   or annotated tag resolving to the exact candidate SHA. A conflicting tag or
   failed remote lookup stops validation; never move a tag to recover.
 - Freeze C/Q and independently select trusted P on main or a protected
-  publication tag. C/Q need not be an ancestor of P. Missing candidate contracts
-  require a deliberate backport; never silently substitute newer main tooling.
+  publication tag. C need not be an ancestor of P. Q defaults to C; an explicit
+  reviewed independent Q must be a verified main ancestor. Missing contracts
+  require a deliberate Q repair or candidate backport, never a moving-main fallback.
 - Apply a release firebreak after the Code SHA is frozen. Admit only confirmed
   product defects, wrong or unverifiable package bytes, security
   defects, or failures that make publication impossible. Queue other findings
@@ -41,13 +42,15 @@ Use this with `$release-openclaw-maintainer` and `$openclaw-testing` when a rele
   for that exact run and commits generated costs; do not hand-edit measurements.
 - Candidate tests run their own frozen Q closure; admitted P owns FRV's aggregate
   decision and checked-in waiver policy. Main-only checks and
-  future-main scenarios are not implicit release requirements. Fixing a frozen
-  qualification harness means a new C/Q, with newly bound evidence. A P-only
+  future-main scenarios are not implicit release requirements. A qualification-only
+  repair may preserve C and select a new reviewed Q with a new admission/request
+  and successful parent. Never edit an old request or relabel its failed FRV. A P-only
   admission/aggregate/verifier/publisher repair can keep C/Q and their original evidence.
 - Protected lightweight `release-publish/<12sha>-<provenance-run>` tags identify
   P, not Q. The suffix records tag-creation provenance, not the current parent.
   Publication helpers retain their `--workflow-sha <P>` argument; the FRV helper's
-  `--workflow-sha` instead selects Q and must equal C on the candidate route.
+  `--workflow-sha` instead selects Q: C by default, or an explicit reviewed
+  main-ancestor Q on the admitted candidate route.
 - Touch `main` only for an operator-requested change or the smallest critical
   main-owned blocker that prevents this release and cannot be handled from the
   release branch. Main's CI health never gates a release. If a release-tooling
@@ -443,23 +446,33 @@ Its `workloadConclusion` excludes the running publisher. Collection failure
 loses reuse metadata without changing workload qualification. With
 `reuse_evidence=true`, dispatch scans at most 100 recent runs, probes at most 40
 target receipt inventories, and fully validates at most five matching receipts
-per role within two minutes. Other-target and other-tooling runs do not spend
+per role within two minutes. Runs without a matching target receipt do not spend
 the full-validation budget. Empty-string inputs equal absent inputs because GitHub omits them from
 `github.event.inputs`; non-empty defaults and candidate descriptor bytes must
 match exactly. It can adopt green children from failed, cancelled, or active
-parents only at the same Tooling SHA as the current parent, still requiring main
-ancestry. Missing or different parent tooling fails closed; no paths are exempt.
+parents at the same Q, or across Q revisions only when authenticated Git tree
+comparison proves identical workload closure. Owning/reusable workflows, local
+actions, the complete scripts tree, and root configuration/dependency files stay
+exact. Normal CI ignores Q-only product directories because its product checkout
+is C; other roles conservatively retain all workflows and the full root tree. Unrelated parent
+workflow changes alone do not invalidate normal CI. Changes to shared scripts
+currently invalidate every child; do not infer narrower compatibility from a
+control-only intent. An independent Q requires verified main ancestry. Missing,
+unsupported, or changed workload closure fails closed.
 Dispatch logs identify reused children, explain each evaluated rejection, and
 summarize skipped runs and fresh dispatches. The current-parent adoption witness
 and immutable execution plan bind each selection. Collectors and final verification
-recheck the live child attempt and conclusion, same tooling, main ancestry, inputs,
+recheck the live child attempt and conclusion, workload closure, main ancestry, inputs,
 artifact identity/digest/expiry, and successful trusted seal/upload steps. A newer
 attempt invalidates reuse; do not rerun an adopted child to repair a collector.
 Current-parent source/publication admission and the separate successful-parent
 changelog reuse path remain unchanged. Artifact producers retain their existing
-sealed receipts. Candidate admission does not widen this per-child receipt
-reuse contract: a divergent Q runs fresh children; whole-parent authenticated
-evidence reuse retains its separate original-Q contract.
+sealed receipts. Cross-Q child reuse retains the original producer Q and exact
+C, role, effective inputs/defaults, candidate descriptor, receipt/artifact, and
+live-attempt binding; neither a green job nor a parent-only fix proves eligibility.
+Changed workload closure requires fresh children. Whole-parent authenticated
+evidence reuse retains its separate exact-Q/P contract. Never relabel a failed
+FRV; tooling recovery needs a fresh successful parent.
 
 An early standalone product-performance run is optional beta confidence. If
 useful, start it against the frozen Code SHA in parallel with release work:
@@ -489,7 +502,7 @@ gh workflow run openclaw-performance.yml \
 
 Use the canonical helper for reviewed candidate qualification. It alone first
 runs the lightweight `admit-qualification` operation on
-`openclaw-release-prepare.yml` at P, then dispatches FRV at Q=C. P records the
+`openclaw-release-prepare.yml` at P, then dispatches FRV at the exact Q. P records the
 operator attestation, complete normalized inputs, and data-only frozen Q coverage;
 the immutable descriptor travels in the existing `trusted_workflow_json` envelope.
 Do not execute candidate code in P's admission step or hand-assemble the envelope.
@@ -508,7 +521,9 @@ pnpm ci:full-release \
   -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
 
-Q defaults to C; an explicit `--workflow-sha` must equal C. P can instead use
+Q defaults to C; an explicit `--workflow-sha <Q>` on the candidate route may
+select a reviewed main-ancestor Q. C retains source, package bytes, version,
+and baselines; Q supplies the complete qualification workflow closure. P can use
 an existing protected `release-publish/*` tag with its exact SHA. Review the
 candidate and coverage before dispatch: admission records that operator
 attestation, not a bot exception. Scheduled main qualification explicitly uses
@@ -544,9 +559,12 @@ that frozen SHA only while it remains an ancestor of the canonical release
 branch and its package version is either the branch's final version or a
 matching beta prerelease. Extended-stable branches and all tags require
 an exact package-version match.
-For fresh candidate qualification, retain Q=C and pass P separately. Missing
-frozen contracts fail closed and require deliberate candidate backports, not
-fallback to main. The explicit historical/cross-revision route remains
+For fresh candidate qualification, default Q=C or explicitly select a reviewed
+main-ancestor Q with `--workflow-sha <Q>` on the candidate route; pass P
+separately. Missing contracts fail closed and require a deliberate Q repair or
+candidate backport, never fallback to main. For a tooling-only repair, use the
+[new-admission recovery procedure](../../../docs/reference/full-release-validation/dispatch.md#recover-qualification-tooling-without-changing-the-candidate)
+with unchanged C and a new request file. The explicit historical/cross-revision route remains
 `--trusted-workflow-ref main --workflow-sha <recorded-main-tooling-sha>`
 (or a protected tooling tag). New requests on this route are diagnostic,
 main-qualification, or postpublish-confidence only, never publish qualification.
@@ -704,10 +722,11 @@ for publication ordering and prepared/direct recovery.
 ### Extended-stable validation
 
 Use the same candidate-owned helper for `.33+` extended-stable validation:
-C is the exact frozen branch tip, Q=C owns its complete qualification closure,
+C is the exact frozen branch tip; Q defaults to C or is an explicit reviewed
+main-ancestor owning the complete qualification closure,
 and independently trusted P admits and verifies it. The canonical
 `extended-stable/YYYY.M.33` branch supplies context, not workflow authority.
-Deliberately backport missing contracts before freezing C.
+Deliberately repair Q or backport missing contracts; never silently follow main.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
@@ -741,7 +760,7 @@ transport after admission. Never raw-dispatch, manually create its ref, or mint
 a protected publication tag for Q. Reconcile an existing historical cross-revision
 publish request under its original identity; never relabel it as candidate-owned.
 A new explicit main/protected route is diagnostic, main-qualification, or
-postpublish-confidence only and cannot replace this admitted Q=C publish proof.
+postpublish-confidence only and cannot replace this admitted C/Q/P publish proof.
 
 Accept only a complete `rerun_group=all` run with a supported exact-target
 manifest. Bind its workflow SHA separately from the candidate SHA; require the
@@ -878,8 +897,9 @@ run-ID-cached bytes first.
    Classify blockers further:
    - confirmed product/code failure: fix the release branch, freeze a new Code
      SHA, and invalidate product evidence
-   - qualification harness/contract defect: repair the candidate closure and
-     freeze new C/Q; preserve the superseded evidence and its invalidation reason
+   - qualification harness/contract defect: preserve C for a tooling-only repair
+     and admit an explicit reviewed main-ancestor Q in a new request and
+     successful parent; preserve superseded evidence and its invalidation reason
    - P-only admission/verifier/publisher defect: preserve C/Q and original
      artifacts, repair independent trusted P, and recover the affected surface
    - infrastructure/credential failure: keep C/Q/P, repair the external
@@ -902,7 +922,8 @@ run-ID-cached bytes first.
      for direct resume or a new prepared button run.
    - child stuck `waiting`, ClawHub `Artifact not found`, or parent failing
      `ClawHub dispatch blocked by waiting run`: see [Publish children](#publish-children)
-     Only product or qualification-harness defects change C/Q. After one diagnosis/fix/narrow
+     Only product defects require changing C; qualification repairs may change Q
+     through a new admission without changing C. After one diagnosis/fix/narrow
      retry, reassess instead of starting another all-group cycle.
 7. Runner routing: FRV-dispatched CI and Plugin Prerelease children always run
    hosted `ubuntu-24.04` (or the release runner group). Other release lanes

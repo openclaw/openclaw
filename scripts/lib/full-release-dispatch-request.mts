@@ -167,9 +167,7 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
       /^[0-9]{4}\.[0-9]+\.[0-9]+(?:-.+)?$/u.test(request.targetVersion) &&
       typeof request.targetContextRef === "string" &&
       typeof request.trustedWorkflowRef === "string" &&
-      ((value.kind === CANDIDATE_REQUEST_KIND &&
-        request.trustedWorkflowRef === "candidate" &&
-        request.targetSha === request.workflowSha) ||
+      ((value.kind === CANDIDATE_REQUEST_KIND && request.trustedWorkflowRef === "candidate") ||
         request.trustedWorkflowRef === "main" ||
         TRUSTED_WORKFLOW_TAG_PATTERN.test(request.trustedWorkflowRef)) &&
       typeof request.workflowRef === "string" &&
@@ -245,8 +243,8 @@ function validateDispatchRecord(value: unknown): asserts value is DispatchRecord
   }
   if (value.kind === CANDIDATE_REQUEST_KIND) {
     requireDispatch(
-      request.trustedWorkflowRef === "candidate" && request.workflowSha === request.targetSha,
-      "Candidate request cannot change its qualification mode or C=Q identity",
+      request.trustedWorkflowRef === "candidate",
+      "Candidate request cannot change its admitted qualification mode",
     );
     const admission = value.admission;
     const admissionKeys = [

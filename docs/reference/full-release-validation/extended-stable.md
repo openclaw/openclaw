@@ -10,10 +10,12 @@ read_when:
 
 ## Extended-stable validation
 
-Extended-stable validation uses the same candidate-owned helper: the exact
-source candidate C also owns qualification Q=C. Independently trusted P admits
-and verifies that request. Keep those roles and the selected release context
-separate; deliberately backport missing qualification contracts before freezing C.
+Extended-stable validation uses the same admitted candidate helper. C is the
+exact source candidate; Q defaults to C, or is an explicitly reviewed
+main-ancestor selected with `--workflow-sha <Q>`. Independently trusted P admits
+and verifies that request. Keep source, version, and baselines at C and the
+complete qualification closure at Q. Missing Q contracts need a deliberate
+qualification repair or candidate backport, never a moving-main fallback.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
@@ -35,7 +37,7 @@ pnpm ci:full-release \
 ```
 
 After independent admission, the helper creates `release-ci/<Q-prefix>-<unique-id>`
-at Q=C and dispatches from that immutable named branch. It passes the exact
+at the exact Q and dispatches from that immutable named branch. It passes the exact
 candidate as `ref` and `expected_sha`, with the release branch in
 `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch or tag,
 not a raw SHA. The release branch supplies context, not qualification authority.
@@ -46,9 +48,10 @@ The shared publisher requires admitted candidate-owned evidence, complete
 `release-publish/*` ref selects P, not Q. Publication-tooling updates do not
 change the frozen candidate or qualification identities. Retained historical
 cross-revision requests keep their original recovery contract; new explicit
-main/protected diagnostic runs cannot replace Q=C publication proof.
+main/protected diagnostic runs cannot replace admitted publication proof.
 
-Product or qualification-harness repairs change C/Q and require new qualification.
+Product repairs change C. Qualification-only repairs may preserve C and select
+a new reviewed Q through a new admission and successful parent.
 Provider, approval, or runner recovery retains the original identities and inputs.
 Do not omit required package, installer, update, channel, or live behavior because
 the target is old.

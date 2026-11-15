@@ -176,13 +176,16 @@ release dispatch or publication.
 New candidate qualification records three separate identities:
 
 - **C — candidate:** the exact commit whose source and publication bytes are checked.
-- **Q — qualification:** the candidate's test workflow closure at C, including
+- **Q — qualification:** the complete selected test workflow closure, including
   reusable workflows, local actions, scripts, planners, contracts, and coverage
-  data. By default **Q=C**.
+  data. By default **Q=C**; an explicit reviewed, independently admitted
+  main-ancestor Q may qualify the unchanged C.
 - **P — admission, aggregate validation, verification, and publication tooling:**
   an independently trusted main revision or protected publication tag. P owns
   the checked-in waiver policy and FRV's final verdict. P may differ from C/Q;
-  C/Q does not need to be an ancestor of P. Trust in P does not replace testing C.
+  C need not be an ancestor of P. An independent Q must be a verified main
+  ancestor. C owns source, package bytes, version, and upgrade baselines.
+  Trust in P does not replace testing C.
 
 The standard SHA-pinned helper first asks P to record the reviewed operator
 attestation, complete normalized inputs, and data-only frozen Q coverage in an
@@ -204,15 +207,21 @@ Supplemental run IDs stay in the candidate evidence bundle, not the publisher's
 optional postpublish diagnostic input. Local Parallels qualification likewise
 uses C's harness and dependencies from the validated candidate checkout.
 
-A candidate missing the required qualification contracts needs a deliberate
-backport. The helper does not silently use future-main checks or import
-main-only scenarios. A repair to the qualification harness changes C and Q and
-requires newly bound evidence; a P-only verifier/publisher repair can preserve
-C/Q and their original artifacts. Explicit trusted-main or protected-tag
+A qualification-only repair need not change C. Keep the default Q=C, or use
+`pnpm ci:full-release --trusted-workflow-ref candidate --workflow-sha <Q>` to
+select an exact reviewed main-ancestor Q through independent P admission.
+Review the complete Q closure, not only its top-level workflow. Changing Q
+requires a new request, admission, and successful parent; never edit an old
+request or silently follow moving main. Missing qualification contracts need
+a deliberate Q repair or candidate backport. A product repair changes C and
+requires newly bound evidence; a P-only repair can preserve C/Q and their
+original artifacts. Explicit trusted-main or protected-tag
 cross-revision validation is limited to diagnostic, main-qualification, and
 postpublish-confidence requests. It cannot supply new final candidate
 qualification. Existing historical publish requests keep their original meaning
-and remain recoverable. New publish qualification requires admitted Q=C.
+and remain recoverable. New publish qualification requires the admitted C/Q/P
+tuple, not the historical diagnostic route. See
+[qualification-tooling recovery](/reference/full-release-validation/dispatch#recover-qualification-tooling-without-changing-the-candidate).
 
 Evidence reuse preserves both the original producer identity and the current
 consumer identity, inputs, coverage, and artifact provenance. It cannot relabel

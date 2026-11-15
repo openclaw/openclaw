@@ -9,14 +9,17 @@ read_when:
 
 ## Top-level stages
 
-Candidate Q=C runs the selected tests. Admitted P supplies
+The selected qualification Q (default C) runs the selected tests against C.
+Admitted P supplies
 `full-release-validation-state.mjs` for Release Decision, Diagnostic Drain,
 manifest writing, and final validation. Its
 [checked-in waiver policy](/reference/full-release-validation/evidence#release-tooling-waivers)
 is applied there; publication still requires FRV itself to conclude success.
 
 For `rerun_group=all`, a `Check for reusable validation evidence` job runs
-first. It looks for the newest prior green full validation with the same release
+first. Whole-parent reuse retains exact Q/P identity semantics; child closure
+equivalence does not relax this path. It looks for the newest prior green full
+validation with the same release
 profile, coverage policy, effective soak setting, and validation inputs. Exact-target reruns use
 `exact-target-full-validation-v1`. A descendant whose complete delta includes
 the selected `CHANGELOG/YYYY.M.PATCH.md` and only that entry, its matching
@@ -46,12 +49,18 @@ Child dispatch can also reuse an individual green child's sealed receipt even
 when its source parent failed, was cancelled, or is still active. It scans at
 most 100 recent dispatch runs, checks at most 40 target receipt inventories, and
 fully validates at most five matching receipts per role within two minutes.
-Other-target and other-tooling runs do not consume the five-validation budget. Target, role,
+Runs without a matching target receipt do not consume the five-validation budget. Target, role,
 non-empty dispatch inputs/defaults, and candidate descriptor bytes must match;
 empty-string inputs equal absent inputs because GitHub omits them from
-`github.event.inputs`. The child's Tooling SHA must equal the current parent's
-Tooling SHA and remain a main ancestor. Missing or different tooling blocks dispatch;
-there is no inert-path exception. Dispatch logs explain each evaluated rejection,
+`github.event.inputs`. The child's Q must equal the current parent's Q, or
+authenticated Git tree comparison must prove an identical workload closure:
+owning/reusable workflows, local actions, the complete scripts tree, and root
+configuration/dependency files. Normal CI excludes Q-only product directories
+because its product checkout is C; other roles conservatively retain all workflows and the full
+root tree. Unrelated parent workflow changes alone do not invalidate normal CI,
+but changes to shared scripts currently invalidate every child. A differing Q
+must have verified main ancestry. Missing, unsupported, or changed workload
+closure blocks reuse; a control-only intent does not prove compatibility. Dispatch logs explain each evaluated rejection,
 identify reused children, and summarize skipped runs and fresh dispatches. Plan
 sealing, collectors, and final verification repeat the tooling and receipt checks.
 

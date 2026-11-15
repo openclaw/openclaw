@@ -62,7 +62,6 @@ export function retainedPublicationArtifactSource(manifest) {
     reuse.changedPaths.length !== 0 ||
     String(reuse.runId) !== String(reuse.selectedRunId) ||
     !/^[a-f0-9]{40}$/u.test(manifest?.targetSha ?? "") ||
-    manifest.targetSha !== manifest.workflowSha ||
     reuse.evidenceSha !== manifest.targetSha ||
     String(retained?.runId) !== String(reuse.runId) ||
     String(current?.runId) !== String(manifest.runId) ||

@@ -41,7 +41,9 @@ gh workflow run full-release-validation.yml --ref main \
 
 Gateway extended-stable shared publication requires complete candidate-owned
 Full Release Validation from an independently admitted `release-ci/*` harness
-at Q=C, targeting the frozen `extended-stable/YYYY.M.33` tip. The raw diagnostic
+at Q=C by default, or an explicit reviewed main-ancestor Q, targeting the frozen
+`extended-stable/YYYY.M.33` tip. Use the [admitted helper](/reference/full-release-validation/dispatch),
+not a moving-main fallback. The raw diagnostic
 example above and direct `main` producers do not satisfy that publication
 contract. Current
 manifests also supply qualified npm preflight artifacts. The shared

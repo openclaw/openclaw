@@ -33,7 +33,7 @@ Prepare the complete history manifest and substantive version-matched release
 notes before freezing the product-complete commit and its target context as the
 **Code SHA/ref**. Package source preflight requires a matching release section;
 an empty placeholder is not preparation. If the notes are final, this commit
-can also be the **Release SHA**. The candidate C owns test qualification Q=C;
+can also be the **Release SHA**. Qualification defaults to Q=C;
 select independently trusted P for admission, aggregate validation, and
 publication, then run:
 
@@ -97,16 +97,129 @@ summaries instead of repeating the two local registry sweeps. Preparation and
 publication compare that evidence with their actual selected operands; a normal
 parent cannot authorize the prepared route by changing the command afterward.
 
-Record C, Q, and P with the request. Q defaults to C; an explicit qualification
-SHA must equal C for a new publish request. P may advance independently, but
-never replaces Q or selects its tests. A product or qualification repair creates
-a new C/Q. Explicit trusted-main or protected-tooling routes remain available
-for diagnostics, main qualification, and postpublish confidence, not fresh
-candidate-owned publication evidence.
+Record C, Q, and P with the request. Q defaults to C. On the admitted candidate
+route (`--trusted-workflow-ref candidate`), `--workflow-sha <Q>` may instead
+select an exact reviewed main-ancestor Q. C owns source, package bytes, version,
+and baselines; Q supplies the complete qualification workflow closure; P owns
+admission, aggregate policy, verification, and publication. Invoking the helper
+attests operator review of the exact C/Q tuple and coverage. P independently
+authenticates that tuple, normalized inputs, and immutable Q transport before
+dispatch. The helper never substitutes a moving main Q. Explicit
+`--trusted-workflow-ref main` or protected-tooling routes remain separate
+diagnostic, main-qualification, and postpublish-confidence routes; they cannot
+supply fresh publication evidence.
+
+## Recover qualification tooling without changing the candidate
+
+Use this route for a diagnosed qualification/orchestration defect, not to hide a
+product failure or clear an unexplained red job. A local controller update cannot
+retrofit the workflow code of an already-dispatched parent.
+
+1. Preserve the old request, C/Q/P identities, parent run and attempt, failed
+   logs, and any successful child receipts. Reconcile uncertain writes first;
+   settle any owned active tree before dispatching a replacement. Do not relabel
+   the failed parent or edit its sealed plan, request, inputs, or admission.
+2. Land and deploy the reviewed repair and the independent-Q admission support
+   to the chosen P and Q revisions. Assess their exact full SHAs and required
+   contracts before selecting them. Q must be a verified main ancestor and its
+   complete workflow/reusable-workflow/action/script/planner/coverage closure
+   must be reviewed. P must independently admit that exact C/Q tuple. The two
+   revisions may be equal, but neither is inferred from moving main.
+3. Keep C, its package version, source, release context, and intended baselines
+   unchanged. Review and record the new request's complete effective inputs,
+   including baseline values, coverage, publication selection, and soak. A new
+   admission is not an edit to the old request. Use a new private request path.
+4. Within the operator's explicit dispatch authorization, invoke the supported helper from the
+   repaired trusted tooling checkout. Replace every placeholder with the
+   assessed value; preserve the original intended publication selection and
+   effective inputs rather than copying unrelated defaults:
+
+```bash
+CANDIDATE_SHA="<unchanged-full-candidate-sha>"
+QUALIFICATION_SHA="<reviewed-full-main-ancestor-q-sha>"
+PUBLISHER_SHA="<reviewed-full-main-p-sha>"
+PUBLICATION_SELECTION='<original-reviewed-publication-selection-json>'
+pnpm ci:full-release \
+  --sha "$CANDIDATE_SHA" \
+  --target-ref <original-canonical-release-context> \
+  --trusted-workflow-ref candidate \
+  --workflow-sha "$QUALIFICATION_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  --pin-admission-workflow \
+  --request-file <new-private-request-file> \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION" \
+  -f rerun_group=all \
+  -f fail_fast=false
+```
+
+The helper obtains new admission through P's existing
+`openclaw-release-prepare.yml` operation and then creates the exact immutable
+`release-ci/*` transport at Q. Do not create that ref or hand-assemble the
+admission envelope. Use `--dry-run` to inspect the selected tuple before any
+authorized dispatch; a preview is not hosted admission or success.
+
+5. Record the new admission descriptor and parent run/attempt. Require a fresh
+   successful parent and strict verification before publication. Whole-parent
+   reuse keeps exact Q/P semantics. Individual child reuse across Q revisions
+   requires authenticated identical workload closure and exact C, role,
+   effective inputs, candidate descriptor, receipt, artifact, and live-attempt
+   checks; it preserves the original producer Q. A plan-cache-only repair can
+   be compatible, but a matching filename, green job, or fix SHA alone proves
+   neither closure equivalence nor receipt eligibility. Missing evidence or
+   changed workload closure requires fresh work, never relabeling.
+
+### November 2026 plan-cache restoration incident
+
+For release `2026.11.4`, the recorded frozen candidate is
+`e283dccf68ba35ef1af5b3fa31571db7f4b6bc74` and the recorded P is
+`292a425338aca4f447ff8f9983fc93a8fbb369d6`. FRV `43743742888`, attempt
+`2`, failed plan-cache restoration. The hosted-controls fix is
+`d7ee885db8f7b831761ef8be7676fc9d0b6e6ad6`. That fix identifier is not an
+assessment of a deployable new P/Q pair or proof that any old child is reusable.
+Keep the frozen C unchanged for this tooling-only recovery; deploy and assess
+new P/Q containing the required repair/support, then follow the new-admission
+procedure above. The failed FRV remains failed. This runbook does not authorize
+or automatically dispatch a replacement or publish the release.
+
+The captured source admission selected `npm-stable-v1`, stable/all-group
+qualification with soak, primary baseline `openclaw@2026.11.3`, and survivor
+baselines `2026.11.2`, `2026.11.3`, `2026.6.34`, and `2026.9.37`
+(`all-scenarios` / `reported-issues`). Compare the replacement request against
+these recorded selections. The helper owns baseline resolution; do not hand-edit
+its reserved baseline envelope. Stop for review if newly resolved inputs differ
+rather than silently treating them as the old qualification.
+
+The November 15 investigation authenticated these retained child receipts with
+the production verifier at their original Q=C and exact recorded inputs:
+
+| Role                          | Run/attempt     | Receipt artifact ID |
+| ----------------------------- | --------------- | ------------------- |
+| Normal CI                     | `43719715726/1` | `14165507867`       |
+| Independent plugin prerelease | `43719725775/1` | `14164184379`       |
+| Candidate plugin prerelease   | `43747457564/1` | `14176495148`       |
+| Candidate release checks      | `43747437691/1` | `14178081554`       |
+| Independent release checks    | `43744253043/2` | `14177235935`       |
+
+This is not cross-Q eligibility. A Q containing the independent-Q implementation
+changes shared qualification scripts, so these five children must rerun under
+the current conservative closure policy. Their original receipts stay valid
+historical evidence; do not relabel them. A later parent-workflow-only change
+can preserve eligible child evidence after the same strict verification.
+
+The failed parent cannot supply successful whole-parent evidence or authorize
+retained publication artifacts. Existing npm/Docker bytes and receipts remain
+historical artifacts, not a qualified new-Q publication bundle. Reacquire and
+qualify the selected artifact stages against unchanged C. Preserve the original
+coverage, soak, platform requirements, and exact scope of any existing policy
+grants; failed or missing required work must rerun. New P admission and a fresh
+successful FRV with its immutable plan and final verification are mandatory.
 
 ## Exact frozen-target test omissions
 
-Candidate-owned Q=C qualification rejects test omissions. The following inputs
+Admitted candidate qualification, including independent Q, rejects test omissions.
+The following inputs
 apply only to explicit cross-revision diagnostics and retained historical
 contracts; they do not authorize a narrower new publish request.
 
@@ -143,8 +256,8 @@ coverage, not passing evidence.
 For new dispatches, including `--dry-run`, the helper first proves GitHub serves
 the exact Validation SHA by bare-SHA fetch in a fresh temporary repository. A failed
 fetch stops before any request artifact or remote mutation. The helper pushes one
-immutable `release-ci/*` workflow ref at Q=C only after independently trusted P
-admits the frozen request, then dispatches C as `ref` and `expected_sha`.
+immutable `release-ci/*` workflow ref at the exact Q only after independently
+trusted P admits the frozen request, then dispatches C as `ref` and `expected_sha`.
 
 Before creating that workflow ref, the helper writes a private operator artifact at
 `.artifacts/full-release-validation/<request-id>.json` and prints its path.

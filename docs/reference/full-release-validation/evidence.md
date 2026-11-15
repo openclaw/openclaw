@@ -62,7 +62,7 @@ limit and fail sealing; evidence is not truncated to fit.
 ## Release-tooling waivers
 
 Waivers are code in trusted release tooling **P**, not candidate **C** or its
-qualification harness **Q=C**. The grant list is
+qualification harness **Q** (Q=C by default). The grant list is
 `scripts/lib/release-validation-waivers.mjs` and is empty by default. Add a
 reviewed row with an exact target version, child role, job name, and reason.
 For example (illustrative only, not an active grant):
@@ -85,7 +85,7 @@ manifest writing, and final validation. Candidate workflows still run every
 selected test; a waiver does not omit a test or change its raw conclusion.
 State, manifest, and summary retain each waived failure and its reason.
 
-Waiver support requires a candidate workflow that routes state operations to
+Waiver support requires a selected Q workflow that routes state operations to
 admitted P. Pre-cutover frozen workflows retain strict validation; changing P
 alone does not retrofit waiver support. Readers still accept the historical empty
 `telegram_waiver` field without rewriting authenticated evidence.
