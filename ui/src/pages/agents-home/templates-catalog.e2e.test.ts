@@ -549,7 +549,7 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     },
   );
 
-  it("shows paused automation declarations in details and the inline preview", async () => {
+  it("shows disabled automation declarations in details and the inline preview", async () => {
     const { page, gateway } = await fixture();
     await gateway.setMethodResponse("templates.catalog.detail", {
       detail: {
@@ -568,16 +568,16 @@ describe.skipIf(!browserAvailable)("Templates discovery and Add", () => {
     const detail = await openDetail(page);
     const automation = detail.locator(".plugin-capabilities").filter({ hasText: "Weekly brief" });
     await capture(page, "paused-automation-detail", automation);
-    expect(await automation.textContent()).toContain("Paused");
+    expect.soft(await automation.textContent()).toContain("Disabled");
     await page.goto(`${server.baseUrl}chat/main`);
     await page.locator("a.markdown-template-link").first().click();
     const shell = page.getByRole("dialog", { name: "Template details", exact: true });
     await shell.getByRole("button", { name: /Automations/ }).click();
     const row = shell.getByRole("button", { name: /Weekly brief/ });
-    expect(await row.textContent()).toContain("Paused");
+    expect.soft(await row.textContent()).toContain("Disabled");
     await row.click();
     await capture(page, "paused-automation-preview", shell);
-    expect(await shell.textContent()).toContain("Paused");
+    expect.soft(await shell.textContent()).toContain("Disabled");
     expect(await gateway.getRequests("templates.add.apply")).toHaveLength(0);
   });
 
