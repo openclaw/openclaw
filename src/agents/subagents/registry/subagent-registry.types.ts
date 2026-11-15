@@ -114,6 +114,8 @@ export type RequesterSettleWakeState = {
   batchRunIds?: string[];
   /** Batch frozen while its spawning requester turn was yielding. */
   requesterYieldBatch?: true;
+  /** Exact parked lifecycle this cohort must settle if no continuation starts. */
+  requesterRunId?: string;
   /** Present only when an idle requester needs a new turn after yielding. */
   afterRequesterYield?: true;
   /**

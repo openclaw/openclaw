@@ -21,6 +21,8 @@ export type SessionUsageCreator = {
   /** Opaque, namespace-qualified identity used by the creator filter. */
   key: string;
   actor?: SessionCreatedActor;
+  /** Visible sessions in range started by this identity, before the creator filter. */
+  sessionCount?: number;
 };
 
 /** Report-calendar hour facets folded in the usage worker instead of per-quarter rows. */
@@ -169,7 +171,14 @@ export type SessionsUsageOverview = {
   hourlyMessages: number[];
   hourlyErrors: number[];
   filterOptions: Record<"agent" | "channel" | "provider" | "model" | "tool", string[]>;
+  /** Sessions in range carrying each filter option; absent from older Gateways. */
+  filterOptionCounts?: UsageFilterOptionCounts;
 };
+
+export type UsageFilterOptionCounts = Record<
+  "agent" | "channel" | "provider" | "model" | "tool",
+  Record<string, number>
+>;
 
 /** Aggregated report with one final, bounded comparison page. */
 export type UsageOverviewSlice = Pick<SessionsUsageResult, "sessions" | "totals" | "aggregates"> & {

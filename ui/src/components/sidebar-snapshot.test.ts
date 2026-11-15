@@ -155,6 +155,7 @@ describe("sidebar snapshot lifecycle", () => {
     vi.stubGlobal("localStorage", createStorageMock());
   });
   afterEach(async () => {
+    document.documentElement.removeAttribute("data-openclaw-warm-frame");
     for (const dispose of disposers.splice(0)) {
       dispose();
     }
@@ -313,6 +314,7 @@ describe("sidebar snapshot lifecycle", () => {
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
       );
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
@@ -326,10 +328,12 @@ describe("sidebar snapshot lifecycle", () => {
       } else {
         await test.restored;
         expect(test.host.sidebarSnapshot).toEqual(chip);
+        expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
         test.selectAgent("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     },
   );
 
@@ -370,11 +374,14 @@ describe("sidebar snapshot lifecycle", () => {
       admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
       () => test.snapshotOwner.disconnect(),
     );
+    document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
     test.snapshotOwner.connect();
     expect(test.snapshotOwner.read().pending).toBe(true);
+    expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
     void test.settle();
     test.publish();
     expect(test.snapshotOwner.read().pending).toBe(false);
+    expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     stalled.resolve(model);
     await vi.dynamicImportSettled();
     expect(test.host.sidebarSnapshot).toBeNull();
@@ -393,6 +400,7 @@ describe("sidebar snapshot lifecycle", () => {
         admitSidebarBootScope(test.gateway, { ...scope, scope: scope.gatewayScope }),
         () => test.snapshotOwner.disconnect(),
       );
+      document.documentElement.setAttribute("data-openclaw-warm-frame", "holding");
       test.snapshotOwner.connect();
       if (timing === "before") {
         await new Promise<void>((resolve) => {
@@ -405,10 +413,12 @@ describe("sidebar snapshot lifecycle", () => {
         });
       } else {
         await test.restored;
+        expect(document.documentElement.getAttribute("data-openclaw-warm-frame")).toBe("holding");
         test.selectPageScope("other");
       }
       expect(test.host.sidebarSnapshot).toBeNull();
       expect(test.snapshotOwner.read().saved).toBe(false);
+      expect(document.documentElement.hasAttribute("data-openclaw-warm-frame")).toBe(false);
     },
   );
 

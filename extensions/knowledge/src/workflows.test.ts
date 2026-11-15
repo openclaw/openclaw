@@ -52,7 +52,7 @@ it("concurrent service calls publish once, allow reads, and recover after a reje
   }));
   const results = await Promise.allSettled([
     ...inputs.map((input) => f.call("save_page", input)),
-    f.call("records"),
+    f.call("records_detail"),
     f.call("save_page", inputs[0]),
   ]);
   expect(results.filter((r) => r.status === "rejected").map((r) => r.reason.message)).toStrictEqual(
@@ -60,7 +60,7 @@ it("concurrent service calls publish once, allow reads, and recover after a reje
   );
   const receipts = results.slice(0, 4).map((r) => value(r));
   expect(value(results[5]!)).toStrictEqual(receipts[0]);
-  expect((await f.call("records")).total).toBe(4);
+  expect((await f.call("records_detail")).total).toBe(4);
   const current = receipts[0];
   const edit = {
     ...inputs[0],
@@ -73,12 +73,12 @@ it("concurrent service calls publish once, allow reads, and recover after a reje
   await f.call("save_page", edit);
   const afterConflict = await Promise.allSettled([
     f.call("save_page", { ...edit, requestId: randomUUID(), body: "Stale draft" }),
-    f.call("record", { id: current.id }),
+    f.call("record_detail", { id: current.id }),
     f.call("save_page", inputs[1]),
   ]);
   expect(afterConflict[0].status).toBe("rejected");
   expect((afterConflict[0] as PromiseRejectedResult).reason.message).toMatch(/Edit conflict/);
   expect(value(afterConflict[1]).record.body).toBe("Updated person");
   expect(value(afterConflict[2])).toStrictEqual(receipts[1]);
-  expect((await f.call("records")).total).toBe(4);
+  expect((await f.call("records_detail")).total).toBe(4);
 });

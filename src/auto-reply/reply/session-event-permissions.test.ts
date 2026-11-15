@@ -168,6 +168,7 @@ async function enqueueGuardedCliWatchdog(params: {
       }),
     }),
     cancel: () => {},
+    release: async () => undefined,
     cancelScope: () => {},
   });
   try {
@@ -248,6 +249,8 @@ it.for([
   "retained-overrides-downgrade",
   "retained-database-replacement",
   "retained-config-downgrade",
+  "retained-channel-config-downgrade",
+  "unrelated-agent-config",
   "remapped-workspace",
   "remapped-guarded",
   "remapped-default",
@@ -261,8 +264,12 @@ it.for([
       skip("Windows cannot replace an open database file");
     }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
+      const channelDowngrade = change === "retained-channel-config-downgrade";
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
+        ...(channelDowngrade
+          ? { channels: { discord: { enabled: true, actions: { stickers: true } } } }
+          : {}),
       });
       await fs.mkdir(state.workspaceDir, { recursive: true });
       const filePath = path.join(state.workspaceDir, "completion.txt");
@@ -285,6 +292,7 @@ it.for([
       }
       const remapped = change.startsWith("remapped-");
       const toolOnly = change === "tool-only-delivery";
+      const unrelatedConfig = change === "unrelated-agent-config";
       const producerMode = toolOnly
         ? "full"
         : change === "remapped-workspace"
@@ -329,6 +337,12 @@ it.for([
               "read tool",
             );
             await read.execute("read-completion", { path: filePath });
+            if (unrelatedConfig) {
+              setRuntimeConfigSnapshot({
+                ...config,
+                agents: { ...config.agents, entries: { ...config.agents?.entries, other: {} } },
+              });
+            }
             const write = tools.find((tool) => tool.name === "write");
             if (retainedDowngrade) {
               expect(write).toBeDefined();
@@ -357,6 +371,11 @@ it.for([
                   fsSync.renameSync(database.path, foreignPath);
                   fsSync.renameSync(originalPath, database.path);
                 };
+              } else if (channelDowngrade) {
+                setRuntimeConfigSnapshot({
+                  ...config,
+                  channels: { discord: { enabled: true, actions: { stickers: false } } },
+                });
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -505,7 +524,9 @@ it.for([
       expect(accepted).toEqual({ ok: true });
       const evidence = JSON.stringify(outcome);
       expect(await fs.readFile(filePath, "utf8"), evidence).toBe(
-        change === "new-session" || remapped || toolOnly ? "completed\n" : "original\n",
+        change === "new-session" || remapped || toolOnly || unrelatedConfig
+          ? "completed\n"
+          : "original\n",
       );
       expect(runEmbeddedAgentMock, evidence).toHaveBeenCalledOnce();
       expect(observedMode, evidence).toBe(
@@ -520,7 +541,7 @@ it.for([
                 : "full",
       );
       expect(attempted, evidence).toBe(
-        change === "new-session" || retainedDowngrade || remapped || toolOnly,
+        change === "new-session" || retainedDowngrade || remapped || toolOnly || unrelatedConfig,
       );
       expect(retainedWriteRejected).toBe(retainedDowngrade);
       if (change === "new-session") {

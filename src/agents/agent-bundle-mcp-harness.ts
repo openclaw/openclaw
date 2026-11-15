@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -332,7 +333,7 @@ export async function materializeStaticMcpToolsForHarnessRunCore(
     ];
     const runLabel = params.requestInteractiveCodexApproval ? "this run" : "this scheduled run";
     const bounded = [...new Set(messages)]
-      .map((message) => message.replaceAll(/\s+/g, " ").trim().slice(0, 180))
+      .map((message) => truncateUtf16Safe(message.replaceAll(/\s+/g, " ").trim(), 180))
       .filter(Boolean)
       .slice(0, 4);
     const diagnosticNotice =

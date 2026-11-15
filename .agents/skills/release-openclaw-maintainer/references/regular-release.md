@@ -13,8 +13,8 @@ On resume, preserve the state's recorded cut.
 Stable policy (Peter, 2026-09-28): the GitHub release becomes public and Latest
 as soon as core npm is verified. It never waits for ClawHub, Docker, or native
 apps. The orchestrator does this in `flip-github`; the manual direct publisher
-passes `finalize_release_before_docker=true`. The prepared button activates only
-after public ClawHub downloads verify, so stable releases use the direct route.
+passes `finalize_release_before_docker=true`. Prepared publication likewise never
+waits for ClawHub downloads before activation.
 
 `pnpm release:stable YYYY.M.PATCH` runs strict stable qualification and publication as one resumable state
 machine with the phases `cut → validate → publish → flip-github → sync-beta →
@@ -37,7 +37,7 @@ request, and stops on a failed parent for
 diagnosis and operator recovery; `publish` runs
 `pnpm release:candidate`, pushes the final tag, starts the macOS validate and
 preflight lanes from the tag, dispatches `OpenClaw Release Publish` once with
-`wait_for_clawhub=false`, approves the parent's `npm-release` gate, and
+ClawHub detached from the core path, approves the parent's `npm-release` gate, and
 completes when `openclaw@YYYY.M.PATCH` is visible on npm; it never approves or
 cancels a child run (the API cannot prove which parent dispatched one), so
 when those capabilities are absent it prints the exact child-approval and
@@ -347,15 +347,18 @@ checks remain in force. The receipt seals plugin readiness; the existing parent
 revalidates the core npm, Full Release Validation, and Windows evidence before
 dispatching publication.
 
-The publisher verifies the complete prepared npm and ClawHub package set before
-starting any plugin writer. Plugin jobs restore and upload those exact bytes;
-they do not install source dependencies, rebuild, or repack them. Packages that
+Each publication lane verifies its own complete prepared package set before
+starting its writers; ClawHub checks do not hold the npm lane. Plugin jobs restore
+and upload those exact bytes; they do not install source dependencies, rebuild,
+or repack them. Packages that
 are already present must match the prepared integrity and canonical public
 tarball before they can be adopted. Core npm and Docker retain their existing
-prepared-artifact and release-evidence checks. Because ClawHub's publication
-authorization depends on terminal parent success, the outer button waits for
-the publisher and then verifies ClawHub's canonical public downloads. Only then
-does it make the GitHub draft release visible.
+prepared-artifact and release-evidence checks. Selected npm plugins must publish
+successfully before core npm. ClawHub starts at its existing dispatch point and
+runs independently thereafter, including authorization and public-download
+verification. The outer button waits for the core publication requirements,
+not ClawHub, before making the GitHub draft release visible. Record ClawHub
+completion or failure separately and recover it without repeating core publication.
 
 Optional stable Windows promotion starts after that outer activation, using the
 same sealed source tag, installer digests, and protected tooling. The ordinary
@@ -395,11 +398,18 @@ explicit publisher inputs override them. The candidate helper retains its
 explicit SDK acknowledgement when needed. Optional Windows source tag and
 candidate-approved digests are supplied together or both omitted.
 
-Wait for the parent's `npm-release` environment approval, plugin npm then core npm, parallel
-ClawHub, npm postpublish verification, Docker publication, dependency/release
-evidence, and GitHub finalization. Reuse successful immutable child artifacts
-on recovery; never rebuild or republish successful versions. The parent's
-approval receipt lets the npm and ClawHub children skip their human gates.
+Wait for the parent's `npm-release` environment approval, successful selected
+plugin npm publication, then core npm, npm postpublish
+verification, Docker publication, dependency/release evidence, and GitHub
+finalization. ClawHub starts at its existing dispatch point in a separate lane;
+its planning, dispatch, authorization, publication, verification, or recovery
+must never delay or fail the core path or release closeout PR. Reuse successful
+immutable child artifacts on recovery; never rebuild or republish successful
+versions. Each lane's own parent approval receipt lets its children skip their
+human gates; the detached ClawHub lane never reuses the core parent's receipt.
+Find that run in the core summary or `clawhub-detached-dispatch-<run>-<attempt>`
+artifact, then approve and monitor its own gate independently. The legacy
+`wait_for_clawhub` input never rejoins ClawHub to the core path.
 The npm children publish in `npm-publish` from the same protected tooling tag
 and require the parent attempt to remain live. Direct human npm recovery still
 requires its own `npm-release` approval. ClawHub children must never be approved
@@ -440,15 +450,16 @@ preserving newer beta versions. Resume incomplete stages through the selected
 route; never republish successful immutable versions.
 
 Stable direct publication passes `finalize_release_before_docker=true` (the
-standing policy above) and `wait_for_clawhub=false`; the candidate and
-publish-preflight commands emit both for final versions on `latest`. Approve the activation
+standing policy above); ClawHub remains independent. The candidate and
+publish-preflight commands emit the early-finalization input for final versions
+on `latest`. Approve the activation
 gate (`Approve GitHub release before Docker`, `npm-release`) as soon as the
 `publish` job succeeds; that job has already verified core npm. Activation
 keeps the Linux updater carry, and Docker is still required for parent success.
-Without the input, the publisher finalizes after Docker. The prepared button
-verifies public ClawHub downloads before activation. Do not make a release
-public while npm verification is failing; that bypasses a gate. Early
-activation does not waive stable validation.
+Without the input, the publisher finalizes after Docker. Neither direct nor
+prepared publication waits for public ClawHub downloads before activation. Do
+not make a release public while npm verification is failing; that bypasses a
+gate. Early activation does not waive stable validation.
 
 Native applications use [platform publication](platform-publication.md) as
 independent tasks; beta runs them only if requested. Their approval, build,
@@ -483,6 +494,8 @@ publishing or promoting to latest, immediately repair the beta floor through
 that owner and verify each selector readback; preserve any newer beta.
 
 Complete [stable main closeout](stable-main-closeout.md) once version,
-changelog, npm and Docker evidence are ready. Record pending apps and monitor
+changelog, npm and Docker evidence are ready. Do not wait for ClawHub to open
+or complete the closeout or retrospective PR; record its owner, run/attempt,
+current status, and follow-up. Record pending apps and monitor
 them independently; verify each platform's assets/updater before announcing it
 complete.

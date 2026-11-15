@@ -26,7 +26,7 @@ export async function withGitObjectStoreTransport<T>(
   const separator = metadata.indexOf("\n");
   const format = metadata.slice(0, separator);
   const shallow = metadata.slice(separator + 1);
-  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-fetch-"));
+  const staging = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-project-fetch-"));
   let retainStaging = false;
   try {
     await command(staging, ["init", "--bare", "--template=", `--object-format=${format}`]);

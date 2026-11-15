@@ -63,8 +63,9 @@ function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId
 async function collectCandidateAgentDirs(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
-): Promise<string[]> {
+): Promise<{ dirs: string[]; warnings: string[] }> {
   const dirs = new Set<string>();
+  const warnings: string[] = [];
   for (const entry of listAgentEntries(cfg)) {
     const id = entry.id?.trim();
     if (id) {
@@ -72,13 +73,21 @@ async function collectCandidateAgentDirs(
     }
   }
   const agentsRoot = path.join(resolveStateDir(env), "agents");
-  const entries = await fs.readdir(agentsRoot, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (entry.isDirectory() || entry.isSymbolicLink()) {
-      dirs.add(path.resolve(agentsRoot, entry.name, "agent"));
+  try {
+    const entries = await fs.readdir(agentsRoot, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isDirectory() || entry.isSymbolicLink()) {
+        dirs.add(path.resolve(agentsRoot, entry.name, "agent"));
+      }
+    }
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      warnings.push(
+        `Cannot list agent directories under ${shortenHomePath(agentsRoot)}; additional directory discovery was skipped. Inspect permissions and rerun doctor.`,
+      );
     }
   }
-  return [...dirs].toSorted((left, right) => left.localeCompare(right));
+  return { dirs: [...dirs].toSorted((left, right) => left.localeCompare(right)), warnings };
 }
 
 function shouldRemoveLocalOAuthShadow(params: {
@@ -122,7 +131,12 @@ export async function scanStaleOAuthProfileShadows(params: {
   }
   const hits: StaleOAuthProfileShadow[] = [];
   const warnings: string[] = [];
-  for (const agentDir of await collectCandidateAgentDirs(params.cfg, env)) {
+  const { dirs: candidateDirs, warnings: dirWarnings } = await collectCandidateAgentDirs(
+    params.cfg,
+    env,
+  );
+  warnings.push(...dirWarnings);
+  for (const agentDir of candidateDirs) {
     const authPath = path.resolve(resolveAuthStorePath(agentDir));
     if (authPath === mainAuthPath) {
       continue;

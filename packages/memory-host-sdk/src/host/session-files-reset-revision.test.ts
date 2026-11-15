@@ -25,7 +25,7 @@ import {
 import {
   buildSessionEntry,
   buildSessionEntries,
-  matchesSessionEntryPrefixHash,
+  streamSessionEntry,
   type BuildSessionEntryOptions,
   type SessionFileEntry,
 } from "./session-files.js";
@@ -384,7 +384,17 @@ describe("SQLite session snapshots and reset content revision", () => {
 
     await persist(scope, "assistant", "ordinary appended text");
     const afterAppend = await exportEntry(scope, buildOptions);
-    expect(matchesSessionEntryPrefixHash(afterAppend, beforeLineCount, before.hash)).toBe(true);
+    const prefixHash = async () =>
+      (
+        await streamSessionEntry(
+          sessionKey,
+          { ...scope, ...buildOptions },
+          {
+            prefixLineCount: beforeLineCount,
+          },
+        )
+      )?.prefixHash;
+    expect(await prefixHash()).toBe(before.hash);
 
     await resetSessionEntryLifecycle({
       agentId: "main",
@@ -406,6 +416,6 @@ describe("SQLite session snapshots and reset content revision", () => {
     });
     expect(Object.keys(after)).not.toContain(cutoffSymbol.description);
     expect(after.hash).not.toBe(before.hash);
-    expect(matchesSessionEntryPrefixHash(after, beforeLineCount, before.hash)).toBe(false);
+    expect(await prefixHash()).not.toBe(before.hash);
   });
 });

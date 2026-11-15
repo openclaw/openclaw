@@ -48,25 +48,40 @@ function isConfirmedYield(card: ToolCard): boolean {
   );
 }
 
-// PR preparation and workspace publication both end the turn and resume it
-// with their result; the shared handoff receipt, not the action, proves that.
-function isConfirmedGitHubHandoff(card: ToolCard): boolean {
+function isPublicHandoffTool(name: unknown): boolean {
+  return (
+    name === "github_publish" ||
+    name === "image_generate" ||
+    name === "video_generate" ||
+    name === "music_generate"
+  );
+}
+
+// These owners finish in the background and resume the conversation with their
+// result. Only a paired, accepted receipt proves the turn intentionally handed off.
+function isConfirmedPublicHandoff(card: ToolCard): boolean {
   if (
-    card.name !== "github_publish" ||
+    !isPublicHandoffTool(card.name) ||
     !Object.hasOwn(card, "args") ||
     card.completed !== true ||
     card.isError === true
   ) {
     return false;
   }
-  const receipt = asRecord(card.details) ?? safeParseJsonRecord(card.outputText ?? "");
-  return receipt?.status === "started" && receipt.async === true && receipt.yielded === true;
+  const receipt = readYieldReceipt(card);
+  return (
+    receipt?.status === "started" &&
+    receipt.async === true &&
+    (card.name === "github_publish"
+      ? receipt.yielded === true
+      : typeof receipt.taskId === "string" && receipt.taskId.length > 0)
+  );
 }
 
 /** Keep handoff-capable calls and results until the projection can pair them. */
 export function hasHandoffToolCall(message: unknown): boolean {
   return extractToolCardsCached(message).some(
-    (card) => card.name === "sessions_yield" || card.name === "github_publish",
+    (card) => card.name === "sessions_yield" || isPublicHandoffTool(card.name),
   );
 }
 
@@ -159,9 +174,9 @@ function scanSessionsYieldItems(
     const yields = yieldCards.filter(isConfirmedYield);
     const lastYield = yields.at(-1);
     const boundary: ChatItem[] = [];
-    // GitHub handoffs also yield, but their public tool details and non-subagent
+    // Public tool handoffs also yield, but their details and non-subagent
     // lifecycle must not enter the private sessions_yield projection below.
-    const handoff = lastYield ?? cards.findLast(isConfirmedGitHubHandoff);
+    const handoff = lastYield ?? cards.findLast(isConfirmedPublicHandoff);
     if (handoff) {
       // The invisible boundary keeps handed-off rows in place and separates
       // their run from a continuation without declaring an interruption.
@@ -240,26 +255,26 @@ function scanSessionsYieldItems(
     let remaining: ChatItem[] = [item];
     // Public handoff details follow the display preference after recognition.
     // Private continuation filtering below still uses only sessions_yield IDs.
-    const hiddenGithubCards = showToolCalls
+    const hiddenPublicCards = showToolCalls
       ? []
       : cards.filter(
           (card) =>
-            card.name === "github_publish" &&
+            isPublicHandoffTool(card.name) &&
             !readNodePermissionRequest(asRecord(card.details)?.permissionMissing),
         );
-    const filterTools = yieldCards.length > 0 || hiddenGithubCards.length > 0;
+    const filterTools = yieldCards.length > 0 || hiddenPublicCards.length > 0;
     if (
       message &&
       filterTools &&
       !showToolCalls &&
       isStandaloneToolMessageForDisplay(message) &&
-      (yieldCards.length > 0 || hiddenGithubCards.length === cards.length)
+      (yieldCards.length > 0 || hiddenPublicCards.length === cards.length)
     ) {
       remaining = [];
     } else if (message && filterTools && Array.isArray(message.content)) {
       const yieldIds = new Set(yieldCards.map((card) => card.callId));
       const ids = new Set(yields.map((card) => card.callId));
-      const hiddenGithubIds = new Set(hiddenGithubCards.map((card) => card.callId));
+      const hiddenPublicIds = new Set(hiddenPublicCards.map((card) => card.callId));
       const content = message.content.filter((block: unknown) => {
         const raw = asRecord(block);
         if (!raw || (!isToolCallContentType(raw.type) && !isToolResultContentType(raw.type))) {
@@ -267,11 +282,11 @@ function scanSessionsYieldItems(
         }
         const id = resolveToolBlockId(raw, message);
         // A retained mixed row can also own an actionable permission request.
-        // Hide only GitHub's cards; its siblings keep their original projection.
+        // Hide only public handoff cards; siblings keep their original projection.
         if (!showToolCalls) {
           return (
             yieldCards.length === 0 &&
-            (id ? !hiddenGithubIds.has(id) : raw.name !== "github_publish")
+            (id ? !hiddenPublicIds.has(id) : !isPublicHandoffTool(raw.name))
           );
         }
         // Live inputs can precede the sanitized history row. Yield context is never a tool detail.
@@ -295,7 +310,7 @@ function scanSessionsYieldItems(
                   showToolCalls
                     ? !yieldIds.has(activity.toolCallId ?? activity.itemId)
                     : yieldCards.length === 0 &&
-                      !hiddenGithubIds.has(activity.toolCallId ?? activity.itemId),
+                      !hiddenPublicIds.has(activity.toolCallId ?? activity.itemId),
                 ),
               },
             },

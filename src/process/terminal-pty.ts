@@ -7,6 +7,7 @@ import {
   resolveWindowsSpawnProgram,
 } from "../plugin-sdk/windows-spawn.js";
 import { signalPtySessionTree } from "./kill-tree.js";
+import { prepareAgentCoreDumpLimit } from "./linux-core-dump.js";
 import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { resolvePtyTerminalName, setPtyTerminalName } from "./pty-terminal-name.js";
 import { getSpawnBroker } from "./spawn-broker/context.js";
@@ -74,6 +75,7 @@ export async function spawnTerminalPty(
   lifecycle?: {
     abortSignal?: AbortSignal;
     assertCurrent?: () => void;
+    prepareCurrent?: () => Promise<void>;
     initiateSpawn?: SpawnInitiation;
   },
 ): Promise<TerminalPtyHandle> {
@@ -101,13 +103,19 @@ export async function spawnTerminalPty(
     // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    const pty = await spawnNodeTerminalPty(
+      params,
+      assertCurrent,
+      lifecycle?.initiateSpawn,
+      lifecycle?.prepareCurrent,
+    );
     if (pty.pid > 0) {
       recordSpawn?.();
     }
     return pty;
   }
   const launch = await prepareTerminalPty(params);
+  await lifecycle?.prepareCurrent?.();
   assertCurrent();
   return lifecycle?.initiateSpawn ? lifecycle.initiateSpawn(launch) : launch();
 }
@@ -117,6 +125,7 @@ export async function prepareTerminalPty(
   params: TerminalPtySpawnParams,
 ): Promise<() => TerminalPtyHandle> {
   const recordSpawn = prepareChildProcessSpawnRecorder(params.file, params.args);
+  const limited = prepareAgentCoreDumpLimit(params.file, params.args, params.executionIntent);
   const env = params.env ? { ...params.env } : undefined;
   // Ambient TERM=dumb describes the gateway/node host, not this real PTY.
   // Passing it through makes interactive CLIs refuse to start in the web terminal.
@@ -133,7 +142,13 @@ export async function prepareTerminalPty(
     // node-pty always exports the child's working directory as PWD.
     bunEnv.PWD = params.cwd ?? process.cwd();
     return () => {
-      const pty = spawnBunTerminalPty({ ...params, env: bunEnv, name: terminalName });
+      const pty = spawnBunTerminalPty({
+        ...params,
+        file: limited.command,
+        args: limited.args,
+        env: bunEnv,
+        name: terminalName,
+      });
       if (pty.pid > 0) {
         recordSpawn?.();
       }
@@ -141,7 +156,7 @@ export async function prepareTerminalPty(
     };
   }
   const { spawn } = await import("@lydell/node-pty");
-  const { file, args } = params;
+  const { command: file, args } = limited;
   const invocationEnv = env ?? process.env;
   const invocation = ((): { file: string; args: string[] | string } => {
     if (!isWindowsBatchCommand(file)) {

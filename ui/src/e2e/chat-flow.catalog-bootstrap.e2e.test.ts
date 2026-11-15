@@ -266,7 +266,7 @@ suite.define(() => {
           'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
         );
         const trigger = picker.locator('[data-chat-model-select][aria-disabled="false"]');
-        const account = picker.locator("[data-chat-account-group-toggle]");
+        const account = picker.locator(".chat-controls__account-trigger");
         await trigger.click();
         await expect.poll(() => account.isVisible()).toBe(true);
         await expect.poll(() => account.textContent()).toContain("Account A");
@@ -373,7 +373,7 @@ suite.define(() => {
                 'openclaw-chat-pane[aria-hidden="false"] .chat-controls__model-picker',
               );
               const accountElement = pickerElement?.querySelector(
-                "[data-chat-account-group-toggle]",
+                ".chat-controls__account-trigger",
               );
               return {
                 catalogPickerPresent: Boolean(pickerElement),

@@ -28,7 +28,11 @@ with the plugin and need no separate install.
 | `knowledge-source-ingest`  | Canonical source identity, retained coverage snapshots, and manifest diffing                                                |
 
 The skills are adapted from gbrain's ingestion, enrichment, and correction
-workflows, using Knowledge tools in place of gbrain commands. They are agent
+workflows, using Knowledge tools in place of gbrain commands. Each `SKILL.md` is
+a short router: a rules card that holds for the whole task, then the reference
+to read for each step. Agents read a reference when its step needs it, such as
+only the page layout for the type being written, rather than the full
+conventions and publication references up front. They are agent
 procedures, not an autonomous ingestion engine, connector, or scheduler.
 Remembering and extraction are best effort; read back what was saved.
 
@@ -51,6 +55,12 @@ Remembering and extraction are best effort; read back what was saved.
   or `discusses` (source to entity). Entity Timelines are derived from these
   notes and the source's claims; pages have no Timeline section, and agents
   retire older written ones when they edit the page.
+- **Pages stay current explanations.** Every path that writes a subject page
+  (ingestion, meetings, capture, entity updates, corrections) follows the
+  sections for its type (project, person, company, concept), routes each fact to
+  the most specific existing page, rewrites State in place instead of appending
+  dated or per-source sections, writes no Timeline entries, keeps every
+  citation, and leaves an already-current page alone apart from the new facts.
 - **Typed edges need support.** Co-mention is not evidence of employment,
   ownership, or attendance. `attended` runs from participant to meeting.
 - **Reconcile across sources.** Reuse duplicate imports, add evidence, link

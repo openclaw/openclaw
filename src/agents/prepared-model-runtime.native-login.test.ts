@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../plugins/provider-plugin.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -32,7 +33,11 @@ const nativeLogin = {
   apiKey: "synthetic-native-presence",
   source: "Fixture CLI login",
   mode: "oauth",
-  nativeAuth: { runtime: "fixture-cli", mode: "oauth" },
+  nativeAuth: {
+    runtime: "fixture-cli",
+    mode: "oauth",
+    display: { kind: "subscription", plan: "Max" },
+  },
 } as const;
 const sharedCredential = { type: "api_key", key: "synthetic-shared-key" } as const;
 const savedCredential = { type: "api_key", key: "synthetic-saved-key" } as const;
@@ -130,7 +135,11 @@ it("publishes native login recovery on forced admission recheck without waiting 
   await recheck({ force: true });
   expect(readAuth().authModes).toEqual({
     shared: "api_key",
-    "fixture-cli": { source: "native", mode: "oauth" },
+    "fixture-cli": {
+      source: "native",
+      mode: "oauth",
+      display: { kind: "subscription", plan: "Max" },
+    },
   });
   expect(readAuth().credentials?.[native.id]).toEqual({
     type: "api_key",
@@ -146,6 +155,38 @@ it("publishes native login recovery on forced admission recheck without waiting 
   expect(readAuth().authModes).toEqual({ shared: "api_key" });
   expect(readAuth().credentials).toEqual({ shared: sharedCredential });
   expect(readAuth().authStore.profiles).toEqual(sharedProfiles);
+});
+
+it("publishes a login whose check outlives the triggering read's plugin scope", async () => {
+  await using resources = new AsyncDisposableStack();
+  const { recheck, readAuth, publish } = fixture(resources);
+  let readOpen = true;
+  const readScope = {
+    lookup: () => {
+      if (!readOpen) {
+        throw new Error("Plugin invocation scope is closed");
+      }
+      return undefined;
+    },
+  };
+  const probed = createDeferredCore();
+  native.probe.mockImplementation(async () => {
+    await probed.promise;
+    // Plugin work resolves its instance through whichever invocation scope it inherited.
+    pluginInvocationContext.getStore()?.lookup({} as never);
+    return nativeLogin;
+  });
+  await vi.advanceTimersByTimeAsync(60_000);
+  const pending = pluginInvocationContext.run(readScope, () => recheck());
+  readOpen = false;
+  probed.resolve();
+  await pending;
+  expect(publish).toHaveBeenCalledOnce();
+  expect(readAuth().authModes[native.id]).toEqual({
+    source: "native",
+    mode: "oauth",
+    display: { kind: "subscription", plan: "Max" },
+  });
 });
 
 it("keeps saved profile credentials authoritative across native login and logout", async () => {

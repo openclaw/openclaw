@@ -502,7 +502,10 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Package tests start after preflight and do not consume the Linux runtime artifact.
+Package tests and full-validation release compilation start after preflight and do not
+consume the Linux runtime artifact. The release phase shares the independent package
+matrix and its two-worker cap. It no longer waits for Linux build verification;
+all native suites and total job counts are unchanged.
 App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
 runner queueing cannot consume the native test job's 30-minute budget. They download
 the producer's artifact by its output ID and verify the selected checkout SHA before
@@ -1058,9 +1061,12 @@ extra compiler pass runs to populate it. Archive upload cost and consumer hit
 rates still need CI measurement.
 
 Source-only Linux Node 24 shards can restore compiled Vitest workers from the
-protected cache warmer. The warmer prepares one generation before SDK or runtime
-builds change package resolution, joins the preparation owner, and publishes only
-the retained cache. PR jobs restore it without publishing. Consumers enable
+protected cache warmer. The warmer prepares separate full, runtime, and tooling
+generations before SDK or runtime builds change package resolution, joins each
+preparation owner, and publishes each retained slot in its own archive. The
+manifest uses the worker owner's selection rules to hint which archive to restore;
+unknown or mixed selections restore the full archive. Execution recomputes the
+preset and validates the restored generation before reuse. PR jobs restore it without publishing. Consumers enable
 reuse only when an archive exists; cold runners keep ordinary fresh compilation.
 The worker owner verifies source and dependency bytes, compiler identity,
 resolution topology, environment, output inventory, and the exact checkout and

@@ -150,6 +150,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Runtime selected by the sandbox owner, including detached command cleanup. */
+  sandboxContainerName?: string;
   /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
@@ -169,6 +171,10 @@ export interface ProcessSession {
   notifyDeliveryContext?: DeliveryContext;
   notifySessionTarget?: SessionEventTarget;
   assertExitNotificationAcceptanceCurrent?: () => void;
+  /** One-shot run (hidden subagent, cron run): the exit continues it only after sessions_yield. */
+  exitWakeAfterYield?: true;
+  /** sessions_yield awaits this command, so its exit resumes the yielded origin run. */
+  resumesYieldedRun?: true;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   exitNotified?: boolean;
@@ -219,6 +225,12 @@ export interface ProcessSession {
   finalizing?: boolean;
   truncated: boolean;
   backgrounded: boolean;
+  /** Explicit `background: true` service. */
+  independentService?: true;
+  /** A process a completed command left running, tracked by identity instead of a run. */
+  adopted?: {
+    stop: () => Promise<{ status: "stopped" } | { status: "uncertain"; reason: string }>;
+  };
   /** PTY cursor key mode: unknown until a PTY reports smkx/rmkx. */
   cursorKeyMode: "unknown" | "normal" | "application";
 }
@@ -262,6 +274,17 @@ let observeDurableProcesses: (() => Promise<void>) | undefined;
 export function setDurableProcessObserver(observer: (() => Promise<void>) | undefined) {
   observeDurableProcesses = observer;
   scheduleSweeper();
+}
+
+type ExitWakeRecorder = {
+  backgrounded: (session: ProcessSession) => void;
+  exited: (session: ProcessSession) => void;
+};
+let exitWakeRecorder: ExitWakeRecorder | undefined;
+
+/** The Gateway's durable store records wake-armed ordinary processes so a restart can report them. */
+export function setExitWakeRecorder(recorder: ExitWakeRecorder | undefined) {
+  exitWakeRecorder = recorder;
 }
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
@@ -564,6 +587,7 @@ export function markExited(
   wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.exited(session);
   }
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
@@ -595,6 +619,7 @@ export function markCancellationRequested(session: ProcessSession) {
 export function markBackgrounded(session: ProcessSession) {
   if (!session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.backgrounded(session);
   }
   session.backgrounded = true;
   const active = activeExecSessions.get(session.id);
@@ -645,11 +670,21 @@ export function getActiveBackgroundExecSessionCount(): number {
   return count;
 }
 
+// Handed off to keep running without OpenClaw; no cleanup remains to join.
+const releasedSessions = new WeakSet<ProcessSession>();
+
+export function markExecSessionReleased(session: ProcessSession): void {
+  releasedSessions.add(session);
+}
+
 /** Joins registered exec cleanup, including foreground and hidden processes. */
 export async function waitForExecScope(scopeKey: string): Promise<void> {
   while (true) {
     const pending = Array.from(activeExecSessions.values())
-      .filter(({ session }) => session.scopeKey === scopeKey)
+      .filter(
+        ({ session }) =>
+          session.scopeKey === scopeKey && !session.adopted && !releasedSessions.has(session),
+      )
       .map((active) => (active.settled ??= createDeferredCore()).promise);
     if (pending.length === 0) {
       return;

@@ -1,6 +1,7 @@
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasErrnoCode, isMissingPathError } from "../../infra/errors.js";
 import { root as fsRoot } from "../../infra/fs-safe.js";
 import { normalizeGitPathForFilesystem } from "../../infra/git-exec.js";
 import { requestGitWorkerEffect } from "../../infra/git-worker-context.js";
@@ -42,16 +43,6 @@ type SnapshotInventory = {
 const assertCurrent = () =>
   requestGitWorkerEffect<"worktree.assert-current">({ type: "worktree.assert-current", input: {} });
 
-// @types/node omits opendir's buffer encoding and declares only string names.
-function openRawDirectory(directoryPath: string | Buffer) {
-  // SAFETY: Node accepts buffer encoding; the consumer validates names before use.
-  const openDirectory = fs.opendir as (
-    path: string | Buffer,
-    options: { encoding: BufferEncoding | "buffer" },
-  ) => Promise<AsyncIterable<Dirent<string | Buffer>>>;
-  return openDirectory(directoryPath, { encoding: "buffer" });
-}
-
 async function listCollapsedOtherPaths(checkoutPath: string, ignored: boolean): Promise<Buffer[]> {
   // --directory collapses whole untracked/ignored trees to one entry each, so the
   // Git output stays bounded by top-level entries instead of every dependency file.
@@ -80,24 +71,71 @@ async function walkCollapsedPaths(
     ) {
       return true;
     }
-    // Buffer names preserve bytes through Node's lstat fallback for unknown entry
-    // types. opendir batches entries and closes the handle even on early retention.
-    const directory = await openRawDirectory(checkoutPathFromGitBytes(checkoutPath, relative));
-    for await (const entry of directory) {
-      if (!Buffer.isBuffer(entry.name)) {
-        throw new Error("Expected raw directory-entry bytes");
-      }
-      const child = Buffer.concat([relative, Buffer.from("/"), entry.name]);
-      if (options.skip?.has(gitPathKey(child))) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        if (await visitDirectory(child)) {
-          return true;
+    const directoryPath = checkoutPathFromGitBytes(checkoutPath, relative);
+    const decoded = relative.toString("utf8");
+    let directoryEntries: Dirent[] | undefined;
+    if (!decoded.includes("\uFFFD")) {
+      try {
+        // Node's DT_UNKNOWN fallback needs a string parent for string names.
+        directoryEntries = await fs.readdir(path.join(checkoutPath, decoded), {
+          withFileTypes: true,
+        });
+      } catch (error) {
+        // A lossy DT_UNKNOWN name can fail Node's internal stat before readdir
+        // returns. Retry with raw bytes; a missing directory still fails there.
+        if (!isMissingPathError(error) && !hasErrnoCode(error, "ENAMETOOLONG")) {
+          throw error;
         }
-      } else {
-        // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
-        await options.visitFile?.(child);
+      }
+    }
+    // One lossy name invalidates the entire decoded listing, including siblings.
+    if (directoryEntries?.some((entry) => entry.name.includes("\uFFFD"))) {
+      directoryEntries = undefined;
+    }
+    const names =
+      directoryEntries?.map((entry) => Buffer.from(entry.name)) ??
+      (await fs.readdir(directoryPath, { encoding: "buffer" }));
+    for (let offset = 0; offset < names.length; offset += 64) {
+      const children = names
+        .slice(offset, offset + 64)
+        .map((name, index) => {
+          const entry = directoryEntries?.[offset + index];
+          return {
+            path: Buffer.concat([relative, Buffer.from("/"), name]),
+            directory: entry?.isDirectory()
+              ? true
+              : entry && (entry.isFile() || entry.isSymbolicLink())
+                ? false
+                : undefined,
+          };
+        })
+        .filter((child) => !options.skip?.has(gitPathKey(child.path)));
+      // Join every read before recursing or retaining a nested repository.
+      const stats = children.some((child) => child.directory === undefined)
+        ? await Promise.allSettled(
+            children.map(
+              async (child) =>
+                child.directory ??
+                (
+                  await rawPathStat(checkoutPathFromGitBytes(checkoutPath, child.path))
+                )?.isDirectory() ??
+                false,
+            ),
+          )
+        : undefined;
+      for (const [index, child] of children.entries()) {
+        const result = stats?.[index];
+        if (result?.status === "rejected") {
+          throw result.reason;
+        }
+        if (result ? result.value : child.directory) {
+          if (await visitDirectory(child.path)) {
+            return true;
+          }
+        } else {
+          // Never follow symlinks; only ordinary Git-style leaf paths enter the snapshot.
+          await options.visitFile?.(child.path);
+        }
       }
     }
     return false;
@@ -504,10 +542,10 @@ export async function snapshotWorktree(
     : parseGitTreePaths(await requireGitBuffer(input.checkoutPath, ["ls-tree", "-r", "-z", tree]));
   assertNoProvisionedTreePaths(treePaths, input.provisionedPaths);
   // Cached trees can bypass write-tree's object checks even in a dirty snapshot.
-  // Verify the final tree before publishing a capture that must remain restorable.
+  // Verify before publication; buffer replies because the complete batch is already supplied.
   const objects = await requireGitBuffer(
     input.checkoutPath,
-    ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+    ["cat-file", "--buffer", "--batch-check=%(objectname) %(objecttype)"],
     {
       input: Buffer.from(
         [...new Set(treePaths.filter((entry) => entry.mode !== "160000").map((entry) => entry.oid))]

@@ -6,6 +6,10 @@ import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
 import { deniesCodexNativeDelegation } from "../../native-tool-policy.js";
 import type { CodexAppServerClient } from "./client.js";
 import {
+  buildCodexDefaultCollaborationPolicy,
+  usesManagedCollaboration,
+} from "./collaboration-policy.js";
+import {
   CODEX_SESSION_OVERRIDABLE_LAYER_TYPES,
   readCodexAuthoredConfigValue,
   readCodexConfigValue,
@@ -152,6 +156,7 @@ export type CodexThreadConfigurationContext = CodexThreadPromptContext &
     | "bootstrapContextMode"
     | "scheduledRuntimeAuthority"
     | "requireWorkspaceOnly"
+    | "trigger"
   >;
 
 /** Common deterministic start/resume/fork fields; no run resources or unsupported setters. */
@@ -159,10 +164,21 @@ export function buildCodexThreadConfiguration(
   params: CodexThreadConfigurationContext,
   options: CodexThreadConfigurationOptions,
 ) {
-  const config = buildCodexRuntimeThreadConfigForRun(params, options.config, {
+  const runtimeConfig = buildCodexRuntimeThreadConfigForRun(params, options.config, {
     ...options,
     directOnlyToolNamespaces: resolveDirectOnlyToolNamespaces(options.dynamicTools),
   });
+  // Supervision owns native mode transitions. Cron has its own per-turn policy.
+  // Ordinary managed turns are fixed Default; suppress the catalogue-owned block
+  // and put capability-aware guidance on the existing compaction-safe carrier.
+  const config = usesManagedCollaboration(params, options)
+    ? { ...runtimeConfig, include_collaboration_mode_instructions: false }
+    : runtimeConfig;
+  const developerInstructions = joinPresentSections(
+    buildCodexThreadGenericInstructions(params, { ...options, config }),
+    options.refreshableInstructions,
+  );
+  options.onDeveloperInstructions?.(developerInstructions);
   return {
     ...(options.cwd !== undefined ? { cwd: options.cwd } : {}),
     ...(options.appServer.sessionRoot
@@ -175,26 +191,33 @@ export function buildCodexThreadConfiguration(
       ? { serviceTier: options.appServer.serviceTier }
       : {}),
     config,
-    // Catalog-owned collaboration messages replace caller collaboration instructions
-    // (codex-rs/core/src/context/world_state/collaboration_mode.rs), so refreshable
-    // workspace instructions ride the thread developer carrier after the immutable generic policy.
-    developerInstructions: joinPresentSections(
-      options.developerInstructions ??
-        buildDeveloperInstructions(params, {
-          dynamicTools: options.dynamicTools,
-          nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
-          nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
-          hostSystemAgentActive: options.hostSystemAgentActive,
-        }),
-      options.refreshableInstructions,
-    ),
+    developerInstructions,
   };
+}
+
+/** The same immutable policy must reach native context and the incognito drift guard. */
+export function buildCodexThreadGenericInstructions(
+  params: CodexThreadConfigurationContext,
+  options: CodexThreadConfigurationOptions,
+): string {
+  return joinPresentSections(
+    options.developerInstructions ??
+      buildDeveloperInstructions(params, {
+        dynamicTools: options.dynamicTools,
+        nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
+        nativeCodeModeOnlyEnabled: options.config?.["features.code_mode_only"] === true,
+        hostSystemAgentActive: options.hostSystemAgentActive,
+      }),
+    usesManagedCollaboration(params, options)
+      ? buildCodexDefaultCollaborationPolicy(options.config ?? {}, options.nativeConfig)
+      : undefined,
+  );
 }
 
 export async function buildThreadStartParams(
   params: AgentHarnessSessionRuntimeParamsV1,
   options: CodexThreadConfigurationOptions & { cwd: string; dynamicTools: CodexDynamicToolSpec[] },
-): Promise<CodexThreadStartParams> {
+): Promise<CodexThreadStartParams & { developerInstructions: string }> {
   const resolvedModelProvider = await resolveCodexAppServerModelProvider({
     ...params,
     homeScope: options.appServer.start.homeScope,

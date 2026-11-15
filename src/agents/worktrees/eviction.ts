@@ -143,7 +143,8 @@ export async function evictManagedWorktree(params: {
                     ["rev-parse", `${snapshotRef}^{commit}`],
                     { signal, beforeRun },
                   );
-                  await accepted.prepareArchive?.(snapshotCommit);
+                  const archive = await accepted.prepareArchive?.();
+                  await archive?.(snapshotCommit);
                 }
               },
             );

@@ -48,14 +48,14 @@ suite.define(() => {
     }
     const native = install === installNativeWebChrome;
     const toggle = native
-      ? ".sidebar-session-toolbar__collapse"
+      ? ".macos-titlebar-controls__sidebar"
       : '[data-navigation-view][aria-pressed="true"]';
     await page.locator(toggle).click();
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
     const box = await page
-      .locator(native ? ".macos-titlebar-controls" : ".shell-chrome-controls")
+      .locator(native ? ".macos-titlebar-controls" : ".sidebar-rail")
       .boundingBox();
     expect(box).not.toBeNull();
     return { page, gateway, toolbar: box! };
@@ -84,19 +84,20 @@ suite.define(() => {
     );
     const header = page.locator(".content .content-header").first();
     const title = header.locator(".page-title");
-    const y = native ? center(toolbar, "y") : 24;
-    await expectAligned(title, y, "y");
+    if (!native) {
+      await expectAligned(title, 24, "y");
+    }
     await expectAligned(title, header, "x");
     const titleBox = (await title.boundingBox())!;
     if (native) {
-      expect(toolbar.y + toolbar.height).toBe(52);
-      expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
-      expect((await header.locator(".page-subtitle").boundingBox())!.y).toBeGreaterThanOrEqual(52);
+      expect(titleBox.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      expect((await header.locator(".page-subtitle").boundingBox())!.y).toBeGreaterThanOrEqual(
+        toolbar.y + toolbar.height,
+      );
     } else {
-      const edges = await page
-        .locator(".shell-chrome-controls button:visible")
-        .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
-      expect(titleBox.x).toBeGreaterThan(Math.max(...edges));
+      expect(
+        titleBox.x >= toolbar.x + toolbar.width || titleBox.x + titleBox.width <= toolbar.x,
+      ).toBe(true);
     }
   });
 

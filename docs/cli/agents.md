@@ -14,6 +14,32 @@ Creation summaries strip terminal escape sequences and show embedded newlines,
 tabs, and carriage returns as `\n`, `\t`, and `\r`. Workspace paths and other
 values in saved configuration and `--json` output retain their original contents.
 
+## Reserved agent IDs and setup recovery
+
+`openclaw` and `crestodian` are reserved system-agent IDs (case-insensitive),
+not names for configured user agents. A display name such as `OpenClaw` is fine
+when the agent's ID is different.
+
+An existing configured agent with a reserved ID conflicts with managed setup.
+For the `openclaw` ID, the setup helper is also omitted to prevent recursive
+self-delegation. Full Access and tool allowlists do not resolve that collision.
+The agent prompt reports the configured conflict instead of treating it as an
+approval problem.
+
+Have the Gateway operator plan a move to a non-reserved ID, preserving the
+workspace, sessions and database ownership, channel bindings, and credentials.
+Changing only the config key or deleting and recreating the agent is not a
+history-preserving migration. Back up the affected state before making changes;
+there is no automatic rename in this recovery path.
+
+The `openclaw` setup tool manages the Gateway hosting the conversation; it does
+not select another Gateway by node or host. For an authorized task on another
+machine, verify the destination and use the available remote execution tools
+with their normal approvals; local agent-ID migration is not a prerequisite for
+that separately authorized remote task. `/openclaw` rescue accepts supported
+commands, not arbitrary setup instructions; it cannot enable a missing tool from
+free-form text.
+
 ## Examples
 
 ```bash
@@ -80,6 +106,13 @@ wait for it to exit, and rerun the same command.
 - `main` is an ordinary agent id. Recreating it after another agent owns the installation can require `openclaw doctor --fix` to repair legacy session or shared-auth ownership first.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
 - An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until cleanup finishes.
+
+Retained and held agent databases stay outside Gateway startup, runtime discovery,
+and update migrations. Requests to a held agent return restoration guidance while
+healthy agents remain available. Explicit `agents add` restoration verifies their ownership
+and backs up and migrates an older SQLite schema before publishing the agent.
+Stop the Gateway before restoring an older schema. A failed restoration leaves
+the database held; `openclaw doctor --fix` provides inspection and restoration guidance.
 
 With PostgreSQL agent storage, a retained local anchor must still match an initialized
 server namespace. If that namespace is missing, empty, or belongs to another store,

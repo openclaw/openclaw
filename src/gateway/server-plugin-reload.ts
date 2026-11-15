@@ -4,6 +4,7 @@ import { validateConfiguredBindings } from "../channels/plugins/configured-bindi
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveConfigWidePluginMetadataSnapshotAsync } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { prepareGatewayPluginMetadataSnapshotPublication } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginHookGatewayCronService } from "../plugins/hook-gateway.types.js";
@@ -254,7 +255,10 @@ export async function reloadGatewayPlugins(
         await checkpoint();
         // Refuse self-reload before stopping the plugin whose callback must finish this request.
         if (!overlap) {
-          facts.releaseResourceHandoff = assertResourceHandoff(resourceHandoffIds);
+          facts.releaseResourceHandoff = assertResourceHandoff(
+            resourceHandoffIds,
+            !params.pluginLifecycle,
+          );
         }
         const configEffects = params.prepareConfigEffects({
           pluginIds: changedPluginIds,
@@ -468,30 +472,22 @@ export async function reloadGatewayPlugins(
             ),
           );
         });
-        if (activationErrors.length > 0) {
-          throw activationErrors.length === 1
-            ? activationErrors[0]
-            : new AggregateError(
-                activationErrors,
-                activationErrors.map(formatErrorMessage).join("; "),
-              );
-        }
+        throwCollectedErrors(activationErrors, activationErrors.map(formatErrorMessage).join("; "));
         facts.phase = "dispose";
         recordCleanup(
           await waitForPluginRegistryRetirement(previousRegistry, { deferConsumers: true }),
         );
         recordCleanup(await kernel.pluginMetadata.waitForRetirement());
-        const receipt = createPluginRuntimeApplication({
-          operationId: lifecycle.operationId,
-          generation: getPluginRuntimeGeneration(),
-          registry: nextRegistry,
-          pluginIds: changedPluginIds,
-          reloadPluginIds: params.pluginLifecycle?.reason === "reload" ? requestedIds : undefined,
-          warnings: [...warnings],
-        });
         return {
           activeChannels: new Set(nextRegistry.channels.map((entry) => entry.plugin.id)),
-          runtime: receipt,
+          runtime: createPluginRuntimeApplication({
+            operationId: lifecycle.operationId,
+            generation: getPluginRuntimeGeneration(),
+            registry: nextRegistry,
+            pluginIds: changedPluginIds,
+            reloadPluginIds: params.pluginLifecycle?.reason === "reload" ? requestedIds : undefined,
+            warnings: [...warnings],
+          }),
         };
       } catch (error) {
         let failure = includeServiceStopFailure(error);

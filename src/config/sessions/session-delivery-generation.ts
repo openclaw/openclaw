@@ -41,13 +41,15 @@ import type {
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSessionEntryGenerationInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
+import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
 import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
-  isSessionDeliveryGenerationRevokedError,
-  isSessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
+import {
+  matchesSessionGeneration,
+  prepareMemorySessionGeneration,
+} from "./session-delivery-generation-memory.js";
 import {
   createSessionGenerationReadBatch,
   type GenerationRead,
@@ -95,6 +97,7 @@ async function prepareSessionGenerationLease(
   initialRead: GenerationRead = withSessionEntriesFromStoresInWorker,
 ): Promise<{
   assertCurrent: SessionSourceAssertion;
+  assertNativeTransactionCurrent: SessionSourceAssertion;
   assertDeliveryCurrent: () => void;
   readSessionSettings: () =>
     | Readonly<Pick<SessionSharingEntry, "permissionMode" | "toolOverrides">>
@@ -143,16 +146,19 @@ async function prepareSessionGenerationLease(
     | undefined;
   let databaseIdentity: string | undefined;
   let retained: ReturnType<typeof retainPreparedSessionGenerationFacts> | undefined;
+  const diag = createLeaseDiagnostics(() => ({ active, invalidated, revoked }));
   const release = () => {
     if (!active) {
       return;
     }
+    diag.flip("released");
     active = false;
     for (const stop of releases.splice(0).toReversed()) {
       stop();
     }
   };
   const revoke = () => {
+    diag.flip("resource-revoked");
     release();
     onRevoked?.(new SessionDeliveryGenerationUnavailableError());
   };
@@ -160,32 +166,31 @@ async function prepareSessionGenerationLease(
     if (revoked) {
       throw new SessionDeliveryGenerationRevokedError();
     }
-    if (!active || invalidated) {
-      throw new SessionDeliveryGenerationUnavailableError();
+    if (!active) {
+      throw diag.unavailable("active-closed");
+    }
+    if (invalidated) {
+      throw diag.unavailable("active-invalidated");
     }
   };
   const refuseCurrent = (error: unknown): never => {
-    const failure =
-      isSessionDeliveryGenerationRevokedError(error) ||
-      isSessionDeliveryGenerationUnavailableError(error)
-        ? error
-        : new SessionDeliveryGenerationUnavailableError({ cause: error });
+    const failure = diag.fallback("current-fallback", error);
     onRevoked?.(failure);
     throw failure;
   };
   const checkEntry = (entry: SessionGenerationEntry | null | undefined, committed = true) => {
     if (entry === undefined) {
-      throw new SessionDeliveryGenerationUnavailableError();
+      throw diag.unavailable("entry-missing");
     }
-    if (
-      (entry?.sessionId ?? null) !== generation.sessionId ||
-      (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
-    ) {
+    if (!matchesSessionGeneration(generation, entry)) {
       if (!committed) {
-        throw new SessionDeliveryGenerationUnavailableError();
+        throw diag.unavailable("entry-tentative");
       }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
+    }
+    if (entry && committed) {
+      generation.sessionId = entry.sessionId;
     }
     return entry;
   };
@@ -211,6 +216,7 @@ async function prepareSessionGenerationLease(
       ) {
         return;
       }
+      diag.flip("row-invalidated");
       invalidated = true;
       return;
     }
@@ -246,6 +252,7 @@ async function prepareSessionGenerationLease(
       }
     }
     if (!isPreparedSessionSharingChange(change)) {
+      diag.flip("row-invalidated");
       invalidated = true;
     }
   };
@@ -313,7 +320,7 @@ async function prepareSessionGenerationLease(
               identity.birthtime === undefined ||
               identity.birthtime !== workerIdentity.birthtime
             ) {
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("initial-identity");
             }
             source = { path: sharing.source.path, identity };
           } else {
@@ -326,7 +333,7 @@ async function prepareSessionGenerationLease(
               !original?.key.startsWith("path:") ||
               readDatabasePathIdentitySync(pathname).key !== original.key
             ) {
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("initial-absence");
             }
             source = { path: pathname, identity: original };
           }
@@ -342,6 +349,7 @@ async function prepareSessionGenerationLease(
           let native = getOpenClawAgentDatabaseIfOpen(nativeOptions);
           let nativeRevision = native && readSqliteNativeMutationRevision(native.db);
           const schemaChanged = () => {
+            diag.flip("schema-invalidated");
             invalidated = true;
           };
           if (native && !isPostgresSqlConnection(native.db)) {
@@ -355,8 +363,9 @@ async function prepareSessionGenerationLease(
                 releases.push(registerSqliteSchemaMutationListener(native.db, schemaChanged));
               }
             } else if (opened !== native) {
+              diag.flip("check-detected");
               invalidated = true;
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("native-handle");
             }
             return native;
           };
@@ -367,11 +376,11 @@ async function prepareSessionGenerationLease(
             }
             // Native callbacks and unfinished cursors cannot certify a committed write set.
             if (!isPostgresSqlConnection(native.db) && hasPendingSqliteNativeExecution(native.db)) {
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("native-pending");
             }
             const revision = readSqliteNativeMutationRevision(native.db);
             if (revision === undefined) {
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("native-revision");
             }
             if (revision === nativeRevision) {
               return;
@@ -389,13 +398,14 @@ async function prepareSessionGenerationLease(
                 !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides) ||
                 readSqliteNativeMutationRevision(native.db) !== revision
               ) {
-                throw new SessionDeliveryGenerationUnavailableError();
+                throw diag.unavailable("native-policy");
               }
               assertActive();
               nativeRevision = revision;
             } catch (error) {
               // Tentative native changes may roll back; committed revocation stays permanent.
               if (committed) {
+                diag.flip("check-detected");
                 invalidated = true;
               }
               throw error;
@@ -424,7 +434,7 @@ async function prepareSessionGenerationLease(
                     (!isPostgresSqlConnection(opened.db) &&
                       hasPendingSqliteNativeExecution(opened.db))))
               ) {
-                throw new SessionDeliveryGenerationUnavailableError();
+                throw diag.unavailable("effect-native");
               }
             };
             assertCurrent();
@@ -445,7 +455,7 @@ async function prepareSessionGenerationLease(
                 `file:${result.databaseIdentity?.identity}` !== source?.identity.key ||
                 result.databaseIdentity?.birthtime !== source.identity.birthtime
               ) {
-                throw new SessionDeliveryGenerationUnavailableError();
+                throw diag.unavailable("effect-identity");
               }
               const observed = checkEntry(
                 result.entries.find((row) => row.sessionKey === generation.sessionKey)?.entry ??
@@ -455,8 +465,9 @@ async function prepareSessionGenerationLease(
                 observed?.permissionMode !== current?.permissionMode ||
                 !isDeepStrictEqual(observed?.toolOverrides, current?.toolOverrides)
               ) {
+                diag.flip("check-detected");
                 invalidated = true;
-                throw new SessionDeliveryGenerationUnavailableError();
+                throw diag.unavailable("effect-policy");
               }
               nativeRevision = revision;
               return {
@@ -472,6 +483,7 @@ async function prepareSessionGenerationLease(
                 !opened.db.isTransaction &&
                 readSqliteNativeMutationRevision(opened.db) === revision
               ) {
+                diag.flip("check-detected");
                 invalidated = true;
               }
               reader.release();
@@ -488,12 +500,12 @@ async function prepareSessionGenerationLease(
     if (admission) {
       releases.push(admission.release);
     } else if (sharedAdmission && source?.identity.key.startsWith("file:")) {
-      throw new SessionDeliveryGenerationUnavailableError();
+      throw diag.unavailable("admission-missing");
     }
     const readCurrent = () => {
       assertActive();
       if (!source || (admission && !admission.isCurrent())) {
-        throw new SessionDeliveryGenerationUnavailableError();
+        throw diag.unavailable("source-admission");
       }
       // Unhosted workers cannot share admission and retain their native source checks.
       if (!sharedAdmission) {
@@ -514,7 +526,11 @@ async function prepareSessionGenerationLease(
           sessionId: generation.sessionId,
           lifecycleRevision: generation.lifecycleRevision ?? undefined,
         },
-        fields: ["sessionId", "lifecycleRevision"],
+        fields: generation.exactTranscript
+          ? ["sessionId", "lifecycleRevision"]
+          : generation.lifecycleRevision === null
+            ? []
+            : ["lifecycleRevision"],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertActive,
         refuse: () => {
@@ -537,7 +553,7 @@ async function prepareSessionGenerationLease(
             ),
           )
         ) {
-          throw new SessionDeliveryGenerationUnavailableError();
+          throw diag.unavailable("delivery-mutation");
         }
         readCurrent();
       } catch (error) {
@@ -580,7 +596,6 @@ async function prepareSessionGenerationLease(
     assertGenerationCurrent.prepareSessionSourceEffect = async () => {
       let releaseEffect: PreparedSessionSourceEffect["release"];
       try {
-        assertActive();
         for (let pending = prepareRead(); pending; pending = prepareRead()) {
           await pending;
         }
@@ -588,7 +603,7 @@ async function prepareSessionGenerationLease(
         const prepared = await prepareNativeEffect(current);
         releaseEffect = prepared.release;
         if (!source) {
-          throw new SessionDeliveryGenerationUnavailableError();
+          throw diag.unavailable("effect-source");
         }
         await prepareSessionStoreCandidatesInWorker({
           validate: { candidates, sources: [source] },
@@ -597,7 +612,7 @@ async function prepareSessionGenerationLease(
           checkGenerationCurrent(() => {
             prepared.assertCurrent();
             if (checkEntry(retained?.readCurrent()) !== current) {
-              throw new SessionDeliveryGenerationUnavailableError();
+              throw diag.unavailable("effect-entry");
             }
           });
         assertEffectCurrent();
@@ -609,6 +624,8 @@ async function prepareSessionGenerationLease(
     };
     return {
       assertCurrent: assertGenerationCurrent,
+      // Opaque host guards retain native atomicity and the same tentative-row checks.
+      assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
       assertDeliveryCurrent: () => assertCurrent(true),
       readSessionSettings: () => {
         assertGenerationCurrent();
@@ -624,7 +641,7 @@ async function prepareSessionGenerationLease(
           throw new Error("Session creation admission changed; retry against the current session");
         }
         if (generation.sessionId !== null || !retained || !databaseIdentity) {
-          throw new SessionDeliveryGenerationUnavailableError();
+          throw diag.unavailable("creation-binding");
         }
         const target = {
           agentId: generation.agentId,
@@ -642,21 +659,16 @@ async function prepareSessionGenerationLease(
         return createDynamicSessionSourceAssertion(
           () => (creationAdopted ? assertGenerationCurrent : assertCreationCurrent),
           () => {
-            throw new SessionDeliveryGenerationUnavailableError();
+            throw diag.unavailable("creation-fallback");
           },
         );
       },
       isCreationAdopted: () => creationAdopted,
     };
   } catch (error) {
+    const failure = diag.fallback("prepare-fallback", error);
     release();
-    if (
-      isSessionDeliveryGenerationRevokedError(error) ||
-      isSessionDeliveryGenerationUnavailableError(error)
-    ) {
-      throw error;
-    }
-    throw new SessionDeliveryGenerationUnavailableError({ cause: error });
+    throw failure;
   }
 }
 
@@ -695,6 +707,7 @@ export async function prepareCronRootSessionGeneration(
     {
       ...input,
       lifecycleRevision: input.lifecycleRevision ?? null,
+      exactTranscript: true,
     },
     onRevoked,
   );

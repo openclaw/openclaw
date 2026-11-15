@@ -1,6 +1,7 @@
 // Control UI tests cover customizable sidebar navigation and persistence.
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionPath,
@@ -323,6 +324,7 @@ suite.define(() => {
     const page = await context.newPage();
     await installNativePluginMockGateway(page, {
       controlUiTabs: [{ group: "control", id: "logbook", label: "Logbook", pluginId: "logbook" }],
+      featureMethods: [...defaultControlUiFeatureMethods, "config.get", "agents.list"],
       methodResponses: {
         "config.get": {
           config: {},
@@ -547,10 +549,10 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
         .not.toContain("shell--onboarding");
-      // Ask OpenClaw is a settings-takeover page (#111686): the settings
-      // sidebar owns navigation there, not the app sidebar.
+      // Settings replaces the session panel while retaining the desktop navigation rail.
       await expect.poll(() => settingsSidebar.isVisible()).toBe(true);
-      await expect.poll(() => sidebar.isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-shell").isVisible()).toBe(false);
+      await expect.poll(() => sidebar.locator(".sidebar-rail").isVisible()).toBe(true);
       await expect
         .poll(() => page.getByRole("button", { name: "Exit setup" }).isVisible())
         .toBe(false);

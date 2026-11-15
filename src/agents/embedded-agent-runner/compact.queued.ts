@@ -114,7 +114,7 @@ function assertQueuedCompactionPreparationActive(
  * Use this from outside a lane context. If already inside a lane, use
  * `compactEmbeddedAgentSessionDirect` to avoid deadlocks.
  */
-export async function compactEmbeddedAgentSession(
+export async function compactQueuedEmbeddedAgentSession(
   input: CompactEmbeddedAgentSessionParams,
   options: QueuedCompactionHostOptions,
 ): Promise<EmbeddedAgentCompactResult> {

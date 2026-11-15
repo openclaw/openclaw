@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/agent-guidance",
-  "version": "2026.11.1",
+  "version": "2026.11.3",
   "private": true,
   "description": "Shared instruction files for selected OpenClaw agents",
   "type": "module",

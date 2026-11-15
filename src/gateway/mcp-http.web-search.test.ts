@@ -78,6 +78,20 @@ it("keeps private search denial, callable sibling tools, and live grant revocati
           requests.push(pending);
           return pending;
         };
+        // Compaction grants list the session's tools for prefix parity but run none of them.
+        const compaction = grants.mintMcpLoopbackClientGrant({
+          context: { sessionKey: "agent:main:main", senderIsOwner: true, toolCallsRefused: true },
+          runtimeOwnerToken: runtime.ownerToken,
+          admittedRunContext,
+        });
+        const compactionGrant = {
+          grant: compaction,
+          capture: mcp.captureGrant(compaction.token, "compaction", runtime.ownerToken),
+        };
+        mcp.expectMcpToolNames(await request(compactionGrant), ["web_search", "message"]);
+        expect((await request(compactionGrant, "message")).result?.isError).toBe(true);
+        expect(mocks.message).not.toHaveBeenCalled();
+        expect(mocks.beforeTool).not.toHaveBeenCalled();
         const disabled = makeGrant(true);
         expect((await request(disabled)).result?.tools?.map(({ name }) => name)).toEqual([
           "message",

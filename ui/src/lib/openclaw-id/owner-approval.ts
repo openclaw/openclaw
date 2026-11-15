@@ -7,6 +7,7 @@ import {
   hexToBytes,
   isEd25519PublicKey,
   isIrohEndpointKey,
+  isNodeDescription,
   isRandomId,
   ownerDeviceCertBody,
   sasCode,
@@ -19,6 +20,7 @@ import {
   type JsonValue,
   type MailboxMessage,
   type MailboxPayload,
+  type NodeDescription,
   type ReceiveMailResponse,
   type SasStart,
 } from "../../../../packages/openclaw-id-protocol/src/index.ts";
@@ -30,6 +32,7 @@ type Attempt = {
   commitment: string;
   sender: string;
   expires: number;
+  expiryTimer?: ReturnType<typeof setTimeout>;
   ephemeral: EphemeralKey;
   secret?: Uint8Array;
   transcript?: Uint8Array;
@@ -43,40 +46,120 @@ type Attempt = {
 export type OwnerApprovalRequest = {
   id: string;
   label: string;
+  /**
+   * What the new device's node may use, when it also asked to run tools for the claw. Its node
+   * key and this surface are in the SAS commitment, so the compared code covers them.
+   */
+  tools?: { commands: string[]; caps: string[] };
   code?: string;
   busy: boolean;
   error?: string;
+  expired?: boolean;
+  uncertain?: boolean;
 };
 /** Browser lifetime state for owner approval. */
 export type OwnerApprovalState = {
   requests: OwnerApprovalRequest[];
   error: string | null;
   ready: boolean;
+  /** The claw's hostname, once known; approval dialogs name the claw. */
+  hostname?: string;
 };
 
 const now = () => Math.floor(Date.now() / 1000);
 
+/**
+ * An app's node from a `start`: its key and the surface it asks for, both bound by the
+ * commitment. Undefined when absent (a browser); null when malformed, so the start is ignored.
+ */
+function appNode(
+  value: unknown,
+  devicePeerKey: string,
+): { peer_key: string; description: NodeDescription } | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  // SAFETY: the guard above rejected non-objects, null and arrays.
+  const { peer_key, description, ...rest } = value as Record<string, unknown>;
+  if (
+    Object.keys(rest).length > 0 ||
+    !isIrohEndpointKey(peer_key) ||
+    peer_key === devicePeerKey ||
+    !isNodeDescription(description)
+  ) {
+    return null;
+  }
+  return { peer_key, description };
+}
+const expiredRequest = "This device request expired or was cancelled.";
+
 /** Owns one cancellable mailbox reader and bounded SAS attempts for this original browser D. */
-export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () => void) {
+export function createOwnerApproval(
+  client: GatewayBrowserClient,
+  onRequest: () => void,
+  onKitUsed: (device: string | undefined) => void = () => {},
+  onMemberDeviceAdded: () => void = () => {},
+) {
   const abort = new AbortController();
   const attempts = new Map<string, Attempt>();
+  const expiredRequests = new Map<string, OwnerApprovalRequest>();
   const listeners = new Set<() => void>();
   let mail: DeviceMail | undefined;
   let error: string | null = null;
   let cursor = "0";
+  let hostname: string | undefined;
   let started = false;
   let ownsLock = false;
   const lifetime = Promise.withResolvers<void>();
   const publish = () => listeners.forEach((listener) => listener());
+  const projectRequest = (id: string, a: Attempt): OwnerApprovalRequest => ({
+    id,
+    label: a.start.label,
+    ...(a.start.node
+      ? {
+          tools: {
+            commands: [...a.start.node.description.commands],
+            caps: [...a.start.node.description.caps],
+          },
+        }
+      : {}),
+    code: a.code,
+    busy: a.busy,
+    error: a.error ?? (a.expires <= now() ? expiredRequest : undefined),
+    expired: a.expires <= now(),
+    uncertain: Boolean(a.submissionStarted && a.error),
+  });
   const drop = (id: string, force = false) => {
     const attempt = attempts.get(id);
     if (attempt?.busy && !force) {
       attempt.cancelled = true;
+      publish();
       return;
     }
+    clearTimeout(attempt?.expiryTimer);
     attempt?.secret?.fill(0);
     attempts.delete(id);
     publish();
+  };
+  const expire = (id: string) => {
+    const attempt = attempts.get(id);
+    if (!attempt) {
+      return;
+    }
+    clearTimeout(attempt.expiryTimer);
+    const remaining = attempt.expires * 1000 - Date.now();
+    if (remaining > 0) {
+      attempt.expiryTimer = setTimeout(() => expire(id), remaining);
+      return;
+    }
+    // Keep only display facts after expiry; pending/uncertain admissions still own their result.
+    if (!attempt.busy) {
+      expiredRequests.set(id, projectRequest(id, attempt));
+    }
+    drop(id);
   };
   const send = async (
     attempt: Attempt,
@@ -113,6 +196,10 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
     ) {
       return;
     }
+    const node = appNode(d.node, d.peer_key);
+    if (node === null) {
+      return;
+    }
     const sender = await fingerprint(d.device_pub);
     if (message.from.device_fp !== sender) {
       return;
@@ -124,6 +211,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         device_pub: d.device_pub,
         peer_key: d.peer_key,
         label: d.label,
+        ...(node ? { node } : {}),
       },
       commitment: d.commit,
       sender,
@@ -142,7 +230,10 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         drop(id);
       }
     }
+    // A fresh request replaces the prior expired display, keeping retained facts bounded.
+    expiredRequests.clear();
     attempts.set(payload.request_id, attempt);
+    expire(payload.request_id);
     try {
       await send(attempt, "accept", {
         eph_pub: bytesToHex(attempt.ephemeral.publicKey),
@@ -159,6 +250,16 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   // Reveal must match N's commitment before computing the matching number.
   const receive = async (message: MailboxMessage) => {
     const p = message.payload;
+    if (p.kind === "notice" && message.claw_id === mail!.clawId) {
+      if (p.event === "kit_used") {
+        // A hint only: name the device the Gateway now lists under that fingerprint, if any.
+        const ctx = await readOwnerApprovalContext(client);
+        onKitUsed(ctx.link.ownerDevices?.find((device) => device.deviceFp === p.ref)?.label);
+      } else if (p.event === "member_device_added") {
+        onMemberDeviceAdded();
+      }
+      return;
+    }
     if (p.kind !== "enrollment" || message.claw_id !== mail!.clawId) {
       return;
     }
@@ -208,7 +309,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
       const received = await mail.call<ReceiveMailResponse>("receive", undefined, cursor);
       for (const [id, a] of attempts) {
         if (a.expires <= now()) {
-          drop(id);
+          expire(id);
         }
       }
       for (const message of received.messages) {
@@ -228,6 +329,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
   const run = async () => {
     const { link } = await readOwnerApprovalContext(client);
     abort.signal.throwIfAborted();
+    hostname = link.hostname;
     if (!navigator.locks || !link.clawId) {
       throw new Error("This browser needs Web Locks to coordinate owner approval across tabs.");
     }
@@ -253,13 +355,11 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
       return {
         ready: Boolean(mail),
         error,
-        requests: [...attempts].map(([id, a]) => ({
-          id,
-          label: a.start.label,
-          code: a.code,
-          busy: a.busy,
-          error: a.error,
-        })),
+        hostname,
+        requests: [
+          ...expiredRequests.values(),
+          ...[...attempts].map(([id, a]) => projectRequest(id, a)),
+        ],
       };
     },
     subscribe(listener: () => void) {
@@ -289,6 +389,7 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
     stop() {
       abort.abort();
       lifetime.resolve();
+      expiredRequests.clear();
       for (const id of attempts.keys()) {
         drop(id, true);
       }
@@ -301,13 +402,13 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
         return;
       }
       if (a.expires <= now()) {
-        drop(id);
+        expire(id);
         return;
       }
       const requireLive = () => {
         abort.signal.throwIfAborted();
         if (attempts.get(id) !== a || a.cancelled || a.expires <= now()) {
-          throw new Error("This device request expired or was cancelled.");
+          throw new Error(expiredRequest);
         }
       };
       a.busy = true;
@@ -353,7 +454,20 @@ export function createOwnerApproval(client: GatewayBrowserClient, onRequest: () 
           {
             claw_id: mail!.clawId,
             seq: ctx.link.seq! + 1,
-            target: { op: "add_owner_device", cert },
+            target: {
+              op: "add_owner_device",
+              cert,
+              ...(a.start.node
+                ? {
+                    node: {
+                      // SAFETY: checked by isIrohEndpointKey when the start message was accepted.
+                      peer_key: a.start.node.peer_key as `iroh:${string}`,
+                      label: a.start.label,
+                      description: a.start.node.description,
+                    },
+                  }
+                : {}),
+            },
             issued_at: now(),
           },
           mail!.signer,

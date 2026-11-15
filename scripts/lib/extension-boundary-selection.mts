@@ -87,6 +87,7 @@ export function selectAffectedBoundaryPackages(
     }
   }
   if (changedEntries.size > 0) {
+    const changedSpecifiers = [...changedEntries];
     const files = execFileSync("git", ["ls-files", "-z", "--", "extensions"], {
       cwd: rootDir,
       encoding: "utf8",
@@ -113,7 +114,8 @@ export function selectAffectedBoundaryPackages(
         continue;
       }
       const source = readFileSync(resolve(rootDir, file), "utf8");
-      if (!source.includes("openclaw/plugin-sdk/") && !source.includes("\\")) {
+      // Escapes can hide a matching specifier; otherwise only parse possible consumers.
+      if (!source.includes("\\") && !changedSpecifiers.some((entry) => source.includes(entry))) {
         continue;
       }
       sources.push({ fileName: file, text: source, owner });

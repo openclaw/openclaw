@@ -216,6 +216,7 @@ it("releases runtimes from Gateway processes without artifact evidence", () => {
   processRow(peer, ["openclaw-gateway"], { cwd: "/" });
   processRow(peer + 1, ["node", "/app/dist/index.js", "gateway", "--port", "18789"]);
   processRow(peer + 2, ["node", "/app/dist/process/spawn-broker/worker.js"]);
+  processRow(peer + 3, ["node", "/app/dist/infra/directory-watch-host.worker.js", `${peer + 1}`]);
   // Title-erased CLIs, update, Doctor's git update, and update workers may be its creator.
   const updaters: string[][] = [
     ["openclaw"],
@@ -228,13 +229,15 @@ it("releases runtimes from Gateway processes without artifact evidence", () => {
     ["openclaw-gateway", `${runtime}/dist/worker.js`],
     // A preload alias is not resolved before the Gateway entrypoint is identified.
     ["node", "--import", alias, "/app/dist/index.js", "gateway"],
+    // A watch helper launched from the runtime still holds it.
+    ["node", `${runtime}/dist/infra/directory-watch-host.worker.js`, `${peer + 1}`],
   ];
   const holders = updaters.map((argv, index) => {
-    processRow(peer + 3 + index, argv, { cwd: "/" });
-    return peer + 3 + index;
+    processRow(peer + 4 + index, argv, { cwd: "/" });
+    return peer + 4 + index;
   });
   expectPids(holders, undefined, runtime);
-  expectPids([peer, peer + 1, peer + 2, ...holders]);
+  expectPids([peer, peer + 1, peer + 2, peer + 3, ...holders]);
 });
 
 it.each([

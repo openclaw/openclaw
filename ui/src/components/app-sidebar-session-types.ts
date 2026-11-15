@@ -292,6 +292,7 @@ export type SidebarSessionGroupMenuState = {
 };
 
 export type SidebarSessionSortMode = (typeof SIDEBAR_SESSION_SORT_OPTIONS)[number]["mode"];
+export const DEFAULT_SIDEBAR_SESSION_SORT_MODE: SidebarSessionSortMode = "updated";
 export type SidebarSessionStatusFilter = (typeof SIDEBAR_SESSION_STATUS_OPTIONS)[number];
 export type SidebarEmptyGroupsMode = "filtering" | "always" | "never";
 export type SidebarSessionOwnerFilter = {
@@ -408,7 +409,7 @@ function sidebarSessionOwnerFilterStorageKey(gatewayUrl: string, selfUserId: str
   return `${SIDEBAR_SESSION_OWNER_FILTER_STORAGE_PREFIX}${gatewayOriginScope(gatewayUrl)}:${encodeURIComponent(selfUserId)}`;
 }
 
-/** Without a saved choice, guests start on Involving me and everyone else on their own sessions. */
+/** Without a saved choice, guests start on Involving me and everyone else on All owners. */
 export function loadStoredSidebarSessionOwnerFilter(
   gatewayUrl: string,
   selfUserId: string,
@@ -416,7 +417,7 @@ export function loadStoredSidebarSessionOwnerFilter(
 ): SidebarSessionOwnerFilter {
   const fallback = options.guest
     ? { ownerId: null, involvingMe: true }
-    : { ownerId: selfUserId, involvingMe: false };
+    : { ownerId: null, involvingMe: false };
   try {
     const stored = getSafeLocalStorage()?.getItem(
       sidebarSessionOwnerFilterStorageKey(gatewayUrl, selfUserId),
@@ -430,7 +431,7 @@ export function loadStoredSidebarSessionOwnerFilter(
       involvingMe: stored === "involving-me",
     };
   } catch {
-    // A disabled store still uses the signed-in default.
+    // A disabled store still uses the default.
     return fallback;
   }
 }
@@ -439,7 +440,9 @@ export function loadStoredSidebarSessionSortMode(): SidebarSessionSortMode {
   const stored = getSafeLocalStorage()?.getItem(SIDEBAR_SESSION_SORT_MODE_STORAGE_KEY);
   // "people" stays readable here even when the gateway later hides the
   // capability; effectiveSessionSortMode() downgrades it at render time.
-  return stored === "updated" || stored === "people" ? stored : "created";
+  return stored === "created" || stored === "updated" || stored === "people"
+    ? stored
+    : DEFAULT_SIDEBAR_SESSION_SORT_MODE;
 }
 
 function loadStoredSidebarStringSet(

@@ -297,12 +297,15 @@ describe("chat pane model-setting permissions", () => {
       const thinking = container.querySelector<HTMLInputElement>("[data-chat-thinking-slider]")!;
       const fast = container.querySelector<HTMLButtonElement>('[data-chat-speed-option="on"]')!;
       const context = container.querySelector<HTMLButtonElement>(
-        "[data-chat-context-window-toggle]",
+        ".chat-controls__context-trigger",
       )!;
       expect(thinking.disabled).toBe(readOnly);
       expect(fast.disabled).toBe(readOnly);
       expect(context.disabled).toBe(scope !== "operator.admin");
+      expect(context).not.toBeNull();
       context.click();
+      await controls.composerControls.model.onContextWindowSelect!("extended", state.sessionKey);
+      await getPendingChatPickerPatch(state, state.sessionKey);
       if (!readOnly) {
         thinking.value = "1";
         thinking.dispatchEvent(new Event("change", { bubbles: true }));
