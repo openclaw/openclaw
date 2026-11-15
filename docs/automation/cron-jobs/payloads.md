@@ -105,8 +105,9 @@ existing conversation with `sessionTarget: "session:<same session key>"`. New
 jobs retain the original authenticated source privately, so the continuation can
 finish authorized work, such as inspecting and merging that conversation's PR,
 without another message from the operator. Each occurrence revalidates the
-original operator scopes, role, device, access grant, model restrictions, and exact
-session identity under current policy. This preserves the original operator
+original operator scopes, role, device, access grant, and model restrictions under
+current policy. The saved link follows the conversation by key through message edits,
+branch switches, and resets; each occurrence binds to its current transcript. This preserves the original operator
 scope ceiling; it is not a new PR-only permission or a blanket grant to automations.
 The stored tool cap, sandbox, and current tool denials still apply. Scheduled
 automation management remains self-scoped.

@@ -103,12 +103,13 @@ export async function dispatchCronDelivery(
       diagnostics,
     };
   };
-  const failTarget = (error: string) => {
+  const failTarget = async (error: string) => {
     const detail = params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? error +
         "; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target"
       : error;
     record("not-delivered", detail);
+    await logCronDeliveryWarn("[cron:" + params.job.id + "] delivery failed: " + detail);
     return finish({ kind: "error", error: detail, errorKind: "delivery-target" });
   };
 
@@ -249,7 +250,12 @@ export async function dispatchCronDelivery(
     delivery: params.resolvedDelivery,
     source:
       params.sourceSessionKey && params.sourceSessionGeneration
-        ? { sessionKey: params.sourceSessionKey, ...params.sourceSessionGeneration }
+        ? {
+            sessionKey: params.sourceSessionKey,
+            lifecycleRevision: params.job.sourceConversation
+              ? undefined
+              : params.sourceSessionGeneration.lifecycleRevision,
+          }
         : undefined,
     sourceSessionKey: params.runSessionKey,
     deliveryAttemptFence: params.deliveryAttemptFence,

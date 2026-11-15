@@ -122,7 +122,9 @@ export async function finalizeCronCompletionAnnouncement(params: {
       config: cfg,
       agentId,
       delivery: resolved,
-      source: params.job.sourceConversation,
+      source: params.job.sourceConversation
+        ? { sessionKey: params.job.sourceConversation.sessionKey }
+        : undefined,
       sourceSessionKey: resolveCronDeliverySessionKey(params.job),
       deliveryAttemptFence: params.deliveryAttemptFence,
     };

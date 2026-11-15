@@ -56,6 +56,43 @@ function fixture() {
 }
 
 describe("generation-bound result delivery", () => {
+  it.each(["edited", "reset"] as const)(
+    "recovers a stored conversation result after the parent was %s",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const { generation } = fixture();
+        const id = "cron-direct-delivery:v1:stored-parent";
+        await enqueueDeliveryOnce(
+          {
+            channel: "matrix",
+            to: "!room:example",
+            payloads: [{ text: "stored parent result" }],
+            sessionGeneration: { ...generation, followConversation: true, lifecycleRevision: null },
+            queuePolicy: "required",
+            requiresProducerClaim: true,
+          },
+          id,
+        );
+        replaceSessionEntrySync(generation, {
+          sessionId: "current-transcript",
+          lifecycleRevision: change === "edited" ? "original" : "reset",
+          updatedAt: 2,
+        });
+        const send = vi.fn(async () => ({ messageId: "recovered-result" }));
+        const recover = () =>
+          recoverPendingDeliveries({
+            cfg: {},
+            log: createRecoveryLog(),
+            deliver: (params) => deliver({ ...params, deps: { matrix: send } }),
+          });
+        await recover();
+        expect(send).toHaveBeenCalledOnce();
+        expect(await loadPendingDelivery(id)).toBeNull();
+        await recover();
+        expect(send).toHaveBeenCalledOnce();
+      });
+    },
+  );
   it.each(["original", "reset"])(
     "rechecks %s generation after awaited dispatch preparation",
     async (revision) => {

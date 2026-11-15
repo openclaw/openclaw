@@ -65,7 +65,7 @@ describe("commitBackgroundResultToSession", () => {
     const commit = commitBackgroundResultToSession({
       agentId: "main",
       sessionKey: target.sessionKey,
-      expectedGeneration: target.generation,
+      expectedLifecycleRevision: target.generation.lifecycleRevision,
       text: "Automation finished while the chat was active.",
       idempotencyKey: "cron-current-completion:cron:job-1:1000",
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -93,7 +93,7 @@ describe("commitBackgroundResultToSession", () => {
       const retry = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Automation finished while the chat was active.",
         idempotencyKey: "cron-current-completion:cron:job-1:1000",
         provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -106,7 +106,7 @@ describe("commitBackgroundResultToSession", () => {
         commitBackgroundResultToSession({
           agentId: "main",
           sessionKey: target.sessionKey,
-          expectedGeneration: target.generation,
+          expectedLifecycleRevision: target.generation.lifecycleRevision,
           text: "A different completion must not reuse the committed run.",
           idempotencyKey: "cron-current-completion:cron:job-1:1000",
           provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
@@ -172,7 +172,7 @@ describe("commitBackgroundResultToSession", () => {
       const result = commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Queued completion",
         idempotencyKey: "queued-completion",
         provenance: { kind: "cron", jobId: "queued", runId: "queued" },
@@ -256,7 +256,7 @@ describe("commitBackgroundResultToSession", () => {
       const commit = await commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Example report\nreport.png",
         prepareDisplayContent: async () => content,
         idempotencyKey: "cron-current-completion:cron:job-media:4000",
@@ -298,7 +298,7 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Do not append this.",
         idempotencyKey: "cron-current-completion:cron:job-2:2000",
         provenance: { kind: "cron", jobId: "job-2", runId: "cron:job-2:2000" },
@@ -314,7 +314,7 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Cancelled report",
         prepareDisplayContent: async () => {
           controller.abort();
@@ -362,7 +362,7 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: target.generation,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
         text: "Do not append this stale cron result.",
         idempotencyKey: "cron-current-completion:cron:job-stale:3000",
         provenance: { kind: "cron", jobId: "job-stale", runId: "cron:job-stale:3000" },
@@ -380,7 +380,39 @@ describe("commitBackgroundResultToSession", () => {
     ).resolves.toEqual([]);
   });
 
-  it("treats a missing lifecycle revision as exact generation state", async () => {
+  it("follows a message edit while retaining the final exact writer fence", async () => {
+    const target = await createTarget();
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey: target.sessionKey, storePath: target.storePath },
+      {
+        sessionId: "edited-session",
+        lifecycleRevision: target.generation.lifecycleRevision,
+        updatedAt: 2,
+      },
+    );
+    await expect(
+      commitBackgroundResultToSession({
+        agentId: "main",
+        sessionKey: target.sessionKey,
+        expectedLifecycleRevision: target.generation.lifecycleRevision,
+        text: "Result after edit",
+        idempotencyKey: "edited-result",
+        provenance: { kind: "cron", jobId: "edited", runId: "edited" },
+        config: target.config,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+    const events = await loadTranscriptEvents({
+      ...target,
+      agentId: "main",
+      sessionId: "edited-session",
+    });
+    expect(
+      events.some((event) => readTranscriptEventMessage(event)?.model === "automation-result"),
+    ).toBe(true);
+    expect(await loadTranscriptEvents({ ...target, agentId: "main" })).toEqual([]);
+  });
+
+  it("follows a reset when no lifecycle revision is pinned", async () => {
     const target = await createTarget();
     const generation = { sessionId: target.sessionId, lifecycleRevision: undefined };
     await replaceSessionEntry(
@@ -392,7 +424,7 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: generation,
+        expectedLifecycleRevision: generation.lifecycleRevision,
         text: "This still belongs to the revision-less session.",
         idempotencyKey: "cron-current-completion:cron:job-legacy:4000",
         provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:4000" },
@@ -408,12 +440,12 @@ describe("commitBackgroundResultToSession", () => {
       commitBackgroundResultToSession({
         agentId: "main",
         sessionKey: target.sessionKey,
-        expectedGeneration: generation,
-        text: "Do not append after the generation changes.",
+        expectedLifecycleRevision: generation.lifecycleRevision,
+        text: "Append to the current transcript after the lifecycle changes.",
         idempotencyKey: "cron-current-completion:cron:job-legacy:5000",
         provenance: { kind: "cron", jobId: "job-legacy", runId: "cron:job-legacy:5000" },
         config: target.config,
       }),
-    ).resolves.toMatchObject({ ok: false, reason: expect.stringContaining("session rebound") });
+    ).resolves.toMatchObject({ ok: true });
   });
 });

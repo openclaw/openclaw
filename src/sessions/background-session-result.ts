@@ -40,8 +40,8 @@ type BackgroundSessionResultProvenance = {
 export async function commitBackgroundResultToSession(params: {
   agentId: string;
   sessionKey: string;
-  /** Pins output to the conversation generation that admitted the background run. */
-  expectedGeneration: { sessionId: string; lifecycleRevision: string | undefined };
+  /** Follows edits to the current transcript; undefined also follows conversation resets. */
+  expectedLifecycleRevision?: string;
   text: string;
   prepareDisplayContent?: () => Promise<readonly Record<string, unknown>[] | undefined>;
   onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
@@ -62,14 +62,8 @@ export async function commitBackgroundResultToSession(params: {
   const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
   });
-  const expectedSessionId = normalizeOptionalString(params.expectedGeneration.sessionId);
-  if (!expectedSessionId) {
-    return { ok: false, reason: "background session result has an invalid expected generation" };
-  }
-  const expectedLifecycleRevision = normalizeOptionalString(
-    params.expectedGeneration.lifecycleRevision,
-  );
-  const identities = [sessionKey, expectedSessionId];
+  const expectedLifecycleRevision = normalizeOptionalString(params.expectedLifecycleRevision);
+  const identities = [sessionKey];
 
   params.assertCurrent?.();
   return await runExclusiveSessionLifecycleMutation("background-result", {
@@ -85,11 +79,13 @@ export async function commitBackgroundResultToSession(params: {
         readConsistency: "latest",
       });
       if (
-        current?.sessionId !== expectedSessionId ||
-        normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision
+        !current?.sessionId ||
+        (expectedLifecycleRevision !== undefined &&
+          normalizeOptionalString(current.lifecycleRevision) !== expectedLifecycleRevision)
       ) {
         return { ok: false, reason: `session rebound for sessionKey: ${sessionKey}` };
       }
+      const expectedSessionId = current.sessionId;
       const unavailable = resolveSessionWorkStartError(sessionKey, current, {
         expectedSessionId,
         purpose: "accepted-result-settlement",
@@ -134,7 +130,7 @@ export async function commitBackgroundResultToSession(params: {
       const committed = await persistSessionTranscriptTurn(scope, {
         cwd: current.spawnedCwd,
         expectedSessionId,
-        expectedLifecycleRevision: expectedLifecycleRevision ?? null,
+        expectedLifecycleRevision: current.lifecycleRevision ?? null,
         assertCurrent: () => {
           params.assertCurrent?.();
           params.signal?.throwIfAborted();

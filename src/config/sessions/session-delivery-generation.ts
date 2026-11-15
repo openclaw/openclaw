@@ -35,7 +35,10 @@ import {
   isSessionDeliveryGenerationRevokedError,
   isSessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
+import {
+  matchesSessionGeneration,
+  prepareMemorySessionGeneration,
+} from "./session-delivery-generation-memory.js";
 import type {
   SessionDeliveryGeneration,
   SessionGenerationEntry,
@@ -61,6 +64,7 @@ function isSessionGenerationFacts(value: unknown): value is SessionGenerationFac
       (typeof value.sessionId === "string" &&
         value.sessionId.length > 0 &&
         value.sessionId === value.sessionId.trim())) &&
+    (value.followConversation === undefined || value.followConversation === true) &&
     typeof value.storePath === "string" &&
     path.isAbsolute(value.storePath) &&
     (value.lifecycleRevision === null ||
@@ -140,15 +144,15 @@ async function prepareSessionGenerationLease(
     if (entry === undefined) {
       throw new SessionDeliveryGenerationUnavailableError();
     }
-    if (
-      (entry?.sessionId ?? null) !== generation.sessionId ||
-      (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
-    ) {
+    if (!matchesSessionGeneration(generation, entry)) {
       if (!committed) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
+    }
+    if (entry && committed && generation.followConversation) {
+      generation.sessionId = entry.sessionId;
     }
     return entry;
   };
@@ -389,7 +393,11 @@ async function prepareSessionGenerationLease(
           sessionId: generation.sessionId,
           lifecycleRevision: generation.lifecycleRevision ?? undefined,
         },
-        fields: ["sessionId", "lifecycleRevision"],
+        fields: generation.followConversation
+          ? generation.lifecycleRevision === null
+            ? []
+            : ["lifecycleRevision"]
+          : ["sessionId", "lifecycleRevision"],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertSourceCurrent,
         refuse: () => {

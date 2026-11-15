@@ -142,7 +142,7 @@ export async function createCompletionFixture(
         agentId: params.agentId,
         jobId: params.job.id,
         runStartedAt: params.runStartedAt,
-        conversation: { sessionKey, ...generation },
+        conversation: { sessionKey, lifecycleRevision: generation.lifecycleRevision },
         payloads: params.deliveryPayloads,
         text: params.synthesizedText,
         signal: params.abortSignal,

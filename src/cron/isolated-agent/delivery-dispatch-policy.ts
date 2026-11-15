@@ -40,7 +40,7 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
 
-/** Carry the implicit source's generation through outbound custody and recovery. */
+/** Stored creator links follow their conversation through outbound custody and recovery. */
 export function resolveDirectCronDeliveryGeneration(
   params: Pick<
     DispatchCronDeliveryParams,
@@ -63,7 +63,10 @@ export function resolveDirectCronDeliveryGeneration(
         }),
         sessionKey: params.sourceSessionKey,
         sessionId: params.sourceSessionGeneration.sessionId,
-        lifecycleRevision: params.sourceSessionGeneration.lifecycleRevision ?? null,
+        lifecycleRevision: params.job.sourceConversation
+          ? null
+          : (params.sourceSessionGeneration.lifecycleRevision ?? null),
+        followConversation: true as const,
       }
     : undefined;
 }

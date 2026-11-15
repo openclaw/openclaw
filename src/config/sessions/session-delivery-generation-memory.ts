@@ -11,6 +11,21 @@ import type {
   SessionGenerationFacts,
 } from "./session-delivery-generation.types.js";
 
+/** Stored links follow edits; a null revision also follows resets. Writers stay exact. */
+export function matchesSessionGeneration(
+  input: SessionGenerationFacts,
+  entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+): boolean {
+  if (!entry || input.sessionId === null) {
+    return Boolean(entry) !== (input.sessionId === null);
+  }
+  return (
+    (input.followConversation || entry.sessionId === input.sessionId) &&
+    ((input.followConversation && input.lifecycleRevision === null) ||
+      (entry.lifecycleRevision ?? null) === input.lifecycleRevision)
+  );
+}
+
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
@@ -45,7 +60,7 @@ export async function prepareMemorySessionGeneration(
   let initial: SessionGenerationEntry | undefined;
   try {
     initial = readEntry();
-    if ((initial?.sessionId ?? null) !== input.sessionId) {
+    if (!matchesSessionGeneration(input, initial)) {
       throw new SessionDeliveryGenerationRevokedError();
     }
   } catch (error) {
@@ -78,12 +93,7 @@ export async function prepareMemorySessionGeneration(
   return {
     assertCurrent,
     assertDeliveryCurrent() {
-      if (
-        isSessionLifecycleMutationActive(source.path, [
-          input.sessionKey,
-          input.sessionId ?? undefined,
-        ])
-      ) {
+      if (isSessionLifecycleMutationActive(source.path, [input.sessionKey, initial?.sessionId])) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertCurrent();

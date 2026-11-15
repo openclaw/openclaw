@@ -50,7 +50,7 @@ async function createTarget() {
     commit: () =>
       commitBackgroundResultToSession({
         ...scope,
-        expectedGeneration: generation,
+        expectedLifecycleRevision: generation.lifecycleRevision,
         text: "Automation completed",
         idempotencyKey: "live-completion",
         provenance: { kind: "cron", jobId: "live", runId: "live" },

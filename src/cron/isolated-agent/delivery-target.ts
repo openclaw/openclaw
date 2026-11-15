@@ -167,8 +167,10 @@ export async function resolveDeliveryTarget(
       const generation = await prepareSessionGenerationFacts({
         agentId,
         storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
-        ...source,
-        lifecycleRevision: source.lifecycleRevision ?? null,
+        sessionKey: source.sessionKey,
+        sessionId: source.sessionId,
+        lifecycleRevision: null,
+        followConversation: true,
       });
       try {
         generation.assertCurrent();

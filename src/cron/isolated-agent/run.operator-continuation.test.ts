@@ -119,7 +119,9 @@ describe("same-conversation scheduled operator continuation", () => {
     "current tool deny",
     "role revoked",
     "role revoked during merge",
+    "session edited",
     "session replaced",
+    "deleted source force run",
   ] as const)("preserves the %s boundary", async (scenario) => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const config: OpenClawConfig = {
@@ -246,7 +248,8 @@ describe("same-conversation scheduled operator continuation", () => {
                     action: "add",
                     job: {
                       name: "Finish authorized landing",
-                      enabled: scenario !== "paused force run",
+                      enabled:
+                        scenario !== "paused force run" && scenario !== "deleted source force run",
                       schedule: {
                         kind: "at",
                         at: new Date(clock.clock.now() + 60_000).toISOString(),
@@ -305,13 +308,21 @@ describe("same-conversation scheduled operator continuation", () => {
       setRuntimeConfigSnapshot(config);
     } else if (scenario === "role revoked") {
       await setCanonicalUserProfileRole(profile.id, "blocked");
-    } else if (scenario === "session replaced") {
+    } else if (scenario === "deleted source force run") {
+      await accessor.deleteSessionEntryLifecycle({
+        archiveTranscript: false,
+        storePath: recovery.target.storePath,
+        target: { canonicalKey: SESSION, storeKeys: [SESSION] },
+      });
+      expect(accessor.loadSessionEntry(recovery.target)).toBeUndefined();
+    } else if (scenario === "session edited" || scenario === "session replaced") {
       replaceSessionEntrySync(
         { sessionKey: SESSION },
         {
           ...recovery.entry,
           sessionId: "replacement-session",
-          lifecycleRevision: "replacement",
+          lifecycleRevision:
+            scenario === "session edited" ? recovery.entry.lifecycleRevision : "replacement",
         },
       );
     }
@@ -445,6 +456,8 @@ describe("same-conversation scheduled operator continuation", () => {
           if (
             scenario === "operator" ||
             scenario === "paused force run" ||
+            scenario === "session edited" ||
+            scenario === "session replaced" ||
             scenario === "role revoked during merge"
           ) {
             try {
@@ -504,7 +517,7 @@ describe("same-conversation scheduled operator continuation", () => {
       await execution.start();
       expect(entered).toBe(0);
       const reloaded = expectDefined(execution.getJob(job.id), "reloaded scheduled job");
-      if (scenario === "paused force run") {
+      if (scenario === "paused force run" || scenario === "deleted source force run") {
         expect(reloaded.enabled).toBe(false);
         await execution.run(job.id, "force");
       } else {
@@ -514,21 +527,28 @@ describe("same-conversation scheduled operator continuation", () => {
       await finished.promise;
       await execution.waitForIdle();
       const state = expectDefined(execution.getJob(job.id), "finished scheduled job").state;
-      if (scenario === "role revoked" || scenario === "session replaced") {
+      if (scenario === "deleted source force run") {
+        expect(state.lastRunStatus, state.lastError).toBe("error");
+        expect(state.lastError).toMatch(/source conversation is unavailable/i);
+        expect(entered).toBe(0);
+        expect(sessionRunner.runEmbedded).not.toHaveBeenCalled();
+        expect(accessor.loadSessionEntry(recovery.target)).toBeUndefined();
+      } else if (scenario === "role revoked") {
         expect(entered).toBe(0);
         expect(state.lastRunStatus, state.lastError).toBe("error");
-        expect(state.lastError).toMatch(
-          scenario === "role revoked"
-            ? /operator identity changed/i
-            : /authority|source|conversation|session|role/i,
-        );
+        expect(state.lastError).toMatch(/operator identity changed/i);
       } else {
         // Session admission keeps live operator custody, so mid-run revocation fails the turn.
         expect(state.lastRunStatus, state.lastError).toBe(
           scenario === "role revoked during merge" ? "error" : "ok",
         );
         expect(entered).toBe(1);
-        if (scenario === "operator" || scenario === "paused force run") {
+        if (
+          scenario === "operator" ||
+          scenario === "paused force run" ||
+          scenario === "session edited" ||
+          scenario === "session replaced"
+        ) {
           expect(rejected).toBeUndefined();
           expect(results).toEqual([{ authorized: true }]);
           if (scenario === "paused force run") {

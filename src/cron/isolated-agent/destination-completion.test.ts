@@ -790,8 +790,8 @@ describe("destination-owned completion", () => {
     },
   );
 
-  it.each(["deleted", "reset"] as const)(
-    "records a delivery failure when the creating conversation is %s",
+  it.each(["deleted", "edited", "reset"] as const)(
+    "follows creating-conversation edits and resets but refuses deletion (%s)",
     async (change) => {
       await withOpenClawTestState({ layout: "state-only" }, async (state) => {
         const fixture = await createCompletionFixture(state, "isolated");
@@ -806,6 +806,12 @@ describe("destination-owned completion", () => {
                 canonicalKey: fixture.scope.sessionKey,
                 storeKeys: [fixture.scope.sessionKey],
               },
+            });
+          } else if (change === "edited") {
+            await replaceSessionEntry(fixture.scope, {
+              sessionId: "edited-session",
+              lifecycleRevision: "report-generation",
+              updatedAt: 2,
             });
           } else {
             await resetSessionEntryLifecycle({
@@ -823,14 +829,19 @@ describe("destination-owned completion", () => {
           }
 
           const delivery = await dispatchCronDelivery(fixture.params);
-          expect(delivery).toMatchObject({
-            delivered: false,
-            deliveryAttempted: true,
-            deliveryError: expect.stringContaining("session rebound"),
-            disposition: { kind: "error", errorKind: "delivery-target" },
-          });
+          if (change === "deleted") {
+            expect(delivery).toMatchObject({
+              delivered: false,
+              deliveryAttempted: true,
+              deliveryError: expect.stringContaining("session rebound"),
+              disposition: { kind: "error", errorKind: "delivery-target" },
+            });
+            expect(fixture.updates()).toBe(0);
+          } else {
+            expect(delivery).toMatchObject({ delivered: true, deliveryError: undefined });
+            expect(await readConversationMessages(fixture.scope)).toHaveLength(1);
+          }
           expect(await fixture.messages()).toEqual([]);
-          expect(fixture.updates()).toBe(0);
         } finally {
           await fixture.dispose();
         }

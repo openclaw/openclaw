@@ -443,7 +443,7 @@ describe("current cron delivery origin", () => {
   });
 
   it.each(["replacement-session", "source-session"])(
-    "rejects a replacement conversation's external route with sessionId=%s",
+    "follows the creating conversation after reset with sessionId=%s",
     async (sessionId) => {
       await withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
         const sessionKey = job.sessionKey!;
@@ -461,8 +461,8 @@ describe("current cron delivery origin", () => {
           }),
         });
         const preview = await resolveCronDeliveryPreview({ cfg, job });
-        expect(preview.label).toBe("announce -> last");
-        expect(preview.detail).toContain("original session generation");
+        expect(preview.label).toBe("announce -> telegram:replacement-recipient");
+        expect(preview.detail).toContain("commits to the destination conversation");
       });
     },
   );

@@ -38,7 +38,7 @@ export type CronConversationResultParams = {
   agentId: string;
   jobId: string;
   runStartedAt: number;
-  conversation: { sessionKey: string; sessionId: string; lifecycleRevision?: string };
+  conversation: { sessionKey: string; lifecycleRevision?: string };
   payloads: ReplyPayload[];
   text?: string;
   signal?: AbortSignal;
@@ -146,7 +146,6 @@ async function resolveCronResultConversationEntry(
   return {
     conversation: {
       sessionKey: route.sessionKey,
-      sessionId: entry.sessionId,
       lifecycleRevision: entry.lifecycleRevision,
     },
   };
@@ -163,10 +162,6 @@ export async function commitCronConversationResult(
       reason: "cron result is missing its destination conversation",
     };
   }
-  const sourceSessionGeneration = {
-    sessionId: params.conversation.sessionId,
-    lifecycleRevision: params.conversation.lifecycleRevision,
-  };
   const transcriptPayloads = params.payloads.map((payload) => {
     const spokenText = normalizeOptionalString(payload.spokenText);
     if (!spokenText) {
@@ -208,7 +203,7 @@ export async function commitCronConversationResult(
     const committed = await commitBackgroundResultToSession({
       agentId: params.agentId,
       sessionKey: sourceSessionKey,
-      expectedGeneration: sourceSessionGeneration,
+      expectedLifecycleRevision: params.conversation.lifecycleRevision,
       text: completionText,
       prepareDisplayContent: async () => {
         const { assistantContent } = await buildAssistantReplyContent({

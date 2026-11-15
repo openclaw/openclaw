@@ -6,6 +6,8 @@ export type SessionDeliveryGeneration = Readonly<{
   sessionKey: string;
   sessionId: string;
   lifecycleRevision: string | null;
+  /** Stored automation links follow the conversation; active writers remain exact by default. */
+  followConversation?: true;
 }>;
 
 export type SessionGenerationEntry = Pick<

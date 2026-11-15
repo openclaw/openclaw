@@ -457,7 +457,7 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
     );
   });
 
-  it("keeps an isolated run detached and delivers against its creation-bound generation", async () => {
+  it("keeps an isolated run detached and delivers to its creating conversation key", async () => {
     mockRunCronFallbackPassthrough();
     const sourceConversation = {
       sessionKey: "agent:default:webchat:direct:creator",
@@ -500,7 +500,7 @@ describe("runCronIsolatedAgentTurn — current conversation context", () => {
         sourceSessionKey: sourceConversation.sessionKey,
         sourceSessionGeneration: {
           sessionId: "original-source-session",
-          lifecycleRevision: "original-source-revision",
+          lifecycleRevision: undefined,
         },
       }),
     );

@@ -20,6 +20,9 @@ export async function restoreCronOperatorSource(params: {
   if (!params.job.operatorSource) {
     return undefined;
   }
+  if (!params.entry.sessionId) {
+    throw new Error("Scheduled operator source conversation is unavailable");
+  }
   const captured = params.job.operatorSource;
   const source = decodeGatewayOperatorRecoverySource(captured.source);
   if (captured.executionRevision !== resolveCronRequesterExecutionRevision(params.job)) {
@@ -51,8 +54,6 @@ export async function restoreCronOperatorSource(params: {
       current.sessionTarget !== `session:${source.sessionKey}` ||
       params.agentId !== source.agentId ||
       params.sessionKey !== source.sessionKey ||
-      params.entry.sessionId !== source.sessionId ||
-      params.entry.lifecycleRevision !== source.lifecycleRevision ||
       !isDeepStrictEqual(current.operatorSource, captured)
     ) {
       throw new Error("Scheduled operator source no longer owns this conversation");
@@ -61,7 +62,12 @@ export async function restoreCronOperatorSource(params: {
   assertCurrent();
   return await restoreGatewayOperatorSource({
     snapshot: source.snapshot,
-    target: source,
+    // Bind this occurrence to the current transcript; later identity mutations still revoke.
+    target: {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionId: params.entry.sessionId,
+    },
     context,
     assertCurrent,
   });
