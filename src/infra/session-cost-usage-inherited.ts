@@ -91,8 +91,12 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   // the whole transcript and appended a control displacing the old tip, and the
   // retained source still bills that tip on its own active path; billing it here
   // too would count the turn twice. Such a branch keeps the active-path-only
-  // accounting it had before in-place cuts.
-  const createdAtMs = readTimestampMs(records.find((record) => record.type === "session"));
+  // accounting it had before in-place cuts. Later copies name what their source
+  // counted in `inheritedThrough`, which stays authoritative: a copied branch the
+  // source never billed (an inactive sibling) is still this transcript's spend.
+  const header = records.find((record) => record.type === "session");
+  const createdAtMs =
+    readInheritedThrough(header).length === 0 ? readTimestampMs(header) : undefined;
   const billBranch = (leafId: string | null) => {
     const tipMs =
       createdAtMs === undefined || leafId === null

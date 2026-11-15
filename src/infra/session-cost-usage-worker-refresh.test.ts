@@ -290,7 +290,6 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
   const window = (sessionId: string, inheritedThrough: string[], leaves: TranscriptEvent[]) => [
     createSessionTranscriptHeader({
       sessionId,
-      timestamp: fixtureCreatedAt,
       ...(inheritedThrough.length && { inheritedThrough }),
     }),
     ...branchedSource().slice(1),
@@ -315,6 +314,9 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
   const cut = { type: "leaf", id: "stable-cut", parentId: "a2", targetId: "a1" };
   const stableCopy = [createSessionTranscriptHeader(), ...branchedSource().slice(1), cut];
   expect(tokensOf(window("v2026.11.3-source", [], [])) + tokensOf(stableCopy)).toBe(40);
+  // Rewinding the marked switch copy in place keeps its own a2b, which its source never billed.
+  const upgraded = [switchLeaf, { ...cut, id: "upgraded-cut", parentId: "97c81933" }];
+  expect(tokensOf(window("source", [], [])) + tokensOf(window("c", ["a2"], upgraded))).toBe(70);
 });
 
 /** The real in-place install: one appended leaf control on the same transcript. */

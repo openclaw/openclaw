@@ -5,6 +5,7 @@
 # real refresh through the worker, and read the republished rollup back) and the oversized
 # in-place repoint. Every other regression this PR added was folded into existing table-driven
 # tests, and one superseded ordering test was deleted. One line restores a mock-isolation
-# note this branch predates on main's worker-idle-gc test. Five lines pin the v2026.11.3
-# upgrade case: a whole-transcript rewind copy must not bill the tip its retained source bills.
-76
+# note this branch predates on main's worker-idle-gc test. Seven lines pin the upgrade
+# cases: a v2026.11.3 whole-transcript copy must not re-bill the tip its retained source bills,
+# and a marked copy's own inactive-sibling spend must survive an in-place rewind.
+78
