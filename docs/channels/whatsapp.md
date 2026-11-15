@@ -398,6 +398,8 @@ A liveness check sent to your own number can therefore become agent input with `
   <Accordion title="Media placeholders and location/contact extraction">
     Media-only messages normalize to placeholders: `<media:image>`, `<media:video>`, `<media:audio>`, `<media:document>`, `<media:sticker>`.
 
+    In direct chats, later text messages can be processed while an earlier voice note is still being downloaded or transcribed. Voice notes remain ordered with other voice notes, and text messages remain ordered with other text messages. The agent can therefore answer a text before the earlier voice transcript is available. Group messages retain their shared conversation order.
+
     Authorized group voice notes are transcribed before mention gating when the body is only `<media:audio>`, so saying the bot mention in the voice note can trigger the reply. If the transcript still does not mention the bot, it stays in pending group history instead of the raw placeholder.
 
     Location bodies render as terse coordinate text. Location labels/comments and contact/vCard details render as fenced untrusted metadata, not inline prompt text.
