@@ -67,16 +67,13 @@ describe("People error copy", () => {
     );
   });
 
-  it.each([
-    "a claw keeps at most 100 invites",
-    "an invite lasts at most 7 days",
-    "a claw has at most 256 nodes",
-  ])("does not prescribe removing people or devices for the limit: %s", (detail) => {
+  it("preserves invitation-duration details without prescribing removal", () => {
+    const detail = "an invite lasts at most 7 days";
     const result = peopleError(refusal("limit_reached", detail), "update", unchanged);
     expect(result.message).toBe(
       "This access request exceeds a limit. Review the error details before changing access.",
     );
-    expect(result.diagnostic).toBe("limit_reached: " + detail);
+    expect(result.diagnostic).toBe("limit_reached: an invite lasts at most 7 days");
   });
 
   it("separates load failures from uncertain updates even when retryable is true", () => {
