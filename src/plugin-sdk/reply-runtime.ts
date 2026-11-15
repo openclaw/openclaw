@@ -48,7 +48,7 @@ export type {
 export type {
   ReplyDispatcherOptions,
   ReplyDispatcherWithTypingOptions,
-} from "../auto-reply/reply/reply-dispatcher.js";
+} from "../auto-reply/reply/reply-dispatcher.types.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 export type {
   GetReplyOptions,

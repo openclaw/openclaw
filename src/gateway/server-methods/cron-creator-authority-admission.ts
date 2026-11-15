@@ -1,7 +1,4 @@
-import {
-  createCronCreatorAuthorityCapability,
-  type CronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
+import { createCronCreatorAuthorityCapability } from "../../agents/cron-creator-authority-context.js";
 import {
   consumeRequesterCronAuthorityAdmission,
   revokeRequesterCronAuthority,
@@ -9,6 +6,7 @@ import {
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import { revokeCronCreatorAuthorityRunScope } from "../cron-creator-authority-grant.js";
+import type { CronCreatorAuthorityCapability } from "../cron-creator-authority-grant.types.js";
 import { CRON_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";

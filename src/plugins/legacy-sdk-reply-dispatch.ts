@@ -1,29 +1,18 @@
+import { publicChannelTurn, type PublicReplyParams } from "../auto-reply/public-reply-options.js";
 import type {
   DispatchReplyWithBufferedBlockDispatcher as CoreBufferedDispatcher,
   DispatchReplyWithDispatcher as CoreDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.types.js";
-import { publicChannelTurn, type PublicReplyParams } from "../plugin-sdk/reply-options.js";
 import {
   createLazyPromise,
   createLazyRuntimeMethod,
   createLazyRuntimeMethodBinder,
   createLazyRuntimeModule,
 } from "../shared/lazy-runtime.js";
-import { getBoundLegacyPluginSdkResourceHost } from "./legacy-sdk-resource-host.js";
-import type {
-  PluginHookReplyDispatchContext,
-  PluginHookReplyDispatchEvent,
-  PluginHookReplyDispatchResult,
-} from "./types.js";
-
-export type LegacyPluginSdkReplyDispatch = Readonly<{
-  tryDispatchAcpReplyHook: (
-    event: PluginHookReplyDispatchEvent,
-    ctx: PluginHookReplyDispatchContext,
-  ) => Promise<PluginHookReplyDispatchResult | void>;
-  dispatchReplyWithBufferedBlockDispatcher: CoreBufferedDispatcher;
-  dispatchReplyWithDispatcher: CoreDispatcher;
-}>;
+import {
+  getBoundLegacyPluginSdkResourceHost,
+  type LegacyPluginSdkReplyDispatch,
+} from "./legacy-sdk-resource-host.js";
 
 /** Capture the creating host's module graph; native SDK caches must not choose state owners. */
 export function createLegacyPluginSdkReplyDispatch(): LegacyPluginSdkReplyDispatch {
@@ -35,7 +24,7 @@ export function createLegacyPluginSdkReplyDispatch(): LegacyPluginSdkReplyDispat
   return Object.freeze({
     tryDispatchAcpReplyHook: createLazyRuntimeMethod(
       createLazyRuntimeModule(() => import("../auto-reply/reply/dispatch-acp-sdk.js")),
-      (runtime) => runtime.tryDispatchAcpReplyHook,
+      (runtime) => runtime.tryDispatchAcpReplyHookCore,
     ),
     dispatchReplyWithBufferedBlockDispatcher: bindProvider(
       (runtime) => runtime.dispatchReplyWithBufferedBlockDispatcherCore,

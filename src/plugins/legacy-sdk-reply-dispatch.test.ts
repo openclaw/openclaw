@@ -15,7 +15,7 @@ const { acpLoaded, providerLoaded, acp, buffered, plain } = vi.hoisted(() => ({
 // mock-isolation: Observe the lazy ACP import without evaluating its real dispatch module graph.
 vi.mock("../auto-reply/reply/dispatch-acp-sdk.js", () => {
   acpLoaded();
-  return { tryDispatchAcpReplyHook: acp };
+  return { tryDispatchAcpReplyHookCore: acp };
 });
 // mock-isolation: Count shared lazy provider loads without evaluating the real reply-dispatch graph.
 vi.mock("../auto-reply/reply/provider-dispatcher.runtime.js", () => {

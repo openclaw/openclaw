@@ -37,7 +37,7 @@ export type {
 // Standalone SDK calls retain their shipped process-native lazy runtime.
 const dispatch = createLazyRuntimeMethod(
   createLazyRuntimeModule(() => import("../auto-reply/reply/dispatch-acp-sdk.js")),
-  (runtime) => runtime.tryDispatchAcpReplyHook,
+  (runtime) => runtime.tryDispatchAcpReplyHookCore,
 );
 
 /** Dispatch an ACP hook through its exact request host before loading native stateful code. */

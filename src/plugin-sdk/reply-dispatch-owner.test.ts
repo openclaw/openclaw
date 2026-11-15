@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { buildTestCtx } from "../auto-reply/reply/test-ctx.js";
-import type { LegacyPluginSdkReplyDispatch } from "../plugins/legacy-sdk-reply-dispatch.js";
 import {
   bindLegacyPluginSdkResourceHost,
   LegacyPluginSdkResourceHost,
+  type LegacyPluginSdkReplyDispatch,
 } from "../plugins/legacy-sdk-resource-host.js";
 import { createIdleReplyDispatcher } from "../plugins/reply-dispatch.test-support.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";

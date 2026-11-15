@@ -1,9 +1,17 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type {
+  DispatchReplyWithBufferedBlockDispatcher as CoreBufferedDispatcher,
+  DispatchReplyWithDispatcher as CoreDispatcher,
+} from "../auto-reply/reply/provider-dispatcher.types.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { LegacyPluginSdkReplyDispatch } from "./legacy-sdk-reply-dispatch.js";
+import type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
+import type {
+  PluginHookReplyDispatchContext,
+  PluginHookReplyDispatchResult,
+} from "./hook-types.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -13,6 +21,15 @@ import {
   getCanonicalGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
 } from "./runtime/gateway-request-scope.js";
+
+export type LegacyPluginSdkReplyDispatch = Readonly<{
+  tryDispatchAcpReplyHook: (
+    event: PluginHookReplyDispatchEvent,
+    ctx: PluginHookReplyDispatchContext,
+  ) => Promise<PluginHookReplyDispatchResult | void>;
+  dispatchReplyWithBufferedBlockDispatcher: CoreBufferedDispatcher;
+  dispatchReplyWithDispatcher: CoreDispatcher;
+}>;
 
 type ResourceClaim = { release: () => Promise<void> };
 

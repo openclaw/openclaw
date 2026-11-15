@@ -16,7 +16,7 @@ const loadDispatchAcpRuntime = createLazyRuntimeModule(() => import("./dispatch-
  * Dispatch a plugin reply hook through ACP when the event targets an ACP-bound session.
  * Returns a handled result only when ACP consumes the reply; otherwise callers continue normal delivery.
  */
-export async function tryDispatchAcpReplyHook(
+export async function tryDispatchAcpReplyHookCore(
   event: PluginHookReplyDispatchEvent,
   ctx: PluginHookReplyDispatchContext,
 ): Promise<PluginHookReplyDispatchResult | void> {
