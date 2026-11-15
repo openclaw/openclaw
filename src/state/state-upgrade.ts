@@ -569,16 +569,21 @@ export async function upgradeStateDirectory(params: {
     if (!planWritten) {
       // Nothing live changed; the next start retries from scratch.
       fs.rmSync(workDir, { recursive: true, force: true });
-      if (isMachineFailure(error)) {
-        throw new Error(
-          // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-          `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space (about the size of the state directory) and start the Gateway again.`,
-          { cause: error },
-        );
-      }
+      throw explainMachineFailure(error, stateDir);
     }
     throw error;
   }
+}
+
+/** A full disk or I/O failure before any live change: name the fix instead of the raw error. */
+export function explainMachineFailure(error: unknown, stateDir: string): unknown {
+  return isMachineFailure(error)
+    ? new Error(
+        // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
+        `State upgrade to ${VERSION} stopped: ${(error as Error).message}. Nothing in ${stateDir} was changed. Free disk space (about the size of the state directory) and start the Gateway again.`,
+        { cause: error },
+      )
+    : error;
 }
 
 function isMachineFailure(error: unknown): boolean {

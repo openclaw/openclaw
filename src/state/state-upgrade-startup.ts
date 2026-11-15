@@ -6,7 +6,11 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
-import { isStateUpgradePending, upgradeStateDirectory } from "./state-upgrade.js";
+import {
+  explainMachineFailure,
+  isStateUpgradePending,
+  upgradeStateDirectory,
+} from "./state-upgrade.js";
 
 const log = createSubsystemLogger("state/upgrade");
 
@@ -29,11 +33,20 @@ export async function upgradeStateOnGatewayStart(
   const modeValue =
     gateway && typeof gateway === "object" && "mode" in gateway ? gateway.mode : undefined;
   const mode = typeof modeValue === "string" ? modeValue : undefined;
-  if (!admits({ configExists: raw !== undefined, mode }) || !isStateUpgradePending(env)) {
+  if (!admits({ configExists: raw !== undefined, mode })) {
     return;
   }
-  // File-only ownership: the old databases are not opened for writing.
-  const lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+  let lock: Awaited<ReturnType<typeof acquireGatewayLock>>;
+  try {
+    // A read-only open on a full disk fails too (it cannot create the shared-memory file).
+    if (!isStateUpgradePending(env)) {
+      return;
+    }
+    // File-only ownership: the old databases are not opened for writing.
+    lock = await acquireGatewayLock({ env, databaseAccess: "none", allowInTests: true });
+  } catch (error) {
+    throw explainMachineFailure(error, resolveStateDir(env));
+  }
   try {
     const statePath = path.join(resolveStateDir(env), "state", "openclaw.sqlite");
     await upgradeStateDirectory({
