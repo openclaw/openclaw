@@ -58,6 +58,21 @@ function laterId(a: string | undefined, b: string): string {
   return !a || BigInt(b) > BigInt(a) ? b : a;
 }
 
+const POLL_PAGE_LIMIT = 10;
+const POLL_POST_LIMIT = 100;
+const POLL_CHAR_LIMIT = 1_048_576;
+
+function estimatePageChars(page: XPage): number {
+  let chars = 0;
+  for (const post of page.data) {
+    chars += post.id.length + post.author_id.length + post.text.length;
+  }
+  for (const user of page.includes.users) {
+    chars += user.id.length + user.username.length + (user.name?.length ?? 0);
+  }
+  return chars;
+}
+
 async function pollXMentions(options: XReceiveOptions): Promise<void> {
   const cursor = await options.getCursor();
   const sinceId = cursor.sinceId;
@@ -70,6 +85,9 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
   let paginationToken = backfill?.paginationToken;
   let retriedContinuation = false;
   let continuationInvalid = false;
+  let batchDeferred = false;
+  let pages = 0;
+  let retainedChars = 0;
   let pageError: Error | undefined;
   const posts: XPostEnvelope[] = [];
   const seenTokens = new Set<string>(paginationToken ? [paginationToken] : []);
@@ -106,6 +124,8 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
         Boolean(paginationToken) && error instanceof XApiError && error.status === 400;
       break;
     }
+    pages += 1;
+    retainedChars += estimatePageChars(page);
     posts.push(...page.data.map((post) => ({ post, users: page.includes.users })));
     paginationToken = page.meta.next_token;
     if (paginationToken && seenTokens.has(paginationToken)) {
@@ -114,6 +134,14 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
       break;
     }
     if (paginationToken) {
+      if (
+        pages >= POLL_PAGE_LIMIT ||
+        posts.length >= POLL_POST_LIMIT ||
+        retainedChars >= POLL_CHAR_LIMIT
+      ) {
+        batchDeferred = true;
+        break;
+      }
       seenTokens.add(paginationToken);
     } else {
       break;
@@ -141,6 +169,17 @@ async function pollXMentions(options: XReceiveOptions): Promise<void> {
       });
     }
     throw pageError;
+  }
+  if (batchDeferred && paginationToken) {
+    // Persist the continuation checkpoint and defer remaining pages to keep polling bounded.
+    await options.setCursor({
+      sinceId,
+      backfill: { sinceId, paginationToken, newestId },
+    });
+    options.onStatus?.({
+      message: `mentions backfill deferred (${posts.length} mentions queued across ${pages} pages); continuing on next poll`,
+    });
+    return;
   }
   if (backfill || newestId !== sinceId) {
     // Commit the high-water mark and remove its completed continuation together.

@@ -668,4 +668,196 @@ describe("X event transport", () => {
       }
     },
   );
+
+  it("bounds polling pages when admission is held and resumes from durable backfill checkpoints", async () => {
+    vi.useFakeTimers();
+    const held = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    const deferred = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    const totalPages = 25;
+    let cursor: XCursorState = { sinceId: "10" };
+    let getMentionsCalls = 0;
+    const admitted: string[] = [];
+    const api = budgetApi(createXTestSpend(), (url) => {
+      getMentionsCalls += 1;
+      const token = url.searchParams.get("pagination_token");
+      const pageIndex = token ? Number(token.replace("page-", "")) : 0;
+      const id = String(10 + totalPages - pageIndex);
+      const nextIndex = pageIndex + 1;
+      return Response.json({
+        data: [post(id)],
+        meta: nextIndex < totalPages ? { next_token: `page-${nextIndex}` } : {},
+      });
+    });
+    const test = streamFixture({
+      api,
+      bearerConfigured: false,
+      getCursor: async () => cursor,
+      setCursor: async (next) => {
+        cursor = next;
+      },
+      onPost: async ({ post: mention }) => {
+        if (!admitted.length) {
+          held.resolve();
+          await release.promise;
+        }
+        admitted.push(mention.id);
+      },
+      onStatus: (value) => {
+        if (value.message?.includes("mentions backfill deferred")) {
+          deferred.resolve();
+        }
+        if (value.cursor === "35") {
+          completed.resolve();
+        }
+      },
+    });
+    void test.run.catch((error: unknown) => {
+      held.reject(error);
+      deferred.reject(error);
+      completed.reject(error);
+    });
+    try {
+      await held.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getMentionsCalls).toBe(10);
+      expect(admitted).toEqual([]);
+      expect(cursor).toEqual({ sinceId: "10" });
+
+      release.resolve();
+      await deferred.promise;
+      expect(admitted).toEqual(Array.from({ length: 10 }, (_, idx) => String(26 + idx)));
+      expect(cursor).toEqual({
+        sinceId: "10",
+        backfill: { sinceId: "10", paginationToken: "page-10", newestId: "35" },
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getMentionsCalls).toBe(20);
+      expect(admitted).toHaveLength(20);
+      expect(cursor).toEqual({
+        sinceId: "10",
+        backfill: { sinceId: "10", paginationToken: "page-20", newestId: "35" },
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await completed.promise;
+      expect(getMentionsCalls).toBe(25);
+      expect(admitted).toEqual([
+        ...Array.from({ length: 10 }, (_, idx) => String(26 + idx)),
+        ...Array.from({ length: 10 }, (_, idx) => String(16 + idx)),
+        ...Array.from({ length: 5 }, (_, idx) => String(11 + idx)),
+      ]);
+      expect(cursor).toEqual({ sinceId: "35" });
+    } finally {
+      release.resolve();
+      await test.stop();
+    }
+  });
+
+  it("bounds empty-page pagination and resumes without advancing sinceId prematurely", async () => {
+    vi.useFakeTimers();
+    const deferred = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    let cursor: XCursorState = { sinceId: "10" };
+    let getMentionsCalls = 0;
+    const api = budgetApi(createXTestSpend(), (url) => {
+      getMentionsCalls += 1;
+      const token = url.searchParams.get("pagination_token");
+      const pageIndex = token ? Number(token.replace("empty-", "")) : 0;
+      if (pageIndex < 12) {
+        return Response.json({
+          data: [],
+          meta: { next_token: `empty-${pageIndex + 1}` },
+        });
+      }
+      return Response.json({ data: [post("11")] });
+    });
+    const test = streamFixture({
+      api,
+      bearerConfigured: false,
+      getCursor: async () => cursor,
+      setCursor: async (next) => {
+        cursor = next;
+      },
+      onStatus: (value) => {
+        if (value.message?.includes("mentions backfill deferred")) {
+          deferred.resolve();
+        }
+        if (value.cursor === "11") {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      await deferred.promise;
+      expect(getMentionsCalls).toBe(10);
+      expect(test.admitted).toEqual([]);
+      expect(cursor).toEqual({
+        sinceId: "10",
+        backfill: { sinceId: "10", paginationToken: "empty-10", newestId: "10" },
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await completed.promise;
+      expect(getMentionsCalls).toBe(13);
+      expect(test.admitted.map((item) => item.post.id)).toEqual(["11"]);
+      expect(cursor).toEqual({ sinceId: "11" });
+    } finally {
+      await test.stop();
+    }
+  });
+
+  it("bounds large retained-content polling batches by character budget", async () => {
+    vi.useFakeTimers();
+    const deferred = Promise.withResolvers<void>();
+    const completed = Promise.withResolvers<void>();
+    let cursor: XCursorState = { sinceId: "10" };
+    let getMentionsCalls = 0;
+    const largeText = "x".repeat(600_000);
+    const api = budgetApi(createXTestSpend(), (url) => {
+      getMentionsCalls += 1;
+      const token = url.searchParams.get("pagination_token");
+      const pageIndex = token ? Number(token.replace("large-", "")) : 0;
+      const id = String(14 - pageIndex);
+      return Response.json({
+        data: [{ ...post(id), text: largeText }],
+        meta: pageIndex < 3 ? { next_token: `large-${pageIndex + 1}` } : {},
+      });
+    });
+    const test = streamFixture({
+      api,
+      bearerConfigured: false,
+      getCursor: async () => cursor,
+      setCursor: async (next) => {
+        cursor = next;
+      },
+      onStatus: (value) => {
+        if (value.message?.includes("mentions backfill deferred")) {
+          deferred.resolve();
+        }
+        if (value.cursor === "14") {
+          completed.resolve();
+        }
+      },
+    });
+    try {
+      await deferred.promise;
+      expect(getMentionsCalls).toBe(2);
+      expect(test.admitted.map((item) => item.post.id)).toEqual(["13", "14"]);
+      expect(cursor).toEqual({
+        sinceId: "10",
+        backfill: { sinceId: "10", paginationToken: "large-2", newestId: "14" },
+      });
+
+      await vi.advanceTimersByTimeAsync(60_000);
+      await completed.promise;
+      expect(getMentionsCalls).toBe(4);
+      expect(test.admitted.map((item) => item.post.id)).toEqual(["13", "14", "11", "12"]);
+      expect(cursor).toEqual({ sinceId: "14" });
+    } finally {
+      await test.stop();
+    }
+  });
 });
