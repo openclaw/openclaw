@@ -485,6 +485,10 @@ export class TranscriptReaderAnchor {
     }
     const held = this.holdsNativeOffset();
     if (applied === undefined) {
+      // Native zero is the reader's start; newly measured rows must not move it away.
+      if (!owned && this.host.scrollElement?.scrollTop === 0) {
+        return false;
+      }
       if (moves && !owned && !held && this.host.prependAnchor.messageKey === null) {
         // The flow moves in this frame; virtual-core would defer its write while iOS scrolls.
         this.owedScroll += delta;
