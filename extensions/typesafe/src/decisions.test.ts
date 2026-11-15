@@ -61,6 +61,20 @@ function catalog(settings: RuntimeConfig, entries = [row(facts)]) {
   return { provider, rows: provider.augmentModelCatalog!({ env: {}, entries }) };
 }
 
+it.each([
+  {
+    provider: "openrouter",
+    modelId: "deepseek/fixture-model",
+    baseUrl: "https://openrouter.ai/api/v1",
+  },
+  { provider: "openai", modelId: "fixture-model", baseUrl: "https://api.openai.com/v1" },
+])("leaves $provider transport unchanged", ({ provider, modelId, baseUrl }) => {
+  const { normalizeTransport } = createPreparedDecisionProvider(() => config).provider!;
+  expect(
+    normalizeTransport?.({ provider, modelId, api: "openai-completions", baseUrl }),
+  ).toBeUndefined();
+});
+
 it.each<[RuntimeConfig, Decision, string?]>([
   [config, facts, hosted],
   [runtime({ baseUrl: "https://api.typesafe.ai" }), facts, hosted],
