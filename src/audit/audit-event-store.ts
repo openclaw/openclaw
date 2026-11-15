@@ -1,5 +1,6 @@
 /** SQLite persistence and stable cursor queries for metadata-only audit events. */
 import { randomUUID } from "node:crypto";
+import type { Selectable } from "kysely";
 import { AUDIT_ACTIVITY_MESSAGE_KIND } from "../../packages/gateway-protocol/src/schema/audit-activity.js";
 import {
   executeSqliteQuerySync,
@@ -18,6 +19,12 @@ import {
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { getAuditEventQueries, type AuditEventInsert } from "./audit-event-queries.js";
 import { parseAgentRunRow, rowToAuditEvent } from "./audit-event-row.js";
+import {
+  invalidateSkillSelectionAuditCachesForDatabase,
+  pruneExpiredSkillSelectionAuditEvents,
+  recordSkillSelectionAuditEvent,
+} from "./audit-event-store.skill-selection-storage.js";
+import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
 import {
   AUDIT_EVENT_SCHEMA_VERSION,
   type AgentRunFinishedAuditEventInput,
@@ -40,6 +47,7 @@ import {
 } from "./message-execution-binding.js";
 
 type AuditDatabase = Pick<OpenClawStateKyselyDatabase, "audit_events">;
+type AuditEventRow = Selectable<AuditDatabase["audit_events"]>;
 
 export const AUDIT_EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const AUDIT_EVENT_MAX_ROWS = 100_000;
@@ -50,6 +58,17 @@ const auditEventRetention = new WeakMap<
   EngineConnection,
   { rowCount: number; nextExpiryAt: number; nextSequence: number }
 >();
+
+/**
+ * Decode a stored audit row. Run/tool/message decoding stays owned by
+ * audit-event-row.ts; companion skill-selection rows keep their own shape.
+ */
+function rowToStoredAuditEvent(row: AuditEventRow): AuditEventRecord {
+  if (row.kind === "skill_selection") {
+    return parseSkillSelectionAuditRow(row);
+  }
+  return rowToAuditEvent(row);
+}
 
 function projectMessageIdentities(db: EngineConnection, input: MessageAuditEventInput) {
   const identity = loadOrCreateAuditIdentityKey(db);
@@ -98,7 +117,10 @@ function bindAuditEvent(db: EngineConnection, input: AuditEventInput, eventId: s
     session_id: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? null : (input.sessionId ?? null),
     run_id: input.runId ?? null,
     tool_call_id: input.kind === "tool_action" ? (input.toolCallId ?? null) : null,
-    tool_name: input.kind === "tool_action" ? input.toolName : null,
+    tool_name:
+      input.kind === "tool_action" || input.kind === "skill_selection"
+        ? (input.toolName ?? null)
+        : null,
     direction: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.direction : null,
     channel: input.kind === AUDIT_ACTIVITY_MESSAGE_KIND ? input.channel : null,
     conversation_kind: input.kind === "message" ? input.conversationKind : null,
@@ -234,7 +256,6 @@ function parseInsertedAuditSequence(value: string): number {
   }
   return sequence;
 }
-
 /** Persist one projected event idempotently and prune fixed retention bounds. */
 export function recordAuditEventInDatabase(
   input: AuditEventInput,
@@ -250,6 +271,19 @@ export function recordAuditEventInDatabase(
     ensureTerminalMessageExecutionBindingSchema(options);
   }
   const { db } = options.database;
+  if (input.kind === "skill_selection") {
+    try {
+      return runOpenClawStateWriteTransaction(
+        () => recordSkillSelectionAuditEvent(input, db, Date.now() - AUDIT_EVENT_RETENTION_MS),
+        options,
+      );
+    } finally {
+      // Companion allocation consumes shared audit sequences outside the
+      // single-statement retention fast path, including duplicate-source
+      // attempts, so the cached sequence high-water mark must go.
+      auditEventRetention.delete(db);
+    }
+  }
   try {
     const retention =
       input.kind !== "message"
@@ -259,7 +293,7 @@ export function recordAuditEventInDatabase(
       const values = bindAuditEvent(db, input, eventId);
       // Validate the complete result before the statement; even a duplicate
       // source consumes an AUTOINCREMENT sequence.
-      const record = rowToAuditEvent({ ...values, sequence: retention.nextSequence });
+      const record = rowToStoredAuditEvent({ ...values, sequence: retention.nextSequence });
       const queries = getAuditEventQueries(db);
       // The batch owns admission and commit. SQLite ABORT undoes this complete
       // statement; retention and terminal bindings never enter this path.
@@ -308,10 +342,11 @@ export function recordAuditEventInDatabase(
         eventId: row?.event_id,
         token: executionToken,
       });
-      return row ? rowToAuditEvent(row) : undefined;
+      return row ? rowToStoredAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
     auditEventRetention.delete(db);
+    invalidateSkillSelectionAuditCachesForDatabase(db);
     clearAuditIdentityKeyCacheForDatabase(db);
     throw error;
   }
@@ -407,13 +442,12 @@ export function pruneExpiredAuditEventsInDatabase(params: {
   now?: number;
   database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
 }): number {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => {
-      const deleted = deleteExpiredAuditEvents(db, params.now ?? Date.now());
-      auditEventRetention.delete(db);
-      return Number(deleted.numAffectedRows ?? 0n);
-    },
-    params.database,
-    { singleStatement: true },
-  );
+  return runOpenClawStateWriteTransaction(({ db }) => {
+    const now = params.now ?? Date.now();
+    const deleted = deleteExpiredAuditEvents(db, now);
+    const retainedAfter = now - AUDIT_EVENT_RETENTION_MS;
+    const deletedSkillSelections = pruneExpiredSkillSelectionAuditEvents({ db, retainedAfter });
+    auditEventRetention.delete(db);
+    return Number(deleted.numAffectedRows ?? 0n) + deletedSkillSelections;
+  }, params.database);
 }
