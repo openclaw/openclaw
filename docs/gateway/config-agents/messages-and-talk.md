@@ -38,6 +38,52 @@ title: "Configuration — messages and talk"
 }
 ```
 
+### Conversation notice language
+
+Set `messages.locale` to `"de"` or `"en"` (default) for host-generated model failure
+notices, including provider limits, overload, billing, authentication, and timeouts.
+This setting does not translate model answers, tool output, commands, or logs.
+Other system and command messages may still be in English.
+
+For direct messages, resolution order is:
+
+1. The authenticated person's `messages.locale` profile preference.
+2. The requesting Gateway client's locale, when supplied by a real client.
+3. The WhatsApp account/channel `messageLocale` setting.
+4. Global `messages.locale`.
+5. English.
+
+Groups use the channel/account setting, then the global setting, then English.
+They do not inherit an individual sender's language. Locale hints such as `de-DE`
+use German; an explicitly unsupported client locale uses English. Missing values
+inherit the next setting. Message contents and phone-number prefixes are not used
+for language detection.
+
+```json5
+{
+  messages: { locale: "en" },
+  channels: {
+    whatsapp: {
+      messageLocale: "de",
+      accounts: {
+        work: { messageLocale: "en" },
+      },
+    },
+  },
+}
+```
+
+A signed-in client can save its own personal choice through the existing Gateway
+RPC `users.prefs.set` with `{"entries":{"messages.locale":"de"}}` (or `"en"`).
+Use `{"entries":{"messages.locale":null}}` to remove the choice and inherit defaults.
+The preference belongs to the authenticated user profile; WhatsApp uses it only
+when the inbound sender is linked to that same profile. Anonymous senders use the
+channel and global defaults.
+
+OpenClaw captures the language for each admitted request. Changing a preference
+applies to subsequent requests; queued followups keep their captured language.
+Gateway transcript metadata also carries that language for queued-input recovery.
+
 ### Response prefix
 
 Per-channel/account overrides: `channels.<channel>.responsePrefix`, `channels.<channel>.accounts.<id>.responsePrefix`.

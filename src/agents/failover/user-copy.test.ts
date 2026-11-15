@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderFormatErrorCopy } from "./assistant-request-failure-copy.js";
+import { renderMissingApiKeyReplyCopy as missingKeyCopy } from "./auth-user-copy.js";
 import {
   AUTH_INVALID_TOKEN_USER_TEXT,
   renderBillingReplyCopy as billingCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy as codeCopy,
-  renderMissingApiKeyReplyCopy as missingKeyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
   renderSanitizedUserFacingText as sanitizedCopy,

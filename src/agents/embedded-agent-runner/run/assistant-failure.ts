@@ -477,6 +477,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       (failedAssistant
         ? formatUserFacingAssistantErrorText(failedAssistant, {
             cfg: runInput.runParams.config,
+            locale: runInput.runParams.messageLocale,
             sessionKey: runInput.runParams.sessionKey ?? runInput.runParams.sessionId,
             agentId: runInput.runParams.agentId,
             provider: activeErrorContext.provider,

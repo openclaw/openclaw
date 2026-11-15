@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
+import { prepareReplyMessageLocale } from "../../auto-reply/reply/message-locale.js";
 import { bindRequesterProfile } from "../../auto-reply/requester-profile.js";
 import type { RuntimeMsgContext as MsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -255,6 +256,9 @@ export function prepareChatSendUserTurn(params: {
   // with identical bare text. Stamping this live turn would bust the prompt cache.
   const ctx: MsgContext = {
     ...buildTextContext(commandBody),
+    ClientLocale: client?.internal?.syntheticClient ? undefined : client?.connect.locale,
+    MessageLocale: readQueuedChatInputAdmission(session.clientRunId)?.target.message["__openclaw"]
+      ?.messageLocale,
     InputProvenance: request.systemInputProvenance,
     ...(isProgressCardRefreshInputProvenance(request.systemInputProvenance)
       ? { InternalTurnSource: "progress-card-refresh" as const }
@@ -348,6 +352,7 @@ export function prepareChatSendUserTurn(params: {
   let inlineImageOmitted = false;
   userTurn.setInputPromise(
     persistedMediaForTranscriptPromise.then(async (result) => {
+      await prepareReplyMessageLocale(ctx, session.cfg ?? params.getConfig?.() ?? {});
       inlineImageOmitted = result.omission === "inline-image-save-failed";
       const media = result.entries.map((entry) => entry.fact);
       const slots = result.entries.flatMap((entry, factIndex) =>
@@ -372,6 +377,7 @@ export function prepareChatSendUserTurn(params: {
       }
       return {
         ...userTurn.baseInput,
+        messageLocale: ctx.MessageLocale,
         ...(transcriptEcho
           ? { text: [userTurn.baseInput.text, transcriptEcho].filter(Boolean).join("\n") }
           : {}),

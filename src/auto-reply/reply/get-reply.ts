@@ -68,6 +68,7 @@ import {
   hasInboundMedia,
   hasInboundMediaForUnderstanding,
 } from "./inbound-media.js";
+import { prepareReplyMessageLocale } from "./message-locale.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createModelSelectionState, resolveTurnModelSelection } from "./model-selection.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
@@ -123,6 +124,7 @@ async function resolveReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
+  await prepareReplyMessageLocale(ctx, cfg);
   const source = await prepareReplySourceInput(ctx, cfg, opts);
   opts = source.options;
   try {

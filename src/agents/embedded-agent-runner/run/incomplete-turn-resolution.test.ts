@@ -36,6 +36,28 @@ function refusalAttempt(provider: string, replaySafe: boolean) {
 }
 
 describe("incomplete-turn terminal metadata", () => {
+  it("keeps the captured language for a provider failure without an assistant message", () => {
+    const text = resolveIncompleteTurnPayloadText({
+      payloadCount: 0,
+      aborted: false,
+      externalAbort: false,
+      timedOut: false,
+      attempt: makeEmbeddedRunnerAttempt({
+        terminal: {
+          kind: "failed",
+          source: "prompt",
+          error: new Error("HTTP 400: invalid request"),
+        },
+      }),
+      terminalFailure: {
+        provider: "openai",
+        runParams: { config: { messages: { locale: "en" } }, messageLocale: "de" },
+        prepared: { payloadsForVisibleCompletion: [] },
+      },
+    });
+    expect(text).toContain("Modellanfrage abgewiesen");
+  });
+
   it("accepts a completed speech-only answer with provider reasoning", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [

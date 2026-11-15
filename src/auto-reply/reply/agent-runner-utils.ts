@@ -483,6 +483,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
+    messageLocale: params.run.messageLocale,
     providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,

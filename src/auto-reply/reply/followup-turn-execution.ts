@@ -56,6 +56,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     OriginatingTo: queued.originatingTo,
     To: queued.originatingTo,
     AccountId: queued.originatingAccountId ?? run.agentAccountId,
+    MessageLocale: run.messageLocale,
     ChatType: queued.originatingChatType ?? run.chatType,
     SessionKey: sessionKey,
     RuntimePolicySessionKey: run.runtimePolicySessionKey ?? sessionKey,

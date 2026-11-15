@@ -5,14 +5,12 @@ import {
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
 import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/context-overflow-observation.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { renderControlUiAgentFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
-import {
-  GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-  renderControlUiAgentFailureCopy,
-  renderFailoverCodeUserCopy,
-} from "../../agents/failover/user-copy.js";
+import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { messageCopy } from "../../agents/failover/user-message-catalog.js";
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveReplyCompletion, resolveReplyExpectation } from "../../agents/reply-completion.js";
@@ -231,21 +229,28 @@ export async function handleAgentExecutionError(params: {
       { message, error: err },
       {
         includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+        locale: turn.followupRun.run.messageLocale,
       },
     );
     const text =
       params.shouldSurfaceToControlUi && err.userMessage === undefined
-        ? renderControlUiAgentFailureCopy()
+        ? renderControlUiAgentFailureCopy(turn.followupRun.run.messageLocale)
         : externalReply.text;
     return await settleFailure({ text }, externalReply.isGenericRunnerFailure);
   }
-  const failoverFacts = resolveReplyFailoverFacts(err, message, params.runtimeConfig);
+  const failoverFacts = resolveReplyFailoverFacts(
+    err,
+    message,
+    params.runtimeConfig,
+    turn.followupRun.run.messageLocale,
+  );
   const failureSummary = resolveReplyFailureSummary({
     error: err,
     message,
     facts: failoverFacts,
     attempts: isFailoverError(err) ? err.attempts : undefined,
     config: params.runtimeConfig,
+    locale: turn.followupRun.run.messageLocale,
   });
   const failoverReason = failoverFacts.reason;
   const isBilling = failureSummary?.kind === "billing";
@@ -277,7 +282,7 @@ export async function handleAgentExecutionError(params: {
       `Auto-compaction failed (${message}). Preserving existing session mapping for ${turn.sessionKey ?? turn.followupRun.run.sessionId}.`,
     );
     turn.replyOperation?.fail("run_failed", err);
-    return finalFailure(buildContextOverflowRecoveryText());
+    return finalFailure(buildContextOverflowRecoveryText(turn.followupRun.run.messageLocale));
   }
   const replayPrevented = findCliTimeoutError(err)?.cliTimeout.observedActivity === true;
   if (providerRequestError) {
@@ -300,6 +305,7 @@ export async function handleAgentExecutionError(params: {
           {
             includeAuthProfileId: !isNonDirectConversationContext(turn.sessionCtx),
             includeDetails: isVerboseFailureDetailEnabled(turn.resolvedVerboseLevel),
+            locale: turn.followupRun.run.messageLocale,
             replayPrevented,
             failoverFacts,
           },
@@ -315,11 +321,11 @@ export async function handleAgentExecutionError(params: {
   const fallbackText =
     failureSummary?.text ??
     (isContextOverflow
-      ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
+      ? messageCopy(turn.followupRun.run.messageLocale, "CONTEXT_OVERFLOW_ERROR_USER_MESSAGE")
       : (externalRunFailureReply?.text ??
         (params.shouldSurfaceToControlUi
-          ? renderControlUiAgentFailureCopy()
-          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT)));
+          ? renderControlUiAgentFailureCopy(turn.followupRun.run.messageLocale)
+          : messageCopy(turn.followupRun.run.messageLocale, "GENERIC_EXTERNAL_RUN_FAILURE_TEXT"))));
   return await settleFailure(
     {
       text: fallbackText,

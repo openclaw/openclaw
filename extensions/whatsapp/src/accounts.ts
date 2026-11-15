@@ -25,6 +25,7 @@ export type ResolvedWhatsAppAccount = {
   enabled: boolean;
   sendReadReceipts: boolean;
   messagePrefix?: string;
+  messageLocale?: "en" | "de";
   defaultTo?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
@@ -106,6 +107,7 @@ export function resolveWhatsAppAccount(params: {
     enabled,
     sendReadReceipts: merged.sendReadReceipts ?? true,
     messagePrefix: merged.responsePrefix,
+    messageLocale: merged.messageLocale,
     defaultTo: merged.defaultTo,
     authDir,
     isLegacyAuthDir: isLegacy,

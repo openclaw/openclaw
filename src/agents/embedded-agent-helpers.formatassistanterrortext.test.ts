@@ -370,3 +370,60 @@ it("rewrites transport-classified malformed streaming fragments in error context
   });
   expect(result).toBe("LLM streaming response contained a malformed fragment. Please try again.");
 });
+
+describe("request-localized recovery guidance", () => {
+  it("keeps an English request English when UI and global defaults are German", () => {
+    const message = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "503 overloaded",
+      content: [],
+    });
+    const text = formatUserFacingAssistantErrorText(message, {
+      locale: "en",
+      cfg: { messages: { locale: "de" }, ui: { prefs: { locale: "de" } } },
+    });
+    expect(text).toContain("AI service");
+    expect(text).not.toContain("KI-Dienst");
+  });
+
+  it("preserves the free-tier recovery action in German", () => {
+    const message = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage:
+        "HTTP 403: This model is only available to first-party clients on the free tier",
+      errorType: "FreeTierError",
+      provider: "example",
+      model: "example-model",
+      content: [],
+    });
+    const text = formatUserFacingAssistantErrorText(message, { locale: "de" });
+    expect(text).toContain("anderes Modell");
+    expect(text).toContain("kostenpflichtigen Tarif");
+    expect(text).not.toContain("couldn't finish");
+  });
+
+  it("preserves provider-refusal semantics regardless of the requested language", () => {
+    const message = makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: "private-provider-detail",
+      errorCode: "misalignment_policy_violation",
+      content: [],
+    });
+    const english = formatUserFacingAssistantErrorText(message, { locale: "en" });
+    expect(english).toContain("safety precaution");
+    expect(formatUserFacingAssistantErrorText(message, { locale: "de" })).toBe(english);
+  });
+});
+
+it.each([
+  ["ECONNRESET", "Prüfe das Gespräch"],
+  ["ENOTFOUND", "Verbindung"],
+  ["", "unbekannten Fehler"],
+])("localizes safe recovery guidance for %s", (errorMessage, expected) => {
+  expect(
+    formatUserFacingAssistantErrorText(
+      makeAssistantMessageFixture({ stopReason: "error", errorMessage }),
+      { locale: "de" },
+    ),
+  ).toContain(expected);
+});

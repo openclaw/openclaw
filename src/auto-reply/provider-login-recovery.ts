@@ -6,6 +6,7 @@ import type { FailoverReason } from "../agents/failover/signal.js";
 import type { ModelAuthRefreshOutcome } from "../commands/models/auth-refresh.js";
 import type { MessagePresentation } from "../interactive/payload.js";
 import type { ProviderChannelLoginChoice } from "../plugins/provider-login-options.js";
+import { resolveMessageLocale } from "../shared/message-locale.js";
 import {
   ProviderAuthConfigApplyError,
   ProviderCredentialsSavedError,
@@ -44,6 +45,7 @@ export function formatProviderLoginFailure(
 }
 
 export type ProviderLoginRecoveryEvidence = {
+  locale?: string;
   provider?: string;
   oauthReason?: OAuthRefreshFailureReason | null;
   failoverReason?: FailoverReason;
@@ -75,14 +77,17 @@ export function buildProviderLoginRecovery(
   }
   const command = buildOAuthRefreshFailureLoginCommand(evidence.provider, { surface: "chat" });
   return {
-    hint: `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
+    hint:
+      resolveMessageLocale(evidence.locale) === "de"
+        ? `Dein Modellanbieter benötigt eine neue Anmeldung. Sende \`${command}\` in einem privaten Chat oder in der OpenClaw-App. Falls angezeigt, kannst du auch **Anmelden** wählen.`
+        : `Your model provider needs a new login. Send \`${command}\` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**.`,
     presentation: {
       blocks: [
         {
           type: "buttons",
           buttons: [
             {
-              label: "Sign in",
+              label: resolveMessageLocale(evidence.locale) === "de" ? "Anmelden" : "Sign in",
               action: { type: "command", command },
             },
           ],

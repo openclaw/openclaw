@@ -169,6 +169,7 @@ export async function resolveFollowupDeliveryDecision(params: {
     payloads.map((payload) =>
       renderPostCompactionModelFailurePayload(
         markPostCompactionModelFailurePayload(postCompactionModelFailure, payload),
+        turn.queued.run.messageLocale,
       ),
     );
   if (execution.outcome.kind === "rejected") {

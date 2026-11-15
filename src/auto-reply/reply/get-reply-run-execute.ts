@@ -327,6 +327,7 @@ export async function executePreparedReplyRun(
     userTurnTranscriptText !== undefined || userTurnMediaForPersistence.length > 0
       ? {
           text: userTurnTranscriptText,
+          messageLocale: ctx.MessageLocale,
           senderIsOwner: command.senderIsOwner,
           requesterOrigin,
           ...(inputIdempotencyKey ? { idempotencyKey: inputIdempotencyKey } : {}),
@@ -521,6 +522,7 @@ export async function executePreparedReplyRun(
       messageProvider,
       mediaNormalizationOwner: opts?.mediaNormalizationOwner,
       clientCaps: ctx.GatewayClientCaps,
+      messageLocale: ctx.MessageLocale,
       bootstrapUserProfileId: personalBootstrapEligible
         ? sessionPersonalProfileId(preparedSessionState.sessionEntry)
         : undefined,

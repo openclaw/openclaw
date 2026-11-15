@@ -13,6 +13,7 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
+  projectAgentErrorKind,
 } from "./embedded-agent-error-observation.js";
 import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
@@ -307,6 +308,7 @@ export function handleAgentEnd(
   const lastAssistant = ctx.state.lastAssistant;
   const isError = isAssistantMessage(lastAssistant) && lastAssistant.stopReason === "error";
   let lifecycleErrorText: string | undefined;
+  let errorKind: ReturnType<typeof projectAgentErrorKind>;
   let errorObservation: ReturnType<typeof projectChatErrorDetail>;
   // Terminal delivery does not depend on streamed text alone: when the streamed
   // assistant texts are empty, payload building falls back to the completed
@@ -382,8 +384,10 @@ export function handleAgentEnd(
     const failoverReason = classifyAssistantFailoverReason(lastAssistant, {
       providerOwner: ctx.params.providerOwner ?? null,
     });
+    errorKind = projectAgentErrorKind(rawError, failoverReason);
     const errorText = formatUserFacingAssistantErrorText(lastAssistant, {
       cfg: ctx.params.config,
+      locale: ctx.params.messageLocale,
       sessionKey: ctx.params.sessionKey,
       agentId: ctx.params.agentId,
       provider: lastAssistant.provider,
@@ -447,6 +451,7 @@ export function handleAgentEnd(
         ctx.params.terminalLifecyclePhase === "finishing" ? "finishing" : isError ? "error" : "end",
       ...(isError ? { error: lifecycleErrorText ?? GENERIC_ASSISTANT_ERROR_TEXT } : {}),
       ...(errorObservation ? { errorObservation } : {}),
+      ...(errorKind ? { errorKind } : {}),
       ...(terminalStopReason ? { stopReason: terminalStopReason } : {}),
       ...(ctx.state.yielded === true ? { yielded: true } : {}),
       ...(ctx.state.timeoutPhase ? { timeoutPhase: ctx.state.timeoutPhase } : {}),

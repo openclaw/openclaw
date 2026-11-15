@@ -19,6 +19,7 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
   | "runId"
   | "lifecycleGeneration"
   | "messageChannel"
+  | "messageLocale"
   | "initialReplayState"
   | "assistantErrorTranscript"
   | "verboseLevel"

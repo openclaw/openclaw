@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { inspectTlsCertificateError } from "../infra/tls-certificate-errors.js";
 import { extractHttpResponseBody } from "./http-error-response.js";
+import { resolveMessageLocale } from "./message-locale.js";
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error)(?:\s+\d{3})?[:\s-]+/i;
 const HTTP_STATUS_DELIMITER_RE = /(?:\s*:\s*|\s+)/;
@@ -271,8 +272,10 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   return trimmed.length > 600 ? `${truncateUtf16Safe(trimmed, 600)}…` : trimmed;
 }
 
-const CONNECTION_FAILED_MESSAGE =
-  "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.";
+const CONNECTION_FAILED_MESSAGE = {
+  en: "Couldn't connect to the AI service. Check your connection, then try again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+  de: "Die Verbindung zum KI-Dienst ist fehlgeschlagen. Prüfe deine Verbindung und versuche es erneut. Details findest du unter Einstellungen → Protokolle in der OpenClaw-App oder mit `openclaw logs --follow`.",
+};
 const TRANSPORT_ERRORS = [
   {
     code: /\beconnrefused\b/i,
@@ -282,8 +285,10 @@ const TRANSPORT_ERRORS = [
   {
     code: /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i,
     phrases: /socket hang up|connection reset|connection aborted/i,
-    message:
-      "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+    message: {
+      en: "Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+      de: "Die Verbindung zum KI-Dienst wurde unterbrochen. Prüfe das Gespräch, bevor du es erneut versuchst. Details findest du unter Einstellungen → Protokolle in der OpenClaw-App oder mit `openclaw logs --follow`.",
+    },
   },
   {
     code: /\benotfound\b|\beai_again\b|\benetunreach\b|\behostunreach\b|\behostdown\b/i,
@@ -300,17 +305,17 @@ export function isKnownTransportErrorCode(value: string): boolean {
   );
 }
 
-export function formatTransportErrorCopy(raw: string): string | undefined {
+export function formatTransportErrorCopy(raw: string, locale?: string): string | undefined {
   if (!raw || isCloudflareOrHtmlErrorPage(raw)) {
     return undefined;
   }
   for (const { code, phrases, message } of TRANSPORT_ERRORS) {
     if (code.test(raw) || phrases.test(raw)) {
-      return message;
+      return message[resolveMessageLocale(locale)];
     }
   }
   if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return CONNECTION_FAILED_MESSAGE;
+    return CONNECTION_FAILED_MESSAGE[resolveMessageLocale(locale)];
   }
   return undefined;
 }

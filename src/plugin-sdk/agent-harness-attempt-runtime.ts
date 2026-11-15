@@ -9,6 +9,7 @@ import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
+  projectAgentErrorKind,
 } from "../agents/embedded-agent-error-observation.js";
 import { renderUserFacingText } from "../agents/embedded-agent-helpers/user-facing-text.js";
 import { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
@@ -216,7 +217,12 @@ export async function emitAgentHarnessAttemptEvent(
 export function createAgentHarnessAttemptLifecycle(params: {
   attempt: Pick<
     EmbeddedRunAttemptParams,
-    "provider" | "modelId" | "onExecutionPhase" | "deferTerminalLifecycle"
+    | "provider"
+    | "modelId"
+    | "onExecutionPhase"
+    | "deferTerminalLifecycle"
+    | "messageLocale"
+    | "config"
   >;
   backend: string;
   startedAtMs: number;
@@ -247,16 +253,23 @@ export function createAgentHarnessAttemptLifecycle(params: {
         data.error instanceof AgentHarnessModelRequestPolicyError ? data.error : undefined;
       const rawError = formatErrorMessage(data.error);
       const observed = buildApiErrorObservationFields(rawError, { provider });
+      const failoverReason = classifyFailoverReason(rawError, { provider });
+      const errorKind = data.errorKind ?? projectAgentErrorKind(data.error, failoverReason);
       terminalData = {
         ...terminalData,
-        error: buildTextObservationFields(renderUserFacingText(rawError, { errorContext: true }), {
-          provider,
-        }).textPreview,
+        ...(errorKind ? { errorKind } : {}),
+        error: buildTextObservationFields(
+          renderUserFacingText(rawError, {
+            errorContext: true,
+            locale: params.attempt.messageLocale ?? params.attempt.config?.messages?.locale,
+          }),
+          { provider },
+        ).textPreview,
         errorObservation: projectChatErrorDetail({
           ...observed,
           provider,
           model,
-          failoverReason: classifyFailoverReason(rawError, { provider }),
+          failoverReason,
           httpStatus:
             policyDenial?.status ?? (observed.httpCode ? Number(observed.httpCode) : undefined),
           ...(policyDenial ? { providerErrorCode: policyDenial.code } : {}),

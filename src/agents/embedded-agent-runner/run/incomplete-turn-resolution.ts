@@ -2,6 +2,7 @@ import { hasOnlyAssistantReasoningContent } from "@openclaw/ai/internal/shared";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import type { MessageLocale } from "../../../shared/message-locale.js";
 import {
   hasAcceptedSessionSpawn,
   hasCompletionMessageSessionSpawn,
@@ -14,8 +15,8 @@ import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-hel
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/auth-user-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
-import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import {
   MISSING_REPLY_NOTICE_TEXT,
@@ -48,7 +49,12 @@ type RunLivenessAttempt = Pick<
 type TerminalFailureContext = {
   assistantProfileFailureReason?: AuthProfileFailureReason | null;
   provider: string;
-  runParams: Pick<Parameters<typeof buildProviderAuthRecoveryHint>[0], "config" | "workspaceDir">;
+  runParams: Pick<
+    Parameters<typeof buildProviderAuthRecoveryHint>[0],
+    "config" | "workspaceDir"
+  > & {
+    messageLocale?: MessageLocale;
+  };
   prepared: { payloadsForVisibleCompletion: EmbeddedAgentRunResult["payloads"] };
 };
 
@@ -168,6 +174,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   }
 
   const { promptError } = projectAgentRunAttemptTerminal(params.attempt.terminal);
+  const locale =
+    params.terminalFailure?.runParams.messageLocale ??
+    params.terminalFailure?.runParams.config?.messages?.locale;
   if (
     !promptError &&
     assistant?.stopReason === "error" &&
@@ -182,6 +191,7 @@ export function resolveIncompleteTurnPayloadText(params: {
           promptError,
           formatErrorMessage(promptError),
           params.terminalFailure?.runParams.config,
+          locale,
         )
       : undefined;
   // A non-replayable harness failure may have no assistant message to carry its error.
@@ -192,11 +202,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     (failureFacts
       ? (failureFacts.requestFailureText ??
         failureFacts.providerRequestError?.userMessage ??
-        renderAssistantRequestFailureCopy({
-          reason: failureFacts.reason,
-          status: failureFacts.status,
-          code: failureFacts.code,
-        }))
+        renderAssistantRequestFailureCopy(
+          { reason: failureFacts.reason, status: failureFacts.status, code: failureFacts.code },
+          locale,
+        ))
       : undefined);
   if (params.hadPotentialSideEffects || params.attempt.replayMetadata.hadPotentialSideEffects) {
     return promptFailureText
@@ -218,10 +227,12 @@ export function resolveIncompleteTurnPayloadText(params: {
   const reason = authFailure?.assistantProfileFailureReason;
   if (authFailure && (reason === "auth" || reason === "auth_permanent")) {
     return renderAuthProfileFailoverCopy({
+      locale,
       reason,
       provider: authFailure.provider,
       allInCooldown: false,
       recoveryHint: buildProviderAuthRecoveryHint({
+        locale,
         provider: authFailure.provider,
         config: authFailure.runParams.config,
         workspaceDir: authFailure.runParams.workspaceDir,

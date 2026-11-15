@@ -1,10 +1,8 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { renderControlUiAgentFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
 import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
-import {
-  PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
-  renderControlUiAgentFailureCopy,
-} from "../../agents/failover/user-copy.js";
+import { messageCopy } from "../../agents/failover/user-message-catalog.js";
 import {
   isHostMissingReplyNoticeText,
   resolveReplyExpectation,
@@ -111,10 +109,13 @@ export async function settleAgentFallbackCycle(params: {
     }
     turn.replyOperation?.fail("run_failed", embeddedError);
     const text = isCompactionFailure
-      ? buildContextOverflowRecoveryText()
+      ? buildContextOverflowRecoveryText(turn.followupRun.run.messageLocale)
       : cycle.shouldSurfaceToControlUi
-        ? renderControlUiAgentFailureCopy()
-        : PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE;
+        ? renderControlUiAgentFailureCopy(turn.followupRun.run.messageLocale)
+        : messageCopy(
+            turn.followupRun.run.messageLocale,
+            "PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE",
+          );
     return {
       kind: "final",
       payload: markAgentRunFailureReplyPayload({ text }),

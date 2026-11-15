@@ -11,6 +11,7 @@ import {
   formatTransportErrorCopy,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { resolveMessageLocale } from "../../shared/message-locale.js";
 import { escapeMarkdownText } from "../../shared/text/escape-markdown.js";
 import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import { classifyFailoverSignalCore } from "./classify-core.js";
@@ -23,6 +24,7 @@ import {
 } from "./message-patterns.js";
 import { extractFailoverSignalDetails } from "./signal-details.js";
 import type { FailoverReason } from "./signal.js";
+import { messageCopy } from "./user-message-catalog.js";
 
 export const ERROR_PREFIX_RE =
   /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
@@ -109,6 +111,37 @@ const ASSISTANT_REQUEST_FAILURE_COPY = {
   unknown: "",
 } satisfies Record<FailoverReason, string>;
 
+const GERMAN_REQUEST_FAILURE_COPY = {
+  auth: "Die Anmeldung beim KI-Dienst ist fehlgeschlagen. Melde dich unter Modelle in der OpenClaw-App erneut an oder führe `openclaw configure` aus.",
+  auth_permanent:
+    "Der KI-Dienst akzeptiert deine Anmeldung nicht. Melde dich unter Modelle in der OpenClaw-App erneut an oder führe `openclaw configure` aus.",
+  format:
+    "Der KI-Dienst konnte diese Anfrage nicht annehmen. Starte mit /new ein neues Gespräch oder wähle ein anderes Modell in der OpenClaw-App.",
+  rate_limit:
+    "Der KI-Dienst benötigt eine kurze Pause. Bitte versuche es in wenigen Minuten erneut.",
+  overloaded:
+    "Der KI-Dienst ist ausgelastet. Versuche es gleich erneut oder wähle ein anderes Modell.",
+  billing:
+    "Der KI-Dienst meldet ein Abrechnungsproblem. Prüfe dein Guthaben und die Nutzungslimits, bevor du es erneut versuchst.",
+  server_error: "Beim KI-Dienst ist ein Fehler aufgetreten. Bitte versuche es gleich erneut.",
+  route_unavailable:
+    "Der Anbieter kann dieses Modell gerade nicht bereitstellen. Wähle ein anderes Modell.",
+  timeout:
+    "Die Anfrage hat zu lange gedauert. Prüfe den Gesprächsverlauf auf bereits erledigte Arbeit, bevor du es erneut versuchst.",
+  tls_certificate:
+    "Die sichere Verbindung zum KI-Dienst ist fehlgeschlagen. Details findest du unter Einstellungen → Protokolle oder mit `openclaw logs --follow`.",
+  context_overflow:
+    "Die Anfrage ist zu groß für dieses Modell. Kürze sie oder wähle ein Modell mit einem größeren Kontextfenster.",
+  model_not_found:
+    "Dieses Modell wurde nicht gefunden. Wähle ein anderes Modell in der OpenClaw-App oder führe `openclaw configure` aus.",
+  session_expired:
+    "Deine KI-Sitzung ist abgelaufen. Starte mit /new ein neues Gespräch. Melde dich bei erneutem Auftreten unter Modelle in der OpenClaw-App an.",
+  empty_response: "Der KI-Dienst hat eine leere Antwort zurückgegeben. Bitte versuche es erneut.",
+  no_error_details: "",
+  unclassified: "",
+  unknown: "",
+} satisfies Record<FailoverReason, string>;
+
 /** Plain storage copy for length-limited surfaces such as session rows. */
 export function renderStorageFailureSummary(
   storageFailure: GatewayStorageFailure | undefined,
@@ -119,9 +152,21 @@ export function renderStorageFailureSummary(
 /** Render classified facts without exposing raw provider response text. */
 export function renderAssistantRequestFailureCopy(
   facts: AssistantRequestFailureCopyFacts,
+  locale?: string,
 ): string | undefined {
   if (facts.storageFailure) {
     return `⚠️ ${STORAGE_FAILURE_COPY[facts.storageFailure]} ${ERROR_DETAILS_HINT}`;
+  }
+  if (resolveMessageLocale(locale) === "de") {
+    if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
+      return "⚠️ Dieser API-Schlüssel ist abgelaufen. Erstelle beim Anbieter einen neuen Schlüssel und ersetze ihn in OpenClaw oder im Geheimnisspeicher. Eine erneute Anmeldung verlängert diesen Schlüssel nicht.";
+    }
+    if (facts.code === "item_conflict") {
+      return "⚠️ Der KI-Dienst hat gespeicherte Gesprächsdaten abgewiesen (item_conflict). Führe /compact aus und versuche es erneut. Wähle bei erneutem Auftreten ein anderes Modell und gib dem Betreiber die Gateway-Protokolle.";
+    }
+    if (facts.code === "incomplete_tool_call") {
+      return "⚠️ Die Aufgabe konnte nicht abgeschlossen werden. Einige Aktionen können bereits ausgeführt worden sein. Prüfe ihre Ergebnisse, bevor du fortfährst.";
+    }
   }
   if (facts.code === API_KEY_EXPIRED_ERROR_CODE) {
     return `⚠️ ${API_KEY_EXPIRED_USER_TEXT}`;
@@ -136,7 +181,11 @@ export function renderAssistantRequestFailureCopy(
     facts.reason === "timeout" && typeof facts.status === "number" && facts.status >= 500
       ? "server_error"
       : facts.reason;
-  const copy = reason ? ASSISTANT_REQUEST_FAILURE_COPY[reason] : undefined;
+  const copy = reason
+    ? (resolveMessageLocale(locale) === "de"
+        ? GERMAN_REQUEST_FAILURE_COPY
+        : ASSISTANT_REQUEST_FAILURE_COPY)[reason]
+    : undefined;
   if (copy) {
     return `⚠️ ${copy}`;
   }
@@ -148,7 +197,9 @@ export function renderAssistantRequestFailureCopy(
   if (!hasStatus && !facts.provider?.trim() && !facts.model?.trim()) {
     return undefined;
   }
-  return `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
+  return resolveMessageLocale(locale) === "de"
+    ? "⚠️ OpenClaw konnte diese Antwort nicht abschließen. Details findest du unter Einstellungen → Protokolle oder mit `openclaw logs --follow`."
+    : `⚠️ OpenClaw couldn't finish this reply. ${ERROR_DETAILS_HINT}`;
 }
 
 /** Render already-classified coordination facts without loading provider runtime. */
@@ -158,6 +209,7 @@ export function renderRuntimeCoordinationFailureCopy(code: string | undefined): 
 }
 
 type FailureCopyOptions = {
+  locale?: string;
   /** Include a diagnostic excerpt when no specialized format guidance matches. */
   includeRawFormatDetails?: boolean;
 };
@@ -182,48 +234,68 @@ export function renderFormatErrorCopy(raw: string, options?: FailureCopyOptions)
     candidate = parsedMessage;
   }
   if (isSessionTranscriptValidationErrorMessage(candidate)) {
-    return "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.";
+    return resolveMessageLocale(options?.locale) === "de"
+      ? "OpenClaw konnte den Gesprächsverlauf nicht lesen. Bitte den Gateway-Betreiber, `openclaw doctor --fix` auszuführen. Bewahre bei erneutem Auftreten den Verlauf auf und kontaktiere den Support mit den Gateway-Protokollen."
+      : "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.";
   }
   const embeddingModel = candidate.match(/^"([\w./:-]{1,200})" does not support chat$/u)?.[1];
   if (embeddingModel) {
     const model = escapeMarkdownText(redactSensitiveText(embeddingModel, { mode: "tools" }));
-    return `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
+    return resolveMessageLocale(options?.locale) === "de"
+      ? `${model} ist ein Embedding-Modell und unterstützt keinen Chat. Wähle mit /model ein Chat-Modell oder entferne es aus models.providers.ollama.models.`
+      : `${model} is an embedding model and cannot chat; pick a chat model with /model (or remove it from models.providers.ollama.models).`;
   }
   if (PROVIDER_CACHE_CONTROL_LIMIT_RE.test(candidate)) {
-    return "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.";
+    return resolveMessageLocale(options?.locale) === "de"
+      ? "Der KI-Dienst konnte dieses Gespräch nicht annehmen. Starte mit /new ein neues Gespräch oder wähle ein anderes Modell in der OpenClaw-App."
+      : "The AI service couldn't accept this conversation. Start a new conversation with /new, or choose another model in the OpenClaw app.";
   }
   if (isUnsupportedReasoningEffortParameterError(candidate)) {
-    return "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
+    return resolveMessageLocale(options?.locale) === "de"
+      ? "Dieser Modell-Endpunkt unterstützt reasoning_effort nicht. Setze für das Modell in deiner Anbieter-Konfiguration compat.supportsReasoningEffort: false und versuche es erneut."
+      : "This model endpoint does not support reasoning_effort. Set compat.supportsReasoningEffort: false on this model in your custom provider configuration and try again.";
   }
   if (candidate.length > 300 || !PROVIDER_OUTPUT_TOKEN_LIMIT_RE.test(candidate)) {
     if (!candidate || /^[{<]/u.test(candidate)) {
-      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+      return resolveMessageLocale(options?.locale) === "de"
+        ? GERMAN_REQUEST_FAILURE_COPY.format
+        : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
     }
     if (candidate.startsWith("[")) {
       try {
         JSON.parse(candidate);
-        return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+        return resolveMessageLocale(options?.locale) === "de"
+          ? GERMAN_REQUEST_FAILURE_COPY.format
+          : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
       } catch {
         // Preserve field-path diagnostics, not truncated or suffixed JSON arrays.
         if (!/^\[[a-z_$][\w$.-]*\](?:\s|:|$)/iu.test(candidate)) {
-          return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+          return resolveMessageLocale(options?.locale) === "de"
+            ? GERMAN_REQUEST_FAILURE_COPY.format
+            : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
         }
       }
     }
     if (options?.includeRawFormatDetails === false) {
-      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+      return resolveMessageLocale(options?.locale) === "de"
+        ? GERMAN_REQUEST_FAILURE_COPY.format
+        : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
     }
     // Redact before truncation so a clipped credential cannot escape matching.
     const detail = redactSensitiveText(candidate, { mode: "tools" })
       .replace(/[\p{Cc}\p{Cf}\s]+/gu, " ")
       .trim();
     if (!detail) {
-      return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
+      return resolveMessageLocale(options?.locale) === "de"
+        ? GERMAN_REQUEST_FAILURE_COPY.format
+        : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
     }
     const bounded = detail.length > 600 ? `${truncateUtf16Safe(detail, 600)}…` : detail;
-    return `LLM request rejected: ${escapeMarkdownText(bounded)}`;
+    return `${resolveMessageLocale(options?.locale) === "de" ? "Modellanfrage abgewiesen" : "LLM request rejected"}: ${escapeMarkdownText(bounded)}`;
   }
-  return "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.";
+  return resolveMessageLocale(options?.locale) === "de"
+    ? "Die eingestellte Antwortlänge ist zu groß für dieses Modell. Verringere das Antwortlimit in den Einstellungen der OpenClaw-App oder wähle ein anderes Modell."
+    : "The reply length is set too high for this model. Lower its reply limit in the OpenClaw app settings, or choose another model.";
 }
 
 /** Share bounded request-limit facts between live failures and persisted chat history. */
@@ -238,7 +310,9 @@ export function renderAssistantFormatFailureCopy(
   options?: FailureCopyOptions,
 ): string | undefined {
   if (message.errorCode === "item_conflict" || message.errorMessage === ITEM_CONFLICT_USER_TEXT) {
-    return ITEM_CONFLICT_USER_TEXT;
+    return resolveMessageLocale(options?.locale) === "de"
+      ? renderAssistantRequestFailureCopy({ code: "item_conflict" }, "de")
+      : ITEM_CONFLICT_USER_TEXT;
   }
   for (const [isBody, raw] of [
     [true, message.errorBody],
@@ -254,7 +328,9 @@ export function renderAssistantFormatFailureCopy(
         info?.message ?? raw.trim(),
       )
     ) {
-      return ITEM_CONFLICT_USER_TEXT;
+      return resolveMessageLocale(options?.locale) === "de"
+        ? renderAssistantRequestFailureCopy({ code: "item_conflict" }, "de")
+        : ITEM_CONFLICT_USER_TEXT;
     }
     if (isBody && !info?.message) {
       continue;
@@ -273,7 +349,10 @@ export function renderAssistantFormatFailureCopy(
       continue;
     }
     const copy = renderFormatErrorCopy(raw, options);
-    if (copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT) {
+    if (
+      copy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT &&
+      copy !== GERMAN_REQUEST_FAILURE_COPY.format
+    ) {
       return copy;
     }
   }
@@ -389,4 +468,11 @@ export function renderRecordedAssistantFailureCopy(
     return classifiedCopy;
   }
   return formatTransportErrorCopy([raw, code].filter(Boolean).join(" ")) ?? classifiedCopy;
+}
+
+export function renderControlUiAgentFailureCopy(locale?: string): string {
+  if (resolveMessageLocale(locale) === "de") {
+    return messageCopy(locale, "GENERIC_EXTERNAL_RUN_FAILURE_TEXT");
+  }
+  return `⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. ${ERROR_DETAILS_HINT}`;
 }

@@ -4,6 +4,7 @@ import {
   extractErrorHttpStatus,
   formatTransportErrorCopy,
 } from "../../shared/assistant-error-format.js";
+import { resolveMessageLocale } from "../../shared/message-locale.js";
 import { describeFailoverError } from "../failover-error.js";
 import { AgentHarnessModelRequestPolicyError } from "../harness/errors.js";
 import {
@@ -19,7 +20,9 @@ export function resolveReplyFailoverFacts(
   error: unknown,
   message: string,
   config?: OpenClawConfig,
+  requestedLocale?: string,
 ) {
+  const locale = requestedLocale ?? config?.messages?.locale;
   const described = describeFailoverError(error);
   const rawError = described.rawError ?? message;
   const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
@@ -27,7 +30,7 @@ export function resolveReplyFailoverFacts(
     described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
   const transportCopy =
     reason === "timeout" && (status === undefined || status === 408)
-      ? formatTransportErrorCopy([rawError, described.code].filter(Boolean).join(" "))
+      ? formatTransportErrorCopy([rawError, described.code].filter(Boolean).join(" "), locale)
       : undefined;
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
   const storageCopy = renderAssistantRequestFailureCopy({
@@ -54,7 +57,7 @@ export function resolveReplyFailoverFacts(
         ? renderRateLimitResetCopy({
             ...described,
             rateLimitResetAt,
-            locale: config?.ui?.prefs?.locale,
+            locale,
             timeZone: config?.agents?.defaults?.userTimezone,
           })
         : undefined) ??
@@ -63,11 +66,15 @@ export function resolveReplyFailoverFacts(
         ? renderAssistantFormatFailureCopy(
             { errorMessage: rawError, errorCode: described.code },
             reason,
+            { locale },
           )
         : transportCopy
-          ? `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
+          ? resolveMessageLocale(locale) === "de"
+            ? `⚠️ ${transportCopy} Prüfe das Gespräch vor einem weiteren Versuch auf bereits erledigte Arbeit.`
+            : `⚠️ ${transportCopy} Check the conversation for any completed work before trying again.`
           : undefined),
     providerRequestError: resolveProviderRequestFailureCopy({
+      locale,
       classification,
       facet: classifyProviderRequestFacets({
         status,

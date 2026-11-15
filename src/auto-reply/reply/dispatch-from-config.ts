@@ -17,6 +17,7 @@ import type {
 } from "./dispatch-from-config.types.js";
 import { DispatchSessionRefreshRequiredError } from "./dispatch-session-refresh-error.js";
 import { prepareInternalGetReplyOptions } from "./get-reply.types.js";
+import { prepareReplyMessageLocale } from "./message-locale.js";
 import { prepareReplySourceInput, retireUnadoptedReplySource } from "./reply-source-binding.js";
 
 export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
@@ -39,6 +40,7 @@ async function dispatchReplyFromConfigWithQueuePolicy(
   inputParams: DispatchFromConfigParams,
   allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
+  await prepareReplyMessageLocale(inputParams.ctx, inputParams.cfg);
   const source = await prepareReplySourceInput(
     inputParams.ctx,
     inputParams.cfg,
