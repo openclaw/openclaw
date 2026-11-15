@@ -517,7 +517,7 @@ it("loads optional English copy at each view boundary while keeping shared label
   const about = en.aboutPage;
   const dashboards = en.dashboardsPage;
   const providerUsage = en.usage.providerUsage;
-  expect(manager.t("aboutPage.artifactDetails")).toBe("Control UI build details");
+  expect(manager.t("aboutPage.artifactDetails")).toBe("Web app build details");
   await manager.setLocale("de");
   for (const [key, copy, load] of [
     ["aboutPage.linkDocs", "Docs", () => import("../pages/about/view.tsx")],

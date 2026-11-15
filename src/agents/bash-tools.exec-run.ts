@@ -568,6 +568,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           cleanupMs,
           notifyOnExit,
           subagentSession,
+          sessionsYieldAvailable: defaults?.sessionsYieldAvailabilityRef?.value === true,
           notifyOnExitEmptySuccess,
           requestOwners: params.background === true ? undefined : requestOwners,
           scopeKey: defaults?.scopeKey,
