@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { parseMd } from "../parse.js";
 
-describe("parseMd — frontmatter", () => {
+describe("parseMd", () => {
   it.each([
     ['"Hello world"', "Hello world"],
     [String.raw`"line\nnext\tcolumn"`, "line\nnext\tcolumn"],
@@ -44,9 +44,6 @@ describe("parseMd — frontmatter", () => {
       expect(ast.raw).toBe(raw);
     }
   });
-});
-
-describe("parseMd — byte-fidelity", () => {
   it("derives the same slug for mixed underscores, punctuation, and hyphens", () => {
     const raw = "## Alpha_ ?_-Beta\u00a0__Gamma\n";
     const ast = parseMd(raw);
@@ -55,8 +52,6 @@ describe("parseMd — byte-fidelity", () => {
 
   it("preserves BOM in raw but ignores it for parsing", () => {
     const raw = "﻿## Heading\n";
-    const ast = parseMd(raw);
-    expect(ast.raw).toBe(raw);
-    expect(ast.blocks[0]?.heading).toBe("Heading");
+    expect(parseMd(raw)).toMatchObject({ raw, blocks: [{ heading: "Heading" }] });
   });
 });
