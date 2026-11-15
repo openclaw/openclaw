@@ -1,4 +1,4 @@
-# 13,357 net test LF against main 36a0209f minus the single 400-line PR allowance.
+# 13,369 net test LF against main 7a47db72 minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -22,4 +22,5 @@
 # startup census and visible-pane geometry fixtures retain their existing assertions.
 # Workspace first-writer FIFO, interrupted process cleanup, explicit late-PID stop,
 # and font-ready geometry reuse existing owning regressions and their assertions.
-12957
+# Accepted unbound Goal input and native Details dismissal replace projection-only fixtures.
+12969

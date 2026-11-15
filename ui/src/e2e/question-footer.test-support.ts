@@ -9,7 +9,7 @@ import {
   recordControlUiE2eFailureFacts,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import type { MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
-import { openDetailsPullRequests } from "./chat-details.test-support.ts";
+import { closeChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 
@@ -75,7 +75,7 @@ export function defineQuestionFooterTests({
       const pullRequests = await openDetailsPullRequests(page);
       const pullRequest = pullRequests.locator(".chat-pr-mobile__row");
       await pullRequest.waitFor();
-      await page.keyboard.press("Escape");
+      await closeChatDetails(page);
       await draft.fill("Keep this follow-up draft");
       const prompt = "Which progress note should I use?";
       const request = questionRecord(`question-mobile-context-${orientation}`, [
@@ -130,7 +130,12 @@ export function defineQuestionFooterTests({
       }
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
-      await page.keyboard.press("Escape");
+      if (width > height) {
+        // A child tooltip consumes Escape; dismiss Details through its native owner.
+        await composer.locator(".chat-send-btn--send").hover();
+        await page.locator("openclaw-tooltip .tooltip-surface[popover]:popover-open").waitFor();
+      }
+      await closeChatDetails(page);
       // Closing Details animates the footer back into place before it can be tapped.
       await waitForLayoutSettled(page, ".chat-question-panel__collapsed-button");
       await expand.tap();
@@ -182,7 +187,7 @@ export function defineQuestionFooterTests({
       expect(await draft.inputValue()).toBe("Keep this follow-up draft");
       await openDetailsPullRequests(page);
       await pullRequest.click({ trial: true });
-      await page.keyboard.press("Escape");
+      await closeChatDetails(page);
     }
   });
 }
