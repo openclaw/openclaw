@@ -4,7 +4,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isMainThread, threadId } from "node:worker_threads";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { startSqliteStatementTiming } from "./database-engine/observation.js";
+import {
+  attributesSqliteStatements,
+  startSqliteStatementTiming,
+} from "./database-engine/observation.js";
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
@@ -52,14 +55,6 @@ export type { SqliteTransactionOptions } from "./sqlite-transaction-types.js";
 
 const DEFAULT_SLOW_BUSY_WAIT_MS = 1_000;
 const DEFAULT_SLOW_TRANSACTION_HOLD_MS = 1_000;
-// Slow holds of these operations name their statements: live appends hold the writer
-// in front of streaming turns, and long transcript reads hold back WAL checkpoints.
-const STATEMENT_ATTRIBUTED_OPERATIONS = new Set([
-  "session.lifecycle.delete",
-  "session.transcript.append-turn",
-  "session context snapshot read",
-  "sessions.transcript-maintenance",
-]);
 
 // The same native handle can cross transformed SDK module graphs. Retain the
 // first terminal failure even when an inner caller catches it and continues.
@@ -477,7 +472,7 @@ function settleSqliteTransactionSync<T>(
     // Share admitted schema inside rollback protection unless the source fence already owns it.
     // GC sampling stays hydration-only: joining it restarts the native profiler per call.
     const stopStatementTiming =
-      hydration || (operationLabel && STATEMENT_ATTRIBUTED_OPERATIONS.has(operationLabel))
+      operationLabel && attributesSqliteStatements(operationLabel)
         ? startSqliteStatementTiming(hydration)
         : undefined;
     let result: T;

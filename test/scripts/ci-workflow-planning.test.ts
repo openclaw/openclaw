@@ -3011,8 +3011,8 @@ describe("ci workflow guards", () => {
   );
 
   it.each([
-    ["macos-swift", false, "workflow_dispatch", false, ["release", "tests"]],
-    ["macos-swift-packages", false, "workflow_dispatch", false, ["packages", "mlx"]],
+    ["macos-swift", false, "workflow_dispatch", false, ["tests"]],
+    ["macos-swift-packages", false, "workflow_dispatch", false, ["release", "packages", "mlx"]],
     ["ios-build", false, "workflow_dispatch", false, ["release", "tests"]],
     ["ios-build", true, "workflow_dispatch", false, ["tests"]],
     ["ios-build", false, "pull_request", false, ["smoke"]],
@@ -3180,9 +3180,9 @@ describe("ci workflow guards", () => {
       const appPhases: string[] = Array.isArray(job.strategy.matrix.phase)
         ? job.strategy.matrix.phase
         : evaluateWorkflowExpression(job.strategy.matrix.phase, context);
-      expect(appPhases).toEqual(full ? ["release", "tests"] : ["tests"]);
+      expect(appPhases).toEqual(["tests"]);
       const packagePhases = evaluateWorkflowExpression(packages.strategy.matrix.phase, context);
-      expect(packagePhases).toEqual(["packages", "mlx"]);
+      expect(packagePhases).toEqual(full ? ["release", "packages", "mlx"] : ["packages", "mlx"]);
       const phases = [...appPhases, ...packagePhases];
       expect(job.strategy["max-parallel"]).toBe(2);
       const env = Object.fromEntries(
@@ -3287,7 +3287,7 @@ describe("ci workflow guards", () => {
         "Restore Swift build directory cache",
         "Validate Swift build cache",
       ]) {
-        expect(selectedPhases(name), name).toEqual(full ? ["release", "tests"] : ["tests"]);
+        expect(selectedPhases(name), name).toEqual(full ? ["tests", "release"] : ["tests"]);
       }
       expect(selectedPhases("Render isolated macOS health fixtures")).toEqual(
         full ? ["tests"] : [],

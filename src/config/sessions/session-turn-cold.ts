@@ -3,7 +3,7 @@ import {
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
 import { acceptSessionSourceValidation } from "./session-source-authority.js";
-import { projectionLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import type {
   SqliteExpectedSessionTranscriptTurnResult,
@@ -73,7 +73,7 @@ export async function restoreSessionTurnColdTranscript(
             guard,
           );
         },
-        projectionLane,
+        sessionStoreLane,
       );
     } else {
       await restoreSessionColdTranscript(target, assertCurrent, undefined, guard);

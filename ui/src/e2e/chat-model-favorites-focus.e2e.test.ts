@@ -192,34 +192,35 @@ suite.define(() => {
             return first && second ? second.y - first.y - first.height : null;
           })
           .toBe(1);
+        // The Default, selected and other rows each carry a hover-only star.
         const opacity = () =>
           picker
             .locator("[data-chat-model-favorite]:visible")
             .evaluateAll((stars) => stars.map((star) => getComputedStyle(star).opacity));
-        expect.soft(await opacity()).toEqual(["0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
         await search.press("ArrowDown");
         await expect.poll(() => other.getAttribute("data-chat-model-highlighted")).toBe("");
         await page.clock.install();
         await picker.getByRole("tab", { name: "Anthropic", exact: true }).hover();
         await page.clock.runFor(1_000);
         expect.soft(await picker.getByRole("tooltip").filter({ visible: true }).count()).toBe(0);
-        expect.soft(await opacity()).toEqual(["0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
         await page.mouse.move(0, 0);
         await page.clock.runFor(200);
         await search.press("ArrowUp");
         await expect.poll(() => selected.getAttribute("data-chat-model-highlighted")).toBe("");
-        expect.soft(await opacity()).toEqual(["0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
         for (const row of [selected, other]) {
           await row.hover();
           const star = row.locator("[data-chat-model-favorite]");
           await expect.poll(() => star.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
           await page.mouse.move(0, 0);
-          expect.soft(await opacity()).toEqual(["0", "0"]);
+          expect.soft(await opacity()).toEqual(["0", "0", "0"]);
         }
         await selectedStar.click();
         await expect.poll(() => selectedStar.getAttribute("aria-pressed")).toBe("false");
         await page.mouse.move(0, 0);
-        expect.soft(await opacity()).toEqual(["0", "0"]);
+        expect.soft(await opacity()).toEqual(["0", "0", "0"]);
         // Direct keyboard focus also leaves the star hidden until pointer hover.
         await other.focus();
         await page.keyboard.press("Tab");

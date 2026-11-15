@@ -124,8 +124,11 @@ along its bottom edge or with **Tab** from its main input, without losing text.
 Search finds commands and sessions; Compose prepares a new background session.
 While you are in Search, text of 60 characters or more, a second line, or a file
 moves the palette to Compose; emptying that draft returns it to Search. Choosing
-Search again keeps it for the current draft. Reopening the palette in the same
-app window returns to the mode you last chose, not to an automatic switch.
+Search again keeps it for the current draft. Reopening the palette returns to the
+mode you last chose, not to an automatic switch. That choice is remembered in this
+browser, including after a reload, when browser storage is available.
+**Cmd/Ctrl+Enter** starts a new background session from either mode using the
+current text and attachments; plain **Enter** still selects a search result.
 **Shift+Tab** keeps normal focus navigation to the mode switch and session controls.
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -252,10 +255,9 @@ page in your default browser. Update the browser or operating system if that
 browser also shows the update screen.
 
 In **Settings → Appearance → Browser tab icon**, choose **Agent avatar** to use
-the selected agent’s image. The **Shape** row offers **Square**, **Rounded corners**,
-and **Circle**. Square preserves the full image; rounded and circular icons use a
-centered crop. The choice is saved with your tab-icon preference, and activity
-badges remain visible on every shape.
+the selected agent’s image with a centered circular crop. Activity badges remain
+visible. Earlier saved square or rounded-avatar choices now use the same circle;
+you do not need to reset your preference.
 
 After a Gateway restart, an agent may need a few minutes to prepare its database. The chat view shows "Starting up" and the sidebar stays quiet while preparation is pending. Both reload automatically when the agent is ready; an actual preparation failure still shows its diagnostic and repair instructions.
 

@@ -58,16 +58,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
-  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
-  // Josh approved the #196456 key-warning delta: +2,580 B; inherited debt stays.
-  // Josh approved the #198491 member-welcome cost (2026-11-14), absorbing inherited debt:
-  // measured 1,314,783 B (+872 B over main d1333651) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_314_847,
-  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  // Josh approved the #196456 key-warning delta: +2,522 B; inherited debt stays.
-  // Same #198491 approval: measured 818,288 B (+743 B over main) plus 64 B headroom.
-  newBootJsGzipBytes: 818_352,
+  // Coordinator-accepted shipped feature cost after paydown #199196.
+  // Measured on main 5328b275: exact route totals, with no added headroom.
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  chatBootJsGzipBytes: 1_310_894,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -79,17 +75,14 @@ const controlUiPerformanceBudgets = {
   // Same snapshot-save repair, measured shared chunk plus 64 B.
   // The same shared-chunk trade, measured plus 64 B.
   // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
-  // Same #198491 approval: measured 575,337 B (+699 B over main) plus 64 B headroom.
-  largestJsGzipBytes: 575_401,
+  largestJsGzipBytes: 567_011,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
   // Coordinator-accepted shipped feature cost after paydown #196291 and #196320.
   // Measured on main a58dbe09: exact totals, with no added headroom.
-  // Josh approved the #198491 member-welcome styles (2026-11-14), absorbing inherited debt:
-  // measured 338,505 B gzip (+377 B over main) / 1,748,847 B raw (+771 B), plus 64 B each.
-  totalCssGzipBytes: 338_569,
-  totalCssRawBytes: 1_748_911,
+  totalCssGzipBytes: 326_575,
+  totalCssRawBytes: 1_682_231,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 

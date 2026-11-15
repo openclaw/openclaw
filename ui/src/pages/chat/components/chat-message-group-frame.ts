@@ -172,6 +172,7 @@ export function prepareMessageGroupFrame(
     normalizedRole === "tool" ||
     (normalizedRole === "assistant" &&
       group.visibleContent === "none" &&
+      group.messages.length > 0 &&
       group.messages.every(({ message }) => Boolean(extractThinkingCached(message)))) ||
     (group.messages.length > 0 &&
       group.messages.every(({ message }) => isProviderVoiceTranscript(message))) ||
