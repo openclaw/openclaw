@@ -38,6 +38,7 @@ import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
+import type { PreparedModelRuntimeCatalogAccessParams } from "./prepared-model-runtime.catalog-contract.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
 import {
   registerPreparedPluginRetirement,
@@ -65,6 +66,10 @@ type Lifetime = ReturnType<typeof createLifetime> & {
   instances?: ReadonlyMap<PluginInstanceHandle, PluginRegistry>;
   deferredCapabilities?: ReadonlySet<PluginInstanceHandle>;
 };
+type PreparedCatalogBuildOwner = Pick<
+  PreparedModelRuntimeCatalogAccessParams,
+  "pluginGeneration" | "agentFacts"
+>;
 type PreparedPluginGenerationResources = Pick<
   PreparedModelRuntimePluginGeneration,
   "pluginMetadataSnapshot" | "pluginRegistry" | "inboundPluginRegistry"
@@ -280,25 +285,30 @@ export function retainPreparedPluginGeneration(
  * scope, and retention diagnostics name the agent's catalog discovery rather than that turn.
  */
 export function runWithPreparedPluginGeneration<T>(
-  generation: PreparedModelRuntimePluginGeneration,
-  agentId: string | undefined,
+  { pluginGeneration: generation, agentFacts }: PreparedCatalogBuildOwner,
   build: () => Promise<T>,
 ): Promise<T> {
+  const owner = { agentId: agentFacts.input.agentId, serviceId: "model-catalog-discovery" };
   return pluginInvocationContext.exit(() =>
-    withPluginRetentionOwner({ agentId, serviceId: "model-catalog-discovery" }, async () => {
-      await using _ = { [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation) };
-      return await build();
+    withPluginRetentionOwner(owner, async () => {
+      // Custody keeps the generation's resources; work holds only plugins the build calls, so a
+      // slow lookup in one plugin does not defer reloading the others (#199521).
+      const lifetime = ownPreparedPluginGeneration(generation);
+      const { work, scope } = createGenerationWorkScope(lifetime, false);
+      let release: (() => Promise<void> | undefined) | undefined;
+      try {
+        release = lifetime.retain();
+        return await (scope ? scope.run(build) : build());
+      } finally {
+        scope?.release();
+        await releaseRuntimePluginWork(release, work.release);
+      }
     }),
   );
 }
 
-/** Each admitted lease owns callable authority independently of its parent's lifetime. */
-export function createPreparedModelRuntimeLease(
-  snapshot: PreparedModelRuntimeSnapshot,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  onRelease?: () => void,
-): PreparedModelRuntimeLease {
-  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
+/** Work custody starts when a scoped call first resolves an exact plugin of the generation. */
+function createGenerationWorkScope(lifetime: Lifetime, retainOverlap: boolean) {
   const registryByInstance = lifetime.instances;
   const registry = registryByInstance?.values().next().value;
   const work = createRuntimePluginWork("prepared-generation-lease", (pluginId, yieldHold) =>
@@ -312,12 +322,25 @@ export function createPreparedModelRuntimeLease(
     registryByInstance && registry
       ? new PluginInvocationScope(registry, registryByInstance.keys(), {
           // Overlap promises already-admitted leases access after ordinary admission closes.
-          retained: (instance) => instance.owner?.record.generationOverlap === true,
+          retained: retainOverlap
+            ? (instance) => instance.owner?.record.generationOverlap === true
+            : undefined,
           work,
           parent: pluginInvocationContext.getStore(),
           registryByInstance,
         })
       : undefined;
+  return { work, scope };
+}
+
+/** Each admitted lease owns callable authority independently of its parent's lifetime. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
+  const { work, scope } = createGenerationWorkScope(lifetime, true);
   let releaseGeneration: () => Promise<void>;
   try {
     for (const instance of lifetime.deferredCapabilities ?? []) {

@@ -34,8 +34,9 @@ or arbitrary exception text; a harness must supply its own known provider outcom
 Discovery that has not settled after three minutes is treated as a thrown
 discovery error, so the runtime's providers report `unavailable`. The host stops
 waiting but cannot cancel the call; bound your own native requests well inside
-that budget. While discovery runs it holds the plugin generation, so a saved
-plugin configuration waits for it before applying.
+that budget. Discovery holds only the plugins it calls, so other plugins reload
+while it runs. A call that is still running keeps its own plugin from reloading
+until it settles, even after the host stopped waiting.
 
 An optional synchronous `readModelCatalogReadiness(params)` returns only
 `{ accountType: string }` for a current native account observation

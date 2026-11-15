@@ -1,5 +1,6 @@
 import pLimit from "p-limit";
 import { withRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
+import { pluginInvocationContext } from "../plugins/plugin-instance-scope.js";
 import { createPreparedRuntimeAuthProfileUsageReader } from "./auth-profiles/runtime-snapshots.js";
 import {
   augmentPreparedModelCatalogWithAgentHarness,
@@ -137,7 +138,6 @@ export async function createFullModelCatalogAccess(
   if (retainedInventory) {
     setCatalogAuth(retainedInventory.catalog, currentAuth);
   }
-  const { agentId } = params.agentFacts.input;
   const hasNativeCatalog = params.pluginGeneration.pluginRegistry?.agentHarnesses.some(
     ({ harness }) => typeof harness.loadModelCatalog === "function",
   );
@@ -406,7 +406,7 @@ export async function createFullModelCatalogAccess(
     }
     const previousNative = nativePending;
     let failedProviders: readonly string[] | undefined;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, agentId, async () => {
+    const promise = runWithPreparedPluginGeneration(params, async () => {
       await previousNative?.catch(() => undefined);
       const settledCatalog = readReadyCatalog();
       if (settledCatalog) {
@@ -651,23 +651,27 @@ export async function createFullModelCatalogAccess(
     }
     attempt.setPending(fullRefresh || providers.length ? providers : undefined);
     const providerIds = fullRefresh ? undefined : providers;
-    const promise = runWithPreparedPluginGeneration(params.pluginGeneration, agentId, async () => {
+    // Shared builds run outside the requesting turn's scope. Native discovery takes its own
+    // generation hold; the provider hold must not wait for it (#199521).
+    const acquire = async () => {
       if (fullRefresh || providers.length) {
-        const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
-          (error: unknown) => {
-            attempt.failed(error, providers, "provider");
-            throw error;
-          },
-        );
-        // Provider facts belong to their completed acquisition; optional native failure cannot
-        // discard them. Native discovery starts from this accepted publication.
-        attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
+        await runWithPreparedPluginGeneration(params, async () => {
+          const candidate = await acquireProviderCatalog(providerIds, refreshResponses).catch(
+            (error: unknown) => {
+              attempt.failed(error, providers, "provider");
+              throw error;
+            },
+          );
+          // Provider facts belong to their completed acquisition; optional native failure cannot
+          // discard them. Native discovery starts from this accepted publication.
+          attempt.published(providerIds, "provider", () => publishCatalog(candidate, "provider"));
+        });
       }
-      if (includeNative) {
-        return await acquireNativeCatalog(nativeScope, undefined, options.refresh);
-      }
-      return published.catalog ?? staticCatalog;
-    }).finally(() => {
+      return includeNative
+        ? await acquireNativeCatalog(nativeScope, undefined, options.refresh)
+        : (published.catalog ?? staticCatalog);
+    };
+    const promise = pluginInvocationContext.exit(acquire).finally(() => {
       pending = undefined;
       retryFailedDiscovery();
     });

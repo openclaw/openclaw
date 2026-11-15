@@ -16,9 +16,13 @@ import {
   loadPreparedGatewayModelCatalogSnapshot,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "../gateway/server-model-catalog.js";
-import { createOwnedTestInstance } from "../plugins/plugin-instance.test-support.js";
+import {
+  createOwnedTestInstance,
+  createTestInstance,
+} from "../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentHarness } from "./harness/types.js";
 import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
@@ -439,21 +443,25 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
   expectModels(respond, [{ provider: second.provider, id: second.id }]);
 });
 
-it("ends hung native discovery at its deadline and names it in sibling plugin holds", async () => {
+it("lets an unrelated plugin reload while native discovery is hung (#199521)", async () => {
   const config = nativeConfig("demo/native-model", {
     "demo/native-model": { agentRuntime: { id: "native-test" } },
   });
   mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
-  // A provider plugin that only shares the generation with the hung harness (#199521).
-  const sibling = createOwnedTestInstance("sibling-provider");
-  const registry = sibling.owner!.registry!;
+  const registry = createEmptyPluginRegistry();
+  const [harnessPlugin, sibling] = ["native-test", "sibling-provider"].map((id) => {
+    const record = createPluginRecord({ id, status: "loaded" });
+    registry.plugins.push(record);
+    return createTestInstance(id, { record, registry });
+  });
   const started = createDeferredCore();
+  const hung = createDeferredCore<never[]>();
   registry.agentHarnesses.push(
     ...harnessRegistry("native-test", {
-      loadModelCatalog: () => {
+      loadModelCatalog: harnessPlugin!.wrap(() => {
         started.resolve();
-        return new Promise<never>(() => {});
-      },
+        return hung.promise;
+      }),
     }).agentHarnesses,
   );
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
@@ -463,19 +471,26 @@ it("ends hung native discovery at its deadline and names it in sibling plugin ho
   try {
     const served = owner.loadNativeModelCatalog!();
     await started.promise;
-    const holds = sibling
-      .retentionSnapshot()
-      .references.filter(({ reason }) => reason === "prepared-generation-lease");
-    expect(holds.length).toBeGreaterThan(0);
-    for (const hold of holds) {
-      expect(hold.owner).toEqual({ agentId: "pro", serviceId: "model-catalog-discovery" });
-    }
+    expect(harnessPlugin!.retentionSnapshot().references).toContainEqual(
+      expect.objectContaining({
+        kind: "work",
+        reason: "prepared-generation-lease",
+        owner: { agentId: "pro", serviceId: "model-catalog-discovery" },
+      }),
+    );
+    // Only the plugin the lookup called is held; a reload of its sibling can drain now.
+    expect(sibling!.retainedWorkCount).toBe(0);
+    const releaseReservation = sibling!.reserveReplacement();
+    await sibling!.waitForIdle(new AbortController().signal);
+    releaseReservation();
     await vi.advanceTimersByTimeAsync(5_000);
     expect((await served).entries).toContainEqual(expect.objectContaining(saved));
-    expect(sibling.retainedWorkCount).toBeGreaterThan(0);
     await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
-    expect(sibling.retainedWorkCount).toBe(0);
+    // The deadline ends discovery's hold; the hung call itself keeps its own plugin until it settles.
+    expect(harnessPlugin!.retainedWorkCount).toBe(0);
+    expect(harnessPlugin!.ordinaryCallCount).toBe(1);
   } finally {
+    hung.resolve([]);
     vi.useRealTimers();
   }
 });
