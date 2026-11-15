@@ -5,7 +5,18 @@ import {
   validateAgentWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { abortChatRunById, type ChatAbortControllerEntry } from "../chat-abort.js";
+import { removedPluginCapabilityDescriptor } from "../../plugins/removed-capability-error.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  isRpcSourceExecuting,
+  isRpcSourceQueued,
+  isRpcSourceRegistered,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
+import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
+import { abortChatRunById } from "../chat-abort.js";
 import type { GatewayMethodRegistry } from "../methods/registry.js";
 import {
   type GatewayMethodDispatchResponse,
@@ -14,27 +25,30 @@ import {
   unwrapGatewayMethodDispatchResponse,
 } from "../server-in-process-dispatch.js";
 import {
-  authorizeGatewayRequestPreDispatch,
   createRequestGatewayMethodRegistry,
   runWithGatewayRequestEnvelope,
 } from "../server-methods.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
+import { authorizeGatewayRequestPreDispatch } from "../server-methods/request-authorization.js";
 import type { GatewayRequestOptions } from "../server-methods/types.js";
 import { validateGatewayMethodParams } from "../server-methods/validation.js";
-import { prepareAgentRequestPreflight } from "./agent-request-preflight.js";
-import { createAgentTurnService } from "./agent-turn-service.js";
+import { runWithGatewayObservationScope } from "../server-request-lifecycle.js";
 import type {
   InternalAgentTurnDispatchOptions,
   InternalAgentTurnFacade,
   InternalAgentTurnPrincipalOptions,
 } from "./internal-facade.types.js";
-import { captureAgentTurnPrincipal, resolveAgentTurnRunObserver } from "./principal.js";
 import type { AgentTurnIo } from "./types.js";
 
 type InternalAgentTurnFacadeOptions = InternalAgentTurnPrincipalOptions & {
   getContext: () => GatewayRequestOptions["context"];
   getMethodRegistry?: () => GatewayMethodRegistry;
 };
+
+const REMOVED_START_OWNER_EXPIRY = removedPluginCapabilityDescriptor(
+  "startOwner.observe().expiresAtMs",
+  "Use startOwner.observe().startDeadlineAtMs for the admission-to-execution-start deadline; it does not limit an already executing turn.",
+);
 
 function throwEnvelopeRejection(method: string, error: ErrorShape): never {
   return unwrapGatewayMethodDispatchResponse(method, {
@@ -71,6 +85,7 @@ export function createInternalAgentTurnFacade(
       client: options.client,
       context,
     });
+    let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
       const authorization = await authorizeGatewayRequestPreDispatch({
@@ -79,7 +94,13 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
+        controllerInput: dispatchOptions.controllerInput,
+        assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
+      // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
+      authorization.sessionMutationAuthorization?.release?.();
+      authorization.sessionAccessAuthority?.release();
+      throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
       entry?.assertOpen();
       if (authorization.error) {
         return { ok: false, error: authorization.error };
@@ -92,45 +113,85 @@ export function createInternalAgentTurnFacade(
       dispatchOptions.assertAdmissionCurrent?.();
       let acceptance: GatewayMethodDispatchResponse | undefined;
       let final: GatewayMethodDispatchResponse | undefined;
-      let resolveAcceptance: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-      let rejectAcceptance: ((error: Error) => void) | undefined;
-      let resolveFinal: ((response: GatewayMethodDispatchResponse) => void) | undefined;
-      let rejectFinal: ((error: Error) => void) | undefined;
+      const acceptanceResult = createDeferredCore<GatewayMethodDispatchResponse>();
+      let finalResult: Deferred<GatewayMethodDispatchResponse> | undefined;
       let postAcceptanceError: Error | undefined;
+      let privateSourceSettlement: Promise<void> | undefined;
       // Acceptance publishes the abort owner before this callback runs. Retain that exact
       // entry so a late deadline cannot cancel a same-run-id successor.
-      let acceptedAbortOwner: { entry: ChatAbortControllerEntry; runId: string } | undefined;
+      let acceptedAbortOwner: { entry: RpcSourceRef; runId: string } | undefined;
+      let emittedAbortOwner: { entry: RpcSourceRef; runId: string } | undefined;
       let startOwnerPublished = false;
-      const publishStartOwner = (runId: string, owner: ChatAbortControllerEntry) => {
+      let sourceIdentityLost = false;
+      const isSourceIdentityCurrent = (owner: RpcSourceRef) => {
+        try {
+          options.assertContextCurrent?.();
+          const identity = getRpcSourceIdentity(owner);
+          // Losing the captured source is permanent, independently of its own abort.
+          sourceIdentityLost ||=
+            options.getContext() !== context ||
+            !isRpcSourceRegistered(owner) ||
+            owner.input.protocolRunId !== expectedRunId ||
+            getAgentEventLifecycleGeneration() !== lifecycleGeneration ||
+            getRpcSourceLifecycleGeneration(owner) !== lifecycleGeneration ||
+            (expectedAgentId !== undefined && identity.agentId !== expectedAgentId) ||
+            (!isRpcSourceExecuting(owner) && identity.sessionId !== expectedSessionId) ||
+            identity.sessionKey !== expectedSessionKey;
+        } catch {
+          sourceIdentityLost = true;
+        }
+        return !sourceIdentityLost;
+      };
+      const publishStartOwner = (runId: string, owner: RpcSourceRef) => {
+        const identity = getRpcSourceIdentity(owner);
         if (
           startOwnerPublished ||
           !dispatchOptions.onStartOwner ||
           runId !== expectedRunId ||
-          (expectedAgentId !== undefined && owner.agentId !== expectedAgentId) ||
-          owner.sessionKey !== expectedSessionKey ||
-          owner.sessionId !== expectedSessionId ||
-          owner.lifecycleGeneration !== lifecycleGeneration ||
-          context.chatAbortControllers.get(runId) !== owner
+          (expectedAgentId !== undefined && identity.agentId !== expectedAgentId) ||
+          identity.sessionKey !== expectedSessionKey ||
+          identity.sessionId !== expectedSessionId ||
+          getRpcSourceLifecycleGeneration(owner) !== lifecycleGeneration ||
+          !isRpcSourceRegistered(owner)
         ) {
           return;
         }
         startOwnerPublished = true;
         const observe = () => {
-          try {
-            options.assertContextCurrent?.();
-          } catch {
+          if (!isSourceIdentityCurrent(owner)) {
             return undefined;
           }
-          return context.chatAbortControllers.get(runId) === owner &&
-            getAgentEventLifecycleGeneration() === lifecycleGeneration &&
-            owner.lifecycleGeneration === lifecycleGeneration &&
-            (expectedAgentId === undefined || owner.agentId === expectedAgentId) &&
-            owner.sessionId === expectedSessionId &&
-            owner.sessionKey === expectedSessionKey &&
-            !owner.controller.signal.aborted &&
-            owner.registrationCleanupRequested !== true
-            ? { executionStarted: owner.executionStarted === true, expiresAtMs: owner.expiresAtMs }
+          const executionStarted = isRpcSourceExecuting(owner);
+          if (owner.input.abortSignal.aborted || owner.input.retirementRequested === true) {
+            return undefined;
+          }
+          // The start watch is complete; attempt policy may itself read this owner.
+          const watchdog = executionStarted ? undefined : owner.input.claim?.operation?.watchdog;
+          const snapshot = watchdog?.snapshot();
+          const decision = snapshot?.current ? watchdog?.decide() : undefined;
+          const deadlineAtMs = decision
+            ? decision.action === "observe" || decision.action === "warn"
+              ? Math.min(
+                  snapshot?.executionDeadlineAtMs ?? Infinity,
+                  decision.deadlineAtMs ?? Infinity,
+                )
+              : Date.now()
             : undefined;
+          return Object.defineProperty(
+            {
+              executionStarted,
+              startDeadlineAtMs:
+                deadlineAtMs !== undefined
+                  ? Number.isFinite(deadlineAtMs)
+                    ? deadlineAtMs
+                    : null
+                  : isRpcSourceQueued(owner) && owner.input.phase === "waiting"
+                    ? null
+                    : undefined,
+            },
+            "expiresAtMs",
+            REMOVED_START_OWNER_EXPIRY,
+          );
         };
         dispatchOptions.onStartOwner({
           observe,
@@ -139,7 +200,8 @@ export function createInternalAgentTurnFacade(
             observe()?.executionStarted === false &&
             abortChatRunById(context, {
               runId,
-              sessionKey: owner.sessionKey,
+              expectedEntry: owner,
+              sessionKey: getRpcSourceIdentity(owner).sessionKey,
               stopReason: "timeout",
             }).aborted,
         });
@@ -148,29 +210,24 @@ export function createInternalAgentTurnFacade(
       const cancelAcceptedRun = (reason: "rpc" | "timeout") => {
         pendingCancelReason ??= reason;
         const owner = acceptedAbortOwner;
-        if (!owner || context.chatAbortControllers.get(owner.runId) !== owner.entry) {
+        if (!owner || !isRpcSourceRegistered(owner.entry)) {
           return;
         }
         abortChatRunById(context, {
           runId: owner.runId,
-          sessionKey: owner.entry.sessionKey,
+          sessionKey: getRpcSourceIdentity(owner.entry).sessionKey,
+          expectedEntry: owner.entry,
           stopReason: pendingCancelReason,
         });
       };
-      const acceptancePromise = new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-        resolveAcceptance = resolve;
-        rejectAcceptance = reject;
-      });
-      const createFinalPromise = () =>
-        new Promise<GatewayMethodDispatchResponse>((resolve, reject) => {
-          resolveFinal = resolve;
-          rejectFinal = reject;
-          if (final) {
-            resolve(final);
-          }
-        });
       const io: AgentTurnIo = {
-        emitStartOwner: publishStartOwner,
+        emitStartOwner: (runId, owner) => {
+          emittedAbortOwner = { runId, entry: owner };
+          if (dispatchOptions.privateCompletion) {
+            privateSourceSettlement = owner.input.settlement.promise;
+          }
+          publishStartOwner(runId, owner);
+        },
         emitAcceptance: (frame, meta) => {
           if (!acceptance) {
             acceptance = {
@@ -179,12 +236,17 @@ export function createInternalAgentTurnFacade(
               error: frame[2],
               ...(meta ? { meta } : {}),
             };
-            resolveAcceptance?.(acceptance);
+            acceptanceResult.resolve(acceptance);
             const acceptedRunId =
-              typeof meta?.runId === "string" && meta.runId.trim() ? meta.runId.trim() : undefined;
-            const acceptedEntry = acceptedRunId
-              ? context.chatAbortControllers.get(acceptedRunId)
-              : undefined;
+              typeof meta?.runId === "string" && meta.runId.length ? meta.runId : undefined;
+            const acceptedEntry =
+              emittedAbortOwner &&
+              emittedAbortOwner.runId === acceptedRunId &&
+              isRpcSourceRegistered(emittedAbortOwner.entry)
+                ? emittedAbortOwner.entry
+                : acceptedRunId
+                  ? getRpcSourceForGateway(acceptedRunId, context.resolveGatewayContext)
+                  : undefined;
             if (acceptedRunId && acceptedEntry) {
               acceptedAbortOwner = { entry: acceptedEntry, runId: acceptedRunId };
               if (pendingCancelReason) {
@@ -194,11 +256,7 @@ export function createInternalAgentTurnFacade(
                 publishStartOwner(acceptedRunId, acceptedEntry);
               }
             }
-            if (
-              meta?.cached === true &&
-              acceptedRunId &&
-              context.chatAbortControllers.get(acceptedRunId)?.executionStarted === true
-            ) {
+            if (meta?.cached === true && acceptedEntry && isRpcSourceExecuting(acceptedEntry)) {
               dispatchOptions.onExecutionStarted?.();
             }
           }
@@ -211,58 +269,99 @@ export function createInternalAgentTurnFacade(
               error: frame[2],
               ...(meta ? { meta } : {}),
             };
-            resolveFinal?.(final);
+            finalResult?.resolve(final);
           }
         },
         ...(dispatchOptions.onExecutionStarted
           ? { emitExecutionStarted: dispatchOptions.onExecutionStarted }
           : {}),
       };
-      const operation = context.trackExecution(() =>
-        runWithGatewayRequestEnvelope(
-          method,
-          options.client,
-          async () => {
-            entry?.assertOpen();
-            dispatchOptions.assertAdmissionCurrent?.();
-            entry?.release();
-            const principal = captureAgentTurnPrincipal(options.client);
-            const preflight = prepareAgentRequestPreflight({
-              request,
+      const operation = context.trackExecution(async () => {
+        preparationOwnedByExecution = true;
+        let releaseExecutionSource: (() => void) | undefined;
+        try {
+          releaseExecutionSource = dispatchOptions.executionSource?.retain?.();
+          return await runWithGatewayRequestEnvelope(
+            method,
+            options.client,
+            async () => {
+              const [
+                { prepareAgentRequestPreflight },
+                { createAgentTurnService },
+                { captureAgentTurnPrincipal, resolveAgentTurnRunObserver },
+              ] = await Promise.all([
+                import("./agent-request-preflight.js"),
+                import("./agent-turn-service.js"),
+                import("./principal.js"),
+              ]);
+              if (dispatchOptions.prepareDispatchCurrent) {
+                await dispatchOptions.prepareDispatchCurrent();
+              }
+              throwIfGatewayDispatchAborted(method, dispatchOptions.signal);
+              entry?.assertOpen();
+              options.assertContextCurrent?.();
+              dispatchOptions.assertAdmissionCurrent?.();
+              entry?.release();
+              const principal = captureAgentTurnPrincipal(options.client);
+              const preflight = await prepareAgentRequestPreflight({
+                request,
+                context,
+                client: principal,
+                io,
+              });
+              if (!preflight) {
+                return;
+              }
+              const onRunObserved = resolveAgentTurnRunObserver({
+                principal,
+                registerToolEventRecipient: context.registerToolEventRecipient,
+              });
+              await createAgentTurnService(
+                { context, isWebchatConnect },
+                options.assertContextCurrent,
+              ).startTurn({
+                controllerInput: dispatchOptions.controllerInput,
+                preflight,
+                principal,
+                io,
+                onRunObserved,
+                assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
+                assertCancellationCurrent: dispatchOptions.assertCancellationCurrent
+                  ? () => {
+                      const owner = emittedAbortOwner?.entry;
+                      if (
+                        !owner ||
+                        emittedAbortOwner?.runId !== expectedRunId ||
+                        !owner.input.abortSignal.aborted ||
+                        !isSourceIdentityCurrent(owner)
+                      ) {
+                        throw new Error("Canceled agent request no longer owns its RPC source");
+                      }
+                      dispatchOptions.assertCancellationCurrent?.();
+                    }
+                  : undefined,
+                executionSource: dispatchOptions.executionSource,
+                privateCompletion: dispatchOptions.privateCompletion,
+                replyExpectation: dispatchOptions.replyExpectation,
+                settleWakeReplay: dispatchOptions.settleWakeReplay,
+              });
+            },
+            {
               context,
-              client: principal,
-              io,
-            });
-            if (!preflight) {
-              return;
-            }
-            const onRunObserved = resolveAgentTurnRunObserver({
-              principal,
-              registerToolEventRecipient: context.registerToolEventRecipient,
-            });
-            await createAgentTurnService(
-              { context, isWebchatConnect },
-              options.assertContextCurrent,
-            ).startTurn({
-              preflight,
-              principal,
-              io,
-              onRunObserved,
-              assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
-            });
-          },
-          {
-            context,
-            isWebchatConnect,
-            methodRegistry,
-            reject: (error) => io.emitAcceptance([false, undefined, error]),
-          },
-        ),
-      );
+              isWebchatConnect,
+              methodRegistry,
+              reject: (error) => io.emitAcceptance([false, undefined, error]),
+            },
+          );
+        } finally {
+          releaseExecutionSource?.();
+          entry?.release();
+        }
+      });
       void operation.then(
         () => {
           if (!acceptance) {
-            rejectAcceptance?.(
+            acceptanceResult.reject(
               new Error(`Gateway method "${method}" completed without a response.`),
             );
           }
@@ -271,14 +370,14 @@ export function createInternalAgentTurnFacade(
           const dispatchError = error instanceof Error ? error : new Error(String(error));
           if (acceptance) {
             postAcceptanceError = dispatchError;
-            rejectFinal?.(dispatchError);
+            finalResult?.reject(dispatchError);
             return;
           }
-          rejectAcceptance?.(dispatchError);
+          acceptanceResult.reject(dispatchError);
         },
       );
       const response = (async () => {
-        const first = acceptance ?? (await acceptancePromise);
+        const first = acceptance ?? (await acceptanceResult.promise);
         if (
           dispatchOptions.expectFinal !== true ||
           (first.payload as { status?: unknown } | undefined)?.status !== "accepted"
@@ -289,11 +388,19 @@ export function createInternalAgentTurnFacade(
         if (postAcceptanceError) {
           throw postAcceptanceError;
         }
-        return final ?? (await createFinalPromise());
+        return final ?? (await (finalResult = createDeferredCore()).promise);
       })();
       return await waitForGatewayDispatch(
         method,
-        response,
+        dispatchOptions.privateCompletion
+          ? response.then(async (result) => {
+              // Replay alone does not release source custody. Join this exact
+              // dispatch, including refusal cleanup, before permitting retry.
+              await privateSourceSettlement;
+              options.assertContextCurrent?.();
+              return result;
+            })
+          : response,
         dispatchOptions.timeoutMs,
         dispatchOptions.signal,
         dispatchOptions.cancelOnDeadline || dispatchOptions.onSignalAbort
@@ -307,7 +414,9 @@ export function createInternalAgentTurnFacade(
         dispatchOptions.cancelOnDeadline ? () => cancelAcceptedRun("timeout") : undefined,
       );
     } finally {
-      entry?.release();
+      if (!preparationOwnedByExecution) {
+        entry?.release();
+      }
     }
   };
 
@@ -328,6 +437,7 @@ export function createInternalAgentTurnFacade(
     timeoutMs?: number,
     signal?: AbortSignal,
     onSignalAbort?: () => Promise<void> | void,
+    prepareDispatchCurrent?: () => Promise<void>,
   ): Promise<T> => {
     const method = "agent.wait";
     throwIfGatewayDispatchAborted(method, signal);
@@ -338,44 +448,81 @@ export function createInternalAgentTurnFacade(
       client: options.client,
       context,
     });
+    let preparationOwnedByExecution = false;
     try {
       const methodRegistry = getMethodRegistry();
-      const authorization = await authorizeGatewayRequestPreDispatch({
-        method,
-        requestParams: params,
-        client: options.client,
-        context,
-        methodRegistry,
-      });
-      entry?.assertOpen();
-      if (authorization.error) {
-        return throwEnvelopeRejection(method, authorization.error);
-      }
-      const validationError = validateGatewayMethodParams(params, validateAgentWaitParams, method);
-      if (validationError) {
-        return throwEnvelopeRejection(method, validationError);
-      }
-      options.assertContextCurrent?.();
-      const result = context.trackExecution(() =>
-        runWithGatewayRequestEnvelope(
-          method,
-          options.client,
-          () => {
+      const result = context.trackExecution(async () => {
+        preparationOwnedByExecution = true;
+        try {
+          const observe = async (retainRoot?: () => void) => {
+            const authorization = await authorizeGatewayRequestPreDispatch({
+              method,
+              requestParams: params,
+              client: options.client,
+              context,
+              methodRegistry,
+            });
+            authorization.sessionMutationAuthorization?.release?.();
+            authorization.sessionAccessAuthority?.release();
+            throwIfGatewayDispatchAborted(method, signal);
             entry?.assertOpen();
-            entry?.release();
-            return createAgentTurnService({ context, isWebchatConnect }).waitForTurn(params);
-          },
-          {
-            context,
-            isWebchatConnect,
-            methodRegistry,
-            reject: (error) => throwEnvelopeRejection(method, error),
-          },
-        ),
-      );
+            if (authorization.error) {
+              return throwEnvelopeRejection(method, authorization.error);
+            }
+            const validationError = validateGatewayMethodParams(
+              params,
+              validateAgentWaitParams,
+              method,
+            );
+            if (validationError) {
+              return throwEnvelopeRejection(method, validationError);
+            }
+            options.assertContextCurrent?.();
+            return await runWithGatewayRequestEnvelope(
+              method,
+              options.client,
+              async () => {
+                retainRoot?.();
+                const { createAgentTurnService } = await import("./agent-turn-service.js");
+                if (prepareDispatchCurrent) {
+                  await prepareDispatchCurrent();
+                }
+                throwIfGatewayDispatchAborted(method, signal);
+                entry?.assertOpen();
+                options.assertContextCurrent?.();
+                entry?.release();
+                const observation = await createAgentTurnService({
+                  context,
+                  isWebchatConnect,
+                }).waitForTurn(params);
+                return observation.result;
+              },
+              {
+                context,
+                isWebchatConnect,
+                methodRegistry,
+                reject: (error) => throwEnvelopeRejection(method, error),
+                signal,
+              },
+            );
+          };
+          return await (methodRegistry.isObservation(method)
+            ? runWithGatewayObservationScope(
+                method,
+                observe,
+                [signal, options.client?.connectionSignal],
+                (error) => throwEnvelopeRejection(method, error),
+              )
+            : observe());
+        } finally {
+          entry?.release();
+        }
+      });
       return (await waitForGatewayDispatch(method, result, timeoutMs, signal, onSignalAbort)) as T;
     } finally {
-      entry?.release();
+      if (!preparationOwnedByExecution) {
+        entry?.release();
+      }
     }
   };
 

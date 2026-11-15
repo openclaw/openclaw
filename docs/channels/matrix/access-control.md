@@ -48,6 +48,10 @@ Matrix supports the shared `contextVisibility` control for supplemental room con
 
 This affects supplemental context visibility only, not whether the inbound message itself can trigger a reply. Trigger authorization still comes from `groupPolicy`, `groups`, `groupAllowFrom`, and DM policy settings.
 
+## Tool context reads
+
+The official Matrix plugin supports message-tool reads of messages, reactions, pins, custom emotes, member profiles, and room details when bundled or installed from npm or ClawHub. These reads use the selected account's room and DM scope checks and its `actions` settings. Member profiles require membership in the requested room; custom emotes include that room's packs and the account's personal pack.
+
 ## DM and room policy
 
 ```json5
@@ -101,3 +105,5 @@ See [Pairing](/channels/pairing) for the shared DM pairing flow and storage layo
 Slash commands (`/new`, `/reset`, `/model`, `/agents`, `/session`, `/acp`, `/approve`, etc.) work directly in DMs. In rooms, OpenClaw also recognizes commands prefixed with the bot's own Matrix mention, so `@bot:server /new` triggers the command path without a custom mention regex - this keeps the bot responsive to the room-style `@mention /command` posts that Element and similar clients emit when a user tab-completes the bot before typing the command.
 
 Authorization rules still apply: command senders must satisfy the same DM or room allowlist/owner policies as plain messages.
+
+Command authorization does not make ordinary messages commands. Plain room messages still follow the configured [visible-reply and silence policies](/gateway/config-channels/mention-gating-and-history).

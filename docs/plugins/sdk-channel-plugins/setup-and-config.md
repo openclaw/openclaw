@@ -25,13 +25,13 @@ plugins](/plugins/sdk-channel-plugins) guide.
   `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`,
   `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`,
   `setSetupChannelEnabled`, and `splitSetupEntries`.
-- Use the broader `openclaw/plugin-sdk/setup` seam only when you also need
+- Use the broader `openclaw/plugin-sdk/setup` interface only when you also need
   the heavier shared setup/config helpers such as
   `moveSingleAccountChannelSectionToDefaultAccount(...)`.
 
 If your channel only wants to advertise "install this plugin first" in setup
 surfaces, prefer `createOptionalChannelSetupSurface(...)`. The generated
-adapter/wizard fail closed on config writes and finalization, and they reuse
+adapter/wizard reject config writes and finalization, and they reuse
 the same install-required message across validation, finalize, and docs-link
 copy.
 
@@ -102,14 +102,14 @@ from the runtime plugin's manifest: another manifest may own the channel policy.
 `resolveAccountKey(accounts, accountId, normalizeAccountId?, policy?, options?)` returns a
 stored key or `undefined`:
 
-| Argument               | Meaning                                                                                                                                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `accounts`             | Authored account map, or `undefined`.                                                                                                                                                                                                |
-| `accountId`            | Requested account id. With a policy, routing normalization runs first and the exact canonical key wins. Without a policy, the exact requested key wins.                                                                              |
-| `normalizeAccountId`   | Optional function applied to the requested id and stored keys when no policy is supplied. Omit both for case-insensitive lookup. A policy selects routing normalization.                                                             |
-| `policy`               | Optional `ChannelAccountKeyPolicy` with `canonicalAliasesRequireOwnField`, the account field that must contain its own nonempty string before a canonical-only alias is eligible. Existing case-insensitive matches remain eligible. |
-| `options.channelId`    | Optional channel whose selected manifest supplies the policy. An explicit `policy` takes precedence. Without a channel or selected policy, the normalizer and case-insensitive behavior stay unchanged.                              |
-| `options.allowMissing` | Return the creation target when no stored key is eligible. Reserved object keys throw before a writer can create an unreadable account.                                                                                              |
+| Argument               | Meaning                                                                                                                                                                                                                                                    |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `accounts`             | Authored account map, or `undefined`.                                                                                                                                                                                                                      |
+| `accountId`            | Requested account id. With a policy, routing normalization runs first and the exact normalized key wins. Without a policy, the exact requested key wins.                                                                                                   |
+| `normalizeAccountId`   | Optional function applied to the requested id and stored keys when no policy is supplied. Omit both for case-insensitive lookup. A policy selects routing normalization.                                                                                   |
+| `policy`               | Optional `ChannelAccountKeyPolicy` with `canonicalAliasesRequireOwnField`, the account field that must contain its own nonempty string before an alias recognized only after normalization is eligible. Existing case-insensitive matches remain eligible. |
+| `options.channelId`    | Optional channel whose selected manifest supplies the policy. An explicit `policy` takes precedence. Without a channel or selected policy, the normalizer and case-insensitive behavior stay unchanged.                                                    |
+| `options.allowMissing` | Return the creation target when no stored key is eligible. Reserved object keys throw before a writer can create an unreadable account.                                                                                                                    |
 
 The shipped v2026.9.4 SDK does not export `resolveAccountKey`; use these options
 only with a host SDK that supplies this selector and channel context. This does

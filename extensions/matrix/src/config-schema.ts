@@ -1,7 +1,9 @@
-// Matrix helper module supports config schema behavior.
 import {
   AllowFromListSchema,
-  BlockStreamingCoalesceSchema,
+  ChannelBotLoopProtectionSchema,
+  ChannelDeliveryStreamingConfigSchema,
+  ChannelStreamingPreviewSchema,
+  ChannelStreamingProgressSchema,
   buildChannelConfigSchema,
   buildGroupEntrySchema,
   buildNestedDmConfigSchema,
@@ -10,9 +12,67 @@ import {
   MarkdownConfigSchema,
   MentionPatternsPolicySchema,
 } from "openclaw/plugin-sdk/channel-config-schema";
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
+import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { z } from "zod";
-import { matrixChannelConfigUiHints } from "./config-ui-hints.js";
+
+const matrixChannelConfigUiHints = {
+  requireMentionInBotThreads: {
+    label: "Mention in Bot Threads",
+    help: "Require a mention in threads rooted in this bot's own Matrix events. Set false to accept unmentioned follow-ups; omit to preserve the room's existing mention behavior.",
+  },
+  "rooms.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
+  },
+  "groups.*.requireMentionInBotThreads": {
+    label: "Mention in Bot Threads",
+    help: "Override the account's bot-created thread mention policy for this Matrix room. Exact room entries replace wildcard room settings.",
+  },
+  joinIntro: {
+    label: "Matrix Group Join Introduction",
+    help: "Post one brief introduction when the bot joins an allowed group room (default: true). Account settings override the channel-wide setting.",
+  },
+  ...createChannelConfigUiHints({
+    channelLabel: "Matrix",
+    mentionPatterns: {
+      targetDescription: "Matrix room IDs",
+      policyNote:
+        "Native Matrix mention evidence still triggers even when regex patterns are denied.",
+      denyNote: "Native mention evidence still triggers.",
+    },
+  }),
+  allowBots: {
+    label: "Matrix Allow Bot Messages",
+    help: 'Allow messages from other configured Matrix bot accounts to trigger replies (default: false). Set "mentions" to require a visible room mention.',
+  },
+  botLoopProtection: {
+    label: "Matrix Bot Loop Protection",
+    help: "Sliding-window guard for accepted Matrix configured-bot loops. Default is enabled whenever allowBots lets configured bot messages reach dispatch.",
+  },
+  "botLoopProtection.enabled": {
+    label: "Matrix Bot Loop Protection Enabled",
+    help: 'Enable the bot-pair loop guard. Defaults to true when allowBots is true or "mentions", and false when configured bot messages are ignored.',
+  },
+  "botLoopProtection.maxEventsPerWindow": {
+    label: "Matrix Bot Loop Events per Window",
+    help: "Maximum accepted bot-pair messages within the sliding window before suppression starts. Default: 20.",
+  },
+  "botLoopProtection.windowSeconds": {
+    label: "Matrix Bot Loop Window Seconds",
+    help: "Sliding window length for counting bot-pair messages. Default: 60.",
+  },
+  "botLoopProtection.cooldownSeconds": {
+    label: "Matrix Bot Loop Cooldown Seconds",
+    help: "How long to suppress the bot pair after it exceeds the budget. Default: 60.",
+  },
+  dangerouslyAllowNameMatching: {
+    label: "Matrix Display Name Matching",
+    help: "Compatibility opt-in for resolving Matrix display names and joined room names in allowlists. Prefer full @user:server IDs and room IDs or aliases because names are mutable.",
+  },
+  ...createChannelConfigUiHints({ channelLabel: "Matrix", progress: {} }),
+} satisfies Record<string, ChannelConfigUiHint>;
 
 const matrixActionSchema = z
   .object({
@@ -46,20 +106,11 @@ const matrixExecApprovalsSchema = z
   })
   .optional();
 
-const botLoopProtectionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    maxEventsPerWindow: z.number().int().positive().optional(),
-    windowSeconds: z.number().int().positive().optional(),
-    cooldownSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const matrixRoomSchema = buildGroupEntrySchema({
+  requireMentionInBotThreads: z.boolean().optional(),
   account: z.string().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   autoReply: z.boolean().optional(),
   users: AllowFromListSchema,
 })
@@ -77,31 +128,9 @@ const matrixNetworkSchema = z
 export const matrixStreamingSchema = z
   .object({
     mode: z.enum(["partial", "quiet", "progress", "off"]).optional(),
-    chunkMode: z.enum(["length", "newline"]).optional(),
-    block: z
-      .object({
-        enabled: z.boolean().optional(),
-        coalesce: BlockStreamingCoalesceSchema.optional(),
-      })
-      .strict()
-      .optional(),
-    progress: z
-      .object({
-        label: z.union([z.string(), z.literal(false)]).optional(),
-        labels: z.array(z.string()).optional(),
-        maxLines: z.number().int().positive().optional(),
-        maxLineChars: z.number().int().positive().optional(),
-        toolProgress: z.boolean().optional(),
-        commandText: z.enum(["raw", "status"]).optional(),
-      })
-      .strict()
-      .optional(),
-    preview: z
-      .object({
-        toolProgress: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
+    ...ChannelDeliveryStreamingConfigSchema.shape,
+    progress: ChannelStreamingProgressSchema.omit({ commentary: true, narration: true }).optional(),
+    preview: ChannelStreamingPreviewSchema.pick({ toolProgress: true }).optional(),
   })
   .strict();
 
@@ -133,13 +162,18 @@ export const MatrixConfigSchema = z.object({
   configWrites: z.boolean().optional(),
   joinIntro: z.boolean().optional(),
   defaultAccount: z.string().optional(),
-  // Accounts stay schema-open, but retired scalar streaming must fail loudly
-  // instead of silently resolving to "off"; doctor migrates the old spelling.
+  // Accounts stay schema-open for most fields, but credential leaves must use
+  // SecretInput so Control UI redaction keeps source/provider and only masks id.
   accounts: z
     .record(
       z.string(),
       z
-        .object({ joinIntro: z.boolean().optional() })
+        .object({
+          joinIntro: z.boolean().optional(),
+          requireMentionInBotThreads: z.boolean().optional(),
+          accessToken: buildSecretInputSchema().optional(),
+          password: buildSecretInputSchema().optional(),
+        })
         .passthrough()
         .refine(hasCanonicalMatrixAccountStreaming, {
           message:
@@ -162,8 +196,9 @@ export const MatrixConfigSchema = z.object({
   allowlistOnly: z.boolean().optional(),
   dangerouslyAllowNameMatching: z.boolean().optional(),
   allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
-  botLoopProtection: botLoopProtectionSchema,
+  botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
   groupPolicy: GroupPolicySchema.optional(),
+  requireMentionInBotThreads: z.boolean().optional(),
   mentionPatterns: MentionPatternsPolicySchema.optional(),
   contextVisibility: ContextVisibilityModeSchema.optional(),
   streaming: matrixStreamingSchema.optional(),

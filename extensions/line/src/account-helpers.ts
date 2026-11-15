@@ -1,10 +1,12 @@
-// Line helper module supports account helpers behavior.
-type LineCredentialAccount = {
-  channelAccessToken?: string;
-  channelSecret?: string;
-  tokenStatus?: "available" | "configured_unavailable" | "missing";
-  signingSecretStatus?: "available" | "configured_unavailable" | "missing";
-};
+import { normalizeLineAllowEntry } from "./bot-access.js";
+import type { ResolvedLineAccount } from "./types.js";
+
+type LineCredentialAccount = Partial<
+  Pick<
+    ResolvedLineAccount,
+    "channelAccessToken" | "channelSecret" | "tokenStatus" | "signingSecretStatus"
+  >
+>;
 
 export function hasLineCredentials(account: LineCredentialAccount): boolean {
   if (account.tokenStatus && account.signingSecretStatus) {
@@ -14,7 +16,7 @@ export function hasLineCredentials(account: LineCredentialAccount): boolean {
 }
 
 export function parseLineAllowFromId(raw: string): string | null {
-  const trimmed = raw.trim().replace(/^line:(?:user:)?/i, "");
+  const trimmed = normalizeLineAllowEntry(raw);
   if (!/^U[a-f0-9]{32}$/i.test(trimmed)) {
     return null;
   }

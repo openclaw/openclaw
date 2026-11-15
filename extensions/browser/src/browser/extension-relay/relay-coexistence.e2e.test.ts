@@ -1,7 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it } from "vitest";
 import {
   createBrowserControlContext,
@@ -19,7 +21,9 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
 });
 
-it("borrows the compiled daemon in another process and leaves it serving an external v2 client", async () => {
+it("borrows the compiled daemon in another process and leaves it serving an external v2 client", async ({
+  signal,
+}) => {
   let child: ChildProcess | undefined;
   await withConnectedDaemon(
     async ({ port, token }) => {
@@ -30,15 +34,14 @@ it("borrows the compiled daemon in another process and leaves it serving an exte
         await startBrowserControlServiceFromConfig();
         const profile = createBrowserControlContext().forProfile("chrome");
         await profile.ensureBrowserAvailable();
-        await expect(profile.listTabs()).resolves.toEqual([
-          expect.objectContaining({
+        await expect(profile.listTabs()).resolves.toMatchObject([
+          {
             targetId: "fixture-target",
             url: "https://example.com/fixture",
-          }),
+          },
         ]);
         await stopBrowserControlService();
-        expect(child?.pid).toBe(pid);
-        expect(child?.exitCode).toBeNull();
+        expect(child).toMatchObject({ pid, exitCode: null });
         await expect(externalVersion(external)).resolves.toMatchObject({
           result: { product: "Chrome/test" },
         });
@@ -64,45 +67,30 @@ it("borrows the compiled daemon in another process and leaves it serving an exte
         },
       );
       const owned = child;
-      const done = new Promise<void>((resolve) => {
-        owned.once("exit", () => resolve());
+      const done = createDeferred<void>();
+      const ready = createDeferred<void>();
+      let output = "";
+      const onData = (chunk: Buffer) => {
+        output = (output + chunk.toString()).slice(-4_096);
+        if (output.includes("standalone extension relay listening")) {
+          ready.resolve();
+        }
+      };
+      owned.stdout?.on("data", onData);
+      owned.stderr?.on("data", onData);
+      owned.once("error", ready.reject);
+      owned.once("exit", () => {
+        done.resolve();
+        ready.reject(new Error("Compiled relay exited before readiness"));
       });
       try {
-        await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new Error("Compiled relay did not become ready")),
-            10_000,
-          );
-          let output = "";
-          const onData = (chunk: Buffer) => {
-            output = (output + chunk.toString()).slice(-4_096);
-            if (output.includes("standalone extension relay listening")) {
-              clearTimeout(timer);
-              resolve();
-            }
-          };
-          owned.stdout?.on("data", onData);
-          owned.stderr?.on("data", onData);
-          owned.once("error", (error) => {
-            clearTimeout(timer);
-            reject(error);
-          });
-          owned.once("exit", () => {
-            clearTimeout(timer);
-            reject(new Error("Compiled relay exited before readiness"));
-          });
-        });
+        await withinTest(ready.promise, signal);
       } catch (error) {
         owned.kill("SIGTERM");
-        await done;
+        await done.promise;
         throw error;
       }
-      return {
-        stop: () => {
-          owned.kill("SIGTERM");
-        },
-        done,
-      };
+      return { port, stop: () => owned.kill("SIGTERM"), done: done.promise };
     },
   );
 });

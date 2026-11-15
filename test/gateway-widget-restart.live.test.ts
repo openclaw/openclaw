@@ -1,4 +1,4 @@
-// Real provider, process replacement, and browser proof of recovered dashboard authoring.
+// Real provider, graceful process replacement, and browser proof of resumed dashboard authoring.
 import { access, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -9,7 +9,6 @@ import {
   GATEWAY_CLIENT_IDS,
 } from "../packages/gateway-protocol/src/client-info.js";
 import type { BoardSnapshot } from "../packages/gateway-protocol/src/index.js";
-import { inspectManagedProcessGroup } from "../scripts/lib/managed-child-process.mts";
 import { isLiveTestEnabled, logLiveProgress } from "../src/agents/live-test-helpers.js";
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { GatewayClient } from "../src/gateway/client.js";
@@ -42,7 +41,7 @@ const FINAL_HTML = `<h1>Restart chart</h1>
 <button onclick="document.getElementById('values').textContent='7 days · Production LOC 90 · Test LOC 150';document.getElementById('production').setAttribute('points','40,165 200,140 360,110');document.getElementById('tests').setAttribute('points','40,125 200,95 360,55');document.getElementById('production-point').setAttribute('cy','110');document.getElementById('test-point').setAttribute('cy','55');document.getElementById('range-end').textContent='Day 7'">Show 7 days</button>`;
 
 it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
-  "resumes an interrupted Control UI turn and publishes an interactive dashboard without reconnecting",
+  "resumes a Control UI task after graceful restart and publishes an interactive dashboard without reconnecting",
   { timeout: 600_000 },
   async () => {
     const apiKey = process.env.OPENAI_API_KEY?.trim();
@@ -100,14 +99,14 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             defaults: {
               workspace: instance.state.workspaceDir,
               model: { primary: MODEL_REF },
+              modelPolicy: { allow: [MODEL_REF] },
               models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
               thinkingDefault: "low",
-              heartbeat: { every: "0m" },
               skipBootstrap: true,
               skills: [],
               timeoutSeconds: 240,
             },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
           tools: {
             allow: ["exec", "process", "dashboard", "show_widget"],
@@ -125,7 +124,10 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         await instance.state.writeConfig(config);
         await instance.startGateway();
         const deviceIdentity = loadOrCreateDeviceIdentity({
-          path: instance.state.path("proof-device.sqlite"),
+          path: instance.state.path("proof-device", "client", "credentials.sqlite"),
+        });
+        const observerDeviceIdentity = loadOrCreateDeviceIdentity({
+          path: instance.state.path("observer-device", "client", "credentials.sqlite"),
         });
         const connect = (controlUi: boolean) =>
           acquireGatewayTestClient(
@@ -133,7 +135,8 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               url: instance.url,
               origin: controlUi ? `http://127.0.0.1:${instance.port}` : undefined,
               token: instance.gatewayToken,
-              deviceIdentity,
+              // A different auth class must not reissue the initiating UI's device token.
+              deviceIdentity: controlUi ? deviceIdentity : observerDeviceIdentity,
               clientName: controlUi ? GATEWAY_CLIENT_IDS.CONTROL_UI : GATEWAY_CLIENT_IDS.TEST,
               clientBuildId: controlUi ? buildId : undefined,
               mode: controlUi ? "webchat" : "test",
@@ -159,10 +162,10 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         });
         const prompt = [
           "WIDGET-RESTART-REQUEST: Build a pinned interactive dashboard. This is one task across a Gateway restart; never ask for a follow-up or browser reconnect.",
-          `First call show_widget with title 'Restart chart', name '${WIDGET_NAME}', pin true, and widget_code '<p>Waiting for restart checkpoint</p>'.`,
+          `First call show_widget with title 'Restart chart', name '${WIDGET_NAME}', pin true, and widget_code '<p>Waiting for graceful restart</p>'.`,
           "Then call exec with command 'touch checkpoint-ready; while [ ! -f checkpoint-resume ]; do sleep 0.1; done', yieldMs 10000, timeoutSeconds 120. Do not finish or publish the final chart while that command is pending.",
-          "A Gateway restart will interrupt the command. Once the recovery message appears, skip the checkpoint and ignore expired process handles; continue the same task immediately.",
-          `After recovery, call show_widget again with the same name '${WIDGET_NAME}', title 'Restart chart', pin true, and the following widget_code exactly. Do not substitute a report or attach a file.`,
+          "A graceful Gateway restart will stop the command. When the Gateway asks you to resume, check the pinned widget, skip the completed checkpoint, and ignore expired process handles; continue the same task immediately.",
+          `After restart, call show_widget again with the same name '${WIDGET_NAME}', title 'Restart chart', pin true, and the following widget_code exactly. Do not substitute a report or attach a file.`,
           FINAL_HTML,
           `Only after show_widget succeeds, reply exactly ${FINAL_MARKER}.`,
         ].join("\n\n");
@@ -197,16 +200,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         logLiveProgress(
           `widget restart: checkpoint reached; replacing owned Gateway pid=${originalProcess.pid}`,
         );
-        // Interrupt the Gateway without draining; the marker releases its detached exec below.
-        process.kill(-originalProcess.pid, "SIGKILL");
-        await vi.waitFor(
-          () =>
-            expect(
-              inspectManagedProcessGroup(originalProcess, { errorPolicy: "indeterminate" }),
-            ).toBe("dead"),
-          { timeout: 10_000 },
-        );
-        await writeFile(path.join(instance.state.workspaceDir, "checkpoint-resume"), "resume\n");
+        await instance.stopGateway();
         await instance.startGateway();
         expect(instance.child?.pid).not.toBe(originalProcess.pid);
         client = await connect(false);
@@ -242,13 +236,12 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
             extractAssistantPhaseText(message)?.trim() === FINAL_MARKER,
         );
         expect(finals).toHaveLength(1);
-        expect(instance.logs()).toContain("startup-orphaned main session(s)");
         logLiveProgress(
-          "widget restart: automatic recovery completed without an inline client; opening persisted dashboard",
+          "widget restart: resumed task completed without an inline client; opening persisted dashboard",
         );
 
         const handoff = await instance.cli(["dashboard", "--json"]);
-        expect(handoff.code, handoff.stderr).toBe(0);
+        expect(handoff.code, JSON.stringify(handoff)).toBe(0);
         const issued = JSON.parse(handoff.stdout) as { browserUrl: string };
         const url = new URL(
           controlUiSessionUrl(`http://127.0.0.1:${instance.port}/`, SESSION_KEY, "dashboard"),
@@ -282,7 +275,7 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
         expect(await widget.locator("#production-point").getAttribute("cy")).toBe("110");
         expect(await widget.locator("#test-point").getAttribute("cy")).toBe("55");
         expect(await widget.locator("#range-end").textContent()).toBe("Day 7");
-        await page.screenshot({ path: path.join(artifactDir, "recovered-dashboard.png") });
+        await page.screenshot({ path: path.join(artifactDir, "resumed-dashboard.png") });
         await writeFile(
           path.join(artifactDir, "proof.json"),
           JSON.stringify(
@@ -292,12 +285,12 @@ it.skipIf(!isLiveTestEnabled() || process.platform === "win32")(
               sessionKey: SESSION_KEY,
               originalRunId: initialRun.runId,
               originalPid: originalProcess.pid,
-              recoveredPid: instance.child?.pid,
+              resumedPid: instance.child?.pid,
               initialRevision: initialBoard.widgets[0]!.revision,
-              recoveredRevision: board.widgets[0]!.revision,
+              resumedRevision: board.widgets[0]!.revision,
               userTurnsSent: 1,
-              recoveredFinals: finals.length,
-              browserConnectedAfterRecovery: true,
+              resumedFinals: finals.length,
+              browserConnectedAfterResume: true,
               interactiveRangeChanged: true,
             },
             null,

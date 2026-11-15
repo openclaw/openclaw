@@ -19,6 +19,7 @@ export { resolveSessionTranscriptsDirForAgent } from "../config/sessions/paths.j
 
 export type { MemorySearchConfig } from "../config/types.tools.js";
 export { root } from "../infra/fs-safe.js";
+export { observeAgentRunActivity } from "../infra/agent-run-activity.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 
 export { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";

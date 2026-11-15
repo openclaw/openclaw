@@ -1,0 +1,182 @@
+import { afterAll, afterEach, expect, it, vi } from "vitest";
+import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { clearAuthProfileMigrationDiagnostics } from "../agents/auth-profiles/legacy-source-diagnostic.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { resolveApiKeyForProviderCore } from "../agents/model-auth-provider.js";
+import {
+  runModelsAuthLoginFlowCore,
+  type ModelsAuthLoginFlowOptions,
+} from "../commands/models/auth.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { cleanupPluginLoaderFixturesForTest } from "../plugins/loader.test-fixtures.js";
+import { updatePluginManifest, writeWorkspacePlugin } from "../plugins/loader.test-harness.js";
+import { getPluginLoaderCacheState } from "../plugins/registry-lifecycle.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import { PROVIDER_AUTH_INTEGRATION_ENV } from "./test-helpers.env.js";
+
+const providerId = "account-relogin-proof";
+const pinnedProfileId = `${providerId}:pinned`;
+const generatedProfileId = `${providerId}:generated`;
+const retainedProfile = { type: "api_key" as const, provider: "other", key: "retained-key" };
+type Profiles = Record<string, AuthProfileCredential>;
+
+function oauthCredential(accountId: string, generation: string): AuthProfileCredential {
+  return {
+    type: "oauth",
+    provider: providerId,
+    access: `${generation}-access`,
+    refresh: `${generation}-refresh`,
+    expires: 2_100_000_000_000,
+    accountId,
+  };
+}
+
+function writeIdentityProvider(workspaceDir: string, credential: AuthProfileCredential) {
+  const { plugin } = writeWorkspacePlugin({
+    workspaceDir,
+    id: providerId,
+    body: `module.exports = {
+      id: ${JSON.stringify(providerId)},
+      register(api) {
+        api.registerProvider({
+          id: ${JSON.stringify(providerId)},
+          label: "Account re-login proof",
+          auth: [{
+            id: "oauth",
+            label: "OAuth",
+            kind: "oauth",
+            matchesPersonalAccount(incoming, existing) {
+              return incoming.type === "oauth" && existing.type === "oauth" &&
+                incoming.provider === existing.provider &&
+                incoming.accountId === existing.accountId;
+            },
+            async run() {
+              return { profiles: [{
+                profileId: ${JSON.stringify(generatedProfileId)},
+                credential: ${JSON.stringify(credential)},
+              }] };
+            },
+          }],
+        });
+      },
+    };`,
+  });
+  updatePluginManifest(plugin, { providers: [providerId] });
+}
+
+afterAll(cleanupPluginLoaderFixturesForTest);
+let cleanupState: OpenClawTestState | undefined;
+afterEach(async () => {
+  getPluginLoaderCacheState().clear();
+  resetPluginRuntimeStateForTest();
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearAuthProfileMigrationDiagnostics();
+  await cleanupState?.cleanup();
+  cleanupState = undefined;
+});
+
+async function proofFixture(accountId: string, generation = "new", extraProfiles: Profiles = {}) {
+  const state = await createOpenClawTestState({
+    label: "provider-account-relogin-proof",
+    env: { ...PROVIDER_AUTH_INTEGRATION_ENV },
+  });
+  cleanupState = state;
+  const config: OpenClawConfig = {
+    agents: { entries: { main: { workspace: state.workspaceDir } } },
+    plugins: { allow: [providerId], entries: { [providerId]: { enabled: true } } },
+  };
+  getPluginLoaderCacheState().clear();
+  resetPluginRuntimeStateForTest();
+  writeIdentityProvider(state.workspaceDir, oauthCredential(accountId, generation));
+  await state.writeConfig(config);
+  seedProfiles(state, { ...extraProfiles, [pinnedProfileId]: oauthCredential("account-a", "old") });
+  const runLogin = (
+    options: Pick<ModelsAuthLoginFlowOptions, "force" | "beforePersistentEffect"> = {},
+  ) =>
+    runModelsAuthLoginFlowCore({
+      provider: providerId,
+      method: "oauth",
+      agent: "main",
+      config,
+      credentialOnly: true,
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      prompter: createWizardPrompter(),
+      refreshAfterLogin: vi.fn(async () => {}),
+      ...options,
+    });
+  return { state, config, runLogin };
+}
+
+function seedProfiles(state: OpenClawTestState, profiles: Profiles): void {
+  saveAuthProfileStore({ version: 1, profiles }, state.agentDir(), {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
+  clearRuntimeAuthProfileStoreSnapshots();
+}
+
+function persistedProfiles(state: OpenClawTestState): Profiles {
+  return loadPersistedAuthProfileStore(state.agentDir())?.profiles ?? {};
+}
+
+it.each([false, true])("rotates the pinned credential (force: %s)", async (force) => {
+  const { state, config, runLogin } = await proofFixture("account-a", "rotated", {
+    "other:retained": retainedProfile,
+  });
+  await expect(runLogin({ force })).resolves.toMatchObject({
+    profiles: [{ profileId: pinnedProfileId, provider: providerId, mode: "oauth" }],
+  });
+  expect(persistedProfiles(state)).toEqual({
+    "other:retained": retainedProfile,
+    [pinnedProfileId]: oauthCredential("account-a", "rotated"),
+  });
+  await expect(
+    resolveApiKeyForProviderCore({
+      provider: providerId,
+      cfg: config,
+      profileId: pinnedProfileId,
+      agentDir: state.agentDir(),
+      lockedProfile: true,
+    }),
+  ).resolves.toMatchObject({
+    apiKey: "rotated-access",
+    mode: "oauth",
+    profileId: pinnedProfileId,
+  });
+});
+
+it("keeps a different account under its provider-generated profile id", async () => {
+  const { state, runLogin } = await proofFixture("account-b");
+  await expect(runLogin()).resolves.toMatchObject({
+    profiles: [{ profileId: generatedProfileId, provider: providerId, mode: "oauth" }],
+  });
+  expect(persistedProfiles(state)).toEqual({
+    [pinnedProfileId]: oauthCredential("account-a", "old"),
+    [generatedProfileId]: oauthCredential("account-b", "new"),
+  });
+});
+
+it.each([false, true])("rejects a reassigned id at persistence (force: %s)", async (force) => {
+  const { state, runLogin } = await proofFixture("account-a");
+  let persistentBoundary = 0;
+  const reassigned = { [pinnedProfileId]: oauthCredential("account-b", "reassigned") };
+  await expect(
+    runLogin({
+      force,
+      beforePersistentEffect: () => {
+        if (++persistentBoundary === (force ? 2 : 1)) {
+          seedProfiles(state, reassigned);
+        }
+      },
+    }),
+  ).rejects.toThrow("existing auth profile identity changed during sign-in");
+  expect(persistentBoundary).toBe(force ? 2 : 1);
+  expect(persistedProfiles(state)).toEqual(reassigned);
+});

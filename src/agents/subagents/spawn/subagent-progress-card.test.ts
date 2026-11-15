@@ -4,11 +4,21 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { appendProgressCardSystemPrompt } from "../../progress-card-system-prompt.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import { prepareAttemptSystemPromptAdditions } from "../../embedded-agent-runner/run/attempt-system-prompt-additions.js";
 import { resolveEffectiveToolInventory } from "../../tools-effective-inventory.js";
 
 vi.mock("../../../infra/device-pairing.js", () => ({
   hasPairedCardRenderer: async () => true,
+}));
+vi.mock("../../git-coauthor-prompt.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../git-coauthor-prompt.js")>()),
+  resolveSessionGitCoauthorPrompt: async () => undefined,
+}));
+
+// mock-isolation: Progress-card availability uses synthetic sessions without auth database admission.
+vi.mock("../../auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSourceAsync: async () => false,
 }));
 
 describe("subagent progress-card availability", () => {
@@ -50,11 +60,12 @@ describe("subagent progress-card availability", () => {
   });
 
   afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync(tempDir);
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it.each([parent, ...children])("exposes tools and guidance for %s", async (sessionKey) => {
-    const inventory = resolveEffectiveToolInventory({
+    const inventory = await resolveEffectiveToolInventory({
       cfg: config,
       sessionKey,
       workspaceDir: tempDir,
@@ -64,8 +75,9 @@ describe("subagent progress-card availability", () => {
     const names = inventory.groups.flatMap((group) => group.tools.map((tool) => tool.id));
     expect(names).toContain("read");
     expect(names.includes("progress_card")).toBe(sessionKey === parent);
-    const prompt = await appendProgressCardSystemPrompt({
+    const { extraSystemPrompt: prompt } = await prepareAttemptSystemPromptAdditions({
       agentId: "main",
+      sessionId: "synthetic-session",
       config,
       sessionKey,
       modelId: "model",

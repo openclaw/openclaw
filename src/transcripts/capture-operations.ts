@@ -1,19 +1,19 @@
 import path from "node:path";
+import { activeSessions, revokeTranscriptStartRetries } from "./capture-startup.js";
 import { persistTranscriptSummary } from "./capture-summary.js";
 import {
-  activeSessions,
   finalizeTranscriptCapture,
   isTranscriptSelectionCurrent,
   isTranscriptSelectionOwned,
   isTranscriptSessionStarting,
-  revokeTranscriptStartRetries,
   stopTranscriptProviderCapture,
   type TranscriptCaptureSelection,
   type TranscriptsRuntimeContext,
 } from "./capture.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
-import { TranscriptsStore, TranscriptsSummaryChangedError } from "./store.js";
+import { TranscriptsSummaryChangedError } from "./store-errors.js";
+import { TranscriptsStore } from "./store.js";
 
 export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
   return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
@@ -62,7 +62,7 @@ export async function stopTranscriptCapture(params: {
   if (selectedActive?.stopping) {
     return skip("stopping");
   }
-  revokeTranscriptStartRetries(params.ctx, session);
+  revokeTranscriptStartRetries(params.ctx.stateDir, session);
   if (selectedActive) {
     selectedActive.stopping = true;
   }
@@ -114,6 +114,7 @@ export async function stopTranscriptCapture(params: {
       persisted = await persistTranscriptSummary({
         config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
         cfg: params.ctx.config,
+        stateDir: params.ctx.stateDir,
         store: params.store,
         session: stoppedSession,
         expectedInputRevision: session.stoppedAt ? selection.historicalRevision : undefined,

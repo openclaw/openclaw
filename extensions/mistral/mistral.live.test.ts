@@ -4,10 +4,11 @@ import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
 } from "openclaw/plugin-sdk/provider-test-contracts";
+import { createRealtimeTranscriptionWebSocketSession } from "openclaw/plugin-sdk/realtime-transcription-session";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
-import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
+import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider-factory.js";
 
 const MISTRAL_KEY = process.env.MISTRAL_API_KEY ?? "";
 const ELEVENLABS_KEY = process.env.ELEVENLABS_API_KEY ?? "";
@@ -38,7 +39,9 @@ describeLive("mistral plugin live", () => {
   }, 90_000);
 
   it("streams realtime STT through the registered transcription provider", async () => {
-    const provider = buildMistralRealtimeTranscriptionProvider();
+    const provider = buildMistralRealtimeTranscriptionProvider({
+      createRealtimeTranscriptionWebSocketSession,
+    });
     const phrase = "Testing OpenClaw Mistral realtime transcription integration OK.";
     const speech = await synthesizeElevenLabsLiveSpeech({
       text: phrase,

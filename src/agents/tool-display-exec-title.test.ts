@@ -16,11 +16,11 @@ describe("execution purpose display", () => {
     },
   );
 
-  it("bounds and redacts execution titles while keeping untitled code activity meaningful", () => {
+  it("bounds execution titles while keeping untitled code activity meaningful", () => {
     const title = `Checking ${"x".repeat(150)}`;
     const token = `ghp_${"a".repeat(36)}`;
     expect(resolveExecDetail({ title, code: "return 1" })).toHaveLength(120);
-    expect(resolveExecDetail({ title: `Reading token=${token}`, code: "return 1" })).not.toContain(
+    expect(resolveExecDetail({ title: `Reading token=${token}`, code: "return 1" })).toContain(
       token,
     );
     expect(
@@ -30,4 +30,17 @@ describe("execution purpose display", () => {
     expect(resolveExecDetail({ code: "return 1", language: "typescript" })).toBe("run TypeScript");
     expect(resolveExecDetail({ title: " ", command: "git status" })).toContain("check git status");
   });
+});
+
+it("keeps the execution target alongside a purpose title", () => {
+  const args = {
+    command: "node --version",
+    title: "Check runtime version",
+    host: "node",
+    node: "preview-node",
+  };
+  expect(resolveExecDetail(args)).toBe("Check runtime version, node: preview-node");
+  expect(resolveExecDetail({ ...args, command: undefined, code: "return 1" })).toBe(
+    "Check runtime version, node: preview-node",
+  );
 });

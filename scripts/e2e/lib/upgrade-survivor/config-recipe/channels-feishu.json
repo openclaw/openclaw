@@ -6,8 +6,6 @@
   "verificationToken": "upgrade-survivor-feishu-verification",
   "encryptKey": "upgrade-survivor-feishu-encrypt",
   "webhookPath": "/feishu/events",
-  "webhookHost": "127.0.0.1",
-  "webhookPort": 3000,
   "accounts": {
     "default": {
       "enabled": true,

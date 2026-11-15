@@ -1,6 +1,9 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { requireGitCommandOutput } from "../../infra/git-exec.js";
-import { insideGitCheckout, runGit } from "./git.js";
+import { readGitHead, resolveGitRefsBase } from "../../infra/git-root.js";
+import { WorktreeRepositoryError } from "./errors.js";
+import { findGitCheckoutRoot, runGit } from "./git.js";
 import { resolveCheckoutRootFromRealPath } from "./repository-paths.js";
 import type { ManagedWorktreeBranch, ManagedWorktreeBranchesResult } from "./types.js";
 
@@ -11,45 +14,40 @@ type RepositoryBranchRef = {
   ref: string;
   branchName: string;
   branch: ManagedWorktreeBranch;
-  symbolicRef?: string;
-  current?: boolean;
 };
 
 async function listRepositoryBranchRefs(
   repoRoot: string,
   patterns: string[],
-  count?: number,
+  count: number,
 ): Promise<RepositoryBranchRef[]> {
   const result = await runGit(
     repoRoot,
     [
+      "--no-optional-locks",
       "-c",
       "core.warnAmbiguousRefs=true",
       "for-each-ref",
-      ...(count === undefined ? [] : [`--count=${count}`]),
+      `--count=${count}`,
       "--sort=refname",
-      count === undefined
-        ? "--format=%(refname)%00%(refname:short)%00%(symref)%00%(HEAD)"
-        : "--format=%(refname)%00%(refname:short)",
+      "--format=%(refname)%00%(refname:short)",
       ...patterns,
     ],
     {
+      timeoutMs: 1_500,
       maxOutputBytes: BRANCH_INVENTORY_MAX_OUTPUT_BYTES,
-      terminateOnOutputLimit: count === undefined,
     },
   );
   const output = requireGitCommandOutput("git for-each-ref", result);
   const branches: RepositoryBranchRef[] = [];
   for (const line of output.trim().split("\n")) {
-    const [ref, name, symbolicRef, head] = line.split("\0");
-    const metadata = { symbolicRef: symbolicRef || undefined, current: head === "*" };
+    const [ref, name] = line.split("\0");
     if (!ref || !name) {
       continue;
     }
     if (ref.startsWith("refs/heads/")) {
       branches.push({
         ref,
-        ...metadata,
         branchName: ref.slice("refs/heads/".length),
         branch: { name, kind: "local" },
       });
@@ -57,7 +55,7 @@ async function listRepositoryBranchRefs(
       const remoteRef = ref.slice("refs/remotes/".length);
       const slash = remoteRef.indexOf("/");
       const branchName = slash > 0 ? remoteRef.slice(slash + 1) : "";
-      branches.push({ ref, branchName, ...metadata, branch: { name, kind: "remote" } });
+      branches.push({ ref, branchName, branch: { name, kind: "remote" } });
     }
   }
   return branches;
@@ -68,44 +66,39 @@ export async function readRepositoryBranches(
   options: { includeRepositoryStatus?: boolean } = {},
 ): Promise<ManagedWorktreeBranchesResult> {
   let sourceRoot: string;
+  let requested: string;
   try {
-    const requested = await fs.realpath(repoRoot).catch(() => {
+    requested = await fs.realpath(repoRoot).catch(() => {
       throw new Error(`repository does not exist: ${repoRoot}`);
     });
-    if (options.includeRepositoryStatus) {
-      if (!(await fs.stat(requested)).isDirectory()) {
-        return { branches: [], repositoryStatus: "unavailable" };
-      }
-      if (!insideGitCheckout(requested)) {
-        return { branches: [], repositoryStatus: "not_git" };
-      }
+    if (options.includeRepositoryStatus && !(await fs.stat(requested)).isDirectory()) {
+      return { branches: [], repositoryStatus: "unavailable" };
     }
-    // Ref discovery needs this checkout's HEAD, not allocation identity or a
-    // full inventory of sibling worktrees rooted at the primary checkout.
-    sourceRoot = await resolveCheckoutRootFromRealPath(requested, repoRoot);
+    const candidate = findGitCheckoutRoot(requested);
+    if (options.includeRepositoryStatus && !candidate) {
+      return { branches: [], repositoryStatus: "not_git" };
+    }
+    const admitted = await resolveCheckoutRootFromRealPath(requested, repoRoot);
+    sourceRoot = admitted.root;
   } catch (error) {
     if (options.includeRepositoryStatus) {
+      // An unborn checkout supports direct sessions, but has no worktree base yet.
+      if (error instanceof WorktreeRepositoryError && error.reason === "unborn") {
+        return { branches: [], repositoryStatus: "not_git" };
+      }
       return { branches: [], repositoryStatus: "unavailable" };
     }
     throw error;
-  }
-  // One fresh inventory carries current/default refs as well as strict selection names.
-  // Fall back to count-bounded queries when a large repository exceeds the byte guard.
-  let inventory: RepositoryBranchRef[] | undefined;
-  try {
-    inventory = await listRepositoryBranchRefs(sourceRoot, ["refs/heads/", "refs/remotes/"]);
-  } catch {
-    inventory = undefined;
   }
   const branches = new Map<string, RepositoryBranchRef>();
   let branchesUnavailable = false;
   for (const prefix of ["refs/remotes/", "refs/heads/"]) {
     try {
-      const entries = inventory
-        ? inventory
-            .filter((entry) => entry.ref.startsWith(prefix))
-            .slice(0, BRANCH_SUGGESTIONS_PER_KIND)
-        : await listRepositoryBranchRefs(sourceRoot, [prefix], BRANCH_SUGGESTIONS_PER_KIND);
+      const entries = await listRepositoryBranchRefs(
+        sourceRoot,
+        [prefix],
+        BRANCH_SUGGESTIONS_PER_KIND,
+      );
       for (const entry of entries) {
         if (entry.branchName && (entry.branch.kind !== "remote" || entry.branchName !== "HEAD")) {
           // Local branches win collisions with the same logical remote branch name.
@@ -116,27 +109,21 @@ export async function readRepositoryBranches(
       branchesUnavailable = true;
     }
   }
-  let defaultRef: string | undefined;
-  let headRef: string | undefined;
-  if (inventory) {
-    defaultRef = inventory.find((entry) => entry.ref === "refs/remotes/origin/HEAD")?.symbolicRef;
-    headRef = inventory.find((entry) => entry.current)?.ref;
-  } else {
-    const remoteHead = await runGit(sourceRoot, [
-      "symbolic-ref",
-      "--quiet",
-      "refs/remotes/origin/HEAD",
-    ]);
-    defaultRef = remoteHead.code === 0 ? remoteHead.stdout.trim() : undefined;
-    const head = await runGit(sourceRoot, ["symbolic-ref", "--quiet", "HEAD"]);
-    headRef = head.code === 0 ? head.stdout.trim() : undefined;
-  }
+  const remoteHead = await runGit(
+    sourceRoot,
+    ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+    { timeoutMs: 1_500 },
+  );
+  const defaultRef = remoteHead.code === 0 ? remoteHead.stdout.trim() : undefined;
+  const head = await runGit(sourceRoot, ["symbolic-ref", "--quiet", "HEAD"], { timeoutMs: 1_500 });
+  const headRef = head.code === 0 ? head.stdout.trim() : undefined;
+  branchesUnavailable ||= remoteHead.termination !== "exit" || head.termination !== "exit";
   const resolveBranch = async (ref: string | undefined) => {
     if (!ref) {
       return undefined;
     }
-    const known = (inventory ?? [...branches.values()]).find((entry) => entry.ref === ref);
-    if (known || inventory) {
+    const known = [...branches.values()].find((entry) => entry.ref === ref);
+    if (known) {
       return known?.branchName && (known.branch.kind !== "remote" || known.branchName !== "HEAD")
         ? known
         : undefined;
@@ -159,7 +146,7 @@ export async function readRepositoryBranches(
     : undefined;
   // Priority refs must survive the inventory bound and use the same disambiguation.
   const defaultEntry = (await resolveBranch(localDefaultRef)) ?? (await resolveBranch(defaultRef));
-  const headEntry = await resolveBranch(headRef);
+  const headEntry = headRef === defaultEntry?.ref ? defaultEntry : await resolveBranch(headRef);
   for (const entry of [defaultEntry, headEntry]) {
     if (entry) {
       branches.set(entry.branchName, entry);
@@ -167,13 +154,38 @@ export async function readRepositoryBranches(
   }
   const rank = (entry: RepositoryBranchRef) =>
     entry.ref === defaultEntry?.ref ? 0 : entry.ref === headEntry?.ref ? 1 : 2;
-  return {
+  const result: ManagedWorktreeBranchesResult = {
     branches: [...branches.values()]
       .toSorted((a, b) => rank(a) - rank(b) || a.branch.name.localeCompare(b.branch.name))
       .map((entry) => entry.branch),
     ...(defaultEntry ? { defaultBranch: defaultEntry.branch.name } : {}),
     ...(headEntry ? { headBranch: headEntry.branch.name } : {}),
-    ...(options.includeRepositoryStatus ? { repositoryStatus: "git" as const } : {}),
     ...(branchesUnavailable ? { branchesUnavailable: true } : {}),
   };
+  return {
+    ...result,
+    ...(options.includeRepositoryStatus ? { repositoryStatus: "git" } : {}),
+  };
+}
+
+/** Worker-only observation paths keep ref watching independent of checkout/object inventories. */
+export async function readRepositoryBranchSnapshot(
+  repoRoot: string,
+  options: { includeRepositoryStatus?: boolean } = {},
+) {
+  const result = await readRepositoryBranches(repoRoot, options);
+  try {
+    const head = readGitHead(repoRoot);
+    if (head) {
+      const gitDir = path.dirname(head.headPath);
+      const root = findGitCheckoutRoot(repoRoot) ?? repoRoot;
+      return {
+        ...result,
+        observation: { root, gitDir, commonDir: resolveGitRefsBase(head.headPath) },
+      };
+    }
+  } catch {
+    // Unavailable metadata is already represented by the discovery result.
+  }
+  return result;
 }

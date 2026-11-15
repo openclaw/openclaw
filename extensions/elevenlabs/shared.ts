@@ -1,4 +1,3 @@
-// Elevenlabs plugin module implements shared behavior.
 export const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
 export function isValidElevenLabsVoiceId(voiceId: string): boolean {
@@ -16,10 +15,8 @@ function normalizeElevenLabsBaseUrlWithProtocols(
     return DEFAULT_ELEVENLABS_BASE_URL;
   }
   const normalized = trimmed.replace(/\/+$/, "");
-  let parsed: URL;
-  try {
-    parsed = new URL(normalized);
-  } catch {
+  const parsed = URL.parse(normalized);
+  if (!parsed) {
     // Do not interpolate the raw value: an explicit baseUrl may embed userinfo
     // (https://user:token@host) or credential-bearing query params that would
     // otherwise leak into logs/diagnostics via this error.

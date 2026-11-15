@@ -18,6 +18,22 @@ How replies are routed and threaded, and how attachments and files move in and o
     - `agent:<agentId>:msteams:channel:<conversationId>`
     - `agent:<agentId>:msteams:group:<conversationId>`
 
+## Channel metadata
+
+The message tool's `channel-list` action requires `teamId`. The `channel-info`
+action requires both `teamId` and `channelId`. Use the Microsoft Teams team ID,
+including when Slack is also configured; the shared `teamId` field accepts each
+provider's ID format. These actions retain the configured Teams access rules.
+
+## Graph actions
+
+After the Teams action handler starts, pinning, unpinning, adding or removing
+reactions, changing participants, and renaming conversations recheck their caller
+before each Graph request. Cancellation during the handler's token preparation,
+target authorization, or participant lookup stops its next request. Cancellation
+does not undo a mutation Microsoft has already accepted. Existing account, target,
+and owner/admin rules still apply; pinning and unpinning remain limited to chats.
+
 ## Reply style: threads vs posts
 
 Teams has two channel UI styles over the same underlying data model:
@@ -76,6 +92,26 @@ The thread root is taken from the stored `threadId` on the conversation referenc
 
 When `replyStyle: "top-level"` is in effect, channel-thread inbounds are intentionally answered as new top-level posts; no thread suffix is attached. This is correct for Threads-style channels; top-level posts where you expected threaded replies means `replyStyle` is set incorrectly for that channel.
 
+## Delivery cancellation and retries
+
+Task and queue deliveries of text, images, files, and presentation cards check
+their current delivery authority before each Teams request, including after
+token acquisition and rate-limit waits. Cancellation stops requests that have
+not yet begun. Messages and file cards already accepted by Teams retain their
+delivery receipts; a partially completed text-and-media send retains its
+accepted parts.
+
+Required SharePoint uploads, member lookups, sharing links, and redirects check
+the same authority before continuing. An uploaded SharePoint file is preparation
+for the Teams file card; the upload alone does not confirm delivery to the chat.
+
+## Outbound mentions
+
+Use `@[Name](id)` in outgoing text, replacing `id` with a Teams user/bot ID or
+Microsoft Entra object ID. Escape brackets inside the display name as `\[` and
+`\]`: `Alice \[Ops\]` becomes `Alice [Ops]` in the native mention. Use `\\` for
+an escaped backslash. The same formatting applies to message edits and file captions.
+
 ## Attachments and images
 
 **Current limitations:**
@@ -92,11 +128,11 @@ Authorization headers are only attached for hosts in `channels.msteams.mediaAuth
 
 Bots can send files in DMs using the built-in FileConsentCard flow. **Sending files in group chats/channels** requires additional setup:
 
-| Context                  | How files are sent                           | Setup needed                                    |
-| ------------------------ | -------------------------------------------- | ----------------------------------------------- |
-| **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                            |
-| **Group chats/channels** | Upload to SharePoint → native file card      | Requires `sharePointSiteId` + Graph permissions |
-| **Images (any context)** | Base64-encoded inline                        | Works out of the box                            |
+| Context                  | How files are sent                           | Setup needed                                              |
+| ------------------------ | -------------------------------------------- | --------------------------------------------------------- |
+| **DMs**                  | FileConsentCard → user accepts → bot uploads | Works out of the box                                      |
+| **Group chats/channels** | Upload to SharePoint → native file card      | Graph permissions; group chats require `sharePointSiteId` |
+| **Images (any context)** | Base64-encoded inline                        | Works out of the box                                      |
 
 ### Why group chats need SharePoint
 
@@ -108,6 +144,10 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
    - `Sites.ReadWrite.All` (Application) - upload files to SharePoint.
    - `ChatMember.Read.All` (Application) - least-privileged tenant-wide permission for group-chat file sends. `Chat.Read.All` also works and already covers this when group-chat history is enabled. As a per-chat alternative, use the `ChatMember.Read.Chat` [resource-specific consent permission](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent).
 2. **Grant admin consent** for the tenant.
+   Standard channels automatically resolve their team's SharePoint site when `sharePointSiteId` is omitted. Discovery uses `GET /groups/{groupId}/sites/root` with the existing `Sites.ReadWrite.All` grant. The channel check uses the existing `ChannelSettings.Read.Group` RSC grant from the [Teams app manifest](/channels/msteams/manifest-and-permissions#current-teams-rsc-permissions-manifest); no additional Graph permissions are required. Site IDs are cached per account, tenant, bot, and team, up to 500 entries, and refreshed on restart.
+
+Group chats and private/shared channels require an explicit site. An explicit `sharePointSiteId` always takes precedence; choose a site whose membership includes the intended recipients. To configure one:
+
 3. **Get your SharePoint site ID:**
 
    ```bash
@@ -141,20 +181,21 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 | ----------------------------------------------------------------------- | --------------------------------------------------------- |
 | Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
 | Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
-| Group chat without a supported chat-member read grant                   | Send fails closed                                         |
+| Group chat without a supported chat-member read grant                   | Send is blocked                                           |
 
 Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 
 ### Fallback behavior
 
-| Scenario                                                         | Result                                           |
-| ---------------------------------------------------------------- | ------------------------------------------------ |
-| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card    |
-| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error      |
-| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card    |
-| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)  |
-| Any context + image                                              | Base64-encoded inline (works without SharePoint) |
+| Scenario                                                         | Result                                            |
+| ---------------------------------------------------------------- | ------------------------------------------------- |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card     |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error       |
+| Standard channel + file + no `sharePointSiteId`                  | Resolve the team site and send a native file card |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card     |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)   |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint)  |
 
 ### Files stored location
 
-Uploaded files are stored in a `/OpenClawShared/` folder in the configured SharePoint site's default document library.
+Uploaded files are stored in a `/OpenClawShared/` folder in the resolved or configured SharePoint site's default document library.

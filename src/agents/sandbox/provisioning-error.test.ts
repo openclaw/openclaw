@@ -8,6 +8,32 @@ describe("sandbox provisioning errors", () => {
     expect(toSandboxProvisioningError(error, "other")).toBe(error);
   });
 
+  it("recognizes markers beside opaque getters and through cyclic wrappers", () => {
+    const error = toSandboxProvisioningError(new Error("backend unavailable"), "docker");
+    const wrapper = Object.defineProperty({ errors: [error] }, "cause", {
+      get() {
+        throw new Error("opaque cause");
+      },
+    });
+    expect(isSandboxProvisioningError(wrapper)).toBe(true);
+    const cycle = { error: undefined as unknown, errors: [wrapper] };
+    cycle.error = cycle;
+    expect(isSandboxProvisioningError(cycle)).toBe(true);
+    expect(isSandboxProvisioningError({ errors: [cycle, null] })).toBe(true);
+    wrapper.errors.length = 0;
+    expect(isSandboxProvisioningError(cycle)).toBe(false);
+  });
+
+  it("recognizes serialized markers without inferring them from message text", () => {
+    expect(
+      isSandboxProvisioningError({
+        name: "SandboxProvisioningError",
+        code: "sandbox_provisioning",
+      }),
+    ).toBe(true);
+    expect(isSandboxProvisioningError(new Error("sandbox_provisioning"))).toBe(false);
+  });
+
   it("recognizes provisioning failures through wrapper causes", () => {
     const provisioningError = toSandboxProvisioningError(
       new Error("backend unavailable"),

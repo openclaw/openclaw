@@ -1,9 +1,9 @@
-// Normalizes logging config, log paths, and file-size limits.
 import fs from "node:fs";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
-import { createConfigIO } from "./io.js";
+import { resolveConfigPath, resolveStateDir } from "./paths.js";
 
 type LogConfigUpdatedOptions = {
   path?: string;
@@ -12,7 +12,9 @@ type LogConfigUpdatedOptions = {
 };
 
 /** Formats a config path for operator-facing log output. */
-export function formatConfigFilePath(path: string = createConfigIO().configPath): string {
+export function formatConfigFilePath(
+  path: string = resolveConfigPath(process.env, resolveStateDir()),
+): string {
   return displayPath(path);
 }
 
@@ -22,7 +24,7 @@ export function formatConfigUpdatedMessage(
   opts: LogConfigUpdatedOptions = {},
 ): string {
   const displayConfigPath = theme.muted(formatConfigFilePath(path));
-  const suffix = opts.suffix ? ` ${opts.suffix}` : "";
+  const suffix = opts.suffix ? terminalText` ${opts.suffix}` : "";
   const backupPath = opts.backupPath === undefined ? `${path}.bak` : opts.backupPath;
   const lines = [`Updated config: ${displayConfigPath}${suffix}`];
   if (backupPath && fs.existsSync(backupPath)) {
@@ -35,5 +37,10 @@ export function formatConfigUpdatedMessage(
 
 /** Emits the standard config-updated message through the active runtime logger. */
 export function logConfigUpdated(runtime: RuntimeEnv, opts: LogConfigUpdatedOptions = {}): void {
-  runtime.log(formatConfigUpdatedMessage(opts.path ?? createConfigIO().configPath, opts));
+  runtime.log(
+    formatConfigUpdatedMessage(
+      opts.path ?? resolveConfigPath(process.env, resolveStateDir()),
+      opts,
+    ),
+  );
 }

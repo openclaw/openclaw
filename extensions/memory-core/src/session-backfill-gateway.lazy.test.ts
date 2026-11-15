@@ -5,14 +5,12 @@ import { registerSessionBackfillGatewayMethods } from "./session-backfill-gatewa
 
 const backfillModule = vi.hoisted(() => ({
   loadCount: 0,
-  executeSessionBackfill: vi.fn(),
   executeSessionBackfillBatch: vi.fn(),
 }));
 
 vi.mock("./session-backfill.js", () => {
   backfillModule.loadCount += 1;
   return {
-    executeSessionBackfill: backfillModule.executeSessionBackfill,
     executeSessionBackfillBatch: backfillModule.executeSessionBackfillBatch,
   };
 });
@@ -24,7 +22,7 @@ it("loads session backfill execution only for the first valid request", async ()
       config: {
         current: () => ({
           agents: {
-            entries: { main: { default: true, workspace: "/tmp/main-workspace" } },
+            entries: { main: { workspace: "/tmp/main-workspace" } },
           },
         }),
       },

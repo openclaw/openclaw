@@ -1,9 +1,7 @@
-// Hook policy helpers decide when hooks may run for a configured event.
-import type { OpenClawConfig, HookConfig } from "../config/config.js";
-import { resolveHookKey } from "./frontmatter.js";
+import type { HookConfig } from "../config/types.hooks.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookPolicyEntry, HookSource } from "./types.js";
 
-/** Human-readable reason for disabling a hook at policy resolution time. */
 export type HookEnableStateReason = "disabled in config" | "workspace hook (disabled by default)";
 
 type HookEnableState = {
@@ -24,31 +22,19 @@ const HOOK_SOURCE_PRECEDENCE: Record<HookSource, number> = {
   "openclaw-workspace": 40,
 };
 
-/** Resolve explicit per-hook config by hook key. */
 export function resolveHookConfig(
   config: OpenClawConfig | undefined,
   hookKey: string,
 ): HookConfig | undefined {
-  const hooks = config?.hooks?.internal?.entries;
-  if (!hooks || typeof hooks !== "object") {
-    return undefined;
-  }
-  const entry = (hooks as Record<string, HookConfig | undefined>)[hookKey];
-  if (!entry || typeof entry !== "object") {
-    return undefined;
-  }
-  return entry;
+  return config?.hooks?.internal?.entries?.[hookKey];
 }
 
 /** Resolve whether a hook is enabled before runtime requirement checks. */
 export function resolveHookEnableState(params: {
   entry: HookPolicyEntry;
-  config?: OpenClawConfig;
   hookConfig?: HookConfig;
 }): HookEnableState {
-  const { entry, config } = params;
-  const hookKey = resolveHookKey(entry.hook.name, entry);
-  const hookConfig = params.hookConfig ?? resolveHookConfig(config, hookKey);
+  const { entry, hookConfig } = params;
 
   if (entry.hook.source === "openclaw-plugin") {
     return { enabled: true };
@@ -64,23 +50,18 @@ export function resolveHookEnableState(params: {
   return { enabled: true };
 }
 
-/** Merge hook entries by name using source precedence and override policy. */
 export function resolveHookEntries<T extends HookPolicyEntry>(
   entries: T[],
   opts?: {
     onCollisionIgnored?: (collision: HookResolutionCollision<T>) => void;
   },
 ): T[] {
-  const ordered = entries
-    .map((entry, index) => ({ entry, index }))
-    .toSorted((a, b) => {
-      const precedenceDelta =
-        HOOK_SOURCE_PRECEDENCE[a.entry.hook.source] - HOOK_SOURCE_PRECEDENCE[b.entry.hook.source];
-      return precedenceDelta !== 0 ? precedenceDelta : a.index - b.index;
-    });
+  const ordered = entries.toSorted(
+    (a, b) => HOOK_SOURCE_PRECEDENCE[a.hook.source] - HOOK_SOURCE_PRECEDENCE[b.hook.source],
+  );
 
   const merged = new Map<string, T>();
-  for (const { entry } of ordered) {
+  for (const entry of ordered) {
     const existing = merged.get(entry.hook.name);
     if (!existing) {
       merged.set(entry.hook.name, entry);

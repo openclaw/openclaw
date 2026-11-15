@@ -10,6 +10,7 @@ export function createContractsChannelSessionVitestConfig(
 ) {
   return createContractsVitestConfig(channelSessionContractPatterns, env, argv, {
     name: "contracts-channel-session",
+    pool: "forks",
   });
 }
 

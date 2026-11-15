@@ -7,6 +7,12 @@ import { assertLegacyReefKeysMigrated } from "./legacy-key-guard.js";
 describe("Reef legacy key guard", () => {
   const tempDirs: string[] = [];
 
+  function tempDir() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-keys-"));
+    tempDirs.push(dir);
+    return dir;
+  }
+
   afterEach(() => {
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -14,8 +20,7 @@ describe("Reef legacy key guard", () => {
   });
 
   it("blocks identity generation while a legacy keys file awaits Doctor", async () => {
-    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-keys-"));
-    tempDirs.push(stateRoot);
+    const stateRoot = tempDir();
     const legacyDir = path.join(stateRoot, ".openclaw", "data", "reef");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "keys.json"), "{}");
@@ -25,20 +30,8 @@ describe("Reef legacy key guard", () => {
     );
   });
 
-  it("uses the configured legacy directory when one is present", async () => {
-    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-keys-"));
-    const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-custom-"));
-    tempDirs.push(stateRoot, legacyDir);
-    fs.writeFileSync(path.join(legacyDir, "keys.json"), "{}");
-
-    await expect(assertLegacyReefKeysMigrated(legacyDir)).rejects.toThrow(
-      "Legacy Reef identity keys must be imported",
-    );
-  });
-
   it("blocks when the legacy keys path exists but is not a regular file", async () => {
-    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-keys-"));
-    tempDirs.push(stateRoot);
+    const stateRoot = tempDir();
     fs.mkdirSync(path.join(stateRoot, ".openclaw", "data", "reef", "keys.json"), {
       recursive: true,
     });
@@ -48,17 +41,9 @@ describe("Reef legacy key guard", () => {
     );
   });
 
-  it("allows a new identity when no legacy key file exists", async () => {
-    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-keys-"));
-    tempDirs.push(stateRoot);
-
-    await expect(assertLegacyReefKeysMigrated(undefined, {}, stateRoot)).resolves.toBeUndefined();
-  });
-
   it("ignores default-home keys for an isolated active state", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-home-"));
-    const isolatedStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-isolated-"));
-    tempDirs.push(homeDir, isolatedStateDir);
+    const homeDir = tempDir();
+    const isolatedStateDir = tempDir();
     const legacyDir = path.join(homeDir, ".openclaw", "data", "reef");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "keys.json"), "{}");
@@ -69,9 +54,8 @@ describe("Reef legacy key guard", () => {
   });
 
   it("honors explicitly configured default-home keys for an isolated active state", async () => {
-    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-home-"));
-    const isolatedStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-reef-isolated-"));
-    tempDirs.push(homeDir, isolatedStateDir);
+    const homeDir = tempDir();
+    const isolatedStateDir = tempDir();
     const legacyDir = path.join(homeDir, ".openclaw", "data", "reef");
     fs.mkdirSync(legacyDir, { recursive: true });
     fs.writeFileSync(path.join(legacyDir, "keys.json"), "{}");

@@ -7,6 +7,14 @@
   "enabledByDefault": true,
   "name": "Linux Node",
   "description": "Desktop notifications, camera capture, and location for Linux node hosts.",
+  "configGroups": [
+    {
+      "id": "device-capabilities",
+      "title": "Device capabilities",
+      "order": 10,
+      "properties": ["notify", "camera", "location"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

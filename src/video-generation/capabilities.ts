@@ -1,34 +1,13 @@
-// Video generation capability helpers derive supported sizes, durations, and modes.
 import type {
   VideoGenerationMode,
   VideoGenerationModeCapabilities,
-  VideoGenerationProvider,
+  VideoGenerationProviderCapabilities,
   VideoGenerationTransformCapabilities,
 } from "./types.js";
 
-// Video generation mode helpers derive the active mode from reference inputs
-// and expose the provider capability block that applies to that mode/model.
-function resolveVideoGenerationMode(params: {
-  inputImageCount?: number;
-  inputVideoCount?: number;
-}): VideoGenerationMode | null {
-  const inputImageCount = params.inputImageCount ?? 0;
-  const inputVideoCount = params.inputVideoCount ?? 0;
-  if (inputImageCount > 0 && inputVideoCount > 0) {
-    return null;
-  }
-  if (inputVideoCount > 0) {
-    return "videoToVideo";
-  }
-  if (inputImageCount > 0) {
-    return "imageToVideo";
-  }
-  return "generate";
-}
-
-export function listSupportedVideoGenerationModes(
-  provider: Pick<VideoGenerationProvider, "capabilities">,
-): VideoGenerationMode[] {
+export function listSupportedVideoGenerationModes(provider: {
+  capabilities: VideoGenerationProviderCapabilities;
+}): VideoGenerationMode[] {
   const modes: VideoGenerationMode[] = ["generate"];
   const imageToVideo = provider.capabilities.imageToVideo;
   if (imageToVideo?.enabled) {
@@ -42,7 +21,7 @@ export function listSupportedVideoGenerationModes(
 }
 
 export function resolveVideoGenerationModeCapabilities(params: {
-  provider?: Pick<VideoGenerationProvider, "capabilities">;
+  provider?: { capabilities: VideoGenerationProviderCapabilities };
   model?: string;
   inputImageCount?: number;
   inputVideoCount?: number;
@@ -52,7 +31,14 @@ export function resolveVideoGenerationModeCapabilities(params: {
 } {
   const inputImageCount = params.inputImageCount ?? 0;
   const inputVideoCount = params.inputVideoCount ?? 0;
-  const mode = resolveVideoGenerationMode(params);
+  let mode: VideoGenerationMode | null = "generate";
+  if (inputImageCount > 0 && inputVideoCount > 0) {
+    mode = null;
+  } else if (inputVideoCount > 0) {
+    mode = "videoToVideo";
+  } else if (inputImageCount > 0) {
+    mode = "imageToVideo";
+  }
   const capabilities = params.provider?.capabilities;
   const withModelLimits = <
     T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
@@ -85,22 +71,10 @@ export function resolveVideoGenerationModeCapabilities(params: {
   if (!capabilities) {
     return { mode, capabilities: undefined };
   }
-  if (mode === "generate") {
+  if (mode) {
     return {
       mode,
-      capabilities: withModelLimits(capabilities.generate),
-    };
-  }
-  if (mode === "imageToVideo") {
-    return {
-      mode,
-      capabilities: withModelLimits(capabilities.imageToVideo),
-    };
-  }
-  if (mode === "videoToVideo") {
-    return {
-      mode,
-      capabilities: withModelLimits(capabilities.videoToVideo),
+      capabilities: withModelLimits(capabilities[mode]),
     };
   }
   const videoToVideoCapabilities = withModelLimits(capabilities.videoToVideo);

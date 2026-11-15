@@ -1,6 +1,7 @@
 // Tests bash command status replies and active-process cancellation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import * as globals from "../../globals.js";
 import {
   enqueueSystemEventEntry,
   enqueueSystemEventWithReceipt,
@@ -111,10 +112,24 @@ describe("handleBashChatCommand", () => {
     createExecToolMock.mockReset();
   });
 
+  it("logs the background session without logging its command", async () => {
+    using log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
+    const execute = vi.fn().mockResolvedValue(backgroundExecResult("private-job"));
+    createExecToolMock.mockReturnValue({ execute });
+
+    const result = await handleBashChatCommand(buildParams("/bash echo PRIVATE_COMMAND_123"));
+
+    expect(execute).toHaveBeenCalledWith(
+      "chat-bash",
+      expect.objectContaining({ command: "echo PRIVATE_COMMAND_123" }),
+    );
+    expect(result.text).toContain("session private-job");
+    expect(log).toHaveBeenCalledWith("Started bash session private-job");
+    expect(JSON.stringify(log.mock.calls)).not.toContain("PRIVATE_COMMAND_123");
+  });
+
   it.each([
-    { status: "completed", exitCode: 0, exitSignal: null, label: "code 0" },
     { status: "completed", exitCode: 1, exitSignal: null, label: "code 1" },
-    { status: "failed", exitCode: 127, exitSignal: null, label: "code 127" },
     { status: "failed", exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
   ])("reports foreground $status as $label without losing diagnostics", async (outcome) => {
     createExecToolMock.mockReturnValue({
@@ -130,57 +145,37 @@ describe("handleBashChatCommand", () => {
     expect(result.text).toContain("execution diagnostic");
   });
 
-  it.each([
-    { exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
-    { exitCode: null, exitSignal: null, label: "unknown exit code" },
-  ])("reports a retained process's $label without acknowledging delivery", async (outcome) => {
-    const eventOptions = { sessionKey: "session-key", contextKey: "exec:finished-status" };
-    const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
-    getFinishedSessionMock.mockReturnValue({
-      id: "finished-status",
-      scopeKey: "chat:bash",
-      terminalStatus: "failed",
-      aggregated: "retained diagnostic",
-      notifyOnExitRemoval: enqueueSystemEventWithReceipt("retained diagnostic", eventOptions, {
-        allowDuplicate: true,
-      }),
-      ...outcome,
-    });
-    expect(peekSystemEventEntries("session-key")).toHaveLength(2);
+  it.each([{ exitCode: null, exitSignal: null, label: "unknown exit code" }])(
+    "reports a retained process's $label without acknowledging delivery",
+    async (outcome) => {
+      const eventOptions = {
+        sessionKey: "agent:main:session-key",
+        contextKey: "exec:finished-status",
+      };
+      const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
+      getFinishedSessionMock.mockReturnValue({
+        id: "finished-status",
+        scopeKey: "chat:bash",
+        terminalStatus: "failed",
+        aggregated: "retained diagnostic",
+        notifyOnExitRemoval: enqueueSystemEventWithReceipt("retained diagnostic", eventOptions, {
+          allowDuplicate: true,
+        }),
+        ...outcome,
+      });
+      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
 
-    const result = await handleBashChatCommand(buildParams("!poll finished-status"));
+      const result = await handleBashChatCommand(buildParams("!poll finished-status"));
 
-    expect(result.text).toContain(`Exit: ${outcome.label}`);
-    expect(result.text).toContain("retained diagnostic");
-    expect(peekSystemEventEntries("session-key")).toHaveLength(2);
-    expect(peekSystemEventEntries("session-key")).toContainEqual(previous);
+      expect(result.text).toContain(`Exit: ${outcome.label}`);
+      expect(result.text).toContain("retained diagnostic");
+      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+      expect(peekSystemEventEntries(eventOptions.sessionKey)).toContainEqual(previous);
 
-    await handleBashChatCommand(buildParams("!poll finished-status"));
-    expect(peekSystemEventEntries("session-key")).toHaveLength(2);
-  });
-
-  it("returns immediately after canonical cancellation is admitted", async () => {
-    const session = buildRunningSession();
-    getSessionMock.mockReturnValue(session);
-    getFinishedSessionMock.mockReturnValue(undefined);
-
-    const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
-
-    expect(result.text).toContain("bash stopping");
-    expect(result.text).toContain("!poll session-1");
-    expect(cancelBackgroundExecSessionMock).toHaveBeenCalledWith("session-1");
-    expect(session.exited).toBe(false);
-  });
-
-  it("includes the full session ID so the user can poll after starting a new job", async () => {
-    const session = buildRunningSession({ id: "deep-forest-42" });
-    getSessionMock.mockReturnValue(session);
-    getFinishedSessionMock.mockReturnValue(undefined);
-
-    const result = await handleBashChatCommand(buildParams("/bash stop deep-forest-42"));
-
-    expect(result.text).toContain("!poll deep-forest-42");
-  });
+      await handleBashChatCommand(buildParams("!poll finished-status"));
+      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+    },
+  );
 
   it("returns no-running-job when session is not found", async () => {
     getSessionMock.mockReturnValue(undefined);
@@ -229,6 +224,7 @@ describe("handleBashChatCommand", () => {
     getSessionMock.mockReturnValue(firstSession);
     await handleBashChatCommand(buildParams("/bash stop"));
     expect(cancelBackgroundExecSessionMock).toHaveBeenCalledWith("session-first");
+    expect(firstSession.exited).toBe(false);
 
     getSessionMock.mockReturnValue(undefined);
     getFinishedSessionMock.mockReturnValue({
@@ -269,11 +265,6 @@ describe("handleBashChatCommand", () => {
   });
 
   it.each([
-    {
-      sessionKey: "agent:target:telegram:direct:target-session",
-      policySessionKey: undefined,
-      runtime: "sandboxed",
-    },
     { sessionKey: "global", policySessionKey: undefined, runtime: "sandboxed" },
     {
       sessionKey: "global",

@@ -1,3 +1,2 @@
-// Narrow entry point for setMatrixRuntime. The full runtime-api barrel is kept
-// for external/runtime callers, but bundled plugin register only needs this.
-export { setMatrixRuntime } from "./src/runtime.js";
+// Registration uses this narrow entry point instead of the full runtime API.
+export { setMatrixRuntime, setMatrixRuntimeLifecycle } from "./src/runtime.js";

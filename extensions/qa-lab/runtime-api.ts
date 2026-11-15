@@ -1,20 +1,27 @@
-// Qa Lab API module exposes the plugin public contract.
+export type { Command } from "commander";
+export type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+export { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+export { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
+export { defaultQaRuntimeModelForMode } from "./src/model-selection.runtime.js";
 export {
   buildQaTarget,
-  callGatewayFromCli,
-  type Command,
   createQaBusThread,
-  defaultQaRuntimeModelForMode,
-  definePluginEntry,
   deleteQaBusMessage,
   editQaBusMessage,
   getQaBusState,
   injectQaBusInboundMessage,
   normalizeQaTarget,
-  type OpenClawConfig,
   parseQaTarget,
-  type PluginRuntime,
   pollQaBus,
+  qaChannelPlugin,
+  reactToQaBusMessage,
+  readQaBusMessage,
+  searchQaBusMessages,
+  sendQaBusMessage,
+  setQaChannelRuntime,
+} from "openclaw/plugin-sdk/qa-channel";
+export {
   type QaBusAttachment,
   type QaBusConversation,
   type QaBusCreateThreadInput,
@@ -33,13 +40,7 @@ export {
   type QaBusStateSnapshot,
   type QaBusThread,
   type QaBusWaitForInput,
-  qaChannelPlugin,
-  reactToQaBusMessage,
-  readQaBusMessage,
-  searchQaBusMessages,
-  sendQaBusMessage,
-  setQaChannelRuntime,
-} from "./src/runtime-api.js";
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 export { createQaLiveLaneGateway } from "./src/live-transports/shared/live-gateway.runtime.js";
 export { runLiveTransportQaSuiteCommand } from "./src/live-transports/shared/live-transport-suite.runtime.js";
 export {

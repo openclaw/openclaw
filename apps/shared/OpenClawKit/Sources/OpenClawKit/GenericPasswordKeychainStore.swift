@@ -29,7 +29,13 @@ public enum GenericPasswordKeychainStore {
         account: String,
         accessGroup: String? = nil) -> String?
     {
-        guard let data = self.loadData(service: service, account: account, accessGroup: accessGroup) else { return nil }
+        var query = self.baseQuery(service: service, account: account, accessGroup: accessGroup)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
@@ -103,17 +109,6 @@ public enum GenericPasswordKeychainStore {
         ]
         let status = SecItemDelete(query as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
-    }
-
-    private static func loadData(service: String, account: String, accessGroup: String?) -> Data? {
-        var query = self.baseQuery(service: service, account: account, accessGroup: accessGroup)
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
-
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else { return nil }
-        return data
     }
 
     static func saveDataResult(

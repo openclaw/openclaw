@@ -43,17 +43,9 @@ export function readClawHubTrustErrorDetails(
   if (!isProtocolRecord(details)) {
     return undefined;
   }
-  const code = isClawHubTrustErrorCode(details.clawhubTrustCode)
-    ? details.clawhubTrustCode
-    : undefined;
-  const version = readNonBlankString(details.version);
-  const warning = readNonBlankString(details.warning);
-  if (!code && !version && !warning) {
-    return undefined;
-  }
-  return {
-    ...(code ? { clawhubTrustCode: code } : {}),
-    ...(version ? { version } : {}),
-    ...(warning ? { warning } : {}),
-  };
+  return buildClawHubTrustErrorDetails({
+    code: isClawHubTrustErrorCode(details.clawhubTrustCode) ? details.clawhubTrustCode : undefined,
+    version: readNonBlankString(details.version),
+    warning: readNonBlankString(details.warning),
+  });
 }

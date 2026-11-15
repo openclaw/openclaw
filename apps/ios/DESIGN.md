@@ -1,6 +1,6 @@
 # iOS design system
 
-OpenClaw follows the native iOS 26 design language while keeping an iOS 18 deployment target. Use SwiftUI system structure first, Liquid Glass for interactive chrome, and quiet opaque surfaces for content.
+OpenClaw requires iOS/iPadOS 26.2 or newer and follows the native iOS 26 design language. Use SwiftUI system structure first, Liquid Glass for interactive chrome, and quiet opaque surfaces for content.
 
 ## Principles
 
@@ -31,13 +31,19 @@ Feature-local layout enums may define row heights and grid dimensions, but shoul
 
 - `OpenClawProBackground`: grouped page background
 - `ProCard`: quiet content grouping; never Liquid Glass
-- `ProIconBadge`, `ProValuePill`: compact semantic indicators
+- `ProIconBadge`: compact semantic indicator
 - `OpenClawNoticeBanner`: shared connection and runtime notices
 - `OpenClawAdaptiveHeaderRow`: responsive destination heading
 - `OpenClawGlassControlGroup`: performance and morphing boundary for nearby glass controls
 - `OpenClawSidebarPalette`: fixed black-sidebar colors that remain dark in every app appearance
-- `OpenClawSidebarRevealButton`, `OpenClawSidebarHeaderLeadingSlot`: shared leading toolbar affordance
-- `openClawGlassButton(prominent:tint:)`: iOS 26 glass button with an iOS 18 bordered fallback
+- `OpenClawSidebarControlButton`, `OpenClawSidebarToolbarItem`: shared leading toolbar affordance
+- `openClawGlassButton(prominent:tint:)`: system Liquid Glass button
+- `OpenClawPrimaryActionButtonStyle`, `OpenClawSecondaryActionButtonStyle`, `OpenClawCloseButtonStyle`: capsule buttons built on `openClawButtonSurface` with system Liquid Glass
+- `openClawProminentButton()`: system prominent button filled with `OpenClawBrand.accentFill`
+
+## Accent roles
+
+`OpenClawBrand.accent` is the readable foreground accent for text, glyphs, and the app tint; it brightens in dark mode to keep 4.5:1 on dark surfaces. `OpenClawBrand.accentFill` is the darker accent for backgrounds that carry white content (prominent buttons, toggles). Never use `accent` as a fill under white text, and never use `accentFill` as text. Custom button surfaces use no gradients, sheens, or shadows; they read as a muddy halo on dark backgrounds.
 
 ## Liquid Glass rules
 
@@ -45,7 +51,7 @@ Use `openClawGlassButton` for primary actions and navigation-adjacent controls. 
 
 Do not place Liquid Glass behind reading content, forms, metrics, or every card in a scroll view. Excess glass weakens hierarchy, increases rendering cost, and competes with the sidebar and navigation chrome.
 
-Keep new iOS APIs behind `#available(iOS 26.0, *)`. The fallback must preserve the same label, action, tint meaning, accessibility, and approximate hit target.
+Guard APIs newer than the iOS 26.2 deployment target with availability checks. Any fallback must preserve the same label, action, tint meaning, accessibility, and approximate hit target.
 
 ## Review checklist
 
@@ -54,5 +60,5 @@ Keep new iOS APIs behind `#available(iOS 26.0, *)`. The fallback must preserve t
 - Has one obvious primary action.
 - Keeps semantic color independent from decoration.
 - Works in light and dark mode, Dynamic Type, and compact phone layouts.
-- Verifies iOS 26 appearance in the simulator and preserves the iOS 18 fallback path.
+- Verifies appearance on supported iOS versions in the simulator.
 - Adds matched before/after evidence for a visual change.

@@ -5,8 +5,16 @@
     "allowJs": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "tsBuildInfoFile": ".artifacts/tsgo-cache/test-root.tsbuildinfo"
+    "tsBuildInfoFile": "../../.artifacts/tsgo-cache/test-root.tsbuildinfo"
   },
+  // These source files augment Vitest context across every root-test shard.
+  "files": [
+    "../vitest/vitest.ui-e2e.setup.ts",
+    "../vitest/vitest.ui-e2e.bundled.global-setup.ts",
+    "../vitest/vitest.ui-e2e-prebuilt.global-setup.ts",
+    "../vitest/vitest.ui-e2e.global-setup.ts",
+    "../e2e/gateway-transcripts-discord-capture.e2e.test.ts"
+  ],
   "include": [
     "../../test/**/*.ts",
     "../../test/**/*.tsx",

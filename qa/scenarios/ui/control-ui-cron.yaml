@@ -18,8 +18,8 @@ scenario:
     - docs/help/testing.md
   codeRefs:
     - ui/src/e2e/cron-filters.e2e.test.ts
-    - ui/src/pages/cron/cron-page.ts
-    - ui/src/pages/cron/view.ts
+    - ui/src/pages/cron/cron-page.tsx
+    - ui/src/pages/cron/view.tsx
     - ui/src/lib/cron/index.ts
   execution:
     kind: playwright

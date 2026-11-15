@@ -6,7 +6,9 @@ import {
   getOfficialExternalPluginCatalogManifest,
   listOfficialExternalChannelCatalogEntries,
 } from "../plugins/official-external-plugin-catalog.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import {
+  createChannelAccountSecretOwner,
   createChannelSecretTargetRegistryEntries,
   getChannelRecord,
 } from "./channel-secret-basic-runtime.js";
@@ -82,26 +84,55 @@ export function loadOfficialExternalChannelSecretContractApi(
           // env fallbacks. Materialize only into the ephemeral runtime config.
           channel[field.activationField] = activationEnvValue;
         }
-        collectSecretInputAssignment({
-          value: channel[field.field],
-          path: `channels.${contract.channelId}.${field.field}`,
-          expected: "string",
-          defaults,
-          context,
-          active:
-            isEnabledFlag(channel) &&
-            hasActivationValue({
-              record: channel,
-              activationField: field.activationField,
-              activationEnv: field.activationEnv,
-              env: context.env,
-              allowEnv: true,
-            }),
-          inactiveReason: `external channel is disabled or ${field.activationField ?? "its credential surface"} is not configured.`,
-          apply: (value) => {
-            channel[field.field] = value;
-          },
-        });
+        const { accounts: _accounts, ...defaultAccount } = channel;
+        const sharedChannel = Object.fromEntries(
+          Object.entries(defaultAccount).filter(
+            ([key]) =>
+              !contract.fields.some(
+                (credential) => key === credential.field || key === credential.activationField,
+              ),
+          ),
+        );
+        const collectAccount = (
+          accountId: string,
+          account: Record<string, unknown>,
+          root: boolean,
+          ownerContract: unknown,
+        ) => {
+          const accountPath = root
+            ? `channels.${contract.channelId}`
+            : appendConfigPathSegment(`channels.${contract.channelId}.accounts`, accountId);
+          collectSecretInputAssignment({
+            value: account[field.field],
+            path: `${accountPath}.${field.field}`,
+            expected: "string",
+            defaults,
+            context,
+            active:
+              (root
+                ? isEnabledFlag(channel)
+                : isChannelAccountEffectivelyEnabled(channel, account)) &&
+              hasActivationValue({
+                record: account,
+                activationField: field.activationField,
+                activationEnv: field.activationEnv,
+                env: context.env,
+                allowEnv: root,
+              }),
+            inactiveReason: `external channel${root ? "" : " account"} is disabled or ${field.activationField ?? "its credential surface"} is not configured.`,
+            owner: createChannelAccountSecretOwner(
+              contract.channelId,
+              accountId,
+              channel,
+              root ? defaultAccount : account,
+              ownerContract,
+            ),
+            apply: (value) => {
+              account[field.field] = value;
+            },
+          });
+        };
+        collectAccount("default", channel, true, defaultAccount);
         const accounts = isRecord(channel.accounts) ? channel.accounts : undefined;
         if (!accounts) {
           continue;
@@ -111,26 +142,7 @@ export function loadOfficialExternalChannelSecretContractApi(
           if (!account || !Object.hasOwn(account, field.field)) {
             continue;
           }
-          collectSecretInputAssignment({
-            value: account[field.field],
-            path: `channels.${contract.channelId}.accounts.${accountId}.${field.field}`,
-            expected: "string",
-            defaults,
-            context,
-            active:
-              isChannelAccountEffectivelyEnabled(channel, account) &&
-              hasActivationValue({
-                record: account,
-                activationField: field.activationField,
-                activationEnv: field.activationEnv,
-                env: context.env,
-                allowEnv: false,
-              }),
-            inactiveReason: `external channel account is disabled or ${field.activationField ?? "its credential surface"} is not configured.`,
-            apply: (value) => {
-              account[field.field] = value;
-            },
-          });
+          collectAccount(accountId, account, false, { channel: sharedChannel, account });
         }
       }
     },

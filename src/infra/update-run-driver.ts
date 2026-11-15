@@ -1,11 +1,9 @@
 import { hostname } from "node:os";
+import type { z } from "zod";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import type { UpdateRunDriverSchema } from "./update-run-driver-schema.js";
 
-export type UpdateRunDriver = {
-  host: string;
-  pid: number;
-  startIdentity: string;
-};
+export type UpdateRunDriver = z.infer<typeof UpdateRunDriverSchema>;
 
 export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDriver): boolean {
   return (
@@ -13,9 +11,12 @@ export function sameUpdateRunDriver(left: UpdateRunDriver, right: UpdateRunDrive
   );
 }
 
-export function readUpdateRunDriver(): UpdateRunDriver | undefined {
+export function readUpdateRunDriver(pid = process.pid): UpdateRunDriver | undefined {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return undefined;
+  }
   const host = hostname();
-  const startedAt = getFileLockProcessStartTime(process.pid);
+  const startedAt = getFileLockProcessStartTime(pid);
   if (
     !host ||
     host.length > 255 ||
@@ -25,7 +26,7 @@ export function readUpdateRunDriver(): UpdateRunDriver | undefined {
   ) {
     return undefined;
   }
-  return { host, pid: process.pid, startIdentity: String(startedAt) };
+  return { host, pid, startIdentity: String(startedAt) };
 }
 
 export function inspectUpdateRunDriver(driver: UpdateRunDriver): "alive" | "dead" | "unknown" {

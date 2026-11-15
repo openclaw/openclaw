@@ -1,6 +1,7 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash } from "node:crypto";
+import { InternalToolLoopBlocked } from "../../packages/agent-core/src/internal-hooks.js";
 import { recordExecutionDecisionWork } from "../audit/execution-decision-work.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { getAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
@@ -10,7 +11,7 @@ const genericDecisions = {
   denied: ["denied", "enforced", "generic_action_policy_denied"],
   suppressed: ["not-applicable", "attribution-only", "generic_action_suppressed"],
 } as const;
-const toolDecisionOwner = new AsyncLocalStorage<{ recorded: boolean }>();
+const toolDecisionOwner = new AsyncContext<{ recorded: boolean }>(Symbol("toolDecisionOwner"));
 
 /** Marks the current tool call after its owner-native decision record is registered. */
 export function markToolDecisionRecorded(): void {
@@ -27,11 +28,17 @@ export async function runWithGenericToolActionDecision<T>(
   run: () => Promise<T> | T,
 ): Promise<T> {
   const state = { recorded: false };
+  let kind: keyof typeof genericDecisions = "allowed";
   try {
     return await toolDecisionOwner.run(state, run);
+  } catch (error) {
+    if (error instanceof InternalToolLoopBlocked) {
+      kind = "suppressed";
+    }
+    throw error;
   } finally {
     if (!state.recorded) {
-      recordGenericToolActionDecision(tool, toolCallId, "allowed");
+      recordGenericToolActionDecision(tool, toolCallId, kind);
     }
   }
 }

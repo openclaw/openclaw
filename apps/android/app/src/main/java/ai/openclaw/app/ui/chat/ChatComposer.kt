@@ -4,6 +4,7 @@ import ai.openclaw.app.ChatDraft
 import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
 import ai.openclaw.app.SharedAttachment
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 import ai.openclaw.app.chat.OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
@@ -187,8 +188,6 @@ internal class ChatComposerTextDraftStore(
     records += retainedNewestFirst.asReversed()
     return ArrayList(records.flatten())
   }
-
-  internal fun size(): Int = drafts.size
 }
 
 private fun pendingSendCheckpointEntry(
@@ -212,15 +211,9 @@ internal fun chatComposerTextDraftsFromSnapshot(values: List<String>?): ChatComp
         if (entry[7].isNotEmpty()) restored[owner] = entry[7]
       }
 
-      CHAT_COMPOSER_PENDING_SEND_RECORD -> {
+      CHAT_COMPOSER_PENDING_SEND_RECORD, CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD -> {
         if (entry[6].isNotEmpty()) {
-          pending += PendingChatComposerSend(entry[6], owner, entry[7])
-        }
-      }
-
-      CHAT_COMPOSER_PENDING_SEND_WITHOUT_INPUT_RECORD -> {
-        if (entry[6].isNotEmpty()) {
-          pending += PendingChatComposerSend(entry[6], owner, null)
+          pending += PendingChatComposerSend(entry[6], owner, entry[7].takeIf { entry[0] == CHAT_COMPOSER_PENDING_SEND_RECORD })
         }
       }
     }
@@ -268,10 +261,8 @@ internal class ChatComposerMediaCheckpoint(
   }
 
   fun consume(requestId: String? = null): ChatComposerMediaLease? {
-    if (this.requestId != requestId) return null
-    val capturedOwner = owner ?: return null
-    val capturedAuthorizationId = mediaAuthorizationId ?: return null
-    return ChatComposerMediaLease(capturedOwner, capturedAuthorizationId).also { clear() }
+    if (this.requestId != requestId || owner == null || mediaAuthorizationId == null) return null
+    return clear()
   }
 
   fun clear(): ChatComposerMediaLease? {
@@ -394,7 +385,6 @@ internal data class StagedChatShare(
 internal const val CHAT_COMPOSER_MAX_ATTACHMENTS = 8
 
 // Gateway chat attachments default to 20 MiB (images: 6 MiB); Android's outbox further caps audio/documents at 8 MiB.
-internal const val CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES = 6L * 1024L * 1024L
 internal const val CHAT_COMPOSER_MAX_AUDIO_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_VIDEO_DECODED_BYTES = OUTBOX_MAX_VIDEO_COMMAND_ATTACHMENT_BYTES
 internal const val CHAT_COMPOSER_MAX_DOCUMENT_DECODED_BYTES = OUTBOX_MAX_COMMAND_ATTACHMENT_BYTES
@@ -428,13 +418,9 @@ internal fun admitChatAttachments(
   val accepted = mutableListOf<PendingAttachment>()
   var base64Chars = currentAttachments.sumOf { it.base64.length.toLong() }
   var decodedBytes = currentAttachments.sumOf { decodedBase64ByteCount(it.base64) }
-  var nonVideoBase64Chars =
-    currentAttachments.filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }.sumOf { it.base64.length.toLong() }
-  var nonVideoDecodedBytes =
-    currentAttachments
-      .filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }
-      .sumOf { decodedBase64ByteCount(it.base64) }
-  var omittedCount = 0
+  val nonVideoAttachments = currentAttachments.filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }
+  var nonVideoBase64Chars = nonVideoAttachments.sumOf { it.base64.length.toLong() }
+  var nonVideoDecodedBytes = nonVideoAttachments.sumOf { decodedBase64ByteCount(it.base64) }
   for (candidate in candidates) {
     val candidateBase64Chars = candidate.base64.length.toLong()
     val candidateDecodedBytes = decodedBase64ByteCount(candidate.base64)
@@ -453,11 +439,9 @@ internal fun admitChatAttachments(
         nonVideoBase64Chars += candidateBase64Chars
         nonVideoDecodedBytes += candidateDecodedBytes
       }
-    } else {
-      omittedCount += 1
     }
   }
-  return ChatAttachmentAdmission(accepted = accepted, omittedCount = omittedCount)
+  return ChatAttachmentAdmission(accepted = accepted, omittedCount = candidates.size - accepted.size)
 }
 
 internal fun chatComposerAttachmentDecodedByteLimit(mimeType: String): Long =
@@ -506,15 +490,6 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
-
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

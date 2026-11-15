@@ -1,4 +1,4 @@
-import { resolveConfiguredRealtimeVoiceProvider } from "openclaw/plugin-sdk/realtime-voice";
+import { resolveConfiguredRealtimeVoiceProviderAsync } from "openclaw/plugin-sdk/realtime-voice";
 import { describe, expect, it } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "./realtime-voice-provider.js";
 import { buildOpenAISpeechProvider } from "./speech-provider.js";
@@ -15,7 +15,7 @@ describe.skipIf(!live)("OpenAI Talk account defaults live", () => {
       return;
     }
     const cfg = {};
-    const { provider, providerConfig } = resolveConfiguredRealtimeVoiceProvider({
+    const { provider, providerConfig } = await resolveConfiguredRealtimeVoiceProviderAsync({
       cfg,
       surface: "gateway-relay",
       providers: [buildOpenAIRealtimeVoiceProvider()],

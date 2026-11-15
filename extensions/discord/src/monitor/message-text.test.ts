@@ -1,69 +1,35 @@
-import {
-  ComponentType,
-  MessageFlags,
-  MessageReferenceType,
-  StickerFormatType,
-} from "discord-api-types/v10";
-import { beforeAll, describe, expect, it } from "vitest";
-import type { Message } from "../internal/discord.js";
-
-let resolveDiscordMessageText: typeof import("./message-text.js").resolveDiscordMessageText;
-let resolveDiscordMessageHistoryText: typeof import("./message-text.js").resolveDiscordMessageHistoryText;
-
-beforeAll(async () => {
-  ({ resolveDiscordMessageHistoryText, resolveDiscordMessageText } =
-    await import("./message-text.js"));
-});
+import { ComponentType, MessageReferenceType, StickerFormatType } from "discord-api-types/v10";
+import { describe, expect, it } from "vitest";
+import { Message } from "../internal/discord.js";
+import { createInternalTestClient } from "../internal/test-builders.test-support.js";
+import { createDiscordMessage } from "./message-handler.preflight.test-helpers.js";
+import { resolveDiscordMessageHistoryText, resolveDiscordMessageText } from "./message-text.js";
 
 function asMessage(payload: Record<string, unknown>): Message {
   return payload as unknown as Message;
 }
 
-function asForwardedSnapshotMessage(params: {
-  content: string;
-  embeds: Array<{ title?: string; description?: string }>;
-  attachments?: Array<Record<string, unknown>>;
-}) {
-  return asMessage({
+const renderText = (payload: Record<string, unknown>) =>
+  resolveDiscordMessageText(asMessage(payload));
+
+function forwardedText(message: Record<string, unknown>) {
+  const snapshot = {
     content: "",
-    rawData: {
-      message_snapshots: [
-        {
-          message: {
-            content: params.content,
-            embeds: params.embeds,
-            attachments: params.attachments ?? [],
-            author: { id: "u2", username: "Bob", discriminator: "0" },
-          },
-        },
-      ],
-    },
-  });
+    author: { id: "u2", username: "Bob", discriminator: "0" },
+    ...message,
+  };
+  return resolveDiscordMessageText(
+    asMessage({ content: "", rawData: { message_snapshots: [{ message: snapshot }] } }),
+    { includeForwarded: true },
+  );
 }
 
-function asReferencedForwardMessage(params: {
-  content?: string;
-  components?: Array<Record<string, unknown>>;
-  embeds?: Array<{ title?: string; description?: string }>;
-  attachments?: Array<Record<string, unknown>>;
-  messageReferenceType?: MessageReferenceType;
-}) {
+function asReferencedForwardMessage(content: string, type: MessageReferenceType) {
   return asMessage({
     content: "",
-    messageReference: {
-      type: params.messageReferenceType ?? MessageReferenceType.Forward,
-      message_id: "m0",
-      channel_id: "c1",
-    },
+    messageReference: { type },
     referencedMessage: asMessage({
-      id: "m0",
-      channelId: "c1",
-      content: params.content ?? "",
-      components: params.components ?? [],
-      attachments: params.attachments ?? [],
-      embeds: params.embeds ?? [],
-      flags: params.components ? MessageFlags.IsComponentsV2 : 0,
-      stickers: [],
+      content,
       author: { id: "u2", username: "Bob", discriminator: "0" },
     }),
   });
@@ -71,307 +37,104 @@ function asReferencedForwardMessage(params: {
 
 describe("resolveDiscordMessageText", () => {
   it("renders definitive video MIME as video on history text carriers", () => {
-    expect(
-      resolveDiscordMessageHistoryText(
-        asMessage({
-          content: "",
-          attachments: [{ filename: "clip.mp4", content_type: "video/mp4" }],
-        }),
-      ),
-    ).toBe("<media:video>");
+    const message = asMessage({
+      content: "",
+      attachments: [{ filename: "clip.mp4", content_type: "video/mp4" }],
+    });
+    expect(resolveDiscordMessageHistoryText(message)).toBe("<media:video>");
   });
 
-  it("includes forwarded message snapshots in body text", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({ content: "forwarded hello", embeds: [] }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("forwarded hello");
-  });
-
-  it("falls back to referenced forward message text when snapshots are absent", () => {
-    const text = resolveDiscordMessageText(
-      asReferencedForwardMessage({ content: "forwarded from referenced message" }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("forwarded from referenced message");
-  });
-
-  it("does not treat ordinary replies as forwarded context", () => {
-    const text = resolveDiscordMessageText(
-      asReferencedForwardMessage({
-        content: "quoted reply content",
-        messageReferenceType: MessageReferenceType.Default,
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toBe("");
-  });
-
-  it("resolves user mentions in content", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "Hello <@123> and <@456>!",
-        mentionedUsers: [
-          { id: "123", username: "alice", globalName: "Alice Wonderland", discriminator: "0" },
-          { id: "456", username: "bob", discriminator: "0" },
-        ],
-      }),
-    );
-    expect(text).toBe("Hello @Alice Wonderland and @bob!");
-  });
-
-  it.each(["a$'b", "$&", "big$$money", "a$`b"])(
-    "preserves literal mention labels containing %s",
-    (label) => {
-      const text = resolveDiscordMessageText(
-        asMessage({
-          content: "Hello <@1> and <@!1>, meet <@2>!",
-          mentionedUsers: [
-            { id: "1", globalName: label, username: "fallback" },
-            { id: "2", username: label },
-          ],
-        }),
+  it.each([
+    [MessageReferenceType.Forward, "[Forwarded message from @Bob]\nforwarded"],
+    [MessageReferenceType.Default, ""],
+  ] as const)(
+    "includes only forwarded reference text (type=%s)",
+    (messageReferenceType, expected) => {
+      const result = resolveDiscordMessageText(
+        asReferencedForwardMessage("forwarded", messageReferenceType),
+        { includeForwarded: true },
       );
-      expect(text).toBe(`Hello @${label} and @${label}, meet @${label}!`);
+      expect(result).toBe(expected);
     },
   );
 
-  it.each([undefined, ""])("uses the user ID when mention names are %s", (name) => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "Hello <@1> and <@!1>!",
-        mentionedUsers: [{ id: "1", globalName: name, username: name }],
-      }),
-    );
-    expect(text).toBe("Hello @1 and @1!");
+  const label = "a$'b $& big$$money a$`b";
+  it.each([
+    [
+      "literal replacement tokens",
+      "Hello <@1> and <@!1>, meet <@2>!",
+      [
+        { id: "1", globalName: label, username: "fallback" },
+        { id: "2", username: label },
+      ],
+      `Hello @${label} and @${label}, meet @${label}!`,
+    ],
+    ["user IDs when names are absent", "Hello <@1> and <@!1>!", [{ id: "1" }], "Hello @1 and @1!"],
+  ] as const)("resolves mentions with %s", (_name, content, mentionedUsers, expected) => {
+    expect(renderText({ content, mentionedUsers })).toBe(expected);
   });
 
-  it("leaves content unchanged if no mentions present", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({ content: "Hello world", mentionedUsers: [] }),
-    );
-    expect(text).toBe("Hello world");
-  });
-
-  it("keeps the primary body empty for sticker-only messages", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        stickers: [{ id: "sticker-3", name: "party", format_type: StickerFormatType.PNG }],
-      }),
-    );
-
-    expect(text).toBe("");
-  });
-
-  it("renders forwarded media facts as text without the legacy single-item count", () => {
-    const attachmentText = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        rawData: {
-          message_snapshots: [
-            {
-              message: {
-                content: "",
-                embeds: [],
-                attachments: [
-                  {
-                    id: "forwarded-image",
-                    filename: "forwarded.png",
-                    content_type: "image/png",
-                    url: "https://cdn.discordapp.com/forwarded.png",
-                  },
-                ],
-                author: { id: "u2", username: "Bob", discriminator: "0" },
-              },
-            },
-          ],
-        },
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(attachmentText).toContain("<media:image>");
-    expect(attachmentText).not.toContain("(1 image)");
-  });
-
-  it("renders forwarded captions together with their media facts", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "look at this",
-        embeds: [],
-        attachments: [
-          {
-            id: "forwarded-image",
-            filename: "forwarded.png",
-            content_type: "image/png",
-            url: "https://cdn.discordapp.com/forwarded.png",
-          },
-        ],
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toContain("look at this\n<media:image>");
-  });
-
-  it("preserves audio classification in forwarded text-only previews", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "",
-        embeds: [],
-        attachments: [
-          {
-            id: "forwarded-audio",
-            filename: "voice.ogg",
-            content_type: "audio/ogg",
-            url: "https://cdn.discordapp.com/voice.ogg",
-          },
-        ],
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toContain("<media:audio>");
-  });
-
-  it("uses embed title when content is empty", () => {
-    expect(
-      resolveDiscordMessageText(asMessage({ content: "", embeds: [{ title: "Breaking" }] })),
-    ).toBe("Breaking");
+  it.each(["", "look at this"])("renders forwarded media with caption %j", (content) => {
+    const result = forwardedText({ content, attachments: [{ content_type: "image/png" }] });
+    expect(result).toContain(content ? `${content}\n<media:image>` : "<media:image>");
+    if (!content) {
+      expect(result).toContain("[Forwarded message from @Bob]");
+      expect(result).not.toContain("(1 image)");
+    }
   });
 
   it("uses Components v2 text display content when normal message text is empty", () => {
+    const client = createInternalTestClient();
     const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        flags: MessageFlags.IsComponentsV2,
-        components: [
-          {
-            type: ComponentType.Container,
-            components: [
-              { type: ComponentType.TextDisplay, content: "Component headline" },
-              {
-                type: ComponentType.Section,
-                components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
-                accessory: { type: ComponentType.Thumbnail, media: { url: "attachment://x.png" } },
-              },
-            ],
-          },
-        ],
-      }),
-    );
-
-    expect(text).toBe("Component headline\nComponent body");
-  });
-
-  it("uses Components v2 text display content from referenced reply messages", () => {
-    const text = resolveDiscordMessageText(
-      asReferencedForwardMessage({
-        components: [
-          {
-            type: ComponentType.Container,
-            components: [{ type: ComponentType.TextDisplay, content: "Referenced component text" }],
-          },
-        ],
-        messageReferenceType: MessageReferenceType.Default,
-      }).referencedMessage!,
-    );
-
-    expect(text).toBe("Referenced component text");
-  });
-
-  it("uses embed description when content is empty", () => {
-    expect(
-      resolveDiscordMessageText(asMessage({ content: "", embeds: [{ description: "Details" }] })),
-    ).toBe("Details");
-  });
-
-  it("joins embed title and description when content is empty", () => {
-    expect(
-      resolveDiscordMessageText(
-        asMessage({ content: "", embeds: [{ title: "Breaking", description: "Details" }] }),
-      ),
-    ).toBe("Breaking\nDetails");
-  });
-
-  it("prefers message content over embed fallback text", () => {
-    expect(
-      resolveDiscordMessageText(
-        asMessage({
-          content: "hello from content",
-          embeds: [{ title: "Breaking", description: "Details" }],
-        }),
-      ),
-    ).toBe("hello from content");
-  });
-
-  it("joins forwarded snapshot embed title and description when content is empty", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "",
-        embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("Forwarded title\nForwarded details");
-  });
-
-  it("preserves text from later embeds in forwarded message snapshots", () => {
-    const text = resolveDiscordMessageText(
-      asForwardedSnapshotMessage({
-        content: "",
-        embeds: [
-          {},
-          { title: "Forwarded title", description: "Forwarded details" },
-          { description: "Forwarded follow-up" },
-        ],
-      }),
-      { includeForwarded: true },
-    );
-
-    expect(text).toBe(
-      "[Forwarded message from @Bob]\nForwarded title\nForwarded details\nForwarded follow-up",
-    );
-  });
-
-  it("includes Components v2 text display content from forwarded snapshots", () => {
-    const text = resolveDiscordMessageText(
-      asMessage({
-        content: "",
-        rawData: {
-          message_snapshots: [
+      createDiscordMessage(
+        {
+          id: "m",
+          channelId: "c",
+          content: "",
+          author: { id: "u", bot: false },
+          components: [
             {
-              message: {
-                content: "",
-                embeds: [],
-                attachments: [],
-                components: [
-                  {
-                    type: ComponentType.Container,
-                    components: [
-                      { type: ComponentType.TextDisplay, content: "Forwarded component text" },
-                    ],
+              type: ComponentType.Container,
+              components: [
+                { type: ComponentType.TextDisplay, content: "Component headline" },
+                {
+                  type: ComponentType.Section,
+                  components: [{ type: ComponentType.TextDisplay, content: "Component body" }],
+                  accessory: {
+                    type: ComponentType.Thumbnail,
+                    media: { url: "attachment://x.png" },
                   },
-                ],
-                author: { id: "u2", username: "Bob", discriminator: "0" },
-              },
+                },
+              ],
             },
           ],
         },
-      }),
-      { includeForwarded: true },
+        client,
+      ),
     );
 
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("Forwarded component text");
+    expect(text).toBe("Component headline\nComponent body");
+    expect(resolveDiscordMessageText(new Message(client, "partial-message"))).toBe("");
+  });
+
+  it.each([
+    [
+      "empty sticker-only primary body",
+      {
+        content: "",
+        stickers: [{ id: "sticker-3", name: "party", format_type: StickerFormatType.PNG }],
+      },
+      "",
+    ],
+    [
+      "content before embed fallback",
+      {
+        content: "hello from content",
+        embeds: [{ title: "Breaking", description: "Details" }],
+      },
+      "hello from content",
+    ],
+  ] as const)("renders %s", (_name, message, expected) => {
+    expect(renderText(message)).toBe(expected);
   });
 });

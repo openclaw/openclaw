@@ -7,11 +7,76 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createHash } = require("node:crypto");
 const { isUtf8 } = require("node:buffer");
-const { spawnSync } = require("node:child_process");
+const { spawn, spawnSync } = require("node:child_process");
+const { constants } = require("node:os");
+const { getSystemErrorMap } = require("node:util");
 const expected = JSON.parse(process.argv[1]);
 const syncRoot = process.cwd();
-const cwd = process.argv[2] ?? syncRoot;
+const cwd = expected.payload === undefined && !expected.script ? process.argv[2] ?? syncRoot : syncRoot;
 let temporary;
+let nativeGit;
+let publishedGit;
+let child;
+let signal;
+let childSettlement;
+let settled = true;
+const preserveGit = typeof expected.payload === "string" || expected.script;
+// SSH output can close before cleanup; retain this handler for queued errors.
+if (preserveGit) process.stderr.on("error", error => {
+  if (error.code !== "EPIPE") throw error;
+});
+function forwardSignal(value) {
+  signal ??= value;
+  if (child?.pid) childSettlement ??= settleGroup(child.pid, value);
+}
+const signalHandlers = ["SIGINT", "SIGTERM", "SIGHUP"].map(value => [value, () => forwardSignal(value)]);
+function groupAlive(pid) {
+  try { process.kill(-pid, 0); return true; } catch (error) {
+    return error.code === "ESRCH" ? false : null;
+  }
+}
+async function settleGroup(pid, firstSignal = "SIGTERM") {
+  if (groupAlive(pid) === false) return;
+  process.stderr.write("[crabbox] stopping background source work before Git restoration\n");
+  for (const value of [firstSignal, "SIGKILL"]) {
+    try { process.kill(-pid, value); } catch (error) {
+      if (error.code === "ESRCH") return;
+    }
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      if (groupAlive(pid) === false) return;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+  }
+  settled = false;
+  process.stderr.write("[crabbox] source child cleanup is unverified; temporary source and receiver retained\n");
+  // Keep the native workspace witness alive until absence is actually observed.
+  // The lease lifetime bounds this recovery hold; losing SSH does not prove closure.
+  await new Promise(resolve => {
+    const timer = setInterval(() => {
+      if (groupAlive(pid) === false) { clearInterval(timer); settled = true; resolve(); }
+    }, 100);
+  });
+}
+async function runChild(command, args, env, stdio = "inherit") {
+  if (signal) throw new Error("source payload interrupted before start");
+  return await new Promise((resolve, reject) => {
+    const running = spawn(command, args, { cwd, env, stdio, detached: true });
+    child = running;
+    childSettlement = null;
+    running.once("error", reject);
+    running.once("close", async (status, stoppedBy) => {
+      // The group can outlive its leader. Keep both our signal target and the
+      // native witness until every remaining writer has stopped.
+      if (running.pid) await (childSettlement ??= settleGroup(running.pid));
+      child = null;
+      resolve({ status, signal: stoppedBy });
+    });
+  });
+}
+async function receive() {
+if (preserveGit) for (const [value, handler] of signalHandlers)
+  process.on(value, handler);
 function fail(message) { throw new Error(message); }
 function stat(file) {
   try { return fs.lstatSync(file); } catch (error) {
@@ -37,8 +102,35 @@ function hashFile(file, algorithm, blob = false) {
     return hash.digest("hex");
   } finally { fs.closeSync(fd); }
 }
+const gitFailureCause = Object.freeze({
+  noSpace: "no-space", permissionDenied: "permission-denied",
+  commandUnavailable: "command-unavailable", outputLimit: "output-limit",
+  terminated: "terminated", remoteRefMissing: "remote-ref-missing",
+  invalidObjectData: "invalid-object-data", dns: "dns", connection: "connection",
+  auth: "auth", unknown: "unknown",
+});
+function gitFailure(phase, result) {
+  const errors = getSystemErrorMap();
+  const rawCode = result.error?.code;
+  const code = [...errors.values()].some(([name]) => name === rawCode) ? rawCode : null;
+  const text = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8").trim() : "";
+  const cause = code === "ENOSPC" ? gitFailureCause.noSpace
+    : code === "EACCES" || code === "EPERM" ? gitFailureCause.permissionDenied
+    : code === "ENOENT" ? gitFailureCause.commandUnavailable
+    : code === "ENOBUFS" ? gitFailureCause.outputLimit
+    : result.signal !== null ? gitFailureCause.terminated
+    : /^fatal: couldn't find remote ref [^\r\n]+$/u.test(text) ? gitFailureCause.remoteRefMissing
+    : /^fatal: (?:pack has bad object(?: at offset \d+)?|bad object [a-f0-9]+|index-pack failed|fetch-pack: invalid index-pack output)$/u.test(text) ? gitFailureCause.invalidObjectData
+    : /^fatal: unable to access '[^'\r\n]+': Could not resolve (?:host|proxy): [^\r\n]+$/u.test(text) ? gitFailureCause.dns
+    : /^fatal: unable to access '[^'\r\n]+': (?:Failed to connect to [^\r\n]+|Recv failure: Connection reset by peer)$/u.test(text) ? gitFailureCause.connection
+    : /^fatal: (?:Authentication failed for '[^'\r\n]+'|could not read Username for '[^'\r\n]+': [^\r\n]+)$/u.test(text) ? gitFailureCause.auth
+    : gitFailureCause.unknown;
+  return { phase, baseSha: /^[a-f0-9]{40}$/u.test(expected.baseSha) ? expected.baseSha : null,
+    status: result.status, signal: result.signal, spawnError: Boolean(result.error),
+    code, errno: errors.has(result.error?.errno) ? result.error.errno : null, cause };
+}
 try {
-  if (process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
+  if (!preserveGit && process.argv[2] && (cwd === syncRoot || cwd.startsWith(syncRoot + path.sep) || syncRoot.startsWith(cwd + path.sep)))
     fail("Testbox execution and sync workspaces overlap; stop this lease and warm a fresh one");
   const capsule = path.join(syncRoot, ".openclaw-crabbox-changed-gate.bundle");
   if (!stat(capsule)?.isFile() || hashFile(capsule, "sha256") !== expected.digest)
@@ -58,10 +150,10 @@ try {
   delete env.GIT_ALTERNATE_OBJECT_DIRECTORIES;
   delete env.GIT_SHALLOW_FILE;
   function git(args, options = {}) {
-    const { encoding, ...spawnOptions } = options;
+    const { encoding, phase = args[0], ...spawnOptions } = options;
     const result = spawnSync("git", ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", ...args],
       { cwd, env, maxBuffer: 64 * 1024 * 1024, ...spawnOptions });
-    if (result.status !== 0) fail("source Git operation failed: " + args[0]);
+    if (result.status !== 0) fail("source Git operation failed: " + JSON.stringify(gitFailure(phase, result)));
     if (encoding === "buffer") return result.stdout;
     if (result.stdout === null) return "";
     if (!isUtf8(result.stdout)) fail("unsupported non-UTF-8 Git metadata");
@@ -69,10 +161,32 @@ try {
   }
   git(["init", "-q"]);
   git(["remote", "add", "origin", "https://github.com/openclaw/openclaw.git"]);
-  git(["fetch", "-q", "--depth=2", "origin", expected.baseSha + ":refs/remotes/origin/main"]);
+  const preparedGit = path.join(cwd, ".git");
+  const preparedEnv = { ...env, GIT_DIR: preparedGit,
+    GIT_INDEX_FILE: path.join(preparedGit, "index") };
+  const reuseBase = stat(preparedGit)?.isDirectory() &&
+    git(["for-each-ref", "--format=%(objectname)", "refs/remotes/origin/main"], {
+      env: preparedEnv,
+    }).trim() === expected.baseSha;
+  // A promisor checkout can own the exact commit and tree while omitting blobs
+  // needed by later checkout and content-diff operations. Inspect the base and
+  // each immediate parent's tree without lazy fetching, matching fetch depth 2.
+  const preparedDepth = reuseBase ? git(["rev-list", "--parents", "--max-count=1",
+    expected.baseSha], {
+    env: { ...preparedEnv, GIT_NO_LAZY_FETCH: "1" }, phase: "base-inspect",
+  }).trim().split(" ") : [];
+  const preparedBaseComplete = reuseBase && preparedDepth.every(commit =>
+    !git(["rev-list", "--objects", "--missing=print", "--max-count=1", commit], {
+      env: { ...preparedEnv, GIT_NO_LAZY_FETCH: "1" }, phase: "base-inspect",
+    }).split("\n").some(line => line.startsWith("?")));
+  // Complete prepared objects stay local. An incomplete or absent prepared base
+  // uses the existing depth-bounded canonical fetch and keeps every exact-SHA guard.
+  git(["fetch", "-q", "--depth=2", preparedBaseComplete ? preparedGit : "origin",
+    expected.baseSha + ":refs/remotes/origin/main"], { phase: "base-fetch" });
   if (git(["rev-parse", "refs/remotes/origin/main"]).trim() !== expected.baseSha)
     fail("source base mismatch");
-  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"]);
+  git(["fetch", "-q", bundle, "refs/openclaw/source-capsule:refs/heads/openclaw-source"],
+    { phase: "capsule-fetch" });
   for (const [ref, value] of [
     ["refs/heads/openclaw-source", expected.carrier],
     ["refs/heads/openclaw-source^{tree}", expected.tree],
@@ -91,7 +205,7 @@ try {
   }
   // The prepared workspace can contain newer workflow source. Its committed tree
   // owns only cleanup candidates; the capsule alone selects the executed source.
-  const previous = new Map((process.argv[2] ? entries("HEAD", path.join(cwd, ".git")) : [])
+  const previous = new Map((!preserveGit && process.argv[2] ? entries("HEAD", path.join(cwd, ".git")) : [])
     .map(entry => [entry.file, entry]));
   const files = entries(expected.tree);
   const metadata = JSON.parse(git(["show", "-s", "--format=%B", expected.carrier]));
@@ -132,11 +246,14 @@ try {
       fs.mkdirSync(directory);
     }
   }
+  // Reuse only physically verified bytes, kinds, and executable bits. No source
+  // code runs before acceptance; lifecycle hooks still trigger a full recheck.
+  const changed = files.filter(entry => sourceMismatch(entry) !== null);
   // Batch raw blobs once; checkout/archive would apply attributes or export rules.
   const blobPath = path.join(temporary, "blobs");
   const output = fs.openSync(blobPath, "wx");
   try { git(["cat-file", "--batch"], {
-    input: files.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
+    input: changed.map(entry => entry.oid + "\n").join(""), stdio: ["pipe", output, "pipe"]
   }); } finally { fs.closeSync(output); }
   const input = fs.openSync(blobPath, "r");
   const buffer = Buffer.alloc(65536);
@@ -150,7 +267,7 @@ try {
     return chunk;
   }
   try {
-    for (const entry of files) {
+    for (const entry of changed) {
       let header = "";
       for (;;) {
         const byte = take(1)[0];
@@ -203,38 +320,37 @@ try {
     if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
   }
   // Verify filesystem bytes, kind, and executable bit independently of either index.
-  function verify({ file, mode, oid }) {
-    if (!reachable(file)) fail("source parent mismatch: " + file);
+  function sourceMismatch({ file, mode, oid }) {
+    if (!reachable(file)) return "source parent mismatch";
     const info = stat(file);
     let actual;
     if (mode === "120000") {
-      if (!info?.isSymbolicLink()) fail("source kind mismatch: " + file);
+      if (!info?.isSymbolicLink()) return "source kind mismatch";
       const target = fs.readlinkSync(file, { encoding: "buffer" });
       actual = createHash("sha1").update("blob " + target.length + "\0").update(target).digest("hex");
     } else {
       if (!info?.isFile() || Boolean(info.mode & 0o100) !== (mode === "100755"))
-        fail("source mode mismatch: " + file);
+        return "source mode mismatch";
       actual = hashFile(file, "sha1", true);
     }
-    if (actual !== oid) fail("source bytes mismatch: " + file);
+    return actual === oid ? null : "source bytes mismatch";
   }
-  for (const entry of files) verify(entry);
+  function verify(entry) {
+    const mismatch = sourceMismatch(entry);
+    if (mismatch) fail(mismatch + ": " + entry.file);
+  }
   if (expected.alias) git(["update-ref", expected.alias, expected.baseSha]);
   git(["symbolic-ref", "HEAD", "refs/heads/openclaw-source"]);
   const sourceIndex = git(["ls-files", "--stage", "-v", "-z"], { encoding: "buffer" });
-  fs.rmSync(".git", { recursive: true, force: true });
-  fs.renameSync(gitDir, path.join(cwd, ".git"));
-  env.GIT_DIR = path.join(cwd, ".git");
-  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   const sourceGit = stat(env.GIT_DIR);
   // The payload consumes Git identity as well as bytes. Lifecycle hooks may refresh
   // index caches or hooksPath, but cannot change source membership or comparison refs.
-  function verifySource() {
+  function verifySource(entries = files) {
     const currentGit = stat(env.GIT_DIR);
     if (!currentGit?.isDirectory() || currentGit.dev !== sourceGit.dev || currentGit.ino !== sourceGit.ino ||
         !stat(env.GIT_INDEX_FILE)?.isFile() || stat(path.join(env.GIT_DIR, "commondir")))
       fail("source Git owner mismatch");
-    for (const entry of files) verify(entry);
+    for (const entry of entries) verify(entry);
     for (const file of deleted) {
       if (reachable(file) && stat(file)) fail("source deletion mismatch: " + file);
     }
@@ -250,7 +366,21 @@ try {
       .split("\0").filter(file => file && !file.startsWith(path.basename(temporary) + "/"));
     if (extras.length) fail("unexpected source entry: " + extras[0]);
   }
-  verifySource();
+  verifySource(changed);
+  // Publish Git identity only after verification; rejected source must retain
+  // the prepared checkout revision for recovery. Renaming preserves its owner.
+  // Boat reuses this transport checkout. Keep its exact Git owner, including
+  // native sync metadata, until the selected-source payload has fully closed.
+  if (preserveGit && stat(path.join(cwd, ".git"))) {
+    nativeGit = path.join(temporary, "native-git");
+    fs.renameSync(path.join(cwd, ".git"), nativeGit);
+  } else {
+    fs.rmSync(".git", { recursive: true, force: true });
+  }
+  fs.renameSync(gitDir, path.join(cwd, ".git"));
+  publishedGit = stat(path.join(cwd, ".git"));
+  env.GIT_DIR = path.join(cwd, ".git");
+  env.GIT_INDEX_FILE = path.join(env.GIT_DIR, "index");
   if (selected.has("pnpm-lock.yaml")) {
     const installer = ".github/actions/setup-node-env/install-dependencies.sh";
     if (!selected.has(installer) || !stat(installer)?.isFile())
@@ -259,32 +389,72 @@ try {
     // source's install owner before any caller payload can run.
     const installEnv = { ...env, CI: "true", GITHUB_WORKSPACE: cwd,
       NODE_BIN: path.dirname(process.execPath), FROZEN_LOCKFILE: "true",
+      PNPM_CONFIG_FROZEN_LOCKFILE: "true",
       DEPENDENCY_CACHE: "false", DEPENDENCY_CACHE_HIT: "false" };
     for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]) delete installEnv[key];
     process.stderr.write("[crabbox] reconciling selected-source dependencies\n");
-    const install = spawnSync("bash", [installer], { cwd, env: installEnv, stdio: ["inherit", 2, 2] });
+    const install = preserveGit
+      ? await runChild("bash", [installer], installEnv, ["inherit", 2, 2])
+      : spawnSync("bash", [installer], { cwd, env: installEnv, stdio: ["inherit", 2, 2] });
     if (install.status !== 0) fail("selected-source frozen install failed; payload was not run");
     verifySource();
   }
   process.stderr.write("[crabbox] verified source=" + expected.sourceSha + " tree=" + expected.tree + " carrier=" + expected.carrier + "\n");
+  if (preserveGit) {
+    let result;
+    if (expected.script) {
+      const script = fs.readFileSync(3).subarray(0, expected.scriptBytes);
+      fs.closeSync(3);
+      const file = path.join(temporary, "payload");
+      fs.writeFileSync(file, script, { mode: 0o700 });
+      const args = process.argv.slice(2);
+      result = script.subarray(0, 2).toString() === "#!"
+        ? await runChild(file, args, { ...process.env, CI: "true" })
+        : await runChild("bash", [file, ...args], { ...process.env, CI: "true" });
+    } else {
+      result = await runChild("bash", ["-c", expected.payload, "openclaw-source-payload", ...process.argv.slice(2)], process.env);
+    }
+    process.exitCode = signal ? 128 + constants.signals[signal] : result.status ?? 128 + constants.signals[result.signal];
+  }
 } catch (error) {
   process.stderr.write("[crabbox] source verification failed: " + error.message + "\n");
-  process.exitCode = 2;
+  process.exitCode = signal ? 128 + constants.signals[signal] : 2;
 } finally {
-  if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
+  try {
+    if (!settled) fail("source payload settlement is unverified; temporary source retained");
+    if (preserveGit && publishedGit) {
+      const current = stat(path.join(cwd, ".git"));
+      if (!current || current.dev !== publishedGit.dev || current.ino !== publishedGit.ino)
+        fail("source Git owner changed; temporary source retained");
+      fs.rmSync(path.join(cwd, ".git"), { recursive: true });
+    }
+    if (nativeGit) fs.renameSync(nativeGit, path.join(cwd, ".git"));
+    if (temporary) fs.rmSync(temporary, { recursive: true, force: true });
+  } catch (error) {
+    process.stderr.write("[crabbox] source Git restoration failed: " + error.message + "\n");
+    process.exitCode ||= 2;
+  }
+  if (preserveGit) for (const [value, handler] of signalHandlers)
+    process.removeListener(value, handler);
 }
+}
+void receive();
 `;
 
 export function remoteSourceBootstrap(
   capsule: CrabboxSourceCapsule,
   alias: string,
   testboxWorkspace: boolean,
+  payload?: { command: string } | { script: string; delimiter: string },
 ) {
   const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
   const { sourceSha, baseSha, tree, carrier, digest } = capsule;
-  const command = `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias }))}`;
+  const command = `node -e ${quote(receiver)} ${quote(JSON.stringify({ sourceSha, baseSha, tree, carrier, digest, alias, payload: payload && "command" in payload ? payload.command : undefined, script: Boolean(payload && "script" in payload), scriptBytes: payload && "script" in payload ? Buffer.byteLength(payload.script) : undefined }))}`;
   if (!testboxWorkspace) {
-    return command;
+    if (payload && "script" in payload) {
+      return `exec ${command} "$@" 3<<'${payload.delimiter}'\n${payload.script}${payload.script.endsWith("\n") ? "" : "\n"}${payload.delimiter}\n`;
+    }
+    return payload === undefined ? command : `exec ${command} "$@"`;
   }
   return [
     'openclaw_source_root="$(cd ./.git/crabbox-artifact-root && pwd -P)" || { echo "[crabbox] missing prepared Testbox execution workspace; stop this lease and warm a fresh one" >&2; exit 2; };',

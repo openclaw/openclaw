@@ -1,4 +1,5 @@
-// Pixverse plugin module implements constants behavior.
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+
 export const PIXVERSE_PROVIDER_ID = "pixverse";
 
 export const PIXVERSE_BASE_URL_BY_REGION = {
@@ -11,3 +12,19 @@ export type PixVerseApiRegion = keyof typeof PIXVERSE_BASE_URL_BY_REGION;
 export const DEFAULT_PIXVERSE_REGION = "international" satisfies PixVerseApiRegion;
 export const DEFAULT_PIXVERSE_MODEL_ID = "v6";
 export const PIXVERSE_DEFAULT_VIDEO_MODEL_REF = `${PIXVERSE_PROVIDER_ID}/${DEFAULT_PIXVERSE_MODEL_ID}`;
+
+export function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
+  switch (normalizeOptionalLowercaseString(value)) {
+    case "cn":
+    case "china":
+    case "mainland":
+    case "pai":
+      return "cn";
+    case "global":
+    case "intl":
+    case "international":
+      return "international";
+    default:
+      return undefined;
+  }
+}

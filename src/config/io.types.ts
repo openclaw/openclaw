@@ -1,6 +1,6 @@
-import type fs from "node:fs";
-import type JSON5 from "json5";
+import type { DeferredPluginMigration } from "../infra/deferred-plugin-migrations.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { ConfigIoDeps, ConfigSnapshotReadMeasure } from "./io.read.types.js";
 import type { ConfigMutationBase } from "./mutation-types.js";
 import type {
   ConfigWriteAfterWrite,
@@ -8,8 +8,6 @@ import type {
   RuntimeConfigWriteNotification,
 } from "./runtime-snapshot.js";
 import type { ConfigFileSnapshot, ConfigValidationIssue, OpenClawConfig } from "./types.js";
-
-export type ParseConfigJson5Result = { ok: true; parsed: unknown } | { ok: false; error: string };
 
 export const configWriteCommittedSnapshot = Symbol("configWriteCommittedSnapshot");
 
@@ -27,7 +25,10 @@ export type ConfigWriteInputBasis = { kind: ConfigMutationBase; config: unknown 
 export const configWritePostCommitRollback = Symbol("configWritePostCommitRollback");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => Promise<void>;
+  };
 };
 
 export type ConfigWriteAuditOrigin =
@@ -38,6 +39,10 @@ export type ConfigWriteAuditOrigin =
   | "cli";
 
 export type ConfigWriteOptions = {
+  /** Offline database-config repair cannot inspect or record shared database state. */
+  databaseAccess?: "none";
+  /** Doctor/update supplies inspected facts; ordinary writes do not query migration state. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   /** Candidate's source/runtime basis within its write snapshot; omitted inputs use active globals. */
   inputBase?: ConfigMutationBase;
   /** Semantic writer label recorded in the config audit journal. */
@@ -52,6 +57,8 @@ export type ConfigWriteOptions = {
   assertConfigPathForWrite?: () => void;
   /** Internal synchronous live-owner assertion checked at guarded publication effects. */
   assertCurrent?: () => void;
+  /** Synchronous requester admission immediately before publication; not post-commit ownership. */
+  assertBeforePublish?: () => void;
   /** Paths that must be removed from the persisted payload. */
   unsetPaths?: string[][];
   /** Caller-authored paths that stay persisted even when equal to defaults. */
@@ -104,7 +111,6 @@ export type ReadConfigFileSnapshotForWriteResult = {
 };
 
 export type ConfigWriteNotification = RuntimeConfigWriteNotification;
-export type ConfigSnapshotReadMeasure = <T>(name: string, run: () => T | Promise<T>) => Promise<T>;
 
 export class ConfigRuntimeRefreshError extends Error {
   constructor(message: string, options?: { cause?: unknown }) {
@@ -113,34 +119,24 @@ export class ConfigRuntimeRefreshError extends Error {
   }
 }
 
-export type ConfigIoDeps = {
-  fs?: typeof fs;
-  json5?: typeof JSON5;
-  env?: NodeJS.ProcessEnv;
-  lowerPrecedenceEnv?: Readonly<Record<string, string>>;
-  homedir?: () => string;
-  configPath?: string;
-  logger?: Pick<typeof console, "error" | "warn">;
-  measure?: ConfigSnapshotReadMeasure;
-  suppressFutureVersionWarning?: boolean;
-  observe?: boolean;
-};
-
-export type NormalizedConfigIoDeps = Required<ConfigIoDeps>;
-
 export type ConfigIoFactoryOptions = ConfigIoDeps & {
   pluginValidation?: "full" | "skip" | "core-only";
   preservedLegacyRootKeys?: readonly string[];
+  /** Doctor supplies pending facts; normal config reads never inspect migration state. */
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   shellEnvFallback?: "load" | "defer";
 };
 
 export type ConfigSnapshotReadOptions = {
+  deferredPluginMigrations?: readonly DeferredPluginMigration[];
   measure?: ConfigSnapshotReadMeasure;
   observe?: boolean;
   isolateEnv?: boolean;
   lowerPrecedenceEnv?: Readonly<Record<string, string>>;
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
+  /** Admission can reject this source while retaining routing and dotenv effects. */
+  onSourceEnvApplied?: (restore: () => void) => void;
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
@@ -152,7 +148,15 @@ export type ConfigSnapshotReadOptions = {
   suppressFutureVersionWarning?: boolean;
 };
 
+export type ConfigSnapshotMetadataReadOptions = ConfigSnapshotReadOptions & {
+  /** CLI diagnostics prepare metadata before validation; strict mode also retains source facts. */
+  prepareValidation?: "runtime" | "strict";
+  /** Keep validation's metadata lazy when the caller needs no complete plugin inventory. */
+  completePluginMetadata?: boolean;
+};
+
 export type ReadConfigFileSnapshotInternalResult = {
+  strictIssues?: ConfigValidationIssue[];
   snapshot: ConfigFileSnapshot;
   envSnapshotForRestore?: Record<string, string | undefined>;
   includeFileHashesForWrite?: Record<string, string>;
@@ -160,10 +164,10 @@ export type ReadConfigFileSnapshotInternalResult = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-export type ReadConfigFileSnapshotWithPluginMetadataResult = {
-  snapshot: ConfigFileSnapshot;
-  pluginMetadataSnapshot?: PluginMetadataSnapshot;
-};
+export type ReadConfigFileSnapshotWithPluginMetadataResult = Pick<
+  ReadConfigFileSnapshotInternalResult,
+  "strictIssues" | "snapshot" | "pluginMetadataSnapshot"
+>;
 
 export type PreparedConfigRecovery = ReadConfigFileSnapshotWithPluginMetadataResult & {
   apply: (beforeCommit?: () => void) => Promise<void>;

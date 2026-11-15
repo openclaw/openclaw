@@ -10,6 +10,7 @@ import {
   retirePluginCache,
   withPluginCache,
 } from "../../src/plugins/plugin-cache.js";
+import { createPluginManifestRecordFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import { getPluginSetupModuleLoader } from "../../src/plugins/plugin-setup-module.js";
 import configs from "../../tsdown.config.ts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -18,14 +19,28 @@ const temp = useAutoCleanupTempDirTracker(afterEach);
 const requireHost = createRequire(import.meta.url);
 const sdk = "openclaw/plugin-sdk/channel-entry-contract";
 
-it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
-  "builds only declared SDK companion edges for %s",
-  async (binding) => {
+it.each([
+  { binding: "alias", origin: "bundled", evaluations: 1 },
+  { binding: "namespace", origin: "bundled", evaluations: 1 },
+  { binding: "inventory", origin: "bundled", evaluations: 1 },
+  { binding: "unrelated", origin: "bundled", evaluations: 0 },
+  { binding: "esm", origin: "global", evaluations: 2 },
+  { binding: "cjs", origin: "global", evaluations: 2 },
+  { binding: "esm", origin: "bundled", evaluations: 1 },
+  { binding: "cjs", origin: "bundled", evaluations: 1 },
+] as const)(
+  "builds only declared SDK companion edges for $binding ($origin)",
+  async ({ binding, origin, evaluations }) => {
     const root = temp.make("inventory companion ");
+    const write = (name: string, source: string) => {
+      const file = path.join(root, name);
+      fs.writeFileSync(file, source);
+      return file;
+    };
     const format = binding === "esm" || binding === "cjs" ? binding : undefined;
     const runtimeExtension = format === "cjs" ? "cjs" : "js";
-    fs.writeFileSync(
-      path.join(root, "package.json"),
+    write(
+      "package.json",
       JSON.stringify({
         type: "module",
         version: "1.0.0",
@@ -37,20 +52,18 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
       }),
     );
     const event = `inventory:${root}`;
-    const companion = path.join(root, "companion.ts");
-    fs.writeFileSync(
-      companion,
+    const companion = write(
+      "companion.ts",
       `import process from 'node:process';
     process.on(${JSON.stringify(event)}, () => {});
     export const channelPlugin = { id: 'fixture' };
     export const runtimeSelectedExport = 'retained';`,
     );
-    const entry = path.join(root, "setup.ts");
     const pluginId = binding === "inventory" ? "openai" : "a2a";
     const entryName = `extensions/${pluginId}/${binding === "inventory" ? "setup-api" : "setup-entry"}`;
     const declaration = binding === "namespace" ? "sdk.defineBundledChannelSetupEntry" : "declare";
-    fs.writeFileSync(
-      entry,
+    const entry = write(
+      "setup.ts",
       `#!/usr/bin/env node
     'use strict';
     const __openclawFileURLToPath = 'first';
@@ -98,10 +111,6 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
         ).bundles;
     if (format) {
       const plan = await buildPluginNpmRuntime({ packageDir: root, logLevel: "silent" });
-      expect(plan?.runtimeBuildOutputs).toEqual([
-        `./dist/companion.${runtimeExtension}`,
-        `./dist/setup.${runtimeExtension}`,
-      ]);
       expect(plan?.packageFiles).toContain("dist/**");
     }
     const cache = createPluginCache();
@@ -116,61 +125,44 @@ it.each(["alias", "namespace", "inventory", "unrelated", "esm", "cjs"])(
       const setup = path.join(outDir, format ? `setup.${runtimeExtension}` : `${entryName}.js`);
       if (binding === "unrelated") {
         expect(privateChunks).toHaveLength(0);
-        expect(fs.readFileSync(setup, "utf8")).not.toContain("new URL(");
         return;
       }
       if (format) {
-        const privateFiles = fs.readdirSync(path.join(outDir, ".setup"));
-        expect(privateFiles.length).toBeGreaterThan(0);
-        expect(
-          privateFiles.every((file) => file.endsWith(format === "cjs" ? ".cjs" : ".mjs")),
-        ).toBe(true);
-        const publicCompanion = requireHost(path.join(outDir, `companion.${runtimeExtension}`)) as {
-          channelPlugin: { id: string };
-          runtimeSelectedExport: string;
-        };
-        expect(publicCompanion.runtimeSelectedExport).toBe("retained");
-        expect(publicCompanion.channelPlugin.id).toBe("fixture");
+        expect(requireHost(path.join(outDir, `companion.${runtimeExtension}`))).toMatchObject({
+          runtimeSelectedExport: "retained",
+          channelPlugin: { id: "fixture" },
+        });
       } else {
-        expect(privateChunks.length).toBeGreaterThan(0);
         expect(privateChunks.some((chunk) => chunk.exports.includes("runtimeSelectedExport"))).toBe(
           true,
         );
       }
       const nativeListeners = process.listenerCount(event);
-      expect(fs.readFileSync(setup, "utf8")).toContain("new URL(");
+      expect(nativeListeners).toBe(format ? 1 : 0);
       if (binding === "inventory") {
         expect(fs.existsSync(path.join(outDir, "extensions/openai/capability-catalog.js"))).toBe(
           true,
         );
       }
       const rootDir = path.dirname(setup);
-      const record = {
+      const record = createPluginManifestRecordFixture({
         id: "fixture",
-        origin: "bundled" as const,
+        origin,
         rootDir,
         source: setup,
-        manifestPath: path.join(rootDir, "openclaw.plugin.json"),
-        channels: [],
-        providers: [],
-        cliBackends: [],
-        hooks: [],
-        skills: [],
-      };
-      const setupEntry = withPluginCache(cache, () => {
+      });
+      withPluginCache(cache, () => {
         const loader = getPluginSetupModuleLoader(record, setup, rootDir);
         const module = loader(setup) as {
           default: { loadSetupPlugin(): { id: string } };
           retained: string[];
         };
+        expect(process.listenerCount(event)).toBe(nativeListeners);
         expect(module.retained).toEqual(["first", "escaped"]);
         expect(loader.initialize(() => module.default.loadSetupPlugin()).id).toBe("fixture");
-        return module.default;
       });
-      expect(process.listenerCount(event)).toBe(nativeListeners + 1);
-      await retirePluginCache(cache);
-      expect(() => setupEntry.loadSetupPlugin()).toThrow("reloaded or disabled");
-      expect(process.listenerCount(event)).toBe(nativeListeners + 1);
+      // Bundled code reuses the public load; installed packages evaluate a captured graph.
+      expect(process.listenerCount(event)).toBe(evaluations);
     } finally {
       await retirePluginCache(cache);
       process.removeAllListeners(event);

@@ -1,8 +1,38 @@
-import { createHash } from "node:crypto";
+import { Buffer } from "node:buffer";
+import { createHash, hash, type Hash } from "node:crypto";
+import { writeStableStringify } from "./stable-stringify.js";
 import { normalizeOptionalString } from "./string-coerce.js";
 
 export function sha256Hex(input: string | Uint8Array): string {
-  return createHash("sha256").update(input).digest("hex");
+  return hash("sha256", input, "hex");
+}
+
+export function sha256StableValue(
+  value: unknown,
+  normalizeString?: (value: string) => string,
+): { digest: string; byteWeight: number } {
+  let digest: Hash | undefined;
+  let text = "";
+  let byteWeight = 0;
+  writeStableStringify(
+    value,
+    (chunk) => {
+      text += chunk;
+      if (text.length >= 16_384) {
+        digest ??= createHash("sha256");
+        digest.update(text);
+        byteWeight += Buffer.byteLength(text);
+        text = "";
+      }
+    },
+    normalizeString,
+  );
+  // Whole JSON string tokens keep surrogate pairs together at every UTF-8 boundary.
+  byteWeight += Buffer.byteLength(text);
+  return {
+    digest: digest ? digest.update(text).digest("hex") : sha256Hex(text),
+    byteWeight,
+  };
 }
 
 export function sha256HexPrefixCore(input: string | Uint8Array, length: number): string {

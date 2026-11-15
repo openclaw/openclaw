@@ -1,4 +1,3 @@
-// Allowlist policy repair tests cover doctor repair of unsafe or stale allowlist policy.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SignalAccountConfig } from "../../../config/types.signal.js";
@@ -12,10 +11,7 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
   readChannelAllowFromStore: readChannelAllowFromStoreMock,
 }));
 
-// The real lookup materializes a bundled channel plugin to read declared doctor
-// capabilities. These mirror the values the plugins actually declare (matrix is
-// "nestedOnly"; signal declares none and takes the "topOnly" default) so the repair
-// logic is exercised unchanged without paying plugin load per call.
+// Mirror declared capabilities without loading bundled plugins for every repair.
 vi.mock("../channel-capabilities.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../channel-capabilities.js")>();
   return {
@@ -35,33 +31,13 @@ describe("doctor allowlist-policy repair", () => {
   });
 
   it.each([
-    { name: "inherited policy", rootAllowFrom: [], account: {}, recovered: true },
-    {
-      name: "inherited allowlist",
-      rootAllowFrom: ["root-sender"],
-      account: { dmPolicy: "allowlist" },
-      recovered: false,
-    },
-    {
-      name: "explicit empty allowlist",
-      rootAllowFrom: ["root-sender"],
-      account: { allowFrom: [] },
-      recovered: true,
-    },
-    {
-      name: "explicit pairing override",
-      rootAllowFrom: [],
-      account: { dmPolicy: "pairing" },
-      recovered: false,
-    },
-  ] satisfies Array<{
-    name: string;
-    rootAllowFrom: string[];
-    account: SignalAccountConfig;
-    recovered: boolean;
-  }>)(
-    "resolves $name before recovering account senders",
-    async ({ rootAllowFrom, account, recovered }) => {
+    ["inherited policy", [], {}, true],
+    ["inherited allowlist", ["root-sender"], { dmPolicy: "allowlist" }, false],
+    ["explicit empty allowlist", ["root-sender"], { allowFrom: [] }, true],
+    ["explicit pairing override", [], { dmPolicy: "pairing" }, false],
+  ] satisfies Array<[string, string[], SignalAccountConfig, boolean]>)(
+    "resolves %s before recovering account senders",
+    async (_name, rootAllowFrom, account, recovered) => {
       readChannelAllowFromStoreMock.mockImplementation(
         async (_channel: string, _env: NodeJS.ProcessEnv, accountId: string) =>
           accountId === "work" ? ["account-sender"] : [],
@@ -81,9 +57,7 @@ describe("doctor allowlist-policy repair", () => {
       expect(result.config.channels?.signal).toEqual({
         dmPolicy: "allowlist",
         allowFrom: rootAllowFrom,
-        accounts: {
-          work: recovered ? { ...account, allowFrom: ["account-sender"] } : account,
-        },
+        accounts: { work: recovered ? { ...account, allowFrom: ["account-sender"] } : account },
       });
       expect(result.changes).toEqual(
         recovered
@@ -100,11 +74,7 @@ describe("doctor allowlist-policy repair", () => {
 
     const result = await maybeRepairAllowlistPolicyAllowFrom({
       channels: {
-        matrix: {
-          dm: {
-            policy: "allowlist",
-          },
-        },
+        matrix: { dm: { policy: "allowlist" } },
       },
     });
 
@@ -118,36 +88,15 @@ describe("doctor allowlist-policy repair", () => {
   it("skips disabled channel and account entries", async () => {
     readChannelAllowFromStoreMock.mockResolvedValue(["alice"]);
 
-    const result = await maybeRepairAllowlistPolicyAllowFrom({
+    const cfg: OpenClawConfig = {
       channels: {
-        telegram: {
-          enabled: false,
-          dmPolicy: "allowlist",
-        },
-        signal: {
-          accounts: {
-            disabled: { enabled: false, dmPolicy: "allowlist" },
-          },
-        },
+        telegram: { enabled: false, dmPolicy: "allowlist" },
+        signal: { accounts: { disabled: { enabled: false, dmPolicy: "allowlist" } } },
       },
-    });
+    };
 
-    expect(result).toEqual({
-      config: {
-        channels: {
-          telegram: {
-            enabled: false,
-            dmPolicy: "allowlist",
-          },
-          signal: {
-            accounts: {
-              disabled: { enabled: false, dmPolicy: "allowlist" },
-            },
-          },
-        },
-      },
-      changes: [],
-    });
+    const expected = { config: structuredClone(cfg), changes: [] };
+    expect(await maybeRepairAllowlistPolicyAllowFrom(cfg)).toEqual(expected);
     expect(readChannelAllowFromStoreMock).not.toHaveBeenCalled();
   });
 });

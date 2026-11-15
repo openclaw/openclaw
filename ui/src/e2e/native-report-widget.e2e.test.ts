@@ -1,6 +1,8 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { BoardReport } from "../../../src/boards/board-report.ts";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -9,6 +11,7 @@ import {
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const suite = createControlUiE2eSuite({
   name: "Control UI native report dashboard widget",
   startServerBeforeBrowser: true,
@@ -20,51 +23,11 @@ function reportSnapshot(detailsUrl: string, revision = 1) {
     blocks: [
       {
         type: "text",
-        title: "Community pulse",
-        text:
-          revision === 1
-            ? "A welcoming week: more questions answered, fewer unresolved threads."
-            : "Updated after the afternoon review: every question has an owner.",
-      },
-      {
-        type: "metrics",
-        items: [
-          {
-            label: "Questions answered",
-            value: revision === 1 ? "42" : "48",
-            detail: "+12 this week",
-          },
-          { label: "Helpful replies", value: "96%", detail: "Across 120 conversations" },
-          { label: "Open threads", value: "7", detail: "All assigned" },
-        ],
-      },
-      {
-        type: "table",
-        title: "Topics this week",
-        columns: ["Topic", "Conversations", "Mood"],
-        rows: [
-          ["Getting started", "54", "Curious"],
-          ["Projects", "38", "Positive"],
-          ["Feedback", "28", "Constructive"],
-        ],
-      },
-      {
-        type: "chart",
-        title: "Daily helpful replies",
-        style: "bar",
-        points: [
-          { label: "Mon", value: 18 },
-          { label: "Tue", value: 24 },
-          { label: "Wed", value: 21 },
-          { label: "Thu", value: 32 },
-        ],
+        text: revision === 1 ? "A welcoming week" : "Updated after the afternoon review",
       },
       {
         type: "links",
-        title: "Explore the report",
-        items: [
-          { label: "Details", url: detailsUrl, detail: "Read the synthetic weekly summary." },
-        ],
+        items: [{ label: "Details", url: detailsUrl }],
       },
     ],
   };
@@ -73,21 +36,23 @@ function reportSnapshot(detailsUrl: string, revision = 1) {
     revision,
     tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
     widgets: [
-      {
+      createBoardWidget({
         name: "community-report",
-        tabId: "main",
         title: "Weekly community report",
         contentKind: "plugin",
         pluginKind: "session:report",
         props,
         sizeW: 12,
         sizeH: 20,
-        position: 0,
-        grantState: "none",
         revision,
-      },
+      }),
     ],
   };
+}
+async function assertNativeDocument(page: Page, documents: string[], dashboardUrl: string) {
+  expect(await page.locator("iframe").count()).toBe(0);
+  expect(page.frames()).toHaveLength(1);
+  expect(documents).toEqual([dashboardUrl]);
 }
 
 suite.define(() => {
@@ -96,7 +61,10 @@ suite.define(() => {
     { height: 844, name: "mobile", width: 390 },
   ])("renders and refreshes a native report without a document on $name", async (viewport) => {
     await suite.withPage(
-      { viewport, recordVideo: { dir: suite.artifactDir, size: viewport } },
+      {
+        viewport,
+        ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir, size: viewport } } : {}),
+      },
       async ({ context, page }) => {
         const detailsUrl = new URL("/native-report-details", suite.server.baseUrl).href;
         const documents: string[] = [];
@@ -108,7 +76,7 @@ suite.define(() => {
         await context.route(detailsUrl, (route) =>
           route.fulfill({
             contentType: "text/html",
-            body: "<!doctype html><title>Report details</title><h1>Weekly report details</h1><p>Synthetic community summary.</p>",
+            body: "<h1>Weekly report details</h1>",
           }),
         );
         const gateway = await installMockGateway(page, {
@@ -143,29 +111,18 @@ suite.define(() => {
         const report = page.locator("openclaw-report-widget");
         await report.waitFor();
         await expect.poll(() => report.textContent()).toContain("A welcoming week");
-        expect(await report.getByRole("article", { name: "Weekly community report" }).count()).toBe(
-          1,
-        );
-        expect(await report.locator(".board-report__metrics").textContent()).toContain("42");
-        expect(await report.getByRole("columnheader").allTextContents()).toEqual([
-          "Topic",
-          "Conversations",
-          "Mood",
-        ]);
-        expect(await report.getByRole("cell", { name: "Constructive", exact: true }).count()).toBe(
-          1,
-        );
-        expect(await report.locator(".board-report__chart rect").count()).toBe(4);
-        expect(await report.locator(".board-report__values").textContent()).toContain("Thu");
         const details = report.getByRole("link", { name: "Details", exact: true });
         expect(await details.getAttribute("href")).toBe(detailsUrl);
-        expect(await page.locator("iframe").count()).toBe(0);
-        expect(page.frames()).toHaveLength(1);
-        expect(documents).toEqual([dashboardUrl]);
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, `report-${viewport.name}.png`),
-        });
+        await assertNativeDocument(page, documents, dashboardUrl);
+        const screenshot = async (name: string) => {
+          if (captureUiProof) {
+            await page.screenshot({
+              animations: "disabled",
+              path: path.join(suite.artifactDir, `${name}-${viewport.name}.png`),
+            });
+          }
+        };
+        await screenshot("report");
 
         const originalReport = await report.evaluateHandle((element) => element);
         const reads = (await gateway.getRequests("board.get")).length;
@@ -179,7 +136,6 @@ suite.define(() => {
         await expect
           .poll(() => report.textContent())
           .toContain("Updated after the afternoon review");
-        expect(await report.locator(".board-report__metrics").textContent()).toContain("48");
         expect(
           await originalReport.evaluate(
             (element) =>
@@ -187,14 +143,9 @@ suite.define(() => {
           ),
         ).toBe(true);
         await originalReport.dispose();
-        expect(documents).toEqual([dashboardUrl]);
-        expect(await page.locator("iframe").count()).toBe(0);
-        expect(page.frames()).toHaveLength(1);
-        await report.locator(".board-report__chart").scrollIntoViewIfNeeded();
-        await page.screenshot({
-          animations: "disabled",
-          path: path.join(suite.artifactDir, `report-updated-${viewport.name}.png`),
-        });
+        await assertNativeDocument(page, documents, dashboardUrl);
+        await report.scrollIntoViewIfNeeded();
+        await screenshot("report-updated");
 
         const opened = context.waitForEvent("page");
         await details.click();

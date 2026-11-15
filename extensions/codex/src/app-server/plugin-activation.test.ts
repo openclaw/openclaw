@@ -8,644 +8,29 @@ import {
   type ResolvedCodexPluginPolicy,
 } from "./config.js";
 import { ensureCodexPluginActivation } from "./plugin-activation.js";
+import { pluginList, pluginSummary } from "./plugin-inventory.test-helpers.js";
 import { CodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { v2 } from "./protocol.js";
 
-describe("Codex plugin activation", () => {
-  function expectActivationResult(
-    result: Awaited<ReturnType<typeof ensureCodexPluginActivation>>,
-    expected: { ok: boolean; reason: string; installAttempted: boolean },
-  ) {
-    expect(result.ok).toBe(expected.ok);
-    expect(result.reason).toBe(expected.reason);
-    expect(result.installAttempted).toBe(expected.installAttempted);
-  }
-
-  function expectBooleanParam(params: unknown, key: string, expected: boolean) {
-    expect((params as Record<string, unknown> | undefined)?.[key]).toBe(expected);
-  }
-
-  it("skips plugin/install when the migrated plugin is already active", async () => {
-    const calls: string[] = [];
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method) => {
-        calls.push(method);
-        if (method === "plugin/list") {
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "already_active",
-      installAttempted: false,
-    });
-    expect(calls).toEqual(["plugin/list"]);
+const installed = { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+const remoteMarketplace = { name: "openai-curated-remote", path: null };
+const localInstall = {
+  marketplacePath: "/marketplaces/openai-curated",
+  pluginName: "google-calendar",
+};
+const remoteInstall = {
+  remoteMarketplaceName: remoteMarketplace.name,
+  pluginName: "plugin_connector_google_calendar",
+};
+const active = () =>
+  pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+const remote = (overrides: Partial<v2.PluginSummary> = {}) =>
+  pluginSummary("google-calendar@openai-curated-remote", {
+    name: "google-calendar",
+    remotePluginId: remoteInstall.pluginName,
+    ...overrides,
   });
-
-  it("can reinstall an already active plugin when migration explicitly applies it", async () => {
-    const calls: string[] = [];
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      installEvenIfActive: true,
-      request: async (method, params) => {
-        calls.push(method);
-        if (method === "plugin/list") {
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/install") {
-          expect(params).toEqual({
-            marketplacePath: "/marketplaces/openai-curated",
-            pluginName: "google-calendar",
-          });
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "already_active",
-      installAttempted: true,
-    });
-    expect(calls).toEqual([
-      "plugin/list",
-      "plugin/install",
-      "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
-    ]);
-  });
-
-  it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const appCache = new CodexAppInventoryCache();
-    const metadataCache = new CodexPluginMetadataCache();
-    let pluginListCalls = 0;
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      appCache,
-      appCacheKey: "runtime",
-      metadataCache,
-      request: async (method, params) => {
-        calls.push({ method, params });
-        if (method === "plugin/list") {
-          pluginListCalls += 1;
-          expect(params).toEqual(pluginListCalls === 1 ? {} : { forceRefetch: true });
-          return pluginList([
-            pluginSummary("google-calendar", {
-              installed: pluginListCalls > 1,
-              enabled: pluginListCalls > 1,
-            }),
-          ]);
-        }
-        if (method === "plugin/install") {
-          expect(params).toEqual({
-            marketplacePath: "/marketplaces/openai-curated",
-            pluginName: "google-calendar",
-          });
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          expectBooleanParam(params, "forceReload", true);
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        if (method === "app/installed") {
-          expectBooleanParam(params, "forceRefresh", true);
-          return { apps: [] } satisfies v2.AppsInstalledResponse;
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "installed",
-      installAttempted: true,
-    });
-    expect(calls.map((call) => call.method)).toEqual([
-      "plugin/list",
-      "plugin/install",
-      "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
-      "app/installed",
-    ]);
-    expect(pluginListCalls).toBe(2);
-    expect(
-      metadataCache.read("runtime", "curated-global")?.response.marketplaces[0]?.plugins[0],
-    ).toMatchObject({ installed: true, enabled: true });
-    expect(appCache.getRevision()).toBeGreaterThan(0);
-  });
-
-  it("keeps curated catalog and skill refresh scoped to the active repository", async () => {
-    const requests: Array<{ method: string; params: unknown }> = [];
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      configCwd: "/repo/project",
-      request: async (method, params) => {
-        requests.push({ method, params });
-        if (method === "plugin/list") {
-          return pluginList([
-            pluginSummary("google-calendar", {
-              installed: requests.filter((request) => request.method === "plugin/list").length > 1,
-              enabled: requests.filter((request) => request.method === "plugin/list").length > 1,
-            }),
-          ]);
-        }
-        if (method === "plugin/install") {
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "installed",
-      installAttempted: true,
-    });
-    expect(requests).toContainEqual({
-      method: "plugin/list",
-      params: { cwds: ["/repo/project"] },
-    });
-    expect(requests).toContainEqual({
-      method: "plugin/list",
-      params: { cwds: ["/repo/project"], forceRefetch: true },
-    });
-    expect(requests).toContainEqual({
-      method: "skills/list",
-      params: { cwds: ["/repo/project"], forceReload: true },
-    });
-    expect(requests).toContainEqual({
-      method: "hooks/list",
-      params: { cwds: ["/repo/project"] },
-    });
-  });
-
-  it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
-    const appCache = new CodexAppInventoryCache();
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      appCache,
-      appCacheKey: "runtime",
-      request: async (method) => {
-        if (method === "plugin/list") {
-          return pluginList([
-            pluginSummary("google-calendar", { installed: false, enabled: false }),
-          ]);
-        }
-        if (method === "plugin/install") {
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        if (method === "app/installed") {
-          throw new Error("app/installed unavailable");
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "installed",
-      installAttempted: true,
-    });
-    expect(result.diagnostics).toEqual([
-      {
-        message: "Codex app inventory refresh skipped: app/installed unavailable",
-      },
-    ]);
-    expect(appCache.getRevision()).toBeGreaterThan(0);
-  });
-
-  it("reports post-install runtime refresh failures without hiding the install attempt", async () => {
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method) => {
-        if (method === "plugin/list") {
-          return pluginList([
-            pluginSummary("google-calendar", { installed: false, enabled: false }),
-          ]);
-        }
-        if (method === "plugin/install") {
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          throw new Error("skills/list unavailable");
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: false,
-      reason: "refresh_failed",
-      installAttempted: true,
-    });
-    expect(result.diagnostics).toEqual([
-      {
-        message: "Codex plugin runtime refresh failed after install: skills/list unavailable",
-      },
-    ]);
-  });
-
-  it("installs a disabled remote curated plugin by its resolved remote id", async () => {
-    const calls: Array<{ method: string; params: unknown }> = [];
-    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
-      name: "google-calendar",
-      remotePluginId: "plugin_connector_google_calendar",
-      installed: false,
-      enabled: false,
-    });
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method, params) => {
-        calls.push({ method, params });
-        if (method === "plugin/list") {
-          return {
-            ...pluginList([remoteSummary]),
-            marketplaces: [
-              {
-                name: CODEX_PLUGINS_MARKETPLACE_NAME,
-                path: "/marketplaces/openai-curated",
-                interface: null,
-                plugins: [pluginSummary("github")],
-              },
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [remoteSummary],
-              },
-            ],
-          } satisfies v2.PluginListResponse;
-        }
-        if (method === "plugin/install") {
-          expect(params).toEqual({
-            remoteMarketplaceName: "openai-curated-remote",
-            pluginName: "plugin_connector_google_calendar",
-          });
-          return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
-        }
-        if (method === "skills/list") {
-          return { data: [] } satisfies v2.SkillsListResponse;
-        }
-        if (method === "hooks/list") {
-          return { data: [] } satisfies v2.HooksListResponse;
-        }
-        if (method === "config/mcpServer/reload") {
-          return {};
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: true,
-      reason: "installed",
-      installAttempted: true,
-    });
-    expect(calls.map((call) => call.method)).toEqual([
-      "plugin/list",
-      "plugin/install",
-      "plugin/list",
-      "skills/list",
-      "hooks/list",
-      "config/mcpServer/reload",
-    ]);
-  });
-
-  it.each([
-    {
-      rejectionMessage: "remote plugin plugin_connector_google_calendar is disabled by admin",
-    },
-    {
-      rejectionMessage:
-        "remote plugin plugin_connector_google_calendar is not available for install",
-    },
-  ])(
-    "converts an exact terminal remote plugin rejection into an activation failure ($rejectionMessage)",
-    async ({ rejectionMessage }) => {
-      const calls: string[] = [];
-      const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
-        name: "google-calendar",
-        remotePluginId: "plugin_connector_google_calendar",
-        installed: false,
-        enabled: false,
-        availability: "AVAILABLE",
-        installPolicy: "AVAILABLE",
-      });
-      const result = await ensureCodexPluginActivation({
-        identity: identity("google-calendar"),
-        request: async (method, params) => {
-          calls.push(method);
-          if (method === "plugin/list") {
-            return {
-              marketplaces: [
-                {
-                  name: "openai-curated-remote",
-                  path: null,
-                  interface: null,
-                  plugins: [remoteSummary],
-                },
-              ],
-              marketplaceLoadErrors: [],
-              featuredPluginIds: [],
-            } satisfies v2.PluginListResponse;
-          }
-          if (method === "plugin/install") {
-            expect(params).toEqual({
-              remoteMarketplaceName: "openai-curated-remote",
-              pluginName: "plugin_connector_google_calendar",
-            });
-            throw new CodexAppServerRpcError(
-              {
-                code: -32600,
-                message: rejectionMessage,
-              },
-              "plugin/install",
-            );
-          }
-          throw new Error(`unexpected request ${method}`);
-        },
-      });
-
-      expectActivationResult(result, {
-        ok: false,
-        reason: "install_failed",
-        installAttempted: true,
-      });
-      expect(result.diagnostics).toEqual([
-        {
-          message: `Codex plugin install failed: ${rejectionMessage}`,
-        },
-      ]);
-      expect(calls).toEqual(["plugin/list", "plugin/install"]);
-    },
-  );
-
-  it.each([
-    {
-      code: -32_001,
-      message: "remote plugin plugin_connector_google_calendar is disabled by admin",
-    },
-    { code: -32_600, message: "plugin service temporarily unavailable" },
-  ])("does not hide unrelated plugin install RPC failures ($code)", async ({ code, message }) => {
-    const error = new CodexAppServerRpcError({ code, message }, "plugin/install");
-    const remoteSummary = pluginSummary("google-calendar@openai-curated-remote", {
-      name: "google-calendar",
-      remotePluginId: "plugin_connector_google_calendar",
-      installed: false,
-      enabled: false,
-      availability: "AVAILABLE",
-      installPolicy: "AVAILABLE",
-    });
-
-    await expect(
-      ensureCodexPluginActivation({
-        identity: identity("google-calendar"),
-        request: async (method) => {
-          if (method === "plugin/list") {
-            return {
-              marketplaces: [
-                {
-                  name: "openai-curated-remote",
-                  path: null,
-                  interface: null,
-                  plugins: [remoteSummary],
-                },
-              ],
-              marketplaceLoadErrors: [],
-              featuredPluginIds: [],
-            } satisfies v2.PluginListResponse;
-          }
-          if (method === "plugin/install") {
-            throw error;
-          }
-          throw new Error(`unexpected request ${method}`);
-        },
-      }),
-    ).rejects.toBe(error);
-  });
-
-  it.each([
-    { availability: "DISABLED_BY_ADMIN", installPolicy: "AVAILABLE" },
-    { availability: "AVAILABLE", installPolicy: "NOT_AVAILABLE" },
-  ] as const)("never installs a curated plugin rejected by marketplace policy", async (policy) => {
-    const calls: string[] = [];
-    const summary = pluginSummary("google-calendar@openai-curated-remote", {
-      name: "google-calendar",
-      remotePluginId: "plugin_connector_google_calendar",
-      installed: false,
-      enabled: false,
-      ...policy,
-    });
-
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method) => {
-        calls.push(method);
-        if (method === "plugin/list") {
-          return {
-            marketplaces: [
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [summary],
-              },
-            ],
-            marketplaceLoadErrors: [],
-            featuredPluginIds: [],
-          } satisfies v2.PluginListResponse;
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: false,
-      reason: "disabled",
-      installAttempted: false,
-    });
-    expect(calls).toEqual(["plugin/list"]);
-  });
-
-  it("does not hide non-RPC plugin install failures", async () => {
-    await expect(
-      ensureCodexPluginActivation({
-        identity: identity("google-calendar"),
-        request: async (method) => {
-          if (method === "plugin/list") {
-            return pluginList([
-              pluginSummary("google-calendar", { installed: false, enabled: false }),
-            ]);
-          }
-          if (method === "plugin/install") {
-            throw new Error("plugin/install transport failed");
-          }
-          throw new Error(`unexpected request ${method}`);
-        },
-      }),
-    ).rejects.toThrow("plugin/install transport failed");
-  });
-
-  it("does not install a remote curated plugin without its opaque remote id", async () => {
-    const calls: string[] = [];
-    const result = await ensureCodexPluginActivation({
-      identity: identity("google-calendar"),
-      request: async (method) => {
-        calls.push(method);
-        if (method === "plugin/list") {
-          return {
-            ...pluginList([]),
-            marketplaces: [
-              {
-                name: "openai-curated-remote",
-                path: null,
-                interface: null,
-                plugins: [
-                  pluginSummary("google-calendar@openai-curated-remote", {
-                    name: "google-calendar",
-                    installed: false,
-                    enabled: false,
-                  }),
-                ],
-              },
-            ],
-          } satisfies v2.PluginListResponse;
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
-    });
-
-    expectActivationResult(result, {
-      ok: false,
-      reason: "plugin_missing",
-      installAttempted: false,
-    });
-    expect(calls).toEqual(["plugin/list"]);
-    expect(result.diagnostics[0]?.message).toContain("did not return a remote plugin id");
-  });
-
-  it("settles a missing plugin from the remote curated marketplace snapshot", async () => {
-    const metadataCache = new CodexPluginMetadataCache();
-    const request = vi.fn(async (_method: string, params: unknown) => {
-      expect(params).toEqual({});
-      return {
-        marketplaces: [
-          {
-            name: "openai-curated-remote",
-            path: null,
-            interface: null,
-            plugins: [],
-          },
-        ],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      } satisfies v2.PluginListResponse;
-    });
-    const activationParams = {
-      identity: identity("google-calendar"),
-      request,
-      metadataCache,
-      appCacheKey: "runtime",
-    };
-
-    const first = await ensureCodexPluginActivation(activationParams);
-    const second = await ensureCodexPluginActivation(activationParams);
-
-    expect(first.reason).toBe("plugin_missing");
-    expect(second.reason).toBe("plugin_missing");
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
-  it("requires workspace-directory plugins to be activated outside OpenClaw", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("workspace activation must not call app-server");
-    });
-    const result = await ensureCodexPluginActivation({
-      identity: {
-        ...identity("workspace-data@workspace-directory"),
-        marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
-      },
-      request,
-    });
-
-    expectActivationResult(result, {
-      ok: false,
-      reason: "disabled",
-      installAttempted: false,
-    });
-    expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each(["company-tools", "openai-bundled", "workspace-shared-with-me"])(
-    "never installs a non-curated %s plugin during thread startup",
-    async (marketplaceName) => {
-      const request = vi.fn(async () => {
-        throw new Error("non-curated activation must not call app-server");
-      });
-      const result = await ensureCodexPluginActivation({
-        identity: { ...identity("security-review"), marketplaceName },
-        configCwd: "/repo/company",
-        request,
-      });
-
-      expectActivationResult(result, {
-        ok: false,
-        reason: "disabled",
-        installAttempted: false,
-      });
-      expect(result.diagnostics[0]?.message).toContain(
-        `/codex plugins install security-review@${marketplaceName}`,
-      );
-      expect(request).not.toHaveBeenCalled();
-    },
-  );
-});
-
-function identity(pluginName: string): ResolvedCodexPluginPolicy {
+function identity(pluginName = "google-calendar"): ResolvedCodexPluginPolicy {
   return {
     configKey: pluginName,
     marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
@@ -655,33 +40,240 @@ function identity(pluginName: string): ResolvedCodexPluginPolicy {
     destructiveApprovalMode: "deny",
   };
 }
-
-function pluginList(plugins: v2.PluginSummary[]): v2.PluginListResponse {
+type ActivationParams = Parameters<typeof ensureCodexPluginActivation>[0];
+type Handler = (params: unknown) => unknown;
+function harness(handlers: Record<string, Handler>) {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const request: ActivationParams["request"] = async (method, params) => {
+    calls.push({ method, params });
+    const handler = handlers[method];
+    if (!handler) {
+      throw new Error(`unexpected request ${method}`);
+    }
+    return handler(params);
+  };
   return {
-    marketplaces: [
-      {
-        name: CODEX_PLUGINS_MARKETPLACE_NAME,
-        path: "/marketplaces/openai-curated",
-        interface: null,
-        plugins,
+    calls,
+    activate: (params: Partial<ActivationParams> = {}) =>
+      ensureCodexPluginActivation({ identity: identity(), request, ...params }),
+  };
+}
+function expectResult(
+  result: Awaited<ReturnType<typeof ensureCodexPluginActivation>>,
+  ok: boolean,
+  reason: string,
+  installAttempted = false,
+) {
+  expect(result).toMatchObject({ ok, reason, installAttempted });
+}
+const install = (expected: typeof localInstall | typeof remoteInstall) => (params: unknown) => {
+  expect(params).toEqual(expected);
+  return installed;
+};
+
+describe("Codex plugin activation", () => {
+  it("skips plugin/install when the migrated plugin is already active", async () => {
+    const h = harness({ "plugin/list": active });
+    expectResult(await h.activate(), true, "already_active");
+    expect(h.calls.map(({ method }) => method)).toEqual(["plugin/list"]);
+  });
+
+  it("can reinstall an already active plugin when migration explicitly applies it", async () => {
+    const h = harness({ "plugin/list": active, "plugin/install": install(localInstall) });
+    expectResult(await h.activate({ installEvenIfActive: true }), true, "already_active", true);
+    expect(h.calls.map(({ method }) => method)).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+    ]);
+  });
+
+  it("installs a migration-authorized local curated plugin and refreshes runtime state", async () => {
+    const metadataCache = new CodexPluginMetadataCache();
+    let lists = 0;
+    const h = harness({
+      "plugin/list": (params) => {
+        expect(params).toEqual(++lists === 1 ? {} : { forceRefetch: true });
+        return pluginList([
+          pluginSummary("google-calendar", { installed: lists > 1, enabled: lists > 1 }),
+        ]);
       },
-    ],
-    marketplaceLoadErrors: [],
-    featuredPluginIds: [],
-  };
-}
+      "plugin/install": install(localInstall),
+      "app/installed": (params) => {
+        expect(params).toMatchObject({ forceRefresh: true });
+        return { apps: [] } satisfies v2.AppsInstalledResponse;
+      },
+    });
+    expectResult(
+      await h.activate({
+        appCache: new CodexAppInventoryCache(),
+        appCacheKey: "runtime",
+        metadataCache,
+      }),
+      true,
+      "installed",
+      true,
+    );
+    expect(h.calls.map(({ method }) => method)).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+      "app/installed",
+    ]);
+    expect(lists).toBe(2);
+    expect(
+      metadataCache.read("runtime", "curated-global")?.marketplaces[0]?.plugins[0],
+    ).toMatchObject({ installed: true, enabled: true });
+  });
 
-function pluginSummary(id: string, overrides: Partial<v2.PluginSummary> = {}): v2.PluginSummary {
-  return {
-    id,
-    name: id,
-    source: { type: "remote" },
-    installed: false,
-    enabled: false,
-    installPolicy: "AVAILABLE",
-    authPolicy: "ON_USE",
-    availability: "AVAILABLE",
-    interface: null,
-    ...overrides,
-  };
-}
+  it("keeps curated catalog refresh scoped to the active repository", async () => {
+    let lists = 0;
+    const h = harness({
+      "plugin/list": () => {
+        lists++;
+        return pluginList([
+          pluginSummary("google-calendar", { installed: lists > 1, enabled: lists > 1 }),
+        ]);
+      },
+      "plugin/install": () => installed,
+    });
+    expectResult(await h.activate({ configCwd: "/repo/project" }), true, "installed", true);
+    expect(h.calls).toContainEqual({ method: "plugin/list", params: { cwds: ["/repo/project"] } });
+    expect(h.calls).toContainEqual({
+      method: "plugin/list",
+      params: { cwds: ["/repo/project"], forceRefetch: true },
+    });
+  });
+
+  it("keeps activation fail-closed when post-install app inventory refresh fails", async () => {
+    const h = harness({
+      "plugin/list": () => pluginList([pluginSummary("google-calendar")]),
+      "plugin/install": () => installed,
+      "app/installed": () => {
+        throw new Error("app/installed unavailable");
+      },
+    });
+    const result = await h.activate({
+      appCache: new CodexAppInventoryCache(),
+      appCacheKey: "runtime",
+    });
+    expectResult(result, true, "installed", true);
+    expect(result.diagnostics).toEqual([
+      { message: "Codex app inventory refresh skipped: app/installed unavailable" },
+    ]);
+  });
+
+  it("installs a disabled remote curated plugin by its resolved remote id", async () => {
+    const remoteList = pluginList([remote()], remoteMarketplace);
+    const h = harness({
+      "plugin/list": () => ({
+        ...remoteList,
+        marketplaces: [
+          ...pluginList([pluginSummary("github")]).marketplaces,
+          ...remoteList.marketplaces,
+        ],
+      }),
+      "plugin/install": install(remoteInstall),
+    });
+    expectResult(await h.activate(), true, "installed", true);
+    expect(h.calls.map(({ method }) => method)).toEqual([
+      "plugin/list",
+      "plugin/install",
+      "plugin/list",
+    ]);
+  });
+
+  it("converts an exact terminal remote plugin rejection into an activation failure", async () => {
+    const message = "remote plugin plugin_connector_google_calendar is not available for install";
+    const h = harness({
+      "plugin/list": () => pluginList([remote()], remoteMarketplace),
+      "plugin/install": (params) => {
+        expect(params).toEqual(remoteInstall);
+        throw new CodexAppServerRpcError({ code: -32600, message }, "plugin/install");
+      },
+    });
+    const result = await h.activate();
+    expectResult(result, false, "install_failed", true);
+    expect(result.diagnostics).toEqual([{ message: `Codex plugin install failed: ${message}` }]);
+    expect(h.calls.map(({ method }) => method)).toEqual(["plugin/list", "plugin/install"]);
+  });
+
+  it("does not hide unrelated plugin install RPC failures", async () => {
+    const error = new CodexAppServerRpcError(
+      { code: -32600, message: "plugin service temporarily unavailable" },
+      "plugin/install",
+    );
+    const h = harness({
+      "plugin/list": () => pluginList([remote()], remoteMarketplace),
+      "plugin/install": () => {
+        throw error;
+      },
+    });
+    await expect(h.activate()).rejects.toBe(error);
+  });
+
+  it.each([
+    { availability: "DISABLED_BY_ADMIN", installPolicy: "AVAILABLE" },
+    { availability: "AVAILABLE", installPolicy: "NOT_AVAILABLE" },
+  ] as const)("never installs a curated plugin rejected by marketplace policy", async (policy) => {
+    const h = harness({ "plugin/list": () => pluginList([remote(policy)], remoteMarketplace) });
+    expectResult(await h.activate(), false, "disabled");
+    expect(h.calls.map(({ method }) => method)).toEqual(["plugin/list"]);
+  });
+
+  it("does not install a remote curated plugin without its opaque remote id", async () => {
+    const h = harness({
+      "plugin/list": () =>
+        pluginList(
+          [pluginSummary("google-calendar@openai-curated-remote", { name: "google-calendar" })],
+          remoteMarketplace,
+        ),
+    });
+    const result = await h.activate();
+    expectResult(result, false, "plugin_missing");
+    expect(h.calls.map(({ method }) => method)).toEqual(["plugin/list"]);
+    expect(result.diagnostics[0]?.message).toContain("did not return a remote plugin id");
+  });
+
+  it("settles a missing plugin from the remote curated marketplace snapshot", async () => {
+    const request = vi.fn(async (_method: string, params: unknown) => {
+      expect(params).toEqual({});
+      return pluginList([], remoteMarketplace);
+    });
+    const params = {
+      identity: identity(),
+      request,
+      metadataCache: new CodexPluginMetadataCache(),
+      appCacheKey: "runtime",
+    };
+    expect((await ensureCodexPluginActivation(params)).reason).toBe("plugin_missing");
+    expect((await ensureCodexPluginActivation(params)).reason).toBe("plugin_missing");
+    expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("requires workspace-directory plugins to be activated outside OpenClaw", async () => {
+    const h = harness({});
+    const result = await h.activate({
+      identity: {
+        ...identity("workspace-data@workspace-directory"),
+        marketplaceName: CODEX_PLUGINS_WORKSPACE_MARKETPLACE_NAME,
+      },
+    });
+    expectResult(result, false, "disabled");
+    expect(result.diagnostics[0]?.message).toContain("installed and enabled outside OpenClaw");
+    expect(h.calls).toEqual([]);
+  });
+
+  it("never installs a non-curated plugin during thread startup", async () => {
+    const h = harness({});
+    const result = await h.activate({
+      identity: { ...identity("security-review"), marketplaceName: "openai-bundled" },
+      configCwd: "/repo/company",
+    });
+    expectResult(result, false, "disabled");
+    expect(result.diagnostics[0]?.message).toContain(
+      "/codex plugins install security-review@openai-bundled",
+    );
+    expect(h.calls).toEqual([]);
+  });
+});

@@ -12,8 +12,7 @@ import {
 
 const LIVE_CACHE_LANE_RETRIES = 1;
 export const LIVE_CACHE_RESPONSE_RETRIES = 2;
-const OPENAI_CACHE_PROBE_MIN_MAX_TOKENS = 1024;
-const ANTHROPIC_CACHE_PROBE_MIN_MAX_TOKENS = 1024;
+const CACHE_PROBE_MIN_MAX_TOKENS = 1024;
 
 type LiveCacheProviderConfig = Parameters<typeof resolveLiveDirectModelPool>[0];
 type ProviderKey = keyof typeof LIVE_CACHE_REGRESSION_BASELINE;
@@ -82,22 +81,14 @@ export function shouldRetryCacheProbeText(params: {
   const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
   const markerLower = `cache-ok ${suffixLower}`;
   // Live providers sometimes return near-miss text on the first attempt.
-  return (
-    (!responseTextLower.includes(markerLower) || !responseTextLower.includes(suffixLower)) &&
-    params.attempt <= LIVE_CACHE_RESPONSE_RETRIES
-  );
+  return !responseTextLower.includes(markerLower) && params.attempt <= LIVE_CACHE_RESPONSE_RETRIES;
 }
 
 export function resolveCacheProbeMaxTokens(params: {
   maxTokens: number | undefined;
   providerTag: "anthropic" | "openai";
 }): number {
-  const requested = params.maxTokens ?? 64;
-  const floor =
-    params.providerTag === "anthropic"
-      ? ANTHROPIC_CACHE_PROBE_MIN_MAX_TOKENS
-      : OPENAI_CACHE_PROBE_MIN_MAX_TOKENS;
-  return Math.max(requested, floor);
+  return Math.max(params.maxTokens ?? 64, CACHE_PROBE_MIN_MAX_TOKENS);
 }
 
 export function shouldAcceptEmptyCacheProbe(params: {

@@ -1,14 +1,20 @@
 import type { Writable } from "node:stream";
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { settlesWithin } from "../shared/settle-within.js";
 import { createChildAdapter } from "./supervisor/adapters/child.js";
-import type { SpawnProcessAdapter } from "./supervisor/types.js";
+import type {
+  AwaitedStdoutConsumer,
+  ProcessCleanupResult,
+  SpawnProcessAdapter,
+  SpawnSecretInput,
+} from "./supervisor/types.js";
 
 export type OwnedStdioProcess = SpawnProcessAdapter<NodeJS.Signals | null> &
   Required<Pick<SpawnProcessAdapter<NodeJS.Signals | null>, "onExit" | "onError">>;
 
 export class OwnedStdioCleanupError extends Error {}
 
-export async function createOwnedStdioProcess(params: {
+export type OwnedStdioProcessOptions = {
   argv: string[];
   argv0?: string;
   cwd?: string;
@@ -19,30 +25,56 @@ export async function createOwnedStdioProcess(params: {
   abortSignal?: AbortSignal;
   /** Consume stderr through a native pipe instead of callback observation. */
   stderrDestination?: Writable;
-}): Promise<OwnedStdioProcess> {
-  let startupCleanup: Promise<boolean> | undefined;
+  secretInput?: SpawnSecretInput;
+  assertCurrent?: () => void;
+  prepareTargetSpawn?: () => void | Promise<void>;
+  /** Require explicit stdin.end(); host loss kills the child before input EOF. */
+  terminateOnHostLoss?: true;
+  stdoutConsumption?: "awaited";
+};
+
+export function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions & { stdoutConsumption: "awaited" },
+): Promise<OwnedStdioProcess & AwaitedStdoutConsumer>;
+export function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions,
+): Promise<OwnedStdioProcess>;
+export async function createOwnedStdioProcess(
+  params: OwnedStdioProcessOptions,
+): Promise<OwnedStdioProcess> {
+  let startupCleanup: Promise<{ failure?: unknown }> | undefined;
   try {
-    return await createChildAdapter({
+    const { adapter, ready } = await createChildAdapter({
       ...params,
       ownProcessTree: true,
       stdinMode: "pipe-open",
       onSpawnCleanup: (cleanup) => {
         startupCleanup = cleanup.then(
-          () => true,
-          () => false,
+          () => ({}),
+          (failure: unknown) => ({ failure }),
         );
       },
     });
+    await ready;
+    return adapter;
   } catch (error) {
-    if (
-      startupCleanup &&
-      (!(await settlesWithin(startupCleanup, 500)) || !(await startupCleanup))
-    ) {
-      throw new OwnedStdioCleanupError("stdio startup cleanup did not confirm closure", {
-        cause: error,
-      });
+    if (!startupCleanup) {
+      throw error;
     }
-    throw error;
+    // Spawn admission can fail while the process owner is still reclaiming a
+    // loaded native process tree. Keep the uncertainty boundary bounded, but
+    // allow the same shutdown window used by ordinary owned-stdio cleanup.
+    const cleanup = (await settlesWithin(startupCleanup, 5_000))
+      ? await startupCleanup
+      : { failure: new Error("stdio startup cleanup did not settle within 5s") };
+    if (!("failure" in cleanup)) {
+      throw error;
+    }
+    // The startup failure is the diagnosis; unconfirmed cleanup is secondary.
+    throw new OwnedStdioCleanupError(
+      `${formatErrorMessage(error)}; stdio startup cleanup also did not confirm closure, so restart the Gateway before retrying`,
+      { cause: new AggregateError([error, cleanup.failure], formatErrorMessage(error)) },
+    );
   }
 }
 
@@ -50,7 +82,7 @@ export async function createOwnedStdioProcess(params: {
 export async function closeOwnedStdioProcess(
   process: OwnedStdioProcess,
   options: { graceMs?: number; force?: boolean } = {},
-): Promise<void> {
+): Promise<ProcessCleanupResult | undefined> {
   const settled = Promise.allSettled([
     process.wait(),
     process.waitForExtinction?.() ??
@@ -74,15 +106,15 @@ export async function closeOwnedStdioProcess(
     } else {
       process.kill("SIGKILL");
     }
-    if (!(await settlesWithin(settled, 500))) {
-      throw new Error("stdio process cleanup did not confirm descendant extinction");
-    }
+    // Hard cancellation has a terminal deadline at the process owner. Join it
+    // rather than imposing a shorter wait that can discard valid late cleanup.
     const failure = (await settled).find(
       (result): result is PromiseRejectedResult => result.status === "rejected",
     );
     if (failure) {
       throw failure.reason;
     }
+    return process.cleanupResult;
   } finally {
     process.dispose();
   }

@@ -8,4 +8,3 @@ import "../styles/chat/composer.css";
 import "../styles/config.css";
 import "../styles/usage.css";
 import "../styles/dreams.css";
-import "../styles/memory-overview.css";

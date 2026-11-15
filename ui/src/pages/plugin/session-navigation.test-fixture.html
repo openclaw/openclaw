@@ -1,0 +1,11 @@
+<!doctype html>
+<button id="open">Open work session</button>
+<script>
+  addEventListener("message", (event) => {
+    if (event.source === parent && event.data?.type === "test-click") {
+      document.getElementById("open").onclick = () => parent.postMessage(event.data.message, "*");
+      document.getElementById("open").click();
+    }
+  });
+  parent.postMessage("test-click-ready", "*");
+</script>

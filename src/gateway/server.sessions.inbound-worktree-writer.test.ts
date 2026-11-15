@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
-import { managedWorktrees } from "../agents/worktrees/service.js";
+import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { managedWorktrees, ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
-import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionMutationActive } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawStateLease } from "../state/openclaw-state-lease.js";
 import {
@@ -14,46 +16,41 @@ import { setupGatewaySessionsWorktreeTestHarness } from "./test/server-sessions.
 
 const { createArchiveWorktreeFixture } = setupGatewaySessionsWorktreeTestHarness();
 
-test.each([false, true])(
+test.for([false, true])(
   "inbound restore releases unrelated session writes while allocation waits (checkout already restored=%s)",
-  async (alreadyRestored) => {
+  async (alreadyRestored, { signal }) => {
     const fixture = await createArchiveWorktreeFixture();
     const { key, sessionId, storePath, worktree, workspace } = fixture;
+    const entry = (sessionKey = key) => loadSessionEntry({ storePath, sessionKey });
+    const patch = (params: Record<string, unknown>) => directSessionReq("sessions.patch", params);
+    const waitForGate = (gate: Promise<void>, work: Promise<unknown>, label: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, work, label), signal);
     const peer = await directSessionReq<{ key: string }>("sessions.create", { agentId: "main" });
     expect(peer.ok).toBe(true);
     const peerKey = peer.payload!.key;
-    expect(peerKey).toMatch(/^agent:main:/);
-    expect(loadSessionEntry({ storePath, sessionKey: peerKey })).toBeDefined();
     await fs.writeFile(path.join(worktree.path, "draft.txt"), "inbound restore preserves work\n");
-    expect(
-      await directSessionReq("sessions.patch", {
-        key,
-        expectedSessionId: sessionId,
-        archived: true,
-      }),
-    ).toMatchObject({ ok: true });
+    expect(await patch({ key, expectedSessionId: sessionId, archived: true })).toMatchObject({
+      ok: true,
+    });
+    await fixture.cleanupWorktrees();
     if (alreadyRestored) {
       await managedWorktrees.restore({ id: worktree.id });
     }
-    const [
-      { createDispatchReplyOperationCoordinator },
-      { createReplyDispatcher },
-      { buildTestCtx },
-    ] = await Promise.all([
+    const [lifecycle, replies, context] = await Promise.all([
       import("../auto-reply/reply/dispatch-from-config.lifecycle.js"),
       import("../auto-reply/reply/reply-dispatcher.js"),
       import("../auto-reply/reply/test-ctx.js"),
     ]);
     const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
-    const dispatcher = createReplyDispatcher({ deliver: async () => {} });
+    const dispatcher = replies.createReplyDispatcher({ deliver: async () => {} });
     onTestFinished(async () => {
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
     });
-    const coordinator = createDispatchReplyOperationCoordinator({
+    const coordinator = lifecycle.createDispatchReplyOperationCoordinator({
       agentId: "main",
       cfg: { agents: { defaults: { workspace } } },
-      ctx: buildTestCtx({
+      ctx: context.buildTestCtx({
         SessionKey: key,
         Body: "Continue this task",
         CommandSource: undefined,
@@ -63,10 +60,7 @@ test.each([false, true])(
       }),
       dispatcher,
       dispatchOperationSessionKey: key,
-      operationSessionStoreEntry: {
-        storePath,
-        entry: loadSessionEntry({ storePath, sessionKey: key }),
-      },
+      operationSessionStoreEntry: { storePath, entry: entry() },
       sessionWorkerPlacementContext: {},
       resolveOperationExpectedSessionId: () => sessionId,
     });
@@ -86,49 +80,35 @@ test.each([false, true])(
         await release.promise;
       },
     );
-    const originalRestore = managedWorktrees.restore.bind(managedWorktrees);
-    const restore = vi.spyOn(managedWorktrees, "restore").mockImplementation((params) => {
-      restoreEntered.resolve();
-      return originalRestore(params);
-    });
+    const originalRestore = captureMethodCall("restore")(ManagedWorktreeService.prototype);
+    const restore = vi
+      .spyOn(ManagedWorktreeService.prototype, "restore")
+      .mockImplementation(function (this: ManagedWorktreeService, params) {
+        restoreEntered.resolve();
+        return originalRestore(this, params);
+      });
     let admission: ReturnType<typeof coordinator.ensureDispatchReplyOperation> | undefined;
     let independent: ReturnType<typeof directSessionReq> | undefined;
     let admissionDone = false;
-    let independentDone = false;
-    let blockedIndependent: Error | undefined;
     try {
-      await Promise.race([entered.promise, allocation]);
+      await waitForGate(entered.promise, allocation, "allocation lease was not acquired");
       admission = coordinator.ensureDispatchReplyOperation("pre_dispatch").then((result) => {
         admissionDone = true;
         return result;
       });
       if (alreadyRestored) {
-        await expect(admission).resolves.toEqual({ status: "ready" });
+        await expect(withinTest(admission, signal)).resolves.toEqual({ status: "ready" });
         expect(restore).not.toHaveBeenCalled();
       } else {
-        await Promise.race([restoreEntered.promise, admission]);
-        expect(restore).toHaveBeenCalledOnce();
-        expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
+        await waitForGate(restoreEntered.promise, admission, "restore was not attempted");
+        expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(true);
       }
-      independent = directSessionReq("sessions.patch", {
-        key: peerKey,
-        label: "Independent inbound peer",
-      }).then((result) => {
-        independentDone = true;
-        return result;
-      });
-      // Release the real allocation lease even when the pre-fix writer blocks this assertion.
-      await vi
-        .waitFor(() => expect(independentDone).toBe(true))
-        .catch((error: unknown) => {
-          blockedIndependent = error instanceof Error ? error : new Error(String(error));
-        });
+      independent = patch({ key: peerKey, label: "Independent inbound peer" });
+      expect(await withinTest(independent, signal)).toMatchObject({ ok: true });
       if (!alreadyRestored) {
         expect(admissionDone).toBe(false);
-        expect(isSessionLifecycleMutationActive(storePath, [key, sessionId])).toBe(true);
-        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toEqual(
-          expect.any(Number),
-        );
+        expect(isSessionMutationActive(storePath, [key, sessionId])).toBe(true);
+        expect(entry()).toMatchObject({ archivedAt: expect.any(Number) });
         await expect(fs.access(worktree.path)).rejects.toThrow();
       }
     } finally {
@@ -140,17 +120,11 @@ test.each([false, true])(
     }
     await allocation;
     await expect(admission).resolves.toEqual({ status: "ready" });
-    expect(await independent).toMatchObject({ ok: true });
-    expect(loadSessionEntry({ storePath, sessionKey: peerKey })?.label).toBe(
-      "Independent inbound peer",
-    );
-    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+    expect(entry(peerKey)).toMatchObject({ label: "Independent inbound peer" });
+    expect(entry()?.archivedAt).toBeUndefined();
     await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
       "inbound restore preserves work\n",
     );
     await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
-    if (blockedIndependent) {
-      throw blockedIndependent;
-    }
   },
 );

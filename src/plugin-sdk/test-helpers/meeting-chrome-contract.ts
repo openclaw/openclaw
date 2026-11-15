@@ -8,7 +8,16 @@ import {
   createMeetingNodeBrowserFixture,
   createMeetingLogger,
   type MeetingBrowserFixtureOptions,
+  type MeetingBrowserFixture,
 } from "./meeting-browser.js";
+
+function expectAudioCaptureReleased(state: MeetingBrowserFixture["state"]) {
+  expect(state.audioCaptureEvents).toEqual([
+    { action: "start", captureId: expect.any(String) },
+    { action: "stop", captureId: state.audioCaptureEvents[0]?.captureId },
+  ]);
+  expect(state.audioCaptureId).toBeUndefined();
+}
 
 type ChromeFixtureOptions = MeetingBrowserFixtureOptions & {
   nodeCommand: string;
@@ -68,6 +77,8 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       }),
     ).rejects.toThrow("realtime startup failed");
 
+    expectAudioCaptureReleased(state);
+
     const evaluated = gatewayRequest.mock.calls.find(
       ([, params]) =>
         params.path === "/act" &&
@@ -107,6 +118,7 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       }),
     ).rejects.toThrow("realtime startup failed");
 
+    expectAudioCaptureReleased(state);
     expect(options.engineMocks.localDispose).toHaveBeenCalled();
     expect(gatewayRequest).toHaveBeenCalledWith(
       "browser.request",
@@ -135,6 +147,7 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
       }),
     ).rejects.toThrow("realtime startup failed");
 
+    expectAudioCaptureReleased(state);
     expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
     expect(
       invoke.mock.calls.filter(
@@ -176,6 +189,7 @@ export function defineMeetingChromeCleanupTests(options: ChromeFixtureOptions) {
         }),
       ).rejects.toThrow("realtime startup failed");
 
+      expectAudioCaptureReleased(state);
       expect(options.engineMocks.nodeDispose).toHaveBeenCalled();
       expect(
         invoke.mock.calls.some(

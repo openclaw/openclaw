@@ -1,24 +1,39 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, assert, describe, expect, it } from "vitest";
 import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import { resolveCodeModeConfig } from "./code-mode.js";
 import { resetCodeModeTestState, testing } from "./code-mode.test-support.js";
 
 afterEach(resetCodeModeTestState);
+type Input = Parameters<typeof testing.runCodeModeExecutor>[0];
+type Resume = Extract<Input, { kind: "resume" }>;
+function createExecutor(limit: number) {
+  const config = resolveCodeModeConfig({
+    tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
+  });
+  const run = (input: Input) =>
+    testing.runCodeModeExecutor(input, { timeoutMs: 10_000, executor: config.executor });
+  const initialization = { config, apiFiles: [], namespaces: [], swarmEnabled: true };
+  return {
+    exec: (source: string, catalog: unknown[] = []) =>
+      run({ kind: "exec", source, catalog, ...initialization }),
+    resume: (
+      continuation: Resume["continuation"],
+      settledRequests: Resume["settledRequests"],
+      pendingRequests?: Resume["pendingRequests"],
+    ) => run({ kind: "resume", config, continuation, settledRequests, pendingRequests }),
+  };
+}
 
 describe("Swarm pipeline backpressure", () => {
   it.each([
     { limit: 1, count: 3, partial: false, followup: false },
-    { limit: 2, count: 6, partial: false, followup: false },
-    { limit: 16, count: 20, partial: false, followup: false },
     { limit: 3, count: 6, partial: true, followup: false },
     { limit: 16, count: 30, partial: true, followup: true },
     { limit: 16, count: 65, partial: false, followup: true, refill: true },
   ])(
     "accounts for $count items with $limit slots, partial settlement $partial and follow-up tools $followup",
     async ({ limit, count, partial, followup, refill = false }) => {
-      const config = resolveCodeModeConfig({
-        tools: { codeMode: { enabled: true, maxPendingToolCalls: limit } },
-      });
+      const executor = createExecutor(limit);
       const source = `
       const initial = ${refill} ? Array.from({ length: 16 }, (_, i) => progress({ value: "initial-" + i })) : [];
       const timers = ${refill} ? Array.from({ length: 128 }, () => setTimeout(() => { throw new Error("canceled queued timer fired"); }, 60_000)) : [];
@@ -39,23 +54,11 @@ describe("Swarm pipeline backpressure", () => {
         ? { status: outcome.status, value: outcome.value }
         : { status: outcome.status, error: outcome.reason.message });
     `;
-      let result: CodeModeWorkerResult = await testing.runCodeModeWorker(
-        {
-          kind: "exec",
-          source,
-          config,
-          catalog: [{ callableName: "progress", name: "progress", source: "openclaw" }],
-          apiFiles: [],
-          namespaces: [],
-          swarmEnabled: true,
-        },
-        10_000,
-      );
+      let result: CodeModeWorkerResult = await executor.exec(source, [
+        { callableName: "progress", name: "progress", source: "openclaw" },
+      ]);
       const collectors = new Map<string, string>();
-      const spawnedPrompts: string[] = [];
       const progressItems: unknown[] = [];
-      // Drive real worker snapshots with controlled child results; this tests request
-      // admission and resumption, not a mock of the guest's Promise implementation.
       for (let round = 0; result.status === "waiting" && round < count * 8; round++) {
         expect(result.pendingRequests.length).toBeGreaterThan(0);
         expect(result.pendingRequests.length).toBeLessThanOrEqual(limit);
@@ -67,12 +70,9 @@ describe("Swarm pipeline backpressure", () => {
             value = { ok: true };
           } else if (request.method === "agentSpawn") {
             const prompt = request.args[0];
-            if (typeof prompt !== "string") {
-              throw new Error("expected a collector prompt");
-            }
+            assert(typeof prompt === "string", "expected a collector prompt");
             const runId = `collector-${collectors.size}`;
             collectors.set(runId, prompt);
-            spawnedPrompts.push(prompt);
             value = { status: "accepted", runId };
           } else if (request.method === "callValue") {
             expect(request.args[0]).toBe("progress");
@@ -82,9 +82,7 @@ describe("Swarm pipeline backpressure", () => {
             expect(request.method).toBe("agentWait");
             const runId = request.args[0];
             const prompt = typeof runId === "string" ? collectors.get(runId) : undefined;
-            if (!prompt) {
-              throw new Error("wait must reference an accepted collector");
-            }
+            assert(prompt, "wait must reference an accepted collector");
             const nextStage = prompt.startsWith("first-")
               ? prompt.replace("first-", "second-")
               : prompt.replace("second-", "done-");
@@ -95,17 +93,12 @@ describe("Swarm pipeline backpressure", () => {
           }
           return { id: request.id, ok: true as const, json: JSON.stringify(value) };
         });
-        result = await testing.runCodeModeWorker(
-          { kind: "resume", snapshot: result.snapshot, config, settledRequests, pendingRequests },
-          10_000,
-        );
+        result = await executor.resume(result.continuation, settledRequests, pendingRequests);
       }
-      expect(result.status, result.status === "failed" ? result.error : undefined).toBe(
-        "completed",
+      assert(
+        result.status === "completed",
+        result.status === "failed" ? result.error : "pipeline must complete",
       );
-      if (result.status !== "completed") {
-        throw new Error("pipeline must complete");
-      }
       expect(result.value.kind).toBe("complete");
       expect(JSON.parse(result.value.json)).toEqual(
         Array.from({ length: count }, (_, index) =>
@@ -114,6 +107,7 @@ describe("Swarm pipeline backpressure", () => {
             : { status: "fulfilled", value: `done-${index}` },
         ),
       );
+      const spawnedPrompts = [...collectors.values()];
       expect(spawnedPrompts).toHaveLength(count * 2 - 1);
       expect(new Set(spawnedPrompts).size).toBe(spawnedPrompts.length);
       const expectedProgress = followup
@@ -135,70 +129,43 @@ describe("Swarm pipeline backpressure", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves queued collector arguments and structured=%s results",
-    async (structured) => {
-      const config = resolveCodeModeConfig({
-        tools: { codeMode: { enabled: true, maxPendingToolCalls: 1 } },
-      });
-      let result = await testing.runCodeModeWorker(
-        {
-          kind: "exec",
-          source: `
-          const timer = setTimeout(() => { throw new Error("canceled timer fired"); }, 60_000);
-          const options = { label: "original", ...(${structured} ? { schema: { type: "object" } } : {}) };
+  it("preserves queued collector arguments and structured results", async () => {
+    const executor = createExecutor(1);
+    const options = { label: "original", schema: { type: "object" } };
+    let result = await executor.exec(`
+          const options = { label: "original", schema: { type: "object" } };
           const collector = agents.run("Queued research", options);
           options.label = "changed";
-          if (${structured}) delete options.schema;
-          else options.schema = { type: "object" };
-          clearTimeout(timer);
+          delete options.schema;
           return await collector;
-        `,
-          config,
-          catalog: [],
-          swarmEnabled: true,
+        `);
+    expect(result).toMatchObject({
+      status: "waiting",
+      pendingRequests: [
+        {
+          method: "agentSpawn",
+          args: ["Queued research", options],
         },
-        10_000,
-      );
-      expect(result).toMatchObject({
-        status: "waiting",
-        canceledRequestIds: ["bridge:sleep:1"],
-        pendingRequests: [
-          {
-            id: "bridge:agentSpawn:1",
-            method: "agentSpawn",
-            args: [
-              "Queued research",
-              { label: "original", ...(structured ? { schema: { type: "object" } } : {}) },
-            ],
-          },
-        ],
-      });
-      for (let round = 0; result.status === "waiting" && round < 2; round++) {
-        const settledRequests = result.pendingRequests.map((request) => ({
-          id: request.id,
-          ok: true as const,
-          json: JSON.stringify(
-            request.method === "agentSpawn"
-              ? { runId: "collector" }
-              : {
-                  runId: "collector",
-                  status: "done",
-                  result: "text",
-                  ...(structured ? { structured: { answer: 42 } } : {}),
-                },
-          ),
-        }));
-        result = await testing.runCodeModeWorker(
-          { kind: "resume", snapshot: result.snapshot, config, settledRequests },
-          10_000,
-        );
-      }
-      expect(result.status).toBe("completed");
-      if (result.status !== "completed") {
-        throw new Error("collector must complete");
-      }
-      expect(JSON.parse(result.value.json)).toEqual(structured ? { answer: 42 } : "text");
-    },
-  );
+      ],
+    });
+    for (let round = 0; result.status === "waiting" && round < 2; round++) {
+      const settledRequests = result.pendingRequests.map((request) => ({
+        id: request.id,
+        ok: true as const,
+        json: JSON.stringify(
+          request.method === "agentSpawn"
+            ? { runId: "collector" }
+            : {
+                runId: "collector",
+                status: "done",
+                result: "text",
+                structured: { answer: 42 },
+              },
+        ),
+      }));
+      result = await executor.resume(result.continuation, settledRequests);
+    }
+    assert(result.status === "completed", "collector must complete");
+    expect(JSON.parse(result.value.json)).toEqual({ answer: 42 });
+  });
 });

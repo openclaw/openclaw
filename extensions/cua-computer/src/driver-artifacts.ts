@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -13,7 +14,9 @@ const requireFromPlugin = createRequire(import.meta.url);
 function resolvePackageEntry(packageName: string): string | undefined {
   try {
     return requireFromPlugin.resolve(packageName);
-  } catch {}
+  } catch {
+    // Import-only packages are resolved with import conditions below.
+  }
   // The CUA Driver SDK is ESM-only: its exports map carries only the "import"
   // condition, so require-condition resolution throws PATH_NOT_EXPORTED even
   // when the package is installed. Resolve with import conditions before
@@ -40,7 +43,9 @@ function resolvePackageJson(packageName: string): string | undefined {
   }
   try {
     return requireFromPlugin.resolve(`${packageName}/package.json`);
-  } catch {}
+  } catch {
+    // The exports map may hide package.json; find the manifest from its entry below.
+  }
   const entry = resolvePackageEntry(packageName);
   if (!entry) {
     return undefined;
@@ -52,7 +57,9 @@ function resolvePackageJson(packageName: string): string | undefined {
       if (readPackageIdentity(candidate).name === packageName) {
         return candidate;
       }
-    } catch {}
+    } catch {
+      // Ancestors without a readable matching manifest are not the package root.
+    }
     const parent = path.dirname(current);
     if (parent === current) {
       return undefined;
@@ -61,11 +68,19 @@ function resolvePackageJson(packageName: string): string | undefined {
   }
 }
 
-function detectLinuxLibc(): "gnu" | "musl" {
-  const report = process.report?.getReport() as
-    | { header?: { glibcVersionRuntime?: unknown } }
-    | undefined;
-  return typeof report?.header?.glibcVersionRuntime === "string" ? "gnu" : "musl";
+function detectLinuxLibc(): "gnu" | "musl" | undefined {
+  // Diagnostic reports also enumerate native stacks and network interfaces,
+  // which can block Gateway registration for minutes. Read the loaded libc instead.
+  try {
+    const maps = fs.readFileSync("/proc/self/maps", "utf8");
+    if (/\/(?:ld-musl-|libc\.musl-)/u.test(maps)) {
+      return "musl";
+    }
+    return /\/libc(?:\.so\.6|-\d[\d.]*\.so)(?:\s|$)/mu.test(maps) ? "gnu" : undefined;
+  } catch {
+    // Restricted procfs must produce the existing unknown-libc diagnostic, not a guess.
+    return undefined;
+  }
 }
 
 let installedVerification: CuaDriverArtifactVerification | undefined;

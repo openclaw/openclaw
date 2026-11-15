@@ -1,14 +1,9 @@
 // Normalizes plugin scope identifiers and scope lists.
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 
 /** Normalizes plugin id scope input into a sorted unique string list. */
 export function normalizePluginIdScope(ids?: readonly unknown[]): string[] | undefined {
-  if (ids === undefined) {
-    return undefined;
-  }
-  return Array.from(
-    new Set(normalizeStringEntries(ids.filter((id): id is string => typeof id === "string"))),
-  ).toSorted();
+  return ids === undefined ? undefined : normalizeSortedUniqueTrimmedStringList(ids);
 }
 
 /** True when plugin scope was explicitly provided, including an empty scope. */

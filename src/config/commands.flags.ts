@@ -1,4 +1,3 @@
-// Normalizes command flag config records for CLI and channel commands.
 import { isPlainObject } from "../infra/plain-object.js";
 import type { CommandsConfig } from "./types.js";
 
@@ -18,7 +17,6 @@ function getOwnCommandFlagValue(
   return commands[key];
 }
 
-/** Returns true only when a command flag is explicitly enabled. */
 export function isCommandFlagEnabled(
   config: { commands?: unknown } | undefined,
   key: CommandFlagKey,

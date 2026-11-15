@@ -13,8 +13,6 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import { skillCollectionReviewMonitorAgentId } from "../../../../src/cron/skill-collection-review-monitor.js";
-import type { CronJob } from "../../../../src/cron/types.js";
 import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identity.js";
 import { closeOpenClawStateDatabaseByPath } from "../../../../src/state/openclaw-state-db-cache.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
@@ -82,6 +80,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
       preload.searchParams.set("fixture", fixture.baseUrl);
       gateway = await gatewayOwner.start({
         repoRoot,
+        initializeCurrentRuntimeState: true,
         useRepoCli: true,
         command: {
           executablePath: process.execPath,
@@ -92,6 +91,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         },
         providerMode: "mock-openai",
         providerBaseUrl: `${fixture.baseUrl}/v1`,
+        mockSessionObserverUrl: mock.sessionObserverUrl,
         primaryModel: MODEL,
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
         controlUiEnabled: true,
@@ -301,42 +301,6 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         verifyContinuity,
         proveGroup,
       };
-      await proveGroup("heartbeat and Workshop monitors", async () => {
-        for (const [every, mode] of [
-          ["1h", "auto"],
-          ["0m", "off"],
-          ["2h", "auto"],
-        ] as const) {
-          await patch({
-            agents: { entries: { qa: { heartbeat: { every } } } },
-            skills: { workshop: { autonomous: { mode } } },
-          });
-          await waitForHotReloadFact("accepted system monitor config", async () => {
-            const { jobs } = await rpc<{
-              jobs: CronJob[];
-            }>("cron.list", { includeDisabled: true, includeDeliveryPreviews: false });
-            const heartbeat = jobs.find(
-              (job) => job.agentId === "qa" && job.payload.kind === "heartbeat",
-            );
-            const review = jobs.find((job) => skillCollectionReviewMonitorAgentId(job) === "qa");
-            return heartbeat?.enabled === (every !== "0m") &&
-              heartbeat.schedule.kind === "every" &&
-              review?.enabled === (mode === "auto") &&
-              (every === "0m" ||
-                heartbeat.schedule.everyMs === (every === "1h" ? 3_600_000 : 7_200_000))
-              ? true
-              : undefined;
-          });
-        }
-        await patch({
-          agents: { entries: { qa: { heartbeat: { every: "0m" } } } },
-          skills: { workshop: { autonomous: { mode: "off" } } },
-        });
-        await verifyContinuity(
-          "heartbeat and Workshop monitors",
-          "Real config.patch writes changed persisted monitor cadence and enablement on the same Gateway boot",
-        );
-      });
       await proveHotReloadTerminalStartup(terminalProof);
 
       await proveHotReloadRequests({
@@ -356,7 +320,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
 
       // Node identities and relay grants are generated for this isolated fixture only.
       const nodeIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+        env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
         identityKey: "browser-node",
       });
       let node: HotReloadConnection | undefined;
@@ -489,7 +453,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
           ["gateway.nodes.pairing.autoApproveCidrs", "gateway.nodes.pairing.sshVerify.cidrs"],
         );
         const pendingIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "pending-node",
         });
         await assert.rejects(
@@ -501,7 +465,7 @@ async function runProof(repoRoot: string, outputDir: string, appendLog: (text: s
         assert.equal(node.closes, 0);
         await patch({ gateway: { nodes: { pairing: { autoApproveLocal: true } } } });
         const nextIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(temporaryRoot, "state/openclaw.sqlite"),
+          env: { ...process.env, OPENCLAW_STATE_DIR: temporaryRoot },
           identityKey: "next-node",
         });
         const nextNode = await connectHotReloadClient(activeGateway, { identity: nextIdentity });

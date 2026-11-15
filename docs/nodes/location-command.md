@@ -117,6 +117,7 @@ Linux uses the same stable errors: `LOCATION_DISABLED`, `LOCATION_TIMEOUT`, and 
 ## Model/tooling integration
 
 - Agent tool: the `nodes` tool's `location_get` action (node required).
+- `locationTimeoutMs` controls the location fix budget. When set, the agent tool adds 30 seconds for the node invocation and another 30 seconds for Gateway transport. Explicit `invokeTimeoutMs` and `timeoutMs` overrides remain independent, including shorter limits.
 - CLI: `openclaw nodes location get --node <id>`.
 - Agent guidelines: only call when the user enabled location and understands the scope.
 

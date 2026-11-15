@@ -1,37 +1,31 @@
-// Qa Lab plugin module implements bus state behavior.
 import { randomUUID } from "node:crypto";
+import {
+  parseQaTarget,
+  sanitizeQaBusToolCalls,
+  type QaBusConversation,
+  type QaBusCreateThreadInput,
+  type QaBusDeleteMessageInput,
+  type QaBusEditMessageInput,
+  type QaBusEvent,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
+  type QaBusOutboundMessageInput,
+  type QaBusPollInput,
+  type QaBusReadMessageInput,
+  type QaBusReactToMessageInput,
+  type QaBusSearchMessagesInput,
+  type QaBusSnapshotConversation,
+  type QaBusThread,
+} from "openclaw/plugin-sdk/qa-channel-protocol";
 import {
   buildQaBusSnapshot,
   cloneMessage,
   normalizeAccountId,
-  normalizeConversationFromTarget,
   pollQaBusEvents,
-  readQaBusMessage,
   requireQaBusMessageForAccount,
   searchQaBusMessages,
 } from "./bus-queries.js";
 import { createQaBusWaiterStore, throwQaBusClosed } from "./bus-waiters.js";
-import { sanitizeQaBusToolCalls } from "./qa-bus-protocol.js";
-import type {
-  QaBusAttachment,
-  QaBusConversation,
-  QaBusCreateThreadInput,
-  QaBusDeleteMessageInput,
-  QaBusEditMessageInput,
-  QaBusEvent,
-  QaBusInboundMessageInput,
-  QaBusMessage,
-  QaBusOutboundMessageInput,
-  QaBusPollInput,
-  QaBusReadMessageInput,
-  QaBusReactToMessageInput,
-  QaBusSearchMessagesInput,
-  QaBusSnapshotConversation,
-  QaBusStateSnapshot,
-  QaBusThread,
-  QaBusToolCall,
-  QaBusWaitForInput,
-} from "./runtime-api.js";
 
 const DEFAULT_BOT_ID = "openclaw";
 const DEFAULT_BOT_NAME = "OpenClaw QA";
@@ -45,65 +39,50 @@ function normalizeInboundConversation(conversation: QaBusConversation): QaBusCon
   return kind === conversation.kind ? conversation : { ...conversation, kind };
 }
 
-type QaBusEventSeed =
-  | {
-      kind: "inbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "outbound-message";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "thread-created";
-      accountId: string;
-      thread: QaBusThread;
-    }
-  | {
-      kind: "message-edited";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "message-deleted";
-      accountId: string;
-      message: QaBusMessage;
-    }
-  | {
-      kind: "reaction-added";
-      accountId: string;
-      message: QaBusMessage;
-      emoji: string;
-      senderId: string;
-    };
+type QaBusEventSeed = {
+  [Kind in QaBusEvent["kind"]]: Omit<Extract<QaBusEvent, { kind: Kind }>, "cursor">;
+}[QaBusEvent["kind"]];
 
 export function createQaBusState() {
   const conversations = new Map<string, QaBusSnapshotConversation>();
   const threads = new Map<string, QaBusThread>();
   const messages = new Map<string, QaBusMessage>();
   const events: QaBusEvent[] = [];
-  const acknowledgedPollCursors = new Map<string, number>();
+  const inboundReceipts = new Map<
+    number,
+    { accountId: string; adopted: boolean; completed: boolean }
+  >();
   let cursor = 0;
   let assertWritable = () => {};
-  const waiters = createQaBusWaiterStore(() =>
+  const getSnapshot = () =>
     buildQaBusSnapshot({
       cursor,
       conversations,
       threads,
       messages,
       events,
-    }),
-  );
+    });
+  const waiters = createQaBusWaiterStore(getSnapshot);
 
-  const pushEvent = (event: QaBusEventSeed | ((cursor: number) => QaBusEventSeed)): QaBusEvent => {
+  const pushEvent = (event: QaBusEventSeed): void => {
     cursor += 1;
-    const next = typeof event === "function" ? event(cursor) : event;
-    const finalized = { cursor, ...next } as QaBusEvent;
-    events.push(finalized);
+    events.push({ cursor, ...event });
+    if (event.kind === "inbound-message") {
+      inboundReceipts.set(cursor, {
+        accountId: event.accountId,
+        adopted: false,
+        completed: false,
+      });
+    }
     waiters.settle();
-    return finalized;
+  };
+
+  const publishMessage = (
+    kind: "inbound-message" | "outbound-message" | "message-edited" | "message-deleted",
+    message: QaBusMessage,
+  ) => {
+    pushEvent({ kind, accountId: message.accountId, message: cloneMessage(message) });
+    return cloneMessage(message);
   };
 
   const ensureConversation = (
@@ -134,23 +113,14 @@ export function createQaBusState() {
     return message;
   };
 
-  const createMessage = (params: {
-    direction: QaBusMessage["direction"];
-    accountId: string;
-    messageId?: string;
-    conversation: QaBusConversation;
-    senderId: string;
-    senderName?: string;
-    text: string;
-    isError?: boolean;
-    timestamp?: number;
-    threadId?: string;
-    threadTitle?: string;
-    replyToId?: string;
-    attachments?: QaBusAttachment[];
-    nativeCommand?: QaBusInboundMessageInput["nativeCommand"];
-    toolCalls?: QaBusToolCall[];
-  }): QaBusMessage => {
+  const createMessage = (
+    params: QaBusInboundMessageInput & {
+      direction: QaBusMessage["direction"];
+      accountId: string;
+      messageId?: string;
+      isError?: boolean;
+    },
+  ): QaBusMessage => {
     assertWritable();
     const thread = params.threadId ? threads.get(params.threadId) : undefined;
     if (
@@ -201,19 +171,12 @@ export function createQaBusState() {
       threads.clear();
       messages.clear();
       events.length = 0;
+      inboundReceipts.clear();
       // Keep the cursor monotonic across resets so long-poll clients do not
       // miss events; terminal reset also fences late waiter timers.
       waiters.reset(undefined, terminal);
     },
-    getSnapshot() {
-      return buildQaBusSnapshot({
-        cursor,
-        conversations,
-        threads,
-        messages,
-        events,
-      });
-    },
+    getSnapshot,
     addInboundMessage(input: QaBusInboundMessageInput, messageId?: string) {
       const accountId = normalizeAccountId(input.accountId);
       const message = createMessage({
@@ -235,20 +198,15 @@ export function createQaBusState() {
         nativeCommand: input.nativeCommand,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "inbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("inbound-message", message);
     },
     addOutboundMessage(input: QaBusOutboundMessageInput) {
       const accountId = normalizeAccountId(input.accountId);
-      const { conversation, threadId } = normalizeConversationFromTarget(input.to);
+      const { conversationId, chatType, threadId } = parseQaTarget(input.to);
       const message = createMessage({
         direction: "outbound",
         accountId,
-        conversation,
+        conversation: { id: conversationId, kind: chatType },
         senderId: input.senderId?.trim() || DEFAULT_BOT_ID,
         senderName: input.senderName?.trim() || DEFAULT_BOT_NAME,
         text: input.text,
@@ -259,12 +217,7 @@ export function createQaBusState() {
         attachments: input.attachments,
         toolCalls: input.toolCalls,
       });
-      pushEvent({
-        kind: "outbound-message",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("outbound-message", message);
     },
     createThread(input: QaBusCreateThreadInput) {
       assertWritable();
@@ -316,65 +269,63 @@ export function createQaBusState() {
       return cloneMessage(message);
     },
     editMessage(input: QaBusEditMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.text = input.text;
       message.editedAt = input.timestamp ?? Date.now();
-      pushEvent({
-        kind: "message-edited",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-edited", message);
     },
     deleteMessage(input: QaBusDeleteMessageInput) {
-      const accountId = normalizeAccountId(input.accountId);
       const message = requireActiveMessageForAccount(input);
       message.deleted = true;
-      pushEvent({
-        kind: "message-deleted",
-        accountId,
-        message: cloneMessage(message),
-      });
-      return cloneMessage(message);
+      return publishMessage("message-deleted", message);
     },
     readMessage(input: QaBusReadMessageInput) {
-      return readQaBusMessage({ messages, input });
+      return cloneMessage(requireQaBusMessageForAccount({ messages, input }));
     },
     searchMessages(input: QaBusSearchMessagesInput) {
       return searchQaBusMessages({ messages, input });
     },
-    resolvePollCursor(input: QaBusPollInput = {}) {
+    recordPollReceipts(input: QaBusPollInput = {}) {
       assertWritable();
       const accountId = normalizeAccountId(input.accountId);
-      const requestedCursor = input.cursor ?? 0;
-      const acknowledgedCursor = acknowledgedPollCursors.get(accountId) ?? 0;
-      // Fetch progress and completed work are separate facts. Missing
-      // acknowledgement means the consumer has not recorded new completion.
-      const completedCursor = input.acknowledgedCursor ?? 0;
-      if (completedCursor > acknowledgedCursor && completedCursor <= cursor) {
-        acknowledgedPollCursors.set(accountId, completedCursor);
+      // A confirmed adoption permits execution. Validate the entire batch first
+      // so a reset or foreign input cannot produce a false custody confirmation.
+      const adopted = (input.adoptedEventCursors ?? []).map((eventCursor) => {
+        const receipt = inboundReceipts.get(eventCursor);
+        if (receipt?.accountId !== accountId) {
+          throw new Error(
+            "adopted event must be a retained inbound input for the selected account",
+          );
+        }
+        return receipt;
+      });
+      for (const receipt of adopted) {
+        receipt.adopted = true;
       }
-      // A restarted channel consumer begins at zero. Resume its account cursor
-      // so retained events are not replayed, while still returning unacked work.
-      return requestedCursor === 0 ? acknowledgedCursor : requestedCursor;
+      // Completion is exact, including terminal no-turn outcomes. Late duplicate
+      // receipts after reset and claims outside this account are harmless.
+      for (const completedCursor of input.completedEventCursors ?? []) {
+        const receipt = inboundReceipts.get(completedCursor);
+        if (receipt?.accountId === accountId) {
+          receipt.adopted = true;
+          receipt.completed = true;
+        }
+      }
     },
-    getAcknowledgedPollCursor(accountId?: string) {
-      return acknowledgedPollCursors.get(normalizeAccountId(accountId)) ?? 0;
+    hasCompletedInboundEvent(accountId: string | undefined, eventCursor: number) {
+      const completion = inboundReceipts.get(eventCursor);
+      return completion?.accountId === normalizeAccountId(accountId) && completion.completed;
     },
     poll(input: QaBusPollInput = {}) {
-      return pollQaBusEvents({ events, cursor, input });
+      return pollQaBusEvents({
+        events,
+        cursor,
+        input,
+        isAdoptedInbound: (eventCursor) => inboundReceipts.get(eventCursor)?.adopted === true,
+      });
     },
-    async waitFor(input: QaBusWaitForInput) {
-      return await waiters.waitFor(input);
-    },
-    async waitForCursorAdvance(
-      afterCursor: number,
-      timeoutMs: number,
-      shouldResolve?: (snapshot: QaBusStateSnapshot) => boolean,
-    ) {
-      return await waiters.waitForCursorAdvance(afterCursor, timeoutMs, shouldResolve);
-    },
+    waitFor: waiters.waitFor.bind(waiters),
+    waitForCursorAdvance: waiters.waitForCursorAdvance.bind(waiters),
   };
 }
 

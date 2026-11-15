@@ -16,7 +16,7 @@ Record the target environment/profile, OpenClaw binary, config/state root, Gatew
 - If the global executable is stale, invoke the target through its owner.
 - Verify status, config, logs, and process identity describe the same Gateway.
 
-Do not mutate pairing or auth until the target is unambiguous.
+Identify the target Gateway before changing pairing or auth.
 
 ## 2. Classify the client
 
@@ -50,8 +50,8 @@ Interpret the first failed transition:
 - No matching Gateway attempt: route, DNS, TLS, origin, or proxy problem.
 - `token_missing`, `password_missing`, mismatch, or Tailscale identity failure: auth failed **before** pairing, so an empty pending list is expected.
 - `pairing required`: route and auth succeeded; approve the exact pending request.
-- `authenticated user connected` / `webchat connected`: match the exact client; if followed by `1006`, preserve auth/pairing and inspect lifecycle, transport, proxy, or reconnect.
-- `1006` without either application-level connected log does not prove auth/pairing; inspect the earlier handshake transition.
+- `client connected`: match `conn`, `client`, `mode`, and `role` to the exact client. Admission precedes the hello response; if followed by `1006`, preserve auth/pairing and inspect hello delivery, lifecycle, transport, proxy, or reconnect. Older builds use overlapping `authenticated user connected` / `webchat connected` records that omit ephemeral clients.
+- `1006` without a matching application-level admission record does not prove auth/pairing; inspect the earlier handshake transition.
 
 ## 4. Prove the route
 

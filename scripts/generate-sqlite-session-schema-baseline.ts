@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Generate SQLite Session Schema Baseline script supports OpenClaw repository automation.
 import path from "node:path";
 import { writeSqliteSessionSchemaBaselineArtifacts } from "./lib/sqlite-session-schema-baseline.ts";
 

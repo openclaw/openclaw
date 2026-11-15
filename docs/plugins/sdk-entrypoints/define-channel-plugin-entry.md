@@ -18,7 +18,7 @@ and mode-gated callbacks. Part of the
 
 Wraps `definePluginEntry` with channel-specific wiring: it automatically
 calls `api.registerChannel({ plugin })`, exposes an optional root-help CLI
-metadata seam, and gates capability and full-runtime callbacks on registration
+metadata interface, and gates capability and full-runtime callbacks on registration
 mode.
 
 ```typescript
@@ -61,7 +61,7 @@ Callbacks run per registration mode (full table under
   `"tool-discovery"`. Store the runtime reference here, typically via
   `createPluginRuntimeStore`.
 - `registerCliMetadata` runs for `"cli-metadata"`, `"discovery"`, and
-  `"full"`. Use it as the canonical place for channel-owned CLI descriptors
+  `"full"`. Use it as the primary place for channel-owned CLI descriptors
   so root help stays non-activating, discovery snapshots include static
   command metadata, and normal CLI registration stays compatible with full
   plugin loads.

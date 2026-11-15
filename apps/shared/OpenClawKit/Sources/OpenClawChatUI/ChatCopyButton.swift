@@ -33,9 +33,6 @@ struct ChatCopyButton: View {
     #endif
 
     @State private var copiedAt: Date?
-    #if os(macOS)
-    @FocusState private var isFocused: Bool
-    #endif
 
     var body: some View {
         Button {
@@ -60,8 +57,22 @@ struct ChatCopyButton: View {
         // iOS has no hover, so the controls stay visible.
         #if os(macOS)
         .help(self.label)
-        .focused(self.$isFocused)
-        .opacity(self.revealed || self.isFocused || self.copiedAt != nil ? 1 : 0)
+        .modifier(ChatHoverAction(revealed: self.revealed || self.copiedAt != nil))
         #endif
     }
 }
+
+#if os(macOS)
+struct ChatHoverAction: ViewModifier {
+    let revealed: Bool
+    @Environment(\.accessibilityVoiceOverEnabled) private var voiceOverEnabled
+    @FocusState private var isFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focused(self.$isFocused)
+            // Zero opacity removes native controls from keyboard/AX navigation.
+            .opacity(self.revealed || self.isFocused || self.voiceOverEnabled ? 1 : 0.01)
+    }
+}
+#endif

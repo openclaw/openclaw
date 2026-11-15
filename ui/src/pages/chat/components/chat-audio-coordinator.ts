@@ -1,9 +1,7 @@
-type ActiveChatAudio = {
+let activeAudio: {
   media: HTMLMediaElement;
   onSuperseded: () => void;
-};
-
-let activeAudio: ActiveChatAudio | null = null;
+} | null = null;
 
 /** Claims the page's audio slot and pauses any previously playing chat audio. */
 export function claimChatAudioPlayback(media: HTMLMediaElement, onSuperseded: () => void): void {

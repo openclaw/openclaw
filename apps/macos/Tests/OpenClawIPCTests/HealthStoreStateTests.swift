@@ -131,7 +131,7 @@ struct HealthStoreStateTests {
                 Issue.record("Expected degraded state when probe fails for linked channel")
             }
 
-            #expect(store.summaryLine.contains("probe degraded"))
+            #expect(store.summaryLine.contains("check degraded"))
         }
     }
 

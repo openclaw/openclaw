@@ -13,7 +13,7 @@ read_when:
   Targetless actions can launch it (for example, `open`, `navigate`, or `openclaw browser start`). Actions that name a
   tab by `targetId`, tab id, or label never start a stopped browser, because a new browser cannot
   contain that tab; start the browser or open a new tab, then select a current target.
-- **Remote control (node host):** run a node host on the machine that has the browser; the Gateway proxies browser actions to it.
+- **Remote control (node host):** run a node host (see [Nodes](/nodes) for pairing and [Node host CLI](/cli/node) for `openclaw node run`) on the machine that has the browser; the Gateway proxies browser actions to it.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chromium-based browser. In this case, OpenClaw will not launch a local browser.
 - For externally managed CDP services on loopback (for example Browserless in
@@ -45,8 +45,17 @@ tokens instead of committing them to config files.
 ## Node browser proxy (zero-config default)
 
 If you run a **node host** on the machine that has your browser, OpenClaw can
-auto-route browser tool calls to that node without any extra browser config.
-This is the default path for remote gateways. Automatic host fallback is allowed
+auto-route browser tool calls to that node when the Gateway host has no local
+browser capability. Automatic routing prefers the host, including a stopped
+managed browser whose executable is installed. Explicit `target="node"`, a
+`node` selector, or `gateway.nodes.browser.node` overrides that preference;
+`target="host"` always stays on the host.
+
+The selected host profile owns existing-session, extension, attach-only, and
+remote-CDP connections even when no managed-browser executable is installed.
+Launch failures, invalid executable settings, permission errors, and page-action
+failures stay on that owner; OpenClaw does not replay them on another machine.
+Automatic host fallback from a selected node is allowed
 only before the selected node handles a request. Once an action reaches the node,
 its follow-up snapshot or settings stay on that node instead of switching browsers.
 
@@ -54,7 +63,8 @@ Standalone runs such as `openclaw agent exec` use the host browser when no
 Gateway or node route is selected. They do not need Gateway credentials for
 local browser control. Sandbox routing and host-control restrictions still apply.
 To discover browser nodes through a local Gateway from a standalone run, set
-`gateway.nodes.browser.mode="auto"`. An explicit node target or pin, remote
+`gateway.nodes.browser.mode="auto"`; discovery runs only when local capability is
+unavailable. An explicit node target or pin, remote
 Gateway configuration, or `OPENCLAW_GATEWAY_URL` also keeps node discovery
 enabled. Explicit node targets and pins retain connection and authentication
 errors.
@@ -66,9 +76,10 @@ Notes:
 - The proxy command never allows persistent profile mutations (`create-profile`, `delete-profile`, `reset-profile`) regardless of `allowProfiles`; make those changes on the node directly.
 - `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy.
 - If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary limiting which profile names the proxy will target.
+- Requests keep their selected profile while preparing work. The node rechecks proxy and profile access before browser actions, including after startup or upload preparation.
 - Disable if you don't want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
-  - On the gateway: `gateway.nodes.browser.mode="off"` (also accepts `"auto"` to pick a single connected browser node, or `"manual"` to require an explicit node param)
+  - On the gateway: `gateway.nodes.browser.mode="off"` (also accepts `"auto"` to prefer the host and fall back to a single connected browser node, or `"manual"` to require an explicit node selection or configured pin)
 
 ## Browserless (hosted remote CDP)
 
@@ -193,6 +204,36 @@ Notes:
 - See [pricing](https://www.browserbase.com/pricing) for current free-tier limits and paid plans.
 - See the [Browserbase docs](https://docs.browserbase.com) for full API
   reference, SDK guides, and integration examples.
+
+### Browser Use
+
+[Browser Use](https://browser-use.com) provides managed cloud browsers through
+its CDP WebSocket endpoint.
+
+```json5
+{
+  browser: {
+    enabled: true,
+    defaultProfile: "browser-use",
+    profiles: {
+      "browser-use": {
+        cdpUrl: "wss://connect.browser-use.com?apiKey=<BROWSER_USE_API_KEY>&proxyCountryCode=us",
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- [Sign up](https://cloud.browser-use.com) and copy your API key from
+  [Settings -> API Keys](https://cloud.browser-use.com/settings?tab=api-keys).
+- Replace `<BROWSER_USE_API_KEY>` with your real Browser Use API key.
+- Optional query parameters include `profileId` for a persistent browser
+  profile, `proxyCountryCode` for country-specific routing, and `timeout` for
+  the session duration in minutes (maximum 240).
+- See the [Browser Use OpenClaw guide](https://docs.browser-use.com/cloud/tutorials/integrations/openclaw)
+  for additional examples and provider options.
 
 ### Notte
 

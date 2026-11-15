@@ -1,46 +1,19 @@
-// Googlechat plugin module parses standard and Workspace Add-on webhook envelopes.
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type {
   GoogleChatAction,
-  GoogleChatActionParameter,
   GoogleChatEvent,
   GoogleChatMessage,
   GoogleChatSpace,
   GoogleChatUser,
 } from "./types.js";
 
-export class GoogleChatEventPayloadError extends Error {
-  constructor(message = "invalid payload") {
-    super(message);
-    this.name = "GoogleChatEventPayloadError";
-  }
-}
-
-type ParsedGoogleChatInboundPayload = {
-  event: GoogleChatEvent;
-  addOnBearerToken: string;
-};
-
-function recordParamsToActionParameters(
-  params?: Record<string, string>,
-): GoogleChatActionParameter[] | undefined {
-  if (!params) {
-    return undefined;
-  }
-  const entries = Object.entries(params)
-    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
-    .map(([key, value]) => ({ key, value }));
-  return entries.length > 0 ? entries : undefined;
-}
-
 /** Normalize only at authenticated dispatch; durable admission stores the untouched envelope. */
-export function parseGoogleChatInboundPayload(raw: unknown): ParsedGoogleChatInboundPayload {
+export function parseGoogleChatInboundPayload(raw: unknown): GoogleChatEvent {
   if (!isRecord(raw)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
 
   let eventPayload: Record<string, unknown> = raw;
-  let addOnBearerToken = "";
   const rawObj = raw as {
     commonEventObject?: {
       hostApp?: string;
@@ -58,15 +31,7 @@ export function parseGoogleChatInboundPayload(raw: unknown): ParsedGoogleChatInb
       user?: GoogleChatUser;
       eventTime?: string;
     };
-    authorizationEventObject?: { systemIdToken?: string };
   };
-
-  if (rawObj.commonEventObject?.hostApp === "CHAT") {
-    addOnBearerToken =
-      typeof rawObj.authorizationEventObject?.systemIdToken === "string"
-        ? rawObj.authorizationEventObject.systemIdToken.trim()
-        : "";
-  }
 
   const chat = rawObj.chat;
   const messagePayload = chat?.messagePayload;
@@ -83,7 +48,13 @@ export function parseGoogleChatInboundPayload(raw: unknown): ParsedGoogleChatInb
     const buttonClickedPayload = chatPayload?.buttonClickedPayload;
     if (buttonClickedPayload) {
       const invokedFunction = rawObj.commonEventObject.invokedFunction;
-      const actionParameters = recordParamsToActionParameters(rawObj.commonEventObject.parameters);
+      const parameters = rawObj.commonEventObject.parameters;
+      const entries = parameters
+        ? Object.entries(parameters)
+            .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+            .map(([key, value]) => ({ key, value }))
+        : [];
+      const actionParameters = entries.length > 0 ? entries : undefined;
       eventPayload = {
         type: "CARD_CLICKED",
         space: buttonClickedPayload.space,
@@ -107,15 +78,15 @@ export function parseGoogleChatInboundPayload(raw: unknown): ParsedGoogleChatInb
   const event = eventPayload as GoogleChatEvent;
   const eventType = event.type ?? event.eventType;
   if (typeof eventType !== "string" || !isRecord(event.space)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
   if (eventType === "MESSAGE") {
     if (!isRecord(event.message) || !event.space?.name?.trim() || !event.message?.name?.trim()) {
-      throw new GoogleChatEventPayloadError();
+      throw new Error("invalid payload");
     }
   } else if (eventType === "CARD_CLICKED" && !isRecord(event.user)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
 
-  return { event, addOnBearerToken };
+  return event;
 }

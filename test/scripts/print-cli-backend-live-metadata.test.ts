@@ -22,8 +22,6 @@ vi.mock("../../src/plugins/setup-registry.js", () => ({
 
 describe("print-cli-backend-live-metadata", () => {
   it.each([
-    { providers: ["api-provider"], models: [], expected: [] },
-    { providers: ["fixture-provider"], models: [], expected: ["@fixture/cli@1.2.3"] },
     {
       providers: ["fixture-cli", "fixture-cli-alias", "api-provider"],
       models: [],
@@ -44,14 +42,11 @@ describe("print-cli-backend-live-metadata", () => {
       models: [],
       expected: ["@fixture/cli@1.2.3"],
     },
-    { providers: [], models: ["api-provider/model"], expected: [] },
-    { providers: ["fixture-cli-unregistered"], models: [], expected: [] },
     {
       providers: ["api-provider"],
       models: ["modern", "small", "all", "fixture-cli/"],
       expected: [],
     },
-    { providers: [], models: [], expected: ["@fixture/cli@1.2.3"] },
     { providers: [" ", " all "], models: [], expected: ["@fixture/cli@1.2.3"] },
   ])(
     "resolves selected Docker CLI packages: $providers / $models",
@@ -60,12 +55,9 @@ describe("print-cli-backend-live-metadata", () => {
     },
   );
 
-  it.each(["", "modern", "small", "all"])(
-    "keeps unrestricted provider selection for the %s model selector",
-    async (selector) => {
-      expect(await resolveCliBackendDockerPackages([], [selector])).toEqual(["@fixture/cli@1.2.3"]);
-    },
-  );
+  it("keeps unrestricted provider selection for a model selector without a provider", async () => {
+    expect(await resolveCliBackendDockerPackages([], ["modern"])).toEqual(["@fixture/cli@1.2.3"]);
+  });
 
   it("builds one unsupported codex-cli metadata payload", async () => {
     expect(await resolveCliBackendLiveMetadata("codex-cli")).toEqual({

@@ -1,6 +1,8 @@
 {
   "id": "slack",
-  "categories": ["channels"],
+  "categories": [
+    "channels"
+  ],
   "doctorContract": {
     "configRepair": true
   },
@@ -25,5 +27,10 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan Slack access for this agent and the channels I choose.",
+    "Summarize decisions and open questions in a Slack thread without replying.",
+    "Draft a reply to a Slack message or thread for my review without sending it."
+  ]
 }

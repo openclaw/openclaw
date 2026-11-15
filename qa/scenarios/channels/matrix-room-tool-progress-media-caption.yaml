@@ -1,0 +1,22 @@
+title: Matrix progress streaming captions a media reply instead of editing its text into the draft
+scenario:
+  id: matrix-room-tool-progress-media-caption
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  execution:
+    kind: flow
+    channel: matrix
+    timeoutMs: 60000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        streaming: progress
+        toolProfile: coding
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-room.js
+  call: runToolProgressMediaCaptionScenario
+  args:
+    - expr: "scenarioContext"

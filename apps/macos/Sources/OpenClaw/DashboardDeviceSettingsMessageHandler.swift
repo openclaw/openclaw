@@ -49,6 +49,7 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
             self?.refresh()
         }
         self.observeBrowserChanges()
+        self.refresh()
     }
 
     func stopObserving() {
@@ -83,45 +84,86 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
     {
         // WebKit rejects the original Promise when cancellation drops an uncalled reply handler.
         // Keep it owned by this queued operation so retired documents cannot leave pending writes.
-        self.requests.enqueue { [weak self] in
+        self.requests.enqueueAdmission { [weak self] in
             guard let self, !self.observers.isEmpty, let owner = self.owner,
                   owner.canUseDeviceSettings(sourceID: sourceID)
             else {
                 replyHandler(nil, "The device settings document is no longer available.")
-                return
+                return nil
             }
-            if request == .installChromeExtension {
+            let setupAction: ChromeExtensionSetupAction? = switch request {
+            case let .chromeExtensionSetup(action): action
+            case .chromeExtensionStatus: .inspect
+            case .installChromeExtension: .install
+            default: nil
+            }
+            if let action = setupAction {
                 do {
-                    let result = try await ChromeExtensionSetup.install {
+                    let result = try await ChromeExtensionSetup.shared.run(action: action) {
                         owner.canUseDeviceSettings(sourceID: sourceID) && !Task.isCancelled
                     }
                     guard owner.canUseDeviceSettings(sourceID: sourceID), !Task.isCancelled else {
                         replyHandler(nil, "The device settings document is no longer available.")
-                        return
+                        return nil
                     }
-                    try replyHandler(JSONSerialization.jsonObject(with: JSONEncoder().encode(result)), nil)
+                    // Preserve the released contract-1 projection without restoring an installer/decoder.
+                    let data = try request == .installChromeExtension || request == .chromeExtensionStatus
+                        ? JSONEncoder().encode(result.legacyInstallation)
+                        : JSONEncoder().encode(result)
+                    try replyHandler(JSONSerialization.jsonObject(with: data), nil)
                 } catch {
                     replyHandler(nil, error.localizedDescription)
                 }
-                return
+                return nil
             }
-            await owner.applyDeviceSettingsRequest(request)
-            let snapshot: DeviceSettingsSnapshot? = if case .set = request {
-                await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
-            } else {
-                nil
-            }
-            guard owner.canUseDeviceSettings(sourceID: sourceID) else {
-                replyHandler(nil, "The device settings document is no longer available.")
-                return
-            }
+            let previousNativeExperienceEnabled = AppStateStore.shared.nativeExperienceEnabled
+            let completion: Task<Void, Error>?
             do {
-                let reply: Any = try snapshot.map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
-                    ?? NSNull()
-                replyHandler(reply, nil)
+                completion = try await owner.applyDeviceSettingsRequest(request)
             } catch {
-                replyHandler(nil, "Device settings could not be read. Try again.")
+                replyHandler(nil, error.localizedDescription)
+                return nil
             }
+            let reply: @MainActor () async -> Void = {
+                let snapshot: DeviceSettingsSnapshot? = if case .set = request {
+                    await owner.readDeviceSettingsSnapshot(sourceID: sourceID)
+                } else {
+                    nil
+                }
+                guard owner.canUseDeviceSettings(sourceID: sourceID) else {
+                    replyHandler(nil, "The device settings document is no longer available.")
+                    return
+                }
+                do {
+                    let reply: Any = try snapshot
+                        .map { try JSONSerialization.jsonObject(with: JSONEncoder().encode($0)) }
+                        ?? NSNull()
+                    replyHandler(reply, nil)
+                    if case let .set(.nativeExperienceEnabled, .boolean(enabled)) = request,
+                       enabled != previousNativeExperienceEnabled,
+                       enabled == AppStateStore.shared.nativeExperienceEnabled
+                    {
+                        // Switching experiences hides this document and cancels its queue.
+                        // Acknowledge the saved preference before retiring its reply source.
+                        AppNavigationActions.experienceDidChange(nativeEnabled: enabled)
+                    }
+                } catch {
+                    replyHandler(nil, "Device settings could not be read. Try again.")
+                }
+            }
+            if let completion {
+                return {
+                    do {
+                        try await completion.value
+                    } catch {
+                        replyHandler(nil, error.localizedDescription)
+                        return
+                    }
+                    await reply()
+                }
+            }
+            await reply()
+            return nil
         }
     }
 
@@ -138,12 +180,14 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
         alert.addButton(withTitle: String(localized: "Allow")).keyEquivalent = ""
         self.consentAlert = alert
         defer { self.consentAlert = nil }
-        let response = await alert.beginSheetModal(for: window)
+        let response = await AppActivation.shared.response(to: alert, over: window)
         return !Task.isCancelled && response == .alertSecondButtonReturn
     }
 
     func refresh(refreshAvailability: Bool = false) {
         guard !self.observers.isEmpty else { return }
+        self.owner?.webView.configuration.preferences.setValue(
+            AppStateStore.shared.debugPaneEnabled, forKey: "developerExtrasEnabled")
         self.refreshTask?.cancel()
         self.refreshTask = Task { [weak self] in
             guard !Task.isCancelled, let self else { return }
@@ -163,6 +207,8 @@ final class DashboardDeviceSettingsMessageHandler: NSObject, WKScriptMessageHand
             _ = CookieSyncManager.shared.lastSummary
             _ = BrowserProfileImportModel.shared.importAvailable
             _ = AppStateStore.shared.connectionMode
+            _ = GatewayProcessManager.shared.gatewayHosting
+            _ = GatewayProcessManager.shared.keepGatewayRunningAvailable
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 guard let self, self.observationGeneration == generation else { return }

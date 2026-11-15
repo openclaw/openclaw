@@ -1,7 +1,3 @@
-import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./metadata.js";
-
-export const POLICY_RULES: readonly PolicyRuleMetadata[] = POLICY_RULE_METADATA;
-
 export const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 
 export const KNOWN_SENSITIVITY_LEVELS = [

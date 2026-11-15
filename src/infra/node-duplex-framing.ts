@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createDeferredCore } from "../shared/deferred.js";
+import { materializeErrorStack } from "./error-graph-internal.js";
 
 const NODE_DUPLEX_FRAGMENT_BYTES = 8 * 1024;
 const NODE_DUPLEX_MAX_MESSAGE_BYTES = 100 * 1024 * 1024;
@@ -57,6 +58,7 @@ export function createNodeDuplexEndpoint(options: {
 
   const close = (reason = new Error("node duplex channel is closed")) => {
     closed = true;
+    materializeErrorStack(reason);
     drainClosed.reject(reason);
     listener = undefined;
     incomingFragments.length = 0;
@@ -135,7 +137,10 @@ export function createNodeDuplexEndpoint(options: {
     if (!frame.last) {
       return;
     }
-    const assembled = Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
+    const assembled =
+      incomingFragments.length === 1
+        ? fragment
+        : Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
     const message = new Uint8Array(assembled.buffer, assembled.byteOffset, assembled.byteLength);
     incomingFragments.length = 0;
     incoming.fragment = 0;

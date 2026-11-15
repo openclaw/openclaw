@@ -13,23 +13,9 @@ import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
-
-/** Current finalized context fields used for reply route resolution. */
-type EffectiveReplyRouteContext = Pick<
-  FinalizedMsgContext,
-  | "Provider"
-  | "Surface"
-  | "OriginatingChannel"
-  | "OriginatingTo"
-  | "MessageThreadId"
-  | "AccountId"
-  | "InputProvenance"
-  | "InternalTurnSource"
-  | "ChatType"
->;
 
 /** Persisted session fields used as route fallback/inheritance. */
 type EffectiveReplyRouteEntry = Pick<SessionEntry, "delivery" | "chatType">;
@@ -96,7 +82,19 @@ function resolveTrustedInheritedThreadId(
 
 /** Resolves current, inherited, or persisted reply route for a session turn. */
 export function resolveEffectiveReplyRoute(params: {
-  ctx: EffectiveReplyRouteContext;
+  /** Current finalized context fields used for reply route resolution. */
+  ctx: Pick<
+    FinalizedMsgContext,
+    | "Provider"
+    | "Surface"
+    | "OriginatingChannel"
+    | "OriginatingTo"
+    | "MessageThreadId"
+    | "AccountId"
+    | "InputProvenance"
+    | "InternalTurnSource"
+    | "ChatType"
+  >;
   entry?: EffectiveReplyRouteEntry;
 }): EffectiveReplyRoute {
   const currentSurface =
@@ -129,23 +127,16 @@ export function resolveEffectiveReplyRoute(params: {
       inheritedExternalRoute: true,
     };
   }
-  if (params.ctx.InternalTurnSource === undefined) {
-    return {
-      channel: params.ctx.OriginatingChannel,
-      to: params.ctx.OriginatingTo,
-      accountId: params.ctx.AccountId,
-      ...(params.ctx.MessageThreadId !== undefined ? { threadId: params.ctx.MessageThreadId } : {}),
-      ...(liveChatType ? { chatType: liveChatType } : {}),
-    };
-  }
-  const persistedChannel = persistedDeliveryContext?.channel;
   const liveChannel = params.ctx.OriginatingChannel;
   const canInheritPersistedTuple =
-    !liveChannel ||
-    normalizeMessageChannel(liveChannel) === normalizeMessageChannel(persistedChannel);
+    params.ctx.InternalTurnSource !== undefined &&
+    (!liveChannel || normalizeMessageChannel(liveChannel) === persistedDeliveryChannel);
   const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
   return {
-    channel: liveChannel ?? persistedChannel,
+    channel:
+      params.ctx.InternalTurnSource === undefined
+        ? liveChannel
+        : (liveChannel ?? persistedDeliveryContext?.channel),
     to:
       params.ctx.OriginatingTo ??
       (canInheritPersistedTuple ? persistedDeliveryContext?.to : undefined),

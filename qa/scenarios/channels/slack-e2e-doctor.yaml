@@ -1,0 +1,29 @@
+title: Slack agent E2E same-lease readiness
+scenario:
+  id: slack-e2e-doctor
+  surface: channels
+  coverage:
+    secondary:
+      - slack.socket
+  objective: Check the actual leased bot pair, channel access, Gateway connection, and advertised lifecycle scopes without posting fixtures.
+  execution:
+    kind: flow
+    channel: slack
+    config:
+      agentE2e: true
+    timeoutMs: 60000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Owns one credential lease and temporary Gateway for agent E2E readiness.
+    summary: Opt-in through qa slack --doctor; uses Convex CI credentials and mock-openai unless explicitly overridden. Does not prove client rendering or mutation permissions beyond advertised scopes.
+flow:
+  steps:
+    - name: inspects same-lease readiness and capability boundaries
+      actions:
+        - call: channelE2e.doctor
+          saveAs: doctor
+        - assert:
+            expr: doctor.ok
+            message:
+              expr: "`Slack readiness failed: ${JSON.stringify(doctor.checks)}`"
+      detailsExpr: "JSON.stringify(doctor)"

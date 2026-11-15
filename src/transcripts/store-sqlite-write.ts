@@ -1,0 +1,273 @@
+import type { Selectable } from "kysely";
+import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
+import type { DB } from "../state/openclaw-state-db.generated.js";
+import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import {
+  deriveMeetingTranscriptSessionColumns,
+  deriveMeetingTranscriptSummaryColumns,
+} from "./store-columns.js";
+import { TranscriptSessionConflictError, TranscriptsSummaryChangedError } from "./store-errors.js";
+import {
+  parseTranscriptExportManifest,
+  parseTranscriptPendingExports,
+} from "./store-export-state.js";
+import {
+  readTranscriptCanonicalSessionRow,
+  readTranscriptExportOwnership,
+} from "./store-sqlite-read.js";
+import {
+  meetingTranscriptDb,
+  meetingTranscriptSessionQuery,
+  parseOptionalJsonRecord,
+  type MeetingTranscriptSessionRow,
+  transcriptSessionInputRevisionFromRow,
+  readStoredTranscriptSummaryRevision,
+  sessionFromRow,
+  transcriptSummaryInputRevisionFromRow,
+} from "./store-sqlite.js";
+import type { TranscriptSummaryWriteGuard } from "./store-types.js";
+
+type TranscriptSessionValues = Pick<
+  MeetingTranscriptSessionRow,
+  | "started_at_ms"
+  | "selector"
+  | "export_key"
+  | "session_slug"
+  | "provider_id"
+  | "title"
+  | "source_json"
+  | "stopped_at"
+  | "metadata_json"
+>;
+type TranscriptSummaryValues = Pick<
+  Selectable<DB["meeting_transcript_summaries"]>,
+  "generated_at" | "summary_json" | "markdown" | "utterance_count"
+>;
+
+export function writeMeetingTranscriptSessionInDatabase(
+  database: EngineConnection,
+  params: {
+    session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
+    sessionValues: TranscriptSessionValues;
+    now: number;
+    expectedInputRevision?: string;
+    expectedSessionRevision?: string;
+  },
+): { inserted: boolean; inputRevision: string; sessionRevision: string } {
+  const { session, sessionValues, now, expectedInputRevision, expectedSessionRevision } = params;
+  const previous = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).selectAll(),
+  );
+  if (
+    (expectedInputRevision !== undefined &&
+      (!previous || transcriptSummaryInputRevisionFromRow(previous) !== expectedInputRevision)) ||
+    (expectedSessionRevision !== undefined &&
+      (!previous || transcriptSessionInputRevisionFromRow(previous) !== expectedSessionRevision))
+  ) {
+    throw new TranscriptsSummaryChangedError();
+  }
+  const owner = readTranscriptCanonicalSessionRow(database, sessionValues.selector);
+  if (owner && (owner.session_id !== session.sessionId || owner.started_at !== session.startedAt)) {
+    throw new TranscriptSessionConflictError();
+  }
+  if (previous) {
+    // ID origin belongs to admission, including the absence of that fact in legacy rows.
+    const admittedMetadata = sessionFromRow(previous).metadata;
+    let metadata = parseOptionalJsonRecord(sessionValues.metadata_json);
+    if (admittedMetadata && Object.hasOwn(admittedMetadata, "sessionIdOrigin")) {
+      metadata = { ...metadata, sessionIdOrigin: admittedMetadata.sessionIdOrigin };
+    } else if (metadata) {
+      delete metadata.sessionIdOrigin;
+    }
+    sessionValues.metadata_json = metadata ? JSON.stringify(metadata) : null;
+  }
+  const { started_at_ms, ...mutableValues } = sessionValues;
+  const values = {
+    ...mutableValues,
+    ...deriveMeetingTranscriptSessionColumns(
+      sessionValues.source_json,
+      sessionValues.metadata_json,
+    ),
+  };
+  const written = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptDb(database)
+      .insertInto("meeting_transcript_sessions")
+      .values({
+        session_id: session.sessionId,
+        started_at: session.startedAt,
+        started_at_ms,
+        ...values,
+        export_manifest_json: "{}",
+        export_pending_json: "[]",
+        next_utterance_seq: 0,
+        created_at_ms: now,
+        updated_at_ms: now,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["session_id", "started_at"]).doUpdateSet({
+          ...values,
+          updated_at_ms: now,
+        }),
+      )
+      .returning(["next_utterance_seq", "title", "source_json", "metadata_json", "stopped_at"]),
+  );
+  if (!written) {
+    throw new Error("Transcript session write did not return its stored revision");
+  }
+  // SQLite normalizes bound text. Return this write's persisted tuple, not its inputs
+  // or a later reader's observation after another writer can change the row.
+  return {
+    inserted: previous === undefined,
+    inputRevision: transcriptSummaryInputRevisionFromRow(written),
+    sessionRevision: transcriptSessionInputRevisionFromRow(written),
+  };
+}
+
+export function deleteEmptyMeetingTranscriptCandidateInDatabase(
+  database: EngineConnection,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  expectedInputRevision: string,
+): void {
+  const stored = executeSqliteQueryTakeFirstSync(
+    database,
+    meetingTranscriptSessionQuery(database, session).selectAll(),
+  );
+  // The retry owner may abandon only its unchanged, unaccepted admission.
+  if (
+    !stored ||
+    stored.stopped_at === null ||
+    transcriptSummaryInputRevisionFromRow(stored) !== expectedInputRevision ||
+    stored.next_utterance_seq !== 0 ||
+    stored.export_manifest_json !== "{}" ||
+    stored.export_pending_json !== "[]"
+  ) {
+    return;
+  }
+  const db = meetingTranscriptDb(database);
+  executeSqliteQuerySync(
+    database,
+    db
+      .deleteFrom("meeting_transcript_sessions")
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt)
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            db
+              .selectFrom("meeting_transcript_summaries")
+              .select("session_id")
+              .where("session_id", "=", session.sessionId)
+              .where("session_started_at", "=", session.startedAt),
+          ),
+        ),
+      ),
+  );
+}
+
+export function writeMeetingTranscriptSummaryInDatabase(
+  database: EngineConnection,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  summaryValues: TranscriptSummaryValues,
+  guard?: TranscriptSummaryWriteGuard,
+): void {
+  if (guard) {
+    // Recheck both transcript and prior notes under the same writer lock as publication.
+    const row = executeSqliteQueryTakeFirstSync(
+      database,
+      meetingTranscriptSessionQuery(database, session).selectAll(),
+    );
+    if (
+      !row ||
+      (guard.allowAppends && row.stopped_at !== null) ||
+      row.next_utterance_seq < guard.nextSequence ||
+      transcriptSummaryInputRevisionFromRow({
+        ...row,
+        ...(guard.allowAppends ? { next_utterance_seq: guard.nextSequence } : {}),
+      }) !== guard.inputRevision ||
+      (readStoredTranscriptSummaryRevision(database, session) ?? "") !== guard.summaryRevision
+    ) {
+      throw new TranscriptsSummaryChangedError();
+    }
+  }
+  const values = {
+    ...summaryValues,
+    ...deriveMeetingTranscriptSummaryColumns(summaryValues.summary_json),
+  };
+  executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .insertInto("meeting_transcript_summaries")
+      .values({
+        session_id: session.sessionId,
+        session_started_at: session.startedAt,
+        ...values,
+      })
+      .onConflict((conflict) =>
+        conflict.columns(["session_id", "session_started_at"]).doUpdateSet(values),
+      ),
+  );
+}
+
+function updateMeetingTranscriptExportState(
+  database: EngineConnection,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  update: (
+    stored:
+      | Pick<MeetingTranscriptSessionRow, "export_manifest_json" | "export_pending_json">
+      | undefined,
+  ) => { export_pending_json: string; export_manifest_json?: string },
+): void {
+  const stored = readTranscriptExportOwnership(database, session);
+  executeSqliteQuerySync(
+    database,
+    meetingTranscriptDb(database)
+      .updateTable("meeting_transcript_sessions")
+      .set(update(stored))
+      .where("session_id", "=", session.sessionId)
+      .where("started_at", "=", session.startedAt),
+  );
+}
+
+export function updateMeetingTranscriptExportManifestInDatabase(
+  database: EngineConnection,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  exportedHashes: Readonly<Record<string, string>>,
+  removedExports: ReadonlySet<string>,
+): void {
+  updateMeetingTranscriptExportState(database, session, (stored) => {
+    const manifest = stored ? parseTranscriptExportManifest(stored.export_manifest_json) : {};
+    const pending = stored
+      ? parseTranscriptPendingExports(stored.export_pending_json)
+      : new Set<string>();
+    for (const fileName of removedExports) {
+      delete manifest[fileName];
+    }
+    for (const fileName of [...Object.keys(exportedHashes), ...removedExports]) {
+      pending.delete(fileName);
+    }
+    return {
+      export_manifest_json: JSON.stringify({ ...manifest, ...exportedHashes }),
+      export_pending_json: JSON.stringify([...pending].toSorted()),
+    };
+  });
+}
+
+export function markMeetingTranscriptPendingExportsInDatabase(
+  database: EngineConnection,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+  fileNames: string[],
+): void {
+  updateMeetingTranscriptExportState(database, session, (stored) => {
+    if (!stored) {
+      throw new Error(`transcripts session not found: ${session.sessionId}`);
+    }
+    const pending = parseTranscriptPendingExports(stored.export_pending_json);
+    for (const fileName of fileNames) {
+      pending.add(fileName);
+    }
+    return { export_pending_json: JSON.stringify([...pending].toSorted()) };
+  });
+}

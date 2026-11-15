@@ -2,6 +2,7 @@ import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+import { stringLiteralUnion } from "./string-literal-union.js";
 
 /** Resolves a session by key, raw session id, label, short URL id, or parent/agent scope. */
 export const SessionsResolveParamsSchema = closedObject({
@@ -30,7 +31,8 @@ export const SessionsResolveCandidateSchema = closedObject({
   key: NonEmptyString,
   agentId: NonEmptyString,
   displayName: Type.Optional(Type.String()),
-  boardFace: Type.Optional(Type.Union([Type.Literal("chat"), Type.Literal("dashboard")])),
+  boardFace: Type.Optional(stringLiteralUnion(["chat", "dashboard"])),
+  boardPresentation: Type.Optional(stringLiteralUnion(["split", "expanded"])),
 });
 
 export const SessionsResolveResultSchema = Type.Union([

@@ -1,4 +1,5 @@
 import { createServer, type RequestListener, type Server } from "node:http";
+import { runInDetachedAsyncContext } from "openclaw/plugin-sdk/concurrency-runtime";
 
 export function listenBrowserHttpServer(
   app: RequestListener,
@@ -19,6 +20,7 @@ export function listenBrowserHttpServer(
     // its callback with a bind error before this startup Promise rejects.
     server.once("error", onError);
     server.once("listening", onListening);
-    server.listen(port, host);
+    // A cached bridge must not keep the turn that prepared it alive through its TCP handle.
+    runInDetachedAsyncContext(() => server.listen(port, host));
   });
 }

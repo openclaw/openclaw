@@ -1,5 +1,4 @@
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-// Matrix plugin module implements startup behavior.
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CoreConfig, MatrixConfig } from "../../types.js";
 import type { MatrixAuth } from "../client.js";
@@ -18,13 +17,6 @@ type MatrixStartupClient = Pick<
   | "uploadContent"
 >;
 
-type MatrixStartupMaintenanceDeps = {
-  updateMatrixAccountConfig: typeof import("../config-update.js").updateMatrixAccountConfig;
-  summarizeMatrixDeviceHealth: typeof import("../device-health.js").summarizeMatrixDeviceHealth;
-  syncMatrixOwnProfile: typeof import("../profile.js").syncMatrixOwnProfile;
-  ensureMatrixStartupVerification: typeof import("./startup-verification.js").ensureMatrixStartupVerification;
-};
-
 const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
   Promise.all([
     import("../config-update.js"),
@@ -33,33 +25,30 @@ const loadMatrixStartupMaintenanceDeps = createLazyRuntimeModule(() =>
     import("./startup-verification.js"),
   ]).then(([configUpdateModule, deviceHealthModule, profileModule, startupVerificationModule]) => ({
     updateMatrixAccountConfig: configUpdateModule.updateMatrixAccountConfig,
-    summarizeMatrixDeviceHealth: deviceHealthModule.summarizeMatrixDeviceHealth,
+    listStaleOpenClawMatrixDevices: deviceHealthModule.listStaleOpenClawMatrixDevices,
     syncMatrixOwnProfile: profileModule.syncMatrixOwnProfile,
     ensureMatrixStartupVerification: startupVerificationModule.ensureMatrixStartupVerification,
   })),
 );
 
-export async function runMatrixStartupMaintenance(
-  params: {
-    client: MatrixStartupClient;
-    auth: MatrixAuth;
-    accountId: string;
-    effectiveAccountId: string;
-    accountConfig: MatrixConfig;
-    logger: RuntimeLogger;
-    logVerboseMessage: (message: string) => void;
-    getRuntimeConfig: () => CoreConfig;
-    replaceConfigFile: (cfg: never) => Promise<void>;
-    loadWebMedia: (
-      url: string,
-      maxBytes: number,
-    ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
-    env?: NodeJS.ProcessEnv;
-    abortSignal?: AbortSignal;
-  },
-  deps?: MatrixStartupMaintenanceDeps,
-): Promise<void> {
-  const runtimeDeps = deps ?? (await loadMatrixStartupMaintenanceDeps());
+export async function runMatrixStartupMaintenance(params: {
+  client: MatrixStartupClient;
+  auth: MatrixAuth;
+  accountId: string;
+  effectiveAccountId: string;
+  accountConfig: MatrixConfig;
+  logger: RuntimeLogger;
+  logVerboseMessage: (message: string) => void;
+  getRuntimeConfig: () => CoreConfig;
+  replaceConfigFile: (cfg: CoreConfig) => Promise<void>;
+  loadWebMedia: (
+    url: string,
+    maxBytes: number,
+  ) => Promise<{ buffer: Buffer; contentType?: string; fileName?: string }>;
+  env?: NodeJS.ProcessEnv;
+  abortSignal?: AbortSignal;
+}): Promise<void> {
+  const runtimeDeps = await loadMatrixStartupMaintenanceDeps();
   throwIfMatrixStartupAborted(params.abortSignal);
   try {
     const profileSync = await runtimeDeps.syncMatrixOwnProfile({
@@ -67,7 +56,7 @@ export async function runMatrixStartupMaintenance(
       userId: params.auth.userId,
       displayName: params.accountConfig.name,
       avatarUrl: params.accountConfig.avatarUrl,
-      loadAvatarFromUrl: async (url, maxBytes) => await params.loadWebMedia(url, maxBytes),
+      loadAvatarFromUrl: params.loadWebMedia,
     });
     throwIfMatrixStartupAborted(params.abortSignal);
     if (profileSync.displayNameUpdated) {
@@ -85,7 +74,7 @@ export async function runMatrixStartupMaintenance(
       const updatedCfg = runtimeDeps.updateMatrixAccountConfig(latestCfg, params.accountId, {
         avatarUrl: profileSync.resolvedAvatarUrl,
       });
-      await params.replaceConfigFile(updatedCfg as never);
+      await params.replaceConfigFile(updatedCfg);
       throwIfMatrixStartupAborted(params.abortSignal);
       params.logVerboseMessage(
         `matrix: persisted converted avatar URL for account ${params.accountId} (${profileSync.resolvedAvatarUrl})`,
@@ -104,12 +93,12 @@ export async function runMatrixStartupMaintenance(
 
   try {
     throwIfMatrixStartupAborted(params.abortSignal);
-    const deviceHealth = runtimeDeps.summarizeMatrixDeviceHealth(
+    const staleOpenClawDevices = runtimeDeps.listStaleOpenClawMatrixDevices(
       await params.client.listOwnDevices(),
     );
-    if (deviceHealth.staleOpenClawDevices.length > 0) {
+    if (staleOpenClawDevices.length > 0) {
       params.logger.warn(
-        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${deviceHealth.staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
+        `matrix: stale OpenClaw devices detected for ${params.auth.userId}: ${staleOpenClawDevices.map((device) => device.deviceId).join(", ")}. Run 'openclaw matrix devices prune-stale --account ${params.effectiveAccountId}' to keep encrypted-room trust healthy.`,
       );
     }
   } catch (err) {

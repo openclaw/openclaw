@@ -22,13 +22,12 @@ data:
         "defaults": {
           "workspace": "~/.openclaw/workspace"
         },
-        "list": [
-          {
-            "id": "default",
+        "entries": {
+          "default": {
             "name": "OpenClaw Assistant",
             "workspace": "~/.openclaw/workspace"
           }
-        ]
+        }
       },
       "cron": { "enabled": false }
     }

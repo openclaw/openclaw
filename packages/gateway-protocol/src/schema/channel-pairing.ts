@@ -4,6 +4,8 @@ import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
+const CliPairingAccountIdSchema = Type.String({ minLength: 1, pattern: "\\S" });
+
 const ChannelPairingAccountSchema = closedObject({
   channel: NonEmptyString,
   channelLabel: NonEmptyString,
@@ -28,10 +30,33 @@ const ChannelPairingRequestSchema = closedObject({
 });
 
 /** Lists pending DM sender access requests for pairing-policy channel accounts. */
-export const ChannelsPairingListParamsSchema = closedObject({
-  channel: Type.Optional(NonEmptyString),
-  accountId: Type.Optional(NonEmptyString),
+export const ChannelsPairingListParamsSchema = Type.Union([
+  closedObject({
+    channel: Type.Optional(NonEmptyString),
+    accountId: Type.Optional(NonEmptyString),
+  }),
+  closedObject({
+    format: Type.Literal("cli"),
+    channel: NonEmptyString,
+    accountId: Type.Optional(CliPairingAccountIdSchema),
+    expectedOwnerId: NonEmptyString,
+  }),
+]);
+
+const ChannelPairingCliRequestSchema = closedObject({
+  id: NonEmptyString,
+  code: NonEmptyString,
+  createdAt: NonEmptyString,
+  lastSeenAt: NonEmptyString,
+  meta: Type.Optional(Type.Record(Type.String(), Type.String())),
 });
+
+/** Capability-qualified CLI results retain codes; ordinary UI results never expose them. */
+export const ChannelsPairingCliListResultSchema = Type.Array(ChannelPairingCliRequestSchema);
+export const ChannelsPairingCodeApproveResultSchema = Type.Union([
+  closedObject({ id: NonEmptyString, entry: ChannelPairingCliRequestSchema }),
+  Type.Null(),
+]);
 
 export const ChannelsPairingListResultSchema = closedObject({
   accounts: Type.Array(ChannelPairingAccountSchema),
@@ -44,13 +69,21 @@ export const ChannelsPairingListResultSchema = closedObject({
 });
 
 /** Approves one pending DM sender request. */
-export const ChannelsPairingApproveParamsSchema = closedObject({
-  channel: NonEmptyString,
-  accountId: NonEmptyString,
-  requestId: NonEmptyString,
-  notify: Type.Optional(Type.Boolean()),
-  bootstrapCommandOwner: Type.Optional(Type.Boolean()),
-});
+export const ChannelsPairingApproveParamsSchema = Type.Union([
+  closedObject({
+    channel: NonEmptyString,
+    accountId: NonEmptyString,
+    requestId: NonEmptyString,
+    notify: Type.Optional(Type.Boolean()),
+    bootstrapCommandOwner: Type.Optional(Type.Boolean()),
+  }),
+  closedObject({
+    channel: NonEmptyString,
+    accountId: Type.Optional(CliPairingAccountIdSchema),
+    code: NonEmptyString,
+    expectedOwnerId: NonEmptyString,
+  }),
+]);
 
 export const ChannelsPairingApproveResultSchema = closedObject({
   requestId: NonEmptyString,
@@ -75,6 +108,10 @@ export const ChannelsPairingDismissResultSchema = closedObject({
 
 export type ChannelsPairingListParams = Static<typeof ChannelsPairingListParamsSchema>;
 export type ChannelsPairingListResult = Static<typeof ChannelsPairingListResultSchema>;
+export type ChannelsPairingCliListResult = Static<typeof ChannelsPairingCliListResultSchema>;
+export type ChannelsPairingCodeApproveResult = Static<
+  typeof ChannelsPairingCodeApproveResultSchema
+>;
 export type ChannelsPairingApproveParams = Static<typeof ChannelsPairingApproveParamsSchema>;
 export type ChannelsPairingApproveResult = Static<typeof ChannelsPairingApproveResultSchema>;
 export type ChannelsPairingDismissParams = Static<typeof ChannelsPairingDismissParamsSchema>;

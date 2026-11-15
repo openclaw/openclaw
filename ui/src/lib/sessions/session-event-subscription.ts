@@ -2,33 +2,19 @@ import {
   DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
-import type { SessionsListResult } from "../../api/types.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import { formatUiError } from "../format-error.ts";
-
-type SessionEventSubscriptionScope = {
-  client: GatewayBrowserClient;
-  epoch: number;
-};
-
-type SessionEventSubscriptionOwner = {
-  ensure: (
-    scope: SessionEventSubscriptionScope,
-    list?: Readonly<Record<string, unknown>>,
-  ) => Promise<SessionsListResult | null>;
-  reset: () => void;
-  dispose: () => void;
-};
+import { isAgentDatabaseInspectionPendingError } from "../gateway-availability.ts";
+import type { SessionConnectionScope } from "./session-types.ts";
 
 /** Keeps one acknowledged broad session observer alive for its connection generation. */
 export function createSessionEventSubscriptionOwner(params: {
-  isCurrent: (scope: SessionEventSubscriptionScope) => boolean;
-  onError: (scope: SessionEventSubscriptionScope, error: string | null) => void;
+  isCurrent: (scope: SessionConnectionScope) => boolean;
+  onError: (scope: SessionConnectionScope, error: string | null) => void;
   retryDelayMs: (error: unknown) => number | null;
-}): SessionEventSubscriptionOwner {
-  let generation = 0;
-  let confirmed: SessionEventSubscriptionScope | null = null;
-  let pending: { generation: number; promise: Promise<SessionsListResult | null> } | null = null;
+}) {
+  let confirmed: SessionConnectionScope | null = null;
+  let pending: Promise<void> | null = null;
   let retryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
 
   const clearRetry = () => {
@@ -38,29 +24,21 @@ export function createSessionEventSubscriptionOwner(params: {
     }
   };
 
-  const isCurrent = (scope: SessionEventSubscriptionScope, expectedGeneration: number): boolean =>
-    generation === expectedGeneration && params.isCurrent(scope);
-
-  const ensure = (
-    scope: SessionEventSubscriptionScope,
-    list?: Readonly<Record<string, unknown>>,
-  ): Promise<SessionsListResult | null> => {
+  const ensure = (scope: SessionConnectionScope): Promise<void> => {
     if (confirmed?.client === scope.client && confirmed.epoch === scope.epoch) {
-      return Promise.resolve(null);
+      return Promise.resolve();
     }
-    if (pending?.generation === generation) {
-      return pending.promise;
+    if (pending) {
+      return pending;
     }
     clearRetry();
-    const expectedGeneration = generation;
     const request = (async () => {
       try {
         const response = await scope.client.request<{
           subscribed?: boolean;
-          list?: SessionsListResult;
-        }>("sessions.subscribe", list ?? {}, { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS });
-        if (!isCurrent(scope, expectedGeneration)) {
-          return null;
+        }>("sessions.subscribe", {}, { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS });
+        if (!params.isCurrent(scope)) {
+          return;
         }
         if (response?.subscribed !== true) {
           throw new GatewayRequestError({
@@ -71,10 +49,9 @@ export function createSessionEventSubscriptionOwner(params: {
         }
         confirmed = scope;
         params.onError(scope, null);
-        return response.list ?? null;
       } catch (error) {
-        if (!isCurrent(scope, expectedGeneration)) {
-          return null;
+        if (!params.isCurrent(scope)) {
+          return;
         }
         // A connected transport can outlive an application acknowledgement.
         // Only this idempotent observer turns its typed deadline into a retry.
@@ -86,31 +63,33 @@ export function createSessionEventSubscriptionOwner(params: {
                 retryable: true,
               })
             : error;
-        params.onError(scope, formatUiError(failure));
+        params.onError(
+          scope,
+          isAgentDatabaseInspectionPendingError(failure) ? null : formatUiError(failure),
+        );
         const delayMs = params.retryDelayMs(failure);
-        if (delayMs === null || !isCurrent(scope, expectedGeneration)) {
-          return null;
+        if (delayMs === null || !params.isCurrent(scope)) {
+          return;
         }
         // A retired connection must never revive an observer on its replacement.
         retryTimer = globalThis.setTimeout(() => {
           retryTimer = null;
-          if (isCurrent(scope, expectedGeneration)) {
+          if (params.isCurrent(scope)) {
             void ensure(scope);
           }
         }, delayMs);
-        return null;
       }
     })().finally(() => {
-      if (pending?.promise === request) {
+      if (pending === request) {
         pending = null;
       }
     });
-    pending = { generation: expectedGeneration, promise: request };
+    pending = request;
     return request;
   };
 
   const reset = () => {
-    generation += 1;
+    // The connection owner retires its scope before reset or disposal.
     confirmed = null;
     pending = null;
     clearRetry();

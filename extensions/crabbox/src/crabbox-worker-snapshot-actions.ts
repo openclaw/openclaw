@@ -1,9 +1,9 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { parseCrabboxCleanupProfile } from "./crabbox-worker-profile.js";
 import type { createCrabboxWarmImageManager } from "./crabbox-worker-warm-image.js";
 
 type WarmImageManager = ReturnType<typeof createCrabboxWarmImageManager>;
-type Profiles = readonly Parameters<typeof parseCrabboxProfile>[0][];
+type Profiles = readonly Parameters<typeof parseCrabboxCleanupProfile>[0][];
 
 export type CrabboxSnapshotActions = {
   pin: WarmImageManager["pin"];
@@ -20,7 +20,7 @@ export async function resolveCrabboxCheckpointBinaries(params: {
   const { profiles, signal, resolveBinary, warn } = params;
   signal.throwIfAborted();
   const resolutions = await Promise.allSettled(
-    profiles.map((profile) => resolveBinary(parseCrabboxProfile(profile).binary, signal)),
+    profiles.map((profile) => resolveBinary(parseCrabboxCleanupProfile(profile).binary, signal)),
   );
   signal.throwIfAborted();
   const binaries: string[] = [];
@@ -46,33 +46,34 @@ export function createCrabboxSnapshotActions(dependencies: {
 }): { images: CrabboxSnapshotActions; settle: () => Promise<void> } {
   const { manager, signal, resolveBinaries } = dependencies;
   const operations = new Set<Promise<unknown>>();
+  const track = async <T>(run: () => Promise<T>): Promise<T> => {
+    signal.throwIfAborted();
+    const operation = Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return run();
+    });
+    operations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      operations.delete(operation);
+    }
+  };
   return {
     images: {
-      pin(checkpointId, pinned) {
-        signal.throwIfAborted();
-        return manager.pin(checkpointId, pinned);
-      },
-      rollback(checkpointId) {
-        signal.throwIfAborted();
-        return manager.rollback(checkpointId);
-      },
-      async delete(checkpointId, profiles) {
-        signal.throwIfAborted();
-        const operation = Promise.resolve().then(async () => {
+      pin: (checkpointId, pinned) =>
+        track(() => manager.pin(checkpointId, pinned, () => signal.throwIfAborted())),
+      rollback: (checkpointId) =>
+        track(() => manager.rollback(checkpointId, () => signal.throwIfAborted())),
+      delete: (checkpointId, profiles) =>
+        track(async () => {
           const binaries = await resolveBinaries(profiles, signal);
           signal.throwIfAborted();
           return manager.delete(
             { binaries, signal, assertCurrent: () => signal.throwIfAborted() },
             checkpointId,
           );
-        });
-        operations.add(operation);
-        try {
-          return await operation;
-        } finally {
-          operations.delete(operation);
-        }
-      },
+        }),
     },
     async settle() {
       await Promise.allSettled(operations);
