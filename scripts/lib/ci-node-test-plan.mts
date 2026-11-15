@@ -3047,6 +3047,7 @@ function createStripedBatches<T>(
   batchCount: number,
   weightForValue: (value: T) => number,
   weightForBatch?: (values: T[]) => number,
+  maxBatchEntries = Number.POSITIVE_INFINITY,
 ): T[][] {
   if (batchCount < 1) {
     throw new Error("striped batch count must be positive");
@@ -3061,20 +3062,22 @@ function createStripedBatches<T>(
     totalWeight: number;
     entries: typeof entries;
   }> = Array.from({ length: batchCount }, () => ({ totalWeight: 0, entries: [] }));
-  const firstBatch = batches[0];
-  if (!firstBatch) {
-    throw new Error("striped batch allocation failed");
-  }
   for (const entry of entries) {
     const nextWeight = (batch: (typeof batches)[number]) =>
       weightForBatch
         ? weightForBatch([...batch.entries.map(({ value }) => value), entry.value])
         : batch.totalWeight + entry.weight;
-    let target = firstBatch;
+    let target: (typeof batches)[number] | undefined;
     for (const batch of batches) {
-      if (nextWeight(batch) < nextWeight(target)) {
+      if (batch.entries.length >= maxBatchEntries) {
+        continue;
+      }
+      if (!target || nextWeight(batch) < nextWeight(target)) {
         target = batch;
       }
+    }
+    if (!target) {
+      throw new Error("striped batch capacity exhausted");
     }
     target.totalWeight = nextWeight(target);
     target.entries.push(entry);
@@ -3323,7 +3326,68 @@ export function createNodeTestShardBundles(
 
 const HOSTED_RELEASE_JOB_SECONDS = 720;
 
-function packHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
+function balanceColdHostedReleaseShards(shards: NodeTestShard[]): NodeTestShard[] {
+  const cold = shards.filter(
+    (shard) =>
+      shard.shardName.startsWith("bundle-") &&
+      shard.predictedSeconds === undefined &&
+      !shard.requiresDist &&
+      !shard.groups &&
+      isRuntimePlacementIncludePatterns(shard.includePatterns),
+  );
+  const compatible = groupBy(cold, (shard) => {
+    const {
+      checkName: _checkName,
+      shardName: _shardName,
+      timing_key: _timingKey,
+      includePatterns: _includePatterns,
+      ...execution
+    } = shard;
+    return JSON.stringify(execution);
+  });
+  const replacements = new Map<NodeTestShard, NodeTestShard[]>();
+  for (const group of compatible.values()) {
+    if (group.length < 2) {
+      continue;
+    }
+    const slots = group.toSorted(compareFullNodeTestAdmissionOrder);
+    const files = slots.flatMap((shard) => shard.includePatterns!);
+    // Repeated targets can represent separate invocations; do not collapse them
+    // into a single process while redistributing otherwise compatible work.
+    if (new Set(files).size !== files.length) {
+      continue;
+    }
+    const stripes = createStripedBatches(
+      files,
+      slots.length,
+      stripeFileWeight,
+      undefined,
+      MAX_BUNDLED_NODE_TEST_PATTERNS,
+    );
+    const weight = (entries: readonly string[]) =>
+      entries.reduce((sum, file) => sum + stripeFileWeight(file), 0);
+    if (
+      Math.max(...stripes.map(weight)) >=
+      Math.max(...slots.map((shard) => weight(shard.includePatterns!)))
+    ) {
+      continue;
+    }
+    for (const [index, includePatterns] of stripes.entries()) {
+      const slot = slots[index]!;
+      const sorted = includePatterns.toSorted((a, b) => a.localeCompare(b));
+      if (JSON.stringify(sorted) === JSON.stringify(slot.includePatterns)) {
+        continue;
+      }
+      // Cold relative weights balance existing slots, never predict a duration.
+      // Resolve the new exact selection again so matching observations still own admission.
+      replacements.set(slot, splitHostedReleaseShard({ ...slot, includePatterns: sorted }));
+    }
+  }
+  return shards.flatMap((shard) => replacements.get(shard) ?? [shard]);
+}
+
+function packHostedReleaseShards(candidates: NodeTestShard[]): NodeTestShard[] {
+  const shards = balanceColdHostedReleaseShards(candidates);
   const unmeasured = shards.filter(
     (shard) => shard.requiresDist || !shard.predictedSeconds || shard.groups,
   );

@@ -69,9 +69,13 @@ vi.mock("../../scripts/lib/ci-test-native-bun-qualification.json", async () => {
   };
 });
 
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:child_process") & { default: typeof import("node:child_process") }
+  >();
+  const overrides = { spawn: vi.fn(actual.spawn) };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 vi.mock("node:fs/promises", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:fs/promises")>()),
 }));
@@ -143,11 +147,17 @@ async function recordPlans(
 
 const readList = (file: string): unknown => JSON.parse(readFileSync(file, "utf8"));
 
+function createChild() {
+  return Object.defineProperties(new childProcess.ChildProcess(), {
+    stdin: { value: null },
+    stdout: { value: new PassThrough() },
+    stderr: { value: new PassThrough() },
+  });
+}
+
 function captureChild() {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(false);
-  const child = new childProcess.ChildProcess();
-  child.stdout = new PassThrough();
-  child.stderr = new PassThrough();
+  const child = createChild();
   const started = createDeferred();
   vi.spyOn(childProcess, "spawn").mockImplementation(() => {
     started.resolve();
@@ -790,19 +800,99 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
-  it.each([
-    { event: "schedule", attempt: "1", mixed: false, extra: false, observed: true },
-    { event: "schedule", attempt: "2", mixed: false, extra: false, observed: false },
-    { event: "pull_request", attempt: "1", mixed: false, extra: false, observed: false },
-    { event: "schedule", attempt: "1", mixed: true, extra: false, observed: false },
-    { event: "schedule", attempt: "1", mixed: false, extra: true, observed: false },
-  ])("bounds CLI audit capture ($event/$attempt, mixed=$mixed, extra=$extra)", async (test) => {
-    const config = "test/vitest/vitest.cli-process.config.ts";
+  it.each(
+    [
+      { event: "schedule", attempt: "1", mixed: false, extra: false, observed: true },
+      { event: "schedule", attempt: "2", mixed: false, extra: false, observed: false },
+      { event: "pull_request", attempt: "1", mixed: false, extra: false, observed: false },
+      { event: "schedule", attempt: "1", mixed: true, extra: false, observed: false },
+      { event: "schedule", attempt: "1", mixed: false, extra: true, observed: false },
+      ...[
+        ["test/vitest/vitest.gateway-methods.config.ts"],
+        ["test/vitest/vitest.gateway-database-workers.config.ts"],
+        [
+          "test/vitest/vitest.gateway-methods.config.ts",
+          "test/vitest/vitest.gateway-methods-isolated.config.ts",
+        ],
+        [
+          "test/vitest/vitest.gateway-server-isolated.config.ts",
+          "test/vitest/vitest.gateway-database-workers.config.ts",
+        ],
+      ].map((configs) => ({
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: true,
+        configs,
+        nextConfigs: ["test/vitest/vitest.cli-process.config.ts"],
+      })),
+      {
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: false,
+        configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      },
+      {
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: false,
+        configs: [
+          "test/vitest/vitest.gateway-methods.config.ts",
+          "test/vitest/vitest.infra.config.ts",
+        ],
+      },
+      {
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: true,
+        policy: "dual-all",
+      },
+      {
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: false,
+        policy: "node",
+        configs: ["test/vitest/vitest.gateway-methods.config.ts"],
+      },
+      {
+        event: "schedule",
+        attempt: "1",
+        mixed: false,
+        extra: false,
+        observed: true,
+        policy: "dual-all",
+        configs: [
+          "test/vitest/vitest.gateway-server-isolated.config.ts",
+          "test/vitest/vitest.gateway-database-workers.config.ts",
+        ],
+        nextConfigs: ["test/vitest/vitest.cli-process.config.ts"],
+      },
+    ].map((test) =>
+      Object.assign(
+        {
+          configs: ["test/vitest/vitest.cli-process.config.ts"],
+          nextConfigs: undefined as string[] | undefined,
+          policy: "bun-all",
+        },
+        test,
+      ),
+    ),
+  )("bounds shared audit capture ($event/$attempt, $configs, $policy)", async (test) => {
+    const configs = test.configs;
     const runChild = vi.fn<NonNullable<RunOptions["runChild"]>>().mockResolvedValue(0);
     const code = await runPlans(
       groupPlans([
-        { configs: [config], shard_name: "first-cli" },
-        { configs: [config], shard_name: "second-cli" },
+        { configs, shard_name: "first-audit" },
+        { configs: test.nextConfigs ?? configs, shard_name: "second-audit" },
         ...(test.mixed ? [{ configs: [bunConfig], shard_name: "unit" }] : []),
       ]),
       {
@@ -813,7 +903,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
           GITHUB_ACTIONS: "true",
           GITHUB_EVENT_NAME: test.event,
           GITHUB_RUN_ATTEMPT: test.attempt,
-          OPENCLAW_CI_TEST_RUNTIME_POLICY: "bun-all",
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: test.policy,
           OPENCLAW_CI_TEST_AUDIT_CLI_DIR: makeScratchDir(),
           OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(
             test.extra ? ["--testTimeout=30000"] : [],
@@ -822,20 +912,47 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       },
     );
     expect(code).toBe(0);
-    expect(runChild.mock.calls.filter(([args]) => args[0] === config)).toHaveLength(2);
+    const gateway = configs.some((config) => config.includes("vitest.gateway-"));
+    if (!gateway) {
+      expect(runChild.mock.calls.filter(([args]) => args[0] === configs[0])).toHaveLength(
+        2 * (test.policy === "dual-all" ? 2 : 1),
+      );
+    }
     const captures = runChild.mock.calls.filter(([, env]) => env.OPENCLAW_VITEST_OBSERVATION_DIR);
     expect(captures).toHaveLength(test.observed ? 1 : 0);
     if (test.observed) {
+      const nodeContract = configs.some((config) => config.includes("gateway-methods."))
+        ? "src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"
+        : "src/gateway/session-database-retention.test.ts";
       expect(captures[0]![0]).toEqual([
-        config,
+        ...configs,
         "--",
+        ...(gateway ? [`--exclude=${path.resolve(nodeContract)}`] : []),
         "--reporter=verbose",
         "--reporter=github-actions",
         "--reporter=./scripts/lib/vitest-resource-reporter.mts",
       ]);
       expect(captures[0]![1].OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY).toBe("1");
-      expect(captures[0]![1].OPENCLAW_VITEST_RUNTIME).toBe("bun");
-      expect(runChild.mock.calls[1]![0]).toEqual([config]);
+      expect(captures[0]![1].OPENCLAW_VITEST_RUNTIME).toBe(
+        test.policy === "dual-all" && !gateway ? "node" : "bun",
+      );
+      expect(captures[0]![1].OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG).toBe(
+        configs.find((config) =>
+          /(?:cli-process|gateway-methods|gateway-database-workers)\.config\.ts$/.test(config),
+        ),
+      );
+      if (gateway) {
+        expect(runChild.mock.calls).toHaveLength(test.policy === "dual-all" ? 4 : 3);
+        expect(runChild.mock.calls[0]![0]).toEqual(
+          test.policy === "dual-all" ? configs : [...configs, "--", path.resolve(nodeContract)],
+        );
+        expect(runChild.mock.calls[0]![1].OPENCLAW_VITEST_RUNTIME).toBe("node");
+        expect(runChild.mock.calls[2]![0]).toEqual(test.nextConfigs);
+      } else {
+        expect(runChild.mock.calls[1]![0]).toEqual(
+          test.policy === "dual-all" ? configs : (test.nextConfigs ?? configs),
+        );
+      }
     }
   });
 
@@ -1757,9 +1874,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     }
     let invocations = 0;
     const spawn = vi.spyOn(processOwner, "spawnOwnedVitestProcess").mockImplementation((spec) => {
-      const child = new childProcess.ChildProcess();
-      child.stdout = new PassThrough();
-      child.stderr = new PassThrough();
+      const child = createChild();
       const scratch = path.dirname(spec.options.env!.OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT!);
       if (!scratchDirs.includes(scratch)) {
         scratchDirs.push(scratch);

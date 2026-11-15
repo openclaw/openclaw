@@ -99,10 +99,10 @@ it("shows Control UI and Gateway build identity with the shared settings facts",
   const { container } = render();
   const rows = Array.from(container.querySelectorAll(".about-build"));
   expect(rows.map((row) => row.querySelector(".settings-row__title")?.textContent)).toEqual([
-    "Control UI",
+    "Web app",
     "Gateway",
   ]);
-  const ui = facts(container, "Control UI build details");
+  const ui = facts(container, "Web app build details");
   const gateway = facts(container, "Gateway");
   expect([...ui.rows.keys()]).toEqual(["Version", "Commit", "Branch", "Built"]);
   expect([...gateway.rows.keys()]).toEqual(["Version", "Commit", "Built"]);
@@ -164,7 +164,7 @@ it("omits unknown facts and marks a disconnected Gateway unavailable", () => {
     { gateway: { version: null, commit: null, builtAt: null } },
     { commit: null, builtAt: null, branch: null },
   );
-  const ui = facts(container, "Control UI build details");
+  const ui = facts(container, "Web app build details");
   const gateway = facts(container, "Gateway");
   expect([...ui.rows.keys()]).toEqual(["Version"]);
   expect(ui.rows.get("Version")?.textContent).toBe("2026.7.10");

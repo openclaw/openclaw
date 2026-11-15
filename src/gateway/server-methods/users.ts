@@ -133,7 +133,7 @@ function profileError(error: unknown) {
 
 function preparePersonalPreferences(client: GatewayRequestHandlerOptions["client"]) {
   const unavailable =
-    "Personal settings are unavailable in this turn. Ask in your own Control UI turn with a new message.";
+    "Personal settings are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.";
   try {
     const participant = resolveGatewayPersonalToolParticipant(
       client?.internal?.agentRuntimeIdentity,

@@ -208,9 +208,11 @@ async function performPreparedGatewaySessionReset({
     authorizeGatewaySessionCreation({
       cfg: resetTarget.cfg,
       agentId: resetTarget.target.agentId,
-      ...(params.operatorRoleActor
-        ? { actor: params.operatorRoleActor }
-        : { profileId: params.requestingOperatorProfileId }),
+      ...(params.operatorAuthority
+        ? { authority: params.operatorAuthority }
+        : params.operatorRoleActor
+          ? { actor: params.operatorRoleActor }
+          : { profileId: params.requestingOperatorProfileId }),
     });
   const reportLifecycleCleanupError = (error: unknown) => {
     if (params.onLifecycleCleanupError) {

@@ -201,8 +201,8 @@ if (process.argv[2] === "build") {
       firebasePreload,
       String.raw`
 import fs from "node:fs";
-import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
+import nodeModule from "node:module";
+nodeModule.registerHooks({ resolve(specifier, context, nextResolve) {
   return specifier === "undici" ? { url: import.meta.url, shortCircuit: true } : nextResolve(specifier, context);
 } });
 export class Agent { async close() {} }

@@ -54,6 +54,22 @@ partitioning finishes before the reporter and dependency-recording options are
 added. Native Bun tests retain their existing command and are not represented by
 Vitest observations. The pilot never skips a test or changes a required check.
 
+Scheduled canonical CI also rotates one separate audit capture across eligible
+CLI-process and Bun Gateway invocations. The Gateway allowlist covers
+`gateway-methods` and `gateway-database-workers`, alone or in their existing
+ordered pairs with `gateway-methods-isolated` and `gateway-server-isolated`,
+respectively. Only the methods or database-workers configuration writes the
+capture; its companion still executes normally. Other mixed commands are
+ineligible. Runtime-generated Node exclusions stay intact; caller-supplied
+Vitest overrides remain ineligible. One combined capture budget applies across both families and all
+runtimes, independently of ordinary `unit-fast` collection.
+
+These audit exports keep the existing `ci-test-observations-audit-cli-*` artifact
+namespace for compatibility, seven-day retention, and payload limits. They do
+not record dependencies or contribute prior snapshots, graph decisions, or model
+scores. An audit capture alone does not establish a full-versus-selected failure
+recall denominator.
+
 Each observed invocation uses a fresh Vite cache directory. This prevents native
 dependency records from leaking between configurations or runtimes, but also
 changes optimizer and transform-cache identity. Compare complete paired job
