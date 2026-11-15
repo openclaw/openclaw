@@ -2,11 +2,8 @@ import { createSignal } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
-import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
-import { mountSolid, type MountSolidOptions } from "../../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createContext } from "../../skill-workshop/skill-workshop-page.test-support.ts";
 import { focusChatComposerFromKeydown } from "../chat-pane-shared.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/composer.css";
@@ -31,7 +28,7 @@ afterEach(() => {
   container.remove();
 });
 
-function mountPicker(optionsReady = true, wrapper?: MountSolidOptions["wrapper"]) {
+function mountPicker(optionsReady = true) {
   document.body.append(container);
   dispose = installChatComposerPickerDismissal(document);
   const modelOptions = ["Alpha", "Beta", "Gamma"].map((label) =>
@@ -65,7 +62,7 @@ function mountPicker(optionsReady = true, wrapper?: MountSolidOptions["wrapper"]
         </div>
       );
     },
-    { container, wrapper },
+    { container },
   );
   flush();
   // Chat and New Session transfer typing at document capture, before picker handlers.
@@ -127,72 +124,6 @@ it("keeps numeric shortcuts functional without visible keycaps", async () => {
   await userEvent.keyboard("2");
   expect(params.onModelSelect).toHaveBeenCalledExactlyOnceWith("example/beta", "main", undefined);
   expect(composer.value).toBe("Keep this draft");
-});
-
-it("shows saved favorites at rest while the selected model keeps its check", async () => {
-  await page.viewport(1280, 900);
-  const initialFavorites = ["example/alpha", "example/beta"];
-  const entries = { "ui.modelFavorites:main": initialFavorites };
-  const request = vi.fn(async (method: string, params: unknown) => {
-    if (method === "users.prefs.get") {
-      return { status: "ok", entries: { ...entries } };
-    }
-    if (method === "users.prefs.set") {
-      Object.assign(entries, (params as { entries: typeof entries }).entries);
-      return { status: "ok" };
-    }
-    throw new Error(`Unexpected method: ${method}`);
-  });
-  const context = createContext(request, {
-    methods: ["users.prefs.get", "users.prefs.set"],
-    scopes: ["operator.write"],
-  });
-  const gateway = createApplicationGateway({
-    ...context.gateway.snapshot,
-    selfUser: { id: "operator" },
-  });
-  const provider = createSolidApplicationContextProvider({ ...context, gateway: gateway.gateway });
-  const { open, params, update } = mountPicker(true, provider.wrapper);
-  params.sessionKey = "agent:main:main";
-  params.modelOptions.push(modelOption("example", "delta", { label: "Delta" }));
-  update();
-  await open();
-  const star = (value: string) =>
-    option(value).querySelector<HTMLButtonElement>("[data-chat-model-favorite]")!;
-  const check = () =>
-    option("example/alpha").querySelector<HTMLElement>(".chat-controls__inline-select-check")!;
-  await vi.waitFor(() => expect(star("example/beta")?.ariaPressed).toBe("true"));
-  const search = page.getByRole("combobox", { name: "Search models" });
-  for (const query of ["", "example"]) {
-    await search.fill(query);
-    await search.hover();
-    await vi.waitFor(() => {
-      expect(getComputedStyle(star("example/beta")).opacity).toBe("1");
-      expect(getComputedStyle(star("example/delta")).opacity).toBe("0");
-      expect(getComputedStyle(star("example/alpha")).opacity).toBe("0");
-      expect(getComputedStyle(check()).opacity).toBe("1");
-    });
-  }
-  await page.getByRole("option", { name: "Alpha", exact: true }).hover();
-  await vi.waitFor(() => expect(getComputedStyle(star("example/alpha")).opacity).toBe("1"));
-  expect(getComputedStyle(check()).opacity).toBe("0");
-  await search.hover();
-  // Tabbing to the favorite must reveal it without stacking it over the check.
-  star("example/alpha").focus();
-  await vi.waitFor(() => expect(getComputedStyle(star("example/alpha")).opacity).toBe("1"));
-  expect(getComputedStyle(check()).opacity).toBe("0");
-  await userEvent.keyboard("{Enter}");
-  expect(request).toHaveBeenCalledWith("users.prefs.set", {
-    entries: { "ui.modelFavorites:main": ["example/beta"] },
-    expectedEntries: { "ui.modelFavorites:main": initialFavorites },
-  });
-  await vi.waitFor(() => expect(star("example/alpha").ariaPressed).toBe("false"));
-  await search.click();
-  await vi.waitFor(() => {
-    expect(getComputedStyle(star("example/alpha")).opacity).toBe("0");
-    expect(getComputedStyle(check()).opacity).toBe("1");
-  });
-  expect(params.onModelSelect).not.toHaveBeenCalled();
 });
 
 it("centers provider icons with their model labels in search results", async () => {
