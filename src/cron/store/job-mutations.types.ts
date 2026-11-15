@@ -11,7 +11,7 @@ type CronJobMutationOptions = Pick<
   CronAddOptions,
   | "pluginCommand"
   | "pluginCommandSourceDigest"
-  | "pluginCommandSenderProfileId"
+  | "pluginCommandRequester"
   | "streamSandbox"
   | "streamOperatorSource"
   | "enabledExplicit"

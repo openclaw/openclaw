@@ -10,7 +10,8 @@ import {
   PLUGIN_COMMAND_SCHEDULE_TOOL_NAME,
 } from "../cron/plugin-command-schedule.js";
 import { PLUGIN_COMMAND_SCHEDULE_MESSAGE } from "../cron/plugin-command-schedule.types.js";
-import type { CronJobCreate } from "../cron/types.js";
+import type { CronJobCreate, PluginCommandRequester } from "../cron/types.js";
+import type { QueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { captureQueuedOperatorRecoverySource } from "../gateway/operator-run-recovery-source.js";
 import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
 import { pluginCommandSupportsChannel } from "../plugins/plugin-command-metadata.js";
@@ -23,11 +24,35 @@ import type { AnyAgentTool } from "./agent-tools.types.js";
 import type { NativeSubagentRequestSource } from "./plugin-native-subagent.types.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
+/**
+ * Store-private beside the envelope (whose shape stays released): a Gateway person's live sender
+ * inputs, kept only when the live command sender is the stored source's person.
+ */
+export function recordScheduledCommandRequester(
+  operatorSource: QueuedOperatorRecoverySource,
+  live: { commandSenderId?: string; senderId?: string; accountId?: string } | undefined,
+): PluginCommandRequester | undefined {
+  if (
+    operatorSource.kind !== "gateway" ||
+    !live?.commandSenderId ||
+    live.commandSenderId !== operatorSource.snapshot.profileId
+  ) {
+    return undefined;
+  }
+  return {
+    commandSenderId: live.commandSenderId,
+    ...(live.senderId ? { senderId: live.senderId } : {}),
+    ...(live.accountId ? { accountId: live.accountId } : {}),
+  };
+}
+
 /** Command-only adapter over the existing final native tool surface and cron.add producer. */
 export function preparePluginCommandScheduledTurns(params: {
   source: NativeSubagentRequestSource;
   pluginId: string;
   channel: string;
+  /** The live command's sender inputs, as its commands.allowFrom check read them. */
+  requester?: { commandSenderId?: string; senderId?: string; accountId?: string };
   assertCurrent: () => void;
   tools: () => Promise<AnyAgentTool[]>;
   withCaller: <T>(run: () => Promise<T>) => Promise<T>;
@@ -51,12 +76,7 @@ export function preparePluginCommandScheduledTurns(params: {
   ) {
     return undefined;
   }
-  // Store-private beside the envelope (whose shape stays released); same person as the source.
-  const commandSenderProfileId =
-    operatorSource.kind === "gateway" &&
-    params.source.operatorAuthority?.commandSenderProfileId === operatorSource.snapshot.profileId
-      ? operatorSource.snapshot.profileId
-      : undefined;
+  const commandRequester = recordScheduledCommandRequester(operatorSource, params.requester);
   const assertCurrent = () => {
     params.assertCurrent();
     if (
@@ -253,7 +273,7 @@ export function preparePluginCommandScheduledTurns(params: {
                 assertCurrent,
                 () => automations.execute(callId, args, params.source.options.abortSignal),
                 sourceDigest,
-                commandSenderProfileId,
+                commandRequester,
               ),
           ),
         );

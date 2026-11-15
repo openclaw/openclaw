@@ -235,16 +235,17 @@ channel's command authorization. Unlinked, unverified, or demoted senders see
 call rechecks the link, role, and command authorization. A requester removed
 from `commands.allowFrom` after a schedule is accepted refuses at the next
 occurrence, the same as a live command from that sender. The same
-`commands.allowFrom` recheck applies to a Gateway operator-UI requester (Control
-UI, including one reached through a remote-ingress plugin, browser copilot, or
-TUI) signed in as a person: like its live commands, the occurrence is checked
-against the `""` list, else the `*` list, with the person's profile id. A
+`commands.allowFrom` recheck applies to a Gateway requester signed in as a
+person (Control UI, including one reached through a remote-ingress plugin,
+browser copilot, TUI, CLI, or another Gateway client): the occurrence is checked
+with the sender ids and channel account the person's live command used (the
+profile id, plus the client id for a client that is not an operator UI) against
+the same list: the `""` list for an internal command, the channel's list for a
 command routed with an external origin (for example a TUI command delivered into
-a channel session) is checked against that channel's list, else the `*` list,
-as its live command is. A Gateway requester without a per-person sender (a
-shared-token owner), one matched by its client id (a CLI, or a plugin's own
-Gateway requests), or a schedule accepted before this recheck existed keeps its
-original admission. Demoting that person,
+a channel session), else the `*` list. A Gateway requester without a per-person
+sender (a shared-token owner, or a plugin's own Gateway requests) or a schedule
+accepted before this recheck existed keeps its original admission. Demoting that
+person,
 removing their role, or unlinking the identity revokes the requester's retained
 work as it does for a Gateway operator: a child still waiting for a Swarm slot
 fails at once with a visible error, and work that missed the change refuses at

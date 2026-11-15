@@ -217,15 +217,15 @@ export function planCronJobMutation(
           }
           // Occurrence rechecks read the requester's live command sender here, so the envelope
           // keeps its released shape. It names the stored source's person or nothing.
-          const sender = options.pluginCommandSenderProfileId;
-          if (sender !== undefined) {
+          const requester = options.pluginCommandRequester;
+          if (requester !== undefined) {
             if (
               pluginCommand.operatorSource.kind !== "gateway" ||
-              pluginCommand.operatorSource.snapshot.profileId !== sender
+              pluginCommand.operatorSource.snapshot.profileId !== requester.commandSenderId
             ) {
               throw new Error("plugin command sender must match its operator source");
             }
-            nextJob.state.pluginCommandSenderProfileId = sender;
+            nextJob.state.pluginCommandRequester = structuredClone(requester);
           }
         }
         if (options.createdActor) {

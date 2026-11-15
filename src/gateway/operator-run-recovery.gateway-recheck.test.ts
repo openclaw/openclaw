@@ -5,16 +5,23 @@ import {
   type GatewayClientId,
   type GatewayClientMode,
 } from "../../packages/gateway-protocol/src/client-info.js";
+import { recordScheduledCommandRequester } from "../agents/plugin-scheduled-command.js";
 import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
+import { readCommandsAllowFromSender } from "../auto-reply/commands-allow-from.js";
+import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginCommandRequester } from "../cron/types.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  rollbackStagedPluginRegistry,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import {
-  captureGatewayOperatorRecoverySnapshot,
-  resolveLiveProfileCommandSender,
-} from "./operator-run-recovery-source.js";
+import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import { type RecoveryFixture, withRecovery } from "./operator-run-recovery.test-support.js";
 import {
@@ -39,8 +46,29 @@ function decodeReleasedShape(snapshot: unknown) {
   return source;
 }
 
+/** A live command from this client, and the record its schedule keeps beside the source. */
+function recordFromLive(
+  client: RecoveryFixture["client"],
+  snapshot: unknown,
+  route: { channel?: string; accountId?: string } = {},
+) {
+  const live = Object.assign(
+    resolveChatSendCallerContext(client, client.connect.client, route.channel),
+    route.accountId ? { AccountId: route.accountId } : {},
+  );
+  const stored = recordScheduledCommandRequester(
+    decodeReleasedShape(snapshot),
+    readCommandsAllowFromSender(live),
+  );
+  return { live, stored };
+}
+
 /** Restore the stored source and resolve the occurrence's requester as the scheduled run does. */
-async function restoreRequester(fixture: RecoveryFixture, storedSender: string | undefined) {
+async function restoreRequester(
+  fixture: RecoveryFixture,
+  stored: PluginCommandRequester | undefined,
+  channel = "webchat",
+) {
   const operatorSource = decodeReleasedShape(fixture.snapshot);
   const restored = await restoreGatewayQueuedOperatorRecovery({
     source: operatorSource,
@@ -48,7 +76,7 @@ async function restoreRequester(fixture: RecoveryFixture, storedSender: string |
     assertCurrent: () => {},
   });
   try {
-    return resolveScheduledCommandRequester({ storedSender, operatorSource, restored });
+    return resolveScheduledCommandRequester({ stored, operatorSource, channel, restored });
   } finally {
     restored.release();
   }
@@ -57,7 +85,31 @@ async function restoreRequester(fixture: RecoveryFixture, storedSender: string |
 const allowFromConfig = (allowFrom?: Record<string, string[]>): OpenClawConfig =>
   allowFrom ? { commands: { allowFrom } } : {};
 
-describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
+/** Each matrix row: the occurrence decides exactly as the live command did; both outcomes occur. */
+function expectLiveParity(
+  live: Parameters<typeof resolveCommandAuthorization>[0]["ctx"],
+  requester: ReturnType<typeof resolveScheduledCommandRequester>,
+  matrix: Array<Record<string, string[]> | undefined>,
+) {
+  const outcomes = matrix.map((allowFrom) => {
+    const cfg = allowFromConfig(allowFrom);
+    const liveAuthorized = resolveCommandAuthorization({
+      ctx: live,
+      cfg,
+      commandAuthorized: true,
+    }).isAuthorizedSender;
+    expect(isScheduledOccurrenceCommandAuthorized(cfg, requester), JSON.stringify(allowFrom)).toBe(
+      liveAuthorized,
+    );
+    return liveAuthorized;
+  });
+  // The matrix exercises both outcomes, so parity is not vacuous.
+  expect(outcomes).toContain(true);
+  expect(outcomes).toContain(false);
+  return outcomes;
+}
+
+describe("gateway person occurrence rechecks commands.allowFrom as the live command did", () => {
   it.each<{ label: string; id: GatewayClientId; mode: GatewayClientMode; scopes: string[] }>([
     {
       label: "Control UI admin",
@@ -83,20 +135,17 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     async ({ id, mode, scopes }) => {
       await withRecovery(
         async (fixture, _stateDir, profile) => {
-          // Live, the profileId was this surface's only command sender; kept beside the snapshot.
-          expect(fixture.sourceAuthority.commandSenderProfileId).toBe(profile.id);
+          // An operator UI has no client sender id: the profileId is its only command sender.
+          const { stored } = recordFromLive(fixture.client, fixture.snapshot);
+          expect(stored).toEqual({ commandSenderId: profile.id });
           const requester = expectDefined(
-            await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
+            await restoreRequester(fixture, stored),
             "re-checkable gateway requester",
           );
           expect(requester).toEqual({ channel: "webchat", commandSenderId: profile.id });
           // An internal command resolves no provider: the "" list, else "*", gates it.
           const authorized = (allowFrom?: Record<string, string[]>) =>
-            isScheduledOccurrenceCommandAuthorized(
-              allowFromConfig(allowFrom),
-              requester,
-              "webchat",
-            );
+            isScheduledOccurrenceCommandAuthorized(allowFromConfig(allowFrom), requester);
           expect(authorized({ "*": [profile.id] })).toBe(true);
           expect(authorized({ "*": ["other-operator"] })).toBe(false);
           expect(authorized({ "*": [] })).toBe(false);
@@ -110,72 +159,105 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     },
   );
 
-  it("re-checks a schedule routed with an external origin against its live list", async () => {
+  it("re-checks a schedule routed with an external origin with the route's account", async () => {
     await withRecovery(
       async (fixture, _stateDir, profile) => {
-        const requester = expectDefined(
-          await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
-          "re-checkable gateway requester",
+        // A channel formatter may read the account: this one maps an alias on one account only.
+        const plugin = createChannelTestPluginBase({
+          id: "telegram",
+          config: {
+            formatAllowFrom: ({
+              allowFrom,
+              accountId,
+            }: {
+              allowFrom: Array<string | number>;
+              accountId?: string | null;
+            }) =>
+              allowFrom.map((entry) =>
+                String(entry) === "alias-person" && accountId === "route-account"
+                  ? profile.id
+                  : String(entry).trim(),
+              ),
+          },
+        }) as ChannelPlugin;
+        const previous = captureActivePluginRegistrySnapshot();
+        stageActivePluginRegistry(
+          createTestRegistry([{ pluginId: "telegram", plugin, source: "test" }]),
+          null,
+          "default",
         );
-        // A TUI command delivered into a channel session carries that route, account included.
-        const live = Object.assign(
-          resolveChatSendCallerContext(fixture.client, fixture.client.connect.client, "telegram"),
-          { AccountId: "route-account" },
+        try {
+          const matrix: Array<Record<string, string[]> | undefined> = [
+            undefined,
+            { "*": [profile.id] },
+            { "*": ["other-operator"] },
+            { telegram: [profile.id] },
+            { telegram: ["alias-person"] },
+            { telegram: ["123456"], "*": [profile.id] },
+            { telegram: ["*"] },
+            { telegram: [] },
+            { "": [profile.id] },
+          ];
+          const aliasRow = matrix.findIndex((row) => row?.telegram?.[0] === "alias-person");
+          for (const accountId of ["route-account", "other-account"]) {
+            // A TUI command delivered into a channel session carries that route, account included.
+            const { live, stored } = recordFromLive(fixture.client, fixture.snapshot, {
+              channel: "telegram",
+              accountId,
+            });
+            expect(stored).toEqual({ commandSenderId: profile.id, accountId });
+            const requester = expectDefined(
+              await restoreRequester(fixture, stored, "telegram"),
+              "re-checkable gateway requester",
+            );
+            const outcomes = expectLiveParity(live, requester, matrix);
+            // The account decides the alias row, so the stored account is load-bearing.
+            expect(outcomes[aliasRow]).toBe(accountId === "route-account");
+          }
+        } finally {
+          rollbackStagedPluginRegistry(previous);
+        }
+      },
+      { clientInfo: { id: GATEWAY_CLIENT_IDS.TUI, mode: "cli" } },
+    );
+  });
+
+  it("re-checks a person on a non-operator-UI client with both live sender candidates", async () => {
+    await withRecovery(
+      async (fixture, _stateDir, profile) => {
+        // Live, a signed-in person on a CLI is matched by its client id and by the profileId.
+        const { live, stored } = recordFromLive(fixture.client, fixture.snapshot);
+        expect(stored).toEqual({ commandSenderId: profile.id, senderId: GATEWAY_CLIENT_IDS.CLI });
+        const requester = expectDefined(
+          await restoreRequester(fixture, stored),
+          "re-checkable gateway requester",
         );
         const matrix: Array<Record<string, string[]> | undefined> = [
           undefined,
           { "*": [profile.id] },
+          { "*": [GATEWAY_CLIENT_IDS.CLI] },
           { "*": ["other-operator"] },
-          { telegram: [profile.id] },
-          { telegram: ["123456"], "*": [profile.id] },
-          { telegram: [`telegram:${profile.id}`] },
-          { telegram: ["*"] },
-          { telegram: [] },
-          { "": [profile.id] },
+          { "*": [] },
+          { "": [GATEWAY_CLIENT_IDS.CLI] },
+          { "": [], "*": [profile.id] },
         ];
-        const outcomes = matrix.map((allowFrom) => {
-          const cfg = allowFromConfig(allowFrom);
-          const liveAuthorized = resolveCommandAuthorization({
-            ctx: live,
-            cfg,
-            commandAuthorized: true,
-          }).isAuthorizedSender;
-          expect(
-            isScheduledOccurrenceCommandAuthorized(cfg, requester, "telegram"),
-            JSON.stringify(allowFrom),
-          ).toBe(liveAuthorized);
-          return liveAuthorized;
-        });
-        expect(outcomes).toContain(true);
-        expect(outcomes).toContain(false);
+        const outcomes = expectLiveParity(live, requester, matrix);
+        // Narrowed past both candidates, the occurrence is refused as live would be.
+        expect(outcomes[3]).toBe(false);
+        expect(outcomes[2]).toBe(true);
       },
-      { clientInfo: { id: GATEWAY_CLIENT_IDS.TUI, mode: "cli" } },
+      { clientInfo: { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" } },
     );
   });
 
   it("keeps a client without a live command sender on its original admission", async () => {
     await withRecovery(
       async (fixture) => {
-        // No live sender candidate (shared-secret owner): the recovery must not invent one.
-        expect(fixture.sourceAuthority.commandSenderProfileId).toBeUndefined();
-        expect(
-          await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
-        ).toBeUndefined();
+        // No live profile sender (shared-secret owner): nothing is recorded, nothing invented.
+        expect(recordFromLive(fixture.client, fixture.snapshot).stored).toBeUndefined();
+        expect(await restoreRequester(fixture, undefined)).toBeUndefined();
       },
       { withoutCommandSender: true },
-    );
-  });
-
-  it("keeps a non-operator-UI gateway occurrence on its original admission", async () => {
-    await withRecovery(
-      async (fixture) => {
-        // A non-UI client is matched live by a content sender id, which is not re-checkable here.
-        expect(fixture.sourceAuthority.commandSenderProfileId).toBeUndefined();
-        expect(
-          await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
-        ).toBeUndefined();
-      },
-      { clientInfo: { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" } },
     );
   });
 
@@ -185,29 +267,43 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
       const requester = await restoreRequester(fixture, undefined);
       expect(requester).toBeUndefined();
       const narrowed = allowFromConfig({ "*": ["other-operator"] });
-      expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester, "webchat")).toBe(true);
+      expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester)).toBe(true);
+    });
+  });
+
+  it("records only the stored source's person", async () => {
+    await withRecovery(async (fixture, _stateDir, profile) => {
+      const source = decodeReleasedShape(fixture.snapshot);
+      expect(recordScheduledCommandRequester(source, { commandSenderId: "other-operator" })).toBe(
+        undefined,
+      );
+      expect(recordScheduledCommandRequester(source, { senderId: "cli" })).toBeUndefined();
+      const channelSource = { kind: "channel", snapshot: {} } as unknown as typeof source;
+      expect(
+        recordScheduledCommandRequester(channelSource, { commandSenderId: profile.id }),
+      ).toBeUndefined();
     });
   });
 
   it("fails closed when the stored command sender is not the source's person", async () => {
     await withRecovery(async (fixture, _stateDir, profile) => {
-      await expect(restoreRequester(fixture, "other-operator")).rejects.toThrow(
-        "requester changed",
-      );
+      await expect(
+        restoreRequester(fixture, { commandSenderId: "other-operator" }),
+      ).rejects.toThrow("requester changed");
       const operatorSource = decodeReleasedShape(fixture.snapshot);
+      const stored = { commandSenderId: profile.id, senderId: "cli", accountId: "a1" };
       const resolve = (
         source: Parameters<typeof resolveScheduledCommandRequester>[0]["operatorSource"],
         authorityProfileId: string,
       ) =>
         resolveScheduledCommandRequester({
-          storedSender: profile.id,
+          stored,
           operatorSource: source,
+          channel: "telegram",
           restored: { authority: { ...fixture.sourceAuthority, profileId: authorityProfileId } },
         });
-      expect(resolve(operatorSource, profile.id)).toEqual({
-        channel: "webchat",
-        commandSenderId: profile.id,
-      });
+      // The record is replayed whole, on the schedule's channel.
+      expect(resolve(operatorSource, profile.id)).toEqual({ ...stored, channel: "telegram" });
       // The restored authority must be the same person, and only a Gateway source carries it.
       expect(() => resolve(operatorSource, "other-operator")).toThrow("requester changed");
       const channelSource = { kind: "channel", snapshot: {} } as unknown as typeof operatorSource;
@@ -217,12 +313,12 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
 
   it("selects the same commands.allowFrom list as a live command from the same client", async () => {
     await withRecovery(async (fixture, _stateDir, profile) => {
+      const { live, stored } = recordFromLive(fixture.client, fixture.snapshot);
       const requester = expectDefined(
-        await restoreRequester(fixture, fixture.sourceAuthority.commandSenderProfileId),
+        await restoreRequester(fixture, stored),
         "re-checkable gateway requester",
       );
-      const live = resolveChatSendCallerContext(fixture.client);
-      const matrix: Array<Record<string, string[]> | undefined> = [
+      expectLiveParity(live, requester, [
         undefined,
         { "*": [profile.id] },
         { "*": ["other-operator"] },
@@ -233,23 +329,7 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
         { webchat: [], "*": [profile.id] },
         { webchat: ["*"], "*": [] },
         { webchat: [profile.id] },
-      ];
-      const outcomes = matrix.map((allowFrom) => {
-        const cfg = allowFromConfig(allowFrom);
-        const liveAuthorized = resolveCommandAuthorization({
-          ctx: live,
-          cfg,
-          commandAuthorized: true,
-        }).isAuthorizedSender;
-        expect(
-          isScheduledOccurrenceCommandAuthorized(cfg, requester, "webchat"),
-          JSON.stringify(allowFrom),
-        ).toBe(liveAuthorized);
-        return liveAuthorized;
-      });
-      // The matrix exercises both outcomes, so parity is not vacuous.
-      expect(outcomes).toContain(true);
-      expect(outcomes).toContain(false);
+      ]);
     });
   });
 });
@@ -277,27 +357,27 @@ const REMOTE_PERSON_CONFIG: OpenClawConfig = {
   },
 };
 
-describe("remote operator-UI schedule source round-trips through the production restore", () => {
+describe("remote Gateway schedule source round-trips through the production restore", () => {
   it.each([
     {
       label: "person, remote Control UI",
       kind: "person",
       id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      recorded: true,
+      senderId: undefined,
     },
     {
       label: "owner, remote Control UI",
       kind: "owner",
       id: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      recorded: false,
+      senderId: undefined,
     },
     {
       label: "person, host-side request",
       kind: "person",
       id: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
-      recorded: false,
+      senderId: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
     },
-  ] as const)("$label", ({ kind, id, recorded }) =>
+  ] as const)("$label", ({ kind, id, senderId }) =>
     withOpenClawTestState({ scenario: "minimal" }, async () => {
       ensureGatewayOwnerProfile("Gateway owner");
       const profile = ensureProfileForEmail("remote@example.test");
@@ -336,7 +416,7 @@ describe("remote operator-UI schedule source round-trips through the production 
       });
       const identity = await prepareUserProfileIdentity(profileId);
       let persisted: string;
-      let storedSender: string | undefined;
+      let recorded: ReturnType<typeof recordFromLive>;
       try {
         const snapshot = captureGatewayOperatorRecoverySnapshot({
           client,
@@ -352,9 +432,13 @@ describe("remote operator-UI schedule source round-trips through the production 
           config: REMOTE_PERSON_CONFIG,
         });
         expect(snapshot).toMatchObject({ sourceIngress: "principal", ingress: recoverySource });
-        decodeReleasedShape(snapshot);
-        storedSender = resolveLiveProfileCommandSender(client, profileId);
-        expect(storedSender).toBe(recorded ? profileId : undefined);
+        recorded = recordFromLive(client, snapshot);
+        // A person's live profile sender is recorded with their client id; an owner has none.
+        expect(recorded.stored).toEqual(
+          kind === "person"
+            ? { commandSenderId: profileId, ...(senderId ? { senderId } : {}) }
+            : undefined,
+        );
         persisted = JSON.stringify({ kind: "gateway", snapshot });
       } finally {
         identity.release();
@@ -370,27 +454,28 @@ describe("remote operator-UI schedule source round-trips through the production 
         const restored = await restore();
         try {
           const requester = resolveScheduledCommandRequester({
-            storedSender,
+            stored: recorded.stored,
             operatorSource,
+            channel: "webchat",
             restored,
           });
-          expect(requester).toEqual(
-            recorded ? { channel: "webchat", commandSenderId: profileId } : undefined,
-          );
-          const live = resolveChatSendCallerContext(client);
-          for (const allowFrom of [[profileId], ["other-operator"], []]) {
-            const cfg = allowFromConfig({ "*": allowFrom });
-            const liveAuthorized = resolveCommandAuthorization({
-              ctx: live,
-              cfg,
-              commandAuthorized: true,
-            }).isAuthorizedSender;
+          const matrix = [[profileId], [GATEWAY_CLIENT_IDS.GATEWAY_CLIENT], ["other-operator"], []];
+          if (kind === "person") {
             // The occurrence refuses exactly when a live command from this client would.
-            expect(isScheduledOccurrenceCommandAuthorized(cfg, requester, "webchat")).toBe(
-              recorded ? liveAuthorized : true,
+            expectLiveParity(
+              recorded.live,
+              requester,
+              matrix.map((allowFrom) => ({ "*": allowFrom })),
             );
-            if (recorded) {
-              expect(liveAuthorized).toBe(allowFrom[0] === profileId);
+          } else {
+            expect(requester).toBeUndefined();
+            for (const allowFrom of matrix) {
+              expect(
+                isScheduledOccurrenceCommandAuthorized(
+                  allowFromConfig({ "*": allowFrom }),
+                  requester,
+                ),
+              ).toBe(true);
             }
           }
         } finally {

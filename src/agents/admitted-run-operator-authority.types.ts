@@ -9,11 +9,6 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   openclawIdPrincipal?: import("../gateway/openclaw-id/tunnel-principal.js").OpenClawIdTunnelPrincipal;
   /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
-  /**
-   * Live-only: the person's profile id when it was the original client's only command sender.
-   * Never part of the recovery snapshot; authorities rebuilt from a snapshot do not carry it.
-   */
-  commandSenderProfileId?: string;
   /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
   channelRecoverySource?: Readonly<{
     reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;

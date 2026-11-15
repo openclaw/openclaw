@@ -35,7 +35,7 @@ import {
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
 import { resolveCronRequesterExecutionRevision } from "../cron/service/jobs-tool-policy.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
-import type { CronStoredJob } from "../cron/types.js";
+import type { CronStoredJob, PluginCommandRequester } from "../cron/types.js";
 import { isAbortError, racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getPluginInstanceCodeIdentity } from "../plugins/plugin-code-identity.js";
@@ -51,8 +51,6 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -61,20 +59,22 @@ type ScheduledResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]
 
 /**
  * The requester an occurrence rechecks: a channel identity re-derived from its link, or a
- * Gateway person's live profile command sender kept store-private beside the envelope.
+ * Gateway person's live sender inputs, kept store-private, on the schedule's channel.
  */
 export function resolveScheduledCommandRequester(params: {
-  storedSender: string | undefined;
+  stored: PluginCommandRequester | undefined;
   operatorSource: PluginCommandSchedule["operatorSource"];
+  channel: string;
   restored: Pick<
     Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>>,
     "authority" | "requester"
   >;
 }): CommandsAllowFromRequester | undefined {
-  const { storedSender: sender, operatorSource, restored } = params;
-  if (sender === undefined) {
+  const { stored, operatorSource, restored } = params;
+  if (stored === undefined) {
     return restored.requester;
   }
+  const sender = stored.commandSenderId;
   if (
     operatorSource.kind !== "gateway" ||
     operatorSource.snapshot.profileId !== sender ||
@@ -82,22 +82,15 @@ export function resolveScheduledCommandRequester(params: {
   ) {
     throw new Error("Scheduled plugin command requester changed; submit a new request.");
   }
-  return { channel: INTERNAL_MESSAGE_CHANNEL, commandSenderId: sender };
+  return { ...stored, channel: params.channel };
 }
 
-/** A Gateway person is checked against the list their live command used: the schedule's channel. */
+/** Without a re-checkable requester the occurrence keeps its original admission. */
 export function isScheduledOccurrenceCommandAuthorized(
   cfg: OpenClawConfig,
   requester: CommandsAllowFromRequester | undefined,
-  scheduleChannel: string,
 ): boolean {
-  if (!requester) {
-    return true;
-  }
-  if (requester.commandSenderId !== undefined) {
-    return isCommandsAllowFromAuthorized(cfg, { ...requester, channel: scheduleChannel });
-  }
-  return isCommandsAllowFromAuthorized(cfg, requester);
+  return !requester || isCommandsAllowFromAuthorized(cfg, requester);
 }
 
 /** Host-only dispatch owner contract. It must throw failures, fence every runtime effect,
@@ -269,7 +262,10 @@ export async function runPluginCommandScheduledTurn(params: {
         resolveCronRequesterExecutionRevision(current) !== revision ||
         !isDeepStrictEqual(current.pluginCommand, schedule) ||
         !isDeepStrictEqual(current.state.pluginCommandBinding, job.state.pluginCommandBinding) ||
-        current.state.pluginCommandSenderProfileId !== job.state.pluginCommandSenderProfileId ||
+        !isDeepStrictEqual(
+          current.state.pluginCommandRequester,
+          job.state.pluginCommandRequester,
+        ) ||
         Date.now() >= schedule.deadlineAtMs
       ) {
         throw new Error("Scheduled plugin command source changed or expired.");
@@ -349,21 +345,18 @@ export async function runPluginCommandScheduledTurn(params: {
       assertParent();
       const operatorAuthority = restored.authority;
       // Fail closed: a channel occurrence must never run without a re-checkable requester.
-      if (
-        !restored.requester &&
-        decodeQueuedOperatorRecoverySource(schedule.operatorSource).kind === "channel"
-      ) {
+      if (!restored.requester && schedule.operatorSource.kind === "channel") {
         throw new Error("Queued channel operator authority changed; submit a new request.");
       }
-      // Only commands.allowFrom is re-derivable here; channel reachability keeps its admission.
+      // Only commands.allowFrom is rechecked here; channel reachability keeps its admission.
       const commandAuthorized = isScheduledOccurrenceCommandAuthorized(
         cfg,
         resolveScheduledCommandRequester({
-          storedSender: job.state.pluginCommandSenderProfileId,
+          stored: job.state.pluginCommandRequester,
           operatorSource: schedule.operatorSource,
+          channel: schedule.channel,
           restored,
         }),
-        schedule.channel,
       );
       if (!commandAuthorized) {
         throw new Error(

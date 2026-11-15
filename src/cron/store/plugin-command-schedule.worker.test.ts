@@ -900,32 +900,37 @@ it("cancels a removed queued job and rejects a plan made before its definition c
 it("keeps the requester's command sender in job state; the released reader decodes the envelope unchanged", async () => {
   const queue = await store("command-sender", []);
   const pluginCommand = pluginCommandSchedule(now);
+  const requester = {
+    commandSenderId: "synthetic-operator",
+    senderId: "cli",
+    accountId: "route-account",
+  };
   const created = await createCommand(queue.storeKey, commandCreate("command-sender"), {
     captured: false,
     pluginCommand,
-    pluginCommandSenderProfileId: "synthetic-operator",
+    pluginCommandRequester: requester,
   });
   const stored = created.find((entry) => entry.id === "command-sender")!;
   expect(stored.pluginCommand).toEqual(pluginCommand);
-  expect(stored.state.pluginCommandSenderProfileId).toBe("synthetic-operator");
-  expect(toPublicCronJob(stored).state).not.toHaveProperty("pluginCommandSenderProfileId");
+  expect(stored.state.pluginCommandRequester).toEqual(requester);
+  expect(toPublicCronJob(stored).state).not.toHaveProperty("pluginCommandRequester");
   const released = await claimWithReleasedReader(queue.storeKey, "command-sender", false);
   expect(released.envelope).toEqual(pluginCommand);
   // A later rewrite of the job keeps it, like the other store-private schedule state.
   await queue.update("command-sender", { enabled: false });
   const [rewritten] = (await queue.read()).jobs;
-  expect(rewritten?.state.pluginCommandSenderProfileId).toBe("synthetic-operator");
+  expect(rewritten?.state.pluginCommandRequester).toEqual(requester);
   // Only the stored source's person is recorded, and no caller can author it.
   await expect(
     createCommand(queue.storeKey, commandCreate("other-sender"), {
       captured: false,
       pluginCommand: pluginCommandSchedule(now),
-      pluginCommandSenderProfileId: "other-operator",
+      pluginCommandRequester: { ...requester, commandSenderId: "other-operator" },
     }),
   ).rejects.toThrow("must match its operator source");
   const input = {
     ...queueJob("authored", now),
-    state: { lastRunAtMs: now, pluginCommandSenderProfileId: "synthetic-operator" },
+    state: { lastRunAtMs: now, pluginCommandRequester: requester },
   };
   await expect(
     mutate(queue.storeKey, { kind: "add", input, options: { captured: false } }),

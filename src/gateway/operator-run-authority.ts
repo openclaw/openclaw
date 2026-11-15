@@ -53,7 +53,7 @@ import {
   isOperatorRoleSourcePolicyCurrent,
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
-import { captureGatewayOperatorRecovery } from "./operator-run-recovery-source.js";
+import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
 type OperatorSource = {
@@ -680,7 +680,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,
     };
-    const recovery = captureGatewayOperatorRecovery({
+    const recoverySnapshot = captureGatewayOperatorRecoverySnapshot({
       client,
       authority: admission,
       modelPolicy: modelPolicy.original,
@@ -690,7 +690,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     assertCurrent();
     const authority = createAdmittedRunOperatorAuthority({
       ...admission,
-      ...recovery,
+      recoverySnapshot,
       rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
       readCurrentRoleFacts: () => ({
         ...assertProfileCurrent(),

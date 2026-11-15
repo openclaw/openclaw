@@ -4,7 +4,6 @@ import {
 } from "../agents/admitted-run-context.js";
 import { captureOperatorModelPolicySnapshot } from "../agents/operator-model-policy.js";
 import type { PreparedOperatorModelPolicy } from "../agents/operator-model-policy.types.js";
-import { getCommandSenderAuthority } from "../auto-reply/command-sender-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { intersectOperatorScopes } from "../shared/operator-scope-compat.js";
 import type { prepareUserProfileIdentity } from "../state/user-profile-list.js";
@@ -19,7 +18,6 @@ import {
   type OperatorRunRecoverySnapshot,
   type QueuedOperatorRecoverySource,
 } from "./operator-run-recovery-source.codec.js";
-import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
 import type { GatewayClient } from "./server-methods/shared-types.js";
 
 /** An unrecoverable source still runs in memory under its retained live authority. */
@@ -62,33 +60,6 @@ export function captureQueuedOperatorRecoverySource(
     // Recovery limits must not reject work under its current live authority.
     return { kind: "unavailable" };
   }
-}
-
-/**
- * The person's profile id when it is this live client's only command sender (an operator UI,
- * local or remote, with no SenderId). Kept beside the recovery snapshot, never inside it.
- */
-export function resolveLiveProfileCommandSender(
-  client: GatewayClient,
-  profileId: string,
-): string | undefined {
-  const live = resolveChatSendCallerContext(client);
-  return live.SenderId === undefined && getCommandSenderAuthority(live)?.() === profileId
-    ? profileId
-    : undefined;
-}
-
-/** The recovery snapshot, plus the live profile command sender kept beside it (never inside). */
-export function captureGatewayOperatorRecovery(
-  params: Parameters<typeof captureGatewayOperatorRecoverySnapshot>[0],
-): Pick<AdmittedRunOperatorAuthority, "recoverySnapshot" | "commandSenderProfileId"> {
-  const recoverySnapshot = captureGatewayOperatorRecoverySnapshot(params);
-  return {
-    recoverySnapshot,
-    commandSenderProfileId: recoverySnapshot
-      ? resolveLiveProfileCommandSender(params.client, params.authority.profileId)
-      : undefined,
-  };
 }
 
 /** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */

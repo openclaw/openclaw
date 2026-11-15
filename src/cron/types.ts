@@ -335,6 +335,13 @@ type CronExternalContent = {
 // edits must not invent missed work. Without activation, every computed slot is real.
 // streamSourceIdentity survives child restarts but rotates atomically on
 // disable/remove/replace, fencing same-schedule ABA admission.
+/** What a Gateway person's live command was authorized with: profile id, client id, route account. */
+export type PluginCommandRequester = {
+  commandSenderId: string;
+  senderId?: string;
+  accountId?: string;
+};
+
 export type CronJobState = Omit<
   CronJobWire["state"],
   "deliverySuppressionReason" | "lastStatus"
@@ -350,11 +357,10 @@ export type CronJobState = Omit<
   /** Store-private restart continuity for a plugin command schedule; see its type. */
   pluginCommandBinding?: PluginCommandScheduleBinding;
   /**
-   * Store-private: the requester's profile id when it was their only live command sender.
-   * Kept in job state so the envelope keeps its released shape; occurrences recheck
-   * commands.allowFrom against it. Older readers ignore it.
+   * Store-private: a Gateway person's live command sender inputs, so occurrences recheck
+   * commands.allowFrom as live did. Kept in job state so the envelope keeps its released shape.
    */
-  pluginCommandSenderProfileId?: string;
+  pluginCommandRequester?: PluginCommandRequester;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -522,7 +528,7 @@ type CronJobStateInput = Partial<
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
-    | "pluginCommandSenderProfileId"
+    | "pluginCommandRequester"
   >
 >;
 

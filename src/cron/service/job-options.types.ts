@@ -16,8 +16,8 @@ export type CronAddOptions = {
   pluginCommand?: CronStoredJob["pluginCommand"];
   /** Captured source digest of the admitting plugin instance; enables restart continuity. */
   pluginCommandSourceDigest?: string;
-  /** Requester's live profile command sender, kept store-private for occurrence rechecks. */
-  pluginCommandSenderProfileId?: string;
+  /** A Gateway person's live command sender inputs, kept store-private for occurrence rechecks. */
+  pluginCommandRequester?: import("../types.js").PluginCommandRequester;
   operatorSource?: NonNullable<CronStoredJob["operatorSource"]>["source"];
   operatorSourceExecutionRevision?: string;
   /** Null authorizes a native CLI account transition on explicit updates only. */

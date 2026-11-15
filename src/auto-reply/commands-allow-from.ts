@@ -1,6 +1,7 @@
 import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getCommandSenderAuthority } from "./command-sender-authority.js";
 import {
   type AllowFromParams,
   formatAllowFromList,
@@ -14,6 +15,18 @@ export type CommandsAllowFromRequester = {
   senderId?: string;
   commandSenderId?: string;
 };
+
+/** The sender inputs a live command's commands.allowFrom check reads from its context. */
+export function readCommandsAllowFromSender(ctx: {
+  SenderId?: string;
+  AccountId?: string;
+}): Omit<CommandsAllowFromRequester, "channel"> {
+  return {
+    commandSenderId: getCommandSenderAuthority(ctx)?.(),
+    senderId: ctx.SenderId,
+    accountId: ctx.AccountId,
+  };
+}
 
 export function isWildcardAllowFromEntry(entry: string): boolean {
   return entry.trim() === "*";

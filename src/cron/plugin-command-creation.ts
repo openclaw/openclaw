@@ -16,8 +16,8 @@ type Creation = {
   envelope: PluginCommandSchedule;
   /** Code identity of the admitting instance; absent without captured plugin source. */
   sourceDigest?: string;
-  /** Requester's live profile command sender; absent when it was not the only one. */
-  commandSenderProfileId?: string;
+  /** A Gateway person's live command sender inputs; absent for any other requester. */
+  commandRequester?: import("./types.js").PluginCommandRequester;
   input: CronJobCreate;
   assertCurrent: () => void;
   consumed: boolean;
@@ -35,13 +35,13 @@ export async function withPluginCommandScheduleCreation(
   assertCurrent: () => void,
   execute: () => Promise<unknown>,
   sourceDigest?: string,
-  commandSenderProfileId?: string,
+  commandRequester?: import("./types.js").PluginCommandRequester,
 ) {
   const creation: Creation = {
     token: randomUUID(),
     envelope: structuredClone(envelope),
     ...(sourceDigest ? { sourceDigest } : {}),
-    ...(commandSenderProfileId ? { commandSenderProfileId } : {}),
+    ...(commandRequester ? { commandRequester: structuredClone(commandRequester) } : {}),
     input: structuredClone(input),
     assertCurrent,
     consumed: false,
@@ -130,7 +130,7 @@ export function readPluginCommandCreation(params: Record<string, unknown>) {
     creation: {
       envelope: creation.envelope,
       sourceDigest: creation.sourceDigest,
-      commandSenderProfileId: creation.commandSenderProfileId,
+      commandRequester: creation.commandRequester,
       assertCurrent: creation.assertCurrent,
       record(stored: CronStoredJob) {
         if (!stored.pluginCommand || !isDeepStrictEqual(stored.pluginCommand, creation.envelope)) {
