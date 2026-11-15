@@ -60,12 +60,8 @@ function revealDestination(host: AppSidebarRenderHost, entry: SidebarZoneEntry) 
     return;
   }
   const section = entry.type === "route" ? sidebarSectionForRoute(entry.route) : undefined;
+  // The drawer closes on navigation; the route's section picks its list for next time.
   if (isMobileNavLayout()) {
-    // The drawer closes on navigation and shows this section's list when it opens again.
-    if (section) {
-      host.navigationView = section;
-      host.invalidate();
-    }
     return;
   }
   if (!section) {
