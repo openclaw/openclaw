@@ -6,17 +6,28 @@ import { captureSessionEntryCurrentRead } from "../../config/sessions/session-en
 import type { SessionEntryCurrentFacts } from "../../config/sessions/session-entry-current.types.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import { prepareSessionSourceAuthority } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { assertRepositoryWorkspaceDiskIdentity } from "../../state/session-repository-workspaces.authority.js";
+import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import type { SessionRepositoryWorkspaceRecord } from "../../state/session-repository-workspaces.types.js";
 import {
   placementTurnOwner,
   type WorkerSessionPlacementIdentity,
   type WorkerSessionPlacementRecord,
 } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
+import {
+  isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
+} from "./placement-target.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import { captureRepositoryDiskCheckpoint } from "./repository-workspace-snapshot.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { forkSessionRepositoryWorkspace } from "./session-repository-checkpoints.js";
 import {
   createWorkerWorkspaceReconcileRequest,
   type WorkerSessionWorkspace,
@@ -31,12 +42,72 @@ import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 export function createRepositoryWorkspaceMutationService(options: {
   placements: WorkerSessionPlacementStore;
-  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel">;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel" | "ensureRetainedRunning">;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   resolveWorkspace: (identity: WorkerSessionPlacementIdentity) => Promise<WorkerSessionWorkspace>;
 }) {
   const { placements, environments } = options;
   return {
+    async fork(
+      params: WorkerSessionPlacementIdentity & {
+        repository: SessionRepositoryWorkspaceRecord;
+        target: { agentId: string; sessionKey: string };
+        branchPrefix?: string;
+        runSetupScript: boolean;
+        assertCurrent: () => void;
+      },
+    ): Promise<SessionRepositoryWorkspaceRecord> {
+      const authority = params.repository.diskAuthority;
+      if (!authority) {
+        throw new Error("Repository child export requires its original disk");
+      }
+      const store = getSessionRepositoryWorkspaceStore();
+      const source = captureOpenClawStateWorkerContext({ path: store.path });
+      // Creation holds the parent's lifecycle. Reuse workspace exclusion without claiming
+      // another turn: a native parent may be spawning from its still-active turn.
+      return await options.workspaceOperations.run(authority.environmentId, async () => {
+        // Retain current parent predicates for Git/HTTP effects, not just SQLite writes.
+        const currentSource = await prepareSessionSourceAuthority(params.assertCurrent);
+        let child: SessionRepositoryWorkspaceRecord | undefined;
+        try {
+          return await captureRepositoryDiskCheckpoint(
+            {
+              identity: params,
+              repository: params.repository,
+              checkpointRef: workerWorkspaceResultRef("child-export-" + randomUUID()),
+              purpose: "child-fork",
+              placements,
+              environments,
+              assertCurrent: currentSource.assertCurrent,
+            },
+            async (snapshot, verifyCurrent) => {
+              child = await forkSessionRepositoryWorkspace({
+                ...params.target,
+                store,
+                branchPrefix: params.branchPrefix,
+                runSetupScript: params.runSetupScript,
+                sourceWorkspaceId: params.repository.workspaceId,
+                diskExport: { checkpointRef: snapshot.checkpointRef, verifyCurrent },
+                assertCurrent: currentSource.assertCurrent,
+              });
+              return child;
+            },
+          );
+        } catch (error) {
+          // Capture also owns resuming the parent. A failed resume must not leak an
+          // unexposed child after the checkpoint copier already returned it.
+          if (child) {
+            await store.delete({
+              workspaceId: child.workspaceId,
+              assertCurrent: () => source.admission.assertCurrent(),
+            });
+          }
+          throw error;
+        } finally {
+          await currentSource.release?.();
+        }
+      });
+    },
     async mutate<T>(
       params: WorkerSessionPlacementIdentity & {
         assertCurrent: () => void;
@@ -83,7 +154,10 @@ export function createRepositoryWorkspaceMutationService(options: {
           throw new Error("Session no longer owns a cloud repository workspace");
         }
         const environment = environments.get(placement.environmentId);
-        if (!isCurrentActiveWorkerEnvironment(placement, environment)) {
+        if (
+          !workspace.repository.diskAuthority &&
+          !isCurrentActiveWorkerEnvironment(placement, environment)
+        ) {
           throw new Error("Repository workspace environment is no longer current");
         }
         const assertEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) => {
@@ -129,8 +203,17 @@ export function createRepositoryWorkspaceMutationService(options: {
             });
           },
         );
-        const assertPlacementCurrent = (current: WorkerSessionPlacementRecord | undefined) => {
+        const assertPlacementCurrent = (
+          current: WorkerSessionPlacementRecord | undefined,
+          requireReady = true,
+        ) => {
           const currentEnvironment = environments.get(placement.environmentId);
+          if (workspace.repository.diskAuthority) {
+            assertRepositoryWorkspaceDiskIdentity(
+              workspace.repository.diskAuthority,
+              currentEnvironment,
+            );
+          }
           if (
             current?.state !== "active" ||
             current.agentId !== params.agentId ||
@@ -139,7 +222,13 @@ export function createRepositoryWorkspaceMutationService(options: {
             current.environmentId !== placement.environmentId ||
             current.activeOwnerEpoch !== placement.activeOwnerEpoch ||
             current.remoteWorkspaceDir !== placement.remoteWorkspaceDir ||
-            !isCurrentActiveWorkerEnvironment(current, currentEnvironment) ||
+            !isExactAttachedEnvironment(currentEnvironment, current) ||
+            (requireReady &&
+              (workspace.repository.diskAuthority
+                ? // File commands use the tunnel's current-build admission, not an old turn's
+                  // launch hash. Retained refresh deliberately preserves the placement epoch.
+                  !isWorkerRetainedWindowOpen(currentEnvironment)
+                : !isCurrentActiveWorkerEnvironment(current, currentEnvironment))) ||
             currentEnvironment?.leaseId !== environment?.leaseId
           ) {
             throw new Error("Repository workspace edit lost its exact session placement owner");
@@ -157,12 +246,25 @@ export function createRepositoryWorkspaceMutationService(options: {
           ...(currentEntry.kind === "file"
             ? { sessionEntry: { source: currentEntry.source, assertCurrent: assertEntryCurrent } }
             : {}),
-          assertPlacementCurrent,
+          assertPlacementCurrent: (current) => assertPlacementCurrent(current),
         };
-        const assertOwner = () => {
+        const assertOwner = (requireReady = true) => {
           assertWorkerCurrent();
-          assertPlacementCurrent(placements.get(params.sessionId));
+          assertPlacementCurrent(placements.get(params.sessionId), requireReady);
         };
+        // The session mutation and workspace queue are already held, but no result
+        // claim exists yet: runtime refresh must finish before that claim is minted.
+        assertOwner(false);
+        if (
+          workspace.repository.diskAuthority &&
+          !isWorkerRetainedWindowOpen(environments.get(placement.environmentId))
+        ) {
+          await environments.ensureRetainedRunning({
+            environmentId: placement.environmentId,
+            expectedOwnerEpoch: placement.activeOwnerEpoch,
+            assertCurrent: () => assertOwner(false),
+          });
+        }
         assertOwner();
         const claim = await placements.claimWorkspaceMutationResult(
           {
@@ -185,7 +287,8 @@ export function createRepositoryWorkspaceMutationService(options: {
           assertCurrent();
           const result = await params.mutate(assertCurrent);
           assertCurrent();
-          if (!result.changed) {
+          // The retained disk owns editor bytes; only explicit publication/export captures them.
+          if (!result.changed || workspace.repository.diskAuthority) {
             await placements.acceptWorkspaceResult(claim, assertWorkerCurrent, currentCheck);
             await placements.completeWorkspaceResultAndReleaseTurn(
               claim,

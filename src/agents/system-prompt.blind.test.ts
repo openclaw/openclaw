@@ -119,11 +119,11 @@ describe("blind system prompt", () => {
         sessionKey: "agent:relay-check:subagent:5b1c",
         preparedSessionEntry: { sessionId: "session-5b1c", updatedAt: 1, blindPrompt },
       });
-    const ordinary = render();
+    const ordinary = await render();
     expect(ordinary).toContain("model=claude-cli/trial-model-7");
     expect(ordinary).toContain("session=agent:relay-check:subagent:5b1c");
     expect(ordinary).toContain(real);
-    const blind = render(true);
+    const blind = await render(true);
     for (const withheld of ["trial-model-7", "default_model=", "relay-check", "5b1c", real]) {
       expect(blind, withheld).not.toContain(withheld);
     }

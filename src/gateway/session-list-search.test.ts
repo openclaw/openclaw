@@ -1,11 +1,16 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expect, onTestFinished, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import * as harnessPolicy from "../agents/harness/policy.js";
 import { registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions/types.js";
+import {
+  isTerminalSessionStatus,
+  SESSION_TOTAL_TOKENS_VERSION,
+  type SessionEntry,
+} from "../config/sessions/types.js";
 import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtime.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -97,7 +102,7 @@ test("unchanged goal searches normalize only the query and refresh with the entr
       updatedAt: now,
       totalTokens: 1200,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       goal: createSessionGoalFixture(`goal-${index}`, "Investigate 日本語 🦞 MiXeD", {
         tokenBudget: 2000,
       }),
@@ -261,6 +266,7 @@ test("reuses model search vocabulary until the row facts owner publishes a chang
 });
 
 test("native models and prepared runtime labels outside the catalog retain their matches", () => {
+  using policies = vi.spyOn(harnessPolicy, "resolveAgentHarnessPolicy");
   const cfg = {
     agents: {
       defaults: { model: "short", models: { "openai/gpt-4.1": { alias: "short" } } },
@@ -327,6 +333,7 @@ test("native models and prepared runtime labels outside the catalog retain their
   acp.backend = "agent:fixture-runtime";
   params.opts = { search: acp.backend };
   expect(searchKeys(params)).toEqual([key]);
+  expect(policies).not.toHaveBeenCalled();
 });
 
 // The original eager predicate is the oracle for query gates and per-call memo keys.

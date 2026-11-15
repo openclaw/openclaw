@@ -6,7 +6,7 @@ import {
   resolveCronStoreKeyInDatabase,
 } from "../cron/store/paths.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import { decodeDoctorHeartbeatJobRows } from "./doctor-heartbeat-jobs.js";
 import {
   planDoctorHeartbeatMonitors,
@@ -40,7 +40,7 @@ export async function assertHeartbeatScratchMigrationUnambiguous(
     return;
   }
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+  await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
     ({ db }) => {
       const storeKey = resolveCronStoreKeyInDatabase(db, storePath, env);
       const jobs = decodeDoctorHeartbeatJobRows(loadCronRows(db, storeKey));

@@ -408,13 +408,9 @@ export class Stores {
           writesEnabled: this.policy.writesEnabled,
           hubPercentile: this.policy.hubPercentile,
         },
-        this.changed,
+        this.policy.operatorRead ? this.changed : undefined,
       );
       this.runtimes.set(vaultId, runtime);
-      // Change hints carry no data; operator reads reconcile through authorized calls.
-      if (this.policy.operatorRead) {
-        runtime.live.start();
-      }
     }
     return runtime;
   }

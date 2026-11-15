@@ -39,7 +39,7 @@ main.content:where(.content--portals-page) .portals-empty {
   padding: 4px;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: color-mix(in srgb, var(--panel) 76%, transparent);
 }
 
@@ -47,9 +47,9 @@ main.content:where(.content--portals-page) .portals-empty {
   width: 100%;
   display: grid;
   gap: 4px;
-  padding: 12px;
+  padding: var(--list-row-padding);
   border: 0;
-  border-radius: 7px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text);
   font: inherit;
@@ -59,11 +59,11 @@ main.content:where(.content--portals-page) .portals-empty {
 
 .portals-rail__item:hover,
 .portals-rail__item:focus-visible {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .portals-rail__item.active {
-  background: var(--accent-subtle);
+  background: var(--surface-selected-hover);
 }
 
 .portals-rail__title,
@@ -75,14 +75,14 @@ main.content:where(.content--portals-page) .portals-empty {
 
 .portals-rail__title {
   color: var(--text-strong);
-  font-size: 0.86rem;
-  font-weight: 650;
+  font-size: var(--control-ui-text-md);
+  font-weight: var(--list-row-title-weight);
 }
 
 .portals-rail__port,
 .portals-rail__description {
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: var(--control-ui-text-sm);
   line-height: 1.35;
 }
 
@@ -100,7 +100,7 @@ main.content:where(.content--portals-page) .portals-empty {
   flex-direction: column;
   overflow: hidden;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--panel);
 }
 
@@ -342,7 +342,7 @@ openclaw-portals-page[embedded],
   width: calc(100% - 24px);
   margin: 0 12px 12px;
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
 }
 
 @media (max-width: 768px) {

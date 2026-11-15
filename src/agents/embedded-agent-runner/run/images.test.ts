@@ -417,15 +417,18 @@ describe("detectAndLoadPromptImages", () => {
     }
 
     const warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+    const localRoots = vi.fn(() => [agentRoot]);
     const result = await loadImages({
       prompt: `Inspect ${imageRef}`,
       workspaceDir: sandboxRoot,
       workspaceOnly: true,
+      localRoots,
       sandbox: { root: sandbox.workspaceDir, bridge },
     });
 
     expect(result.detectedRefs).toHaveLength(1);
     expect(result).toMatchObject({ loadedCount: 0, skippedCount: 1, images: [] });
+    expect(localRoots).not.toHaveBeenCalled();
     expect(warn.mock.calls).toEqual([
       ["Native image: sandbox validation failed (reason=outside-workspace, pathClass=absolute)"],
     ]);

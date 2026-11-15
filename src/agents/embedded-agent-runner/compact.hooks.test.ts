@@ -447,7 +447,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     createOpenClawCodingToolsMock.mockReturnValue(
       ["read", "exec"].map((name) => compactionTool(name, {})),
     );
-    buildConfiguredAgentSystemPromptMock.mockImplementation((params) =>
+    buildConfiguredAgentSystemPromptMock.mockImplementation(async (params) =>
       JSON.stringify({
         promptMode: params.promptMode,
         skillsPrompt: params.skillsPrompt ?? null,

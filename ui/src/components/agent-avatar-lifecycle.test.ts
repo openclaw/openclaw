@@ -152,8 +152,12 @@ it("shares one reset observer while preserving synchronous credential retirement
     }),
   );
   const images = () => mounted.flatMap((element) => [...element.querySelectorAll("img")]);
-  // Each select renders its trigger and option avatar; standalone avatars render one each.
-  const expectedImages = 12;
+  for (const element of mounted) {
+    await element.updateComplete;
+    element.querySelector<HTMLButtonElement>(".agent-select__trigger")?.click();
+  }
+  // Four trigger avatars and four standalone avatars stay mounted; only the last menu is open.
+  const expectedImages = 9;
   try {
     await waitForSolid(() => {
       expect(images()).toHaveLength(expectedImages);

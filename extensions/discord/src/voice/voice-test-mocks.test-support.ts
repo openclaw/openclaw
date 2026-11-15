@@ -230,6 +230,7 @@ vi.mock("./sdk-runtime.js", () => ({
   loadDiscordVoiceSdk: () => ({
     AudioPlayerStatus: { Playing: "playing", Idle: "idle" },
     EndBehaviorType: { AfterSilence: "AfterSilence", Manual: "Manual" },
+    SpeakingMap: { DELAY: 100 },
     NetworkingStatusCode: { Ready: "networking-ready", Resuming: "networking-resuming" },
     StreamType: { Opus: "opus", Raw: "raw" },
     VoiceConnectionStatus: {

@@ -13,10 +13,13 @@ import {
   weak,
   weakControl,
 } from "../../../gateway/session-collection.test-support.js";
+import { GatewayScheduler } from "../../../infra/gateway-scheduler.js";
 import * as snapshotSource from "../../../infra/sqlite-snapshot-source.js";
 import { SqliteWorkerError } from "../../../infra/sqlite-worker-contract.js";
 import * as operationAdmission from "../../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { LegacyPluginSdkResourceHost } from "../../../plugins/legacy-sdk-resource-host.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -450,6 +453,33 @@ it("releases unrelated registration rows while following new owners and deletion
   expect(preparedRows().has("unrelated")).toBe(true);
 });
 
+it("selects registration rows in owner order without traversing unrelated live runs", async () => {
+  const child = "agent:main:subagent:indexed-registration";
+  seed(
+    entry("first", { childSessionKey: child }),
+    entry("explicit", { createdAt: 2 }),
+    entry("unrelated"),
+  );
+  await restore();
+  const context = captureOpenClawStateWorkerContext();
+  const prepare = () => prepareSubagentRegistrationRows(child, ["explicit"], context);
+  const initial = await prepare();
+  expect([...initial().keys()]).toEqual(["first", "explicit"]);
+  const traversal = vi.spyOn(subagentRuns, Symbol.iterator);
+  const reader = await prepare();
+  expect([...reader().keys()]).toEqual(["first", "explicit"]);
+  expect(traversal).not.toHaveBeenCalled();
+  traversal.mockRestore();
+  // A live replacement leaves the durable bucket; a new live row joins it.
+  subagentRuns.set("first", entry("first", { childSessionKey: "agent:main:elsewhere" }));
+  subagentRuns.set("last", entry("last", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "last"]);
+  await register(entry("durable-next", { childSessionKey: child }));
+  expect([...reader().keys()]).toEqual(["explicit", "durable-next", "last"]);
+  await mutateSubagentRuns(["explicit"], () => postimages([["explicit", null]]));
+  expect([...reader().keys()]).toEqual(["durable-next", "last"]);
+});
+
 it("persists prepared-only registration without resurrecting it after a queued deletion", async () => {
   await register(entry("warm-registration"));
   const original = entry("prepared-deletion");
@@ -528,7 +558,11 @@ it("serializes opposite multi-row orders without a lock-order deadlock", async (
   ]);
 });
 
-it("settles a requester cohort and killed-child cleanup after shutdown closes admission", async () => {
+it("settles a plugin-origin requester cohort and killed-child cleanup during shutdown drain", async () => {
+  const host = new LegacyPluginSdkResourceHost();
+  const scheduler = new GatewayScheduler();
+  host.bindScheduler(scheduler);
+  const instance = createOwnedTestInstance("shutdown-settle");
   const children = Array.from({ length: 18 }, (_, index) =>
     entry(`child-${index}`, {
       completion: { required: true },
@@ -574,23 +608,29 @@ it("settles a requester cohort and killed-child cleanup after shutdown closes ad
       },
     }),
   );
-  const settlement = Promise.all(wakes).then(() =>
-    mutateRequesterCompletionBatch({
-      entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
-      context,
-      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
-      assertCurrent: () => {},
-    }),
+  const settlement = host.run(() =>
+    instance.run(() =>
+      Promise.all(wakes).then(() =>
+        mutateRequesterCompletionBatch({
+          entries: [...subagentRuns.values()].filter(({ runId }) => runId !== stopped.runId),
+          context,
+          operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+          assertCurrent: () => {},
+        }),
+      ),
+    ),
   );
   gatewayAdmission.markGatewayRestartDraining("stop (SIGTERM)");
+  scheduler.beginClose();
   const killed = manager.markSubagentRunTerminated({
     runId: stopped.runId,
     reason: "synthetic kill",
     suppressTaskDelivery: true,
   });
-  const results = await Promise.allSettled([...completions, settlement, killed]).finally(
-    gatewayAdmission.resetGatewayWorkAdmission,
-  );
+  const results = await Promise.allSettled([...completions, settlement, killed]);
+  gatewayAdmission.resetGatewayWorkAdmission();
+  await host.close();
+  await scheduler.stop();
   expect(results.filter((result) => result.status === "rejected")).toEqual([]);
   await expect(fs.stat(attachmentDir)).rejects.toMatchObject({ code: "ENOENT" });
   const saved = loadSubagentRegistryFromSqlite();

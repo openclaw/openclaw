@@ -33,7 +33,10 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
+import {
+  SESSION_TOTAL_TOKENS_VERSION,
+  type InternalSessionEntry as SessionEntry,
+} from "../../config/sessions.js";
 import {
   appendTranscriptEvent,
   loadSessionEntry,
@@ -65,9 +68,13 @@ import {
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
 } from "./agent-runner-memory.js";
 import {
+  createFlushSessionEntry,
+  createFreshSessionEntry,
   createMemoryFlushPlan,
   createModifiedMemoryFlushPlan,
   createMemoryRunEntryMockImplementation,
+  createSessionEntry,
+  registerClaudeCliBackend,
   modelRoutingProvenance,
   runSelectedMemoryModel,
   seedMemoryAccountingTranscript,
@@ -155,34 +162,8 @@ async function runSessionCompactionIfNeeded(params: PreflightCompactionTestParam
   return await runSessionCompactionIfNeededRaw({ ...runParams, cfg });
 }
 
-function createSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
-}
-
-function createFreshSessionEntry(overrides: Partial<SessionEntry>): SessionEntry {
-  return createSessionEntry({ totalTokensFresh: true, totalTokensVersion: 1, ...overrides });
-}
-
-function createFlushSessionEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return createFreshSessionEntry({ totalTokens: 80_000, compactionCount: 1, ...overrides });
-}
-
 function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolver): void {
   registerMemoryCapability("memory-core", { flushPlanResolver: resolver });
-}
-
-function registerClaudeCliBackend(ownsNativeCompaction = false): void {
-  cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-        ownsNativeCompaction,
-      },
-    ],
-  });
 }
 
 type TestReplyOperation = ReplyOperation & {
@@ -559,9 +540,7 @@ describe("runMemoryFlushIfNeeded", () => {
       );
       expect(hostAccounting).not.toHaveBeenCalled();
       if (customTail === 0) {
-        expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeGreaterThanOrEqual(
-          78_000,
-        );
+        expect(loadSessionEntry({ sessionKey, storePath })?.totalTokens).toBeUndefined();
       }
     },
   );
@@ -818,25 +797,23 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
   });
 
-  it("passes persisted session policy and runtime policy key to preflight compaction", async () => {
-    registerMemoryFlushPlanResolverForTest(() =>
-      createModifiedMemoryFlushPlan({ softThresholdTokens: 1, reserveTokensFloor: 0 }),
-    );
-    const sessionEntry: SessionEntry = createFreshSessionEntry({
-      totalTokens: 120,
+  it("passes persisted session policy, runtime policy key and turn skills to preflight compaction", async () => {
+    // The stored snapshot drops runtime catalogs; compaction must reuse this turn's hydrated one.
+    const persistedSkills = { prompt: "selected", skills: [{ name: "selected" }] };
+    const turnSkills = { ...persistedSkills, resolvedSkills: [] };
+    const { sessionEntry, run } = await createRequiredPreflight({
       permissionMode: "full",
       sessionRoot: "/tmp/workspace",
+      skillsSnapshot: persistedSkills,
     });
-
-    await runDefaultPreflight(sessionEntry, {
+    await run({
       followupRun: createTestFollowupRun({
         sessionId: "session",
         sessionKey: "agent:main:main",
         cwd: "/tmp/task-repo",
         runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
+        skillsSnapshot: turnSkills,
       }),
-      modelContextTokens: 100,
-      sessionKey: "agent:main:main",
       runtimePolicySessionKey: "agent:main:telegram:default:direct:12345",
     });
 
@@ -846,6 +823,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactCall.cwd).toBe("/tmp/task-repo");
     expect(compactCall.sandboxSessionKey).toBe("agent:main:telegram:default:direct:12345");
     expect(compactCall.sessionEntry).toBe(sessionEntry);
+    expect(compactCall.skillsSnapshot).toBe(turnSkills);
   });
 
   it("applies session compaction at reported pressure after a runtime fallback with memory flush disabled", async () => {
@@ -1135,7 +1113,7 @@ describe("runMemoryFlushIfNeeded", () => {
     },
   );
 
-  it("ignores unversioned fresh state and legacy CLI usage on the first upgraded turn", async () => {
+  it("ignores prompt-only version 1 state and legacy CLI usage on the first upgraded turn", async () => {
     const sessionKey = "agent:main:main";
     const storePath = path.join(rootDir, "sessions.json");
     const legacyCli = usageEvent(
@@ -1147,6 +1125,7 @@ describe("runMemoryFlushIfNeeded", () => {
     const sessionEntry = createSessionEntry({
       totalTokens: 1_124_767,
       totalTokensFresh: true,
+      totalTokensVersion: 1,
       compactionCount: 0,
     });
     const sessionStore = { [sessionKey]: sessionEntry };
@@ -1189,7 +1168,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBe(88_876);
   });
-  it("keeps nonzero unavailable output as growth after the previous exact snapshot", async () => {
+  it("does not combine a fresh owner snapshot with unrelated transcript output", async () => {
     await writeTranscript([
       usageEvent("large answer", {
         input: 128_814,
@@ -1203,9 +1182,7 @@ describe("runMemoryFlushIfNeeded", () => {
 
     await runDefaultPreflight(sessionEntry, { promptForEstimate: "continue" });
 
-    expect(requireCompactEmbeddedAgentSessionCall().currentTokenCount).toBeGreaterThanOrEqual(
-      82_000,
-    );
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("does not add unavailable output twice when full-message estimation already includes it", async () => {
@@ -1230,7 +1207,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("includes appended transcript growth before persisting fresh usage", async () => {
+  it("uses appended transcript growth without overwriting the request owner's usage", async () => {
     const storePath = path.join(rootDir, "sessions.json");
     await writeTranscript([
       usageEvent("small answer", { input: 40_000, output: 2_000 }),
@@ -1254,8 +1231,8 @@ describe("runMemoryFlushIfNeeded", () => {
 
     expect(flushResult.outcome).toBe("skipped");
     const persistedAfterFlush = loadMainSessionEntry(storePath);
-    expect(persistedAfterFlush.totalTokensFresh).toBe(true);
-    expect(persistedAfterFlush.totalTokens).toBeGreaterThan(80_000);
+    expect(persistedAfterFlush.totalTokensFresh).toBe(false);
+    expect(persistedAfterFlush.totalTokens).toBeUndefined();
 
     await runDefaultPreflight(persistedAfterFlush, { storePath });
 
@@ -1390,7 +1367,7 @@ describe("runMemoryFlushIfNeeded", () => {
       ...loadMainSessionEntry(fixture.storePath),
       totalTokens: 90_000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
     };
     await fixture.run(tokenHeavyEntry);
 
@@ -1457,7 +1434,7 @@ describe("runMemoryFlushIfNeeded", () => {
       updatedAt: 1,
       totalTokens: 95_000,
       totalTokensFresh: true,
-      totalTokensVersion: 1,
+      totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       compactionCount: 0,
       activeWriterRunId: "preflight",
     });

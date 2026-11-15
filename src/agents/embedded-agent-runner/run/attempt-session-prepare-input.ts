@@ -11,10 +11,24 @@ export type EmbeddedAttemptSessionPreparationInput = {
   effectiveCwd: string;
   effectiveWorkspace: string;
   onSessionManagerCreated: (sessionManager: ReturnType<typeof guardSessionManager>) => void;
-  replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;
   sessionTarget: SessionTranscriptRuntimeTarget;
   withOwnedTranscriptWrite: <T>(operation: () => Promise<T> | T) => Promise<T>;
 };
+
+export type SessionBoundaryAttempt = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "inputProvenance"
+  | "onUserMessagePersistenceInvalidated"
+  | "operation"
+  | "prompt"
+  | "promptCacheKey"
+  | "sessionId"
+  | "sessionKey"
+  | "skipPreparedUserTurnMessage"
+  | "suppressNextUserMessagePersistence"
+  | "userTurnTranscriptRecorder"
+>;

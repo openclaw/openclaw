@@ -56,8 +56,11 @@ suite.define(() => {
 
       const row = page.locator(".device-entry", { hasText: "office-workstation.example.test" });
       const openAlias = async (entry = row) => {
-        await entry.locator(".device-entry__menu-trigger").click();
-        await entry.locator('[role="menuitem"][data-value="editAlias"]').click();
+        // A row stays open through its own rename.
+        if (!(await entry.evaluate((element) => (element as HTMLDetailsElement).open))) {
+          await entry.locator(":scope > summary").click();
+        }
+        await entry.getByRole("button", { name: "Edit alias", exact: true }).click();
       };
       await row.waitFor();
 

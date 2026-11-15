@@ -71,6 +71,7 @@ type DiscordMessageActionContext = Pick<
   | "reply"
   | "progressSnapshot"
   | "assertDirectAdapterHandoff"
+  | "abortSignal"
 >;
 
 export async function handleDiscordMessageAction(
@@ -114,6 +115,7 @@ async function dispatchDiscordMessageAction(
     mediaReadFile: ctx.mediaReadFile,
     ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
+    ...(ctx.abortSignal ? { callerSignal: ctx.abortSignal } : {}),
     ...readPolicyOptions,
   } as const;
   const runAction = (payload: { action: string; [key: string]: unknown }) =>
@@ -333,6 +335,7 @@ async function dispatchDiscordMessageAction(
       action: action === "pin" ? "pinMessage" : action === "unpin" ? "unpinMessage" : "listPins",
       channelId: resolveChannelId(),
       messageId,
+      ...(action === "list-pins" ? { limit: readPositiveIntegerParam(params, "limit") } : {}),
     });
   }
 

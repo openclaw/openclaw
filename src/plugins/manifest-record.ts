@@ -357,6 +357,7 @@ export function buildPluginManifestRecord(params: {
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.packageName,
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
+    recommendedPrompts: params.manifest.recommendedPrompts,
     catalog: normalizeManifestCatalog({
       featured: params.manifest.catalog?.featured ?? officialCatalogManifest?.catalog?.featured,
       order: params.manifest.catalog?.order ?? officialCatalogManifest?.catalog?.order,
@@ -426,6 +427,7 @@ export function buildPluginManifestRecord(params: {
     }),
     mcpServers: params.manifest.mcpServers,
     skills: params.manifest.skills ?? [],
+    ...(params.manifest.agentSkillsDir ? { agentSkillsDir: params.manifest.agentSkillsDir } : {}),
     settingsFiles: [],
     hooks: [],
     origin: params.candidate.origin,
@@ -476,6 +478,7 @@ export function buildBundleManifestRecord(params: {
     id: string;
     name?: string;
     description?: string;
+    recommendedPrompts?: string[];
     version?: string;
     skills: string[];
     onboardingSkill?: string;
@@ -492,6 +495,7 @@ export function buildBundleManifestRecord(params: {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
+    recommendedPrompts: params.manifest.recommendedPrompts,
     ...resolvePortablePluginIcons({
       rootDir: params.candidate.rootDir,
       rejectHardlinks: params.rejectHardlinks,

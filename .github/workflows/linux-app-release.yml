@@ -81,11 +81,54 @@ jobs:
         uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: refs/tags/${{ steps.request.outputs.release_tag }}
-          fetch-depth: 0
-          persist-credentials: false
+        env:
+          RELEASE_TAG: ${{ steps.request.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          exec python3 -I -S "$CI_GIT_OWNER" --policy - <<'PYTHON'
+          import os
+          import sys
+
+          from ci_git_owner import FetchTimeout, GitFailure, backoff, git_output, run_git
+
+          workspace = os.environ["GITHUB_WORKSPACE"]
+          release_tag = os.environ["RELEASE_TAG"]
+          run_git(workspace, "init", workspace)
+          run_git(workspace, "config", "gc.auto", "0")
+          run_git(workspace, "remote", "add", "origin", "https://github.com/openclaw/openclaw.git")
+          for attempt in range(1, 4):
+              try:
+                  run_git(
+                      workspace,
+                      "fetch",
+                      "--force",
+                      "--no-tags",
+                      "origin",
+                      f"+refs/tags/{release_tag}:refs/tags/{release_tag}",
+                      timeout=120,
+                      reclaim_locks=True,
+                  )
+                  break
+              except (FetchTimeout, GitFailure):
+                  if attempt == 3:
+                      print("Failed to fetch selected release tag after 3 attempts.", file=sys.stderr)
+                      raise SystemExit(1)
+                  print(f"::warning::Selected release tag fetch attempt {attempt}/3 failed; retrying.")
+                  backoff(attempt * 5)
+
+          tag_sha = git_output(workspace, "rev-parse", f"refs/tags/{release_tag}^{{commit}}").rstrip("\n")
+          run_git(
+              workspace,
+              "checkout",
+              "--detach",
+              tag_sha,
+              timeout=120,
+              reclaim_locks=True,
+          )
+          if git_output(workspace, "rev-parse", "HEAD").rstrip("\n") != tag_sha:
+              print("Selected release tag checkout did not preserve its exact commit.", file=sys.stderr)
+              raise SystemExit(1)
+          PYTHON
 
       - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -97,6 +140,7 @@ jobs:
           sparse-checkout: |
             apps/linux/src-tauri/tauri.conf.json
             scripts/lib/record-shared.mjs
+            scripts/lib/plain-gh.mjs
             scripts/release-tooling-identity.mjs
             scripts/linux-updater-manifest.mjs
             scripts/lib/release-version.mjs
@@ -324,22 +368,25 @@ jobs:
             xdg-utils \
             xvfb
 
-      - name: Install Rust
+      - &install_release_rust
+        name: Install Rust
         run: rustup toolchain install stable --profile minimal
 
-      - name: Setup trusted Node runtime
+      - &setup_release_node
+        name: Setup trusted Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
 
-      - name: Checkout selected tag
+      - &checkout_selected_release_tag
+        name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.validate_release.outputs.tag_sha }}
           persist-credentials: false
 
       - name: Install selected-tag dependencies
-        run: |
+        run: &install_selected_release_dependencies |
           corepack enable
           pnpm install --frozen-lockfile --prefer-offline \
             --config.ignore-scripts=false --config.engine-strict=false \
@@ -540,7 +587,8 @@ jobs:
     outputs:
       signed_appimage_artifact_id: ${{ steps.upload_signed_appimage.outputs.artifact-id }}
     steps:
-      - name: Install trusted signing tools
+      - &install_release_signing_tools
+        name: Install trusted signing tools
         run: |
           set -euo pipefail
           minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
@@ -636,26 +684,14 @@ jobs:
       dmg_artifact_id: ${{ steps.upload_dmg.outputs.artifact-id }}
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+      - *install_release_rust
 
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.22.1
+      - *setup_release_node
 
-      - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_release.outputs.tag_sha }}
-          persist-credentials: false
+      - *checkout_selected_release_tag
 
       - name: Install selected-tag dependencies
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile --prefer-offline \
-            --config.ignore-scripts=false --config.engine-strict=false \
-            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: *install_selected_release_dependencies
 
       - name: Build macOS test bundles
         working-directory: apps/linux/src-tauri
@@ -709,6 +745,7 @@ jobs:
         id: upload_updater
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
+          compression-level: 0
           name: macos-app-release-unsigned-updater
           path: dist/macos-app/unsigned/*.app.tar.gz
           if-no-files-found: error
@@ -724,27 +761,15 @@ jobs:
     outputs:
       unsigned_updater_artifact_id: ${{ steps.upload_updater.outputs.artifact-id }}
     steps:
-      - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+      - *install_release_rust
 
-      - name: Setup trusted Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.22.1
+      - *setup_release_node
 
-      - name: Checkout selected tag
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.validate_release.outputs.tag_sha }}
-          persist-credentials: false
+      - *checkout_selected_release_tag
 
       - name: Install selected-tag dependencies
         shell: bash
-        run: |
-          corepack enable
-          pnpm install --frozen-lockfile --prefer-offline \
-            --config.ignore-scripts=false --config.engine-strict=false \
-            --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+        run: *install_selected_release_dependencies
 
       - name: Build Windows installer
         working-directory: apps/linux/src-tauri
@@ -880,30 +905,7 @@ jobs:
     outputs:
       signed_desktop_artifact_id: ${{ steps.upload_signed_desktop.outputs.artifact-id }}
     steps:
-      - name: Install trusted signing tools
-        run: |
-          set -euo pipefail
-          minisign_archive="${RUNNER_TEMP}/minisign-0.12-linux.tar.gz"
-          tauri_archive="${RUNNER_TEMP}/cargo-tauri-x86_64-unknown-linux-gnu.tgz"
-          mkdir -p "${RUNNER_TEMP}/bin"
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
-            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "$minisign_archive" "$MINISIGN_URL"
-          printf '%s  %s\n' "$MINISIGN_ARCHIVE_SHA256" "$minisign_archive" | sha256sum --check -
-          tar -xzf "$minisign_archive" -C "${RUNNER_TEMP}/bin" --strip-components=2 \
-            minisign-linux/x86_64/minisign
-          printf '%s  %s\n' "$MINISIGN_BINARY_SHA256" "${RUNNER_TEMP}/bin/minisign" |
-            sha256sum --check -
-          curl --fail --location --silent --show-error --proto '=https' --tlsv1.2 \
-            --connect-timeout 10 --max-time 120 --retry 3 --retry-all-errors \
-            --output "$tauri_archive" "$TAURI_CLI_URL"
-          printf '%s  %s\n' "$TAURI_CLI_ARCHIVE_SHA256" "$tauri_archive" | sha256sum --check -
-          tar -xzf "$tauri_archive" -C "${RUNNER_TEMP}/bin" cargo-tauri
-          printf '%s  %s\n' "$TAURI_CLI_BINARY_SHA256" "${RUNNER_TEMP}/bin/cargo-tauri" |
-            sha256sum --check -
-          chmod 0555 "${RUNNER_TEMP}/bin/cargo-tauri" "${RUNNER_TEMP}/bin/minisign"
-          "${RUNNER_TEMP}/bin/cargo-tauri" --version
-          "${RUNNER_TEMP}/bin/minisign" -v
+      - *install_release_signing_tools
 
       - name: Download finalized macOS updater archive
         if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
@@ -1025,6 +1027,7 @@ jobs:
             scripts/linux-app-channel.mjs
             scripts/release-tooling-identity.mjs
             scripts/lib/record-shared.mjs
+            scripts/lib/plain-gh.mjs
             scripts/lib/release-version.mjs
             apps/linux/src-tauri/tauri.conf.json
           sparse-checkout-cone-mode: false

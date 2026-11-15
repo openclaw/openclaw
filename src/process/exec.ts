@@ -258,12 +258,15 @@ export async function runExec(
 
 export type BufferedCommandOptions = {
   executionIntent?: ProcessExecutionIntent;
+  executionScopeKey?: string;
   timeoutMs?: number;
   noOutputTimeoutMs?: number;
   cwd?: string;
   input?: string | Uint8Array;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   maxOutputBytes?: number | { stdout?: number; stderr?: number };
   maxCombinedOutputBytes?: number;
@@ -340,7 +343,9 @@ export async function runCommandBuffered(
   try {
     const result = await runCommandWithTimeout(argv, {
       executionIntent: options.executionIntent,
+      executionScopeKey: options.executionScopeKey,
       baseEnv: options.baseEnv,
+      preparedEnv: options.preparedEnv,
       cwd: options.cwd,
       env: options.env,
       input: options.input,

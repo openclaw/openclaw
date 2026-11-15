@@ -13,7 +13,10 @@ import {
   type OpenClawTestState as State,
 } from "../../test-utils/openclaw-test-state.js";
 import { noteCommittedSharedAuthStoreOwnership } from "./path-resolve.js";
-import { hasAnyAuthProfileStoreSourceAsync as hasSource } from "./source-check.js";
+import {
+  hasAnyAuthProfileStoreSourceAsync as hasSource,
+  hasLocalAuthProfileStoreSourceAsync,
+} from "./source-check.js";
 import { writeAuthProfileJsonCell } from "./sqlite-json-write.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
 import * as readers from "./sqlite-read.js";
@@ -185,6 +188,7 @@ it("keeps the captured shared root after a local read yields", () =>
     noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
     const shared = openOpenClawStateDatabase();
     writeAuthProfileJsonCell(shared.db, "store", "shared-state", { version: 1, profiles: {} });
+    expect(await hasLocalAuthProfileStoreSourceAsync(state.agentDir("absent"))).toBe(false);
     const original = readers.prepareAgentAuthProfileRowsRead;
     vi.spyOn(readers, "prepareAgentAuthProfileRowsRead").mockImplementation((input) => {
       const reader = original(input);

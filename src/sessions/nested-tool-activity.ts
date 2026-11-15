@@ -4,6 +4,8 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
+const omittedResultText = "[Nested tool output omitted: exceeds display limit]";
+
 const correlationId = z.string().min(1).max(1024);
 const activityDetails = z
   .object({
@@ -48,6 +50,15 @@ export function readNestedToolActivity(value: unknown): NestedToolActivity | und
   return parsed.success ? parsed.data : undefined;
 }
 
+/**
+ * Reads the run's own activity even after a hidden turn (for example child coordination)
+ * cleared its display flag. Display readers keep using readNestedToolActivity.
+ */
+export function readOwnNestedToolActivity(value: unknown): NestedToolActivity | undefined {
+  const record = asOptionalRecord(value);
+  return readNestedToolActivity(record?.display === false ? { ...record, display: true } : value);
+}
+
 /** Keep each terminal activity bounded independently of provider context. */
 export function createNestedToolActivity(
   details: Omit<NestedToolActivity["details"], "result"> & { result: unknown },
@@ -58,7 +69,7 @@ export function createNestedToolActivity(
   const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
     ? details.result
     : {
-        content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }],
+        content: [{ type: "text", text: omittedResultText }],
       };
   return getActivitySchema().parse({
     role: "custom",
@@ -69,6 +80,18 @@ export function createNestedToolActivity(
     details: { ...details, input, result },
     timestamp: details.startedAt,
   });
+}
+
+/** Display omission retains no evidence that the invocation finished. */
+export function isNestedToolActivityResultOmitted({ details }: NestedToolActivity): boolean {
+  const { result } = details;
+  const content = asOptionalRecord(result.content[0]);
+  return (
+    result.details === undefined &&
+    result.content.length === 1 &&
+    content?.type === "text" &&
+    content.text === omittedResultText
+  );
 }
 
 /** Tool-card content for public history. */

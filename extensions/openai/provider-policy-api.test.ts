@@ -144,48 +144,38 @@ describe("OpenAI provider policy artifact", () => {
     expect(profile?.defaultLevel).toBe(expected);
   });
 
-  it.each(["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"])(
-    "exposes logical Ultra for %s on the OpenClaw runtime",
-    (modelId) => {
-      const levels = resolveThinkingProfile({
-        provider: "openai",
-        modelId,
-        agentRuntime: "openclaw",
-      })?.levels.map((level) => level.id);
-
-      expect(levels).toContain("ultra");
+  describe.each([
+    {
+      name: "logical Ultra on the OpenClaw runtime",
+      models: ["gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-6-astra"],
+      context: { agentRuntime: "openclaw" },
     },
-  );
-
-  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])(
-    "uses native Ultra fallback for %s when model/list metadata is unavailable",
-    (modelId) => {
-      const levels = resolveThinkingProfile({
-        provider: "openai",
-        modelId,
-        agentRuntime: "codex",
-      })?.levels.map((level) => level.id);
-
-      expect(levels).toContain("ultra");
+    {
+      name: "native Ultra fallback when model/list metadata is unavailable",
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"],
+      context: { agentRuntime: "codex" },
     },
-  );
-
-  it.each(["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"])(
-    "keeps native Ultra fallback for %s with direct OpenAI API metadata",
-    (modelId) => {
-      const levels = resolveThinkingProfile({
-        provider: "openai",
-        modelId,
+    {
+      name: "native Ultra fallback with direct OpenAI API metadata",
+      models: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-6-astra"],
+      context: {
         agentRuntime: "codex",
-        api: "openai-responses",
+        api: "openai-responses" as const,
         compat: {
           supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
         },
-      })?.levels.map((level) => level.id);
-
-      expect(levels).toContain("ultra");
+      },
     },
-  );
+  ])("$name", ({ models, context }) => {
+    it.each(models)("exposes Ultra for %s", (modelId) => {
+      const levels = resolveThinkingProfile({
+        provider: "openai",
+        modelId,
+        ...context,
+      })?.levels.map((level) => level.id);
+      expect(levels).toContain("ultra");
+    });
+  });
 
   it("does not invent native Ultra support for bare or suffixed GPT-5.6 refs", () => {
     for (const modelId of ["gpt-5.6", "gpt-5.6-sol-oai"]) {

@@ -21,8 +21,8 @@ import {
 import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import type { NormalizedUsage } from "../../agents/usage.js";
 import { setRuntimeConfigSnapshot, type OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../../infra/system-events.js";
@@ -50,7 +50,10 @@ import {
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
   runtimeErrorMock,
+  sessionFixture,
+  sessionState,
   setupAgentRunnerTestHooks,
+  storedSession,
   tempDirs,
 } from "./agent-runner.misc.runreplyagent.test-support.js";
 import { type BaseRunOptions, createBaseRun } from "./agent-runner.runreplyagent.test-support.js";
@@ -66,32 +69,6 @@ function registerMemoryFlushPlanResolverForTest(resolver: MemoryFlushPlanResolve
 type RunWithModelFallbackParams = TestModelFallbackRunnerParams;
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
-
-function sessionFixture(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return { sessionId: "session", updatedAt: Date.now(), ...overrides };
-}
-
-function sessionState(sessionKey: string, sessionEntry: SessionEntry) {
-  return { sessionKey, sessionEntry, sessionStore: { [sessionKey]: sessionEntry } };
-}
-
-async function storedSession(
-  overrides: Partial<SessionEntry> = {},
-  sessionKey = "main",
-  tmp = tempDirs.make("openclaw-reply-"),
-) {
-  const storePath = path.join(tmp, "sessions.json");
-  const sessionEntry = sessionFixture(overrides);
-  await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
-  return {
-    tmp,
-    storePath,
-    sessionKey,
-    sessionEntry,
-    scope: { agentId: "main", sessionId: sessionEntry.sessionId, sessionKey, storePath },
-    reply: { ...sessionState(sessionKey, sessionEntry), storePath },
-  };
-}
 
 function agentRun(options: BaseRunOptions = {}) {
   return createBaseRun({
@@ -211,7 +188,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       {
         totalTokens: 200_000,
         totalTokensFresh: true,
-        totalTokensVersion: 1 as const,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
       },
       "agent:main:main",
     );
@@ -239,7 +216,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       const sessionEntry = sessionFixture({
         totalTokens: 10_920,
         totalTokensFresh: true,
-        totalTokensVersion: 1,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
         compactionCount: 0,
       });
       const reply = { ...sessionState(sessionKey, sessionEntry), storePath };
@@ -1009,7 +986,12 @@ it.each([false, true])("enforces fallback <final> tags (memory flush=%s)", async
   if (memoryFlush) {
     const root = await fs.realpath(tempDirs.make("openclaw-memory-flush-tags-"));
     const { sessionKey, reply } = await storedSession(
-      { totalTokens: 1_000_000, totalTokensFresh: true, totalTokensVersion: 1, compactionCount: 0 },
+      {
+        totalTokens: 1_000_000,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+        compactionCount: 0,
+      },
       "agent:main:memory-flush-tags",
       root,
     );

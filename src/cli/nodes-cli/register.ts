@@ -250,21 +250,28 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
           );
 
           const payload = asRecord(asRecord(raw).payload);
-          const devices = Array.isArray(payload.devices) ? payload.devices.filter(isRecord) : [];
+          // Released Windows nodes use cameras/DeviceId/Name instead of devices/id/name.
+          const devices = Array.isArray(payload.devices)
+            ? payload.devices.filter(isRecord)
+            : Array.isArray(payload.cameras)
+              ? payload.cameras
+                  .filter(isRecord)
+                  .map(({ DeviceId: id, Name: name, ...device }) =>
+                    Object.assign({ id, name }, device),
+                  )
+              : [];
 
           if (opts.json) {
             defaultRuntime.writeJson(devices);
             return;
           }
 
+          const { heading, muted } = getNodesTheme();
           if (devices.length === 0) {
-            const { muted } = getNodesTheme();
             defaultRuntime.log(muted("No cameras reported."));
             return;
           }
 
-          const { heading, muted } = getNodesTheme();
-          const tableWidth = getTerminalTableWidth();
           // Device fields come from the node; keep its control bytes off the operator's terminal.
           const text = (value: unknown, fallback: string) =>
             typeof value === "string" ? terminalText`${value}` : fallback;
@@ -276,7 +283,7 @@ export async function registerNodesCli(program: Command, argv: readonly string[]
           defaultRuntime.log(heading("Cameras"));
           defaultRuntime.log(
             renderTable({
-              width: tableWidth,
+              width: getTerminalTableWidth(),
               columns: [
                 { key: "Name", header: "Name", minWidth: 14, flex: true },
                 { key: "Position", header: "Position", minWidth: 10 },

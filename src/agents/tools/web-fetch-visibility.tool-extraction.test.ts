@@ -59,7 +59,7 @@ const RESPONSES = [
   markdown(
     "/markdown-code-text",
     MARKDOWN_CODE,
-    'Example\n\nRead the guide, \\!important, \\\\, and .\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
+    'Example\n\nRead the guide, !important, \\, and .\n\n# comment\n- literal\n1. literal\n[label](https://example.com)\n![alt](image.png)\n`value`\n    if enabled:\n        print("two  spaces")\n\n\n\treturn True',
   ),
   markdown("/markdown-unclosed", `\`\`\`text\n${UNCLOSED_CODE}`, UNCLOSED_CODE),
   markdown("/markdown-inline-fence-prose", INLINE_FENCE),

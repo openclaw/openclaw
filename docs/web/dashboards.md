@@ -25,6 +25,8 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
+Search ignores case and matches canonically equivalent composed and decomposed
+Unicode text without rewriting titles, author labels, previews, or session keys.
 Stored sessions without a matching task URL remain visible as previews without an open link.
 Select a linked card to open its owning task using your personal presentation override
 or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
@@ -368,8 +370,8 @@ they appear instantly, exactly like inline chat widgets, and their network acces
 is fully disabled.
 
 Widgets that want **reach** must declare it. An explicit [session permission mode](/gateway/permission-modes)
-decides what happens: **Full access** grants immediately; **Workspace** uses an
-AI reviewer and rejects anything it does not allow; **Guarded** shows an
+decides what happens: **Full access** grants immediately; **Auto-review** uses an
+AI reviewer and rejects anything it does not allow; **Ask me** shows an
 **Allow** / **Reject** card; **Read only** rejects the request. Without an
 explicit session mode, the equivalent configured exec approval policy applies.
 

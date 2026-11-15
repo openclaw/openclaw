@@ -4,6 +4,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { expectCollected } from "../test-utils/retention.js";
 import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
@@ -31,10 +32,11 @@ class MockChild extends EventEmitter {
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
 const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawn: mock.spawn,
-}));
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const mocked = { ...actual, spawn: mock.spawn };
+  return { ...mocked, default: mocked };
+});
 
 type Session = ReturnType<typeof createSqliteReadOnlyWorkerSession>;
 const sessions: Array<{ session: Session; child: MockChild }> = [];
@@ -290,6 +292,36 @@ it("captures only read scope and refuses callbacks after owner retirement", asyn
     expect(late).not.toHaveBeenCalled();
   } finally {
     await Promise.all([owner.close(), other.close()]);
+  }
+});
+
+it("releases callers of close while retired read scopes remain reachable", async () => {
+  class RetiredCaller {
+    closed = false;
+  }
+  const callers: WeakRef<RetiredCaller>[] = [];
+  async function retire() {
+    const owner = createSqliteReadOnlyWorkerScope();
+    const caller = new RetiredCaller();
+    callers.push(new WeakRef(caller));
+    const beforeCleanup = () => {
+      caller.closed = true;
+      return owner.close();
+    };
+    await beforeCleanup();
+    return owner;
+  }
+  const retired = [];
+  for (let generation = 0; generation < 20; generation++) {
+    retired.push(await retire());
+  }
+  await expectCollected(...callers);
+  for (const owner of retired) {
+    const signal = owner.run(() => resolveSqliteInspectionSignal());
+    expect(signal?.aborted).toBe(true);
+    expect(signal?.reason).toMatchObject({ code: "SQLITE_READONLY_WORKER_SCOPE_CLOSED" });
+    const captured = owner.run(captureSqliteReadOnlyWorkerScope);
+    expect(() => captured(() => "late")).toThrow("SQLite read-only worker scope closed");
   }
 });
 

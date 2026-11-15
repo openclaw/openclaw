@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { root as openFsSafeRoot } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
+import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import {
   createStagedInputPathMatcher,
   stagedInputDirectoriesFromEntries,
@@ -11,9 +12,17 @@ import {
   stagedInputPathDirectory,
 } from "../../media/staged-inputs.js";
 import { runCommandBuffered, runCommandWithTimeout, runExec } from "../../process/exec.js";
+import { WorkspaceResultLimitError } from "./workspace-inventory-limits.js";
 import { sameEntry } from "./workspace-manifest-comparison.js";
-import type { WorkspaceManifestValueInputs } from "./workspace-manifest-computation.js";
-import { prepareWorkspaceTreeInput, readWorkspaceNodes } from "./workspace-manifest-worker.js";
+import type {
+  WorkspaceManifestValueInputs,
+  WorkspaceManifestValueOutputs,
+} from "./workspace-manifest-computation.js";
+import {
+  computeWorkspaceManifest,
+  prepareWorkspaceTreeInput,
+  readWorkspaceNodes,
+} from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_PACK_BYTES,
@@ -80,31 +89,28 @@ async function writeRawWorkspaceTree(params: {
   source: WorkspaceManifestValueInputs["workspace.manifest.tree-input"]["source"];
 }): Promise<string> {
   // A working-tree/index snapshot would apply user encodings and clean filters.
+  const root = params.repositoryRoot;
   const ref = `refs/heads/openclaw-snapshot-${randomBytes(16).toString("hex")}`;
-  const inputPath = path.join(params.repositoryRoot, ".git", "snapshot-input");
+  const inputPath = path.join(root, ".git", "snapshot-input");
   try {
     await prepareWorkspaceTreeInput({ ...params, inputPath, ref });
-    const input = await fs.open(inputPath, "r");
-    try {
-      await runExec("git", ["-C", params.repositoryRoot, "fast-import", "--quiet"], {
-        stdinFileDescriptor: input.fd,
-        timeoutMs: PATCH_TIMEOUT_MS,
-        maxBuffer: 1024 * 1024,
-      });
-    } finally {
-      await input.close();
-    }
-    return await requireGit(params.repositoryRoot, ["rev-parse", `${ref}^{tree}`]);
+    await using input = await fs.open(inputPath, "r");
+    const { stdout } = await runExec("git", ["-C", root, "fast-import", "--quiet"], {
+      stdinFileDescriptor: input.fd,
+      timeoutMs: PATCH_TIMEOUT_MS,
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout.split(" ")[2]!.split("\t")[0]!;
   } finally {
     await fs.rm(inputPath, { force: true });
   }
 }
 
-async function readWorkspacePatch(
+export async function readWorkspacePatch(
   root: string,
   baseTree: string,
   currentTree: string,
-): Promise<Uint8Array> {
+): Promise<Uint8Array<ArrayBuffer>> {
   const patchPath = path.join(root, ".git", "workspace.patch");
   const output = await fs.open(patchPath, "wx", 0o600);
   let bytes = 0;
@@ -153,7 +159,7 @@ async function readWorkspacePatch(
       },
     );
     if (limitExceeded) {
-      throw new Error("Cloud workspace patch exceeds its byte limit");
+      throw new WorkspaceResultLimitError("Cloud workspace patch exceeds its byte limit");
     }
     if (diff.termination !== "exit" || diff.code !== 0) {
       throw new Error(diff.stderr.trim() || "git diff failed");
@@ -161,7 +167,7 @@ async function readWorkspacePatch(
   } finally {
     await output.close();
   }
-  return await fs.readFile(patchPath);
+  return ownedWorkerBytes(await fs.readFile(patchPath));
 }
 
 export async function createWorkspacePatch(params: {
@@ -169,7 +175,7 @@ export async function createWorkspacePatch(params: {
   stagingRoot: string;
   baseEntries: WorkerWorkspaceManifestEntry[];
   appliedEntries: WorkerWorkspaceManifestEntry[];
-}): Promise<{ patch: Uint8Array; baseTree: string; basePack: Uint8Array }> {
+}): Promise<WorkspaceManifestValueOutputs["workspace.reconcile.patch"]> {
   const temporary = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-workspace-patch-"),
   );
@@ -181,12 +187,14 @@ export async function createWorkspacePatch(params: {
     for (const entry of params.baseEntries) {
       if (entry.type === "file") {
         if (entry.size > MAX_RECONCILIATION_FILE_BYTES) {
-          throw new Error(`Cloud workspace rollback file is too large: ${entry.path}`);
+          throw new WorkspaceResultLimitError(
+            `Cloud workspace rollback file is too large: ${entry.path}`,
+          );
         }
       }
       bytes += entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
       if (bytes > MAX_RECONCILIATION_TOTAL_BYTES) {
-        throw new Error("Cloud workspace rollback exceeds its byte limit");
+        throw new WorkspaceResultLimitError("Cloud workspace rollback exceeds its byte limit");
       }
     }
     const baseTree = await writeRawWorkspaceTree({
@@ -205,11 +213,22 @@ export async function createWorkspacePatch(params: {
         },
       },
     );
+    if (packed.stdout.byteLength > MAX_RECONCILIATION_PACK_BYTES) {
+      throw new WorkspaceResultLimitError(
+        "Cloud workspace recovery snapshot exceeds its byte limit",
+      );
+    }
     if (packed.termination !== "exit" || packed.code !== 0) {
       throw new Error(packed.stderr.toString("utf8").trim() || "git pack-objects failed");
     }
-    if (packed.stdout.byteLength > MAX_RECONCILIATION_PACK_BYTES) {
-      throw new Error("Cloud workspace recovery snapshot exceeds its byte limit");
+    const snapshot = {
+      baseTree,
+      basePack: ownedWorkerBytes(packed.stdout),
+      basePackSha256: createHash("sha256").update(packed.stdout).digest("hex"),
+    };
+    // Directory-only and fully conflicted reconciliations share the empty tree.
+    if (params.baseEntries.length === 0 && params.appliedEntries.length === 0) {
+      return { ...snapshot, patch: new Uint8Array() };
     }
     const appliedTree = await writeRawWorkspaceTree({
       repositoryRoot: temporary,
@@ -217,7 +236,7 @@ export async function createWorkspacePatch(params: {
       source: { root: params.stagingRoot },
     });
     const patch = await readWorkspacePatch(temporary, baseTree, appliedTree);
-    return { patch, baseTree, basePack: packed.stdout };
+    return { ...snapshot, patch };
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }
@@ -336,7 +355,10 @@ async function createWorkspaceRecoveryPatch(params: WorkspaceRecoveryContext): P
           source: { root: temporary, tree: params.journal.baseTree },
         })
       : params.journal.baseTree;
-    return await readWorkspacePatch(temporary, actualTree, recoveryBaseTree);
+    return await computeWorkspaceManifest({
+      type: "workspace.reconcile.diff",
+      input: { root: temporary, baseTree: actualTree, currentTree: recoveryBaseTree },
+    });
   } finally {
     await fs.rm(temporary, { recursive: true, force: true });
   }

@@ -19,7 +19,8 @@ export type RuntimeConfigWriteApplicationStatus =
   | "superseded"
   | "failed"
   | "stopped"
-  | "unclaimed";
+  | "unclaimed"
+  | { status: "deferred"; reason: string; appliesWhen: string };
 
 export type RuntimeConfigWriteApplicationClaim = {
   settle: (status: RuntimeConfigWriteApplicationStatus) => void;

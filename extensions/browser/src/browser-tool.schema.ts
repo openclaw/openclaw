@@ -130,7 +130,7 @@ export const BROWSER_ACT_REQUEST_KEYS = [
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
 // which OpenAI rejects ("Invalid schema ... type: None"). Keep this schema an object.
-export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
+function buildBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
   const actKindDescription = capabilities.actKinds.includes("batch")
     ? "batch uses actions."
@@ -221,6 +221,24 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
     ...actProperties,
     request: Type.Optional(BrowserActSchema),
   });
+}
+
+// Definitions vary only by ordered capability metadata; no caller or profile handles are retained.
+const browserToolSchemas = new Map<string, ReturnType<typeof buildBrowserToolSchema>>();
+
+export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
+  const key = JSON.stringify([
+    capabilities.actions,
+    capabilities.actKinds,
+    capabilities.tabBound,
+    capabilities.supportsNativeSnapshots !== false,
+  ]);
+  let schema = browserToolSchemas.get(key);
+  if (!schema) {
+    schema = buildBrowserToolSchema(capabilities);
+    browserToolSchemas.set(key, schema);
+  }
+  return schema;
 }
 
 const BrowserSnapshotStatsSchema = Type.Object(

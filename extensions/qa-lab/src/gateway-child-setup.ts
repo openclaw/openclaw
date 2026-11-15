@@ -96,6 +96,8 @@ export type QaGatewayChildParams = {
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
+  /** Use password authentication for fixture RPCs when default token auth is overridden. */
+  rpcPassword?: string;
   runtimePreloads?: readonly string[];
 };
 

@@ -89,6 +89,7 @@ function renderFrame(
         frame: input.kind === "group" ? { ...completedFrame, parts: [input] } : input,
         options: {
           streamOptions: {},
+          partDependencies: (part) => [part],
           renderGroupOptions: () => ({ showReasoning: true, ...options }),
           isWorkExpanded: () => true,
           onToggleWork: () => {},

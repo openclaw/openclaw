@@ -208,6 +208,7 @@ struct ChatFileAdmissionTests {
             text: model.input,
             draftInput: model.input,
             draftRevision: model.composerRevision(for: model.sessionKey),
+            draftComposerKey: model.composerSessionKey(for: model.sessionKey),
             draftAttachments: model.attachments,
             session: model.currentSessionSnapshot())
         let commands = await store.loadCommands()

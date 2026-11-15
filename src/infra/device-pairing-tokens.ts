@@ -54,11 +54,12 @@ export async function ensureDeviceToken(params: {
   role: string;
   scopes: string[];
   issuer?: DeviceAuthToken["issuer"];
+  approval?: DeviceAuthToken["approval"];
   isIssuanceCurrent?: () => boolean;
 }): Promise<DeviceAuthToken | null> {
   const { isIssuanceCurrent, ...input } = params;
   return readCurrentPairedDevice(input.deviceId, (device) => {
-    if (isIssuanceCurrent?.() === false) {
+    if (isIssuanceCurrent?.() === false || !device) {
       return null;
     }
     const reusable = reusablePairedDeviceToken(device, input);

@@ -1,6 +1,7 @@
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import type { PageCacheProgress } from "../infra/sqlite-page-cache.worker.js";
 import {
   runSqliteReadOnlyOperation,
@@ -22,7 +23,7 @@ export async function warmGatewayDatabasePageCache(params: {
   startupTrace?: GatewayStartupTrace;
   log: { info: (message: string) => void; warn: (message: string) => void };
 }): Promise<void> {
-  if (process.platform !== "linux") {
+  if (process.platform !== "linux" || isConstrainedProcessLowOnMemory()) {
     return;
   }
   const statePath = resolveOpenClawStateSqlitePath();
@@ -51,8 +52,8 @@ export async function warmGatewayDatabasePageCache(params: {
         }))),
   ];
   let remaining = MAX_PASS_BYTES;
-  for (const target of targets) {
-    if (params.signal.aborted || remaining <= 0) {
+  for (const [index, target] of targets.entries()) {
+    if (params.signal.aborted || remaining <= 0 || isConstrainedProcessLowOnMemory()) {
       return;
     }
     // Best-effort maintenance never retains a worker beyond its bounded warm window.
@@ -74,7 +75,12 @@ export async function warmGatewayDatabasePageCache(params: {
             target.path,
             {
               type: "pageCache.begin",
-              input: { kind: target.kind, maxBytes: remaining, now: Date.now() },
+              // Reserve a share for later databases; unused bytes stay available to them.
+              input: {
+                kind: target.kind,
+                maxBytes: Math.floor(remaining / (targets.length - index)),
+                now: Date.now(),
+              },
             },
             options,
           );
@@ -100,6 +106,10 @@ export async function warmGatewayDatabasePageCache(params: {
           let previousBytes = 0;
           let chunkStarted = performance.now();
           while (!progress.complete) {
+            // Page warming is optional; release its worker when requests need the memory.
+            if (isConstrainedProcessLowOnMemory()) {
+              return;
+            }
             // Idle/startup time must not accumulate credit for an unpaced burst of disk reads.
             await delay(
               Math.max(
@@ -112,6 +122,9 @@ export async function warmGatewayDatabasePageCache(params: {
               undefined,
               { signal },
             );
+            if (isConstrainedProcessLowOnMemory()) {
+              return;
+            }
             target.assertCurrent();
             previousBytes = Math.max(progress.readBytes, progress.diskBytes);
             chunkStarted = performance.now();

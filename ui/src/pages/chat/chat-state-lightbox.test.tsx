@@ -1,10 +1,10 @@
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { ImageLightboxItemView } from "../../components/image-lightbox.tsx";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createPageState } from "./chat-state-page.ts";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
 import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 
 describe("image lightbox lifecycle", () => {
@@ -51,7 +51,7 @@ describe("image lightbox lifecycle", () => {
       release,
     };
     const mounted = mountSolid(() => (
-      <ChatImageLightbox item={state.imageLightbox} onClose={state.handleCloseImage} />
+      <ImageLightboxItemView item={state.imageLightbox} onClose={state.handleCloseImage} />
     ));
     onTestFinished(mounted.unmount);
     expect(mounted.container.querySelector("openclaw-image-lightbox")).not.toBeNull();

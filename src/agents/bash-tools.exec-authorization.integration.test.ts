@@ -72,6 +72,7 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
     resetProcessRegistryForTests();
     closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
   });
   function tool(
     autoReviewer: ExecAutoReviewer,
@@ -120,6 +121,74 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       return { ok: true };
     });
   }
+
+  it("does not dispatch a dynamic predicate without approval", async () => {
+    saveExecApprovals({
+      version: 1,
+      defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+      agents: {},
+    });
+    const review = reviewer();
+    await expect(
+      tool(review, "allowlist").execute("dynamic-predicate", {
+        command: String.raw`test $'\0\''?v benign`,
+      }),
+    ).rejects.toThrow("exec denied: allowlist miss");
+
+    expect(review).not.toHaveBeenCalled();
+    expect(boundary.spawn).not.toHaveBeenCalled();
+  });
+
+  it.each(["/bin/bash", "/usr/bin/false"])(
+    "executes a safe-bin pipeline without synchronous probes (SHELL=%s)",
+    async (shell) => {
+      vi.stubEnv("SHELL", shell);
+      const syncCalls: string[] = [];
+      const ownerCall = (method: string) => {
+        if (
+          /\/(?:exec-safe-bin-trust|exec-command-resolution|executable-path|system-run-(?:cwd-binding|file-snapshot|mutable-file-(?:operand|policy)|approval-binding))\.(?:ts|js):/.test(
+            new Error().stack ?? "",
+          )
+        ) {
+          syncCalls.push(method);
+        }
+      };
+      const statSync = fs.statSync;
+      const accessSync = fs.accessSync;
+      const realpathSync = fs.realpathSync;
+      vi.spyOn(fs, "statSync").mockImplementation((file, options) => {
+        ownerCall("stat");
+        return statSync(file, options);
+      });
+      vi.spyOn(fs, "accessSync").mockImplementation((file, mode) => {
+        ownerCall("access");
+        return accessSync(file, mode);
+      });
+      vi.spyOn(fs, "realpathSync").mockImplementation((file, options) => {
+        ownerCall("realpath");
+        return realpathSync(file, options);
+      });
+      const exec = createExecTool({
+        agentId: "main",
+        host: "gateway",
+        mode: "allowlist",
+        safeBins: ["wc"],
+        cwd: root,
+        notifyOnExit: false,
+      });
+      const result = await exec.execute("safe-bin-pipeline", {
+        command: "pwd | wc -l",
+      });
+      expect(result.details).toMatchObject({
+        status: "completed",
+        exitCode: 0,
+        aggregated: expect.stringMatching(/^\s*1\s*$/),
+      });
+      expect(boundary.spawn).toHaveBeenCalledTimes(1);
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(syncCalls).toEqual([]);
+    },
+  );
 
   it("gates encoded arithmetic before spawning while literal builtins still run", async () => {
     saveExecApprovals({
@@ -304,6 +373,39 @@ describe.skipIf(process.platform === "win32")("gateway execution authorization b
       }
       expect(result.details.exitCode).toBe(0);
       expect(result.details.aggregated).toBe("venv-package-loaded approved.txt");
+    },
+  );
+
+  it.each([
+    ["missing name", "missing-exec-fixture", true],
+    ["missing absolute path", "{root}/missing-exec-fixture", true],
+    ["resolution error", "{root}/loop", true],
+    ["resolved without a grant", "/bin/ls", false],
+    ["satisfied builtin before a missing command", "cd . && missing-exec-fixture", true],
+    ["satisfied builtin before an ungranted command", "cd . && /bin/ls", false],
+    ["prompt-only wrapper", "env -S missing-exec-fixture", false],
+  ] as const)(
+    "explains Gateway executable lookup denials: %s",
+    async (_name, command, unresolved) => {
+      fs.symlinkSync("loop", path.join(root, "loop"));
+      saveExecApprovals({
+        version: 1,
+        defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
+        agents: {},
+      });
+      const review = reviewer();
+      await expect(
+        tool(review, "allowlist").execute("lookup-denial", {
+          command: command.replace("{root}", root),
+        }),
+      ).rejects.toThrow(
+        unresolved
+          ? "exec denied: executable could not be resolved; check command spelling and Gateway PATH or use an absolute executable path"
+          : "exec denied: allowlist miss",
+      );
+      expect(boundary.spawn).not.toHaveBeenCalled();
+      expect(review).not.toHaveBeenCalled();
+      expect(callGatewayTool).not.toHaveBeenCalled();
     },
   );
 

@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-chat-history-fixtures.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -8,7 +9,6 @@ import {
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
@@ -49,9 +49,11 @@ suite.define(() => {
     const chat = page.locator("openclaw-select-picker:has(#settings-font-chat)");
     const preview = page.locator(".settings-typography-preview");
     await preview.waitFor();
-    expect(await ui.locator("..").locator("..").textContent()).toContain(
-      "Stored in this browser only",
-    );
+    expect(
+      await page
+        .locator("#settings-appearance-typography > .settings-section__scope")
+        .textContent(),
+    ).toContain("Stored in this browser only");
     await page.evaluate(() => document.fonts.ready);
     const families = () =>
       preview.evaluate((panel) => {
@@ -95,6 +97,23 @@ suite.define(() => {
     await selectPickerValue(ui, "theme");
     await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
+  });
+
+  // macOS stem darkening keeps light sans chat faces from rendering thin; app
+  // chrome keeps the body's antialiased smoothing.
+  it.each(["claw", "absolutely"])("keeps auto smoothing on %s chat prose only", async (theme) => {
+    const { page } = await openThemedChat(theme, "dark", {
+      historyMessages: [historyMessage("assistant", "Readable chat prose", Date.now())],
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const prose = page.locator(".chat-thread .chat-text").first();
+    await expect.poll(() => prose.textContent()).toContain("Readable chat prose");
+    const smoothing = (locator: Locator) =>
+      locator.evaluate((element) =>
+        getComputedStyle(element).getPropertyValue("-webkit-font-smoothing"),
+      );
+    expect(await smoothing(prose)).toBe("auto");
+    expect(await smoothing(page.locator("body"))).toBe("antialiased");
   });
 
   // #137473: compare incremental input pixels with a whole-value assignment.
@@ -225,6 +244,7 @@ suite.define(() => {
                 .renderBlockingStatus,
             })),
         }));
+        expect(report.buildId).toMatch(/-[a-f0-9]{64}$/u);
         const colors = await page.evaluate(resolveRenderedColors, {
           actual: report.background,
           expected: mode === "dark" ? dark : light,
@@ -233,7 +253,11 @@ suite.define(() => {
         expect(report).toMatchObject({
           resolvedTheme: mode === "dark" ? resolved : `${resolved}-light`,
           palette: [
-            { pathname: `/themes/${theme}.css`, version: report.buildId, blocking: "blocking" },
+            {
+              pathname: `/themes/${theme}.css`,
+              version: report.buildId?.slice(-64),
+              blocking: "blocking",
+            },
           ],
         });
       }
@@ -248,9 +272,10 @@ suite.define(() => {
 
     const readChrome = async () => {
       const chrome = await page.evaluate(() => ({
-        color: document.documentElement.style.getPropertyValue(
-          "--control-ui-system-chrome-background",
-        ),
+        color: document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content,
+        // Safari shows the document canvas in the safe areas around its bars.
+        html: getComputedStyle(document.documentElement).backgroundColor,
+        body: getComputedStyle(document.body).backgroundColor,
         metas: Array.from(
           document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]'),
           (meta) => ({ color: meta.content, media: meta.getAttribute("media") }),
@@ -260,11 +285,15 @@ suite.define(() => {
         resolveRenderedColors,
         Object.fromEntries([
           ["chrome", chrome.color],
+          ["html", chrome.html],
+          ["body", chrome.body],
           ...chrome.metas.map((meta, index) => [`meta-${index}`, meta.color]),
         ]),
       );
       return {
         color: colors.chrome,
+        html: colors.html,
+        body: colors.body,
         metas: chrome.metas.map((meta, index) => ({
           color: colors[`meta-${index}`],
           media: meta.media,
@@ -274,6 +303,8 @@ suite.define(() => {
     const expectChrome = async (color: RenderedColor) => {
       await expect.poll(readChrome).toEqual({
         color,
+        html: color,
+        body: color,
         metas: [
           { color, media: null },
           { color, media: null },
@@ -282,11 +313,12 @@ suite.define(() => {
     };
     const palette = await page.evaluate(resolveRenderedColors, {
       page: "#f4f4f4",
-      chat: "#f8f8f8",
+      canvas: "#f8f8f8",
     });
     const pageColor = palette.page!;
-    const chatColor = palette.chat!;
-    await expectChrome(chatColor);
+    const canvasColor = palette.canvas!;
+    // The session workbench paints the page surface over the shell canvas.
+    await expectChrome(pageColor);
 
     // Use the shell's actual shortcut and browser history without rebuilding the runtime.
     await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
@@ -295,17 +327,27 @@ suite.define(() => {
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(pageColor);
+    // The drawer's 44% black backdrop dims the page; the system chrome dims with it.
+    const dimmed = { ...pageColor };
+    for (const channel of ["red", "green", "blue"] as const) {
+      dimmed[channel] = Math.round(pageColor[channel] * 0.56);
+    }
     await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
+    await page.locator(".shell-nav-backdrop").click({ position: { x: 700, y: 450 } });
+    await expectChrome(pageColor);
+    await navigationDrawerToggle(page).click();
+    await expectChrome(dimmed);
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
 
     for (const [width, height, color] of [
       [1280, 900, pageColor],
-      [900, 450, chatColor],
+      [900, 450, canvasColor],
       [900, 900, pageColor],
-      [720, 900, chatColor],
+      [720, 900, canvasColor],
     ] as const) {
       await page.setViewportSize({ width, height });
       await expectChrome(color);
@@ -317,7 +359,7 @@ suite.define(() => {
       const parent = shell.parentNode!;
       const next = shell.nextSibling;
       const color = () =>
-        document.documentElement.style.getPropertyValue("--control-ui-system-chrome-background");
+        document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')!.content;
       try {
         shell.remove();
         const removed = color();
@@ -338,18 +380,18 @@ suite.define(() => {
       reconnected: reconnect.reconnected,
     });
     expect({ ...reconnectedColors, sameShell: reconnect.sameShell }).toEqual({
-      removed: chatColor,
-      reconnected: chatColor,
+      removed: canvasColor,
+      reconnected: canvasColor,
       sameShell: true,
     });
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
     await page.locator('.shell-skip-link[href="#control-ui-main"]').focus();
     await page.keyboard.press("ControlOrMeta+Shift+,");
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
     await page.locator(".new-session-page__message").waitFor();
-    await expectChrome(chatColor);
+    await expectChrome(canvasColor);
   });
 
   it("publishes a runtime palette only when its colors are ready and ignores superseded loads", async () => {
@@ -380,7 +422,6 @@ suite.define(() => {
     const palette = await page.evaluate(resolveRenderedColors, {
       knot: "#f0f0f3",
       tide: "#edeff1",
-      tideContent: "#f1f3f5",
     });
     try {
       const request = page.waitForRequest(tidePaletteUrl);
@@ -411,7 +452,7 @@ suite.define(() => {
         chrome:
           (await page.locator('meta[name="theme-color"]').first().getAttribute("content")) ?? "",
       });
-      expect(chromeColors.chrome).toEqual(palette.tideContent);
+      expect(chromeColors.chrome).toEqual(palette.tide);
       await changeTheme("claw");
       await expectTheme(page, "light");
     } finally {
@@ -455,12 +496,14 @@ suite.define(() => {
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const buildId = await attribute(page, "data-openclaw-control-ui-build-id");
+    expect(buildId).toMatch(/-[a-f0-9]{64}$/u);
+    const publicAssetVersion = buildId?.slice(-64);
     await expect
       .poll(() => fontRequests.some((url) => url.pathname.endsWith("/space-grotesk.css")))
       .toBe(true);
     const fontUrl = fontRequests.find((url) => url.pathname.endsWith("/space-grotesk.css"));
     expect(fontUrl?.pathname).toBe(`${basePath}/fonts/space-grotesk.css`);
-    expect(fontUrl?.searchParams.get("v")).toBe(buildId);
+    expect(fontUrl?.searchParams.get("v")).toBe(publicAssetVersion);
     await expect.poll(() => page.locator("#openclaw-typeface-space-grotesk").count()).toBe(0);
     const paletteHref = await page.evaluate(
       () =>
@@ -468,7 +511,7 @@ suite.define(() => {
     );
     const paletteUrl = new URL(paletteHref ?? "", suite.server.baseUrl);
     expect(paletteUrl.pathname).toBe(`${basePath}/themes/absolutely.css`);
-    expect(paletteUrl.searchParams.get("v")).toBe(buildId);
+    expect(paletteUrl.searchParams.get("v")).toBe(publicAssetVersion);
     expect(await cssToken(page, "--bg-content")).toBe("#1b1b1a");
   });
 });

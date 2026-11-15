@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPathInside } from "@openclaw/fs-safe/path";
+import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
 import { readExistingWorktreePaths } from "../agents/worktrees/registry-read.js";
@@ -18,6 +18,7 @@ import {
   resolveBackupConfigCapture,
   type BackupConfigCapture,
 } from "../infra/backup-config-capture.js";
+import { resolveAgentPortRoots } from "../infra/database-engine/agent-port.js";
 import { resolveDatabaseEngineSelection } from "../infra/database-engine/config.js";
 import {
   getDatabaseEngineInput,
@@ -25,6 +26,7 @@ import {
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
+import { canonicalizeContainmentRoot } from "../infra/path-containment.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
@@ -41,7 +43,10 @@ import {
 } from "../skills/loading/skill-root-discovery.js";
 import { tryRealpath } from "../skills/loading/symlink-targets.js";
 import { recordBackupRunOutcome } from "../state/backup-run-records.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  executeExistingOpenClawStateRead,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { pathExists, resolveUserPath, shortenHomePath } from "../utils.js";
 import {
@@ -50,6 +55,7 @@ import {
   type BackupRegenerableKind,
 } from "./backup-resource-inventory.js";
 import { buildCleanupPlan } from "./cleanup-utils.js";
+import { isDoctorMigrationBackupPath } from "./doctor-migration-backup-names.js";
 import { resolveLegacyConfigSnapshotForBackup } from "./doctor/shared/automatic-config-repair.js";
 
 // DEFLATE can legitimately encode zero-filled sparse ranges just over 1000:1.
@@ -123,7 +129,7 @@ export function resolveBackupArchivePath(
 }
 
 type BackupAssetKind = "state" | "config" | "credentials" | "workspace" | "agent" | "managed skill";
-type BackupSkipReason = "covered" | "missing" | "regenerable" | "private";
+type BackupSkipReason = "covered" | "missing" | "regenerable" | "private" | "excluded";
 
 export type BackupAsset = {
   kind: BackupAssetKind;
@@ -133,7 +139,7 @@ export type BackupAsset = {
 };
 
 type SkippedBackupAsset = {
-  kind: BackupAssetKind | BackupRegenerableKind;
+  kind: BackupAssetKind | BackupRegenerableKind | "migration backup";
   sourcePath: string;
   displayPath: string;
   reason: BackupSkipReason;
@@ -185,9 +191,12 @@ async function resolveBackupPlanFromPaths(params: {
   configPath: string;
   oauthDir: string;
   workspaceDirs?: string[];
+  excludedWorktreeTemplateDirs?: string[];
+  excludedMigrationBackupPaths?: string[];
   agentRoots?: readonly BackupAgentRoot[];
   pluginInventory?: ActivatedPluginBackupInventory;
   configCapture?: BackupConfigCapture;
+  localCompanion?: boolean;
   includeWorkspace?: boolean;
   onlyConfig?: boolean;
   skillDiscoveryLimits?: ResolvedSkillDiscoveryLimits;
@@ -237,9 +246,26 @@ async function resolveBackupPlanFromPaths(params: {
         ),
       )
     ).flat(),
+    excludedWorktreeTemplateDirs: (
+      await Promise.all(
+        (params.excludedWorktreeTemplateDirs ?? []).map(async (directory) => [
+          path.resolve(directory),
+          await canonicalizePathForContainment(directory),
+        ]),
+      )
+    ).flat(),
+    excludedMigrationBackupPaths: (
+      await Promise.all(
+        (params.excludedMigrationBackupPaths ?? []).map(async (file) => [
+          path.resolve(file),
+          await canonicalizePathForContainment(file),
+        ]),
+      )
+    ).flat(),
     agentRoots,
     pluginResources: params.pluginInventory?.resources ?? [],
     pluginRoots: params.pluginInventory?.pluginRoots ?? [],
+    localCompanion: params.localCompanion,
     onlyConfig,
   });
 
@@ -422,6 +448,14 @@ async function resolveBackupPlanFromPaths(params: {
       reason: "regenerable",
     });
   }
+  for (const file of params.excludedMigrationBackupPaths ?? []) {
+    skipped.push({
+      kind: "migration backup",
+      sourcePath: path.resolve(file),
+      displayPath: shortenHomePath(path.resolve(file)),
+      reason: "excluded",
+    });
+  }
 
   return {
     stateDir,
@@ -510,25 +544,8 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
 }
 
 /** Resolve symlinks in the existing prefix while retaining a not-yet-created suffix. */
-export async function canonicalizePathForContainment(targetPath: string): Promise<string> {
-  const resolved = path.resolve(targetPath);
-  const suffix: string[] = [];
-  let probe = resolved;
-
-  while (true) {
-    try {
-      const realProbe = await fs.realpath(probe);
-      return suffix.length === 0 ? realProbe : path.join(realProbe, ...suffix.toReversed());
-    } catch {
-      const parent = path.dirname(probe);
-      if (parent === probe) {
-        return resolved;
-      }
-      suffix.push(path.basename(probe));
-      probe = parent;
-    }
-  }
-}
+/** Backup roots and sources compare in the shared containment owner's spelling. */
+export const canonicalizePathForContainment = canonicalizeContainmentRoot;
 
 export async function resolveBackupAgentRoot(
   config: OpenClawConfig,
@@ -550,9 +567,34 @@ export async function resolveBackupAgentRoots(config: OpenClawConfig): Promise<B
   );
 }
 
+// Only Doctor's exact sibling names: update cleanup still owns their retention.
+async function listDoctorMigrationBackups(databasePaths: readonly string[]): Promise<string[]> {
+  // Doctor names originals beside physical databases; retained locators can be file aliases.
+  const physicalPaths = await Promise.all(databasePaths.map(realpathOrResolve));
+  const listed = await Promise.all(
+    [...new Set([...databasePaths, ...physicalPaths])].map(async (configuredPath) => {
+      const databasePath = path.resolve(configuredPath);
+      const directory = path.dirname(databasePath);
+      const names = await fs.readdir(directory).catch((error: unknown) => {
+        if (isNotFoundPathError(error)) {
+          return [];
+        }
+        throw error;
+      });
+      return names
+        .map((name) => path.join(directory, name))
+        .filter((file) => isDoctorMigrationBackupPath(databasePath, file));
+    }),
+  );
+  return [...new Set(listed.flat())].toSorted();
+}
+
 export async function resolveBackupPlanFromDisk(
   params: {
     includeWorkspace?: boolean;
+    excludeWorktreeTemplates?: boolean;
+    excludeMigrationBackups?: boolean;
+    localCompanion?: boolean;
     onlyConfig?: boolean;
     nowMs?: number;
   } = {},
@@ -581,6 +623,9 @@ export async function resolveBackupPlanFromDisk(
 
 async function resolveBackupPlanFromState(params: {
   includeWorkspace?: boolean;
+  excludeWorktreeTemplates?: boolean;
+  excludeMigrationBackups?: boolean;
+  localCompanion?: boolean;
   onlyConfig?: boolean;
   nowMs?: number;
 }) {
@@ -646,14 +691,30 @@ async function resolveBackupPlanFromState(params: {
       discoveredWorkspaceDirs.push(resolveUserPath(sharedWorkspaceBase));
     }
   }
+  // The registry owns exact template generations, including previous/custom roots.
+  // Never infer exclusions from .templates names or the whole checkout directory.
+  const templates = params.excludeWorktreeTemplates
+    ? await executeExistingOpenClawStateRead(
+        { env: process.env },
+        { type: "worktrees.templates.list", input: undefined },
+      )
+    : undefined;
   return await resolveBackupPlanFromPaths({
     stateDir,
     configPath,
     oauthDir,
     workspaceDirs: discoveredWorkspaceDirs,
+    excludedWorktreeTemplateDirs: templates?.records.map((template) => template.path),
+    excludedMigrationBackupPaths: params.excludeMigrationBackups
+      ? await listDoctorMigrationBackups([
+          resolveOpenClawStateSqlitePath(),
+          ...(await resolveAgentPortRoots(discoveryInput)),
+        ])
+      : undefined,
     agentRoots,
     pluginInventory,
     configCapture,
+    localCompanion: params.localCompanion,
     includeWorkspace,
     onlyConfig,
     skillDiscoveryLimits: resolveSkillDiscoveryLimits(discoverySnapshot.config),

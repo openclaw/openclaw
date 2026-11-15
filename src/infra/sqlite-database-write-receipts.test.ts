@@ -23,6 +23,7 @@ function createAdmission(): Admission {
     generation: new SharedArrayBuffer(
       Int32Array.BYTES_PER_ELEMENT * Object.keys(SqliteDatabaseGenerationSlot).length,
     ),
+    writerDiagnostic: new Int32Array(new SharedArrayBuffer(125 * Int32Array.BYTES_PER_ELEMENT)),
     facts: new Map(),
     writeScopes: new Map(),
     writeScopeRevision: 0,

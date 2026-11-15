@@ -100,6 +100,33 @@ export function registerSessionInitializationAdmissionTests({
       updatedAt: Date.now(),
       sessionStartedAt: Date.now(),
     });
+  it("blocks secondary reply initialization until its canonical Template admission completes", async () => {
+    const scope = await makeScope("template-secondary-admission");
+    const canonicalKey = "agent:main:main";
+    const entry = { sessionId: "template-canonical", updatedAt: Date.now() };
+    await writeSessionStoreFast(scope.storePath, {
+      [canonicalKey]: {
+        ...entry,
+        initializationPending: true,
+        templateInitialization: {
+          source: { packageName: "@openclaw/admission-fixture", version: "1.0.0" },
+          agentConfig: {},
+          workspaceIdentity: "verified-workspace",
+        },
+      },
+    });
+    const initializeSecondary = () =>
+      initSessionState({
+        cfg: { session: { store: scope.storePath } },
+        ctx: telegramTurn(scope.sessionKey, "hello", "template-user"),
+      });
+    await expect(initializeSecondary()).rejects.toThrow("Template setup is still initializing");
+    expect(loadSessionEntry(scope)).toBeUndefined();
+    await writeSessionStoreFast(scope.storePath, { [canonicalKey]: entry });
+    const initialized = await initializeSecondary();
+    expect(initialized.sessionKey).toBe(scope.sessionKey);
+    expect(loadSessionEntry(scope)?.sessionId).toBe(initialized.sessionId);
+  });
   it.each(["same-id", "new-id", "created", "reset-before-read"] as const)(
     "hands the acknowledged %s initialization to a fresh view of its original admission",
     async (kind) => {

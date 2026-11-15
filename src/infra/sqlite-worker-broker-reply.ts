@@ -217,7 +217,7 @@ export async function dispatchSqliteWorkerJob(
           });
         }
       } catch (error) {
-        retained.admission.finish();
+        retained.admission.finish("not-entered");
         throw error;
       }
       job.operationAdmission = {
@@ -665,10 +665,12 @@ export function settleSqliteWorkerJob(
   settlement?: SqliteWorkerOperationSettlement,
 ): void {
   job.custody.retire();
-  job.settleNative?.(
-    settlement ?? (job.custody.dispatched ? { kind: "completed" } : { kind: "not-entered", error }),
+  const outcome: SqliteWorkerOperationSettlement =
+    settlement ?? (job.custody.dispatched ? { kind: "completed" } : { kind: "not-entered", error });
+  job.settleNative?.(outcome);
+  job.operationAdmission?.admission.finish(
+    outcome.kind === "not-entered" ? "not-entered" : undefined,
   );
-  job.operationAdmission?.admission.finish();
   job.operationAdmission?.releaseService();
   // finish() drains the receipt port before the separate command reply can acknowledge success.
   const admission = job.operationAdmission?.admission;

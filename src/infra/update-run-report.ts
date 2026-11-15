@@ -30,6 +30,8 @@ export type UpdateRunReport = { headline: string; lines: string[]; markdown: str
 
 const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
 const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
+  "preflight-local-replay-conflict":
+    "A local commit conflicts with the update target. Resolve the conflict in the paths named by the failing check (rebase the local commits onto the update target, or drop them), then rerun the update.",
   "preflight-insufficient-space":
     "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
   "pnpm-corepack-missing":
@@ -60,7 +62,7 @@ type ReportInput = Pick<
   | "repair"
   | "downtimeMs"
 > &
-  Partial<Pick<UpdateRunRecord, "target">>;
+  Partial<Pick<UpdateRunRecord, "target" | "createdAtMs" | "finishedAtMs">>;
 const PHASES = new Set<string>(UPDATE_RUN_PHASES);
 
 type UpdateRunIdentity =
@@ -167,7 +169,9 @@ export function formatUpdateRunRecovery(
   }
   return code === "gateway-probe-failed"
     ? `recovery check failed (${code})`
-    : `not serving (${code})`;
+    : code === "stopped-free"
+      ? `not serving (${code})`
+      : `readiness unverified (${code})`;
 }
 
 function bounded(text: string, limit: number): string {
@@ -388,17 +392,30 @@ export function renderUpdateRunReport(
   )) {
     lines.push(`Warning: Doctor migration: ${message}`);
   }
-  const phases = run.steps
-    .filter((step) => PHASES.has(step.step))
-    .map((step) => {
-      const duration =
-        step.startedAtMs != null && step.endedAtMs != null
-          ? ` (${formatDurationPrecise(Math.max(0, step.endedAtMs - step.startedAtMs))})`
-          : "";
-      return `${step.step}${duration}`;
-    });
+  const phaseSteps = run.steps.filter((step) => PHASES.has(step.step));
+  const phases = phaseSteps.map((step) => {
+    const duration =
+      step.startedAtMs != null && step.endedAtMs != null
+        ? ` (${formatDurationPrecise(Math.max(0, step.endedAtMs - step.startedAtMs))})`
+        : "";
+    return `${step.step}${duration}`;
+  });
   if (phases.length) {
     lines.push(`Phases: ${phases.join(" → ")}`);
+    const phaseMs = phaseSteps.reduce(
+      (sum, step) =>
+        sum +
+        (step.startedAtMs != null && step.endedAtMs != null
+          ? Math.max(0, step.endedAtMs - step.startedAtMs)
+          : 0),
+      0,
+    );
+    const totalMs =
+      run.createdAtMs == null || run.finishedAtMs == null ? 0 : run.finishedAtMs - run.createdAtMs;
+    // Capture and terminal cleanup run outside these phases; large state makes them long.
+    if (totalMs - phaseMs >= 1_000) {
+      lines.push(`Total: ${formatDurationPrecise(totalMs)}, including work outside these phases.`);
+    }
   }
   for (const step of selectUpdateFailureReportSteps(
     run.steps.filter((item) => item.status === "failed"),
@@ -573,6 +590,8 @@ export function updateRunReportInputFromResult(
         : (result.reason ?? recorded?.reason ?? null),
     origin: recorded?.origin ?? {},
     target: recorded?.target,
+    createdAtMs: recorded?.createdAtMs,
+    finishedAtMs: recorded?.finishedAtMs,
     before: recordedOutcome?.before ?? result.before ?? recorded?.before ?? {},
     after: recordedOutcome?.after ?? result.after ?? recorded?.after ?? {},
     repair: recorded?.repair ?? [],

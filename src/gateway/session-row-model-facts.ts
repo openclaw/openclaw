@@ -2,7 +2,7 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
-import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection-persisted.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
@@ -15,6 +15,7 @@ import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { normalizeSessionSearchLiteral } from "../shared/session-search-text.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
+import type { SessionRuntimeResolution } from "./session-runtime-resolution.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -288,6 +289,7 @@ export function readSessionRowModelFacts(params: {
   rowContext: SessionListRowContext;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   lightweightListRow?: boolean;
+  runtimeResolution?: SessionRuntimeResolution;
 }) {
   const { cfg, key, agentId, source, rowContext } = params;
   const lightweight = params.lightweightListRow === true;
@@ -326,6 +328,7 @@ export function readSessionRowModelFacts(params: {
     sessionKey: key,
     entry: params.entry,
     preparedAcpMeta: params.preparedAcpMeta,
+    runtimeResolution: params.runtimeResolution,
     modelCatalog:
       rowModelCatalog ?? (lightweight || metadataSnapshot !== undefined ? [] : undefined),
     modelCatalogRouteVariants: preparedCatalog?.routeVariants,

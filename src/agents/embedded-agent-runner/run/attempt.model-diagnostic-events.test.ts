@@ -8,7 +8,7 @@ import {
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { normalizeTranscriptJsonValue } from "../../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../../config/sessions/transcript-json-normalize.js";
 import {
   onInternalDiagnosticEvent,
   onTrustedInternalDiagnosticEvent,

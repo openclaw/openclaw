@@ -1,11 +1,16 @@
 import type { JSX } from "@solidjs/web";
 import { Show, createSignal, createUniqueId, lazy, onSettled } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Kbd } from "../../../components/solid/kbd.tsx";
+import { Kbd, KeyboardShortcut, ShortcutHint } from "../../../components/solid/kbd.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerSessionNavigationEnglish } from "../../../i18n/locales/en-session-navigation.ts";
 import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { canSubmitBeforeChatHistory } from "../../../lib/chat/commands.ts";
+import {
+  formatKeyboardShortcutParts,
+  isApplePlatform,
+  KEYBOARD_SHORTCUT_COMBOS,
+} from "../../../lib/keyboard-shortcut-contract.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import type { ComposerDictationOwner } from "../composer-dictation.ts";
@@ -294,12 +299,19 @@ export function renderChatAbortActionSolid(
   return (
     <>
       {props.canAbort ? (
-        <openclaw-tooltip prop:content={t("chat.runControls.stop")}>
+        <openclaw-tooltip>
+          <span slot="content">
+            <ShortcutHint
+              label={t("chat.runControls.stop")}
+              combo={KEYBOARD_SHORTCUT_COMBOS.escape}
+            />
+          </span>
           <button
             class="chat-send-btn chat-send-btn--stop"
             ref={primaryPointerDownRef(() => props.onPrimaryActionPointerDown)}
             onClick={() => props.onAbort?.()}
-            aria-label={t("chat.runControls.stopGenerating")}
+            disabled={!props.onAbort}
+            aria-label={t("chat.runControls.stop")}
           >
             <Icon name="stop" />
             <span class="agent-chat__control-label">{t("chat.runControls.stop")}</span>
@@ -346,10 +358,7 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
   const hasSendableContent = () =>
     hasComposedContent() && props.canSend && !props.sending && !sendDisabledReason();
   const showShortcutTooltip = () =>
-    !isMobileBrowserPlatform() &&
-    !props.preparingAttachments &&
-    sendStatus() == null &&
-    alternateAvailable();
+    !isMobileBrowserPlatform() && !props.preparingAttachments && sendStatus() == null;
   const SendAction = () => (
     <openclaw-tooltip
       prop:content={
@@ -362,9 +371,27 @@ export function renderChatPrimaryActionsSolid(props: ChatRunControlsProps) {
     >
       <Show when={showShortcutTooltip()}>
         <span slot="content">
-          {label()} <Kbd keys="⏎" inline />
-          {" · "}
-          {alternateLabel()} <Kbd keys={t("chat.sendShortcutModifierEnter")} inline />
+          {label()}{" "}
+          <KeyboardShortcut
+            combo={
+              props.sendShortcut === "modifier-enter"
+                ? KEYBOARD_SHORTCUT_COMBOS.modifiedEnter
+                : KEYBOARD_SHORTCUT_COMBOS.sendMessage
+            }
+            inline
+          />
+          <Show when={alternateAvailable()}>
+            {" · "}
+            {alternateLabel()}{" "}
+            <Kbd
+              keys={
+                isApplePlatform()
+                  ? t("chat.sendShortcutModifierEnter")
+                  : formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, false)
+              }
+              inline
+            />
+          </Show>
         </span>
       </Show>
       <button

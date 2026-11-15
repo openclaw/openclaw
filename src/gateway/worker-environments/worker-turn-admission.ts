@@ -36,6 +36,7 @@ import type {
 } from "./placement-store.js";
 import {
   isCurrentActiveWorkerEnvironment,
+  isExactAttachedEnvironment,
   matchesWorkerPlacementTarget,
 } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
@@ -52,7 +53,7 @@ import {
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 
 export type WorkerTurnAdmissionOptions = {
-  environments: Pick<WorkerEnvironmentService, "get">;
+  environments: Pick<WorkerEnvironmentService, "get" | "inspectTurnLease">;
   placements: WorkerSessionPlacementStore;
   reconcileActivePlacement: (environmentId: string) => Promise<void>;
   waitForAdmissionNode: (params: {
@@ -538,6 +539,7 @@ export async function executeLocalTurn<T>(params: {
 
 export async function claimWorkerTurn(params: {
   placements: WorkerSessionPlacementStore;
+  environments: WorkerTurnAdmissionOptions["environments"];
   identity: ReturnType<typeof resolvePlacementIdentity>;
   placement: ActiveWorkerPlacement;
   runId: string;
@@ -545,19 +547,45 @@ export async function claimWorkerTurn(params: {
   signal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<{ placement: ActiveWorkerPlacement; turnClaim: WorkerSessionTurnClaim } | null> {
-  const claim = () =>
-    params.placements.claimTurn(
+  const claim = async () => {
+    const environment = params.environments.get(params.placement.environmentId);
+    // Recorded loss/build recovery retains its existing admission path. Only a
+    // live attached lease can be qualified by the provider before this claim.
+    const leaseId = isExactAttachedEnvironment(environment, params.placement)
+      ? environment?.leaseId
+      : undefined;
+    const assertCurrent = () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+      const current = params.environments.get(params.placement.environmentId);
+      if (
+        leaseId &&
+        (!isExactAttachedEnvironment(current, params.placement) || current?.leaseId !== leaseId)
+      ) {
+        throw new Error("Cloud worker lease changed before its turn claim");
+      }
+    };
+    assertCurrent();
+    if (leaseId) {
+      await params.environments.inspectTurnLease({
+        environmentId: params.placement.environmentId,
+        ownerEpoch: params.placement.activeOwnerEpoch,
+        leaseId,
+        assertCurrent,
+        signal: params.signal,
+      });
+    }
+    // Requalify after any earlier claim wait, and again at the claim commit.
+    return await params.placements.claimTurn(
       {
         ...params.identity,
         claimId: randomUUID(),
         runId: params.runId,
         owner: placementTurnOwner(params.placement),
       },
-      () => {
-        params.signal?.throwIfAborted();
-        params.assertCurrent?.();
-      },
+      assertCurrent,
     );
+  };
   try {
     return { placement: params.placement, turnClaim: await claim() };
   } catch (error) {

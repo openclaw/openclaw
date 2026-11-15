@@ -111,7 +111,8 @@ export class WorkerTaskPoolCore<Input, Output> {
   private readonly resumeCompute = () => this.dispatch();
   private closedError?: Error;
   private nextTaskId = 0;
-  private readonly retireIdleOnPressure = () => this.retirement.retireIdle(this.resourceClosures);
+  private readonly retireIdleOnPressure = (critical: unknown) =>
+    this.retirement.retireIdle(this.resourceClosures, critical === true);
   private readonly expireTasks = () => expireWorkerTasks(this.queue, this.slots, this.timeout);
 
   constructor(
@@ -240,13 +241,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       );
       return task;
     }
-    if (!this.admission.admit(inputBytes)) {
-      this.finish(
-        task,
-        new WorkerTaskError("worker task capacity reached", "overloaded", {
-          capacityAvailable: this.admission.waitForCapacity(inputBytes),
-        }),
-      );
+    const refusal = this.admission.admit(inputBytes, () =>
+      this.host.describeTask?.(this.options.workerUrl, undefined, options.diagnosticOperation),
+    );
+    if (refusal) {
+      this.finish(task, refusal);
       return task;
     }
     task.admitted = true;

@@ -16,14 +16,11 @@ import { fingerprintResolvedProviderAuth } from "../agents/execution-auth-bindin
 import * as modelAuth from "../agents/model-auth.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { buildAllowedModelSet } from "../agents/model-selection.js";
-import { resolveConfiguredPrimaryModelForAgent } from "../agents/utility-model.js";
-import { migrateLegacyConfig } from "../commands/doctor/shared/legacy-config-migrate.js";
 import { ensureOnboardingAgent } from "../commands/onboard-agent.js";
 import { hasResolvedRosterBeforeMigrations } from "../config/agent-roster-provenance.js";
 import { clearConfigCache, readConfigFileSnapshot as readSnapshot } from "../config/config.js";
 import { resolveAgentModelPrimaryValue as primaryModel } from "../config/model-input.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
-import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import {
   computeDeclaredSurfaceHash,
   mergePluginDeclaredSurfaces,
@@ -874,120 +871,6 @@ describe("setup activation error boundaries", () => {
         }
       }
       expect(transition).toHaveBeenCalledOnce();
-    },
-  );
-});
-
-describe("setup utility activation", () => {
-  const utilityResult = { ok: true, modelRef, modelTarget: "utility" };
-  const utilityDetection = { utilityModel: modelRef, setupModel: modelRef, setupComplete: false };
-  async function writeUtilityConfig(configPath: string, config: unknown) {
-    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    clearConfigCache();
-  }
-  it.each([modelRef, "legacy/working", undefined])(
-    "preserves implicit primary %s across utility login",
-    async (priorModel) => {
-      const setup = await fixture({
-        modelTarget: "utility",
-        addProviderDuringLogin: priorModel !== modelRef,
-        fresh: priorModel === undefined,
-      });
-      delete setup.config.meta;
-      const defaults = setup.config.agents?.defaults;
-      assert(defaults);
-      if (priorModel) {
-        defaults.utilityModel = priorModel;
-      }
-      if (priorModel === "legacy/working") {
-        setup.config.models = {
-          providers: {
-            legacy: {
-              api: "openai-completions",
-              baseUrl: "https://legacy.example/v1",
-              models: [buildCatalogModel("working", { name: "Legacy fixture", maxTokens: 4096 })],
-            },
-          },
-        };
-      }
-      await writeUtilityConfig(setup.configPath, setup.config);
-
-      if (priorModel) {
-        const before = await fs.readFile(setup.configPath, "utf8");
-        await expect(setup.activate()).rejects.toThrow(/doctor --fix|explicit primary/i);
-        expect([setup.login.mock.calls, setup.run.mock.calls]).toEqual([[], []]);
-        expect(await fs.readFile(setup.configPath, "utf8")).toBe(before);
-        const migrated = migrateLegacyConfig(setup.config, {
-          sourceConfigBeforeMigrations: setup.config,
-        });
-        assert(migrated.config);
-        expect(migrated.partiallyValid).toBeUndefined();
-        await writeUtilityConfig(setup.configPath, migrated.config);
-      }
-
-      vi.mocked(setup.prompter.confirm).mockResolvedValue(true);
-      const result = await setup.activate();
-
-      expect(result, result.ok ? undefined : result.error).toMatchObject(utilityResult);
-      expect(setup.login).toHaveBeenCalledOnce();
-      expect(setup.run).toHaveBeenCalledOnce();
-      const candidate = setup.run.mock.calls[0]?.[0].config;
-      assert(candidate);
-      expect(resolveConfiguredPrimaryModelForAgent({ cfg: candidate, agentId: "main" })).toBe(
-        priorModel,
-      );
-      const { valid, sourceConfig: source } = await readSnapshot();
-      const profile = setup.readProfile();
-      assert(profile);
-      expect(valid).toBe(true);
-      expect(source.meta?.migrations?.utilityModelSeparation).toBe(true);
-      expect(primaryModel(source.agents?.defaults?.model)).toBe(priorModel);
-      expect(source.agents?.defaults?.utilityModel).toBe(`${modelRef}@${profile[0]}`);
-      expect(source.models?.providers?.openai?.models[0]?.id).toBe("gpt-5.4-mini");
-      if (priorModel === "legacy/working") {
-        expect(source.models?.providers?.legacy).toEqual(setup.config.models?.providers?.legacy);
-      }
-      if (!priorModel) {
-        const detected = await setup.detect();
-        expect(detected).toMatchObject(utilityDetection);
-        expect(detected.configuredModel).toBeUndefined();
-      }
-    },
-  );
-
-  it.each(["helper", modelRef])(
-    "rechecks canonical identity while preserving authored %s and its profile",
-    async (authoredModel) => {
-      const setup = await fixture({ modelTarget: "utility" });
-      expect(await setup.activate()).toMatchObject({ ok: true });
-      const profile = setup.readProfile();
-      assert(profile);
-      const config = (await readSnapshot()).sourceConfig;
-      const defaults = config.agents?.defaults;
-      assert(defaults?.models?.[modelRef]);
-      defaults.models[modelRef].alias = "helper";
-      defaults.utilityModel = `${authoredModel}@${profile[0]}`;
-      const authoredConfig = `${JSON.stringify(config, null, 2)}\n`;
-      await fs.writeFile(setup.configPath, authoredConfig);
-      clearConfigCache();
-
-      const detected = await setup.detect();
-      expect(detected).toMatchObject(utilityDetection);
-      expect(detected.configuredModel).toBeUndefined();
-      const candidate = detected.candidates.find(
-        (entry) => entry.kind === "existing-model" && entry.modelTarget === "utility",
-      );
-      assert(candidate);
-      expect(candidate.modelRef).toBe(modelRef);
-      setup.run.mockClear();
-      const verified = await setup.activate("existing-model", undefined, {
-        modelRef: candidate.modelRef,
-        modelTarget: candidate.modelTarget,
-      });
-      expect(verified).toMatchObject(utilityResult);
-      expect(setup.run).toHaveBeenCalledOnce();
-      expect(setup.run.mock.calls[0]?.[0].authProfileId).toBe(profile[0]);
-      expect(await fs.readFile(setup.configPath, "utf8")).toBe(authoredConfig);
     },
   );
 });

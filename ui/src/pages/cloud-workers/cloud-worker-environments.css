@@ -63,13 +63,6 @@
   font-size: 13px;
   color: var(--muted);
 }
-.cloud-environments__advanced {
-  margin-top: 24px;
-}
-.cloud-environments__advanced > summary {
-  padding: 16px 0;
-  font-weight: 600;
-}
 @media (max-width: 900px) {
   .cloud-environments {
     grid-template-columns: minmax(0, 1fr);

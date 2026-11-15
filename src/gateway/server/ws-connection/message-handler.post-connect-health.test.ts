@@ -180,6 +180,10 @@ vi.mock("../../../config/config.js", () => ({
 vi.mock("../../../config/io.js", () => ({
   getRuntimeConfig: loadConfigMock,
 }));
+vi.mock("../../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/runtime-snapshot.js")>()),
+  readRuntimeConfig: loadConfigMock,
+}));
 vi.mock("../../../infra/system-presence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../infra/system-presence.js")>()),
   commitPresence: commitPresenceMock,
@@ -957,7 +961,6 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
         ),
         identity: { type: "profile", id: profileId },
-        email: "alice@example.com",
         name: "alice",
         avatarUrl: expect.stringMatching(
           new RegExp(`^/api/users/${profileId}/avatar\\?v=\\d+$`, "u"),
@@ -1164,7 +1167,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         const initialPresence = upsertPresenceMock.mock.calls.find(
           ([key]) => key === "conn-github-identity-detached",
         )?.[1];
-        expect(initialPresence).not.toHaveProperty("user");
+        expect(initialPresence).toHaveProperty("user", undefined);
         expect(harness.registeredProfileId).toBeUndefined();
         expect(harness.socketSend.mock.invocationCallOrder[0]).toBeLessThan(
           sync.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
@@ -1461,7 +1464,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       const presence = upsertPresenceMock.mock.calls.find(
         ([key]) => key === "conn-github-identity-failure",
       )?.[1];
-      expect(presence).not.toHaveProperty("user");
+      expect(presence).toHaveProperty("user", undefined);
       expect(harness.refreshConnectedUserProfile).not.toHaveBeenCalled();
     });
   });
@@ -1502,8 +1505,8 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       await waitForFast(() => {
         expect(upsertPresenceMock).toHaveBeenCalledWith(
           "conn-profile-store-failure",
-          expect.objectContaining({
-            user: { id: "alice@example.com", email: "alice@example.com" },
+          expect.not.objectContaining({
+            user: expect.anything(),
           }),
           { pending: true },
         );
@@ -1974,10 +1977,10 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         },
       });
       if (error) {
-        await waitForFast(() => expect(close).toHaveBeenCalledWith(1008, error));
+        await harness.runWhenIdle().then(() => expect(close).toHaveBeenCalledWith(1008, error));
         expect(harness.client).toBeNull();
       } else {
-        await waitForFast(() => expect(harness.socketSend).toHaveBeenCalled());
+        await harness.runWhenIdle().then(() => expect(harness.socketSend).toHaveBeenCalled());
         expect((harness.client as GatewayWsClient).internal?.agentRuntimeIdentity).toMatchObject({
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",

@@ -1,3 +1,4 @@
+import type { JSX } from "@solidjs/web";
 import {
   action,
   affects,
@@ -14,18 +15,25 @@ import {
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import type { ModelCatalogEntry } from "../../api/types.ts";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
-import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsLoadingSkeleton,
+  SettingsRow,
+  SettingsToggleRow,
+} from "../../components/solid/settings-ui.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
-import { ConfigReadStatus } from "./view-readiness.tsx";
+import { ConfigReadBoundary } from "./view-readiness.tsx";
 import type { ConfigProps } from "./view-types.ts";
 
 const AUTO_VALUE = "__openclaw_observer_auto__";
 
 function resolvedModelLabel(status: ConfigProps["sessionObserverResolvedModel"]): string {
-  if (!status || status.status === "unavailable") {
+  if (!status) {
+    return t("configView.sessionObserver.modelNotLoaded");
+  }
+  if (status.status === "unavailable") {
     return t("configView.sessionObserver.modelUnavailable");
   }
   if (status.status === "disabled") {
@@ -129,6 +137,10 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
     // Admission publishes owner facts before the optimistic transition joins this tick.
     void setCompletion(Promise.resolve().then(() => present(view, pending, retired, edit)));
   }
+  const resolved = () => (
+    <Loading>{resolvedModelLabel(latest(() => presentation().values.resolved))}</Loading>
+  );
+  const pending = () => !props.config.configLoaded;
   const disabled = () =>
     !props.config.configLoaded ||
     props.config.loading ||
@@ -136,71 +148,85 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
     props.config.sessionObserverDisabled === true;
   return (
     <>
-      <div class="settings-section__header settings-section__header--subsection">
-        <h3 class="settings-section__heading">{t("configView.sessionObserver.title")}</h3>
-      </div>
-      <p class="settings-section__desc">{t("configView.sessionObserver.hint")}</p>
-      <ConfigReadStatus config={props.config} />
-      <div class="settings-group">
-        <SettingsToggleRow
-          title={t("configView.sessionObserver.toggle")}
-          description={t("configView.sessionObserver.toggleHint")}
-          checked={presentation().values.enabled}
-          disabled={
-            !props.config.configLoaded ||
-            props.config.loading ||
-            props.config.sessionObserverDisabled === true ||
-            presentation().saving() === "model"
-          }
-          saving={presentation().saving() === "enabled"}
-          onChange={(enabled) => submit({ enabled })}
-        />
-        <Loading>
-          <SettingsRow
-            title={t("configView.sessionObserver.resolvedModel")}
-            description={resolvedModelLabel(latest(() => presentation().values.resolved))}
-          />
-        </Loading>
-        <Errored
-          fallback={(_error) => (
-            <SessionObserverModelPicker
-              value={presentation().values.model}
-              disabled={disabled()}
-              onChange={(model) => submit({ model })}
-              models={[]}
-              unavailable
-            />
-          )}
+      <Show
+        when={
+          props.config.configReadAccess !== "denied" &&
+          props.config.appearanceDataRequested !== false
+        }
+      >
+        <ConfigReadBoundary
+          config={props.config}
+          displayReady={props.config.configLoaded || props.config.loading}
+          fallback={<SettingsLoadingSkeleton rows={2} />}
         >
-          <Loading
-            on={modelsScope()}
-            fallback={
-              <SessionObserverModelPicker
-                value={presentation().values.model}
-                disabled={disabled()}
-                onChange={(model) => submit({ model })}
-                models={[]}
-                unavailable={props.config.sessionObserverModelsUnavailable === true}
+          <Show when={props.config.configLoaded || props.config.loading}>
+            <div class="settings-group">
+              <SettingsToggleRow
+                title={t("configView.sessionObserver.toggle")}
+                description={t("configView.sessionObserver.toggleHint")}
+                checked={presentation().values.enabled}
+                pending={!props.config.configLoaded}
+                disabled={
+                  !props.config.configLoaded ||
+                  props.config.loading ||
+                  props.config.sessionObserverDisabled === true ||
+                  presentation().saving() === "model"
+                }
+                saving={presentation().saving() === "enabled"}
+                onChange={(enabled) => submit({ enabled })}
               />
-            }
-          >
-            <SessionObserverModelPicker
-              value={presentation().values.model}
-              disabled={disabled()}
-              onChange={(model) => submit({ model })}
-              models={props.config.sessionObserverModels ?? []}
-              unavailable={props.config.sessionObserverModelsUnavailable === true}
-            />
-          </Loading>
-        </Errored>
-      </div>
-      <Show when={presentation().saving()}>
-        <p role="status">{t("common.saving")}</p>
-      </Show>
-      <Show when={!presentation().saving()}>
-        <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
-          <Loading>{outcome()}</Loading>
-        </Errored>
+              <Errored
+                fallback={(_error) => (
+                  <SessionObserverModelPicker
+                    value={presentation().values.model}
+                    disabled={disabled()}
+                    pending={pending()}
+                    onChange={(model) => submit({ model })}
+                    models={[]}
+                    unavailable
+                    resolved={resolved()}
+                  />
+                )}
+              >
+                <Loading
+                  on={modelsScope()}
+                  fallback={
+                    <SessionObserverModelPicker
+                      value={presentation().values.model}
+                      disabled={disabled()}
+                      pending={pending()}
+                      onChange={(model) => submit({ model })}
+                      models={[]}
+                      unavailable={props.config.sessionObserverModelsUnavailable === true}
+                      resolved={resolved()}
+                    />
+                  }
+                >
+                  <SessionObserverModelPicker
+                    value={presentation().values.model}
+                    disabled={disabled()}
+                    pending={pending()}
+                    onChange={(model) => submit({ model })}
+                    models={props.config.sessionObserverModels ?? []}
+                    unavailable={props.config.sessionObserverModelsUnavailable === true}
+                    resolved={resolved()}
+                  />
+                </Loading>
+              </Errored>
+            </div>
+            <p
+              class="settings-section__desc settings-section__scope"
+              role={presentation().saving() ? "status" : undefined}
+            >
+              {t(presentation().saving() ? "common.saving" : "configView.sessionObserver.scope")}
+            </p>
+            <Show when={!presentation().saving()}>
+              <Errored fallback={(error) => <p role="alert">{formatUiError(error())}</p>}>
+                <Loading>{outcome()}</Loading>
+              </Errored>
+            </Show>
+          </Show>
+        </ConfigReadBoundary>
       </Show>
     </>
   );
@@ -208,10 +234,12 @@ export function SessionObserverSettings(props: { config: ConfigProps }) {
 
 function SessionObserverModelPicker(props: {
   value: string | undefined;
+  pending?: boolean;
   disabled: boolean;
   onChange: (selection: SessionObserverModelSelection) => void;
   models: readonly ModelCatalogEntry[];
   unavailable: boolean;
+  resolved: JSX.Element;
 }) {
   const selected = () => (props.value === undefined ? AUTO_VALUE : props.value);
   const options = createMemo(() => {
@@ -238,11 +266,20 @@ function SessionObserverModelPicker(props: {
   return (
     <SettingsRow
       title={t("configView.sessionObserver.modelPicker")}
-      description={t(
-        props.unavailable
-          ? "configView.sessionObserver.modelCatalogUnavailable"
-          : "configView.sessionObserver.modelPickerHint",
-      )}
+      description={
+        <>
+          <span>
+            {t(
+              props.unavailable
+                ? "configView.sessionObserver.modelCatalogUnavailable"
+                : "configView.sessionObserver.modelPickerHint",
+            )}
+          </span>
+          <br />
+          {props.resolved}
+        </>
+      }
+      controlPending={props.pending}
       control={
         <ModelPicker
           label={t("configView.sessionObserver.modelPicker")}

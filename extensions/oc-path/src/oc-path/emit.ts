@@ -1,4 +1,6 @@
 import type { AstBlock, MdAst } from "./ast.js";
+import type { JsoncEntry } from "./jsonc/ast.js";
+import { guardSentinel } from "./sentinel.js";
 import { sourceLineEnding } from "./source.js";
 
 export function replaceMdSource(
@@ -25,7 +27,11 @@ export function replaceMdSource(
     blocks: ast.blocks.map((block) => ({
       ...block,
       line: shift(block.line),
-      items: block.items.map((item) => ({ ...item, line: shift(item.line) })),
+      items: block.items.map((item) => ({
+        ...item,
+        line: shift(item.line),
+        textLine: item.textLine === null ? null : shift(item.textLine),
+      })),
     })),
   });
   const lines = edited.raw.replace(/^\uFEFF/, "").split(/\r?\n/);
@@ -67,4 +73,22 @@ export function insertMdSource(
     prefix + text.replace(/\r?\n/g, ending) + suffix,
     (shifted) => update(shifted, line),
   );
+}
+
+/** Emit new object entries with the same key guard regardless of JSON format. */
+export function emitJsoncObjectEntries<T>(
+  entries: readonly JsoncEntry[],
+  parentPath: string,
+  emit: (entry: JsoncEntry, path: string) => T,
+): T[] {
+  return entries.map((entry) => {
+    const path = guardedJsoncKeyPath(entry.key, parentPath);
+    return emit(entry, path);
+  });
+}
+
+export function guardedJsoncKeyPath(key: string, parentPath: string): string {
+  const path = `${parentPath}/${key}`;
+  guardSentinel(key, path);
+  return path;
 }

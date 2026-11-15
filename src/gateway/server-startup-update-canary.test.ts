@@ -1,5 +1,10 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
+import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
+import { resolveSecretRefString } from "../secrets/resolve.js";
 import { withAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import type { GatewayServer } from "./server-public.js";
@@ -24,17 +29,73 @@ beforeAll(async () => {
     OPENCLAW_GATEWAY_TOKEN: undefined,
     OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
   });
+  Object.assign(
+    state.envVars,
+    buildUpdateRehearsalPathEnv(state.stateDir),
+    buildUpdateDoctorEnv({
+      allowGatewayServiceRepair: false,
+      allowGatewayActivation: false,
+      serviceRepairPolicy: "external",
+    }),
+  );
+  state.applyEnv();
+  const servingRoot = state.path("serving");
+  const credential = path.join(servingRoot, "credentials", "fixture", "token");
+  await fs.mkdir(path.dirname(credential), { recursive: true, mode: 0o700 });
+  await fs.writeFile(credential, "synthetic-real-provider-value", { mode: 0o600 });
+  const resolver = await state.writeText(
+    "resolver.mjs",
+    `#!${process.execPath}
+     import fs from "node:fs";
+     import path from "node:path";
+     fs.writeFileSync(${JSON.stringify(state.path("provider-executed"))}, "executed");
+     const value = fs.readFileSync(path.join(process.env.OPENCLAW_STATE_DIR, "credentials", "fixture", "token"), "utf8");
+     process.stdout.write(JSON.stringify({ protocolVersion: 1, values: { "talk/key": value } }));`,
+  );
+  await fs.chmod(resolver, 0o700);
+  const command = process.platform === "win32" ? process.execPath : resolver;
+  const args = process.platform === "win32" ? [resolver] : [];
+  const provider = {
+    source: "exec" as const,
+    command,
+    args,
+    trustedDirs: [path.dirname(command)],
+    passEnv: ["OPENCLAW_STATE_DIR"],
+  };
+  await expect(
+    resolveSecretRefString(
+      { source: "exec", provider: "vault", id: "talk/key" },
+      {
+        config: { secrets: { providers: { vault: provider } } },
+        env: { OPENCLAW_STATE_DIR: servingRoot },
+      },
+    ),
+  ).resolves.toBe("synthetic-real-provider-value");
+  await fs.unlink(state.path("provider-executed"));
   await state.writeJson("plugin/package.json", { openclaw: { extensions: ["./index.mjs"] } });
   await state.writeJson("plugin/openclaw.plugin.json", {
     id: pluginId,
     activation: { onStartup: true },
-    configSchema: { type: "object", properties: {} },
+    configContracts: { secretInputs: { paths: [{ path: "apiKey" }] } },
+    configSchema: { type: "object", properties: { apiKey: {} } },
   });
   await state.writeText(
     "plugin/index.mjs",
     `export default { id: "${pluginId}", register() {} };\n`,
   );
   await state.writeConfig({
+    logging: { file: state.statePath("canary.log") },
+    secrets: {
+      providers: {
+        vault: provider,
+      },
+    },
+    talk: {
+      realtime: {
+        provider: "openai",
+        providers: { openai: { apiKey: { source: "exec", provider: "vault", id: "talk/key" } } },
+      },
+    },
     agents: { defaults: { model: { primary: "openai/gpt-4.1" } } },
     gateway: {
       mode: "local",
@@ -45,7 +106,12 @@ beforeAll(async () => {
     discovery: { mdns: { mode: "off" } },
     plugins: {
       allow: [pluginId],
-      entries: { [pluginId]: { enabled: true } },
+      entries: {
+        [pluginId]: {
+          enabled: true,
+          config: { apiKey: { source: "exec", provider: "vault", id: "talk/key" } },
+        },
+      },
       load: { paths: [state.statePath("plugin")] },
       slots: { memory: "none" },
     },
@@ -118,4 +184,22 @@ it("serves candidate readiness without starting normal Gateway maintenance", asy
   }
   expect(loadedPlugin).toMatchObject({ id: pluginId, status: "loaded" });
   expect(deferredCalls).toEqual([]);
+  await expect(fs.access(state!.path("provider-executed"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await fs.readFile(state!.path("serving", "credentials", "fixture", "token"), "utf8")).toBe(
+    "synthetic-real-provider-value",
+  );
+  await expect(
+    fs.access(state!.statePath("credentials", "fixture", "token")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await fs.readFile(state!.configPath, "utf8")).not.toContain(
+    "synthetic-real-provider-value",
+  );
+  const persisted = JSON.parse(await fs.readFile(state!.configPath, "utf8"));
+  expect(persisted.talk.realtime.providers.openai.apiKey).toEqual({
+    source: "exec",
+    provider: "vault",
+    id: "talk/key",
+  });
 });

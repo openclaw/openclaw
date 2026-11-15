@@ -25,6 +25,7 @@ import {
   type VolatileSessionTab,
 } from "./session-tab-process-state.js";
 import * as sessionTabStore from "./session-tab-store.js";
+import * as sessionTabTracking from "./session-tab-tracking.js";
 
 afterEach(async () => {
   const { closePlaywrightBrowserConnection } = await import("./pw-session.js");
@@ -354,6 +355,63 @@ describe("browser tab selection and ownership", () => {
     // OLD2 and OLD3 carry no recorded activity, so OLD3 (ahead of OLD2 in the
     // reversed CDP listing) is evicted before any tracked tab.
     expect(closed).toEqual(["http://127.0.0.1:18800/json/close/OLD3"]);
+  });
+
+  it.each([
+    {
+      name: "aliased durable activity",
+      profile: "chrome",
+      aliases: ["openclaw"],
+      expected: "OLD2",
+    },
+    { name: "unrelated durable activity", profile: "other", aliases: ["work"], expected: "OLD8" },
+    {
+      name: "released dashboard activity",
+      profile: "openclaw",
+      dashboard: "released",
+      expected: "OLD8",
+    },
+    {
+      name: "active aliased dashboard",
+      profile: "chrome",
+      aliases: ["openclaw"],
+      dashboard: "active",
+      expected: "OLD2",
+    },
+    {
+      name: "stopping aliased dashboard",
+      profile: "chrome",
+      aliases: ["openclaw"],
+      dashboard: "stopping",
+      expected: "OLD2",
+    },
+  ] as const)("preserves page ownership when evicting with $name", async (scenario) => {
+    const record = {
+      ...retainedDashboardRecord("OLD8"),
+      kind: "durable" as const,
+      profile: scenario.profile,
+      profileAliases: scenario.aliases ? [...scenario.aliases] : undefined,
+      lastUsedAt: scenario.dashboard && scenario.dashboard !== "released" ? 0 : 9_000,
+      dashboard: scenario.dashboard
+        ? { ...retainedDashboardRecord("OLD8").dashboard!, state: scenario.dashboard }
+        : undefined,
+    };
+    vi.spyOn(sessionTabTracking, "readDurableTabs").mockResolvedValue([record]);
+    const { openclaw, closed, cleanup } = setupManagedTabEviction(() =>
+      seedVolatileTabActivity(
+        Array.from({ length: 6 }, (_, index) => ({
+          targetId: `OLD${index + 2}`,
+          lastUsedAt: 2_000 + index,
+        })),
+      ),
+    );
+    vi.mocked(sessionTabStore.readBrowserDashboardTabs).mockResolvedValue([
+      retainedDashboardRecord("OLD1"),
+      ...(record.dashboard ? [record] : []),
+    ]);
+    await openclaw.openTab("http://127.0.0.1:3009");
+    await cleanup.promise;
+    expect(closed).toEqual([`http://127.0.0.1:18800/json/close/${scenario.expected}`]);
   });
 
   it("does not block opening on an ordinary managed-tab cleanup close", async () => {

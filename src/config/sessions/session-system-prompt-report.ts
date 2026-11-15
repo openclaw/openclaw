@@ -26,6 +26,8 @@ export type SessionSystemPromptReport = {
     chars: number;
     projectContextChars: number;
     nonProjectContextChars: number;
+    /** Part of `chars` estimated from configuration, not the text the model was sent. */
+    estimatedChars?: number;
     hash?: string;
   };
   currentTurn?: {

@@ -161,6 +161,7 @@ export type CronRunFinalizationOutcome = CronJobExecutionResult & {
   startedAt: number;
   endedAt: number;
   runReceipt?: CronRunReceiptHandle;
+  executionPending?: boolean;
   activeJobMarker?: { jobRemoved?: true; scheduleMutated?: true; triggerMutated?: true };
   request?: {
     runId?: string;
@@ -202,7 +203,7 @@ export type CronRuntimeMutationContracts = {
 
   "cron.mutateExternalState": {
     input: CronRuntimeMutationInputs["cron.mutateExternalState"];
-    snapshot: { nowMs: number; cronConfig?: CronConfig };
+    snapshot: { nowMs: number; cronConfig?: CronConfig; defaultAgentId?: string };
     outcome: {
       job?: CronJob;
       nowMs: number;
@@ -242,6 +243,7 @@ export type CronRuntimeMutationContracts = {
   "cron.finalizeRuns": {
     input: CronRuntimeMutationInputs["cron.finalizeRuns"];
     snapshot: {
+      receiptOnly?: boolean;
       nowMs: number;
       defaultAgentId?: string;
       cronConfig?: CronConfig;

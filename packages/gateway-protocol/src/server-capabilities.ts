@@ -2,6 +2,8 @@
 export const GATEWAY_SERVER_CAPS = {
   AGENT_SESSION_ID_CREATE: "agent-session-id-create-v1",
   BOARD_WIDGET_PUT_CANVAS_DOC: "board-widget-put-canvas-doc",
+  /** Queue modes and exact input receipts, not active-backend injection availability. */
+  CHAT_INPUT_CUSTODY: "chat-input-custody-v1",
   CHAT_SEND_ROUTING_CONTRACT: "chat-send-routing-contract",
   CONTROL_UI_BROWSER_FOCUS: "control-ui-browser-focus",
   GATEWAY_RESTART_TARGET_SAFE: "gateway-restart-target-safe-v1",

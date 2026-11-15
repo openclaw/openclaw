@@ -44,6 +44,7 @@ import {
 } from "../device-revocation.js";
 import {
   GatewayOperatorAccessDeniedError,
+  GatewayOperatorAccessUnavailableError,
   resolveGatewayOperatorAccessAuthority,
   resumeGatewayOperatorAccessGrant,
 } from "../operator-access-policy.js";
@@ -347,7 +348,7 @@ describe("visitor access admitted caller", () => {
           caller.release();
           closeGatewayDeviceRevocation(context);
           await gateway?.stop();
-          sdkResources.close();
+          await sdkResources.close();
         }
       });
     },
@@ -441,7 +442,7 @@ describe("visitor access admitted caller", () => {
       } finally {
         closeGatewayDeviceRevocation(previousContext);
         await previousGateway.stop();
-        previousSdkResources.close();
+        await previousSdkResources.close();
       }
       await closeOpenClawStateDatabaseAsync();
 
@@ -466,9 +467,10 @@ describe("visitor access admitted caller", () => {
       });
       try {
         const grants = createVisitorGrantStore(state.env);
+        // Invalid policy configuration is unavailable, not a decision to revoke this visitor.
         expect(() =>
           resolveGatewayOperatorAccessAuthority(unassigned.id, restrictedConfig),
-        ).toThrow(GatewayOperatorAccessDeniedError);
+        ).toThrow(GatewayOperatorAccessUnavailableError);
         for (const profile of [staff, owner]) {
           expect(resolveGatewayOperatorAccessAuthority(profile.id, restrictedConfig)).toBeNull();
         }
@@ -697,7 +699,7 @@ describe("visitor access admitted caller", () => {
         }
       } finally {
         await gateway.stop();
-        sdkResources.close();
+        await sdkResources.close();
       }
     });
   });

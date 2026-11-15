@@ -3,19 +3,47 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
+import { i18n } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import * as clipboard from "../clipboard.ts";
+import * as toast from "../toast.ts";
+import { openConfigFile } from "./config-gateway-operations.ts";
 import { configSnapshot } from "./config-snapshot.test-support.ts";
 import { createPatchServer, loadedConfig } from "./config-suite.test-support.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
   createGatewayHarness,
   createConfigServerMock,
 } from "./config-test-harness.ts";
 import { mockRequest } from "./config-write.test-support.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
+registerSettingsEnglish();
+
 describe("config gateway operations", () => {
+  it.each([true, false])(
+    "localizes config file failures when clipboard copy is %s",
+    async (copied) => {
+      const translate = vi
+        .spyOn(i18n, "t")
+        .mockImplementation((key, params) => key + ":" + (params?.path ?? ""));
+      vi.spyOn(clipboard, "copyToClipboard").mockResolvedValue(copied);
+      const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+      const path = "/user/config.json";
+      const { state } = createConfigCapabilityHarness(
+        vi.fn().mockResolvedValue({ ok: false, path }),
+      );
+      await openConfigFile(state);
+      const key = copied ? "configView.filePathCopied" : "configView.filePath";
+      expect(state.lastError).toBe("configView.fileOpenFailed:\n\n" + key + ":" + path);
+      expect(translate).toHaveBeenCalledWith(key, { path });
+      expect(showToast).toHaveBeenCalledWith(expect.objectContaining({ message: state.lastError }));
+      vi.restoreAllMocks();
+    },
+  );
   it.each(["config.get", "config.schema"] as const)(
     "retires an in-flight %s when read access is revoked on the same client",
     async (method) => {

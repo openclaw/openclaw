@@ -302,7 +302,7 @@ it("retains failed Remove feedback after automatic unchanged dashboard reconcili
     widget: testId(view, "board-widget-action-error")?.textContent?.trim() ?? null,
   });
   await waitForSolid(() => {
-    expect(errors().board).toContain("could not be saved");
+    expect(errors().board).toContain("Couldn’t save the dashboard change. Try again.");
     expect(errors().widget).toContain("Dashboard write rejected");
   });
   const beforeRefresh = errors();

@@ -21,6 +21,7 @@ import { readVerifiedSessionColdChunks } from "./session-cold-storage-chunks.js"
 import { decodeSessionColdRecords } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
+import type { SessionTranscriptMatchDiagnostics } from "./session-history-read.types.js";
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { findTranscriptEventMatchingInDatabase } from "./session-transcript-match-read.js";
 import { resolveSqliteSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
@@ -48,7 +49,12 @@ function findSessionColdTranscriptEvent(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   archive: Omit<SessionColdArchive, "archive_blob">,
   match: (event: TranscriptEvent) => boolean,
-  selection?: { active?: boolean; indexedMessage?: boolean; beforeSeq?: number },
+  selection?: {
+    active?: boolean;
+    indexedMessage?: boolean;
+    beforeSeq?: number;
+    diagnostics?: SessionTranscriptMatchDiagnostics;
+  },
 ): { event: TranscriptEvent } | undefined {
   let found: { event: TranscriptEvent } | undefined;
   let indexReady = !selection?.active;
@@ -59,6 +65,10 @@ function findSessionColdTranscriptEvent(
     const messages = new Set<number>();
     const active = new Set<number>();
     for (const record of decodeSessionColdRecords(chunk.bytes, chunk.archive)) {
+      if (record.kind === "event" && selection?.diagnostics) {
+        selection.diagnostics.rowsVisited++;
+        selection.diagnostics.coldRows++;
+      }
       if (record.kind === "index") {
         indexReady = !record.row.needs_rebuild && record.row.indexed_seq === archive.last_seq;
       } else if (record.kind === "active" && record.row.context_eligible === null) {
@@ -221,23 +231,33 @@ export function findSessionTranscriptEventInWorker(
   request: SessionTranscriptEventMatchRequest,
 ): { event: TranscriptEvent } | undefined {
   const { target, match } = request;
+  const complete = (result: { event: TranscriptEvent } | undefined) => {
+    if (request.diagnostics) {
+      request.diagnostics.outcome = result ? "hit" : "miss";
+    }
+    return result;
+  };
   return readColdAware(
     database,
     target.sessionId,
-    () => findTranscriptEventMatchingInDatabase(database, request),
+    () => complete(findTranscriptEventMatchingInDatabase(database, request)),
     (archive) => {
       const active = match.kind === "active-assistant" || match.kind === "canvas-widget";
       const matchesVisibleFinal =
         match.kind === "visible-final"
           ? createVisibleAssistantResultEventMatcher(match.runId)
           : undefined;
-      return findSessionColdTranscriptEvent(
-        database,
-        archive,
-        (event) =>
-          (!active || Boolean(target.sessionKey)) &&
-          (matchesVisibleFinal ? matchesVisibleFinal(event) : matchesTranscriptEvent(event, match)),
-        { active },
+      return complete(
+        findSessionColdTranscriptEvent(
+          database,
+          archive,
+          (event) =>
+            (!active || Boolean(target.sessionKey)) &&
+            (matchesVisibleFinal
+              ? matchesVisibleFinal(event)
+              : matchesTranscriptEvent(event, match)),
+          { active, diagnostics: request.diagnostics },
+        ),
       );
     },
   );

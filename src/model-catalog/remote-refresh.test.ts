@@ -269,7 +269,7 @@ describe("remote model catalog refresh", () => {
     ],
     ["invalid UTF-8", async () => new Response(Uint8Array.of(0xff))],
     ["invalid schema", async () => Response.json({ ...bundle, models: [] })],
-    ["unsupported schemaVersion", async () => Response.json({ ...bundle, schemaVersion: 3 })],
+    ["unsupported schemaVersion", async () => Response.json({ ...bundle, schemaVersion: 4 })],
   ] satisfies Array<[string, typeof fetch]>)(
     "preserves the previous catalog without a fallback request after %s",
     async (_failure, fetch) => {

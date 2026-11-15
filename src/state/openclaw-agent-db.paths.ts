@@ -341,6 +341,21 @@ export function isSameOpenClawAgentDatabasePath(left: string, right: string): bo
   );
 }
 
+export function includesOpenClawAgentDatabasePath(
+  paths: readonly string[],
+  target: string,
+  samePath = isSameOpenClawAgentDatabasePath,
+): boolean {
+  return paths.some((pathname) => {
+    try {
+      return samePath(pathname, target);
+    } catch {
+      // An uncertain sibling cannot classify this target; its own inspection reports the failure.
+      return false;
+    }
+  });
+}
+
 function canonicalPathForRegistryBoundary(pathname: string): string {
   const identity = resolveAgentDatabasePathIdentity(pathname);
   if ("realPath" in identity) {

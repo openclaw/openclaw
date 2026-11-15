@@ -23,21 +23,23 @@ import { readQaJsonResponse } from "./ignored-response-body.js";
 import { safeParseQaJson } from "./json.js";
 import * as parity from "./parity-shared.js";
 import type { RuntimeId } from "./runtime-id.js";
-import {
-  buildRuntimeParityCacheDiagnostics,
-  type RuntimeParityCacheDiagnostics,
-} from "./runtime-parity-cache-diagnostics.js";
+import { buildRuntimeParityCacheDiagnostics } from "./runtime-parity-cache-diagnostics.js";
 import type { RuntimeParityUsage } from "./runtime-parity-usage.js";
+import type {
+  RuntimeParityCell,
+  RuntimeParityResult,
+  RuntimeParityResultCell,
+  RuntimeParityScenarioExecution,
+  RuntimeParityStatus,
+  RuntimeParityToolCall,
+  RuntimeParityUsagePolicy,
+} from "./runtime-parity.types.js";
 import {
   extractQaMessageText,
   readQaMessageToolCalls,
   readQaTranscriptMessages,
 } from "./runtime-transcript.js";
 import { readRawQaSessionStore } from "./suite-runtime-agent-session.js";
-
-export type { RuntimeParityUsage } from "./runtime-parity-usage.js";
-
-type RuntimeParityStatus = "pass" | "fail" | "skip";
 
 const CANONICAL_RUNTIME_IDS = ["openclaw", "codex"] as const satisfies readonly RuntimeId[];
 
@@ -49,39 +51,6 @@ export function normalizeRuntimePair(
   }
   return ["openclaw", "codex"];
 }
-
-export type RuntimeParityToolCall = {
-  tool: string;
-  argsHash: string;
-  resultHash: string;
-  errorClass?: string;
-};
-
-export type RuntimeParityUsagePolicy =
-  | { expectation: "assistant-message-required" }
-  | { expectation: "not-applicable"; reason: string };
-
-export type RuntimeParityCell = {
-  runtime: RuntimeId;
-  transcriptBytes: string;
-  toolCalls: RuntimeParityToolCall[];
-  providerPlanToolCalls?: RuntimeParityToolCall[];
-  finalText: string;
-  usage: RuntimeParityUsage;
-  cacheDiagnostics?: RuntimeParityCacheDiagnostics;
-  wallClockMs: number;
-  bootstrapWallClockMs?: number;
-  transportErrorClass?: string;
-  runtimeErrorClass?: string;
-  bootStateLines: string[];
-  sentinelFindings?: GatewayLogSentinelFinding[];
-  modelSwitchEvidence?: Record<string, unknown>;
-};
-
-type RuntimeParityResultCell = RuntimeParityCell & {
-  status: RuntimeParityStatus;
-  details?: string;
-};
 
 // Runtime-tool fixtures reserve this prefix for tracked harness limitations.
 // Matching only that explicit skip keeps unexpected coverage loss blocking.
@@ -95,22 +64,6 @@ function isKnownHarnessGapSkip(
     cell.details?.trimStart().startsWith(KNOWN_HARNESS_GAP_DETAILS_PREFIX) === true
   );
 }
-
-export type RuntimeParityDrift =
-  | "none"
-  | "text-only"
-  | "tool-call-shape"
-  | "tool-result-shape"
-  | "structural"
-  | "failure-mode";
-
-export type RuntimeParityResult = {
-  scenarioId: string;
-  runtimeParityUsage?: RuntimeParityUsagePolicy;
-  cells: Record<RuntimeId, RuntimeParityResultCell>;
-  drift: RuntimeParityDrift;
-  driftDetails?: string;
-};
 
 export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUsagePolicy {
   // Legacy or malformed summaries must not silently disable live-usage proof.
@@ -127,12 +80,6 @@ export function resolveRuntimeParityUsagePolicy(value: unknown): RuntimeParityUs
   }
   return { expectation: "assistant-message-required" };
 }
-
-export type RuntimeParityScenarioExecution = {
-  status: RuntimeParityStatus;
-  details?: string;
-  cell: RuntimeParityCell;
-};
 
 export function runtimeParityCellStatus(cell: RuntimeParityResultCell): RuntimeParityStatus {
   return isRuntimeParityCellPassable(cell) ? cell.status : "fail";

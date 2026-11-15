@@ -57,7 +57,7 @@ function listRequest<P>(list: (params?: P) => unknown, methods: Record<string, (
   return mockSessionRequests({ "sessions.list": list, ...methods });
 }
 const subscribed = () => ({ subscribed: true });
-function escape(input: HTMLInputElement) {
+function escape(input: HTMLElement) {
   const event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
   input.dispatchEvent(event);
   expect(event.defaultPrevented).toBe(true);
@@ -280,8 +280,9 @@ describe("Sessions page typing and detail ownership", () => {
         escape(input());
       }
       await page.updateComplete;
+      // Clearing keeps the field and returns focus to it, ready for the next search.
       expect(document.activeElement).toBe(input());
-      expect(clear).toMatchObject({ hidden: true, disabled: true });
+      expect(page.querySelector('button[aria-label="Clear search"]')).toBeNull();
       expect([input().value, page.selectedSessions.size, page.result]).toEqual(["", 0, null]);
       const count = requests.length;
       await advance(200);

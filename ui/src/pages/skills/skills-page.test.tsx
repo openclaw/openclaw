@@ -19,6 +19,32 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function libraryButton(page: Element, label: string) {
+  return [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+    (button) => button.textContent?.trim() === label,
+  )!;
+}
+
+async function createLibraryDraft(page: HTMLElement, slug: string, text: string) {
+  const create = () => libraryButton(page, "Create skill");
+  await waitForFast(() => expect(create()?.disabled).toBe(false));
+  create().click();
+  flush();
+  await waitForFast(() =>
+    expect(page.querySelector('textarea[name="library-content"]')).not.toBeNull(),
+  );
+  const content = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
+  for (const [input, value] of [
+    [page.querySelector<HTMLInputElement>('input[name="library-slug"]')!, slug],
+    [content, text],
+  ] as const) {
+    input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+  flush();
+  return content;
+}
+
 describe("Skills discovery lifecycle", () => {
   it("keeps Discovery library status in sync with a held editor toggle", async () => {
     onTestFinished(installDialogPolyfill());
@@ -47,10 +73,7 @@ describe("Skills discovery lifecycle", () => {
     expect(status()).toContain("Enabled");
     card.querySelector<HTMLButtonElement>(".skill-discovery-card__open")!.click();
     const { dialog } = await getRenderedModalDialog(page);
-    const button = (label: string) =>
-      [...dialog.querySelectorAll<HTMLButtonElement>("button")].find(
-        (candidate) => candidate.textContent?.trim() === label,
-      )!;
+    const button = (label: string) => libraryButton(dialog, label);
     button("Disable").click();
     try {
       await waitForFast(() => expect(button("Enable").disabled).toBe(true));
@@ -80,25 +103,35 @@ describe("Skills discovery lifecycle", () => {
       return method === "skills.search" ? { results: [] } : { skills: [] };
     });
     const mounted = mountSkills(request, "settings");
-    const create = () =>
-      [...mounted.page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Create skill",
-      )!;
-    await waitForFast(() => expect(create()?.disabled).toBe(false));
-    create().click();
+    const content = await createLibraryDraft(mounted.page, "retained-draft", "# Retained draft");
+    for (const input of [
+      { ctrlKey: true, isComposing: true },
+      { metaKey: true, isComposing: true },
+      { ctrlKey: true, keyCode: 229 },
+      { metaKey: true, keyCode: 229 },
+      {},
+    ]) {
+      const event = new KeyboardEvent("keydown", {
+        key: "Enter",
+        bubbles: true,
+        cancelable: true,
+        ...input,
+      });
+      content.dispatchEvent(event);
+      flush();
+      expect(event.defaultPrevented).toBe(false);
+      expect(request).not.toHaveBeenCalledWith("skills.library.save", expect.anything());
+    }
+    content.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true }));
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    );
     flush();
-    const content = mounted.page.querySelector<HTMLTextAreaElement>(
-      'textarea[name="library-content"]',
-    )!;
-    content.value = "# Retained draft";
-    content.dispatchEvent(new Event("input", { bubbles: true }));
-    const slug = mounted.page.querySelector<HTMLInputElement>('input[name="library-slug"]')!;
-    slug.value = "retained-draft";
-    slug.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    [...mounted.page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Save skill")!
-      .click();
+    expect(request).not.toHaveBeenCalledWith("skills.library.save", expect.anything());
+    content.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+    content.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }),
+    );
     await waitForFast(() => expect(content.readOnly).toBe(true));
     await new Promise((resolve) => {
       setTimeout(resolve, 0);
@@ -124,6 +157,7 @@ describe("Skills discovery lifecycle", () => {
   });
 
   it("keeps installed selection responsive while verdict enrichment refreshes", async () => {
+    await import("./skill-detail.tsx"); // Module loading is setup for the selection invariant.
     const report = {
       workspaceDir: "/workspace",
       managedSkillsDir: "/managed",
@@ -165,12 +199,11 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLInputElement>('input[value="workspace"]')!.click();
     await waitForFast(() => expect(page.textContent).toContain("Unavailable"));
     page.querySelector<HTMLButtonElement>('[aria-label="Open Linked Skill details"]')!.click();
-    await waitForFast(() =>
-      expect(page.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill"),
-    );
+    const { modal } = await getRenderedModalDialog(page);
+    expect(modal.querySelector(".exec-approval-title")?.textContent).toBe("Linked Skill");
     const dialog = page.querySelector(".skill-reader-dialog");
     [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Refresh")!
+      .find((button) => button.getAttribute("aria-label") === "Refresh")!
       .click();
     await waitForFast(() => expect(verdictRequests).toBe(2));
     await waitForFast(() => expect(dialog?.textContent).toContain("Refreshing"));
@@ -343,45 +376,21 @@ describe("Skills discovery lifecycle", () => {
         ? {
             ...personalLibrary,
             entries: [
-              {
-                skillId: "12345678-1234-1234-1234-123456789abc",
-                revision: "a".repeat(64),
+              libraryEntry({
                 slug: "retained-library-skill",
                 name: "retained-library-skill",
                 description: "Retained library entry",
-                ownerProfileId: "alice",
-                authorProfileId: "alice",
-                ownerLabel: "Alice",
-                shared: false,
-                enabled: true,
-                removed: false,
-                canEdit: true,
-                createdAt: 1,
-                updatedAt: 1,
-              },
+              }),
             ],
           }
         : { skills: [] };
     });
     const { page, connection } = mountSkills(request, "settings");
-    await waitForFast(() => {
-      const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Create skill",
-      );
-      expect(create?.disabled).toBe(false);
-    });
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Create skill")!
-      .click();
-    flush();
-    const content = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
-    content.value = "# Offline draft\nKeep this authored content.";
-    content.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
-    const slug = page.querySelector<HTMLInputElement>('input[name="library-slug"]')!;
-    slug.value = "offline-draft";
-    slug.dispatchEvent(new Event("input", { bubbles: true }));
-    flush();
+    const content = await createLibraryDraft(
+      page,
+      "offline-draft",
+      "# Offline draft\nKeep this authored content.",
+    );
     const snapshot = connection.gateway.snapshot;
     connection.publish({ ...snapshot, phase: "reconnecting", hello: null });
     flush();
@@ -394,15 +403,8 @@ describe("Skills discovery lifecycle", () => {
     expect(page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')?.value).toBe(
       content.value,
     );
-    await waitForFast(() => {
-      const save = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
-        (button) => button.textContent?.trim() === "Save skill",
-      );
-      expect(save?.disabled).toBe(false);
-    });
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Save skill")!
-      .click();
+    await waitForFast(() => expect(libraryButton(page, "Save skill")?.disabled).toBe(false));
+    libraryButton(page, "Save skill").click();
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("skills.library.save", {
         expectedRevision: null,
@@ -418,15 +420,9 @@ describe("Skills discovery lifecycle", () => {
       expect(page.querySelector('textarea[name="library-content"]')).toBeNull(),
     );
     await waitForFast(() => expect(page.textContent).toContain("retained-library-skill"));
-    [...page.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent?.trim() === "Create skill")!
-      .click();
-    flush();
-    const successor = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
+    const successor = await createLibraryDraft(page, "", "# Successor draft");
     expect(successor).not.toBeNull();
     expect(successor.readOnly).toBe(false);
-    successor.value = "# Successor draft";
-    successor.dispatchEvent(new Event("input", { bubbles: true }));
     pending.reject(new Error("Synthetic retired save rejection"));
     await waitForFast(() => {
       expect(page.querySelector('textarea[name="library-content"]')).toBe(successor);
@@ -672,6 +668,169 @@ describe("Skills discovery lifecycle", () => {
     page.querySelector<HTMLButtonElement>('[aria-label="Skill settings"]')!.click();
     expect(context.navigate).toHaveBeenCalledWith("skill-settings", { search: "?agent=research" });
   });
+  it.each([
+    {
+      outcome: "success",
+      install: () => Promise.resolve({ message: "Installed @alice/calendar" }),
+      role: "status",
+      text: "Installed @alice/calendar",
+      action: "Installed",
+      disabled: true,
+    },
+    {
+      outcome: "failure",
+      install: () => Promise.reject(new Error("ClawHub download failed")),
+      role: "alert",
+      text: "ClawHub download failed",
+      action: "Install Calendar",
+      disabled: false,
+    },
+  ])(
+    "shows the install $outcome in the open ClawHub dialog",
+    async ({ install, role, text, action, disabled }) => {
+      onTestFinished(installDialogPolyfill());
+      const admitted = deferred();
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.search") {
+          return { results: [] };
+        }
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, defaultTarget: "workspace" };
+        }
+        if (method === "skills.status") {
+          return { skills: [] };
+        }
+        if (method === "skills.detail") {
+          return {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          };
+        }
+        if (method === "skills.install") {
+          await admitted.promise;
+          return install();
+        }
+        throw new Error(`Unexpected method: ${method}`);
+      });
+      const { page, publishRouteData } = mountSkills(request);
+      publishRouteData({ clawhubRef: "@alice/calendar" });
+      const actionButton = () =>
+        page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions button");
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Install Calendar"));
+
+      actionButton()!.click();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe("Installing…"));
+      expect(page.querySelector(".skill-reader-dialog__notice")).toBeNull();
+
+      admitted.resolve();
+      await waitForFast(() => expect(actionButton()?.textContent).toBe(action));
+      const notice = page.querySelector(".skill-reader-dialog .skill-reader-dialog__notice");
+      expect(notice?.getAttribute("role")).toBe(role);
+      expect(notice?.textContent).toBe(text);
+      expect(actionButton()?.disabled).toBe(disabled);
+    },
+  );
+  it.each(["refresh", "route", "mine", "unchanged"] as const)(
+    "retires workspace install feedback for %s without blocking the next action",
+    async (next) => {
+      onTestFinished(installDialogPolyfill());
+      let report = {
+        workspaceDir: "/workspace",
+        managedSkillsDir: "/managed",
+        skills: [
+          createSkill({
+            name: "Calendar",
+            primaryEnv: undefined,
+            clawhub: {
+              status: "linked",
+              valid: true,
+              registry: "https://clawhub.ai",
+              ownerHandle: "alice",
+              slug: "calendar",
+              installedVersion: "1.0.0",
+              installedAt: 1,
+              originPath: "/workspace/skills/calendar/.clawhub/origin.json",
+              lockPath: "/workspace/.clawhub/lock.json",
+            },
+          }),
+        ],
+      };
+      const request = vi.fn(async (method: string) => {
+        if (method === "skills.library.list") {
+          return { ...personalLibrary, defaultTarget: "workspace" };
+        }
+        if (method === "skills.status") {
+          return report;
+        }
+        if (method === "skills.securityVerdicts") {
+          return { items: [] };
+        }
+        if (method === "skills.detail") {
+          return {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          };
+        }
+        if (method === "skills.install") {
+          return { message: "Installed @alice/calendar" };
+        }
+        throw new Error("Unexpected method: " + method);
+      });
+      const { page, publishRouteData } = mountSkills(request, "settings");
+      publishRouteData({ clawhubRef: "@alice/calendar" });
+      const action = () =>
+        page.querySelector<HTMLButtonElement>(".skill-reader-dialog__actions button");
+      await waitForFast(() => expect(action()?.textContent).toBe("Install Calendar"));
+      action()!.click();
+      await waitForFast(() => expect(action()?.textContent).toBe("Installed"));
+      expect(action()?.disabled).toBe(true);
+
+      if (next === "unchanged") {
+        publishRouteData({ clawhubRef: "@alice/calendar", report });
+        await waitForFast(() => expect(action()?.textContent).toBe("Installed"));
+        expect(action()?.disabled).toBe(true);
+        expect(page.querySelector(".skill-reader-dialog__notice")?.textContent).toContain(
+          "Installed",
+        );
+        return;
+      }
+      if (next === "mine") {
+        page.querySelector<HTMLButtonElement>('.skill-reader-dialog [aria-label="Close"]')!.click();
+        await waitForFast(() => expect(action()).toBeNull());
+        page.querySelector<HTMLInputElement>('input[type="radio"][value="mine"]')!.click();
+        // The same installed inventory must not disable a different destination.
+        publishRouteData({ clawhubRef: "@alice/calendar", report });
+      } else {
+        // Model a supported external removal through the next accepted inventory, not a CLI deletion.
+        report = { ...report, skills: [] };
+        if (next === "route") {
+          publishRouteData({ clawhubRef: "@alice/calendar", report });
+        } else {
+          [...page.querySelectorAll<HTMLButtonElement>("button")]
+            .find((button) => button.getAttribute("aria-label") === "Refresh")!
+            .click();
+        }
+      }
+      await waitForFast(() =>
+        expect(action()?.textContent).toBe(next === "mine" ? "Import skill" : "Install Calendar"),
+      );
+      expect(action()?.disabled).toBe(false);
+      expect(page.querySelector(".skill-reader-dialog__notice")).toBeNull();
+      action()!.click();
+      if (next === "mine") {
+        await waitForFast(() =>
+          expect(page.querySelector('input[name="library-import-slug"]')).not.toBeNull(),
+        );
+        expect(request.mock.calls.filter(([method]) => method === "skills.install")).toHaveLength(
+          1,
+        );
+      } else {
+        await waitForFast(() =>
+          expect(request.mock.calls.filter(([method]) => method === "skills.install")).toHaveLength(
+            2,
+          ),
+        );
+      }
+    },
+  );
   it("keeps Settings scope independent of discovery and rejects an older route snapshot", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "skills.library.list") {

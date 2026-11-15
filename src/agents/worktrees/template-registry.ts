@@ -13,6 +13,16 @@ export type WorktreeTemplateRecord = {
   lastUsedAt: number;
 };
 
+export const retainedWorktreeTemplateKey = (cacheKey: string, contentKey: string) =>
+  `retained:${cacheKey}:${contentKey}`;
+
+/** Retained commits share the publication owner's mutation lease. */
+export function worktreeTemplateMutationKey(cacheKey: string): string {
+  return cacheKey.startsWith("retained:")
+    ? cacheKey.slice("retained:".length, cacheKey.lastIndexOf(":"))
+    : cacheKey;
+}
+
 export type WorktreeWarmPoolRequest = {
   template: WorktreeTemplateRecord;
   sourceOnly: boolean;

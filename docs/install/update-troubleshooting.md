@@ -173,6 +173,12 @@ the update. Do not weaken recovery permissions or delete the activation journal;
 if Doctor reports a live owner or cannot identify the runtime, follow that
 diagnostic before retrying.
 
+If OpenClaw 2026.9.7 or 2026.9.8 reports `Package publication recovery permissions
+are unsafe`, Doctor cannot clear it: use the
+[manual procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+once. OpenClaw 2026.10.5 and later name the rejected object, its mode, and its
+link count.
+
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
 version satisfying both the candidate's full engine range and the updater's
 supported Node range. The suggested version is the lowest supported release in
@@ -640,6 +646,13 @@ Windows host-wide legacy capture cleanup remains report-only.
   confirmed ENOSPC instead of trying older commits; it does not delete shared
   package-manager stores. See [Git checkout flow](/cli/update#git-checkout-flow)
   for staging placement and the older published-updater limitation.
+- `preflight-local-replay-conflict`: a local commit on a dev checkout conflicts
+  with every update candidate that was tried. The failing `preflight-rebase`
+  check names the local commit and the conflicted paths. Rebase the local
+  commits onto the update target and resolve those paths, or drop the commits,
+  then retry. After a conflict the updater skips older candidates whose content
+  at the conflicted paths is unchanged and still tries any candidate that
+  differs there.
 - `deps-install-failed`, `build-failed`, `ui-build-failed`: inspect the failing
   step, fix the dependency or build error, then retry.
 - `global-install-failed`: the package-manager install, staging, verification,

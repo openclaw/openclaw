@@ -64,3 +64,34 @@ it.each<PermissionCase>([
     failures: allowed ? [] : [{ gate: "allowFrom", key: "tools.elevated.allowFrom.whatsapp" }],
   });
 });
+
+// #51245: the live gate for a Telegram native slash command, with no channel
+// plugin registered, must honor tools.elevated.allowFrom.telegram.
+const telegramSlash: MsgContext = {
+  Provider: "telegram",
+  Surface: "telegram",
+  ChatType: "direct",
+  CommandSource: "native",
+  SessionKey: "telegram:slash:123456",
+  SenderId: "123456",
+  From: "telegram:123456",
+};
+it.each<[string, Array<string | number>, Partial<MsgContext>, boolean]>([
+  ["authorizes a numeric sender id", ["123456"], {}, true],
+  ["authorizes a number-typed sender id", [123456], {}, true],
+  ["authorizes a telegram:-prefixed sender id", ["telegram:123456"], {}, true],
+  ["denies a different sender", ["123456"], { SenderId: "999999", From: "telegram:999999" }, false],
+])("telegram slash session %s", (_name, allowFrom, ctx, allowed) => {
+  expect(
+    resolveElevatedPermissions({
+      cfg: { tools: { elevated: { enabled: true, allowFrom: { telegram: allowFrom } } } },
+      agentId: "main",
+      provider: "telegram",
+      ctx: { ...telegramSlash, ...ctx },
+    }),
+  ).toEqual({
+    enabled: true,
+    allowed,
+    failures: allowed ? [] : [{ gate: "allowFrom", key: "tools.elevated.allowFrom.telegram" }],
+  });
+});

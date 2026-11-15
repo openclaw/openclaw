@@ -95,6 +95,11 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     allowGatewaySubagentBinding: boolean;
     /** Reads accepted inventory without scheduling discovery or expiry renewal. */
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
+    /** Admission facts travel with run projections; never reread live inventory for a started turn. */
+    capturedModelCatalog?: Readonly<{
+      admitted: ModelCatalogSnapshot;
+      published: ModelCatalogSnapshot;
+    }>;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
     /** Rechecks native CLI login availability without refreshing provider inventory. */
@@ -214,6 +219,8 @@ export type PreparedModelRuntimeRefreshOptions = {
   joinSupersedingPublication?: boolean;
   /** Restricts replacement to configured owners whose normalized agent id is present. */
   agentIds?: ReadonlySet<string>;
+  /** Auth-only config publications rebuild credentials without replacing plugin capabilities. */
+  preservePluginGenerations?: boolean;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{
@@ -254,6 +261,8 @@ export type PreparedModelCatalogProviderFacts = {
 
 export type PreparedModelCatalogInventory = {
   catalog: ModelCatalogSnapshot;
+  /** An unscoped provider acquisition completed; retained across provider-local refreshes. */
+  fullProviderDiscovery?: true;
   runtimeModels: ReadonlyMap<string, readonly Model[]>;
   key: string;
   pluginFingerprint: string;

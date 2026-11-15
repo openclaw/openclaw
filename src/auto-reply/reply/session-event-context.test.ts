@@ -4,6 +4,28 @@ import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-
 import { projectChatDisplayMessages } from "../../gateway/chat-display-projection.js";
 import { buildSessionEventContext } from "./session-event-context.js";
 
+it("keeps restart recovery intact for the agent and out of chat display", () => {
+  const text =
+    "The Gateway restarted while you were working. Resume your work: inspect saved child work before repeating effects. Workspace and publication ownership do not transfer.";
+  const ctx = buildSessionEventContext({
+    cfg: {},
+    agentId: "main",
+    sessionKey: "agent:main:repair",
+    text,
+    options: { source: "restart" },
+    occurrenceId: "restart-occurrence",
+    target: { sessionId: "existing", generation: "current" },
+    assertCurrent() {},
+  });
+  expect(ctx.Body).toBe(text);
+  expect(ctx.BodyForAgent).toBe(text);
+  const displayed = projectChatDisplayMessages([
+    { role: "user", content: ctx.BodyForAgent, provenance: ctx.InputProvenance },
+  ]);
+  expect(displayed).toEqual([]);
+  expect(JSON.stringify(displayed)).not.toContain("publication ownership");
+});
+
 it("retains scheduled execution provenance without projecting the prompt as a result", () => {
   const sessionKey = "agent:main:scheduled-review";
   const job = makeCronJob({

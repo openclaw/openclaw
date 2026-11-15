@@ -111,7 +111,10 @@ it("keeps the destination session for a reply to a delivered cron question", () 
 
     const deliveryStartedAt = Date.now();
     const delivered = await dispatchCronDelivery(params);
-    expect(delivered, JSON.stringify(delivered)).toMatchObject({ delivered: true });
+    expect(delivered, JSON.stringify(delivered)).toMatchObject({
+      delivered: true,
+      deliveryReceipts: [{ channel: "telegram", to: "12345", messageId: "cron-question" }],
+    });
     const entry = latest(destination);
     expect(entry).toMatchObject(generation);
     expect(entry?.lastInteractionAt).toBeGreaterThanOrEqual(deliveryStartedAt);

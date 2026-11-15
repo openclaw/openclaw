@@ -37,6 +37,7 @@ export async function admitGatewayCronOccurrence(
 export async function runGatewayCronSessionEvent(
   request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],
   resolveTarget: ResolveCronTarget,
+  cronStorePath?: string,
 ) {
   const sessionKey = resolveCronSessionTargetSessionKey(request.job.sessionTarget);
   const target = resolveTarget({ agentId: request.job.agentId, sessionKey });
@@ -62,6 +63,7 @@ export async function runGatewayCronSessionEvent(
   return await runCronSessionTurn({
     ...request,
     cfg: target.runtimeConfig,
+    cronStorePath,
     agentId: target.agentId,
     sessionKey: target.sessionKey,
   });

@@ -91,10 +91,12 @@ describe("gateway startup trace", () => {
           rss.mockReturnValue(256 * 1024 * 1024);
         });
         expect(info.mock.calls[0]?.[0]).not.toContain("rssMb=");
-        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=0 /);
+        // Worker counts belong to the process, which Gateway tests share; the case above
+        // owns worker attribution, this one the process memory fields.
+        expect(info.mock.calls[1]?.[0]).toMatch(/ rssMb=256\.0 heapUsedMb=\d+\.\d workers=\d/);
         rss.mockReturnValue(512 * 1024 * 1024);
         trace.mark("ready");
-        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=0 /);
+        expect(info.mock.calls.at(-1)?.[0]).toMatch(/ rssMb=512\.0 heapUsedMb=\d+\.\d workers=\d/);
       } finally {
         trace.close();
       }
@@ -202,7 +204,7 @@ describe("gateway startup trace", () => {
         "database-admission",
         () => Promise.resolve(),
         (name, run) => measureCliCommandStartup(name, run),
-        () => ({ agents: 200 }),
+        () => ({ agents: 200, stateIntegrityReason: "schema-mismatch" }),
       );
     }
     const info = vi.fn();
@@ -227,7 +229,9 @@ describe("gateway startup trace", () => {
     const admissionStep = messages.find((message) =>
       message.startsWith("startup trace: process.bootstrap.cli.bootstrap.database-admission "),
     );
-    expect(admissionStep).toMatch(/start=\d+\.\dms calls=2\.0 agents=400\.0$/);
+    expect(admissionStep).toMatch(
+      /start=\d+\.\dms calls=2\.0 agents=400\.0 stateIntegrityReason=schema-mismatch$/,
+    );
     expect(admissionStep).not.toContain("rssMb=");
     expect(messages.find((message) => message.startsWith("startup trace: ready "))).toContain(
       "cli.bootstrap.database-admission:",

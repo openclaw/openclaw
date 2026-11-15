@@ -104,6 +104,15 @@ system input admitted under the owning session's current principal. Finished row
 their logs follow the registry's bounded result retention and explicit removal. A
 session reset invalidates completion eligibility through the recorded session ID.
 
+The same table also holds a best-effort row with `kind: "ordinary"` for each running
+ordinary (non-durable) background command whose exit would wake its conversation,
+except in incognito sessions. It carries the same bounded fields, with the generic
+command summary, no unit, and a `sandboxed` flag for sandbox commands. The registry writes it when the command is backgrounded and deletes it when
+the command exits while the Gateway runs. On startup the registry reports each remaining
+row as lost through the same completion path, then deletes it. The Gateway boot record
+tells it whether the previous Gateway shut down or crashed while the command ran. An older binary reads such a row as a durable process with a missing unit
+and reports it as lost, which remains accurate.
+
 ### Linux database page cache
 
 After readiness, the Gateway samples Linux file-cache residency and checks it again
@@ -191,6 +200,10 @@ session node owns their retention and deletion; no migration is required.
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the cache format. Revision 2 introduced the current prose (one to three concise sentences); revision 3 keeps that prose and certifies that the oversized-omission flag counts only skipped user or assistant messages, not oversized tool results such as screenshots. Missing or pre-revision-2 records retain their text and coverage while the existing queue refreshes the prose with a model call. Revision-2 records are rechecked once without a model call unless new messages arrived: the stale omission notice is removed when only tool results were skipped, and kept when an earlier user or assistant message was genuinely omitted. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### Scheduled run parent receipts
+
+A child-placement scheduled run stores one optional, private `scheduledMemoryParent` object in its `:run:` row's existing `session_nodes.entry_json`. It records the parent session the occurrence was admitted against (key, session ID, lifecycle revision) and the occurrence's admitted owner bit, so sessions the run spawns resolve memory through that parent. Only cron run preparation writes it; it adds no SQL table, column, or schema-version change. See [scheduled run parent receipts](/reference/database-schemas/storage-changes#scheduled-run-parent-receipts) for its writer, lifetime, and upgrade and downgrade behavior.
 
 ### User-turn model prompt projections
 
@@ -826,3 +839,24 @@ written. Subsequent preparation, activation, and recovery reject unsupported
 generations before drain. Status and preview do not adopt the policy or migrate
 the control database. The inventory does not enable collection, disk-space
 reclamation, or host-maintenance deletion.
+
+### Usage-ranked tool index
+
+Agent schema 42 adds `agent_tool_usage(tool_id, score, updated_at)` in the
+executing agent's database. It stores only aggregate successful-call scores and
+last-success timestamps. The existing `cache_entries` owner holds import coverage
+boundaries and a reset generation; it does not retain per-call IDs or payloads.
+
+The opt-in Labs feature reads at prompt boundaries. Run admission and accumulated
+counts share the existing transcript actor's transaction and authority grant when
+the transcript uses the executing agent's canonical database. Other transcript
+stores and late completions use the existing run-settlement writer. Tool-only
+mutations declare an empty session write scope, preserving unrelated session
+facts. Inactive rows expire after 90 days; reads exclude them
+and usage writes prune them. Reset fences pending batches, and agent retirement
+removes the counters. Incognito sessions never record usage. Schema migration
+creates an empty table, with SQLite scoped backup/rollback and PostgreSQL parity;
+it does not automatically scan or import existing transcripts.
+
+See [usage-ranked tool index](/concepts/experimental-features#usage-ranked-tool-index)
+for authenticated inspection, explicit transcript import, reset, and privacy.

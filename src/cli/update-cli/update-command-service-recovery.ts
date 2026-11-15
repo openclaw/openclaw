@@ -10,6 +10,7 @@ import {
   resolveUpdateStateTargetVersion,
 } from "../../infra/update-candidate-state.versions.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import {
   getUpdateRun,
   recordUpdateRunDiagnostics,
@@ -507,6 +508,16 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
       await before.windowsTaskAutoStartRecovery?.restore(true, checkOriginal, assertOriginal);
       await checkOriginal();
     } else {
+      // Final recovery may be the first admitted activation after verification
+      // failed. Restore the task under the same ownership guard before /Run.
+      await before.windowsTaskAutoStartRecovery?.restore(
+        true,
+        async () => {
+          await readCurrentService();
+        },
+        assertCurrent,
+      );
+      assertCurrent();
       await runUpdatedInstallGatewayCommand(
         {
           onGatewayStartAttempted: params.onGatewayStartAttempted,
@@ -639,14 +650,7 @@ export async function compensateOriginalManagedService(
   return {
     result: {
       ...result,
-      recovery: {
-        ...result.recovery,
-        serviceRestartSafe: false,
-        reason:
-          result.recovery?.serviceRestartSafe === false
-            ? result.recovery.reason
-            : "runtime-verification-failed",
-      },
+      recovery: unsafeUpdateRecovery(result.recovery),
       steps: [
         ...result.steps,
         {

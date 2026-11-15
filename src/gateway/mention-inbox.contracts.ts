@@ -14,6 +14,8 @@ export type MentionInbox = {
     client: GatewayClient | null,
     input: UsersMentionableParams,
     publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
+    /** Internal display lookup includes the reader, but never creates recipients. */
+    displayProfileIds?: readonly string[],
   ) => Promise<void>;
   /** @deprecated Await validateRecipientsAsync. Removed in a later release after stable deprecation. */
   validateRecipients: (

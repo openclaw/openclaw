@@ -78,3 +78,50 @@ it("keeps the receiving window scoped and skips subscriptions retired during del
   receiver.dispatchEvent(new MessageEvent("message", { source }));
   expect(otherReceiver).toHaveBeenCalledOnce();
 });
+
+it("defers frame source lookup until delivery and promotes only the matching frame", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const source = frame.contentWindow!;
+  const sourceRead = vi.spyOn(frame, "contentWindow", "get");
+  const callback = vi.fn();
+  onTestFinished(observeWindowMessage(window, frame, callback));
+  expect(sourceRead).not.toHaveBeenCalled();
+  window.dispatchEvent(new MessageEvent("message", { source: window }));
+  expect(callback).not.toHaveBeenCalled();
+  const event = new MessageEvent("message", { source });
+  window.dispatchEvent(event);
+  expect(callback).toHaveBeenCalledExactlyOnceWith(event);
+  sourceRead.mockClear();
+  window.dispatchEvent(event);
+  expect(sourceRead).not.toHaveBeenCalled();
+  expect(callback).toHaveBeenCalledTimes(2);
+});
+
+it("retires unresolved frames and preserves registration order after promotion", () => {
+  const frame = document.body.appendChild(document.createElement("iframe"));
+  onTestFinished(() => frame.remove());
+  const source = frame.contentWindow!;
+  const sourceRead = vi.spyOn(frame, "contentWindow", "get");
+  const retired = vi.fn();
+  const release = observeWindowMessage(window, frame, retired);
+  release();
+  release();
+  window.dispatchEvent(new MessageEvent("message", { source }));
+  expect(sourceRead).not.toHaveBeenCalled();
+  expect(retired).not.toHaveBeenCalled();
+
+  const delivered: string[] = [];
+  let releaseLast = () => {};
+  onTestFinished(
+    observeWindowMessage(window, frame, () => {
+      delivered.push("frame");
+      releaseLast();
+    }),
+  );
+  onTestFinished(observeWindowMessage(window, source, () => delivered.push("source")));
+  releaseLast = observeWindowMessage(window, frame, () => delivered.push("retired"));
+  onTestFinished(releaseLast);
+  window.dispatchEvent(new MessageEvent("message", { source }));
+  expect(delivered).toEqual(["frame", "source"]);
+});

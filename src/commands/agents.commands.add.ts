@@ -31,7 +31,7 @@ import {
 } from "../agents/auth-profiles/sqlite.js";
 import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { throwExpectedCliError } from "../cli/failure-output.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { runWithLocalStateOwner } from "../cli/local-state-owner.js";
 import { isTerminalInteractive } from "../cli/terminal-interactivity.js";
 import { logConfigUpdated } from "../config/logging.js";

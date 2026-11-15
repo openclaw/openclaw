@@ -87,6 +87,41 @@ export async function prepareMSTeamsDebounceEntry(params: {
   };
 }
 
+/** Proactive sends replay this reference, so every inbound owner stores the same shape. */
+export function buildMSTeamsConversationReference(
+  activity: MSTeamsTurnContext["activity"],
+  threadId?: string,
+): StoredConversationReference {
+  const conversation = activity.conversation;
+  const from = activity.from;
+  const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
+    | { timezone?: string }
+    | undefined;
+  // Proactive sends require the tenant and normalized regional service URL
+  // captured from the original Bot Framework activity.
+  const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
+  const aadObjectId = from?.aadObjectId;
+  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
+  return {
+    activityId: activity.id,
+    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
+    agent: activity.recipient,
+    conversation: {
+      id: normalizeMSTeamsConversationId(conversation?.id ?? ""),
+      conversationType: conversation?.conversationType ?? "personal",
+      tenantId,
+    },
+    ...(tenantId ? { tenantId } : {}),
+    ...(aadObjectId ? { aadObjectId } : {}),
+    teamId: activity.channelData?.team?.id,
+    channelId: activity.channelId,
+    ...(serviceUrl ? { serviceUrl } : {}),
+    locale: activity.locale,
+    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
+    ...(threadId ? { threadId } : {}),
+  };
+}
+
 export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const activity = entry.context.activity;
   const conversation = activity.conversation;
@@ -98,33 +133,7 @@ export function assembleMSTeamsInboundFacts(entry: MSTeamsDebounceEntry) {
   const teamId = activity.channelData?.team?.id;
   const threadId = isChannel ? (conversationMessageId ?? activity.replyToId) : undefined;
   const advertisedMedia = resolveMSTeamsAdvertisedMedia(entry.attachments);
-  const from = activity.from;
-  const clientInfo = activity.entities?.find((entity) => entity.type === "clientInfo") as
-    | { timezone?: string }
-    | undefined;
-  // Proactive sends require the tenant and normalized regional service URL
-  // captured from the original Bot Framework activity.
-  const tenantId = activity.channelData?.tenant?.id ?? conversation?.tenantId;
-  const aadObjectId = from?.aadObjectId;
-  const serviceUrl = tryNormalizeBotFrameworkServiceUrl(activity.serviceUrl);
-  const conversationRef: StoredConversationReference = {
-    activityId: activity.id,
-    user: from ? { id: from.id, name: from.name, aadObjectId: from.aadObjectId } : undefined,
-    agent: activity.recipient,
-    conversation: {
-      id: conversationId,
-      conversationType,
-      tenantId,
-    },
-    ...(tenantId ? { tenantId } : {}),
-    ...(aadObjectId ? { aadObjectId } : {}),
-    teamId,
-    channelId: activity.channelId,
-    ...(serviceUrl ? { serviceUrl } : {}),
-    locale: activity.locale,
-    ...(clientInfo?.timezone ? { timezone: clientInfo.timezone } : {}),
-    ...(threadId ? { threadId } : {}),
-  };
+  const conversationRef = buildMSTeamsConversationReference(activity, threadId);
 
   return {
     ...entry,

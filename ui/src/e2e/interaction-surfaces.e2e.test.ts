@@ -160,7 +160,8 @@ suite.define(() => {
         await sharing.waitFor();
         await page.mouse.move(1000, 650);
         const closed = await background(sharing);
-        expect(closed).not.toBe("rgba(0, 0, 0, 0)");
+        // Sharing rests chromeless like the Details and Panels toggles beside it.
+        expect(closed).toBe("rgba(0, 0, 0, 0)");
         await frame(page, label + "-sharing-closed", sharing);
         await sharing.hover();
         expect.soft(await background(sharing)).not.toBe(closed);

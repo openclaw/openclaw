@@ -86,7 +86,8 @@ import {
   resolveCodexUrl,
 } from "./openai-chatgpt-responses-protocol.js";
 import {
-  buildRequestBody,
+  buildHookedRequestBody,
+  CODEX_TOOL_CALL_PROVIDERS,
   type OpenAICodexResponsesOptions,
 } from "./openai-chatgpt-responses-request.js";
 import {
@@ -125,7 +126,6 @@ type DynamicImport = (specifier: string) => Promise<unknown>;
 const dynamicImport: DynamicImport = (specifier) => import(specifier);
 
 const REQUEST_COMPRESSION_ZSTD_LEVEL = 3;
-const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_TRANSPORT_ERROR_CODE = "ERR_WEBSOCKET_TRANSPORT";
 // Only registered server/transport-unavailability closes may authorize retry or
 // settled-turn finalization; peer policy/protocol rejections must fail closed.
@@ -247,26 +247,8 @@ export const streamOpenAICodexResponses: StreamFunction<
       const optionHeaders = resolveAiTransportHeaderSentinels(options?.headers);
 
       const accountId = extractOpenAICodexAccountId(apiKey);
-      const buildBody = async (replayMode: OpenAIResponsesReplayMode) => {
-        let body = buildRequestBody(
-          model,
-          context,
-          CODEX_TOOL_CALL_PROVIDERS,
-          options,
-          replayMode,
-          Boolean(v2Compaction),
-        );
-        const restoreUsers = v2Compaction?.preserveUsers(body.input ?? []);
-        const nextBody = await options?.onPayload?.(body, model);
-        if (nextBody !== undefined) {
-          body = nextBody as RequestBody;
-        }
-        if (restoreUsers) {
-          body.input = [...restoreUsers(body.input ?? []), { type: "compaction_trigger" }];
-          v2Compaction?.assertReplayFits(body.input, model);
-        }
-        return body;
-      };
+      const buildBody = (replayMode: OpenAIResponsesReplayMode) =>
+        buildHookedRequestBody({ model, context, options, replayMode, v2Compaction });
       let semanticAttempt: ResponsesEncryptedContentAttempt<RequestBody> = {
         kind: "initial",
         request: await buildBody("checkpoint"),

@@ -120,7 +120,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-it("renders and updates the workspace rail inside the Files panel", async () => {
+it("renders and updates the shared workspace catalog inside the Files panel", async () => {
   const { list, mount, renderPanels, sessions, state, query } = createReviewFixture();
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "workspace"));
   loadSessionWorkspace(state, getSessionWorkspace(state), true);
@@ -132,11 +132,11 @@ it("renders and updates the workspace rail inside the Files panel", async () => 
   });
   await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
   await renderPanels();
-  const rail = element(mount, "openclaw-chat-files-panel .chat-workspace-rail");
+  const rail = element(mount, "openclaw-chat-files-panel .workspace-desktop");
   expect(rail.querySelector('button[aria-label="notes.txt"]')).not.toBeNull();
   getSessionWorkspace(state).browserSearch = "notes";
   await renderPanels();
-  expect(query(".chat-workspace-rail")).toBe(rail);
+  expect(query(".workspace-desktop")).toBe(rail);
   expect(rail.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("notes");
   element(rail, 'button[aria-label="notes.txt"]').click();
   await vi.waitFor(() =>
@@ -342,6 +342,7 @@ it.each(["ready", "unavailable", "error"] as const)(
     const attachment = videoAttachment(source, {
       sizeBytes: 574_000,
       artifactId: `artifact_${attachmentId}`,
+      playback: "native",
     });
     let rerender = () => {};
     mountSolid(
@@ -616,8 +617,15 @@ it("retains default Review content and collapsed files while switching tabs, foc
     client: { request },
     connected: true,
     connectionEpoch: 1,
-    hello: { features: { methods: ["sessions.diff"] } },
+    hello: gatewayHelloForMethods(["sessions.diff"]),
     sessionKey: "agent:main:review",
+    sessionsResult: {
+      ts: 1,
+      path: "test",
+      count: 1,
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [{ key: "agent:main:review", kind: "direct", workspaceReadDisabledReason: null }],
+    },
     sidebarLayout: { columns: [] },
   });
   let presented = true;
@@ -726,7 +734,7 @@ it("shows why a file could not open instead of falling back to the session diff"
   const notice = query(".review-unavailable");
   expect(notice?.getAttribute("role")).toBe("alert");
   expect(notice?.classList.contains("danger")).toBe(true);
-  expect(notice?.querySelector("strong")?.textContent).toBe("Unable to open");
+  expect(notice?.querySelector("strong")?.textContent).toBe("Couldn’t open file");
   expect(notice?.querySelector("span")?.textContent).toBe(message);
   expect(notice?.querySelector("img")).toBeNull();
   expect(query("openclaw-session-diff")).toBeNull();

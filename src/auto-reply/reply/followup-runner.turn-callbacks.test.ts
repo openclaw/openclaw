@@ -198,6 +198,7 @@ it.for(["before drain", "enqueue during drain", "deferred restart"] as const)(
         scheduleFollowupDrain(key, activeRunner);
       }
       releaseFirst.resolve();
+      await vi.advanceTimersByTimeAsync(250);
       await withinTest(Promise.all(finished.map(({ promise }) => promise)), signal);
       await vi.runAllTimersAsync();
 

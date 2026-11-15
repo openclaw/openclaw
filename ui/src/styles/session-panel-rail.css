@@ -169,8 +169,7 @@
   outline-offset: var(--control-ui-focus-ring-offset);
 }
 
-.session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg,
-.session-panel-rail .session-panel-rail__toggle[aria-expanded="true"] > svg {
+.session-panel-rail .session-panel-rail__button[aria-pressed="true"] > svg {
   color: var(--icon-active, var(--accent));
 }
 
@@ -192,17 +191,6 @@
   flex: 1;
   align-items: center;
   gap: 8px;
-}
-
-.session-panel-rail .session-panel-rail__title {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: inherit;
-  font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* Menu triggers wrap their glyph in a label; remove its text baseline so it

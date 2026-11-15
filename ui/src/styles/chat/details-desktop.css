@@ -1,94 +1,3 @@
-/* Discrete display transitions keep the closed surface painted during its exit. */
-.chat-details:has(> .chat-details-desktop-body) {
-  container-type: inline-size;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-}
-
-.chat-details:not([hidden]):has(> .chat-details-desktop-body) {
-  display: flex;
-}
-
-.chat-details-desktop-body {
-  --details-row-font-size: calc(13px * var(--control-ui-text-scale));
-  --details-row-line-height: 24px;
-  --details-meta-font-size: var(--control-ui-text-sm);
-  --details-meta-line-height: 20px;
-  --details-row-padding: 4px;
-  --details-row-height: 32px;
-  --details-row-padding-block: 4px;
-  --details-row-icon-size: 15px;
-  --details-row-icon-slot: 16px;
-  --details-row-gap: 8px;
-  --details-row-list-gap: 0px;
-  --details-section-padding: 10px;
-  --scrollbar-size: 8px;
-  --scrollbar-thumb-inset: 2px;
-  --details-scrollbar-thumb: transparent;
-  --details-fade-top: 0px;
-  --details-fade-bottom: 0px;
-  font-variant-numeric: tabular-nums;
-  flex: 0 1 auto;
-  min-height: 0;
-  min-width: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--details-scrollbar-thumb) transparent;
-}
-
-.chat-details-desktop-body:hover {
-  --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
-}
-
-.chat-details-desktop-body[data-fade-top] {
-  --details-fade-top: 24px;
-}
-
-.chat-details-desktop-body[data-fade-bottom] {
-  --details-fade-bottom: 24px;
-}
-
-.chat-details-desktop-body:is([data-fade-top], [data-fade-bottom]) {
-  mask:
-    linear-gradient(
-      to bottom,
-      transparent,
-      black var(--details-fade-top),
-      black calc(100% - var(--details-fade-bottom)),
-      transparent
-    ),
-    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
-}
-
-.chat-details-desktop-body__content {
-  /* Subtract the native gutters before the first layout measurement. */
-  padding: 4px calc(16px + 50% - 50cqi);
-}
-
-@supports selector(::-webkit-scrollbar) {
-  .chat-details-desktop-body {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar {
-    width: var(--scrollbar-size);
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-track {
-    margin-block: 16px;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-thumb {
-    border: var(--scrollbar-thumb-inset) solid transparent;
-    border-radius: 4px;
-    background: var(--details-scrollbar-thumb);
-    background-clip: content-box;
-  }
-}
-
 .chat-details-desktop-section {
   margin: 0;
   padding-block: var(--details-section-padding, 10px);
@@ -133,10 +42,12 @@
   outline-offset: 3px;
 }
 
+/* Box center reads high beside mostly lowercase text; sit on the text's optical center. */
 .chat-details-desktop-section__heading > svg {
   flex: none;
   width: 14px;
   height: 14px;
+  margin-block-start: 2px;
   transform: rotate(-90deg);
 }
 
@@ -164,13 +75,20 @@
   margin-inline-start: 0;
 }
 
+/* Title and count differ in size, so they share a text baseline rather than a box center. */
+.chat-details-desktop-section__heading:has(.chat-details-desktop-section__count) {
+  align-items: baseline;
+  padding-block: 2px;
+}
+
 .chat-details-desktop-section__heading:has(.chat-details-desktop-section__count) > svg {
   order: 1;
+  align-self: center;
 }
 
 .chat-details-desktop-section__count {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 4px;
   font-size: var(--details-meta-font-size);
   line-height: var(--details-meta-line-height);
@@ -190,9 +108,10 @@
   > .chat-details-processes__envelope
   > .chat-details-processes__motion-content
   > .chat-details-desktop-section,
+.chat-details-desktop-body__content > openclaw-chat-summary-automations > .chat-details__group,
 .chat-details-desktop-body__content
   > openclaw-chat-summary-automations
-  > :is(.chat-details__group, .chat-details-desktop-section) {
+  > .chat-details-desktop-section {
   margin: 0;
   padding: var(--details-section-padding) 0;
   border-top: 1px solid var(--details-separator);
@@ -329,12 +248,18 @@
     .chat-pr.chat-pr--summary,
     .session-progress-card__step
   ) {
-  box-sizing: border-box;
-  width: 100%;
+  width: calc(100% + 2 * var(--details-row-outset));
   min-height: var(--details-row-height);
-  margin-inline: 0;
+  margin-inline: calc(-1 * var(--details-row-outset));
   padding: var(--details-row-padding-block) var(--details-row-padding);
   gap: var(--details-row-gap);
+}
+
+/* Row content sits on the heading axis; only the hover surface reaches past it. */
+.chat-details
+  .chat-details-desktop-body
+  :is(.chat-details-processes__row, .chat-environment__row:has(> .chat-environment__action)) {
+  margin-inline: calc(-1 * var(--details-row-outset));
 }
 
 .chat-details
@@ -409,27 +334,28 @@
 
 /* Rows retain their native renderers; only the desktop composition owns their metrics. */
 .chat-details .chat-details-desktop-body :is(.chat-details-people, .chat-outputs--desktop) {
-  --details-row-height: 28px;
-  --details-row-padding-block: 2px;
   display: grid;
 }
 
 .chat-details .chat-details-desktop-body .chat-details-people__row {
   grid-template-columns: var(--details-row-icon-slot) minmax(0, 1fr) auto;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
 }
 
 .chat-details .chat-details-desktop-body a.chat-details-people__row:hover {
   background: var(--surface-hover);
 }
 
+/* Row icons share the slot; stacked Subagents keep the native avatar that People matches. */
 .chat-details
   .chat-details-desktop-body
   :is(
     .chat-details-people__avatar,
     .chat-summary__automation-icon,
     .chat-outputs__icon,
-    .chat-environment-desktop__machine-icon
+    .chat-environment-desktop__machine-icon,
+    :where(.chat-details-subagents__row) > .chat-details-subagents__avatar,
+    .chat-details-processes__icon
   ) {
   display: inline-flex;
   flex: 0 0 var(--details-row-icon-slot);
@@ -454,6 +380,8 @@
     .chat-outputs__icon > svg,
     .chat-outputs__icon > .chat-attachment-file-icon,
     .chat-environment-desktop__machine-icon > svg,
+    :where(.chat-details-subagents__row) > .chat-details-subagents__avatar > svg,
+    .chat-details-processes__icon > svg,
     .chat-details-people__avatar .viewer-avatar
   ) {
   flex: none;
@@ -489,13 +417,16 @@
   margin-inline-start: -7px;
 }
 
+.chat-details .chat-details-desktop-body .chat-environment__branch-controls {
+  padding-inline-start: calc(var(--details-row-icon-slot) + var(--details-row-gap));
+}
+
 /* The clickable child fills its row, including the existing hover surface. */
 .chat-details .chat-details-desktop-body .chat-environment__row:has(> .chat-environment__action) {
   padding: 0;
 }
 
 .chat-details .chat-details-desktop-body .chat-environment__action {
-  box-sizing: border-box;
   min-height: var(--details-row-height);
   padding: var(--details-row-padding-block) var(--details-row-padding);
   gap: var(--details-row-gap);
@@ -516,4 +447,71 @@
 
 .chat-details-desktop-environment:not(:first-child) > .chat-details-desktop-section {
   border-top: 1px solid var(--details-separator);
+}
+
+/* Task progress uses the same row and type as every other list in the panel. */
+.chat-details .chat-details-desktop-body .task-progress-details__plan .session-progress-card__step {
+  --details-row-height: 30px;
+  min-height: var(--details-row-height);
+  padding-block: var(--details-row-padding-block);
+  font-size: var(--details-row-font-size);
+  line-height: var(--details-row-line-height);
+}
+
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details--desktop[data-desktop-details]
+  .session-progress-card__step {
+  column-gap: var(--details-row-gap);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__runtime {
+  color: var(--muted);
+  font-size: var(--details-meta-font-size);
+  font-weight: 400;
+}
+
+.chat-details
+  .chat-details-desktop-body
+  .task-progress-details__plan
+  .session-progress-card__step-marker {
+  flex-basis: var(--details-row-icon-slot);
+  width: var(--details-row-icon-slot);
+  height: var(--details-row-line-height);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__step-text {
+  font-size: var(--details-row-font-size);
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__markdown :is(p, li) {
+  font-size: inherit;
+  line-height: inherit;
+}
+
+/* Only unboxed icon buttons hang past the content edge; publication groups own their surface. */
+.chat-details .chat-details-desktop-body .chat-pr--summary .chat-pr__actions-trigger,
+.chat-details .chat-details-desktop-body .session-progress-card__options {
+  margin-inline-end: -6px;
+}
+
+.chat-details .chat-details-desktop-body .chat-details-processes__stop {
+  margin-inline-end: -4px;
+}
+
+.chat-details .chat-details-desktop-body .session-progress-card__options svg {
+  width: var(--details-row-icon-size);
+  height: var(--details-row-icon-size);
+}
+
+.chat-details .chat-details-desktop-body .chat-details-processes__view-all {
+  padding-inline-start: calc(var(--details-row-icon-slot) + var(--details-row-gap));
+}
+
+.chat-details .chat-details-desktop-body .chat-outputs__name {
+  color: var(--text);
+}
+
+.chat-details .chat-details-desktop-body .chat-outputs__row .chat-outputs__icon {
+  color: var(--muted);
 }

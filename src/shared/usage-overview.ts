@@ -146,6 +146,8 @@ const QUERY_KEYS = new Set([
 
 const MULTI_VALUE_QUERY_KEYS = new Set(["channel", "provider", "model", "tool"]);
 
+export const USAGE_FILTER_KEYS = ["agent", "channel", "provider", "model", "tool"] as const;
+
 const matchesEverySession: UsageQueryPredicate = () => true;
 
 const prepareUsageQuery = (
@@ -452,19 +454,27 @@ export function buildUsageOverview(params: {
 }): UsageOverviewSlice {
   const { options, rows: sessions } = params;
   const calendar = createUsageCalendar(params.dayBucket);
+  // Each option counts the sessions that carry it, once per session.
   const filters = {
-    agent: new Set<string>(),
-    channel: new Set<string>(),
-    provider: new Set<string>(),
-    model: new Set<string>(),
-    tool: new Set<string>(),
+    agent: new Map<string, number>(),
+    channel: new Map<string, number>(),
+    provider: new Map<string, number>(),
+    model: new Map<string, number>(),
+    tool: new Map<string, number>(),
   };
   for (const session of sessions) {
+    const values = {
+      agent: new Set<string>(),
+      channel: new Set<string>(),
+      provider: new Set<string>(),
+      model: new Set<string>(),
+      tool: new Set<string>(),
+    };
     if (session.agentId) {
-      filters.agent.add(session.agentId);
+      values.agent.add(session.agentId);
     }
     if (session.channel) {
-      filters.channel.add(session.channel);
+      values.channel.add(session.channel);
     }
     for (const provider of [
       session.modelProvider,
@@ -472,22 +482,27 @@ export function buildUsageOverview(params: {
       session.origin?.provider,
     ]) {
       if (provider) {
-        filters.provider.add(provider);
+        values.provider.add(provider);
       }
     }
     if (session.model) {
-      filters.model.add(session.model);
+      values.model.add(session.model);
     }
     for (const model of session.usage?.modelUsage ?? []) {
       if (model.provider) {
-        filters.provider.add(model.provider);
+        values.provider.add(model.provider);
       }
       if (model.model) {
-        filters.model.add(model.model);
+        values.model.add(model.model);
       }
     }
     for (const tool of session.usage?.toolUsage?.tools ?? []) {
-      filters.tool.add(tool.name);
+      values.tool.add(tool.name);
+    }
+    for (const key of USAGE_FILTER_KEYS) {
+      for (const value of values[key]) {
+        filters[key].set(value, (filters[key].get(value) ?? 0) + 1);
+      }
     }
   }
   const { days, queried, matched, selected, scoped, roster } = selectUsageOverviewSessions(
@@ -539,16 +554,23 @@ export function buildUsageOverview(params: {
     hourlyMessages: Array.from({ length: 24 }, () => 0),
     hourlyErrors: Array.from({ length: 24 }, () => 0),
     filterOptions: {
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      agent: [...filters.agent].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      channel: [...filters.channel].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      provider: [...filters.provider].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      model: [...filters.model].sort(),
-      // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
-      tool: [...filters.tool].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      agent: [...filters.agent.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      channel: [...filters.channel.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      provider: [...filters.provider.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      model: [...filters.model.keys()].sort(),
+      // oxlint-disable-next-line unicorn/no-array-sort -- The keys spread is a private array.
+      tool: [...filters.tool.keys()].sort(),
+    },
+    filterOptionCounts: {
+      agent: Object.fromEntries(filters.agent),
+      channel: Object.fromEntries(filters.channel),
+      provider: Object.fromEntries(filters.provider),
+      model: Object.fromEntries(filters.model),
+      tool: Object.fromEntries(filters.tool),
     },
   };
   for (const session of matched) {

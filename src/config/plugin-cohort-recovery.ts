@@ -76,9 +76,9 @@ export async function withPluginCohortConfigCapture<T>(
   operation: () => Promise<T>,
 ): Promise<T> {
   authority.assertCurrent();
+  // Preserve the installed updater's captured WAL family until Doctor admits it.
   const pair = loadPluginCohortRecovery(authority.runId, {
     env: authority.env,
-    allowNativeRead: true,
   });
   if (!pair || pair.cohort.disposition !== "pending") {
     return await captures.exit(operation);
@@ -120,8 +120,19 @@ function recordConfigPublication(
   );
 }
 
-function conflict(file: PluginCohortConfigFileIntent): never {
+/** A later writer changed what this publication wrote; recovery keeps that file. */
+class LaterConfigChangeError extends ConfigMutationConflictError {}
+
+/** Invalid config is not a later edit to keep; recovery stays pending. */
+function invalidConfig(file: PluginCohortConfigFileIntent): never {
   throw new ConfigMutationConflictError(
+    `Configuration is invalid after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
+    { retryable: false },
+  );
+}
+
+function conflict(file: PluginCohortConfigFileIntent): never {
+  throw new LaterConfigChangeError(
     `Configuration changed after update publication: ${file.filePath}. Plugin cohort recovery preserved it.`,
     { retryable: false },
   );
@@ -201,8 +212,26 @@ function mergedAuthoredPreimage(
   return changedOwnValue ? formatJsonFileValue(result) : currentRaw;
 }
 
-/** Reopen the canonical config owner; historical facts never revive its former lock or authority. */
+/**
+ * Reopen the canonical config owner; historical facts never revive its former lock or
+ * authority. Returns false when a later writer's change was kept instead of restored.
+ */
 export async function restorePluginCohortConfigPublication(
+  file: PluginCohortConfigFileIntent,
+  authority: ConfigCohortAuthority,
+): Promise<boolean> {
+  try {
+    await restoreConfigPublication(file, authority);
+    return true;
+  } catch (error) {
+    if (error instanceof LaterConfigChangeError) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function restoreConfigPublication(
   file: PluginCohortConfigFileIntent,
   authority: ConfigCohortAuthority,
 ): Promise<void> {
@@ -272,6 +301,10 @@ export async function restorePluginCohortConfigPublication(
             ownership.targetPath !== file.targetPath ||
             prepared.writeOptions.includeFileTargetsForWrite?.[file.filePath] !== file.targetPath
           ) {
+            // An unparseable include has no provenance; that is invalid, not a later edit.
+            if (!prepared.snapshot.valid) {
+              invalidConfig(file);
+            }
             conflict(file);
           }
         }
@@ -299,7 +332,7 @@ export async function restorePluginCohortConfigPublication(
           const graphTargets = {
             ...prepared.writeOptions.includeFileTargetsForWrite,
             ...(file.include
-              ? { [prepared.snapshot.path]: fsNode.realpathSync(prepared.snapshot.path) }
+              ? { [prepared.snapshot.path]: fsNode.realpathSync.native(prepared.snapshot.path) }
               : {}),
           };
           const referenceGuards: Array<() => void> = [];
@@ -361,7 +394,7 @@ export async function restorePluginCohortConfigPublication(
           // Only the exact owned postimage qualifies for old-schema byte compensation.
           // A merge keeps normal future-writer protection and the later writer's stamp.
           if (!prepared.snapshot.valid) {
-            conflict(file);
+            invalidConfig(file);
           }
           const future = resolveFutureConfigActionBlock({
             action: "restore plugin cohort configuration",
@@ -379,7 +412,7 @@ export async function restorePluginCohortConfigPublication(
           let candidateRaw = mergedRaw;
           if (file.include) {
             if (!prepared.snapshot.authoredConfig) {
-              conflict(file);
+              invalidConfig(file);
             }
             const candidate = structuredClone(prepared.snapshot.authoredConfig);
             setConfigValueAtPath(candidate, file.include.boundaryPath, mergedValue);

@@ -17,6 +17,7 @@ import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { prepareStagedPackageInstall } from "./package-update-lifecycle.js";
 import { createNpmTarget } from "./package-update-steps.test-support.js";
+import * as sqliteSnapshots from "./sqlite-snapshot-source.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
@@ -121,6 +122,7 @@ it("preserves an owner that adopts dead-driver work before reconciliation commit
 it("status projects recent driver loss until explicit reconciliation", async () => {
   const run = await deadDriverRun();
   vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
+  const snapshot = vi.spyOn(sqliteSnapshots, "startSqliteReadOnlyLocationAsync");
   expect(await readUpdateRunStatus()).toMatchObject({
     activeRun: { runId: run.id, status: "running", phase: "activating" },
     abandonedRun: {
@@ -128,6 +130,8 @@ it("status projects recent driver loss until explicit reconciliation", async () 
       rule: "inactive-driver-dead",
     },
   });
+  expect(snapshot).not.toHaveBeenCalled();
+  snapshot.mockRestore();
   expect(await run.readAsync()).toEqual(run.recorded);
   await run.reconcile({ explicit: true });
   expect(await run.readAsync()).toMatchObject({
@@ -137,6 +141,111 @@ it("status projects recent driver loss until explicit reconciliation", async () 
     finishedAtMs: expect.any(Number),
   });
 });
+it.each([false, true])(
+  "reconciles a serving candidate after driver loss (managed handoff: %s)",
+  async (managed) => {
+    const { dead } = deadDriverFixture();
+    const run = fixture({
+      trigger: "control-ui",
+      before: { version: "2026.10.4" },
+      target: { kind: "package", version: "2026.10.9" },
+      origin: {
+        driver: dead,
+        ...(managed ? { managedHandoff: { parent: dead, helper: dead } } : {}),
+      },
+    });
+    run.phase("activating");
+    run.step({ step: "post-update verification", status: "in_progress" });
+    run.verify({
+      booted: true,
+      serviceRunning: true,
+      versionMatch: true,
+      runningVersion: "2026.10.9",
+      runningBuildId: "candidate-build",
+      pluginErrors: ["agentmail needs an update"],
+    });
+    if (managed) {
+      // A valid historical row near its byte budget forces compaction when
+      // reconciliation appends the warning and completes the pending phases.
+      const steps = run.read()!.steps;
+      for (let index = 0; index < 14; index++) {
+        steps.push({
+          step: `finalize:fixture:${index}`,
+          status: "completed",
+          detail: "x".repeat(1024),
+        });
+      }
+      const padding = { step: "finalize:padding", status: "completed" as const, detail: "" };
+      steps.push(padding);
+      padding.detail = "x".repeat(16 * 1024 - Buffer.byteLength(JSON.stringify(steps)) - 32);
+      openOpenClawStateDatabase(run.options)
+        .db.prepare("UPDATE update_runs SET steps_json = ? WHERE run_id = ?")
+        .run(JSON.stringify(steps), run.id);
+    }
+    await closeOpenClawStateDatabaseAsync();
+    const reconciled = (await run.history()).run;
+    expect(reconciled).toMatchObject({
+      status: "succeeded",
+      reason: null,
+      phase: "finished",
+      after: { version: "2026.10.9", buildId: "candidate-build" },
+      verification: { pluginErrors: ["agentmail needs an update"] },
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "warning:reconcile:driver-lost-after-verification",
+          status: "completed",
+          detail: expect.stringContaining("2026.10.9"),
+        }),
+      ]),
+    });
+    expect(
+      reconciled?.steps.some((step) => step.status === "failed" || step.status === "in_progress"),
+    ).toBe(false);
+    expect(await run.readAsync()).toEqual(reconciled);
+    await expect(run.reconcile()).resolves.toEqual([]);
+  },
+);
+it.each([
+  { booted: false },
+  { serviceRunning: false },
+  { versionMatch: false },
+  { runningVersion: undefined },
+  { runningVersion: "2026.10.4" },
+  { coreReady: false },
+  { rollbackOutcome: { status: "succeeded" as const, reason: "previous package restored" } },
+  { fault: "failed-step" },
+  { fault: "different-build" },
+])(
+  "keeps conflicting or incomplete serving proof abandoned: %j",
+  async ({ fault, ...verification }) => {
+    const { dead } = deadDriverFixture();
+    const run = fixture({
+      trigger: "control-ui",
+      target: { version: "2026.10.9" },
+      origin: { driver: dead },
+    });
+    run.phase("activating");
+    if (fault === "failed-step") {
+      run.step({ step: "post-update verification", status: "failed", exitCode: 1 });
+    } else if (fault === "different-build") {
+      run.step({
+        step: "finalize:installed-candidate",
+        status: "completed",
+        detail: JSON.stringify({ version: "2026.10.9", buildId: "different-build" }),
+      });
+    }
+    run.verify({
+      booted: true,
+      serviceRunning: true,
+      versionMatch: true,
+      runningVersion: "2026.10.9",
+      runningBuildId: "candidate-build",
+      ...verification,
+    });
+    await closeOpenClawStateDatabaseAsync();
+    expect((await run.history()).run).toMatchObject({ status: "failed", reason: "abandoned" });
+  },
+);
 it.each([
   { pruned: false, repair: false },
   { pruned: true, repair: false },

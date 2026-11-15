@@ -54,6 +54,8 @@ Current Slack message actions include `send`, `channel-create`, `conversation-op
 
 Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
 
+Slack `read` bounds (`before` and `after`) accept Slack timestamps or ISO-8601 dates, either plain or wrapped in one pair of double quotes. Quoted empty strings and malformed bounds return an error before a history or thread request.
+
 In a Slack conversation, delegated `member-info` reads only the current requester
 on the same account; omitting `userId` selects that requester. `emoji-list` uses
 the trusted current workspace. Both metadata actions work without a channel target

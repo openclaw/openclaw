@@ -482,6 +482,7 @@ export async function importMemoryWikiOkfBundle(params: {
     const conceptTimestamp = normalizeOptionalString(concept.frontmatter.timestamp);
 
     const frontmatter = {
+      type: concept.type,
       pageType: "concept",
       id: concept.pageId,
       title: concept.title,
@@ -522,13 +523,12 @@ export async function importMemoryWikiOkfBundle(params: {
     }
     pagePaths.push(concept.pagePath);
   }
-  const currentPagePaths = new Set(pagePaths);
   const removedPagePaths =
     warnings.length === 0
       ? await removeStaleOkfConceptPages({
           vaultRoot: params.config.vault.path,
           bundleKey,
-          currentPagePaths,
+          currentPagePaths: new Set(pagePaths),
         })
       : [];
 

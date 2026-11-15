@@ -3,16 +3,25 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects, serialize } from "node:v8";
+import { serialize } from "node:v8";
 import { MessageChannel, Worker } from "node:worker_threads";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  createRegistryScope,
+  ExpiredPluginRegistryScopeError,
+  getPluginRegistryForContext,
+  withPluginRuntimeGatewayRequestScope,
+} from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { forceFullGc } from "../test-utils/retention.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
 import {
   acquireGatewayStateOwner,
   assertStateDatabaseAccessAllowed,
 } from "./gateway-state-owner.js";
+import { createSqliteDatabaseAdmissionCursor } from "./sqlite-database-admission.js";
 import {
   deferSqlitePostCommitPublication,
   withSqlitePostCommitPublications,
@@ -23,6 +32,7 @@ import type { Job } from "./sqlite-worker-broker.types.js";
 import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "./sqlite-worker-contract.js";
 import { exchangeSqliteDatabaseAdmissions } from "./sqlite-worker-database-admission-relay.js";
 import {
+  bindSqliteWorkerDatabaseAdmissionCursor,
   createSqliteDatabaseAdmissionRelay,
   type SqliteWorkerOperationAdmission,
   createSqliteWorkerOperationAdmission as createAdmission,
@@ -92,6 +102,96 @@ function captureInline(facts: unknown) {
   return captured;
 }
 
+it("restores the owner between queued admission errors that reset the broker cursor", () => {
+  const context = new AsyncLocalStorage<object>();
+  const owner = {};
+  const observed: unknown[] = [];
+  const admission = context.run(owner, () => admissionFixture());
+  bindSqliteWorkerDatabaseAdmissionCursor(admission, createSqliteDatabaseAdmissionCursor(), () => {
+    observed.push(context.getStore());
+    context.enterWith({ unrelated: true });
+    return createSqliteDatabaseAdmissionCursor();
+  });
+  const decisions = Array.from({ length: 2 }, () => new Int32Array(new SharedArrayBuffer(4)));
+  for (const decision of decisions) {
+    const { port2 } = channelFixture();
+    admission.port.postMessage(
+      {
+        kind: "sqlite-database-admissions",
+        admissions: null,
+        port: port2,
+        decision: decision.buffer,
+      },
+      [port2],
+    );
+  }
+  admission.service();
+  expect(decisions.map((decision) => Atomics.load(decision, 0))).toEqual([2, 2]);
+  expect(observed).toEqual([owner, owner]);
+  expect(context.getStore()).toBeUndefined();
+  context.disable();
+});
+
+it.each(["rotated", "expired"] as const)(
+  "observes a %s registry between messages in one owner-context drain",
+  (change) => {
+    const context = new AsyncLocalStorage<object>();
+    const owner = {};
+    const registry = createEmptyPluginRegistry();
+    const replacement = createEmptyPluginRegistry();
+    const scope = createRegistryScope(registry, undefined);
+    let expired = false;
+    const nativePrototype: { deref: (this: WeakRef<object>) => object | undefined } =
+      WeakRef.prototype;
+    const deref = nativePrototype.deref;
+    // Collection cannot happen within one JS job; simulate loss of this weak target.
+    vi.spyOn(WeakRef.prototype, "deref").mockImplementation(function (this: WeakRef<object>) {
+      const value: unknown = deref.call(this);
+      return expired && value === registry ? undefined : value;
+    });
+    const effects: unknown[] = [];
+    const admission = context.run(owner, () =>
+      withPluginRuntimeGatewayRequestScope(scope, () =>
+        admissionFixture((_request, grant) => {
+          expect(context.getStore()).toBe(owner);
+          const current = getPluginRegistryForContext();
+          grant(() => {
+            effects.push(current);
+            if (change === "rotated") {
+              scope.pluginRegistry = replacement;
+            } else {
+              expired = true;
+            }
+            context.enterWith({ unrelated: true });
+          });
+        }),
+      ),
+    );
+    bindAuthority(admission, path.resolve("synthetic-generation.sqlite"), {
+      assertRequest() {
+        expect(context.getStore()).toBe(owner);
+        if (getPluginRegistryForContext() !== registry) {
+          throw new Error("Original generation changed");
+        }
+      },
+    });
+    const decisions = Array.from({ length: 2 }, () => new Int32Array(new SharedArrayBuffer(4)));
+    for (const decision of decisions) {
+      admission.port.postMessage({ stage: "transaction", decision: decision.buffer }, []);
+    }
+    admission.service();
+    expect(decisions.map((decision) => Atomics.load(decision, 0))).toEqual([1, 2]);
+    expect(effects).toEqual([registry]);
+    if (change === "expired") {
+      expect(admission.failure).toBeInstanceOf(ExpiredPluginRegistryScopeError);
+    } else {
+      expect(admission.failure).toMatchObject({ message: "Original generation changed" });
+    }
+    expect(context.getStore()).toBeUndefined();
+    context.disable();
+  },
+);
+
 it("finishes settled admissions without traversing empty pending decisions", () => {
   const admission = admissionFixture();
   admission.port.postMessage({ kind: "native-settlement", settlement: { kind: "completed" } }, []);
@@ -139,7 +239,7 @@ it("releases publication captures from retained finished admissions", async () =
   expect(publications).toBe(finished.length);
   const control = new WeakRef({});
   await nextTurn();
-  queryObjects(WeakRef);
+  forceFullGc();
   expect(control.deref()).toBeUndefined();
   expect(finished.filter(({ snapshot }) => snapshot.deref())).toHaveLength(0);
   // Lost reply recovery still consumes the committed evidence after transport cleanup.
@@ -162,13 +262,52 @@ it("preserves nested finish order and error precedence on repeated calls", () =>
   });
 
   try {
-    expect(() => admission.finish()).toThrow(failure);
+    expect(() => admission.finish("not-entered")).toThrow(failure);
     expect(() => admission.finish()).toThrow(failure);
     expect(events).toEqual(["first", "second", "first", "second"]);
+    expect(admission.settlement).toEqual({ kind: "completed" });
     expect(() => admission.observeRequests(() => {})).toThrow("closed");
   } finally {
     finish();
   }
+});
+
+it.each(["unknown", "committed", "completed"] as const)(
+  "preserves queued %s evidence when finishing a refused dispatch",
+  (outcome) => {
+    const admission = admissionFixture();
+    const committed = { version: 1, sequence: 1, facts: { revision: 2 } };
+    admission.port.postMessage(
+      outcome === "committed"
+        ? { kind: "native-commit", committed }
+        : {
+            kind: "native-settlement",
+            settlement: {
+              kind: outcome,
+              ...(outcome === "completed" ? { committed } : {}),
+            },
+          },
+      [],
+    );
+    admission.finish("not-entered");
+    expect(admission.settlement).toEqual(
+      outcome === "committed"
+        ? undefined
+        : {
+            kind: outcome,
+            ...(outcome === "completed" ? { committed: { facts: committed.facts } } : {}),
+          },
+    );
+    expect(admission.committed).toEqual(
+      outcome === "unknown" ? undefined : { facts: committed.facts },
+    );
+  },
+);
+
+it("keeps an unconfirmed finish unknown", () => {
+  const admission = admissionFixture();
+  admission.finish();
+  expect(admission.settlement).toBeUndefined();
 });
 
 it.each([
@@ -450,6 +589,68 @@ it.each(["unadmitted", "retired"] as const)(
         scenario === "retired" ? "Creation relay retired" : "SQLite creation relay is not admitted",
     });
     expect(existsSync(location)).toBe(false);
+  },
+);
+
+it.each(["event", "service"] as const)(
+  "uses the captured live relay owner for %s delivery",
+  async (delivery) => {
+    const context = new AsyncLocalStorage<object>();
+    const owner = {};
+    let live = true;
+    let checks = 0;
+    const root = tempDirs.make("sqlite-relay-context-");
+    const admission = context.run(owner, () =>
+      createSqliteDatabaseAdmissionRelay(() => {
+        expect(context.getStore()).toBe(owner);
+        checks++;
+        if (!live) {
+          throw new Error("Relay owner retired");
+        }
+      }),
+    );
+    async function request(location: string) {
+      const { port1, port2 } = channelFixture();
+      const decision = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      try {
+        expect(context.getStore()).toBeUndefined();
+        admission.port.postMessage(
+          {
+            kind: "sqlite-database-admissions",
+            admissions: [],
+            location,
+            create: "admitted",
+            port: port2,
+            decision: decision.buffer,
+          },
+          [port2],
+        );
+        if (delivery === "service") {
+          admission.service();
+          expect(Atomics.load(decision, 0)).not.toBe(0);
+        }
+        await expect.poll(() => Atomics.load(decision, 0)).not.toBe(0);
+        return Atomics.load(decision, 0);
+      } finally {
+        port1.close();
+        port2.close();
+      }
+    }
+    try {
+      const accepted = path.join(root, "accepted.sqlite");
+      expect(await request(accepted)).toBe(1);
+      expect(existsSync(accepted)).toBe(true);
+      expect(admission.failure).toBeUndefined();
+      live = false;
+      const refused = path.join(root, "refused.sqlite");
+      expect(await request(refused)).toBe(2);
+      expect(existsSync(refused)).toBe(false);
+      expect(admission.failure).toMatchObject({ message: "Relay owner retired" });
+      expect(checks).toBe(2);
+    } finally {
+      admission.finish();
+      context.disable();
+    }
   },
 );
 

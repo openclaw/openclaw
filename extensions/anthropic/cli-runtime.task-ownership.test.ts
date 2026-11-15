@@ -1,15 +1,19 @@
 import type { CliBackendMessageInjection } from "openclaw/plugin-sdk/cli-backend";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import {
   collectClaudeCli as collect,
   createCliTestHarness,
   resultDetail,
+  withClaudeCliTestDeadline,
 } from "./cli-runtime.test-support.js";
 import { executeClaudeCli } from "./cli.runtime.js";
 
 const harness = createCliTestHarness();
 const createLiveSession = harness.liveSession.bind(harness);
-afterEach(() => harness.cleanup());
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await harness.cleanup();
+});
 
 it("keeps a held current-input answer when a prior task result arrives", async () => {
   const fixture = String.raw`
@@ -67,14 +71,16 @@ for await (const line of createInterface({ input: process.stdin })) {
   expect(resultDetail(await collect(context))).toMatchObject({ answer: "first" });
   let injection: CliBackendMessageInjection | undefined;
   const records: Record<string, unknown>[] = [];
-  for await (const record of executeClaudeCli({
-    ...context,
-    prompt: "current input",
-    useResume: true,
-    registerMessageInjection: (value) => {
-      injection = value;
-    },
-  })) {
+  for await (const record of executeClaudeCli(
+    withClaudeCliTestDeadline({
+      ...context,
+      prompt: "current input",
+      useResume: true,
+      registerMessageInjection: (value) => {
+        injection = value;
+      },
+    }),
+  )) {
     records.push(record);
     if (record.subtype === "current_ready") {
       if (!injection) {
@@ -157,11 +163,13 @@ for await (const line of createInterface({ input: process.stdin })) {
     const turns: Record<string, unknown>[][] = [];
     for (const prompt of ["subagent answers", "subagent ended first"]) {
       const answers: Record<string, unknown>[] = [];
-      for await (const record of executeClaudeCli({
-        ...context,
-        prompt,
-        useResume: turns.length > 0,
-      })) {
+      for await (const record of executeClaudeCli(
+        withClaudeCliTestDeadline({
+          ...context,
+          prompt,
+          useResume: turns.length > 0,
+        }),
+      )) {
         if (record.type !== "result") {
           continue;
         }
@@ -217,10 +225,13 @@ for await (const line of createInterface({ input: process.stdin })) {
 }
 `;
   const liveSession = createLiveSession();
+  const firstDeadline = new AbortController();
+  vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(firstDeadline.signal);
   const context = await harness.context(fixture, { liveSession });
   const first = resultDetail(await collect(context));
   expect(first.answer).toBe("parent final");
   expect(liveSession.current()).toBeUndefined();
+  firstDeadline.abort(new DOMException("First request deadline elapsed", "TimeoutError"));
   // The next turn starts a fresh process; that process's descendant still runs, too.
   const next = resultDetail(await collect({ ...context, useResume: true }));
   expect(next).toMatchObject({ answer: "parent final" });

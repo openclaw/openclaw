@@ -79,9 +79,12 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   bindSourceReplyDeliveryRuntime(turn.followupRun.run, sourceReplyDeliveryRuntime);
   const sourceReplyDeliveryModeOrigin = sourceReplyDeliveryRuntime.origin;
   const preserveProgressCallbackStartOrder = turn.opts?.preserveProgressCallbackStartOrder === true;
-  const runLane =
-    turn.followupRun.run.scheduledAutomation || turn.followupRun.run.internalEventExecution
-      ? CommandLane.CronNested
+  const runLane = turn.followupRun.run.scheduledAutomation
+    ? CommandLane.CronNested
+    : turn.followupRun.run.internalEventExecution
+      ? turn.followupRun.run.inputProvenance?.sourceTool === "restart"
+        ? CommandLane.RestartRecovery
+        : CommandLane.CronNested
       : CommandLane.Main;
   let queuedUserMessagePersistedAcrossFallback = false;
   const messageToolDeliveryState: MessageToolDeliveryState = {
@@ -107,10 +110,15 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
   });
   const selection = resolveModelFallbackOptions(params.effectiveRun, params.runtimeConfig);
   // A scheduled run resolves candidates on the runtime its account was captured for.
-  const runtimeSessionEntry = () => {
+  // The recorded provider runs on its account; other providers select one live.
+  const scheduledAuthProfileId = (provider: string) => {
+    const scheduled = params.scheduledInference?.runParams(provider);
+    return scheduled && "authProfileId" in scheduled ? scheduled.authProfileId : undefined;
+  };
+  const runtimeSessionEntry = (provider: string) => {
     const entry = params.liveModelSwitchRuntimeEntry ?? turn.getActiveSessionEntry();
     return entry && params.scheduledInference
-      ? params.scheduledInference.runtimeSessionEntry(entry)
+      ? params.scheduledInference.runtimeSessionEntry(entry, provider)
       : entry;
   };
   const resolveCandidateRuntime = (
@@ -130,8 +138,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         provider,
         model,
         agentId: turn.followupRun.run.agentId,
-        authProfileId:
-          params.scheduledInference?.runParams.authProfileId ?? selectedAuthProfile.authProfileId,
+        authProfileId: scheduledAuthProfileId(provider) ?? selectedAuthProfile.authProfileId,
         sessionRuntimeOverride,
         pinnedHarnessId: resolveSessionPinnedHarnessId(activeEntry),
       }),
@@ -174,7 +181,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: runtimeSessionEntry(),
+            entry: runtimeSessionEntry(provider),
             cfg: params.runtimeConfig,
           }),
         resolveContextEngineHost: (provider, model, runtimeOverride) => {
@@ -264,7 +271,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           modelId: model,
           agentId: turn.followupRun.run.agentId,
           sessionKey: turn.followupRun.run.runtimePolicySessionKey ?? turn.sessionKey,
-          sessionEntry: runtimeSessionEntry(),
+          sessionEntry: runtimeSessionEntry(provider),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
         params.scheduledInference?.assertCandidate(
@@ -311,7 +318,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
         if (activeProbe && provider === activeProbe.provider && model === activeProbe.model) {
           markAutoFallbackPrimaryProbe({ probe: activeProbe, sessionKey: turn.sessionKey });
         }
-        turn.opts?.onModelSelected?.({ provider, model, thinkLevel: candidateThinkLevel });
+        turn.opts?.onModelSelected?.({
+          provider,
+          model,
+          thinkLevel: candidateThinkLevel,
+          agentRuntime: candidateAgentRuntime,
+          cliExecution: runtime.useCliExecution,
+        });
         const runStart = params.createAgentRunStartCallbacks();
         const signalExecutionPhaseForCandidate: AgentFallbackCandidateCommonParams["signalExecutionPhaseForTyping"] =
           (info) => {
@@ -356,7 +369,36 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
             signalExecutionPhaseForTyping: signalExecutionPhaseForCandidate,
             prepareAgentRunStart: runStart.prepareAgentRunStart,
             notifyAgentRunStart: runStart.notifyAgentRunStart,
-            hasAgentRunStarted: runStart.hasAgentRunStarted,
+            notifyScheduledExecutionStarted: async (lifecycleBackstop, resolveSessionKey) => {
+              try {
+                await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
+                  params.runId,
+                );
+                params.runAbortSignal?.throwIfAborted();
+                turn.followupRun.run.internalEventExecution?.assertCurrent?.();
+                const automation = turn.followupRun.run.scheduledAutomation;
+                // Embedded execution resolves its current key after admission; CLI keeps its captured key.
+                const sessionKey = resolveSessionKey();
+                if (automation && sessionKey) {
+                  automation.onExecutionStarted?.({
+                    runId: params.runId,
+                    sessionId: turn.followupRun.run.sessionId,
+                    sessionKey,
+                    provider,
+                    model,
+                    ...(runOptions.isFallbackRetry ? { isFallback: true } : {}),
+                  });
+                }
+              } catch (error) {
+                if (!runStart.hasAgentRunStarted()) {
+                  lifecycleBackstop.note({
+                    stream: "lifecycle",
+                    data: { phase: "finishing", executionStarted: false, providerStarted: false },
+                  });
+                }
+                throw error;
+              }
+            },
             preserveProgressCallbackStartOrder,
             onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => {
               params.state.pendingLifecycleTerminal = { provider, model, backstop };
@@ -369,8 +411,11 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
               ...common,
               cliExecutionProvider: runtime.cliExecutionProvider,
               lifecycleGeneration: params.state.lifecycleGeneration,
-              onSessionWriter: (writer) => {
-                params.state.sessionWriter = writer;
+              onCompactionAccounting: (fact) => {
+                if (fact.kind === "durable") {
+                  params.state.sessionWriter = fact.target;
+                }
+                recordTurnCompaction(params.state.compaction, fact);
               },
             });
           } else {

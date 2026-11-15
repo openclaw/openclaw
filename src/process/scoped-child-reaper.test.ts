@@ -57,6 +57,11 @@ const processRow = (pid = 401, state = "Z", ppid = SELF, pgid = ROOT) => ({
 });
 let processRows: ProcessRow[] = [];
 let initialSigchldListeners: ReturnType<typeof process.listeners>;
+const unrelatedSigchldListener = () => {};
+
+function addedSigchldListeners(listeners = process.listeners("SIGCHLD")) {
+  return listeners.filter((listener) => !initialSigchldListeners.includes(listener));
+}
 
 function setProcesses(rows: ProcessRow[]) {
   processRows = rows;
@@ -88,6 +93,7 @@ function expectNoNativeReaping() {
 }
 
 beforeEach(() => {
+  process.on("SIGCHLD", unrelatedSigchldListener);
   initialSigchldListeners = process.listeners("SIGCHLD");
   vi.useFakeTimers();
   vi.clearAllMocks();
@@ -111,13 +117,21 @@ beforeEach(() => {
 afterEach(async () => {
   setProcesses([]);
   await vi.advanceTimersByTimeAsync(60_000);
-  expect(process.listeners("SIGCHLD")).toEqual(initialSigchldListeners);
+  const listeners = process.listeners("SIGCHLD");
+  process.off("SIGCHLD", unrelatedSigchldListener);
   vi.restoreAllMocks();
   vi.useRealTimers();
   Object.defineProperty(process, "platform", { value: originalPlatform });
+  expect(addedSigchldListeners(listeners)).toEqual([]);
+  expect(listeners).toContain(unrelatedSigchldListener);
 });
 
 it("bounds discovery for 50 retained groups and coalesces exit notifications", async () => {
+  // An earlier file's reaper can finish after the next module generation starts.
+  const onExit = () => {};
+  process.on("SIGCHLD", onExit);
+  initialSigchldListeners = process.listeners("SIGCHLD");
+  setTimeout(() => process.off("SIGCHLD", onExit), 1_010);
   setProcesses(
     Array.from({ length: 50 }, (_, index) =>
       processRow(1_001 + index * 2, "S", process.pid, 1_000 + index * 2),
@@ -128,7 +142,7 @@ it("bounds discovery for 50 retained groups and coalesces exit notifications", a
   }
   await vi.advanceTimersByTimeAsync(1_000);
   expect(proc.stat.mock.calls.length).toBeLessThanOrEqual(60);
-  expect(process.listenerCount("SIGCHLD")).toBe(initialSigchldListeners.length + 1);
+  expect(addedSigchldListeners()).toHaveLength(1);
 
   setProcesses(processRows.map((row) => Object.assign(row, { state: "Z" })));
   for (let notice = 0; notice < 5; notice++) {
@@ -138,7 +152,8 @@ it("bounds discovery for 50 retained groups and coalesces exit notifications", a
   expect(proc.wait).toHaveBeenCalledTimes(50);
   await vi.advanceTimersByTimeAsync(1_000);
   expect(vi.getTimerCount()).toBe(0);
-  expect(process.listeners("SIGCHLD")).toEqual(initialSigchldListeners);
+  expect(addedSigchldListeners()).toEqual([]);
+  expect(process.listeners("SIGCHLD")).not.toContain(onExit);
 });
 
 it("retains groups across a failed enumeration until adoption is visible", async () => {
