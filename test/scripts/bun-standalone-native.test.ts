@@ -15,6 +15,7 @@ import {
 import { createStandaloneSourceEntries } from "../../scripts/lib/bun-standalone-source-entries.mjs";
 import { createStandaloneSourceGraph } from "../../scripts/lib/bun-standalone-source-graph.mjs";
 import { createStandaloneSourceParser } from "../../scripts/lib/bun-standalone-source-parser.mjs";
+import { runStandaloneBootstrap } from "../helpers/standalone-bootstrap.js";
 
 const parse = createStandaloneSourceParser();
 const temporary: string[] = [];
@@ -24,12 +25,22 @@ afterEach(() =>
     .forEach((directory) => fs.rmSync(directory, { recursive: true, force: true })),
 );
 
+function nativeAdapter(runtimeRoot: string, platform?: "darwin" | "linux") {
+  const target: { platform?: "darwin" | "linux"; arch?: "arm64" } = platform
+    ? { platform, arch: "arm64" }
+    : {};
+  return createStandaloneNativeAdapter({ runtimeRoot, parse, ...target });
+}
+
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-native-"));
   temporary.push(root);
   function write(filename: string, contents = "fixture") {
     fs.mkdirSync(path.dirname(filename), { recursive: true });
     fs.writeFileSync(filename, contents);
+  }
+  function writeManifest(value: Record<string, unknown>, directory = root) {
+    write(path.join(directory, "package.json"), JSON.stringify(value));
   }
   function pkg(name: string, manifest: Record<string, unknown>, files: Record<string, string>) {
     const directory = path.join(
@@ -39,10 +50,7 @@ function fixture() {
       "node_modules",
       name,
     );
-    write(
-      path.join(directory, "package.json"),
-      JSON.stringify({ name, version: "1.0.0", ...manifest }),
-    );
+    writeManifest({ name, version: "1.0.0", ...manifest }, directory);
     for (const [filename, contents] of Object.entries(files)) {
       write(path.join(directory, filename), contents);
     }
@@ -51,7 +59,7 @@ function fixture() {
     fs.symlinkSync(directory, link);
     return directory;
   }
-  return { root, write, pkg };
+  return { root, write, pkg, writeManifest };
 }
 
 function evaluate(
@@ -71,7 +79,7 @@ function evaluate(
 }
 
 function hoistedCopies() {
-  const { root, write } = fixture();
+  const { root, write, writeManifest } = fixture();
   const parents = [
     path.join(root, "node_modules", "first"),
     path.join(root, "node_modules", "second"),
@@ -80,29 +88,23 @@ function hoistedCopies() {
     path.join(parents[0], "node_modules", "helper"),
     path.join(parents[1], "node_modules", "helper"),
   ] as const;
-  write(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "fixture", dependencies: { first: "1.0.0", second: "1.0.0" } }),
-  );
+  writeManifest({ name: "fixture", dependencies: { first: "1.0.0", second: "1.0.0" } });
   for (const parent of parents) {
     const helper = path.join(parent, "node_modules", "helper");
-    write(
-      path.join(parent, "package.json"),
-      JSON.stringify({
+    writeManifest(
+      {
         name: path.basename(parent),
         version: "1.0.0",
         dependencies: { helper: "1.0.0" },
-      }),
+      },
+      parent,
     );
     write(path.join(parent, "index.js"), "module.exports = require('helper');");
-    write(
-      path.join(helper, "package.json"),
-      JSON.stringify({ name: "helper", version: "1.0.0", main: "index.js" }),
-    );
+    writeManifest({ name: "helper", version: "1.0.0", main: "index.js" }, helper);
     write(path.join(helper, "LICENSE"), "Same license\n");
     write(path.join(helper, "index.js"), "module.exports = 1;");
   }
-  const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+  const adapter = nativeAdapter(root);
   for (const directory of [...parents, ...helpers]) {
     const filename = path.join(directory, "index.js");
     adapter.transform({ filename, contents: fs.readFileSync(filename, "utf8") });
@@ -112,15 +114,12 @@ function hoistedCopies() {
 
 describe("standalone native sidecar", () => {
   it("retains opaque parser dependencies from emitted companions excluded by source selection", () => {
-    const { root, write, pkg } = fixture();
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        type: "module",
-        dependencies: { "syntax-library": "1.0.0" },
-      }),
-    );
+    const { root, write, pkg, writeManifest } = fixture();
+    writeManifest({
+      name: "openclaw",
+      type: "module",
+      dependencies: { "syntax-library": "1.0.0" },
+    });
     const parser = pkg(
       "syntax-library",
       { main: "index.cjs" },
@@ -140,7 +139,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       sourceRoot: root,
       configs: [{ entry: { scanner: "src/scanner.ts" }, fixedExtension: false }],
     });
-    const native = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const native = nativeAdapter(root);
     const entries = native.discover(["dist/scanner.js", "dist/scanner-hash.mjs"], {
       selectRuntimeEntries: sources.selectRuntimeEntries,
       scanOnlyEntries: ["disk-loader.cjs"],
@@ -177,7 +176,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       ),
     );
     const capture = (filenames: string[]) =>
-      createStandaloneNativeAdapter({ runtimeRoot: root, parse }).finalize({
+      nativeAdapter(root).finalize({
         metafile: { inputs: Object.fromEntries(filenames.map((filename) => [filename, {}])) },
       });
     const first = capture(entries);
@@ -190,10 +189,10 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
   });
 
   it("loads admitted addons through the native boundary and preserves the module cache", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const addon = pkg("addon", { main: "binding.node" }, { "binding.node": "native fixture" });
-    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { addon: "1" } }));
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    writeManifest({ dependencies: { addon: "1" } });
+    const adapter = nativeAdapter(root);
     adapter.transform({ filename: path.join(addon, "binding.node"), contents: "" });
     const relocated = path.join(root, "relocated");
     const { context } = evaluate(adapter, {}, relocated);
@@ -212,7 +211,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       process: { dlopen },
     });
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     const load = context["__openclawStandaloneCreateRequire"](
       createRequire,
       path.join(relocated, "entry.mjs"),
@@ -238,7 +237,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
   });
 
   it("skips file probes for discarded text while retaining resource payloads", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const discarded = [
       "index.js",
       "types.d.ts",
@@ -264,16 +263,13 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       {},
       { "browsers.json": "{}", "lib/vite/app.js": "browser payload" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "resource-fixture": "1", "playwright-core": "1" } }),
-    );
+    writeManifest({ dependencies: { "resource-fixture": "1", "playwright-core": "1" } });
     const discardedPaths = new Set(discarded.map((name) => path.join(owner, name)));
     const realpath = vi.spyOn(fs, "realpathSync");
     const stat = vi.spyOn(fs, "statSync");
     let adapter: ReturnType<typeof createStandaloneNativeAdapter>;
     try {
-      adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+      adapter = nativeAdapter(root);
       expect(
         realpath.mock.calls.filter(([filename]) => discardedPaths.has(String(filename))),
       ).toHaveLength(0);
@@ -310,17 +306,14 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
   });
 
   it.each(["entry.js", "binding.node"])("rejects an escaping file symlink named %s", (name) => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-native-outside-"));
     temporary.push(outside);
     write(path.join(outside, name), "outside payload");
     const owner = pkg("escaping-resource", {}, {});
     const link = path.join(owner, name);
     fs.symlinkSync(path.join(outside, name), link);
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "escaping-resource": "1" } }),
-    );
+    writeManifest({ dependencies: { "escaping-resource": "1" } });
     expect(() => createStandaloneNativeAdapter({ runtimeRoot: root, parse })).toThrow(
       `Dependency resource escapes runtime: ${link}`,
     );
@@ -363,7 +356,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
   });
 
   it("preserves named package scopes and their resources under the installed package", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const name = "@fixture/scoped";
     const scopes = [
       { directory: "dist/esm", type: "module" },
@@ -374,7 +367,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       { exports: { "./package.json": "./package.json" } },
       { "shared.wasm": "shared resource", LICENSE: "scope fixture license" },
     );
-    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { [name]: "1.0.0" } }));
+    writeManifest({ dependencies: { [name]: "1.0.0" } });
     for (const scope of scopes) {
       write(
         path.join(owner, scope.directory, "package.json"),
@@ -388,7 +381,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
       write(path.join(owner, scope.directory, "index.js"), "export {};");
       write(path.join(owner, scope.directory, "scope.wasm"), scope.type);
     }
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     const finalized = adapter.finalize({
       metafile: {
         inputs: Object.fromEntries(
@@ -446,7 +439,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
   });
 
   it("loads the full ws implementation through a transformed ESM caller after pruning", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const dependency = pkg(
       "ws",
       {
@@ -461,7 +454,7 @@ export function parse(text) { return require("syntax-library").parse(text); }`;
         "lib/websocket.js": "module.exports = { marker: 'full-ws' };",
       },
     );
-    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { ws: "1.0.0" } }));
+    writeManifest({ dependencies: { ws: "1.0.0" } });
     const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-image-"));
     temporary.push(image);
     const runner = path.join(image, "runner.mjs");
@@ -495,6 +488,8 @@ const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embed
 const bootstrap = [
   'import path from "node:path";',
   'import { fileURLToPath, pathToFileURL } from "node:url";',
+  'import { createRequire } from "node:module";',
+  'import.meta.require = createRequire(import.meta.url);',
   'const root = ' + JSON.stringify(root) + ';',
   'globalThis.__openclawStandaloneRootUrl = pathToFileURL(root + "/").href;',
   'const entries = ' + JSON.stringify(embeddedPaths) + ';',
@@ -548,10 +543,7 @@ console.log("full-ws loaded without node_modules");
           "lib/websocket.js": "module.exports = { marker: 'full-ws' };",
         },
       );
-      tree.write(
-        path.join(tree.root, "package.json"),
-        JSON.stringify({ dependencies: { "@fixture/fs-safe": "1.0.0", ws: "1.0.0" } }),
-      );
+      tree.writeManifest({ dependencies: { "@fixture/fs-safe": "1.0.0", ws: "1.0.0" } });
     }
     source.write(path.join(source.root, "src/entry.ts"), "export const value: number = 1;");
     const configs: Parameters<typeof createStandaloneSourceEntries>[0]["configs"] = [
@@ -580,7 +572,7 @@ console.log("full-ws loaded without node_modules");
         ? path.join(runtime.root, file.relative)
         : filename;
     };
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: runtime.root, parse });
+    const adapter = nativeAdapter(runtime.root);
     for (const filename of staged) {
       adapter.transform({
         filename: nativeFilename(filename),
@@ -618,7 +610,7 @@ console.log("full-ws loaded without node_modules");
         .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
       context,
     );
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: runtime.root, embeddedPaths }).bootstrap,
       context,
     );
@@ -645,13 +637,10 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("resolves graph-retained root and peer packages without retaining unused development packages", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const first = pkg("hoisted", { main: "index.js" }, { "index.js": "module.exports = 'first';" });
     const second = path.join(root, "node_modules/.pnpm/hoisted@2.0.0/node_modules/hoisted");
-    write(
-      path.join(second, "package.json"),
-      JSON.stringify({ name: "hoisted", version: "2.0.0", main: "index.js" }),
-    );
+    writeManifest({ name: "hoisted", version: "2.0.0", main: "index.js" }, second);
     write(path.join(second, "index.js"), "module.exports = 'second';");
     fs.unlinkSync(path.join(root, "node_modules/hoisted"));
     fs.symlinkSync(second, path.join(root, "node_modules/hoisted"));
@@ -663,17 +652,14 @@ console.log("full-ws loaded without node_modules");
     fs.mkdirSync(path.join(consumer, "node_modules"));
     fs.symlinkSync(first, path.join(consumer, "node_modules/hoisted"));
     pkg("unused-development", { main: "binding.node" }, { "binding.node": "unused" });
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        dependencies: { "peer-consumer": "1.0.0" },
-        devDependencies: { hoisted: "2.0.0", "unused-development": "1.0.0" },
-      }),
-    );
+    writeManifest({
+      dependencies: { "peer-consumer": "1.0.0" },
+      devDependencies: { hoisted: "2.0.0", "unused-development": "1.0.0" },
+    });
     const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-image-"));
     temporary.push(image);
     const embeddedPaths: Record<string, string> = {};
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     for (const [name, directory] of Object.entries({ first, second, consumer })) {
       const filename = path.join(directory, "index.js");
       const contents = fs.readFileSync(filename, "utf8");
@@ -691,7 +677,7 @@ console.log("full-ws loaded without node_modules");
           ? filename
           : embeddedPaths[path.relative(root, filename)],
     });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     const fromRoot = context["__openclawStandaloneCreateRequire"](
       createRequire,
@@ -716,7 +702,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("keeps unloaded plugins' declared dependency metadata without promoting runtime payloads", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const first = pkg(
       "declared",
       { main: "index.js" },
@@ -726,10 +712,7 @@ console.log("full-ws loaded without node_modules");
       },
     );
     const second = path.join(root, "node_modules/.pnpm/declared@2.0.0/node_modules/declared");
-    write(
-      path.join(second, "package.json"),
-      JSON.stringify({ name: "declared", version: "2.0.0", main: "index.js" }),
-    );
+    writeManifest({ name: "declared", version: "2.0.0", main: "index.js" }, second);
     write(path.join(second, "index.js"), "module.exports = 'second';");
     fs.unlinkSync(path.join(root, "node_modules/declared"));
     fs.symlinkSync(second, path.join(root, "node_modules/declared"));
@@ -739,31 +722,25 @@ console.log("full-ws loaded without node_modules");
       { main: "index.js" },
       { "index.js": "unused", "native.node": "unused-native" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", devDependencies: { unrelated: "1" } }),
-    );
+    writeManifest({ name: "openclaw", devDependencies: { unrelated: "1" } });
     const pluginA = path.join(root, "dist/extensions/a");
     const pluginB = path.join(root, "dist/extensions/b");
-    write(
-      path.join(pluginA, "package.json"),
-      JSON.stringify({
+    writeManifest(
+      {
         name: "@openclaw/a",
         dependencies: { declared: "1" },
         optionalDependencies: { optional: "1", missing: "1" },
-      }),
+      },
+      pluginA,
     );
-    write(
-      path.join(pluginB, "package.json"),
-      JSON.stringify({ name: "@openclaw/b", dependencies: { declared: "2" } }),
-    );
+    writeManifest({ name: "@openclaw/b", dependencies: { declared: "2" } }, pluginB);
     fs.mkdirSync(path.join(pluginA, "node_modules"));
     fs.symlinkSync(first, path.join(pluginA, "node_modules/declared"));
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     const { context, finalized } = evaluate(adapter, {}, root);
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
     Object.assign(context, { embedded: () => undefined, commonJsEntries: new Set() });
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     const fromA = context["__openclawStandaloneCreateRequire"](
       createRequire,
@@ -789,23 +766,20 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("loads exported package subpaths from the image after removing node_modules", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const dependency = pkg(
       "@fixture/fs-safe",
       { exports: { "./secure-temp-root": "./dist/secure-temp-dir.js" } },
       { "dist/secure-temp-dir.js": "module.exports = { resolveSecureTempRoot: () => 'safe' };" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "@fixture/fs-safe": "1.0.0" } }),
-    );
+    writeManifest({ dependencies: { "@fixture/fs-safe": "1.0.0" } });
     const image = fs.mkdtempSync(path.join(os.tmpdir(), "standalone-image-"));
     temporary.push(image);
     const imageEntry = path.join(image, "secure-temp-dir.cjs");
     fs.copyFileSync(path.join(dependency, "dist/secure-temp-dir.js"), imageEntry);
     const sourceEntry = path.relative(root, path.join(dependency, "dist/secure-temp-dir.js"));
     const embeddedPaths = { [sourceEntry]: imageEntry };
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     const finalized = adapter.finalize({ embeddedPaths });
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths });
     const context = vm.createContext({
@@ -823,7 +797,7 @@ console.log("full-ws loaded without node_modules");
         .replace(finalized.bootstrapReplacement.search, finalized.bootstrapReplacement.replacement),
       context,
     );
-    vm.runInContext(requireAdapter.bootstrap, context);
+    runStandaloneBootstrap(requireAdapter.bootstrap, context);
     pruneStandaloneRuntime(planStandaloneRuntime(root, finalized.files));
     expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
     const load = context["__openclawStandaloneCreateRequire"](
@@ -834,7 +808,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("discovers opaque bundled requires without promoting metadata-only or shadowed packages", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const native = pkg("native-helper", { main: "binding.node" }, { "binding.node": "native" });
     const library = pkg(
       "runtime-library",
@@ -849,15 +823,15 @@ console.log("full-ws loaded without node_modules");
     const childCli = pkg("child-cli", { main: "cli.js" }, { "cli.js": "process.exit(0);" });
     pkg("metadata-only", { main: "binding.node" }, { "binding.node": "metadata-only" });
     pkg("shadowed", { main: "binding.node" }, { "binding.node": "shadowed" });
-    write(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    writeManifest({ name: "openclaw" });
     const plugin = path.join(root, "dist/extensions/example");
-    write(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
+    writeManifest(
+      {
         name: "example-plugin",
         dependencies: { "runtime-library": "1", "esm-library": "1", "child-cli": "1" },
         optionalDependencies: { "native-helper": "1", "metadata-only": "1", shadowed: "1" },
-      }),
+      },
+      plugin,
     );
     const helper = path.join(plugin, ".setup/runtime.mjs");
     write(
@@ -875,7 +849,7 @@ console.log("full-ws loaded without node_modules");
       export const metadata = load("metadata-only/package.json");
       export const shadowed = (load) => load("shadowed");`,
     );
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     adapter.discover([path.relative(root, entry)]);
     expect(adapter.additionalModuleEntries).toContain(
       path.relative(root, path.join(library, "index.js")),
@@ -901,7 +875,7 @@ console.log("full-ws loaded without node_modules");
       ),
       embedded: (filename: string) => embeddedPaths[path.relative(root, filename)],
     });
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths }).bootstrap,
       context,
     );
@@ -924,7 +898,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("retains native resources when the output parent is a symlink", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const owner = pkg(
       "native-library",
       { main: "index.js" },
@@ -933,14 +907,11 @@ console.log("full-ws loaded without node_modules");
         "binding.node": "native",
       },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "native-library": "1" } }),
-    );
+    writeManifest({ dependencies: { "native-library": "1" } });
     const alias = `${root}-alias`;
     fs.symlinkSync(root, alias);
     temporary.push(alias);
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: alias, parse });
+    const adapter = nativeAdapter(alias);
     adapter.transform({
       filename: path.join(alias, path.relative(root, owner), "index.js"),
       contents: "export const url = import.meta.url;",
@@ -953,7 +924,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("routes literal package names resolving to addons through the physical sidecar", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     pkg("native-helper", { main: "binding.node" }, { "binding.node": "native" });
     const source = '(require) => require("native-helper")';
     const owner = pkg(
@@ -961,16 +932,8 @@ console.log("full-ws loaded without node_modules");
       { dependencies: { "native-helper": "1.0.0" } },
       { "index.js": "module.exports = require('native-helper');" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "native-wrapper": "1.0.0" } }),
-    );
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    writeManifest({ dependencies: { "native-wrapper": "1.0.0" } });
+    const adapter = nativeAdapter(root, "darwin");
     const filename = path.join(owner, "index.js");
     const transformed = adapter.transform({ filename, contents: '() => require("native-helper")' });
     const { context } = evaluate(adapter);
@@ -983,7 +946,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("loads JavaScript behind a native-looking request and preserves native resource resolution", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const owner = pkg(
       "native-looking-name",
       { main: "index.js" },
@@ -994,12 +957,9 @@ console.log("full-ws loaded without node_modules");
         "module.wasm": "wasm fixture",
       },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "native-looking-name": "1.0.0" } }),
-    );
+    writeManifest({ dependencies: { "native-looking-name": "1.0.0" } });
     const filename = path.join(owner, "index.js");
-    const adapter = createStandaloneNativeAdapter({ runtimeRoot: root, parse });
+    const adapter = nativeAdapter(root);
     const transformed = adapter.transform({
       filename,
       contents: "() => require('./platform.node')",
@@ -1012,7 +972,7 @@ console.log("full-ws loaded without node_modules");
       embedded: () => undefined,
       __openclawStandaloneRootUrl: pathToFileURL(destination + "/").href,
     });
-    vm.runInContext(
+    runStandaloneBootstrap(
       createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} }).bootstrap,
       context,
     );
@@ -1036,23 +996,15 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("preserves library aliases while copying their bytes as regular files", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const owner = pkg(
       "native-library",
       {},
       { "index.js": "export const url = import.meta.url;", "lib/library.1.dylib": "library" },
     );
     fs.symlinkSync("library.1.dylib", path.join(owner, "lib/library.dylib"));
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "native-library": "1.0.0" } }),
-    );
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    writeManifest({ dependencies: { "native-library": "1.0.0" } });
+    const adapter = nativeAdapter(root, "darwin");
     adapter.transform({
       filename: path.join(owner, "index.js"),
       contents: "export const url = import.meta.url;",
@@ -1089,7 +1041,7 @@ console.log("full-ws loaded without node_modules");
   ] as const)(
     "selects $platform arm64 resources from native headers and bare architecture directories",
     ({ platform, retained }) => {
-      const { root, write, pkg } = fixture();
+      const { root, write, pkg, writeManifest } = fixture();
       const macho = (cpu: number) => {
         const header = Buffer.alloc(32);
         header.writeUInt32LE(0xfeedfacf, 0);
@@ -1148,28 +1100,22 @@ console.log("full-ws loaded without node_modules");
           fs.chmodSync(filename, 0o755);
         }
       }
-      write(
-        path.join(root, "package.json"),
-        JSON.stringify({ dependencies: { "native-matrix": "1" } }),
-      );
-      const adapter = createStandaloneNativeAdapter({
-        runtimeRoot: root,
-        parse,
-        platform,
-        arch: "arm64",
-      });
+      writeManifest({ dependencies: { "native-matrix": "1" } });
+      const adapter = nativeAdapter(root, platform);
       adapter.transform({ filename: path.join(owner, "index.js"), contents: "export {};" });
       const actual = adapter
         .finalize()
         .files.filter((file: { category: string }) => file.category !== "dependencyMetadata")
         .map((file: { source: string }) => path.relative(owner, path.join(root, file.source)))
         .toSorted();
-      expect(actual).toEqual(retained.toSorted());
+      expect(actual).toEqual(
+        retained.toSorted((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
+      );
     },
   );
 
   it("captures computed fs-safe/proc-safe and sqlite-vec imports without a pnpm tree", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const fsNative = pkg(
       "@openclaw/fs-safe-darwin-arm64",
       { main: "fs-safe-native.node", os: ["darwin"], cpu: ["arm64"] },
@@ -1201,22 +1147,14 @@ console.log("full-ws loaded without node_modules");
       { optionalDependencies: { "sqlite-vec-darwin-arm64": "1.0.0" } },
       { "index.mjs": "export const url = import.meta.url;" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        dependencies: {
-          "@openclaw/fs-safe": "1.0.0",
-          "@openclaw/proc-safe": "1.0.0",
-          "sqlite-vec": "1.0.0",
-        },
-      }),
-    );
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
+    writeManifest({
+      dependencies: {
+        "@openclaw/fs-safe": "1.0.0",
+        "@openclaw/proc-safe": "1.0.0",
+        "sqlite-vec": "1.0.0",
+      },
     });
+    const adapter = nativeAdapter(root, "darwin");
     for (const filename of [
       path.join(fsOwner, "dist/native.js"),
       path.join(procOwner, "dist/native.js"),
@@ -1269,7 +1207,7 @@ console.log("full-ws loaded without node_modules");
   });
 
   it("resolves a computed native library from transformed CommonJS after pruning", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     pkg("sqlite-vec-darwin-arm64", {}, { "vec0.dylib": "native-library" });
     const source =
       'exports.getLoadablePath = () => require.resolve("sqlite-vec-darwin-arm64/" + "vec0.dylib");';
@@ -1278,14 +1216,9 @@ console.log("full-ws loaded without node_modules");
       { main: "index.cjs", optionalDependencies: { "sqlite-vec-darwin-arm64": "1.0.0" } },
       { "index.cjs": source },
     );
-    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { "sqlite-vec": "1" } }));
+    writeManifest({ dependencies: { "sqlite-vec": "1" } });
     const filename = path.join(owner, "index.cjs");
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    const adapter = nativeAdapter(root, "darwin");
     const transformed = adapter.transform({ filename, contents: source });
     const requireAdapter = createStandaloneRequireAdapter({ runtimeRoot: root, embeddedPaths: {} });
     const finalized = adapter.finalize();
@@ -1314,7 +1247,7 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
     );
     expect(untransformed.status, untransformed.stderr).toBe(1);
     expect(untransformed.stderr.trim()).toBe("MODULE_NOT_FOUND");
-    vm.runInContext(
+    runStandaloneBootstrap(
       adapter.bootstrap
         .replace(/^import[^\n]+\n/, "")
         .replace(
@@ -1334,7 +1267,7 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
   });
 
   it("rebases resource expressions and resolves embedded optional wrappers through their original identity", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const native = pkg(
       "terminal-native",
       { main: "lib/index.js", type: "commonjs" },
@@ -1350,13 +1283,8 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
       { optionalDependencies: { "terminal-native": "1.0.0" } },
       { "index.js": "module.exports = require(selected);" },
     );
-    write(path.join(root, "package.json"), JSON.stringify({ dependencies: { terminal: "1.0.0" } }));
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    writeManifest({ dependencies: { terminal: "1.0.0" } });
+    const adapter = nativeAdapter(root, "darwin");
     expect(adapter.additionalModuleEntries).toEqual([
       path.relative(root, path.join(native, "lib/index.js")),
     ]);
@@ -1395,21 +1323,13 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
   });
 
   it("keeps plugin asset roots and shadowed bindings while resolving core package resources", () => {
-    const { root, write, pkg } = fixture();
+    const { root, write, pkg, writeManifest } = fixture();
     const native = pkg("native-helper", { main: "binding.node" }, { "binding.node": "native" });
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ name: "openclaw", dependencies: { "native-helper": "1.0.0" } }),
-    );
+    writeManifest({ name: "openclaw", dependencies: { "native-helper": "1.0.0" } });
     const plugin = path.join(root, "dist/extensions/example");
-    write(path.join(plugin, "package.json"), JSON.stringify({ name: "example-plugin" }));
+    writeManifest({ name: "example-plugin" }, plugin);
     write(path.join(plugin, "helper.wasm"), "plugin");
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    const adapter = nativeAdapter(root, "darwin");
     const pluginCode = "const asset = new URL('./helper.wasm', import.meta.url);";
     expect(
       adapter.transform({ filename: path.join(plugin, "index.js"), contents: pluginCode }).contents,
@@ -1443,7 +1363,7 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
   });
 
   it("preserves the separate Copilot runtime contract and package search paths", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     const platformName = "@github/copilot-sdk-darwin-arm64";
     const runtime = pkg(
       platformName,
@@ -1466,16 +1386,8 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
       { optionalDependencies: { [platformName]: "1.0.0" } },
       { "dist/runtimeArtifacts.js": "export const url = import.meta.url;" },
     );
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({ dependencies: { "@github/copilot-sdk": "1.0.0" } }),
-    );
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
-    });
+    writeManifest({ dependencies: { "@github/copilot-sdk": "1.0.0" } });
+    const adapter = nativeAdapter(root, "darwin");
     adapter.transform({
       filename: path.join(sdk, "dist/runtimeArtifacts.js"),
       contents: "export const url = import.meta.url;",
@@ -1506,22 +1418,14 @@ try { exports.getLoadablePath(); } catch (error) { console.error(error.code); pr
   });
 
   it("does not admit installed development prebuilds or resources absent from the runtime graph", () => {
-    const { root, write, pkg } = fixture();
+    const { root, pkg, writeManifest } = fixture();
     pkg("dev-native", { main: "binding.node" }, { "binding.node": "dev" });
     pkg("unused-native", { main: "binding.node" }, { "binding.node": "unused" });
-    write(
-      path.join(root, "package.json"),
-      JSON.stringify({
-        dependencies: { "unused-native": "1.0.0" },
-        devDependencies: { "dev-native": "1.0.0" },
-      }),
-    );
-    const adapter = createStandaloneNativeAdapter({
-      runtimeRoot: root,
-      parse,
-      platform: "darwin",
-      arch: "arm64",
+    writeManifest({
+      dependencies: { "unused-native": "1.0.0" },
+      devDependencies: { "dev-native": "1.0.0" },
     });
+    const adapter = nativeAdapter(root, "darwin");
     expect(adapter.finalize().files).toEqual([]);
     expect(adapter.additionalModuleEntries).toEqual([]);
   });

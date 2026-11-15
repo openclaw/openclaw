@@ -117,6 +117,18 @@ Workspace manifest downloads use gzip when the node supports it and remain compa
 
 For a Gateway-source worktree, OpenClaw sends a fresh eligible inventory at dispatch. Files created only on the Gateway afterward remain local until explicitly staged with `git add`. Before the next worker turn executes, reconciliation admits those staged paths, preserves independent worker edits, and retains conflicting worker bytes for inspection. Completed turns also reconcile workspace changes. Unstaged new inputs require a fresh dispatch.
 
+Git-backed worker captures use Git's standard ignore rules (`.gitignore`,
+`.git/info/exclude`, and global excludes). Tracked files, marker-authenticated
+staged inputs, explicit `.worktreeinclude` inputs, and exact previously captured
+paths remain eligible. Result capture also retains ordinary `.artifacts/` reports
+and screenshots referenced by saved messages, even when ignored. Other unselected
+ignored files stay worker-local, including new `dist/` and `.cache/openclaw-bun/`
+outputs. Initial source admission and prepared-project completion verification
+use Git eligibility, even when reusing prior captures. The declared disposable
+runtime and build-cache roots remain excluded. Plain workspaces retain their
+filesystem capture policy. Local managed sandboxes retain their broader authored
+file custody; see [workspace access](/gateway/sandboxing/workspace-access).
+
 ### Deliver skills to the worker
 
 Remote-exec skill bundles are private, read-only turn inputs inside the execution workspace. Transfer groups their files into bounded batches to avoid a separate network round trip for every small file. They are ignored by ordinary Git staging and excluded from workspace synchronization and reconciliation. Normal turn cleanup removes them; cleanup failures are reported. Before preparing the next turn, OpenClaw removes leftover private skill copies from that workspace, including copies whose initialization response was lost. This also runs when the new turn selects no skills. Recovery preserves attachments and unrelated directories, and a cleanup failure stops preparation with retry guidance.
@@ -308,7 +320,9 @@ Recovery requested for one worker inspects that environment and resumes only its
 
 If a turn reports `Cloud worker finished, but its workspace result could not be reconciled`, inspect the cause after the colon. A failed node manifest capture includes its bounded, redacted stderr, or its termination status when stderr is empty. Node cleanup preserves manifests needed between upload and verification, including when other workers finish simultaneously; increasing transfer timeouts does not repair a missing manifest.
 
-Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. New results support up to 50,000 changed paths (including deletions and directories) across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. A result above the changed-path limit reports the count and asks you to exclude generated output or split the work. Add unwanted output to `.gitignore`; files already tracked by Git must also be removed from the index. Previously accepted receipts remain recoverable under their original record limits. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
+Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. New results support up to 50,000 changed paths (including deletions and directories) across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. A result above the changed-path limit reports the count and asks you to exclude generated output or split the work. Add unwanted output to `.gitignore`; files already tracked by Git must also be removed from the index. Unapplied saved results pass the same admission limits during local reconciliation; oversized results are recorded as rejected instead of being retried automatically. Their saved files and Git result remain available for inspection. Previously applied receipts and rollback journals remain recoverable under their original record limits. Patch construction runs in the Git worker so large results do not run synchronous Git-output writes on the Gateway thread. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
+
+For a rejected local sandbox checkpoint, move disposable output to checkout-root `.openclaw/tmp/` or remove it, then checkpoint the corrected sandbox workspace. If rejection happened while importing canonical changes into the sandbox, correct the canonical workspace and retry workspace preparation. Unchanged rejected inputs stay parked, and the saved Git result remains available.
 
 ## What survives a dead machine
 
@@ -327,6 +341,8 @@ Worker-turn live previews are snapshots of the current assistant message. Correc
 With default mirrored durability, workspace state has a wider loss window. A completed turn reconciles cloud files before releasing its claim, and **Stop cloud device…**, archiving, or deleting a session performs final reconciliation before destroying an active worker. Changes made between reconciliations exist only on the box and can be lost if that box disappears. Deletion proceeds only after safe reclaim succeeds. For a Gateway-source session it snapshots the managed worktree under `refs/openclaw/snapshots/` before removing it; for a repository-only session it deletes the source owner and retained checkpoint artifacts. A failed safe reclaim retains the session and unsynced recovery state and reports an error.
 
 For repository-only sessions, the Gateway retains complete base/current file manifests, changed file contents, and bounded worker Git delta packs in immutable checkpoints. The packs exclude the pinned base and its ancestors: the Gateway does not keep a full copy of upstream Git history or unchanged base files. Replacement workers therefore need the pinned upstream commit to be fetchable or already present in the node's verified seed cache. An explicit Gateway move needs that commit available to its project clone. A moved or deleted remote branch does not change the pinned commit, but losing access to that commit can prevent restoration.
+
+The initial repository checkpoint is accepted before activation, including when adopting a prepared worker, so eligible setup output survives a lost machine before the first turn. Checkpoint capture verifies the uploaded files at the transfer boundary, then checks the remote workspace and Git HEAD before accepting the staged result. It does not rescan the remote workspace between upload and staging.
 
 After the first repository checkpoint, node transfers use the last accepted manifest as their baseline. The Gateway reuses unchanged checkpoint blobs while retaining the original pinned source in recovery metadata. An unchanged file manifest reuses the accepted checkpoint only when its publication snapshot and Git lineage also match; empty commits and changed publication bytes still create a new checkpoint. Stale or missing accepted parents are rejected.
 

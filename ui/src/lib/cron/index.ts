@@ -161,19 +161,17 @@ function buildFailureAlert(
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
   return {
+    ...sourceConfig,
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
       preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
-    ...(cooldownMs !== undefined
-      ? { cooldownMs }
-      : existingConfig?.cooldownMs !== undefined
-        ? { cooldownMs: null }
-        : {}),
+    cooldownMs: cooldownMs ?? (existingConfig?.cooldownMs !== undefined ? null : undefined),
     mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
     accountId: accountId || (existingConfig?.accountId ? null : undefined),
-    includeSkipped: sourceConfig?.includeSkipped,
+    threadId:
+      form.failureAlertThreadId ?? (existingConfig?.threadId !== undefined ? null : undefined),
   };
 }
 
@@ -453,13 +451,13 @@ export async function toggleCronJob(
   return updated;
 }
 
-export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
+export async function runCronJob(state: CronState, jobId: string) {
   const job =
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
   return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
-    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
+    const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode: "force" });
     if (!isCurrent()) {
       return;
     }

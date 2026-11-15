@@ -42,6 +42,7 @@ export type SessionApprovalReplayState = {
 };
 
 export type ChatState = StreamCausalBoundaryState & {
+  inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandDisclosurePolicy;
   uploadConfig?: ApplicationConfigCapability;
   client: GatewayBrowserClient | null;
   connected: boolean;
@@ -93,6 +94,8 @@ export type ChatState = StreamCausalBoundaryState & {
   lastError: string | null;
   chatError?: string | null;
   chatRunError?: ChatRunError | null;
+  /** Run whose failure the operator dismissed; reloads must not resurrect it. */
+  chatDismissedRunErrorId?: string | null;
   lastLocalTerminalReconcile?: LocalTerminalReconcile | null;
   chatReplyTarget?: ChatReplyTarget | null;
   agentsError?: string | null;
@@ -103,7 +106,11 @@ export type ChatState = StreamCausalBoundaryState & {
   hello: GatewayHelloOk | null;
   selfUser?: AuthenticatedUser | null;
   canvasPluginSurfaceUrl?: string | null;
-  settings?: { chatPersistCommentary?: boolean; gatewayUrl?: string | null };
+  settings?: {
+    chatPersistCommentary?: boolean;
+    chatInlineCommands?: boolean;
+    gatewayUrl?: string | null;
+  };
   sessions?: Partial<SessionCapability>;
   chatSessionMessageSubscriptionRequestedKey?: string | null;
   chatSessionMessageSubscription?: SessionMessageSubscription | null;

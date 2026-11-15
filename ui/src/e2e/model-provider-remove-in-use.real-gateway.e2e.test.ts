@@ -125,7 +125,7 @@ suite.define(() => {
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-remove-in-use");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
@@ -145,7 +145,7 @@ suite.define(() => {
         await waitForControlUiGatewayReady(page);
         const row = await expandProvider(page, "tencent-tokenhub");
         await row
-          .getByRole("button", { name: "Remove provider: Tencent Tokenhub", exact: true })
+          .getByRole("button", { name: "Remove provider: Tencent TokenHub", exact: true })
           .click();
         const dialog = page.locator("openclaw-modal-dialog");
         const confirm = dialog.getByRole("button", { name: "Remove provider", exact: true });
@@ -175,7 +175,7 @@ suite.define(() => {
           .poll(
             () =>
               page
-                .getByRole("button", { name: "Remove provider: Tencent Tokenhub", exact: true })
+                .getByRole("button", { name: "Remove provider: Tencent TokenHub", exact: true })
                 .count(),
             { timeout: 30_000 },
           )

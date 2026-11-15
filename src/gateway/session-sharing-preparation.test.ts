@@ -3,6 +3,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import {
   replaceSessionEntry,
@@ -16,7 +17,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readDatabaseIdentityBirthtime } from "../infra/sqlite-worker-identity.js";
 import * as worker from "../infra/sqlite-worker-store.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -38,7 +39,9 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
+import { captureSessionMutationRouting } from "./session-sharing-routing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import * as routing from "./session-store-key.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -63,6 +66,25 @@ const it = baseIt.extend<{ state: OpenClawTestState; harness: ReturnType<typeof 
 function releasing<T extends { release(): void }>(facts: T) {
   return Object.assign(facts, { [Symbol.dispose]: () => facts.release() });
 }
+
+it("reuses a published routing revision and rejects a same-object route change after yielding", async ({
+  harness,
+}) => {
+  const { cfg, sessionKey } = harness;
+  const reads = vi.spyOn(routing, "readSessionRoutingFacts");
+  const assertCurrent = captureSessionMutationRouting(cfg, undefined, [
+    { sessionKey, agentId: "main" },
+  ]);
+  const initialReads = reads.mock.calls.length;
+  for (let i = 0; i < 10; i++) {
+    assertCurrent(cfg);
+  }
+  expect(reads).toHaveBeenCalledTimes(initialReads);
+  await Promise.resolve();
+  cfg.session!.store = `${cfg.session!.store}.replacement`;
+  setRuntimeConfigSnapshot(cfg);
+  expect(() => assertCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 function sharingHarness(
   cfg: OpenClawConfig,
@@ -177,6 +199,117 @@ it.for(["runtime", "automation"])(
   },
 );
 
+it("retains selected committed sharing facts across a broad sessions notification", async ({
+  harness,
+}) => {
+  const { cfg, scope } = harness;
+  harness.write(restrictedEntry("broad-survivor", "original"));
+  await addSessionMember(scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  sessionChanges.emit({ all: true, scope: "sessions" });
+  const current = prepared.readCurrent(cfg);
+  expect(prepared.readCurrent(cfg)).toBe(current);
+  expect(current.target.entry.sessionId).toBe("broad-survivor");
+  expect(current.membership.has("requester")).toBe(true);
+  expect(harness.authorize(current)).toBeNull();
+});
+
+it.for([
+  { all: true, scope: "sessions", factsInvalidated: true },
+  { all: true, scope: "sessions", runtimeSession: { sessionId: "guarded" } },
+  { all: true, scope: "stores" },
+  { all: true, scope: { agentId: "main" } },
+  { all: true, scope: { storePath: "selected" } },
+  { all: true, scope: { topology: true } },
+  { all: true, scope: "future-unknown-scope" },
+] satisfies SessionRowChange[])(
+  "keeps nonallowlisted publication closed: %j",
+  async (change, { harness }) => {
+    harness.write(restrictedEntry("guarded", "original"));
+    using prepared = releasing(await harness.prepare());
+    sessionChanges.emit(change);
+    sessionChanges.emit({ all: true, scope: "sessions" });
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it.for(["released", "absent", "sessionId", "lifecycle", "unknown"] as const)(
+  "does not revive %s facts after a broad sessions notification",
+  async (condition, { harness }) => {
+    const entry = restrictedEntry("guarded", "original");
+    if (condition !== "absent") {
+      harness.write(entry);
+    }
+    using prepared = releasing(await harness.prepareMissing());
+    const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+    if (condition === "released") {
+      prepared.release();
+    } else if (condition === "sessionId") {
+      harness.write({ ...entry, sessionId: "replacement" });
+    } else if (condition === "lifecycle") {
+      harness.write({ ...entry, lifecycleRevision: "replacement" });
+    } else if (condition === "unknown") {
+      harness.transaction((database) =>
+        publishSessionEntryCacheInvalidation(database, { sessionKey: harness.sessionKey }),
+      );
+    }
+    publish();
+    expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+  },
+);
+
+it("restores exact committed facts after rollback without reviving a refused admission", async ({
+  harness,
+}) => {
+  const entry = restrictedEntry("rollback-sharing", "original");
+  harness.write(entry);
+  await addSessionMember(harness.scope, { identityId: "requester", addedBy: "creator" });
+  using prepared = releasing(await harness.prepare());
+  const before = prepared.readCurrent(harness.cfg);
+  const committedEntry = structuredClone(before.target.entry);
+  const committedMembers = [...before.membership];
+  const assertSource = () => {
+    const denied = harness.authorize(prepared.readCurrent(harness.cfg));
+    if (denied) {
+      throw new Error(denied.message);
+    }
+  };
+  const admission = prepareSystemAgentRunAdmission(
+    harness.cfg,
+    "pending-rollback-admission",
+    "main",
+    "pending-rollback",
+    assertSource,
+  );
+  const publish = () => sessionChanges.emit({ all: true, scope: "sessions" });
+  try {
+    await admission.admit("plugin-harness", "rollback-harness");
+    expect(harness.authorize(before)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).not.toThrow();
+    expect(() =>
+      harness.transaction((database) => {
+        writeSessionEntry(database, harness.sessionKey, { ...entry, visibility: "draft" });
+        publish();
+        expect(() => prepared.readCurrent(harness.cfg)).toThrow(unavailableMessage);
+        expect(() => admission.assertSourceCurrent()).toThrow(unavailableMessage);
+        throw new Error("candidate rollback");
+      }),
+    ).toThrow("candidate rollback");
+    publish();
+    const after = prepared.readCurrent(harness.cfg);
+    expect(after.target.entry).toEqual(committedEntry);
+    expect([...after.membership]).toEqual(committedMembers);
+    expect(after.target.entry.visibility).toBe("read-only");
+    expect(after.membership.has("requester")).toBe(true);
+    expect(harness.authorize(after)).toBeNull();
+    expect(() => admission.assertSourceCurrent()).toThrow(
+      "source execution authority is no longer active",
+    );
+  } finally {
+    admission.close();
+  }
+});
+
 it("refuses a worker sharing result whose captured birthtime differs from its retained source", async ({
   harness,
 }) => {
@@ -210,7 +343,35 @@ it("refuses a worker sharing result whose captured birthtime differs from its re
   expect(forged).toBe(true);
 });
 
-it.for(["unknown", "rollback"] as const)(
+it.for(["main", "other"])(
+  "keeps an acquiring session's facts scoped to its physical owner when %s becomes ready",
+  async (agentId, { harness }) => {
+    const { cfg, sessionKey } = harness;
+    harness.write(restrictedEntry("acquiring-topology", "original"));
+    const read = entryReads.readSessionEntriesFromStoreInWorker;
+    let published = false;
+    vi.spyOn(entryReads, "readSessionEntriesFromStoreInWorker").mockImplementation(
+      async (...args) => {
+        const result = await read(...args);
+        if (!published && result.entries.some((row) => row.sessionKey === sessionKey)) {
+          published = true;
+          sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        }
+        return result;
+      },
+    );
+    const pending = harness.prepare();
+    if (agentId === "main") {
+      await expect(pending).rejects.toThrow(unavailableMessage);
+    } else {
+      using prepared = releasing(await pending);
+      expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("acquiring-topology");
+    }
+    expect(published).toBe(true);
+  },
+);
+
+it.for(["unknown", "rollback", "other", "ops", "main"] as const)(
   "applies %s topology publications to retained sharing facts",
   async (change, { state }) => {
     const storePath = state.statePath("shared.sqlite");
@@ -222,7 +383,7 @@ it.for(["unknown", "rollback"] as const)(
     using prepared = releasing(await harness.prepare());
     if (change === "unknown") {
       sessionChanges.emit({ all: true, scope: "stores" });
-    } else {
+    } else if (change === "rollback") {
       expect(() =>
         runOpenClawStateWriteTransaction(
           () => {
@@ -232,14 +393,28 @@ it.for(["unknown", "rollback"] as const)(
           { env: state.env },
         ),
       ).toThrow("Synthetic registry rollback");
+    } else {
+      sessionChanges.emit({ all: true, scope: { agentId: change, topology: true } });
     }
-    if (change === "rollback") {
+    if (change === "rollback" || change === "other") {
       expect(prepared.readCurrent(cfg).target.entry.sessionId).toBe("registry-sharing");
     } else {
       expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
     }
   },
 );
+
+it("invalidates absent shared-store facts when another physical owner becomes available", async ({
+  state,
+}) => {
+  const storePath = state.statePath("missing-shared.sqlite");
+  const cfg = { agents: { entries: { ops: {} } }, session: { store: storePath } };
+  const harness = sharingHarness(cfg, "agent:ops:missing", storePath, "ops");
+  using prepared = releasing(await harness.prepareMissing());
+  expect(prepared.readCurrent(cfg).target).toBeNull();
+  sessionChanges.emit({ all: true, scope: { agentId: "main", topology: true } });
+  expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
+});
 
 it("does not discover registry-only retired stores outside captured roots", async ({ state }) => {
   const storePath = state.statePath("external-retired.sqlite");

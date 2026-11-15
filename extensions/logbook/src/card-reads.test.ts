@@ -58,6 +58,9 @@ it("serves timeline and status through their bounded store operations", async ()
     ) => methods.set(method, handler),
   } as unknown as OpenClawPluginApi);
   const service = services[0]!;
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected service API version 2");
+  }
   try {
     await service.start(context);
     const call = async (method: string, params = {}) => {

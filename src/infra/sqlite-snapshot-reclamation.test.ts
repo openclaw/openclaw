@@ -31,6 +31,7 @@ function strand(root: string, idleMs: number, hold?: "creator" | "reader") {
   const outer = createSqliteSnapshotStagingTokenSync(root);
   const child = createSqliteSnapshotStagingTokenSync(outer.directory);
   fs.writeFileSync(path.join(child.directory, "database.sqlite"), "copied bytes");
+  fs.writeFileSync(path.join(child.directory, "database.sqlite.partial"), "interrupted compaction");
   child.release();
   let release: () => void = () => {};
   if (hold === "creator") {
@@ -57,6 +58,16 @@ describe.skipIf(process.platform === "win32")("abandoned SQLite snapshot reclama
     return { own, parent, foreign };
   }
   const sweep = () => reclaimAbandonedSqliteSnapshots(new AbortController().signal);
+
+  it("reclaims abandoned inspection trees containing the schema discovery ownership record", async () => {
+    const { own } = installation();
+    const { directory } = strand(own, hours(1));
+    fs.writeFileSync(path.join(directory, "schema-discovery-ownership.json"), "{}");
+    age(directory, hours(1));
+
+    expect(await sweep()).toMatchObject({ removed: 1, skipped: 0 });
+    expect(fs.existsSync(directory)).toBe(false);
+  });
 
   it("reclaims day-old copies stranded beside this installation's namespace", async () => {
     const { own, parent, foreign } = installation();

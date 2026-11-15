@@ -146,9 +146,9 @@ describe("runMessageAction media behavior", () => {
     vi.clearAllMocks();
   });
 
-  it("normalizes image/png data URLs and infers filenames for send", async () => {
+  it.each(["send", "thread-reply"] as const)("stages png data URLs for %s", async (action) => {
     const args: Record<string, unknown> = { buffer: parameterizedPngDataUrl };
-    await hydrate(args);
+    await hydrate(args, { action });
     expect(args).toMatchObject({
       contentType: "image/png",
       filename: "attachment.png",

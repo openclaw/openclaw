@@ -1,10 +1,18 @@
 // ClawDescriptor: what the Gateway publishes and Discovery serves. Untrusted for clients.
+
+import { canonicalize } from "../jcs.js";
 import type { Ed25519PublicKey } from "../keys.js";
 import { isClawId, isEd25519PublicKey } from "../keys.js";
 import type { BindingEvidence } from "../statements/pin.js";
+import {
+  verifyRootReset,
+  type RootResetCheck,
+  type RootResetEvidence,
+} from "../statements/reset.js";
 import type { SignedStatement, UnixSeconds } from "../statements/types.js";
 import { parseStatement } from "../statements/validate.js";
 import {
+  failure,
   verifyOwnerStatement,
   type VerifyOptions,
   type VerifyResult,
@@ -27,6 +35,11 @@ export type ClawDescriptor = {
   root_pub: Ed25519PublicKey;
   /** Current ServerBinding, signed by R. */
   binding: SignedStatement<"ServerBinding">;
+  /**
+   * Only after an owner reset, and only with the binding the reset created: the previous root
+   * and binding and the K_gw-signed RootReset. Absent otherwise (docs/discovery.md, "Owner reset").
+   */
+  reset?: RootResetEvidence;
   published_at: UnixSeconds;
 };
 
@@ -49,8 +62,11 @@ const DESCRIPTOR_FIELDS = new Set([
   "relay_url",
   "root_pub",
   "binding",
+  "reset",
   "published_at",
 ]);
+
+const RESET_FIELDS = ["previous_root_pub", "previous_binding", "statement"];
 
 function isRelayUrl(value: unknown): boolean {
   if (typeof value !== "string" || value.length > 512) {
@@ -114,8 +130,40 @@ export function parseClawDescriptor(value: unknown): DescriptorParse {
   if (binding.statement.body.claw_id !== record.claw_id) {
     return malformed("binding is for another claw");
   }
+  if (record.reset !== undefined) {
+    const reset = parseResetEvidence(record.reset);
+    if (reset) {
+      return reset;
+    }
+  }
   // SAFETY: every ClawDescriptor field was validated above and unknown fields were rejected.
   return { ok: true, descriptor: value as ClawDescriptor };
+}
+
+// Shape of the reset evidence; null when valid. Whether it is consistent is for verifyRootReset,
+// so a forged reset fails on its signature or keys, never here.
+function parseResetEvidence(value: unknown): DescriptorParse | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return malformed("reset must be an object");
+  }
+  // SAFETY: the guard above rejected non-objects, null and arrays.
+  const reset = value as Record<string, unknown>;
+  const keys = Object.keys(reset);
+  if (keys.length !== RESET_FIELDS.length || !RESET_FIELDS.every((key) => keys.includes(key))) {
+    return malformed(`reset must have exactly ${RESET_FIELDS.join(", ")}`);
+  }
+  if (!isEd25519PublicKey(reset.previous_root_pub)) {
+    return malformed("invalid reset.previous_root_pub");
+  }
+  const previous = parseStatement(reset.previous_binding, "ServerBinding");
+  if (!previous.ok) {
+    return { ok: false, code: previous.code, detail: `reset.previous_binding: ${previous.detail}` };
+  }
+  const statement = parseStatement(reset.statement, "RootReset");
+  if (!statement.ok) {
+    return { ok: false, code: statement.code, detail: `reset.statement: ${statement.detail}` };
+  }
+  return null;
 }
 
 /** The untrusted binding material a client feeds into `verifyBindingForPin`. */
@@ -123,17 +171,68 @@ export function descriptorEvidence(descriptor: ClawDescriptor): BindingEvidence 
   return {
     root_pub: descriptor.root_pub,
     binding: descriptor.binding,
+    ...(descriptor.reset ? { reset: descriptor.reset } : {}),
   };
 }
 
 /**
- * Discovery-side consistency check on publish: the binding verifies under the
- * descriptor's own root. This catches Gateway bugs early; it is
- * not a security check (Discovery pins nothing) and clients verify again against their pin.
+ * Discovery-side consistency check on publish: the binding verifies under the descriptor's own
+ * root, and reset evidence, if present, is a valid reset from its previous binding to this one.
+ * This catches Gateway bugs early; it is not a security check (Discovery pins nothing) and
+ * clients verify again against their pin.
  */
 export async function checkDescriptorConsistency(
   descriptor: ClawDescriptor,
   options: VerifyOptions,
 ): Promise<VerifyResult<"ServerBinding">> {
-  return verifyOwnerStatement(descriptor.binding, { root_pub: descriptor.root_pub }, options);
+  const verified = await verifyOwnerStatement(
+    descriptor.binding,
+    { root_pub: descriptor.root_pub },
+    options,
+  );
+  if (!verified.ok || !descriptor.reset) {
+    return verified;
+  }
+  const reset = descriptor.reset;
+  const previous = { root_pub: reset.previous_root_pub, binding: reset.previous_binding };
+  const before = await verifyOwnerStatement(
+    previous.binding,
+    { root_pub: previous.root_pub },
+    options,
+  );
+  if (!before.ok) {
+    return before;
+  }
+  const checked = await verifyRootReset(previous, reset.statement, descriptor, options);
+  return checked.ok ? verified : checked;
+}
+
+/**
+ * Discovery's check for a republished descriptor whose root differs from the stored one. It is
+ * accepted only as an owner reset from the stored descriptor: the reset evidence names the stored
+ * root and binding (else `reset_mismatch`; none at all is `root_mismatch`), and
+ * `verifyRootReset` passes with the stored binding as the current one, so the RootReset is signed
+ * by the K_gw Discovery already holds for this claw.
+ */
+export async function checkDescriptorRootReset(
+  stored: ClawDescriptor,
+  next: ClawDescriptor,
+  options: Pick<VerifyOptions, "now">,
+): Promise<RootResetCheck> {
+  const reset = next.reset;
+  if (!reset) {
+    return failure("root_mismatch", "a new root needs a root reset");
+  }
+  if (
+    reset.previous_root_pub !== stored.root_pub ||
+    canonicalize(reset.previous_binding) !== canonicalize(stored.binding)
+  ) {
+    return failure("reset_mismatch", "the reset does not continue the published binding");
+  }
+  return verifyRootReset(
+    { root_pub: stored.root_pub, binding: stored.binding },
+    reset.statement,
+    next,
+    options,
+  );
 }

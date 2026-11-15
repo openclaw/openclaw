@@ -229,11 +229,11 @@ suite.define(() => {
       expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 700, height: viewport.height });
-      // Narrow desktop breadcrumbs stack two 32px rows. A taller host band
+      // Narrow desktop breadcrumbs stack two 28px rows. A taller host band
       // expands the compact header; clearing it restores that intrinsic floor.
       for (const [height, expected] of [
         ["80px", 76],
-        ["", 64],
+        ["", 56],
       ] as const) {
         await page.evaluate((value) => {
           document.documentElement.style.setProperty("--openclaw-native-titlebar-height", value);
@@ -323,9 +323,7 @@ suite.define(() => {
         }, response);
         await pane.getByRole("link", { name: "Settings", exact: true }).click();
         const toast = page.locator(".app-toast");
-        await expect
-          .poll(() => toast.textContent())
-          .toContain("Couldn't open that page in the Dashboard");
+        await expect.poll(() => toast.textContent()).toContain("Couldn't open that page");
         expect(page.url()).toBe(conversationUrl);
         expect(await composer.isVisible()).toBe(true);
         await toast.getByRole("button", { name: "Dismiss", exact: true }).click();

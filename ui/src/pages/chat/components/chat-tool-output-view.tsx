@@ -4,11 +4,8 @@ import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { registerChatToolContentEnglish } from "../../../i18n/locales/en-chat-tool-content.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
-import {
-  isLegacyToolOutputUnavailable,
-  toolOutputSourceLabel,
-  formatToolOutput,
-} from "../../../lib/chat/tool-output.ts";
+import { isLegacyToolOutputUnavailable } from "../../../lib/chat/tool-output-text.ts";
+import { toolOutputSourceLabel, formatToolOutput } from "../../../lib/chat/tool-output.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
@@ -102,7 +99,7 @@ export function ChatToolOutput(props: Props) {
               <pre>{card()!.inputText}</pre>
             </details>
           </Show>
-          <Show when={view.result.state !== "loading"}>
+          <Show when={view.result.state !== "loading" && text().length > 0}>
             <div class="chat-tool-output__actions">
               <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
               <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
@@ -153,7 +150,7 @@ export function ChatToolOutput(props: Props) {
             )
           : [];
       const loadedCard = matches.length === 1 ? matches[0] : undefined;
-      if (!loadedCard || loadedCard.outputText === undefined) {
+      if (!loadedCard) {
         return { state: "unavailable", card: null };
       }
       return {

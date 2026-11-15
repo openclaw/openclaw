@@ -110,11 +110,14 @@ suite.define(() => {
         await page.getByRole("button", { name: "Add account", exact: true }).first().click();
         const picker = page.getByRole("dialog", { name: "Add an account" });
         await picker.getByRole("searchbox", { name: "Search providers…" }).fill("Tencent");
-        await picker.getByRole("button", { name: "Tencent Tokenhub" }).click();
+        await picker.getByRole("button", { name: "Tencent TokenHub" }).click();
         const form = page.getByRole("dialog", { name: "Add provider" });
         await form.getByRole("textbox", { name: "API key" }).fill("sk-synthetic-setup-check");
         await form.getByRole("button", { name: "Save provider", exact: true }).click();
         await expect.poll(() => form.isVisible(), { timeout: 30_000 }).toBe(false);
+        // Adding the first provider already ran one check, which the 5xx also failed.
+        expect(inferenceRequests).toBe(1);
+        inferenceRequests = 0;
         const dialog = page.getByRole("dialog", { name: "Set up a model" });
         const startCheck = async () => {
           await page.goto(await open("chat")); // Routes to Set up a model until one is verified.

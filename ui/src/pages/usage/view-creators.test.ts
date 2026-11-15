@@ -2,7 +2,7 @@ import { createSignal, type Setter } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import type { SessionUsageCreator } from "../../../../src/shared/usage-types.js";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
 import { mountView, texts } from "./view-render.test-support.ts";
 
@@ -19,11 +19,6 @@ function group(creator: SessionUsageCreator, totalTokens = 0, totalCost = 0, ses
     daily: [],
     sessionActivity: [],
   };
-}
-
-function selectIdentity(select: HTMLSelectElement, value: string) {
-  select.value = value;
-  select.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 function mountCreators(creator: SessionUsageCreator, onSelect = (_key: string | null) => {}) {
@@ -178,7 +173,7 @@ it("updates retained creator identities and actions through refresh, reordering 
   expect(container.querySelector("details")!.open).toBe(false);
 });
 
-it("keeps all creator choices after filtering and passes opaque identities through row and select actions", () => {
+it("keeps creator choices and opaque identities through row, picker, and search actions", async () => {
   const alex = human("alex", "Alex Morgan", true);
   const jordan = human("jordan", "Jordan Lee");
   const onSelect = vi.fn<(key: string | null) => void>();
@@ -198,10 +193,23 @@ it("keeps all creator choices after filtering and passes opaque identities throu
       onSelect,
     }),
   ]);
-  const select = container.querySelector("select")!;
-  expect(select.getAttribute("aria-label")).toBe("Filter by session creator");
-  expect(select.value).toBe(alex.key);
-  expect(texts(select, "option")).toEqual(["All identities", "Alex Morgan", "Jordan Lee"]);
+  const trigger = container.querySelector<HTMLButtonElement>(".usage-creator-trigger")!;
+  const picker = container.querySelector<HTMLElement>(".usage-creator-filter")!;
+  const open = async () => {
+    trigger.click();
+    await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  };
+  expect(trigger.getAttribute("aria-label")).toBe("Filter by session creator");
+  expect(trigger.textContent).toContain("Alex Morgan");
+  await open();
+  expect(
+    [...picker.querySelectorAll('[role="menuitemradio"]')].map((item) =>
+      item.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Alex Morgan", "Jordan Lee"]);
+  expect(picker.querySelector('[aria-label="Alex Morgan"]')?.getAttribute("aria-checked")).toBe(
+    "true",
+  );
   expect(container.textContent).not.toContain("opaque-");
   const row = container.querySelector("tbody tr")!;
   expect(texts(row, "td")).toEqual(["1.2K", "$2.50", "3"]);
@@ -212,19 +220,36 @@ it("keeps all creator choices after filtering and passes opaque identities throu
 
   setOptions([]);
   flush();
-  const unavailable = container.querySelector("select")!;
-  expect(unavailable).toBe(select);
-  expect(unavailable.value).toBe(alex.key);
-  expect(unavailable.selectedOptions[0]?.textContent?.trim()).toBe("Selected identity");
+  expect(container.querySelector(".usage-creator-trigger")).toBe(trigger);
+  expect(trigger.textContent).toContain("Selected identity");
+  expect(
+    picker.querySelector('[aria-label="Selected identity"]')?.getAttribute("aria-checked"),
+  ).toBe("true");
   expect(container.textContent).not.toContain(alex.key);
-  selectIdentity(unavailable, "");
+  [...picker.querySelectorAll<HTMLButtonElement>("button")]
+    .find((button) => button.textContent?.trim() === "Clear")!
+    .click();
   expect(onSelect).toHaveBeenLastCalledWith(null);
 
   setOptions([alex, jordan]);
   flush();
-  selectIdentity(select, jordan.key);
+  if (trigger.getAttribute("aria-expanded") !== "true") {
+    await open();
+  }
+  const search = picker.querySelector<HTMLInputElement>("input")!;
+  search.value = "Jordan";
+  search.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(
+    [...picker.querySelectorAll('[role="menuitemradio"]')].map((item) =>
+      item.getAttribute("aria-label"),
+    ),
+  ).toEqual(["Jordan Lee"]);
+  search.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   expect(onSelect).toHaveBeenLastCalledWith(jordan.key);
-  selectIdentity(select, "");
+  await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
+  await open();
+  picker.querySelector<HTMLButtonElement>('[aria-label="Alex Morgan"]')!.click();
   expect(onSelect).toHaveBeenLastCalledWith(null);
 });
 

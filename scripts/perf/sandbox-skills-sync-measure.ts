@@ -7,11 +7,14 @@
  * Modes: cold = new destinations, warm = retained snapshot/destination,
  * refreshed = retained destinations after one supporting-file revision change,
  * restarted = retained files without process-local sync records (relocated destinations).
+ * evicted = retained destinations after 100 unrelated syncs evict their usage records.
  * Forty skills have nine files each, including hidden instructions and nested
  * references/scripts. Discovery, fixture writes and content verification are
  * outside measurement. This measures skills_sync, not container startup/layout.
  * --skills 96 --custody includes real retained Gateway state ownership checks.
  * --background-files 62000 adds 1.116 GB of unrelated synthetic workspace files.
+ * --concurrency 50 --iterations 50 measures a burst across distinct destinations.
+ * --payload-bytes sets each of the eight supporting-file sizes (default 4096).
  * Counters cover Node realpathSync.native/lstatSync, not native-internal syscalls.
  * Allocation sampling includes collected objects on the main thread only;
  * process CPU and memory also include the discovery worker. No forced GC.
@@ -22,7 +25,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import os from "node:os";
 import path from "node:path";
-import { performance, PerformanceObserver } from "node:perf_hooks";
+import { monitorEventLoopDelay, performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -35,6 +38,8 @@ const { values } = parseArgs({
     owner: { type: "string" },
     output: { type: "string" },
     iterations: { type: "string", default: "10" },
+    concurrency: { type: "string", default: "1" },
+    "payload-bytes": { type: "string", default: "4096" },
     mode: { type: "string", default: "all" },
     allocations: { type: "boolean", default: false },
     skills: { type: "string", default: "40" },
@@ -43,14 +48,18 @@ const { values } = parseArgs({
   },
 });
 const iterations = Number(values.iterations);
+const concurrency = Number(values.concurrency);
+const payloadBytes = Number(values["payload-bytes"]);
 const skillCount = Number(values.skills);
 const backgroundFiles = Number(values["background-files"]);
 assert(Number.isSafeInteger(iterations) && iterations > 0, "--iterations must be positive");
+assert(Number.isSafeInteger(concurrency) && concurrency > 0, "Invalid --concurrency");
+assert(Number.isSafeInteger(payloadBytes) && payloadBytes >= 0, "Invalid --payload-bytes");
 assert(Number.isSafeInteger(skillCount) && skillCount > 0, "--skills must be positive");
 assert(Number.isSafeInteger(backgroundFiles) && backgroundFiles >= 0, "Invalid --background-files");
 const modes = values.mode === "all" ? ["cold", "warm", "refreshed"] : [values.mode];
 assert(
-  modes.every((mode) => ["cold", "warm", "refreshed", "restarted"].includes(mode)),
+  modes.every((mode) => ["cold", "warm", "refreshed", "restarted", "evicted"].includes(mode)),
   "Invalid --mode",
 );
 const output = path.resolve(values.output ?? `.local/sandbox-skills-sync-${process.pid}.json`);
@@ -135,7 +144,7 @@ try {
       const directory = file % 2 ? "scripts/helpers" : "references/topics";
       expected.set(
         `${name}/${directory}/file-${file}.txt`,
-        `${name} file ${file}\n${"x".repeat(4096)}\n`,
+        `${name} file ${file}\n${"x".repeat(payloadBytes)}\n`,
       );
     }
   }
@@ -160,6 +169,7 @@ try {
       ...options,
       sourceWorkspaceDir: workspace,
       targetWorkspaceDir,
+      readOnlyTarget: true,
       skillsSnapshot: snapshot,
       assertCurrent: assertOwner
         ? () => {
@@ -172,16 +182,26 @@ try {
   const results = [];
   for (const mode of modes) {
     const targets = Array.from({ length: iterations }, (_, index) =>
-      path.join(fixture, mode, mode === "warm" ? "shared" : String(index)),
+      path.join(fixture, mode, mode === "warm" ? String(index % concurrency) : String(index)),
     );
     if (mode !== "cold") {
-      for (const target of new Set(targets)) {
-        const seed = mode === "restarted" ? `${target}-seed` : target;
-        await sync(seed);
-        if (seed !== target) {
-          await fs.promises.rename(seed, target);
-          for (const relative of expected.keys()) {
-            await fs.promises.utimes(path.join(target, "skills", relative), 1, 1);
+      const uniqueTargets = [...new Set(targets)];
+      for (let offset = 0; offset < uniqueTargets.length; offset += concurrency) {
+        const seeds = await Promise.allSettled(
+          uniqueTargets.slice(offset, offset + concurrency).map(async (target) => {
+            const seed = mode === "restarted" ? `${target}-seed` : target;
+            await sync(seed);
+            if (seed !== target) {
+              await fs.promises.rename(seed, target);
+              for (const relative of expected.keys()) {
+                await fs.promises.utimes(path.join(target, "skills", relative), 1, 1);
+              }
+            }
+          }),
+        );
+        for (const seed of seeds) {
+          if (seed.status === "rejected") {
+            throw seed.reason;
           }
         }
       }
@@ -193,6 +213,25 @@ try {
         await writeFile(path.join(workspace, "skills", changed), content);
         expected.set(changed, content);
         markSkillsSupportingFilesChanged({ workspaceDir: workspace });
+      } else if (mode === "evicted") {
+        const emptyWorkspace = path.join(fixture, "empty-source");
+        await mkdir(emptyWorkspace);
+        for (let offset = 0; offset < 100; offset += concurrency) {
+          const evictions = await Promise.allSettled(
+            Array.from({ length: Math.min(concurrency, 100 - offset) }, (_, index) =>
+              owner.syncWorkspaceSkills({
+                ...options,
+                sourceWorkspaceDir: emptyWorkspace,
+                targetWorkspaceDir: path.join(fixture, "other-targets", String(offset + index)),
+              }),
+            ),
+          );
+          for (const eviction of evictions) {
+            if (eviction.status === "rejected") {
+              throw eviction.reason;
+            }
+          }
+        }
       }
     }
     const collections: { kind: number; ms: number }[] = [];
@@ -202,6 +241,7 @@ try {
       recordGcCollections(batch.getEntries(), collections, started, ended),
     );
     observer.observe({ entryTypes: ["gc"] });
+    const eventLoop = monitorEventLoopDelay({ resolution: 20 });
     try {
       if (inspector) {
         await inspector.post("HeapProfiler.startSampling", {
@@ -215,7 +255,7 @@ try {
       const cpuBefore = process.cpuUsage();
       const threadBefore = process.threadCpuUsage();
       const latency: number[] = [];
-      const deliveries = [];
+      const deliveries: Awaited<ReturnType<typeof sync>>[] = [];
       checks = 0;
       let realpaths = 0;
       let lstats = 0;
@@ -233,18 +273,29 @@ try {
           return Reflect.apply(target, receiver, args);
         },
       });
+      eventLoop.enable();
       started = performance.now();
       try {
-        for (const target of targets) {
-          const before = performance.now();
-          deliveries.push(await sync(target));
-          latency.push(performance.now() - before);
+        for (let offset = 0; offset < targets.length; offset += concurrency) {
+          const completed = await Promise.allSettled(
+            targets.slice(offset, offset + concurrency).map(async (target) => {
+              const before = performance.now();
+              deliveries.push(await sync(target));
+              latency.push(performance.now() - before);
+            }),
+          );
+          for (const result of completed) {
+            if (result.status === "rejected") {
+              throw result.reason;
+            }
+          }
         }
       } finally {
         fs.realpathSync.native = realpath;
         fs.lstatSync = lstat;
       }
       ended = performance.now();
+      eventLoop.disable();
       const thread = process.threadCpuUsage(threadBefore);
       const cpu = process.cpuUsage(cpuBefore);
       const memoryAfter = process.memoryUsage();
@@ -284,6 +335,7 @@ try {
         nodeRealpathsPerSync: realpaths / iterations,
         nodeLstatsPerSync: lstats / iterations,
         elapsedMs: ended - started,
+        eventLoopDelayMs: { p95: eventLoop.percentile(95) / 1e6, max: eventLoop.max / 1e6 },
         latency: distribution(latency),
         processCpuMs: (cpu.user + cpu.system) / 1000,
         mainThreadCpuMs: (thread.user + thread.system) / 1000,
@@ -304,12 +356,15 @@ try {
         hostLoadAfter,
       });
     } finally {
+      eventLoop.disable();
       observer.disconnect();
     }
   }
   const result = {
     ownerPath,
     skillCount,
+    concurrency,
+    payloadBytes,
     backgroundFiles,
     custody: values.custody,
     filesPerSkill: 9,

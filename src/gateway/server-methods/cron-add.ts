@@ -167,7 +167,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     creatorOptions = await captureCronCreatorSession(
       jobCreate,
       callerScope,
-      { client, context, signal },
+      { client, context, signal, hasCurrentClientAuthority },
       cfg,
       runtimeAuthority !== undefined,
     );
@@ -178,6 +178,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
       context.cron.getDefaultAgentId(),
     );
   } catch (err) {
+    creatorOptions?.disposeOperatorSource?.();
     creatorOptions?.disposeInferenceAuthorization?.();
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
@@ -217,6 +218,11 @@ export const cronAddHandler: GatewayRequestHandler = async ({
         context.cron.add(jobCreate, {
           streamExecApproval,
           streamSandbox,
+          ...(jobCreate.schedule.kind === "stream" &&
+          !streamSandbox &&
+          creatorOptions?.operatorSource?.snapshot.openclawIdPrincipal
+            ? { streamOperatorSource: creatorOptions.operatorSource.snapshot }
+            : {}),
           execPolicy,
           sessionEntryCurrent: creator.sessionEntryCurrent,
 
@@ -272,6 +278,7 @@ export const cronAddHandler: GatewayRequestHandler = async ({
     respondInvalidCronParams(respond, "cron.add", formatErrorMessage(err));
     return;
   } finally {
+    creatorOptions.disposeOperatorSource?.();
     creatorOptions.disposeInferenceAuthorization?.();
   }
   const job = "job" in result ? result.job : result;

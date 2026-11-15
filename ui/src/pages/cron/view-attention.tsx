@@ -1,4 +1,5 @@
 import type { CronJob } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { isCronJobRunning } from "../../lib/cron-status.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -30,7 +31,7 @@ export function FailureDetails(props: {
       : t("cron.attention.noNextRun");
   };
   return (
-    <div class="callout danger cron-failure-details">
+    <InlineAlert tone="danger" class="cron-failure-details">
       <div>
         <strong>
           {t(
@@ -64,6 +65,6 @@ export function FailureDetails(props: {
       >
         {cause()}
       </div>
-    </div>
+    </InlineAlert>
   );
 }

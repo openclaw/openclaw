@@ -54,6 +54,7 @@ export async function needsOpenClawStateDatabaseSchemaRepair(
     prepared = await prepareSqliteReadOnlyLocation(pathname, {
       preserveSourceArtifacts: true,
       signal,
+      reuse: true,
     });
   } catch (error) {
     if (error instanceof SqliteSnapshotCleanupError) {

@@ -60,7 +60,7 @@ export function createPluginDetailReads(options: {
   const catalog = createRead();
   const { state, setState } = options;
   /** Local inspection owns availability; optional metadata never delays the installed controls. */
-  async function showDetails(pluginId: string | null): Promise<void> {
+  async function showDetails(pluginId: string | null, loadInspection = true): Promise<void> {
     inspection.reset();
     options.selectInstalled(pluginId);
     const plugin = state.result?.plugins.find((entry) => entry.id === pluginId);
@@ -83,7 +83,7 @@ export function createPluginDetailReads(options: {
       : null;
     setState({ detail: initial });
     const scope = gateway.capture();
-    if (!plugin?.installed || !initial || !scope || !canInspect) {
+    if (!loadInspection || !plugin?.installed || !initial || !scope || !canInspect) {
       return;
     }
     const { client } = scope;
@@ -212,10 +212,19 @@ export function createPluginDetailReads(options: {
       catalog.observe(read);
       const result = await read;
       if (gateway.isCurrent(scope) && state.catalogDetail === detail) {
-        setState({ catalogDetail: { ...detail, result } });
-        void showDetails(
-          result.plugin.local.installed ? (result.plugin.local.pluginId ?? null) : null,
+        const local = result.plugin.local;
+        const currentInstalled = state.result?.plugins.find(
+          (plugin) => plugin.installed && plugin.catalogId === detail.id,
         );
+        if (local.installed && state.result && !currentInstalled) {
+          // Inventory may remove an identity while its older catalog response is in flight.
+          setState({ catalogDetail: null });
+          void showDetails(null);
+          context.replace("plugins", { pathname: pathForRoute("plugins", context.basePath) });
+          return;
+        }
+        setState({ catalogDetail: { ...detail, result } });
+        void showDetails(local.installed ? (currentInstalled?.id ?? local.pluginId ?? null) : null);
         clearInstallLink();
       }
     } catch {

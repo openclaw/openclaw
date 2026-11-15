@@ -118,7 +118,7 @@ export async function withNodeEventSessionSource(
       };
       const pending: Promise<unknown>[] = [];
       try {
-        return await consume(
+        const result = await consume(
           {
             ...opts,
             isConnectionCurrent: async () => {
@@ -142,6 +142,10 @@ export async function withNodeEventSessionSource(
             pending,
           },
         );
+        if (result) {
+          opts?.onResult?.(result);
+        }
+        return result;
       } finally {
         for (const work of pending) {
           await Promise.allSettled([work]);

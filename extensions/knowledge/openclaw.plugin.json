@@ -1,11 +1,15 @@
 {
   "id": "knowledge",
   "kind": "memory",
-  "categories": ["memory"],
+  "categories": [
+    "memory"
+  ],
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
-  "reload": { "turnHandover": true },
+  "reload": {
+    "turnHandover": true
+  },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -75,6 +79,83 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
+          }
+        },
+        "additionalProperties": false
+      },
+      "recallGate": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "off",
+              "shadow",
+              "live"
+            ],
+            "description": "off disables the gate; shadow (default) logs what it would inject and injects nothing; live injects matched records into the user turn."
+          },
+          "candidates": {
+            "type": "string",
+            "enum": [
+              "keyword",
+              "model"
+            ],
+            "description": "keyword (default) shortlists pages by keyword search and scores each with an excerpt of its best passages; model has the decision model pick from the page label index."
+          },
+          "highThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Per-page relevance probability at or above which page text is injected. Default 0.75."
+          },
+          "mediumThreshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Per-page relevance probability at or above which a one-line pointer is injected. Off unless set."
+          },
+          "skipHintBelow": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "When set and nothing is injected, a best score below this adds a one-line hint that memory search is probably unnecessary. Off unless set."
+          },
+          "excerpts": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "keyword mode: most passages quoted per page. Default 4."
+          },
+          "excerptChars": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 4000,
+            "description": "keyword mode: characters per passage. Default 1000."
+          },
+          "pageChars": {
+            "type": "integer",
+            "minimum": 200,
+            "maximum": 6000,
+            "description": "Characters of page text injected per page. Default 2800."
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 10000,
+            "description": "Whole-gate latency budget per turn. Default 1500."
+          },
+          "maxIndexChars": {
+            "type": "integer",
+            "minimum": 500,
+            "maximum": 200000,
+            "description": "model mode: character budget of the index sent to the decision model. Default 24000."
+          },
+          "maxCandidates": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Most pages scored per turn. Default 10."
           }
         },
         "additionalProperties": false

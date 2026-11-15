@@ -89,7 +89,8 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
-  const checkpoint = () => checkpointLocalWorkspace(owner);
+  const checkpoint = (options?: { knownMutation?: true }) =>
+    checkpointLocalWorkspace(owner, options);
   try {
     lifetime.use(
       await acquireSandboxRuntimeUse({ workspaceDir: localWorkspaceProjectionPath(owner) }),

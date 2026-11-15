@@ -35,8 +35,6 @@ import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-reques
 import { syncSessionPanelInputs, useSessionPanel } from "./chat-session-panel.tsx";
 import { ChatSummaryAutomations } from "./chat-summary-automations.tsx";
 
-export { preloadChatDetailsEnvironment } from "./chat-details-environment.tsx";
-
 registerEnglishCatalog(registerSessionProgressEnglish);
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -651,9 +649,7 @@ export type ChatDetailsDesktopCompositionProps = Omit<Props, "desktop"> & {
 
 /** Desktop entry point: one scroll body and the native Progress owner after Outputs. */
 export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositionProps) {
-  onSettled(() => {
-    props.onReady?.();
-  });
+  onSettled(() => props.onReady?.());
   return (
     <>
       <ChatDetailsSession

@@ -99,7 +99,7 @@ function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefi
   }
   const { until, ...failure } = entry;
   // A configuration change may retain the previous failure for this one-minute pause.
-  if (until <= Date.now()) {
+  if (until <= performance.now()) {
     memorySearchToolCooldowns.delete(key);
     return undefined;
   }
@@ -108,7 +108,7 @@ function readMemorySearchToolCooldown(key: string): MemoryCorpusFailure | undefi
 
 function recordMemorySearchToolCooldown(key: string, failure: MemoryCorpusFailure): void {
   memorySearchToolCooldowns.set(key, {
-    until: Date.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
+    until: performance.now() + MEMORY_SEARCH_TOOL_COOLDOWN_MS,
     ...failure,
   });
 }

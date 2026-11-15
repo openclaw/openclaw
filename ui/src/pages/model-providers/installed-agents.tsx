@@ -17,7 +17,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasProviderBrandIcon } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { RefreshButton } from "../../components/solid/refresh-button.tsx";
 import {
   SettingsEmpty,
@@ -34,6 +34,7 @@ import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
+import { ModelProviderIcon } from "../../lib/reactive/provider-presentation.tsx";
 import {
   modelProviderConfigBusy,
   modelProviderConfigMutationBlockedReason,
@@ -439,6 +440,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
   function renderAgent(
     props: { agent: InstalledAgent },
     getCards: () => readonly ModelProviderCard[],
+    catalogDiscovering: () => boolean,
   ) {
     const view = createMemo(() => {
       const snapshot = projection.read();
@@ -466,11 +468,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       } else if (card?.catalogStatus === "unavailable") {
         status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
         hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
-      } else if (card?.checkingModels) {
-        status = { kind: "muted", labelKey: "modelProviders.installedAgents.status.discovering" };
       } else if (card && card.availableModelCount > 0) {
         status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
-      } else {
+      } else if (!card?.checkingModels && !catalogDiscovering()) {
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       }
       return {
@@ -526,7 +526,7 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
                 </span>
               }
             >
-              <ProviderBrandIcon provider={view().agent.id} class="model-providers__icon" />
+              <ModelProviderIcon provider={view().agent.id} class="model-providers__icon" />
             </Show>
           }
           title={view().agent.name}
@@ -553,20 +553,31 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
         />
         <Show when={view().message}>
           {(message) => (
-            <div
-              class={["callout", message().kind, "model-providers__installed-agent-message"]}
-              role={message().kind === "error" ? "alert" : "status"}
+            <InlineAlert
+              tone={
+                message().kind === "error"
+                  ? "danger"
+                  : message().kind === "warning"
+                    ? "warning"
+                    : "success"
+              }
+              class="model-providers__installed-agent-message"
             >
               {message().text}
-            </div>
+            </InlineAlert>
           )}
         </Show>
       </div>
     );
   }
 
-  function render(getCards: () => readonly ModelProviderCard[], retryDiscovery: () => void) {
-    const AgentRow = (props: { agent: InstalledAgent }) => renderAgent(props, getCards);
+  function render(
+    getCards: () => readonly ModelProviderCard[],
+    retryDiscovery: () => void,
+    catalogDiscovering: () => boolean,
+  ) {
+    const AgentRow = (props: { agent: InstalledAgent }) =>
+      renderAgent(props, getCards, catalogDiscovering);
     const InstalledAgents = () => {
       const view = createMemo(() => ({
         ...projection.read(),

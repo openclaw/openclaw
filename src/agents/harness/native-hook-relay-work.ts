@@ -3,15 +3,15 @@ import { loadMcpToolGrants } from "../../infra/exec-approvals-mcp.js";
 import { resolveProjectedMcpCodexToolApprovalMode } from "../mcp-codex-tool-approval.js";
 import { drainNativeHookRelayBridge } from "./native-hook-relay-bridge.js";
 import { NATIVE_HOOK_RELAY_BRIDGE_STALE_REGISTRATION_ERROR } from "./native-hook-relay-client.js";
-import { nativeHookRelayState } from "./native-hook-relay-state.js";
 import type {
   ActiveNativeHookRelayRegistration,
   NativeHookRelayBridgeRegistration,
-  NativeHookRelayEvent,
   NativeHookRelayRegistration,
   RegisterNativeHookRelayParams,
   RelayLifetime,
-} from "./native-hook-relay-types.js";
+} from "./native-hook-relay-contexts.js";
+import { nativeHookRelayState } from "./native-hook-relay-state.js";
+import type { NativeHookRelayEvent } from "./native-hook-relay-types.js";
 import { isJsonObject } from "./native-hook-relay-utils.js";
 
 const { relays } = nativeHookRelayState;

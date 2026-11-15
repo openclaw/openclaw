@@ -278,6 +278,12 @@ it.each([
           schemaProcessCount: 2,
           schemaInspectionCount: 3,
           schemaSnapshotCount: 0,
+          statePreflightMs: expect.any(Number),
+          agentPreflightMs: expect.any(Number),
+          stateIntegrityCheckCount: 1,
+          stateIntegrityMs: expect.any(Number),
+          stateIntegrityReason: "maintenance",
+          stateSealCount: 0,
         });
       }
       expectFiles(

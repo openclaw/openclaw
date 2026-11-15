@@ -26,10 +26,11 @@ it.each(["removed", "replaced"])("closes after %s state lock", async (ending) =>
   const canonical = capture(options);
   const successor = capture({
     ...options,
-    path: path.join(options.env.OPENCLAW_STATE_DIR, "successor", "agent.sqlite"),
+    path: path.join(options.env.OPENCLAW_STATE_DIR, "successor", path.basename(options.path)),
   });
   const alias = path.dirname(aliased.path);
   const linkType = process.platform === "win32" ? "junction" : "dir";
+  let fresh: ReturnType<typeof capture> | undefined;
   const sessionKey = "agent:main:retarget-proof";
   const read = async (execution: typeof creator) => {
     const result = await execution.runExisting(source(), (scope) =>
@@ -58,6 +59,9 @@ it.each(["removed", "replaced"])("closes after %s state lock", async (ending) =>
     expect(receipt?.physicalIdentity).not.toBe(successor.fileIdentity?.physicalIdentity);
     fs.unlinkSync(alias);
     fs.symlinkSync(path.dirname(successor.path), alias, linkType);
+    expect(() => {
+      fresh = capture(aliased);
+    }).toThrow(/identity changed/);
     await write(creator, "original-session");
     for (const execution of [creator, canonical]) {
       await expect(read(execution)).resolves.toEqual([[sessionKey, "original-session"]]);
@@ -87,6 +91,11 @@ it.each(["removed", "replaced"])("closes after %s state lock", async (ending) =>
   } finally {
     owner.release();
     fs.rmSync(owner.path, { force: true }); // Only this test's synthetic successor lock.
-    await Promise.allSettled([creator.release(), canonical.release(), successor.release()]);
+    await Promise.allSettled([
+      creator.release(),
+      canonical.release(),
+      successor.release(),
+      fresh?.release(),
+    ]);
   }
 });

@@ -13,6 +13,11 @@ import {
 } from "./plugin-runtime-refresh.js";
 import { clearToolSearchCatalog } from "./tool-search-catalog.js";
 
+// mock-isolation: Gateway cleanup must not load the optional tool-dispatch bridge.
+vi.mock("./code-mode-bridge.js", () => {
+  throw new Error("Code Mode cleanup loaded the tool-dispatch bridge");
+});
+
 function controlledRun(abortSignal?: AbortSignal) {
   const started = createDeferredCore();
   const release = createDeferredCore();

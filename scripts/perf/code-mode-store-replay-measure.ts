@@ -23,6 +23,10 @@
  * appended-history replays, in addition to --warmup replays. Accept identical
  * results with reduced replay CPU/allocation; GC and memory cover writes too.
  * --matrix runs those nine shapes serially in one process with separate sessions.
+ * --entries 6000 --writes 500 --keys 4 --value-bytes 65536 selects 500 sets
+ * followed by missing-key deletes, crossing the 4096 custom-entry cache limit.
+ * Compare five AB/BA pairs plus A/A, with and without --durable: encode count
+ * must fall from 500 to 4, checksums must match, and CPU/allocation must improve.
  * This is the actual admitted store boundary, not a whole-Gateway load test.
  */
 import assert from "node:assert/strict";
@@ -42,6 +46,7 @@ const { values } = parseArgs({
     "store-module": { type: "string" },
     entries: { type: "string", default: "5000" },
     keys: { type: "string", default: "200" },
+    writes: { type: "string" },
     "value-bytes": { type: "string", default: "4096" },
     iterations: { type: "string", default: "200" },
     warmup: { type: "string", default: "5" },
@@ -53,6 +58,14 @@ const { values } = parseArgs({
 const selectedEntries = Number(values.entries);
 const selectedKeys = Number(values.keys);
 const selectedValueBytes = Number(values["value-bytes"]);
+const selectedWrites = values.writes === undefined ? undefined : Number(values.writes);
+assert(
+  selectedWrites === undefined ||
+    (Number.isSafeInteger(selectedWrites) &&
+      selectedWrites > 0 &&
+      selectedWrites <= selectedEntries),
+  "--writes must be a positive count no larger than --entries",
+);
 const iterations = Number(values.iterations);
 const warmup = Number(values.warmup);
 for (const value of [selectedEntries, selectedKeys, selectedValueBytes, iterations, warmup]) {
@@ -68,6 +81,7 @@ assert(
 );
 assert(!values.append || values.durable, "--append requires --durable");
 assert(!values.matrix || (values.append && values.durable), "--matrix requires --append --durable");
+assert(!values.matrix || selectedWrites === undefined, "--writes cannot be combined with --matrix");
 const ownerUrl = new URL("../../src/agents/code-mode-session-store.ts", import.meta.url);
 const storeModule = values["store-module"] ? path.resolve(values["store-module"]) : ownerUrl;
 const source = readFileSync(storeModule, "utf8");
@@ -101,8 +115,8 @@ async function measure(
   const expected = new Map<string, { value: unknown; networkContent: boolean }>();
   let sets = 0;
   for (let index = 0; index < entries; index++) {
-    const key = `key-${index % keys}`;
-    const deleted = index % 11 === 10;
+    const deleted = selectedWrites === undefined ? index % 11 === 10 : index >= selectedWrites;
+    const key = selectedWrites !== undefined && deleted ? "missing-key" : `key-${index % keys}`;
     const value = { syntheticReplay: true, revision: String(index).padStart(10, "0"), payload };
     const networkContent = index % 3 === 0;
     await manager.appendCustomEntryAsync("openclaw.code-mode-store", {

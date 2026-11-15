@@ -20,6 +20,7 @@ import {
   type SpawnResult,
 } from "./exec-result.js";
 import { killProcessTree } from "./kill-tree.js";
+import { prepareAgentCoreDumpLimit } from "./linux-core-dump.js";
 import { getAgentExecCgroup, type ProcessExecutionIntent } from "./linux-exec-cgroup.js";
 import { scheduleAdoptedChildZombieReapAfterExit } from "./scoped-child-reaper.js";
 import { BrokerChild } from "./spawn-broker/child.js";
@@ -539,6 +540,8 @@ type SpawnCommandOptions = CommandSpawnOptions & {
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv; no ambient environment is merged again. */
+  preparedEnv?: NodeJS.ProcessEnv;
   executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
@@ -602,6 +605,7 @@ export function spawnCommandWithInvocation<
   const {
     baseEnv,
     env,
+    preparedEnv,
     windowsVerbatimArguments,
     cancelSignal,
     executionTimeoutMs,
@@ -610,7 +614,7 @@ export function spawnCommandWithInvocation<
     executionScopeKey,
     ...execaOptions
   } = sourceOptions;
-  const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
+  const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
   const invocation = resolveSafeChildProcessInvocation({
     argv,
     cwd: execaOptions.cwd,
@@ -637,12 +641,13 @@ export function spawnCommandWithInvocation<
     // The 1s margin absorbs broker scheduling lag; the execution-only check cannot relabel an exited root.
     remoteOptions.executionDeadlineMs = executionTimeoutMs + 1_000;
   }
+  const limited = prepareAgentCoreDumpLimit(invocation.command, invocation.args, executionIntent);
   const reservation = reserveCommandProcessCustody([invocation.command, ...invocation.args]);
   const child: CommandSubprocess<CommandSpawnOptions> =
     broker && remoteOptions
       ? spawnBrokerCommand(
           broker,
-          [invocation.command, ...invocation.args],
+          [limited.command, ...limited.args],
           commandOptions,
           remoteOptions,
           executionIntent,
@@ -650,7 +655,7 @@ export function spawnCommandWithInvocation<
         )
       : runWithMainThreadTask(
           "process:spawn",
-          () => execa(invocation.command, invocation.args, commandOptions),
+          () => execa(limited.command, limited.args, commandOptions),
           "command",
         );
   // nice execs Git in the same child; retain its family and operation attribution.

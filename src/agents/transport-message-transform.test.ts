@@ -132,11 +132,22 @@ it("preserves unframed tool results only for a selected compaction replay window
   ).toHaveLength(1);
 });
 
+// Unbound Claude thinking crosses model switches; prefix-bound thinking stays with its model.
 // Live-verified 2026-09-02: equivalent response-model bindings retain usable reasoning.
 it.each([
   {
     source: { provider: "anthropic", model: "claude-sonnet-4-6" },
     target: "claude-fable-5",
+    keepThinking: true,
+  },
+  {
+    source: { provider: "anthropic", model: "claude-fable-5-2" },
+    target: "claude-zzz-9-9",
+    keepThinking: false,
+  },
+  {
+    source: { provider: "openai", model: "gpt-6-astra" },
+    target: "claude-zzz-9-9",
     keepThinking: false,
   },
   {

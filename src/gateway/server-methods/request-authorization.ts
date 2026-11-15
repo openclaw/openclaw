@@ -30,6 +30,7 @@ import {
 } from "../../state/agent-database-admission.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../operator-role-enforcement.js";
 import { readQueuedChatInputAdmission } from "../queued-chat-input-admission.js";
 import {
   prepareGatewaySessionAccessAuthority,
@@ -299,8 +300,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.methodRegistry.requiresAuthenticatedProfile(params.method) ||
         resolveDirectIncognitoTargets(params.method, params.requestParams).length > 0 ||
         (sessionMutationTargetFields(params.method).length > 0 &&
-          (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)().gateway
-            ?.roles !== undefined),
+          isNamedOperatorRoleEnforcementEnabled(
+            (params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig)(),
+          )),
     });
     if (profileError) {
       return { error: profileError };
@@ -352,10 +354,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
       );
       const cfg = params.context.getRuntimeConfig();
       let agents = startupWriteAgents(params, cfg);
-      let inputAgents = agents;
       let refusal = startupWriteRefusal(agents);
       if (!refusal && cfg.session?.store) {
-        inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
+        const inputAgents = await prepareStartupStoreAgents(agents, cfg, waitSignal);
         agents = [...new Set([...agents, ...inputAgents])];
         if (params.context.getRuntimeConfig() !== cfg) {
           continue;
@@ -370,19 +371,6 @@ export async function authorizeGatewayRequestPreDispatch(params: {
           error.details = { ...gatewayStartupUnavailableDetails(), method: params.method };
         }
         return { error };
-      }
-      if (
-        inputAgents.some((agentId) =>
-          params.context.agentDatabaseStartup?.isAgentInputRecoveryPending(agentId),
-        )
-      ) {
-        const error = startupError(true);
-        if (error) {
-          if (params.consumeSessionTurn && error.retryable) {
-            delete error.details;
-          }
-          return { error };
-        }
       }
     }
     const startup =

@@ -4,7 +4,10 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronRunLogEntry } from "../../api/types.ts";
 import { configResponse } from "../../e2e/appearance-prefs.test-support.ts";
-import { controlUiE2eBuiltModuleRequest } from "../../e2e/control-ui-built-module.test-support.ts";
+import {
+  controlUiE2eBuiltModuleRequest,
+  failControlUiModuleForDocuments,
+} from "../../e2e/control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -63,6 +66,10 @@ async function openRunHistory(page: Page) {
 suite.define(() => {
   it("opens and focuses the transcript region while its feed loads", async () => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
+      const heldHistory = await holdModuleResponse(
+        page,
+        controlUiE2eBuiltModuleRequest("ui/src/pages/cron/run-transcript.runtime.ts"),
+      );
       const held = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest(
@@ -72,10 +79,14 @@ suite.define(() => {
       try {
         await installCron(page, { "cron.history": history("Delayed transcript output") });
         await page.getByRole("tab", { name: "Activity history", exact: true }).waitFor();
+        expect(heldHistory.requests()).toBe(0);
         expect(held.requests()).toBe(0);
         const { button, region } = await openRunHistory(page);
+        await heldHistory.request;
+        await region.getByRole("status").first().waitFor();
+        heldHistory.release();
         await held.request;
-        await region.getByRole("status").waitFor();
+        await region.getByRole("status").first().waitFor();
         await expect
           .poll(() => region.evaluate((element) => element === document.activeElement))
           .toBe(true);
@@ -93,20 +104,19 @@ suite.define(() => {
         expect(await region.count()).toBe(0);
         expect(await button.evaluate((element) => element === document.activeElement)).toBe(true);
       } finally {
+        heldHistory.release();
         held.release();
       }
     });
   });
 
-  it("recovers a failed feed import through the guarded document reload", async () => {
+  it.each([
+    ["feed", "ui/src/pages/chat/components/chat-transcript-feed-view.tsx"],
+    ["history processing", "ui/src/pages/cron/run-transcript.runtime.ts"],
+  ])("recovers a failed %s import through the guarded document reload", async (_name, module) => {
     await suite.withPage({ viewport: { width: 1100, height: 900 } }, async ({ page }) => {
-      const feedModule = controlUiE2eBuiltModuleRequest(
-        "ui/src/pages/chat/components/chat-transcript-feed-view.tsx",
-      );
-      let requests = 0;
-      await page.route(feedModule, (route) =>
-        ++requests === 1 ? route.abort("internetdisconnected") : route.fallback(),
-      );
+      const transcriptModule = controlUiE2eBuiltModuleRequest(module);
+      const failed = await failControlUiModuleForDocuments(page, transcriptModule);
       const gateway = await installCron(page, {
         "cron.history": history("Recovered transcript output"),
       });
@@ -118,7 +128,7 @@ suite.define(() => {
       await reload;
       const { button, region } = await openRunHistory(page);
       await exactText(region, "Recovered transcript output").waitFor();
-      expect(requests).toBe(2);
+      expect(failed.documentCount()).toBe(2);
       expect((await gateway.getRequests("cron.history")).map(({ params }) => params)).toEqual([
         { id: entry.jobId, runAtMs: entry.runAtMs, limit: 100 },
       ]);

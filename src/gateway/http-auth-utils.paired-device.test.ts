@@ -16,6 +16,14 @@ import { handleControlUiHttpRequest } from "./control-ui.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import { markGatewayIngressTransport } from "./ingress-attribution.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { readStoredClaw, writeStoredClaw } from "./openclaw-id/claw-store.js";
+import {
+  setDeviceTokenBindingOwner,
+  setDeviceTokenBindingsLoading,
+} from "./openclaw-id/device-token-binding.js";
+import { linkedClaw } from "./openclaw-id/openclaw-id.test-support.js";
+import { createOpenClawIdService } from "./openclaw-id/service.js";
+import { setOpenClawIdTunnelPrincipalResolver } from "./openclaw-id/tunnel-principal.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import {
   AUTH_TOKEN,
@@ -144,7 +152,95 @@ it.each(["operator.admin", "operator.read"])(
 );
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  setDeviceTokenBindingOwner(undefined);
+  setDeviceTokenBindingsLoading(Promise.resolve());
+  setOpenClawIdTunnelPrincipalResolver(undefined);
+});
+
+// Status of an ordinary-ingress Control UI read with `token`, or null when authorized.
+async function ordinaryReadStatus(token: string): Promise<number | null> {
+  const req = createRequest({ path: "/control-ui-config.json", authorization: `Bearer ${token}` });
+  const res = new ServerResponse(req);
+  try {
+    const authorized = await authorizeControlUiReadRequestOrReply({
+      req,
+      res,
+      auth: AUTH_TOKEN,
+      cfg: {},
+      getRuntimeConfig: () => ({}),
+    });
+    return authorized ? null : res.statusCode;
+  } finally {
+    res.destroy();
+    req.destroy();
+  }
+}
+
+it("keeps a saved tunnel-bound token refused on HTTP after a Gateway start with the switch off", async () => {
+  await withOpenClawTestState({ label: "openclaw-id-http-restart-off" }, async () => {
+    const token = await pairBrowser(["operator.admin"]);
+    const claw = await linkedClaw({ read: readStoredClaw, write: writeStoredClaw });
+    await claw.authority.bindToken("browser", "operator", claw.w1);
+    // A new service over the saved claw record stands for the restarted Gateway.
+    const service = createOpenClawIdService({
+      getConfig: () => ({ enabled: false }),
+      getStateDir: () => "/nonexistent/openclaw-id-test",
+      getGatewayServer: () => undefined,
+      log: { info: () => {}, warn: () => {} },
+    });
+    const loaded = service.loadTokenBindings();
+    const early = ordinaryReadStatus(token);
+    await loaded;
+    expect(await early).toBe(401);
+    expect(await ordinaryReadStatus(token)).toBe(401);
+    await service.stop();
+  });
+});
+
+it("refuses tunnel-bound HTTP tokens outside the tunnel and token fallback for removed peers", async () => {
+  await withOpenClawTestState({ label: "openclaw-id-http-binding" }, async () => {
+    const token = await pairBrowser(["operator.admin"]);
+    const peerKey = `iroh:${"ac".repeat(32)}`;
+    setDeviceTokenBindingOwner({
+      lookup: () => peerKey,
+      record: async () => {},
+      forget: async () => {},
+      reportMismatch: () => {},
+    });
+    setOpenClawIdTunnelPrincipalResolver(async () => undefined);
+    for (const tunnel of [false, true]) {
+      const req = createRequest({
+        path: "/control-ui-config.json",
+        authorization: `Bearer ${token}`,
+      });
+      if (tunnel) {
+        markGatewayIngressTransport(req, {
+          kind: "openclaw-id-tunnel",
+          peerKey,
+          clientIp: "fd69:726f:6800::1",
+        });
+      }
+      const res = new ServerResponse(req);
+      try {
+        expect(
+          await authorizeControlUiReadRequestOrReply({
+            req,
+            res,
+            auth: AUTH_TOKEN,
+            cfg: {},
+            getRuntimeConfig: () => ({}),
+          }),
+        ).toBeNull();
+        expect(res.statusCode).toBe(401);
+      } finally {
+        res.destroy();
+        req.destroy();
+      }
+    }
+  });
+});
 
 it("authenticates remote HTTP reads only from the grant and refuses reusable credentials", async () => {
   await withOpenClawTestState({ label: "remote-http-device-ceiling" }, async () => {

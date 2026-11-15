@@ -1,11 +1,14 @@
 import type { Range, Virtualizer } from "@tanstack/virtual-core";
 import type { MarkdownPrewarmMode } from "../../../components/markdown.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
+import { createTranscriptEndSettlement } from "./chat-transcript-end-anchor.ts";
+import * as forecast from "./chat-transcript-forecast.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 
 // A few viewports avoid repeat mounts without making every scroll restyle a
 // large parked subtree. Geometry and prepared Markdown outlive DOM eviction.
 const PREPARED_ROW_LIMIT = 12;
+const SCROLL_PREPARE_ROW_LIMIT = 8;
 // Use idle time before a fast sweep reaches distant rows. The shared HTML cache
 // still bounds admission; DOM and pristine-fragment limits stay unchanged.
 const IDLE_PREWARM_ROW_LIMIT = 2048;
@@ -16,8 +19,12 @@ const INITIAL_PREWARM_ROW_LIMIT = 128;
 export class TranscriptInitialRange {
   pending = true;
   preparingEnd = false;
+  private endWork?: () => (() => void) | void;
+  private readonly queueEndWork = () =>
+    this.endWork && scheduleLayout(this, () => this.endWork?.());
   private tailRows: number;
   private rows: readonly TranscriptRow[] = [];
+  private hasIdleDomRows = false;
   private hasRetainedRows = false;
   private hasPrewarmRows = false;
   // Completed text rows have no widget custody. Retain their keyed DOM while
@@ -27,16 +34,25 @@ export class TranscriptInitialRange {
   readonly rowIndexes = new Map<string, number>();
   private cancelPreparation?: () => void;
   private preparationIsIdle = false;
-  private prepareStarted = 0;
-  private prepareLatency = 16;
   private idleStep = 1;
   private idleMeasureStep = 1;
-  private scrollSample = { time: 0, distance: 0, velocity: 0, direction: -1 };
+  private scrollSample = { time: 0, distance: 0, direction: -1 };
+  private pendingWheel?: { delta: number; time: number };
   private viewportOnly = false;
   private cachedWindow = false;
+  private forecastTimeout?: ReturnType<typeof setTimeout>;
 
   get reading(): boolean {
     return !this.pending && !this.viewportOnly;
+  }
+
+  // Medium histories pair messages in each retained row; keep the same content budget.
+  private get preparedRowLimit(): number {
+    return this.hasRetainedRows && !this.hasIdleDomRows ? 6 : PREPARED_ROW_LIMIT;
+  }
+
+  private get scrollPrepareRowLimit(): number {
+    return this.hasRetainedRows && !this.hasIdleDomRows ? 4 : SCROLL_PREPARE_ROW_LIMIT;
   }
 
   constructor(
@@ -52,6 +68,7 @@ export class TranscriptInitialRange {
     ) => number,
     private readonly afterCommit: (effect: () => void) => void,
     private readonly measureRows: () => boolean,
+    private readonly rowsMeasured: (indexes: readonly number[]) => boolean,
     private readonly prewarmRow?: (index: number, mode: MarkdownPrewarmMode) => boolean | undefined,
     private readonly invalidatePreparation: () => void = invalidate,
   ) {
@@ -95,12 +112,6 @@ export class TranscriptInitialRange {
     }
     if (!this.tailRows) {
       const indexes = new Set(this.normalIndexes(range));
-      for (const key of this.preparedRowKeys) {
-        const index = this.rowIndexes.get(key);
-        if (index !== undefined) {
-          indexes.add(index);
-        }
-      }
       const preparingIndex = this.preparingRowKey
         ? this.rowIndexes.get(this.preparingRowKey)
         : undefined;
@@ -109,6 +120,33 @@ export class TranscriptInitialRange {
       }
       for (const index of this.endIndexes()) {
         indexes.add(index);
+      }
+      const limit =
+        this.isReaderMoving() || forecast.pendingWheelDelta(this.pendingWheel) !== 0
+          ? Math.max(this.preparedRowLimit, indexes.size + this.scrollPrepareRowLimit)
+          : Infinity;
+      for (const index of forecast.indexes(
+        this.virtualizer(),
+        this.forecastViewport(),
+        range,
+        indexes,
+        this.rows,
+        this.scrollPrepareRowLimit,
+      )) {
+        indexes.add(index);
+        // Keep the forecast alive until arrival instead of remounting it a frame later.
+        const key = this.rows[index]!.key;
+        this.preparedRowKeys.delete(key);
+        this.preparedRowKeys.add(key);
+      }
+      // Keep the active and paced preparation windows; spend remaining slots on recent history.
+      for (const key of this.retentionKeys(range)) {
+        const index = this.rowIndexes.get(key);
+        if (index !== undefined && (indexes.has(index) || indexes.size < limit)) {
+          indexes.add(index);
+        } else {
+          this.preparedRowKeys.delete(key);
+        }
       }
       return [...indexes].toSorted((left, right) => left - right);
     }
@@ -119,22 +157,50 @@ export class TranscriptInitialRange {
   presentation(rows: readonly TranscriptRow[]) {
     if (this.rows !== rows) {
       this.rows = rows;
+      this.hasIdleDomRows = false;
       this.hasRetainedRows = false;
       this.hasPrewarmRows = false;
       for (const row of rows) {
         this.hasPrewarmRows ||= Boolean(row.prewarm || row.retainDom);
-        if (row.retainDom) {
-          this.hasRetainedRows = true;
+        this.hasRetainedRows ||= Boolean(row.retainDom);
+        if (row.retainDom && !row.prewarm) {
+          this.hasIdleDomRows = true;
           break;
         }
       }
     }
     this.retainViewportRows();
+    const active = this.activeIndexes();
+    const virtualizer = this.virtualizer();
+    const first = active[0];
+    // Ordinary rows would pay another commit on every wheel step. Retained fragments
+    // need preparation before their cold, estimated height can enter the flow.
+    const predecessor =
+      !this.pending &&
+      !this.preparingEnd &&
+      first !== undefined &&
+      rows[first]?.retainDom &&
+      first === (virtualizer.range?.startIndex ?? 0) - 1 &&
+      !this.cachedRowSize(first) &&
+      !virtualizer.itemSizeCache.has(virtualizer.options.getItemKey(first)) &&
+      !this.rowsMeasured([first])
+        ? active.shift()
+        : undefined;
+    if (predecessor !== undefined && this.preparingRowKey !== rows[predecessor]!.key) {
+      // Incoming overscan takes priority over speculative background preparation.
+      this.preparingRowKey = rows[predecessor]!.key;
+      // A resumed reader can have a cached moving range without this predecessor.
+      this.refresh();
+    }
     return {
-      activeRowKeys: new Set(
-        [...this.activeIndexes(), ...this.endIndexes()].map((index) => rows[index]!.key),
-      ),
+      activeRowKeys: new Set([...active, ...this.endIndexes()].map((index) => rows[index]!.key)),
       preparingRowKey: this.preparingRowKey,
+      forecastRowKeys: forecast.rowKeys(
+        virtualizer,
+        this.forecastViewport(),
+        rows,
+        this.preparedRowKeys,
+      ),
     };
   }
 
@@ -151,6 +217,21 @@ export class TranscriptInitialRange {
           overscan: virtualizer.options.overscan,
         })
       : [];
+  }
+
+  private forecastViewport() {
+    if (this.viewportOnly || this.preparingEnd || !this.hasRetainedRows) {
+      return undefined;
+    }
+    const pendingDelta = forecast.pendingWheelDelta(this.pendingWheel);
+    if (!pendingDelta && !this.isReaderMoving()) {
+      return undefined;
+    }
+    return forecast.viewport(
+      this.virtualizer(),
+      pendingDelta || this.scrollSample.direction * this.scrollSample.distance,
+      Boolean(this.pendingWheel && performance.now() - this.pendingWheel.time < 100),
+    );
   }
 
   private normalIndexes(range: Range): number[] {
@@ -182,18 +263,32 @@ export class TranscriptInitialRange {
     }
     const virtualizer = this.virtualizer();
     const height = virtualizer.scrollRect?.height ?? 0;
-    const indexes: number[] = [];
-    let covered = 0;
-    for (let index = this.rows.length - 1; index >= 0 && covered < height; index--) {
-      indexes.push(index);
-      covered +=
-        (virtualizer.itemSizeCache.get(this.rows[index]!.key) ??
-          virtualizer.options.estimateSize(index)) + virtualizer.options.gap;
+    if (height <= 0 || !this.rows.length) {
+      return [];
     }
-    return indexes;
+    const end =
+      virtualizer.getTotalSize() +
+      virtualizer.options.scrollMargin -
+      virtualizer.options.paddingEnd;
+    const first = virtualizer.getVirtualItemForOffset(end - height);
+    if (!first) {
+      return [];
+    }
+    return this.normalIndexes({
+      startIndex: first.index,
+      endIndex: this.rows.length - 1,
+      count: this.rows.length,
+      overscan: virtualizer.options.overscan,
+      lanes: virtualizer.options.lanes,
+    });
   }
 
-  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean): void => {
+  readonly prepareEnd = (ready: () => void, isCurrent: () => boolean, native: boolean): void => {
+    this.pendingWheel = undefined;
+    if (native && this.pending) {
+      ready();
+      return;
+    }
     cancelLayout(this);
     this.preparingEnd = true;
     this.refresh();
@@ -202,20 +297,45 @@ export class TranscriptInitialRange {
       if (!this.preparingEnd || !this.canPrepare() || !isCurrent()) {
         return;
       }
-      if (this.measureRows()) {
+      // Native sizes can expand the destination window without moving the current range.
+      if (native) {
+        this.refresh();
+      }
+      if (native ? !this.rowsMeasured(this.endIndexes()) : this.measureRows()) {
         this.invalidate();
         // A measurement can mount another row. Let the browser present before
         // its next pass instead of draining every correction in one task.
-        this.afterCommit(() => scheduleLayout(this, () => begin));
+        this.afterCommit(this.queueEndWork);
         return;
       }
-      this.finishEnd();
+      this.endWork = undefined;
       ready();
     };
+    this.endWork = () => begin;
     this.afterCommit(begin);
   };
 
+  // Keep the destination in flow until its real size and native endpoint agree.
+  readonly finishEndWhenSettled = (): void => {
+    this.pendingWheel = undefined;
+    if (!this.preparingEnd) {
+      this.preparingEnd = true;
+      this.refresh();
+      this.invalidate();
+    }
+    const endWork = createTranscriptEndSettlement(
+      this.virtualizer(),
+      () => this.canPrepare() && this.endWork === endWork,
+      this.rowsMeasured,
+      this.queueEndWork,
+      () => this.finishEnd(),
+    );
+    this.endWork = endWork;
+    this.queueEndWork();
+  };
+
   finishEnd(): void {
+    this.endWork = undefined;
     cancelLayout(this);
     if (this.preparingEnd) {
       this.preparingEnd = false;
@@ -280,6 +400,7 @@ export class TranscriptInitialRange {
   }
 
   updateRows(rows: readonly TranscriptRow[]): void {
+    this.pendingWheel = undefined;
     this.idleStep = 1;
     this.idleMeasureStep = 1;
     const indexes = this.rowIndexes;
@@ -293,7 +414,6 @@ export class TranscriptInitialRange {
     }
     if (this.preparingRowKey && !rows[indexes.get(this.preparingRowKey) ?? -1]?.retainDom) {
       this.preparingRowKey = undefined;
-      this.prepareStarted = 0;
     }
   }
 
@@ -303,6 +423,10 @@ export class TranscriptInitialRange {
   }
 
   didCommit(): void {
+    // Revealing a parked pane resumes its current end stage without hidden polling.
+    if (this.endWork && this.canPrepare()) {
+      this.queueEndWork();
+    }
     if (this.preparationIsIdle && this.isReaderMoving()) {
       this.cancelPreparation?.();
       this.cancelPreparation = undefined;
@@ -312,17 +436,54 @@ export class TranscriptInitialRange {
   }
 
   recordReaderMovement(delta: number): void {
+    const pendingDelta = forecast.pendingWheelDelta(this.pendingWheel);
+    if (this.pendingWheel) {
+      this.pendingWheel.delta =
+        Math.sign(delta) === Math.sign(pendingDelta)
+          ? Math.sign(pendingDelta) * Math.max(0, Math.abs(pendingDelta) - Math.abs(delta))
+          : 0;
+    }
     this.idleStep = 1;
     this.idleMeasureStep = 1;
-    const now = performance.now();
-    const previous = this.scrollSample;
     this.scrollSample = {
-      time: now,
+      time: performance.now(),
       distance: Math.abs(delta),
-      velocity: previous.time ? Math.abs(delta) / Math.max(16, now - previous.time) : 0,
       direction: Math.sign(delta),
     };
+    this.finishEnd();
     this.finish();
+    if (!this.hasRetainedRows || this.preparingEnd) {
+      return;
+    }
+    this.refresh();
+    this.scheduleForecastExpiry();
+  }
+
+  recordWheel(delta: number): void {
+    if (!this.reading || this.preparingEnd || !this.hasRetainedRows || !this.canPrepare()) {
+      return;
+    }
+    const now = performance.now();
+    const changed = delta !== 0 || !this.pendingWheel || now - this.pendingWheel.time >= 100;
+    this.pendingWheel = { delta: forecast.pendingWheelDelta(this.pendingWheel) + delta, time: now };
+    this.cancelPreparation?.();
+    this.cancelPreparation = undefined;
+    this.preparationIsIdle = false;
+    if (changed) {
+      this.refresh();
+      this.invalidate();
+    }
+    this.scheduleForecastExpiry();
+  }
+
+  private scheduleForecastExpiry(): void {
+    clearTimeout(this.forecastTimeout);
+    this.forecastTimeout = setTimeout(() => {
+      this.forecastTimeout = undefined;
+      this.pendingWheel = undefined;
+      this.refresh();
+      this.invalidate();
+    }, 100);
   }
 
   readonly measureElement = (
@@ -336,9 +497,6 @@ export class TranscriptInitialRange {
       key === this.preparingRowKey &&
       (entry || !this.virtualizer().targetWindow?.ResizeObserver)
     ) {
-      // This is readiness latency, including layout, rather than CPU time.
-      this.prepareLatency = Math.max(1, performance.now() - this.prepareStarted);
-      this.prepareStarted = 0;
       queueMicrotask(() => {
         if (this.preparingRowKey === key) {
           this.preparingRowKey = undefined;
@@ -366,34 +524,44 @@ export class TranscriptInitialRange {
         this.preparedRowKeys.add(row.key);
       }
     }
-    // The recent viewport wins over speculative preparation; geometry stays in
-    // virtual-core's size cache even after the bounded DOM cache evicts a row.
-    while (this.preparedRowKeys.size > PREPARED_ROW_LIMIT) {
-      this.preparedRowKeys.delete(this.preparedRowKeys.keys().next().value!);
+    // During a fling, keep approaching rows before the viewport we just
+    // left. Geometry survives eviction in virtual-core's size cache.
+    for (const key of this.retentionKeys(range).slice(this.preparedRowLimit)) {
+      this.preparedRowKeys.delete(key);
     }
   }
 
-  private queuePreparation(materialize = false, afterFrame = false): void {
+  private retentionKeys(range: { startIndex: number; endIndex: number }): string[] {
+    return forecast.retainedKeys(
+      this.preparedRowKeys,
+      this.rowIndexes,
+      this.rows.length,
+      range,
+      forecast.pendingWheelDelta(this.pendingWheel) ||
+        (this.isReaderMoving() ? this.scrollSample.direction : 0),
+    );
+  }
+
+  private queuePreparation(afterFrame = false): void {
     if (
       this.cancelPreparation ||
+      forecast.pendingWheelDelta(this.pendingWheel) !== 0 ||
       !this.hasPrewarmRows ||
       (!this.hasRetainedRows && this.rows.at(-1)?.streaming) ||
       this.preparingEnd ||
       this.pending ||
-      this.tailRows > 0 ||
       !this.canPrepare()
     ) {
       return;
     }
-    const materializeRow = materialize && !this.preparingRowKey;
     const idlePrewarmLimit =
-      this.scrollSample.time && this.hasRetainedRows
+      this.scrollSample.time && this.hasIdleDomRows
         ? IDLE_PREWARM_ROW_LIMIT
         : INITIAL_PREWARM_ROW_LIMIT;
     const idleRange = this.virtualizer().range;
     if (
       idleRange &&
-      (this.viewportOnly || !this.hasRetainedRows || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
+      (this.viewportOnly || !this.hasIdleDomRows || this.idleMeasureStep > PREPARED_ROW_LIMIT) &&
       performance.now() - this.scrollSample.time >= 100
     ) {
       const sampledDirection = this.scrollSample.direction;
@@ -409,12 +577,12 @@ export class TranscriptInitialRange {
         return;
       }
     }
-    const queueNext = (withDom = false) => this.queuePreparation(withDom, true);
-    const prepare = (deadline: number, prewarmRequested = false, warmOnlyRequested = false) => {
+    const queueNext = () => this.queuePreparation(true);
+    const prepare = (deadline: number, prewarmRequested = false, warmOnly = false) => {
       this.cancelPreparation = undefined;
       this.preparationIsIdle = false;
       if (performance.now() >= deadline) {
-        queueNext(!warmOnlyRequested);
+        queueNext();
         return;
       }
       const virtualizer = this.virtualizer();
@@ -426,7 +594,7 @@ export class TranscriptInitialRange {
         !this.canPrepare() ||
         !range ||
         !virtualizer.scrollElement ||
-        (this.prepareStarted && !warmOnlyRequested)
+        (this.preparingRowKey && !warmOnly)
       ) {
         return;
       }
@@ -440,55 +608,22 @@ export class TranscriptInitialRange {
       const direction = inward ? -sampledDirection : sampledDirection;
       const viewport = virtualizer.scrollRect?.height ?? 600;
       const moving = !inward && this.isReaderMoving();
-      const velocity = moving ? this.scrollSample.velocity : 0;
       // Large steps need the arriving viewport, including its interior rows.
-      // Warm its Markdown first, then admit one DOM row on a later budget.
-      const viewportStep = moving && this.scrollSample.distance >= viewport;
-      const prewarm = prewarmRequested || viewportStep;
-      const warmOnly = warmOnlyRequested;
-      const arrivingViewport = warmOnly || viewportStep;
+      // Retained rows already forecast their DOM; this queue warms ordinary Markdown.
+      const prewarm = prewarmRequested || (moving && this.scrollSample.distance >= viewport);
       // HTML warming is synchronous: predict one observed scroll step and walk
       // into that viewport, rather than beyond its leading edge.
-      const distance = moving
-        ? arrivingViewport
-          ? this.scrollSample.distance
-          : velocity * (16 + this.prepareLatency)
-        : 0;
-      // At speed, prepare the next viewport rather than rows the reader skips.
-      // Virtual-core resolves this from cached sizes; no neighbor layout reads.
-      const predictedTop = Math.max(
-        0,
-        Math.min(
-          (virtualizer.scrollOffset ?? 0) + direction * distance,
-          Math.max(0, virtualizer.getTotalSize() - viewport),
-        ),
+      const distance = moving ? this.scrollSample.distance : 0;
+      const { predictedTop, predicted, overscan, origin } = forecast.preparation(
+        virtualizer,
+        range,
+        direction,
+        distance,
       );
-      const predictedOffset =
-        predictedTop + ((arrivingViewport ? direction < 0 : direction > 0) ? viewport : 0);
-      const predicted = virtualizer.getVirtualItemForOffset(Math.max(0, predictedOffset));
-      // Prediction can reach an edge before the viewport. Prepare back into the
-      // transcript instead of searching past an ordinary, nonfragment edge row.
-      let searchDirection = direction;
-      if (!arrivingViewport && distance && predicted) {
-        if (predicted.index === 0) {
-          searchDirection = 1;
-        } else if (predicted.index === rows.length - 1) {
-          searchDirection = -1;
-        }
-      }
-      // Ordinary rows mount with overscan. Warm those neighbours as well as
-      // the viewport so its first frame does not parse the cold edge rows.
-      const overscan = arrivingViewport && distance ? virtualizer.options.overscan : 0;
-      const origin =
-        distance && predicted
-          ? predicted.index - searchDirection * (1 + overscan)
-          : direction > 0
-            ? range.endIndex
-            : range.startIndex;
       const rendered = new Set(virtualizer.getVirtualItems().map((row) => row.key));
       // Before reader navigation, keep warming out of the native scroll geometry.
       const nearGeometryPending =
-        this.hasRetainedRows && !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
+        this.hasIdleDomRows && !this.viewportOnly && this.idleMeasureStep <= PREPARED_ROW_LIMIT;
       if (prewarm && !moving) {
         // Measure nearby prepared rows before spending idle slices on distant HTML.
         const warmLimit = nearGeometryPending ? PREPARED_ROW_LIMIT : idlePrewarmLimit;
@@ -500,14 +635,16 @@ export class TranscriptInitialRange {
             queueNext();
             return;
           }
-          const index = origin + this.idleStep * searchDirection;
+          const index = origin + this.idleStep * direction;
           const row = rows[index];
           if (!row) {
             break;
           }
           // Ordinary rows warm data only; retaining their trees doubled mixed-session DOM.
           const mode =
-            row.retainDom && this.idleStep <= PREPARED_ROW_LIMIT ? "fragment" : "idle-html";
+            row.retainDom && !row.prewarm && this.idleStep <= PREPARED_ROW_LIMIT
+              ? "fragment"
+              : "idle-html";
           if (!rendered.has(row.key) && (row.prewarm || row.retainDom) && this.prewarmRow) {
             const warmed = this.prewarmRow(index, mode);
             if (warmed === undefined) {
@@ -528,28 +665,14 @@ export class TranscriptInitialRange {
       }
       // Warming covers the predicted viewport, whose row count varies with
       // measured heights. A fixed candidate cap left its last rows cold.
-      const opposite =
-        arrivingViewport && distance
-          ? virtualizer.getVirtualItemForOffset(predictedTop + (direction > 0 ? viewport : 0))
-          : undefined;
-      const domLookahead =
-        velocity || warmOnly
-          ? 8
-          : Math.max(
-              // A full visible window still measures one temporary row so idle
-              // geometry can finish and hand off to distant Markdown warming.
-              1,
-              PREPARED_ROW_LIMIT -
-                this.activeIndexes().filter((index) => rows[index]?.retainDom).length,
-            );
+      const opposite = distance
+        ? virtualizer.getVirtualItemForOffset(predictedTop + (direction > 0 ? viewport : 0))
+        : undefined;
       const lookahead =
         opposite && predicted
           ? Math.abs(opposite.index - predicted.index) + 1 + 2 * overscan
-          : domLookahead;
+          : this.scrollPrepareRowLimit;
       let admitted = 0;
-      let warmed = false;
-      let canMaterialize = false;
-      let preparedCandidate: string | undefined;
       let candidates = 0;
       for (
         let step = moving || warmOnly ? 1 : this.idleMeasureStep;
@@ -560,10 +683,10 @@ export class TranscriptInitialRange {
           break;
         }
         if (performance.now() >= deadline) {
-          queueNext(warmOnly ? canMaterialize : true);
+          queueNext();
           return;
         }
-        const index = origin + step * searchDirection;
+        const index = origin + step * direction;
         const row = rows[index];
         if (!row) {
           break;
@@ -572,97 +695,54 @@ export class TranscriptInitialRange {
           this.idleMeasureStep = step + 1;
         }
         const canPrepareRow =
-          row.retainDom && !rendered.has(row.key) && !this.preparedRowKeys.has(row.key);
+          !moving && row.retainDom && !rendered.has(row.key) && !this.preparedRowKeys.has(row.key);
         // Idle admission skips retained DOM and live/widget rows to keep
         // measuring beyond a cached prefix after the reader changes direction.
         if (moving || warmOnly || canPrepareRow) {
           candidates++;
         }
-        canMaterialize ||= Boolean(canPrepareRow);
-        if (canPrepareRow) {
-          preparedCandidate ??= row.key;
-        }
-        // Distant HTML must not evict the nearby fragments needed by the next scroll.
-        const mode = row.retainDom && (arrivingViewport || step <= 8) ? "fragment" : "html";
-        const warm = () =>
+        if (
           prewarm &&
           moving &&
-          (row.prewarm || row.retainDom) &&
+          row.prewarm &&
+          !row.retainDom &&
           !rendered.has(row.key) &&
           this.prewarmRow
-            ? this.prewarmRow(index, mode)
-            : false;
-        for (let warming = warm(); warming !== false; warming = warm()) {
-          // An unloaded preparation module yields this slice without advancing the row.
-          if (warming === undefined) {
-            queueNext();
-            return;
-          }
-          // The shared cache owns readiness; no DOM or range invalidation is needed.
-          if (warmOnly) {
-            warmed = true;
-            // One admission prepares one message, not the whole atomic row.
-            if (performance.now() >= deadline) {
+        ) {
+          // Warm one message at a time; an unloaded module or spent slice yields.
+          let warming: boolean | undefined;
+          while ((warming = this.prewarmRow(index, "html")) !== false) {
+            if (warming === undefined || !warmOnly || performance.now() >= deadline) {
               queueNext();
               return;
             }
-            continue;
           }
-          queueNext();
-          return;
         }
-        if (!warmOnly && candidates <= domLookahead && canPrepareRow) {
-          if (performance.now() >= deadline) {
-            queueNext();
-            return;
-          }
+        if (canPrepareRow && !this.preparingRowKey) {
           // Keep nearby DOM hot; farther idle rows live only until their
           // measurement enters the virtualizer's geometry cache.
-          if (moving || this.preparedRowKeys.size < PREPARED_ROW_LIMIT) {
+          if (this.preparedRowKeys.size < PREPARED_ROW_LIMIT) {
             this.preparedRowKeys.add(row.key);
           }
           this.preparingRowKey = row.key;
           admitted++;
         }
       }
-      if (warmOnly && preparedCandidate && !this.preparingRowKey && performance.now() < deadline) {
-        // A fully warm viewport can use the rest of this slice to prepare one
-        // DOM row, before the next scroll frame reaches it.
-        this.preparedRowKeys.add(preparedCandidate);
-        this.preparingRowKey = preparedCandidate;
-        admitted++;
+      if (admitted) {
+        this.refresh();
+        this.invalidate();
+        // Markdown can keep warming while the single admitted DOM row is measured.
+        queueNext();
+      } else if (prewarm && !moving && this.idleMeasureStep > PREPARED_ROW_LIMIT) {
+        // Ordinary rows need no DOM admission; resume their remaining HTML sweep.
+        queueNext();
       }
-      if (!admitted) {
-        if (warmOnly && (warmed || canMaterialize)) {
-          queueNext(canMaterialize);
-        } else if (
-          prewarm &&
-          !moving &&
-          nearGeometryPending &&
-          this.idleMeasureStep > PREPARED_ROW_LIMIT
-        ) {
-          // Ordinary rows need no DOM admission; resume their remaining HTML sweep.
-          queueNext();
-        }
-        return;
-      }
-      this.prepareStarted = performance.now();
-      virtualizer.setOptions({
-        ...virtualizer.options,
-        rangeExtractor: (next) => this.extract(next),
-      });
-      this.invalidate();
-      // Markdown can keep warming while the single admitted DOM row is measured.
-      queueNext();
     };
     if (this.isReaderMoving() && this.prewarmRow && typeof requestIdleCallback === "function") {
       const queueTask = () => {
         // Rendering can delay this timer beyond six milliseconds. Budget its
         // own work so a busy frame cannot starve the next viewport's preparation.
-        const task = setTimeout(
-          () => prepare(performance.now() + 6, !materializeRow, !materializeRow),
-          0,
-        );
+        const task = setTimeout(() => prepare(performance.now() + 6, true, true), 0);
         this.cancelPreparation = () => clearTimeout(task);
       };
       // Start without waiting for another frame. Subsequent slices stay
@@ -689,17 +769,21 @@ export class TranscriptInitialRange {
   }
 
   releaseRows(): void {
+    this.pendingWheel = undefined;
     this.rows = [];
+    this.hasIdleDomRows = false;
     this.hasRetainedRows = false;
     this.hasPrewarmRows = false;
   }
 
   disconnect(): void {
+    clearTimeout(this.forecastTimeout);
+    this.pendingWheel = undefined;
+    this.endWork = undefined;
     cancelLayout(this);
     this.cancelPreparation?.();
     this.cancelPreparation = undefined;
     this.preparationIsIdle = false;
-    this.prepareStarted = 0;
     this.preparingRowKey = undefined;
     this.preparedRowKeys.clear();
     this.viewportOnly = false;

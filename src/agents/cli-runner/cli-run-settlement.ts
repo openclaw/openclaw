@@ -42,7 +42,11 @@ import { resolveCliSessionId } from "./cli-run-recovery.js";
 import { projectCliMessagingDeliveryEvidence } from "./delivery-evidence.js";
 import { hashCliReseedPrompt } from "./reseed-envelope.js";
 import type { ClaudeCliRunDiagnosticLifecycle } from "./run-diagnostics.js";
-import { resolveCliSourceReplyMirror, type prepareCliRunTerminalReply } from "./terminal-reply.js";
+import {
+  resolveCliSourceReplyMirror,
+  shouldSuppressCliAutomaticFinal,
+  type prepareCliRunTerminalReply,
+} from "./terminal-reply.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
 const log = createSubsystemLogger("agents/cli-runner");
@@ -498,7 +502,8 @@ export function buildCliRunResult(params: {
   usedHistoryPrompt: boolean;
   userTurnHandled: boolean;
   sessionBindingDisabled: boolean;
-  preparedContextAgentMeta: { contextTokens?: number };
+  /** Turn facts settled before the result: context size and the transcript-priced cost. */
+  preparedContextAgentMeta: { contextTokens?: number; costUsd?: number };
 }): EmbeddedAgentRunResult {
   const {
     assistantTranscriptOwned,
@@ -519,11 +524,10 @@ export function buildCliRunResult(params: {
   const { sourceReplyMirror } = preparedReply;
   const text = preparedReply.text;
   const finalAssistantVisibleText = preparedReply.finalMessageText ?? text;
-  // Automatic finals still need route-scoped dedupe: an earlier send may be only progress.
   const payloads =
     sourceReplyMirror.payloads.length > 0
       ? sourceReplyMirror.payloads
-      : sourceReplyMirror.delivered && runParams.sourceReplyDeliveryMode === "message_tool_only"
+      : shouldSuppressCliAutomaticFinal(output, runParams, sourceReplyMirror.delivered)
         ? undefined
         : text
           ? (output.textParts && text === output.text ? output.textParts : [text]).map(
@@ -704,6 +708,7 @@ export function buildCliRunResult(params: {
         usage: output.usage,
         ...(output.usage ? { lastCallUsage: output.usage } : {}),
         ...(output.diagnosticUsage ? { diagnosticUsage: output.diagnosticUsage } : {}),
+        ...output.nativeCompaction,
         ...(persistedCliSessionId
           ? {
               cliSessionBinding: buildCliSessionBinding(

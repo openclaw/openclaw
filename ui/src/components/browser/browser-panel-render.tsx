@@ -363,20 +363,17 @@ export function BrowserPanelChrome(
     return (
       <div class="rail-header__actions bp-actions">
         <span class="bp-dock-modes" role="group" aria-label={t("browser.title")}>
-          <openclaw-tooltip
-            prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-          >
-            <PanelIconButton
-              class="rail-header__action bp-icon"
-              label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-              icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
-              onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
-            />
-          </openclaw-tooltip>
+          <PanelIconButton
+            class="rail-header__action bp-icon"
+            label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
+            icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
+            onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
+          />
         </span>
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.openExternal")}
+          title={t("browser.openExternalTooltip")}
           icon={<Icon name="externalLink" />}
           newTab
           disabled={!activeUrl()}
@@ -385,6 +382,7 @@ export function BrowserPanelChrome(
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.close")}
+          title={false}
           icon={<Icon name="x" />}
           onClick={() => props.onClose()}
         />

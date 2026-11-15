@@ -539,9 +539,10 @@ describe.runIf(browserMode)("Review layout", () => {
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-mobile__rail")).not.toBeNull(),
     );
-    const view = panel.querySelector<HTMLButtonElement>(
-      ".session-diff-mobile__rail .session-diff__toolbar-icon",
-    )!;
+    const view = panel.querySelector<HTMLButtonElement>('[aria-label="Change view options"]')!;
+    await userEvent.hover(view);
+    await expect.poll(() => view.style.getPropertyValue("anchor-name")).not.toBe("");
+    const tooltipAnchor = view.style.getPropertyValue("anchor-name");
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
@@ -564,12 +565,11 @@ describe.runIf(browserMode)("Review layout", () => {
       files: [{ path: "added.ts", status: "added", additions: 1, deletions: 0 }],
     });
     await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
-    expect(panel.querySelector(".session-diff-mobile__rail .session-diff__toolbar-icon")).toBe(
-      view,
-    );
+    expect(panel.querySelector('[aria-label="Change view options"]')).toBe(view);
     await userEvent.keyboard("{Escape}");
     await waitForSolid(() => expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull());
     expect(document.activeElement).toBe(view);
+    expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
     await userEvent.click(view);
     await waitForSolid(() =>
       expect(panel.querySelector(".session-diff-menu__surface")?.matches(":popover-open")).toBe(
@@ -579,6 +579,6 @@ describe.runIf(browserMode)("Review layout", () => {
     await userEvent.click(panel.querySelector<HTMLButtonElement>('[data-value="sync"]')!);
     await waitForSolid(() => expect(openPage).toHaveBeenCalledTimes(1));
     expect(panel.querySelector("openclaw-session-diff-menu")).toBeNull();
-    expect(view.style.getPropertyValue("anchor-name")).toBe("");
+    expect(view.style.getPropertyValue("anchor-name")).toBe(tooltipAnchor);
   });
 });

@@ -105,7 +105,7 @@ it("preserves the upstream HTTP error status", async () => {
   await expect(search()).rejects.toMatchObject({ status: 429, statusCode: 429 });
 });
 
-it("rejects invalid and incomplete response bodies", async () => {
+it("rejects invalid, incomplete, and failed-engine responses", async () => {
   const fetch = mockFetch(new Response("{"));
   await expect(search()).rejects.toThrow("SearXNG returned invalid JSON.");
 
@@ -120,6 +120,8 @@ it("rejects invalid and incomplete response bodies", async () => {
   });
   fetch.mockResolvedValueOnce(new Response(stream));
   await expect(search()).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+  mockFetch(Response.json({ results: [], unresponsive_engines: [["engine", "timeout"]] }));
+  await expect(search()).rejects.toThrow("engine (timeout)");
 });
 
 it.each(["example.com", "internal"])("gates private redirects from search.%s", async (host) => {

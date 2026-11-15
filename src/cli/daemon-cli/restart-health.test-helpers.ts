@@ -26,8 +26,12 @@ export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKi
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
 
-export function gatewayResponseError(message: string): GatewayProtocolRequestError {
-  const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+export function gatewayResponseError(message: string, code?: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({
+    code: "UNAVAILABLE",
+    message,
+    details: code ? { code } : undefined,
+  });
   retainGatewayResponsePayload(error, undefined);
   return error;
 }
@@ -48,15 +52,11 @@ export function gatewayProtocolMismatchError(): GatewayClientRequestError {
   return error;
 }
 
-export function gatewayVerifiedUserRequiredError(): GatewayClientRequestError {
-  const error = new GatewayClientRequestError({
-    code: "NOT_PAIRED",
-    message:
-      "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
-    details: { code: "AUTH_VERIFIED_USER_REQUIRED" },
-  });
-  retainGatewayResponsePayload(error, undefined);
-  return error;
+export function gatewayVerifiedUserRequiredError(): GatewayProtocolRequestError {
+  return gatewayResponseError(
+    "operator role policies require a verified user identity for this authentication method; reconnect through the trusted proxy or Tailscale, or use the shared gateway token/password",
+    "AUTH_VERIFIED_USER_REQUIRED",
+  );
 }
 export const requestStartupProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();
 export const requestReadinessProbe = vi.fn<ConfiguredGatewayLocalProbe["requestHttp"]>();

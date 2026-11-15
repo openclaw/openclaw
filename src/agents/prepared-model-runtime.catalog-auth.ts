@@ -1,9 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { listManifestSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import {
   resolveAgentCredentialMapFromStore,
@@ -31,6 +34,7 @@ import { preparedSyntheticAuthProviderScope } from "./prepared-model-runtime.syn
 
 // Startup captures each CLI login once; ordinary reads recheck it after this window.
 const NATIVE_LOGIN_RECHECK_MS = 60_000;
+const log = createSubsystemLogger("agents/prepared-model-runtime");
 
 // A single honored response does not prove capacity recovered; retain the last downgrade for a minute.
 const SERVICE_TIER_OBSERVATION_TTL_MS = 60_000;
@@ -571,8 +575,17 @@ export function createNativeLoginRecheck(
       return undefined;
     }
     checkedAt = now;
-    pending = recheck()
-      .catch(() => undefined)
+    // The owner publishes after the triggering read returns; that caller's closed
+    // plugin invocation scope must not own the probe or the publication.
+    pending = runInDetachedAsyncContext(recheck)
+      .catch((error: unknown) => {
+        if (
+          !params.retirementSignal.aborted &&
+          !(error instanceof PreparedModelRuntimePublicationSupersededError)
+        ) {
+          log.warn(`native login recheck failed: ${formatErrorMessage(error)}`);
+        }
+      })
       .finally(() => {
         pending = undefined;
       });

@@ -35,7 +35,10 @@ import {
 } from "../../local-user-ingress.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE } from "../../method-scopes.js";
 import { serializeEventPayload } from "../../node-registry.js";
+import { resolveOpenClawIdOwnerProfile } from "../../openclaw-id/owner-account.js";
+import { openclawIdTunnelRolePolicy } from "../../openclaw-id/tunnel-principal.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../../operator-role-enforcement.js";
 import { resolveOperatorRolePolicyForAssignment } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
@@ -210,17 +213,39 @@ export async function attachAuthenticatedGatewayConnect(
     assertCurrent: profileLifecycle.assertCurrent,
     recordTiming: context.recordAttachTiming,
   });
-  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
-  // Only an owner-bound ingress grant receives the shared owner role bypass.
+  const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(context.configSnapshot);
+  // Only an owner-bound ingress grant receives the shared owner role bypass;
+  // an OpenClaw ID owner device is the Gateway owner.
+  const openclawIdPrincipal =
+    remoteIngressPrincipal?.openclawIdPrincipal ??
+    (authMethod === "trusted-proxy" ? authResult.openclawId : undefined);
   const operatorOwner =
     role === "operator" &&
     (authMethod === "token" ||
       authMethod === "password" ||
-      remoteIngressPrincipal?.operatorRoleActor.kind === "system");
+      remoteIngressPrincipal?.operatorRoleActor.kind === "system" ||
+      openclawIdPrincipal?.kind === "owner");
+  // An owner device whose OpenClaw ID account is linked to a profile arrives as that person;
+  // it keeps operatorOwner (from its certificate) and skips role policy like any owner device.
+  const linkedOwnerProfile =
+    role === "operator" && !remoteIngressPrincipal && openclawIdPrincipal?.kind === "owner"
+      ? await resolveOpenClawIdOwnerProfile().catch((error: unknown) => {
+          logWsControl.warn(
+            `OpenClaw ID owner profile lookup failed conn=${connId}; using the shared owner: ${formatForLog(error)}`,
+          );
+          return null;
+        })
+      : null;
   // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
     (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
-    shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
+    shouldUseGatewayOwnerProfile({
+      role,
+      authenticatedUserId,
+      authMethod,
+      rolesConfigured,
+      openclawIdOwner: openclawIdPrincipal?.kind === "owner" && !linkedOwnerProfile,
+    });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
     ? { ok: true as const, prepared: undefined }
@@ -228,7 +253,9 @@ export async function attachAuthenticatedGatewayConnect(
         context,
         state,
         ownerProfileExpected,
+        linkedOwnerProfile,
         authenticatedUserId,
+        requestHeaders: context.handler.upgradeReq.headers,
         resolveAuthenticatedGitHubIdentity,
         assertCurrent: profileLifecycle.assertCurrent,
       });
@@ -245,23 +272,30 @@ export async function attachAuthenticatedGatewayConnect(
   const scopesStartedAt = performance.now();
   const effectiveScopes = remoteIngressPrincipal
     ? deviceScopes
-    : resolveEffectiveConnectionScopes({
-        role,
-        deviceScopes,
-        verifiedIdentity: state.authPolicy.verifiedIdentity,
-        identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-        upgradeReq: context.handler.upgradeReq,
-      });
+    : authResult.delegation
+      ? [...authResult.delegation.scopes]
+      : resolveEffectiveConnectionScopes({
+          role,
+          deviceScopes,
+          verifiedIdentity: state.authPolicy.verifiedIdentity,
+          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+          upgradeReq: context.handler.upgradeReq,
+        });
+  // OpenClaw ID members are capped by their membership role, whatever the device requested.
+  const openclawIdRolePolicy =
+    role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
   const rolePolicy = remoteIngressPrincipal
     ? remoteIngressPrincipal.operatorRolePolicy
-    : role === "operator" && !operatorOwner
-      ? resolveOperatorRolePolicyForAssignment(
-          authenticatedUserProfile?.profileId,
-          preparedProfile?.authority.role ?? null,
-          context.configSnapshot,
-          preparedProfile?.authority.githubLogin ?? null,
-        )
-      : undefined;
+    : openclawIdRolePolicy
+      ? openclawIdRolePolicy
+      : role === "operator" && !operatorOwner
+        ? resolveOperatorRolePolicyForAssignment(
+            authenticatedUserProfile?.profileId,
+            preparedProfile?.authority.role ?? null,
+            context.configSnapshot,
+            preparedProfile?.authority.githubLogin ?? null,
+          )
+        : undefined;
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;
@@ -363,6 +397,10 @@ export async function attachAuthenticatedGatewayConnect(
   const controlUiAdmin = authenticatedControlUi && scopes.includes(ADMIN_SCOPE);
   const internal: NonNullable<GatewayWsClient["internal"]> = {
     ...(isLocalClient ? { isLocalClient: true as const } : {}),
+    ...(context.handler.ingressAttribution.kind === "openclaw-id-tunnel"
+      ? { openclawIdPeerKey: context.handler.ingressAttribution.peerKey }
+      : {}),
+    ...(openclawIdPrincipal ? { openclawIdPrincipal, openclawIdRolePolicy } : {}),
     ...(authenticatedOperator ? { authenticatedOperator: true as const } : {}),
     ...(authenticatedControlUi ? { authenticatedControlUi: true as const } : {}),
     ...(controlUiAdmin ? { controlUiAdmin: true as const } : {}),
@@ -390,7 +428,8 @@ export async function attachAuthenticatedGatewayConnect(
   const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
     prepareGatewayLocalUserIngress({
       authMethod,
-      authenticatedUserExpected: Boolean(authenticatedUserId) || ownerProfileExpected,
+      authenticatedUserExpected:
+        Boolean(authenticatedUserId) || ownerProfileExpected || Boolean(linkedOwnerProfile),
       ...(profile
         ? {
             profile: {
@@ -535,8 +574,8 @@ export async function attachAuthenticatedGatewayConnect(
     if (!remoteIngressPrincipal) {
       prepareGatewayConnectOperatorAccess(nextClient);
     }
-  } catch {
-    await rejectGatewayConnectOperatorAccess(context);
+  } catch (error) {
+    await rejectGatewayConnectOperatorAccess(context, error);
     return;
   }
   if (!profileLifecycle.isCurrent(preparedProfile)) {

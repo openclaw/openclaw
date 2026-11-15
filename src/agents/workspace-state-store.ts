@@ -190,6 +190,20 @@ export async function mergeWorkspaceSetupState(
   );
 }
 
+export async function rollbackWorkspaceBootstrapSeed(
+  workspaceDir: string,
+  bootstrapSeededAt: string,
+  options: OpenClawStateDatabaseOptions & WorkspaceStateOperationOptions = {},
+): Promise<void> {
+  return runWorkspaceStateOperation(
+    {
+      type: "workspace.rollbackBootstrapSeed",
+      input: { workspaceDir: path.resolve(resolveUserPath(workspaceDir)), bootstrapSeededAt },
+    },
+    options,
+  );
+}
+
 export async function replaceWorkspaceAttestation(
   params: WorkspaceAttestationInput & WorkspaceStateOperationOptions,
 ): Promise<WorkspaceAttestation> {

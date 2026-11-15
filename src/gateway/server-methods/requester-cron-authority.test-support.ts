@@ -99,7 +99,6 @@ export function admission(
           sourceSessionKey: childSessionKey,
         }
       : undefined,
-    hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
   });
 }

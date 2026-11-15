@@ -256,8 +256,6 @@ it("matches full replay errors after a cached prefix, including later deletes of
       { set: { e: 1 }, delete: [], networkContent: {} },
       { set: { "": 1 }, delete: [], networkContent: { "": false } },
       { set: {}, delete: [1], networkContent: {} },
-      { set: { e: `${value}x` }, delete: ["e"], networkContent: { e: false } },
-      { set: { e: value }, delete: [], networkContent: { e: false } },
     ];
     await withSelectedTranscriptReader(
       scope,
@@ -395,30 +393,25 @@ it("retires old accesses on catalog restriction while keeping the session availa
   await expect(owner.cell().load("new")).rejects.toThrow("active session-bound run");
 });
 
-it("replays overwrite history without rescanning every retained value per entry", async () => {
+it("encodes only the surviving value when replaying repeated writes to one key", async () => {
   const manager = SessionManager.inMemory();
   for (let index = 0; index < 100; index++) {
-    const key = `key-${index % 20}`;
     await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
-      set: { [key]: { index } },
+      set: { key: { index } },
       delete: [],
-      networkContent: { [key]: index % 2 === 0 },
+      networkContent: { key: index % 2 === 0 },
     });
   }
-  const owner = run(manager);
-  const scan = vi.spyOn(Map.prototype, "values");
-  const loaded = await owner.cell().load("key-19");
-  const scannedValues = scan.mock.contexts.reduce<number>(
-    (total, map) => total + (map instanceof Map ? map.size : 0),
-    0,
-  );
-  scan.mockRestore();
-  expect(loaded).toEqual({ value: { index: 99 }, networkContent: false });
-  expect(scannedValues).toBeLessThanOrEqual(100);
+  const stringify = vi.spyOn(codeModeJson, "stringifyCodeModeJsonSafe");
+  await expect(run(manager).cell().load("key")).resolves.toEqual({
+    value: { index: 99 },
+    networkContent: false,
+  });
+  expect(stringify).toHaveBeenCalledTimes(1);
 });
 
 it.each(["value", "total"] as const)(
-  "rejects historical %s overflow even when a later entry deletes it",
+  "rejects final %s overflow but allows replay after its deletion",
   async (kind) => {
     const manager = SessionManager.inMemory();
     const set =
@@ -432,15 +425,16 @@ it.each(["value", "total"] as const)(
       delete: [],
       networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
     });
+    await expect(run(manager).cell().load("a")).rejects.toMatchObject({
+      message: "Code Mode session store replay failed; repair the session before using store/load.",
+      cause: expect.any(RangeError),
+    });
     await manager.appendCustomEntryAsync("openclaw.code-mode-store", {
       set: {},
       delete: Object.keys(set),
       networkContent: {},
     });
-    await expect(run(manager).cell().load("a")).rejects.toMatchObject({
-      message: "Code Mode session store replay failed; repair the session before using store/load.",
-      cause: expect.any(RangeError),
-    });
+    await expect(run(manager).cell().load("a")).resolves.toEqual({ networkContent: false });
   },
 );
 

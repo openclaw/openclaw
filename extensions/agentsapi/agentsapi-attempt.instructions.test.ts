@@ -71,7 +71,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async () => {
     resolveAgentHarnessBeforePromptBuildResult: resolvePromptMock,
     prepareAgentWorkspaceContext: prepareAgentWorkspaceContextMock,
     prepareWatchedSessionsHarnessContext: watchedSessionsContextMock,
-    embeddedAgentLog: { warn: vi.fn(), debug: vi.fn() },
+    embeddedAgentLog: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
     formatErrorMessage: String,
     setActiveEmbeddedRun: vi.fn(),
     clearActiveEmbeddedRun: vi.fn(),
@@ -255,11 +255,13 @@ it("keeps ordinary context but grants no Gateway tool authority when forwarding 
   );
 });
 
-it("continues without transcript access when no prompt hook needs history", async () => {
+it("does not create an empty native conversation when prior history cannot be loaded", async () => {
   const fixture = await createFixture();
-  openModelContextAsyncMock.mockRejectedValue(new Error("History is unavailable"));
-  await fixture.run();
-  expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
+  const error = new Error("History is unavailable");
+  openModelContextAsyncMock.mockRejectedValue(error);
+  await expect(fixture.run()).rejects.toBe(error);
+  expect(fixture.requests).toEqual([]);
+  expect(promptFixture.turnInputs).toEqual([]);
 });
 
 it.each([

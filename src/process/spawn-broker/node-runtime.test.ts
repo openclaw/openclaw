@@ -1,6 +1,13 @@
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { ChildProcess } from "node:child_process";
+import fs, { mkdir, rm, symlink } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOwnedStdioProcess, createOwnedStdioProcess } from "../owned-stdio.js";
 import { createProcessSupervisor } from "../supervisor/supervisor.js";
@@ -25,9 +32,87 @@ beforeEach(async () => {
 afterEach(() => {
   process.execPath = executable;
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 describe.skipIf(process.platform === "win32")("children after a Homebrew Node upgrade", () => {
+  it("joins runtime diagnosis after native close before releasing shutdown and scope cleanup", async ({
+    signal,
+  }) => {
+    vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
+    const entered = createDeferred();
+    const release = createDeferred();
+    const nativeClosed = createDeferred();
+    const nativeError = createDeferred<Error>();
+    const access = fs.access;
+    const heldAccess = vi.spyOn(fs, "access").mockImplementation(async (...args) => {
+      if (args[0] === removedNode) {
+        entered.resolve();
+        await release.promise;
+      }
+      return access(...args);
+    });
+    const supervisor = createProcessSupervisor();
+    const closeScope = supervisor.acquireScopeCleanup("runtime-diagnosis", {
+      processTree: "transport-only",
+    });
+    const starting = supervisor.spawn({
+      mode: "child",
+      argv: [removedNode, "-e", "process.exit(0)"],
+      scopeKey: "runtime-diagnosis",
+      exactEnv: true,
+      env: { PATH: "/usr/bin:/bin" },
+      initiateSpawn: (launch) => {
+        const child = launch();
+        if (!(child instanceof ChildProcess)) {
+          throw new Error("Expected the native child transport");
+        }
+        child.once("error", nativeError.resolve);
+        child.once("close", () => nativeClosed.resolve());
+        return child;
+      },
+    });
+    const outcome = Promise.allSettled([starting]);
+    let drainingScope: Promise<PromiseSettledResult<void>[]> | undefined;
+    let shuttingDown: Promise<void> | undefined;
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          Promise.all([entered.promise, nativeClosed.promise]),
+          starting,
+          "native close and runtime diagnosis did not precede startup settlement",
+        ),
+        signal,
+      );
+      const failure = await nativeError.promise;
+      expect(failure).toMatchObject({ code: "ENOENT", path: removedNode });
+      await nextEventLoopTurn();
+      let scopeSettled = false;
+      let shutdownSettled = false;
+      drainingScope = Promise.allSettled([closeScope()]);
+      void drainingScope.then(() => {
+        scopeSettled = true;
+      });
+      shuttingDown = supervisor.shutdown().then(() => {
+        shutdownSettled = true;
+      });
+      await nextEventLoopTurn();
+      expect(scopeSettled).toBe(false);
+      expect(shutdownSettled).toBe(false);
+      release.resolve();
+      await outcome;
+      await expect(starting).rejects.toBe(failure);
+      expect(failure.message).toContain("Restart the Gateway.");
+      expect(await drainingScope).toEqual([{ status: "rejected", reason: failure }]);
+      await shuttingDown;
+    } finally {
+      release.resolve();
+      heldAccess.mockRestore();
+      await Promise.allSettled([starting, drainingScope, shuttingDown, closeScope()]);
+      await supervisor.shutdown();
+    }
+  });
+
   it("runs exec and owned MCP stdio through the replacement runtime", async () => {
     const supervisor = createProcessSupervisor();
     try {
@@ -64,9 +149,7 @@ describe.skipIf(process.platform === "win32")("children after a Homebrew Node up
         OPENCLAW_CHILD_OOM_SCORE_ADJ: "1",
       };
       const log = await import("../supervisor/supervisor-log.runtime.js");
-      const warning = vi
-        .spyOn(log, "warnProcessSupervisorSpawnFailure")
-        .mockImplementation(() => {});
+      const warning = vi.spyOn(log, "warnProcessSupervisorFailure").mockImplementation(() => {});
       const supervisor = createProcessSupervisor();
       try {
         for (let attempt = 0; attempt < 2; attempt++) {

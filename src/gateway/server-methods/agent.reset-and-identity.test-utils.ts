@@ -255,7 +255,28 @@ describe("gateway agent handler", () => {
     expect(typeof routeArgs.config).toBe("object");
   });
 
-  it("does not auto-route voice wake requests with an explicit session key", async () => {
+  it.each([
+    {
+      name: "does not auto-route voice wake requests with an explicit session key",
+      sessionKey: "agent:main:research",
+      expectedSessionKey: "agent:main:research",
+      runId: "test-voice-route-explicit-session",
+      reqId: "voice-5",
+      configure: () => ({}),
+    },
+    {
+      name: "does not auto-route voice wake requests with another agent's explicit main session",
+      sessionKey: "agent:ops:main",
+      expectedSessionKey: "agent:ops:main",
+      runId: "test-voice-route-explicit-other-agent-main",
+      reqId: "voice-5b",
+      configure: () => {
+        mocks.listAgentIds.mockReturnValue(["main", "ops"]);
+        return { agents: { entries: { main: {}, ops: {} } } };
+      },
+    },
+  ])("$name", async ({ sessionKey, expectedSessionKey, runId, reqId, configure }) => {
+    const cfg = configure();
     mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
       version: 1,
       defaultTarget: { sessionKey: "agent:main:voice" },
@@ -264,60 +285,14 @@ describe("gateway agent handler", () => {
     });
     mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
 
-    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
-      cfg: {},
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg,
       storePath: getAgentTestStorePath(),
       entry: {
         sessionId: "voice-session-id",
         updatedAt: Date.now(),
       },
-      canonicalKey: sessionKey,
-    }));
-    mocks.updateSessionStore.mockResolvedValue(undefined);
-    mockSuccessfulAgentCommand();
-    mocks.loadVoiceWakeRoutingConfig.mockClear();
-    mocks.resolveVoiceWakeRouteByTrigger.mockClear();
-
-    const respond = vi.fn();
-    await invokeAgent(
-      {
-        message: "do thing",
-        sessionKey: "agent:main:research",
-        voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route-explicit-session",
-      },
-      {
-        respond,
-        context: makeContext(),
-        reqId: "voice-5",
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:main:research");
-    expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
-    expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
-  });
-
-  it("does not auto-route voice wake requests with another agent's explicit main session", async () => {
-    const opsAgentCfg = { agents: { entries: { main: {}, ops: {} } } };
-    mocks.listAgentIds.mockReturnValue(["main", "ops"]);
-    mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
-      version: 1,
-      defaultTarget: { sessionKey: "agent:main:voice" },
-      routes: [],
-      updatedAtMs: 0,
-    });
-    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
-
-    mocks.loadSessionEntry.mockImplementation((sessionKey: string) => ({
-      cfg: opsAgentCfg,
-      storePath: getAgentTestStorePath(),
-      entry: {
-        sessionId: "voice-session-id",
-        updatedAt: Date.now(),
-      },
-      canonicalKey: sessionKey,
+      canonicalKey: key,
     }));
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mockSuccessfulAgentCommand();
@@ -329,19 +304,19 @@ describe("gateway agent handler", () => {
     await invokeAgent(
       {
         message: "do thing",
-        sessionKey: "agent:ops:main",
+        sessionKey,
         voiceWakeTrigger: "robot wake",
-        idempotencyKey: "test-voice-route-explicit-other-agent-main",
+        idempotencyKey: runId,
       },
       {
         respond,
         context: makeContext(),
-        reqId: "voice-5b",
+        reqId,
       },
     );
 
     const callArgs = await waitForAgentCommandCall<{ sessionKey?: string }>();
-    expect(callArgs.sessionKey).toBe("agent:ops:main");
+    expect(callArgs.sessionKey).toBe(expectedSessionKey);
     expect(mocks.loadVoiceWakeRoutingConfig).not.toHaveBeenCalled();
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
   });

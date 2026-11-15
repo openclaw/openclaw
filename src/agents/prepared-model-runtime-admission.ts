@@ -4,15 +4,10 @@ import {
   currentPluginWorkHoldsPendingReplacement,
 } from "../plugins/plugin-instance-scope.js";
 import type { PluginInvocationInstance } from "../plugins/plugin-instance.types.js";
-import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
 import {
   readPluginReplacementOperation,
   type PluginReplacementOperation,
 } from "../plugins/plugin-replacement-operation.js";
-import {
-  getPreparedModelRuntimeBorrowedSnapshot,
-  getPreparedModelRuntimePluginGeneration,
-} from "./prepared-model-runtime-generation-scope.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
 import type { PreparedModelRuntimeOwner } from "./prepared-model-runtime.types.js";
 
@@ -45,18 +40,7 @@ export function assertPreparedModelRuntimeAdmissionCanWait(
   if (owner && ((!owner.snapshot && !owner.refreshError) || !owner.needsRefresh)) {
     return;
   }
-  const generation = getPreparedModelRuntimePluginGeneration();
-  const heldTurn = generation && getPreparedModelRuntimeBorrowedSnapshot(generation);
   const heldInstances = new Set(currentPluginWorkPendingReplacements());
-  if (heldTurn) {
-    for (const registry of [generation.pluginRegistry, generation.inboundPluginRegistry]) {
-      for (const instance of registry ? collectRegistryInvocationInstances(registry) : []) {
-        if (instance.replacementPending) {
-          heldInstances.add(instance);
-        }
-      }
-    }
-  }
   if (heldInstances.size || currentPluginWorkHoldsPendingReplacement()) {
     const error = new PreparedModelRuntimeOwnerNotPublishedError(
       "This turn holds a plugin being replaced and cannot wait for its own reload. Do not resend while this turn holds the runtime; inspect the original operation after this turn ends.",

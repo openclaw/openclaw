@@ -1,16 +1,18 @@
 {
   "setup": {
-    "src/infra/supervisor-markers.ts": "bbdc4260a2bd637b8fac2e13e76d1ecd7747b7bcd5ed90410249d09ea4b665b3",
+    "scripts/lib/openclaw-bun.json": "96324707a1ca2b6159f7dd5c4660936d84622b96c06345078f94a6dd169d482f",
+    "src/infra/supervisor-markers.ts": "9f91af7471ed88fe21b3bd1db373dcb5a6e7d408611af01d435c6a225c4eaa93",
     "src/test-utils/bun-process.ts": "77220fb93b0d204b4d645065d699dd289d13e3b18deb54f9f942c7a801c790bb",
     "src/test-utils/env.ts": "8e9010865a1119c0e13c4d7ac7df72dc71329e5f5ce6a9ee7363bfedc37e9531",
-    "test/setup.env.ts": "aa96fede1449f3ffb524ecebef5d0eb16d89f4db3f1a17e7f2c63aa0b432041e",
-    "test/test-env.ts": "56c7d4ac2ada299100654a3e0a07efcbf5ddc4dac701c1deede7344467638497",
+    "test/helpers/postgres-pool-roots.ts": "6723730c0cf175b52b6606cce2601a6d93e31fcbc85191529f3c0278f996c58e",
+    "test/setup.env.ts": "13e9849cea7146fc6b4610e71f870b819a9c99d6119ab316d6d9adefe7fb7930",
+    "test/test-env.ts": "e1684f94873e3615957afe1bb906e1e9e048bec8330b55a7c04823eb5678df5e",
     "test/test-home-context.mts": "ab02ed0c3e96d2adbaae760779ae6d930e0d8325b125203c943cc647cafae329",
     "test/test-home-policy.mts": "09d6a515889850eb8c6589c14f8b3d37c117370dd376809fea7cbae1b9a456ce",
-    "test/vitest/vitest.shared.config.ts": "a387cc8313aad51c2290864f9d23bab3c9638b10fe01a59448dbe684bf37ed24",
+    "test/vitest/vitest.shared.config.ts": "b266ddb5777cc7d334e15dde2622e660b59a898b3eb396652fc10bf22f28a0b6",
     "test/vitest/vitest.timeouts.ts": "82465558c77ce00d1e892a4ba06be6df5d4e449eecffb5383d1c45ce8ad7d073",
-    "test/vitest/vitest.unit-fast.config.ts": "c375573bd6c01fc691c8890933356e37fd20a45561dbe772c140ed86c76dc4f6",
-    "tsconfig.json": "1f46f23ff55b5544a2081e4372e96626464a7ce787840d6bcbfd29d814f55cc7"
+    "test/vitest/vitest.unit-fast.config.ts": "f90c55af46345b8b9c0852484e5cb384d92ba44c21835f2559b477eac0ec59d2",
+    "tsconfig.json": "ada477bf9a91ad23002b3e5f717007e872d72b3860e1779dd490215c9720f830"
   },
   "tests": {
     "packages/markdown-core/src/chunk-text.test.ts": "e30b2190ef2fa1e9b2ef39b990e2f53db35192347f8f40be12b7d907cc834d3b",

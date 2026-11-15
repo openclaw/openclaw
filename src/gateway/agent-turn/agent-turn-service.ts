@@ -17,7 +17,6 @@ import { registerChatAbortController } from "../chat-abort.js";
 import type { OffloadedRef } from "../chat-attachments.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
-import { createCronContinuationController } from "../server-methods/agent-cron-continuation.js";
 import { runAgentResetPhase } from "../server-methods/agent-reset-phase.js";
 import { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import { prepareAgentSession } from "../server-methods/agent-session-prepare.js";
@@ -35,7 +34,6 @@ import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
 import { startAgentRunExecution } from "./agent-run-execution-phase.js";
 import {
   persistAgentSessionPhase,
-  type AgentSessionPersistParams,
   type AgentSessionPersistResult,
 } from "./agent-session-persist.js";
 import { finishAgentTurnPreparation } from "./agent-turn-admission-cleanup.js";
@@ -214,11 +212,6 @@ export function createAgentTurnService(
       let preparedOffloadedRefs: OffloadedRef[] = [];
       let releaseGatewayAdmission = () => {};
       let respondToAdmissionOutcome = () => false;
-      const cronContinuation = createCronContinuationController({
-        runId,
-        lifecycleGeneration,
-        context,
-      });
       try {
         assertAdmissionCurrent?.();
         const content = await prepareAgentContentPhase({
@@ -275,7 +268,6 @@ export function createAgentTurnService(
           groupSpace: normalizedSpawned.groupSpace,
         };
         let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
-        let restoredCronContinuationIdentity: AgentSessionPersistParams["restoredCronContinuationIdentity"];
         let cfgForAgent: OpenClawConfig | undefined;
         let freshChild = false;
         let sessionStorePath: string | undefined;
@@ -350,7 +342,6 @@ export function createAgentTurnService(
             requestedSessionId,
             agentId,
             recipientChannel,
-            lifecycleGeneration,
             effectiveBootstrapContextRunKind,
             preAttachmentSession,
             respond,
@@ -388,7 +379,6 @@ export function createAgentTurnService(
             return;
           }
           effectiveBootstrapContextRunKind = preparedSession.effectiveBootstrapContextRunKind;
-          restoredCronContinuationIdentity = preparedSession.restoredCronContinuationIdentity;
           session.sessionPersistedBeforeGatewayAdmission =
             preparedSession.sessionPersistedBeforeGatewayAdmission;
           const requestDeliveryHint = normalizeDeliveryContext({
@@ -419,7 +409,6 @@ export function createAgentTurnService(
                   ? normalizeOptionalString(principal?.internal?.pluginRuntimeOwnerId)
                   : undefined,
               expectedExistingSessionId,
-              hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
               requestedSessionId,
               fallbackSessionId,
             });
@@ -517,7 +506,6 @@ export function createAgentTurnService(
             runId,
             agentId,
             suppressVisibleSessionEffects,
-            restoredCronContinuationIdentity,
             initialPatchBuild: patchBuild,
             buildSessionPatch: (freshEntry) => buildSessionPatch(freshEntry, fallbackSessionId),
             state: session,
@@ -527,7 +515,6 @@ export function createAgentTurnService(
             maintenanceConfig: sessionMaintenanceConfig,
             assertGatewayWorkAdmissionAllowed: admissionController.assertAllowed,
             respondToGatewayAdmissionOutcome: admissionController.respondToOutcome,
-            setCronContinuationClaim: cronContinuation.setClaim,
             respond,
           });
           if (!persistedSession) {
@@ -583,7 +570,6 @@ export function createAgentTurnService(
           promptedAt,
           requestedSessionKeyRaw,
           preAcceptedReservedSessionKey,
-          restoredCronContinuationIdentity,
           getAdmittedSessionId: () => session.admittedSessionId,
           ownerConnId,
           ownerDeviceId,
@@ -636,7 +622,6 @@ export function createAgentTurnService(
                 media,
                 inputProvenance: preparedDispatch.userTurn.inputProvenance,
                 effectiveBootstrapContextRunKind,
-                releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
               }),
             );
           } finally {
@@ -660,7 +645,6 @@ export function createAgentTurnService(
           transferred: gatewayAdmissionTransferred,
           cleanupRunAbort: () => earlyRunAbort?.cleanup(),
           releaseGatewayAdmission,
-          releaseCronContinuation: cronContinuation.releaseWithRecovery,
           getOffloadedRefs: () => preparedOffloadedRefs,
           clearUnaccepted: dedupeLifecycle.clearUnaccepted,
           settleSourceWork: preparationSource.settle,

@@ -11,7 +11,7 @@ type Entry = {
   flows: Map<string, number>;
 };
 
-function sourceOwner(file: string, name: string, line: number): Owner {
+export function controlUiProfileSourceOwner(file: string, name: string, line: number): Owner {
   if (/(?:solid-js|@solidjs)[/+.]/u.test(file)) {
     return "Solid";
   }
@@ -72,7 +72,7 @@ export function createControlUiCpuCensus() {
         file: row.url,
         line: row.lineNumber,
         column: row.columnNumber,
-        owner: sourceOwner(row.url, row.functionName, row.lineNumber),
+        owner: controlUiProfileSourceOwner(row.url, row.functionName, row.lineNumber),
         selfMs: 0,
         flows: new Map(),
       };

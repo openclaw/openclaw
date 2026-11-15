@@ -2,8 +2,10 @@ import { link, lstat, mkdir, mkdtemp, readFile, rm, stat } from "node:fs/promise
 import { dirname, join, resolve } from "node:path";
 import { tempWorkspace } from "@openclaw/fs-safe/temp";
 import * as tar from "tar";
+import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { snapshotTemplateDependencyDirectory } from "./dependency-directory.js";
 import { digestTemplateBytes } from "./digest.js";
 import {
   TEMPLATE_PROJECT_RESULT_SCHEMA_VERSION,
@@ -17,11 +19,15 @@ export const TEMPLATE_BUILD_RESULT_SCHEMA_VERSION = "openclaw.templateBuild.v1" 
 // zlib's public numeric API defines Z_FILTERED as strategy 1.
 const ZLIB_FILTERED_STRATEGY = 1;
 
-async function readSelectedProjectFile(projectRoot: string, path: string): Promise<Buffer> {
+async function readSelectedProjectFile(
+  projectRoot: string,
+  path: string,
+  maxBytes = MAX_MANAGED_FILE_BYTES,
+): Promise<Buffer> {
   const sourceRoot = await fsSafeRoot(projectRoot);
   const read = await sourceRoot.read(path, {
     hardlinks: "reject",
-    maxBytes: MAX_MANAGED_FILE_BYTES,
+    maxBytes,
     symlinks: path === "CLAW.md" ? "follow-within-root" : "reject",
   });
   return read.buffer;
@@ -112,26 +118,37 @@ export async function buildTemplateProject(projectPath: string, outputPath: stri
       files.set("LICENSE", license);
     }
     if (project.template.packageBootstrap) {
-      const bootstrap = await readSelectedProjectFile(project.root, "BOOTSTRAP.md");
+      const bootstrap = await readSelectedProjectFile(
+        project.root,
+        "BOOTSTRAP.md",
+        MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
+      );
       assertValidatedBytes("BOOTSTRAP.md", bootstrap, project.template.packageBootstrap);
       files.set("BOOTSTRAP.md", bootstrap);
-    }
-    if (project.template.openClawProfile) {
-      const profileSnapshot = project.template.snapshot.openClawProfile;
-      if (!profileSnapshot) {
-        throw new TemplateProjectError(
-          "project_invalid",
-          "Validated OpenClaw profile is missing its source snapshot.",
-        );
-      }
-      const profile = await readSelectedProjectFile(project.root, profileSnapshot.sourcePath);
-      assertValidatedBytes(profileSnapshot.sourcePath, profile, profileSnapshot);
-      files.set(profileSnapshot.sourcePath, profile);
     }
     for (const source of project.template.snapshot.workspaceSources) {
       const bytes = await readSelectedProjectFile(project.root, source.sourcePath);
       assertValidatedBytes(source.sourcePath, bytes, source);
       files.set(source.sourcePath, bytes);
+    }
+
+    for (const source of project.template.snapshot.bundledSources ?? []) {
+      const current = await snapshotTemplateDependencyDirectory({
+        rootDir: project.root,
+        path: source.path,
+      });
+      if (current.digest !== source.snapshot.digest) {
+        throw new TemplateProjectError(
+          "project_changed_during_build",
+          "Bundled dependency changed after validation.",
+        );
+      }
+      for (const file of source.snapshot.files) {
+        const path = `${source.path}/${file.path}`;
+        const bytes = await readSelectedProjectFile(project.root, path);
+        assertValidatedBytes(path, bytes, file);
+        files.set(path, bytes);
+      }
     }
 
     const fileNames = [...files.keys()].toSorted((left, right) =>

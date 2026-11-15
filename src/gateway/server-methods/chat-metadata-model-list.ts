@@ -106,6 +106,7 @@ export function createChatMetadataModelList(params: {
               sessionKey: readScope.sessionKey,
               sessionEntry: entry && {
                 modelOverride: entry.modelOverride,
+                modelOverrideSource: entry.modelOverrideSource,
                 providerOverride: entry.providerOverride,
                 modelOverrideRouteResolution: entry.modelOverrideRouteResolution,
                 modelOverrideFallbackOriginProvider: entry.modelOverrideFallbackOriginProvider,

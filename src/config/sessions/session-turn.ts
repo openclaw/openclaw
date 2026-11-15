@@ -52,6 +52,7 @@ import {
 import { SessionTranscriptColdError } from "./session-transcript-cold-error.js";
 import { buildSessionTranscriptTurnExpectedState } from "./session-transcript-turn-state.js";
 import { restoreSessionTurnColdTranscript } from "./session-turn-cold.js";
+import { acceptSessionTurnFreshAuthority } from "./session-turn-fresh-authority.js";
 import {
   completeSessionTurnPublication,
   publishCommittedSessionTurn,
@@ -87,6 +88,7 @@ export async function appendSessionTurnInWorker(
   const cliWriter = getCliHistoryWriter({ ...scope, storePath: scope.path });
   let custodyRequired = false;
   const freshCommitGuards = new Set<() => void>();
+  const mentionCommitGuards: Array<(() => void) | undefined> = [];
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
   const assertOwnerCurrent = () =>
@@ -252,17 +254,7 @@ export async function appendSessionTurnInWorker(
           return true;
         }
         if (isRecord(facts) && facts.kind === "session-turn-fresh") {
-          const source = typeof facts.index === "number" ? sources[facts.index] : undefined;
-          if (!source) {
-            throw new Error("Session turn omitted its fresh-message authority");
-          }
-          acceptSessionSourceValidation(
-            source,
-            // SAFETY: The paired worker read these facts in the current transaction.
-            facts.sourceValidation as SessionSourceValidation,
-          );
-          source.assertCurrent();
-          freshCommitGuards.add(source.assertCurrent);
+          acceptSessionTurnFreshAuthority(facts, sources, mentionCommitGuards, freshCommitGuards);
           return true;
         }
         if (
@@ -448,6 +440,19 @@ export async function appendSessionTurnInWorker(
           }
           if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = sanitizeTranscriptMessageForStorage(message);
+          }
+          if (
+            !facts?.pending &&
+            !facts?.existing &&
+            message !== undefined &&
+            hooks?.prepareMentionInvitation
+          ) {
+            const preparedMention = hooks.prepareMentionInvitation(message);
+            if (preparedMention) {
+              append.mentionInvitation = structuredClone(preparedMention.invitation);
+              mentionCommitGuards[index] = preparedMention.assertCurrent;
+              append.freshGuard = true;
+            }
           }
           plan.options.messages[index] = {
             ...append,

@@ -1,9 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, readlinkSync } from "node:fs";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { readDarwinProcessCensus } from "../darwin-process-inspection.js";
+import type { ReleasedProcess } from "./types.js";
 
 export type ProcessCommand =
   | {
@@ -16,7 +17,14 @@ export type ProcessCommand =
       owner?: "same" | "different" | "unknown";
     }
   | { argvUnavailable: true; uid: number; owner?: "same" | "different" | "unknown" }
-  | { argvUnavailable: true; uid?: never; owner: "different" };
+  | { argvUnavailable: true; uid?: never; owner: "different" }
+  /** A sealed Apple binary whose argument image Darwin redacts (no-read-procargs). */
+  | {
+      argvUnavailable: true;
+      executable: string;
+      uid?: never;
+      owner?: "same" | "different" | "unknown";
+    };
 
 /** Reject a known unsupported legacy contract before launching application work. */
 export function assertProcessGroupControl(): void {
@@ -53,7 +61,10 @@ function readLinuxProcessUid(pid: number): number | undefined {
   }
 }
 
-/** Only kernel absence, observed outside the owned group, confirms extinction. */
+/**
+ * For the relay's own anchor group: only kernel absence, observed outside the owned group, confirms extinction.
+ * Unlike `isProcessGroupGone`, EPERM deliberately stays "not gone" here (kernel-only proof).
+ */
 export function isOwnedProcessGroupGone(pgid: number): boolean {
   try {
     process.kill(-pgid, 0);
@@ -247,6 +258,49 @@ export function* readProcessGroupMembers(
   }
 }
 
+// A zombie leader may retain live Linux threads; share the existing check.
+function isLiveCensusMember({ pid, state }: { pid: number; state: string }): boolean {
+  return !state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid));
+}
+
+/**
+ * Whether the process table is this PID namespace's. A nested PID namespace with the parent's
+ * /proc mounted still lists processes under the parent's numbers, so a pid row proves nothing;
+ * only /proc/self naming this pid does. Other platforms read a host-wide table.
+ */
+export function isOwnProcfs(): boolean {
+  if (process.platform !== "linux") {
+    return true;
+  }
+  try {
+    return readlinkSync("/proc/self") === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Denied-probe fallback for groups whose members we only observe; callers reach it through
+ * `isProcessGroupGone`. A failed census, or a procfs that is not this PID namespace's, keeps the
+ * group alive. Accepted edge case: hidepid or a restricted `/proc` can still hide a member, so an
+ * otherwise empty census reads as gone.
+ */
+export function isProcessGroupGoneByCensus(pgid: number): boolean {
+  if (!isOwnProcfs()) {
+    return false;
+  }
+  try {
+    for (const member of readProcessGroupMembers(1_000)) {
+      if (member.pgid === pgid && isLiveCensusMember(member)) {
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Advisory retirement timing only; the host owns kernel group-disappearance proof. */
 export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | undefined {
   let observedOwner = false;
@@ -259,11 +313,7 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
           return undefined;
         }
         observedOwner = true;
-      } else if (
-        pgid === process.pid &&
-        // A zombie leader may retain live Linux threads; share the existing check.
-        (!state.startsWith("Z") || (process.platform === "linux" && !isPidDefinitelyDead(pid)))
-      ) {
+      } else if (pgid === process.pid && isLiveCensusMember({ pid, state })) {
         return true;
       }
     }
@@ -271,4 +321,128 @@ export function hasLiveOwnedProcessGroupMembers(timeoutMs = 1_000): boolean | un
     return undefined;
   }
   return observedOwner ? false : undefined;
+}
+
+const MAX_RELEASED_COMMAND_CHARS = 200;
+
+type ProcessRow = { pid: number; ppid: number; pgid: number; live: boolean; command?: string };
+
+function readLinuxProcessRow(pid: number): ProcessRow | undefined {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+    const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const command = readFileSync(`/proc/${pid}/cmdline`, "utf8")
+      .split("\0")
+      .filter(Boolean)
+      .join(" ");
+    return {
+      pid,
+      ppid: Number(fields[1]),
+      pgid: Number(fields[2]),
+      live: fields[0] !== "Z" && fields[0] !== "X",
+      command: command || undefined,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function readProcessRows(): ProcessRow[] {
+  if (process.platform === "linux") {
+    return readdirSync("/proc")
+      .filter((name) => /^\d+$/.test(name))
+      .flatMap((name) => readLinuxProcessRow(Number(name)) ?? []);
+  }
+  const listing = spawnSync("/bin/ps", ["-A", "-o", "pid=,ppid=,pgid=,stat=,command="], {
+    encoding: "utf8",
+    timeout: 1_000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+  if (listing.status !== 0 || listing.error) {
+    throw listing.error ?? new Error(`ps exited with status ${String(listing.status)}`);
+  }
+  return listing.stdout.split("\n").flatMap((line) => {
+    const match = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/.exec(line);
+    return match
+      ? [
+          {
+            pid: Number(match[1]),
+            ppid: Number(match[2]),
+            pgid: Number(match[3]),
+            live: !match[4]!.startsWith("Z"),
+            command: match[5]!.trim() || undefined,
+          },
+        ]
+      : [];
+  });
+}
+
+/**
+ * Name every live process a command left behind: members of the owner's group,
+ * caller-observed children (adopted orphans), and all of their descendants, even
+ * those that started a new session. The owner's own helpers (its direct children
+ * other than the command root) and their descendants are not the command's.
+ * Undefined when the process table cannot be read: the caller must then stop the
+ * tree instead of releasing processes it cannot account for.
+ */
+export function describeReleasedProcesses(
+  rootPid: number | undefined,
+  adoptedPids: readonly number[] = [],
+): ReleasedProcess[] | undefined {
+  let rows: ProcessRow[];
+  try {
+    rows = readProcessRows();
+  } catch {
+    return undefined;
+  }
+  if (rows.length === 0) {
+    return undefined;
+  }
+  const children = new Map<number, ProcessRow[]>();
+  for (const row of rows) {
+    const siblings = children.get(row.ppid);
+    if (siblings) {
+      siblings.push(row);
+    } else {
+      children.set(row.ppid, [row]);
+    }
+  }
+  const closure = (seeds: Iterable<number>) => {
+    const found = new Set<number>();
+    const queue = [...seeds];
+    for (let pid = queue.pop(); pid !== undefined; pid = queue.pop()) {
+      if (found.has(pid)) {
+        continue;
+      }
+      found.add(pid);
+      queue.push(...(children.get(pid) ?? []).map((child) => child.pid));
+    }
+    return found;
+  };
+  // Only children the owner itself started are helpers (a source loader's compiler, for
+  // example). Orphans the Linux subreaper adopted are the command's, not the owner's.
+  const helpers = closure(
+    (children.get(process.pid) ?? [])
+      .filter((row) => row.pid !== rootPid && !adoptedPids.includes(row.pid))
+      .map((row) => row.pid),
+  );
+  const seeds = rows
+    .filter((row) => adoptedPids.includes(row.pid) || row.pgid === process.pid)
+    .map((row) => row.pid)
+    .filter((pid) => pid !== process.pid && !helpers.has(pid));
+  const released = closure(seeds);
+  return rows
+    .filter((row) => row.live && released.has(row.pid) && !helpers.has(row.pid))
+    .toSorted((left, right) => left.pid - right.pid)
+    .map(({ pid, command }) =>
+      command === undefined
+        ? { pid }
+        : {
+            pid,
+            command:
+              command.length > MAX_RELEASED_COMMAND_CHARS
+                ? `${command.slice(0, MAX_RELEASED_COMMAND_CHARS - 1)}…`
+                : command,
+          },
+    );
 }

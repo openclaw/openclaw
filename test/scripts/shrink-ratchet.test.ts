@@ -62,6 +62,38 @@ describe("shrink-ratchet", () => {
     expect(ratchet.loadRatchetReference(root, "HEAD", baselinePath, parse)).toBe(1);
     expect(ratchet.loadRatchetReference(root, "HEAD", "missing.txt", parse)).toBeNull();
     expect(() => ratchet.loadRatchetReference(root, "missing-ref", baselinePath, parse)).toThrow();
+    const origin = path.join(tempDirs.make("ratchet-origin-"), "repo.git");
+    git("clone", "--bare", root, origin);
+    git("-C", origin, "config", "uploadpack.allowFilter", "true");
+    const remoteOnly = execFileSync(
+      "git",
+      [
+        "-C",
+        origin,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit-tree",
+        "HEAD^{tree}",
+        "-p",
+        "HEAD",
+        "-m",
+        "unprepared comparison",
+      ],
+      { encoding: "utf8" },
+    ).trim();
+    git("-C", origin, "update-ref", "refs/heads/unprepared", remoteOnly);
+    git("remote", "add", "origin", origin);
+    git("config", "remote.origin.promisor", "true");
+    git("config", "remote.origin.partialclonefilter", "blob:none");
+    expect(() =>
+      ratchet.resolveRatchetBase(root, {
+        base: remoteOnly,
+        staged: false,
+        mergeBase: false,
+      }),
+    ).toThrow("Could not resolve ratchet base ref");
   });
 
   it.each`

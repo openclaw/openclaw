@@ -432,24 +432,92 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("projects a nonterminal tool-use result past the explicit deadline as timed out", async () => {
-    const abortController = new AbortController();
-    const timeoutReason = new Error("chat run timed out");
-    timeoutReason.name = "TimeoutError";
-    mocks.agentCommand.mockImplementationOnce(async () => {
-      abortController.abort(timeoutReason);
-      return {
-        payloads: [{ text: "Exec failed", isError: true }],
+  it.each([
+    {
+      name: "projects a nonterminal tool-use result past the explicit deadline as timed out",
+      runId: "agent-run-tool-use-deadline",
+      ingress: {
+        message: "review the repository",
+        timeout: "600",
+      },
+      commandResult: (abortController: AbortController) => {
+        const timeoutReason = new Error("chat run timed out");
+        timeoutReason.name = "TimeoutError";
+        abortController.abort(timeoutReason);
+        return {
+          payloads: [{ text: "Exec failed", isError: true }],
+          meta: {
+            durationMs: 602_530,
+            aborted: false,
+            replayInvalid: true,
+            livenessState: "working",
+            stopReason: "toolUse",
+            completion: { stopReason: "toolUse", finishReason: "toolUse" },
+          },
+        };
+      },
+      terminalOutcome: {
+        status: "timeout",
+        stopReason: "timeout",
+      },
+      reply: {
+        status: "timeout",
+        summary: "aborted",
+        stopReason: "timeout",
+      },
+    },
+    {
+      name: "projects a provider timeout result without an abort flag or stop reason as timed out",
+      runId: "agent-run-provider-timeout-result",
+      ingress: {
+        message: "run a command that exceeds the provider deadline",
+        timeout: "10",
+      },
+      commandResult: () => ({
+        payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
         meta: {
-          durationMs: 602_530,
+          durationMs: 30_454,
           aborted: false,
           replayInvalid: true,
           livenessState: "working",
-          stopReason: "toolUse",
-          completion: { stopReason: "toolUse", finishReason: "toolUse" },
+          timeoutPhase: "provider",
+          providerStarted: true,
+          error: {
+            kind: "incomplete_turn",
+            message: "Request timed out before a response was generated.",
+          },
         },
-      };
-    });
+      }),
+      terminalOutcome: {
+        status: "timeout",
+        reason: "hard_timeout",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+      reply: {
+        status: "timeout",
+        summary: "aborted",
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    },
+    {
+      name: "projects a resolved agent error as a failed gateway response",
+      runId: "agent-run-resolved-error",
+      ingress: { message: "run the agent", timeout: "600" },
+      commandResult: () => ({
+        payloads: [{ text: "Provider rejected the request.", isError: true }],
+        meta: {
+          error: { kind: "incomplete_turn", message: "provider rejected the request" },
+          stopReason: "error",
+        },
+      }),
+      terminalOutcome: { status: "error", reason: "failed", stopReason: "error" },
+      reply: { status: "error", summary: "failed", stopReason: "error" },
+    },
+  ])("$name", async ({ runId, ingress, commandResult, terminalOutcome, reply }) => {
+    const abortController = new AbortController();
+    mocks.agentCommand.mockImplementationOnce(async () => commandResult(abortController));
     const context = makeContext();
     const respond = vi.fn();
     const onSettled = vi.fn(() => true);
@@ -457,13 +525,12 @@ describe("gateway agent handler", () => {
     await dispatchAgentRunFromGateway({
       admittedRunEntry: undefined,
       ingressOpts: {
-        message: "review the repository",
+        ...ingress,
         sessionKey: "agent:main:main",
-        timeout: "600",
         allowModelOverride: false,
       },
-      runId: "agent-run-tool-use-deadline",
-      dedupeKeys: ["agent:agent-run-tool-use-deadline"],
+      runId,
+      dedupeKeys: [`agent:${runId}`],
       abortController,
       cleanupAbortController: vi.fn(),
       io: createAgentTurnIo(respond),
@@ -472,132 +539,14 @@ describe("gateway agent handler", () => {
     });
 
     expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "timeout",
-        stopReason: "timeout",
-      }),
+      terminalOutcome: expect.objectContaining(terminalOutcome),
       onRecovered: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      expect.objectContaining({
-        runId: "agent-run-tool-use-deadline",
-        status: "timeout",
-        summary: "aborted",
-        stopReason: "timeout",
-      }),
+      expect.objectContaining({ runId, ...reply }),
       undefined,
-      { runId: "agent-run-tool-use-deadline" },
-    );
-  });
-
-  it("projects a provider timeout result without an abort flag or stop reason as timed out", async () => {
-    mocks.agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "Request timed out before a response was generated.", isError: true }],
-      meta: {
-        durationMs: 30_454,
-        aborted: false,
-        replayInvalid: true,
-        livenessState: "working",
-        timeoutPhase: "provider",
-        providerStarted: true,
-        error: {
-          kind: "incomplete_turn",
-          message: "Request timed out before a response was generated.",
-        },
-      },
-    });
-    const context = makeContext();
-    const respond = vi.fn();
-    const onSettled = vi.fn(() => true);
-
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "run a command that exceeds the provider deadline",
-        sessionKey: "agent:main:main",
-        timeout: "10",
-        allowModelOverride: false,
-      },
-      runId: "agent-run-provider-timeout-result",
-      dedupeKeys: ["agent:agent-run-provider-timeout-result"],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      onSettled,
-    });
-
-    expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "timeout",
-        reason: "hard_timeout",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-      onRecovered: expect.any(Function),
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "agent-run-provider-timeout-result",
-        status: "timeout",
-        summary: "aborted",
-        timeoutPhase: "provider",
-        providerStarted: true,
-      }),
-      undefined,
-      { runId: "agent-run-provider-timeout-result" },
-    );
-  });
-
-  it("projects a resolved agent error as a failed gateway response", async () => {
-    mocks.agentCommand.mockResolvedValueOnce({
-      payloads: [{ text: "Provider rejected the request.", isError: true }],
-      meta: {
-        error: { kind: "incomplete_turn", message: "provider rejected the request" },
-        stopReason: "error",
-      },
-    });
-    const context = makeContext();
-    const respond = vi.fn();
-    const onSettled = vi.fn(() => true);
-
-    await dispatchAgentRunFromGateway({
-      admittedRunEntry: undefined,
-      ingressOpts: {
-        message: "run the agent",
-        sessionKey: "agent:main:main",
-        timeout: "600",
-        allowModelOverride: false,
-      },
-      runId: "agent-run-resolved-error",
-      dedupeKeys: ["agent:agent-run-resolved-error"],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      onSettled,
-    });
-
-    expect(onSettled).toHaveBeenCalledWith({
-      terminalOutcome: expect.objectContaining({
-        status: "error",
-        reason: "failed",
-        stopReason: "error",
-      }),
-      onRecovered: expect.any(Function),
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: "agent-run-resolved-error",
-        status: "error",
-        summary: "failed",
-        stopReason: "error",
-      }),
-      undefined,
-      { runId: "agent-run-resolved-error" },
+      { runId },
     );
   });
 

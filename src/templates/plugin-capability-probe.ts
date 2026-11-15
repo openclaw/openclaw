@@ -81,7 +81,7 @@ function configuredPathSelectsPlugin(
 }
 
 export async function sourceHostPluginConflict(
-  pkg: TemplatePackage,
+  pkg: TemplatePackage | { source: "bundled"; path: string },
   pluginId: string,
   options: Pick<TemplatePluginProbeDeps, "env" | "config">,
 ): Promise<string | undefined> {
@@ -112,7 +112,8 @@ export async function sourceHostPluginConflict(
       return undefined;
     }
   }
-  return `Plugin ${pkg.ref}@${pkg.version} cannot become active because this source build prioritizes its bundled plugin ${pluginId}. Use a packaged OpenClaw build or a plugin with a distinct ID.`;
+  const label = pkg.source === "bundled" ? pkg.path : `${pkg.ref}@${pkg.version}`;
+  return `Plugin ${label} cannot become active because this source build prioritizes its bundled plugin ${pluginId}. Use a packaged OpenClaw build or a plugin with a distinct ID.`;
 }
 
 export async function probeTemplatePluginArtifact(

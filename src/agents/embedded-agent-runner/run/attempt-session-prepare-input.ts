@@ -11,7 +11,6 @@ export type EmbeddedAttemptSessionPreparationInput = {
   effectiveCwd: string;
   effectiveWorkspace: string;
   onSessionManagerCreated: (sessionManager: ReturnType<typeof guardSessionManager>) => void;
-  replayAllowedToolNames: ReadonlySet<string>;
   resolveActiveContextEnginePluginId: () => string | undefined;
   runAbortSignal: AbortSignal;
   sessionAgentId: string;

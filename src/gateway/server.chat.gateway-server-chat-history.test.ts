@@ -19,6 +19,7 @@ import {
   agentDiscoveryMock,
   connectWebchatClient,
   dispatchInboundMessageMock,
+  mockGetReplyFromConfigOnce,
   rpcReq,
   testState,
   writeSessionStore,
@@ -93,6 +94,7 @@ describe("gateway server chat", () => {
       error: { message: expect.stringMatching(/null bytes/i) },
     });
 
+    mockGetReplyFromConfigOnce(async () => ({ text: "Sanitized input received." }));
     const sanitizedRes = await sendChat("idem-sanitized-1", { message: "Cafe\u0301\u0007\tline" });
     expect(sanitizedRes.ok).toBe(true);
     await waitForAgentRunDrained("idem-sanitized-1");
@@ -127,6 +129,7 @@ describe("gateway server chat", () => {
         },
       });
 
+      mockGetReplyFromConfigOnce(async () => ({ text: "WebChat reply." }));
       const webchatRes = await sendChat("idem-webchat-1", {}, webchatWs);
       expect(webchatRes.ok).toBe(true);
       await waitForAgentRunDrained("idem-webchat-1");
@@ -135,6 +138,7 @@ describe("gateway server chat", () => {
       webchatWs = undefined;
 
       testState.agentConfig = { timeoutSeconds: 123 };
+      mockGetReplyFromConfigOnce(async () => ({ text: "Reply within configured timeout." }));
       const timeoutRes = await sendChat("idem-timeout-1");
       expect(timeoutRes.ok).toBe(true);
       expect(timeoutRes.payload?.runId).toBe("idem-timeout-1");

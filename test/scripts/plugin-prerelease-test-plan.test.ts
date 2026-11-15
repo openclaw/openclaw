@@ -98,6 +98,7 @@ function runPluginManifest(
   eventName = "workflow_dispatch",
   runtimePolicy = "",
   targetRoot?: string,
+  runnerBackend = "",
 ) {
   const workflow = readPluginPrereleaseWorkflow();
   const step = workflow.jobs.preflight.steps.find(
@@ -108,7 +109,11 @@ function runPluginManifest(
   }
   const root = tempDirs.make("openclaw-plugin-prerelease-phase-");
   const outputPath = join(root, "github-output");
-  const result = spawnSync("bash", ["-c", step.run], {
+  const run = step.run.replace(
+    "./.frv-tooling/scripts/lib/ci-blacksmith-capacity.mjs",
+    new URL("../../scripts/lib/ci-blacksmith-capacity.mjs", import.meta.url).href,
+  );
+  const result = spawnSync("bash", ["-c", run], {
     cwd: targetRoot,
     encoding: "utf8",
     env: {
@@ -117,6 +122,7 @@ function runPluginManifest(
       GITHUB_OUTPUT: outputPath,
       PATH: process.env.PATH,
       PHASE: phase,
+      OPENCLAW_CI_RUNNER_BACKEND: runnerBackend,
       OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
     },
   });
@@ -537,9 +543,11 @@ export const createExtensionTestShards = () => [{
     expect(workflow.jobs["plugin-prerelease-extension-shard"].strategy["max-parallel"]).toBe(12);
 
     const hourly = runPluginManifest("independent", "schedule");
+    const boatHourly = runPluginManifest("independent", "schedule", "", undefined, "boat");
     const release = runPluginManifest("independent");
     const forcedNode = runPluginManifest("independent", "workflow_dispatch", "node");
     expect(hourly.result.status, hourly.result.stderr).toBe(0);
+    expect(boatHourly.result.status, boatHourly.result.stderr).toBe(0);
     expect(release.result.status, release.result.stderr).toBe(0);
     expect(forcedNode.result.status, forcedNode.result.stderr).toBe(0);
     const outputs = (output: string) =>
@@ -550,6 +558,42 @@ export const createExtensionTestShards = () => [{
           .map((line) => [line.slice(0, line.indexOf("=")), line.slice(line.indexOf("=") + 1)]),
       );
     const selected = outputs(hourly.output);
+    const manifestStep = workflow.jobs.preflight.steps.find(
+      (step: WorkflowStep) => step.id === "manifest",
+    );
+    expect(manifestStep.env.OPENCLAW_CI_RUNNER_BACKEND).toBe(
+      "${{ vars.OPENCLAW_CI_RUNNER_BACKEND }}",
+    );
+    const physicalRows = JSON.parse(
+      expectDefined(selected.plugin_prerelease_extension_matrix, "hourly extension matrix"),
+    ).include;
+    const boatRows = JSON.parse(
+      expectDefined(outputs(boatHourly.output).plugin_prerelease_extension_matrix, "Boat matrix"),
+    ).include;
+    expect(boatRows).toEqual(
+      physicalRows.map((row: Record<string, unknown>) =>
+        Object.assign({}, row, {
+          runner_label: row.runner_label === "blacksmith-4vcpu-ubuntu-2404" ? "boat-large" : "boat",
+        }),
+      ),
+    );
+    const boatLabels = new Set(boatRows.map((row: Record<string, unknown>) => row.runner_label));
+    expect(boatLabels).toEqual(new Set(["boat", "boat-large"]));
+    for (const runner_label of boatLabels) {
+      for (const releaseRunnerGroup of ["", "release-runners"]) {
+        for (const eventName of ["schedule", "workflow_dispatch"] as const) {
+          const labels = eventName === "schedule" ? runner_label : "ubuntu-24.04";
+          expect(
+            evaluateWorkflowRunner(workflow.jobs["plugin-prerelease-extension-shard"]["runs-on"], {
+              ...context,
+              eventName,
+              releaseRunnerGroup,
+              matrix: { runner_label },
+            }),
+          ).toEqual(releaseRunnerGroup ? { group: releaseRunnerGroup, labels } : labels);
+        }
+      }
+    }
     const ownership = (matrix: string | undefined) =>
       JSON.parse(expectDefined(matrix, "extension matrix")).include.map(
         ({ requires_bun: _bun, test_runtime_policy: _runtime, ...row }: Record<string, unknown>) =>

@@ -350,7 +350,9 @@ it("reuses trusted simulator libraries and shared package downloads without publ
 it("shares release device libraries only between trusted main release destinations", () => {
   const job = readWorkflow(".github/workflows/ios-store-release.yml").jobs.release;
   const restore = job.steps.find((step: WorkflowStep) => step.id === "watch-rtc-cache");
-  const save = job.steps.find((step: WorkflowStep) => step.uses?.startsWith("actions/cache/save@"));
+  const save = job.steps.find(
+    (step: WorkflowStep) => step.name === "Save Watch RTC release libraries",
+  );
   expect(restore.with.key).toMatch(/^watch-rtc-release-v1-/);
   expect(restore.with["restore-keys"]).toBe(
     "watch-rtc-release-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.watch-rtc-inputs.outputs.xcode }}-\n",

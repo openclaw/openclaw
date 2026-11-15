@@ -204,10 +204,16 @@ export function retainedConflictPaths(
   },
   originalApplyPaths?: ReadonlySet<string>,
 ): string[] {
+  // Build ancestor membership once: a large conflict set must not cause a
+  // synchronous apply-path × conflict-path scan on the Gateway thread.
+  const conflictAncestors = new Set<string>();
+  for (const conflictPath of preflight.conflictPaths) {
+    for (const ancestor of workspacePathAncestors(conflictPath)) {
+      conflictAncestors.add(ancestor);
+    }
+  }
   const retainedApplyPaths = [...preflight.applyPaths].filter(
-    (entryPath) =>
-      !originalApplyPaths?.has(entryPath) ||
-      !preflight.conflictPaths.some((conflictPath) => conflictPath.startsWith(`${entryPath}/`)),
+    (entryPath) => !originalApplyPaths?.has(entryPath) || !conflictAncestors.has(entryPath),
   );
   const conflicts = new Set([...preflight.conflictPaths, ...retainedApplyPaths]);
   const blockingConflicts = new Set(preflight.blockingConflictPaths);

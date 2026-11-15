@@ -181,6 +181,7 @@ function sendSecretEgressRequest(
             statusCode,
             toForwardableResponseHeaders(upstreamResponse.headers),
           );
+          forward.response.flushHeaders();
         } catch {
           // This callback runs outside any caller's try block; a throw here
           // would exit the Gateway. Keep the failure on this one request.

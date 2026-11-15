@@ -4,6 +4,7 @@ import { getEnvironmentData, receiveMessageOnPort } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
+import { stageSqliteTransactionState } from "../sqlite-post-commit.js";
 import {
   createSqliteWorkerOperationAdmission,
   deferSqliteWorkerCommitReceipt,
@@ -149,6 +150,69 @@ describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
       }),
     );
     expect(rows(db, prefix)).toEqual([{ id: `${prefix}saved` }]);
+    operation.settle();
+  });
+
+  it.each([false, true])("honors staged commit refusal (nested=%s)", (nested) => {
+    const { db, prefix, ...operation } = admitted();
+    const refusal = new Error("staged authority revoked");
+    const phases: string[] = [];
+    const mutate = () => {
+      insert(db, `${prefix}refused`);
+      expect(
+        stageSqliteTransactionState(db, {
+          prepareCommit() {
+            phases.push("prepare");
+            throw refusal;
+          },
+          commit: () => phases.push("commit"),
+          rollback: () => phases.push("rollback"),
+        }),
+      ).toBe(true);
+    };
+    expect(() =>
+      operation.execute(() =>
+        db.runTransaction(() => {
+          if (nested) {
+            db.runTransaction(mutate);
+            expect(phases).toEqual([]);
+          } else {
+            mutate();
+          }
+        }),
+      ),
+    ).toThrow(refusal);
+    expect(db.isTransaction).toBe(false);
+    expect(rows(open(), prefix)).toEqual([]);
+    expect(phases).toEqual(["prepare", "rollback"]);
+    operation.settle();
+  });
+
+  it.each([false, true])("prepares staged facts once before commit (nested=%s)", (nested) => {
+    const { db, prefix, ...operation } = admitted();
+    const phases: string[] = [];
+    const mutate = () => {
+      insert(db, `${prefix}saved`);
+      stageSqliteTransactionState(db, {
+        prepareCommit() {
+          expect(db.isTransaction).toBe(true);
+          phases.push("prepare");
+        },
+        commit: () => phases.push("commit"),
+      });
+    };
+    operation.execute(() =>
+      db.runTransaction(() => {
+        if (nested) {
+          db.runTransaction(mutate);
+          expect(phases).toEqual([]);
+        } else {
+          mutate();
+        }
+      }),
+    );
+    expect(phases).toEqual(["prepare", "commit"]);
+    expect(rows(open(), prefix)).toEqual([{ id: `${prefix}saved` }]);
     operation.settle();
   });
 

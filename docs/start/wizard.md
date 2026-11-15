@@ -139,9 +139,11 @@ Quick start follows this path:
    installs the background service, so the Gateway keeps running after the
    terminal closes. No starts the Gateway in the foreground instead:
    **Ctrl+C** stops it, config persists, and `openclaw gateway install` enables
-   background operation later. A temporary run such as `npx`, or a host where
-   OpenClaw can't manage the service, skips the question. If the service fails
-   to start, setup reports why and continues in setup chat.
+   background operation later. A host where OpenClaw can't manage the service
+   skips the question. From `npx`, `pnpm dlx`, or another temporary copy, Yes
+   first installs the same OpenClaw version into the state directory, because
+   the temporary copy can be deleted; this needs npm and network access. If the
+   service fails to start, setup reports why and continues in setup chat.
 6. Save the verified route, prepare the agent workspace, and persist Gateway
    settings.
 7. Open the browser dashboard. Use `openclaw` for the TUI or

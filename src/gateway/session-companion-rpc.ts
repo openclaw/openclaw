@@ -13,6 +13,7 @@ import {
   type SessionSourceAssertion,
   type PreparedSessionSourceAuthority,
 } from "../config/sessions/session-source-authority.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "./operator-role-enforcement.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";
@@ -89,7 +90,7 @@ function companionTargetIsVisible(
   const cfg = context.getRuntimeConfig();
   const sharingTarget = prepared.target;
   if (!sharingTarget) {
-    return cfg.gateway?.roles === undefined;
+    return !isNamedOperatorRoleEnforcementEnabled(cfg);
   }
   const sharing = prepareProjectedSessionSharing({
     client,

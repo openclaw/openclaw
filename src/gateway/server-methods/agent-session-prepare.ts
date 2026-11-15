@@ -1,6 +1,4 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
@@ -12,12 +10,10 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
   resolveAgentSessionWorkStartError,
-  type RestoredCronContinuation,
 } from "../agent-turn/agent-handler-helpers.js";
 import type { AgentTurnPrincipal } from "../agent-turn/types.js";
 import {
@@ -42,8 +38,6 @@ type PrepareAgentSessionParams = {
   request: AgentRunRequest;
   client?: AgentTurnPrincipal | null;
   inputProvenance?: InputProvenance;
-  canUseCronRunContinuation: boolean;
-  lifecycleGeneration: string;
   effectiveBootstrapContextRunKind?: "default" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
@@ -108,51 +102,7 @@ async function prepareAdmittedAgentSession(
     return undefined;
   }
 
-  let effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
-  let restoredCronContinuationIdentity:
-    | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
-    | undefined;
-  const isGeneratedMediaCronContinuation =
-    hasGeneratedMediaCompletionEvent(params.request.internalEvents) &&
-    parseCronRunScopeSuffix(canonicalKey).runId !== undefined;
-  if (isGeneratedMediaCronContinuation) {
-    if (!params.canUseCronRunContinuation) {
-      respondError(
-        params.respond,
-        ErrorCodes.INVALID_REQUEST,
-        "cron run completion handoffs are reserved for server-owned callers",
-      );
-      return undefined;
-    }
-    const marker = entry?.cronRunContinuation;
-    const continuationSessionId = normalizeOptionalString(entry?.sessionId);
-    const staleClaim =
-      marker?.phase === "continuing" &&
-      marker.ownerLifecycleGeneration !== params.lifecycleGeneration;
-    if (staleClaim || (marker?.phase === "ready" && marker.basePersisted !== true)) {
-      respondError(
-        params.respond,
-        ErrorCodes.INVALID_REQUEST,
-        staleClaim
-          ? "cron run continuation owner was lost during gateway restart"
-          : "cron run continuation base session was not persisted",
-      );
-      return undefined;
-    }
-    if (!marker || marker.phase !== "ready" || !continuationSessionId) {
-      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation is not ready");
-      return undefined;
-    }
-    if (params.requestedSessionId && params.requestedSessionId !== continuationSessionId) {
-      respondError(params.respond, ErrorCodes.UNAVAILABLE, "cron run continuation session changed");
-      return undefined;
-    }
-    restoredCronContinuationIdentity = {
-      lifecycleRevision: marker.lifecycleRevision,
-      sessionId: continuationSessionId,
-    };
-    effectiveBootstrapContextRunKind = "cron";
-  }
+  const effectiveBootstrapContextRunKind = params.effectiveBootstrapContextRunKind;
 
   const sessionExistedBeforeAttachmentSetup =
     params.preAttachmentSession?.canonicalKey === canonicalKey
@@ -225,7 +175,6 @@ async function prepareAdmittedAgentSession(
         : undefined,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,
-    restoredCronContinuationIdentity,
     freshChild: freshChild !== undefined,
   };
 }

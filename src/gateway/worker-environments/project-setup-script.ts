@@ -11,7 +11,7 @@ import {
 } from "./workspace-inventory-limits.js";
 import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
-const PreparedSetupEnvironment = z
+export const PreparedSetupEnvironment = z
   .record(
     z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/u),
     z
@@ -140,8 +140,8 @@ const git = (root, args) => {
   }
   return result.stdout.trim();
 };
-const manifest = (root, baseCommit = input.baseCommit, priorRefs = [], manifestHome = machineHome) => {
-  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, "eligible", ...priorRefs.map((ref) => ref.slice(7))], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
+const manifest = (root, baseCommit = input.baseCommit, priorRefs = [], manifestHome = machineHome, memoFiles = []) => {
+  const result = spawnSync(process.execPath, ["-e", manifestScript, root, baseCommit, "eligible", ...priorRefs.map((ref) => ref.slice(7)), ...memoFiles.map((file) => "memo:" + file)], { env: { ...env, HOME: manifestHome }, encoding: "utf8", timeout: 600000, maxBuffer: 262144 });
   if (result.status !== 0 || !/^sha256:[a-f0-9]{64}$/.test(result.stdout.trim())) throw new Error("Prepared project manifest verification failed: " + (result.stderr?.trim() || result.error?.message || result.status));
   return result.stdout.trim();
 };
@@ -284,15 +284,40 @@ const runSetup = (command, workspaceDir, homeDir) => {
   const manifestRoot = ownedDirectory(ownedDirectory(homeDir, ".openclaw-worker", fresh), "manifests", fresh);
   const completionRoot = ownedDirectory(manifestRoot, "prepared", fresh);
   const changed = previous && previous.baseCommit !== input.baseCommit;
+  let skipInstall = false;
   if (changed) {
     // Invalidate the only completion witness before touching Git or running code.
     // An interrupted update cannot replay setup, even when returning to an older commit.
     fs.unlinkSync(previous.completedManifest);
     fs.rmdirSync(previous.completionDirectory);
     for (const ref of new Set([previous.sourceManifestRef, previous.preparedManifestRef])) fs.unlinkSync(path.join(manifestRoot, ref.slice(7) + ".json"));
+    let linked = false;
+    try {
+      const seedGit = path.join(seed, ".git");
+      const workspaceGit = path.join(workspaceDir, ".git");
+      const sourcePacks = ownedDirectory(ownedDirectory(seedGit, "objects"), "pack");
+      const targetPacks = ownedDirectory(ownedDirectory(workspaceGit, "objects"), "pack");
+      const packs = fs.readdirSync(sourcePacks).filter((name) => name.endsWith(".pack"));
+      if (packs.length) {
+        // The seed verified new objects against the same retained base. Share immutable
+        // packs instead of making fetch walk and transfer both object stores again.
+        for (const pack of packs) {
+          for (const name of [pack, pack.slice(0, -5) + ".idx"]) {
+            try { fs.linkSync(path.join(sourcePacks, name), path.join(targetPacks, name)); }
+            catch (error) { if (error.code !== "EEXIST") throw error; }
+          }
+        }
+        const shallow = path.join(workspaceGit, "shallow");
+        const boundaries = [fs.readFileSync(path.join(seedGit, "shallow"), "utf8"), fs.existsSync(shallow) ? fs.readFileSync(shallow, "utf8") : ""];
+        fs.writeFileSync(shallow, [...new Set(boundaries.join("\\n").trim().split(/\\s+/))].join("\\n") + "\\n", { mode: 0o600 });
+        linked = git(workspaceDir, ["rev-parse", "--verify", input.baseCommit + "^{commit}"]) === input.baseCommit;
+      }
+    } catch { /* Unsupported links or incomplete packs use the existing local fetch. */ }
+    if (!linked) git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", "--negotiation-tip=HEAD", seed, input.baseCommit]);
+    // Content-only refreshes retain install outputs; lifecycle scripts reading other tracked files do not rerun.
+    skipInstall = recipe.source === "detected" && !git(workspaceDir, ["diff", "--no-renames", "--name-only", "-z", previous.baseCommit, input.baseCommit]).split("\\0").some((file) => /(^|\\/)(package\\.json|pnpm-lock\\.yaml|pnpm-workspace\\.yaml|\\.npmrc|\\.pnpmfile\\.cjs|yarn\\.lock|\\.yarnrc(?:\\.yml)?|package-lock\\.json|npm-shrinkwrap\\.json|bun\\.lockb?|\\.nvmrc|\\.node-version|\\.tool-versions|mise\\.toml)$|(^|\\/)(patches|\\.yarn\\/(plugins|releases))\\//.test(file));
     // onCreate is not repeated for a content refresh; retain its generated artifacts.
-    if (recipe.source !== "devcontainer") removeSetupOutputs(workspaceDir, previous);
-    git(workspaceDir, ["fetch", "--depth=1", "--no-tags", "--no-write-fetch-head", "--update-shallow", seed, input.baseCommit]);
+    if (recipe.source !== "devcontainer" && !skipInstall) removeSetupOutputs(workspaceDir, previous);
     // Images captured with a stale index must not rewrite unchanged files on this forced checkout.
     git(workspaceDir, ["update-index", "-q", "--refresh"]);
     git(workspaceDir, ["checkout", "--detach", "--force", input.baseCommit]);
@@ -300,14 +325,15 @@ const runSetup = (command, workspaceDir, homeDir) => {
     throw new Error("Prepared project pristine baseline changed");
   }
   phase("gitUpdate");
-  if (fresh || changed) setupPath = await (${PREPARE_REPOSITORY_NODE_JS})(workspaceDir, homeDir, machineHome) ?? setupPath;
+  if (fresh || changed) setupPath = await (${PREPARE_REPOSITORY_NODE_JS})(workspaceDir, homeDir, machineHome, Boolean(changed)) ?? setupPath;
   phase("toolchainPreparation");
   const recipePreparation = { source: recipe.source, ...(recipe.ignoredPropertiesNote ? { ignoredPropertiesNote: recipe.ignoredPropertiesNote } : {}), phaseDurationsMs };
   let setupFailure;
   let captureSkipped;
   if ((fresh || changed) && input.runSetupScript !== false) {
+    if (skipInstall) recipePreparation.note = "Dependency installation skipped: no dependency inputs changed";
     const phases = recipe.source === "detected"
-      ? [["detectedInstall", recipe.detectedInstall]]
+      ? skipInstall ? [] : [["detectedInstall", recipe.detectedInstall]]
       : [...(fresh ? [["onCreate", recipe.onCreate]] : recipe.source === "script" ? [["onCreate", recipe.onCreate]] : []), ["updateContent", recipe.updateContent]];
     for (const [phase, command] of phases) {
       if (command === undefined) continue;
@@ -331,14 +357,11 @@ const runSetup = (command, workspaceDir, homeDir) => {
   ownedDirectory(workspaceDir, ".git");
   if (git(workspaceDir, ["rev-parse", "HEAD"]) !== input.baseCommit) throw new Error("Prepared project setup changed its Git base");
   verifyRecipe(workspaceDir, true);
-  const preparedManifestRef = !fresh && !changed ? previous.preparedManifestRef : manifest(workspaceDir, input.baseCommit, [sourceManifestRef]);
-  const preparedBytes = !fresh && !changed ? previous.preparedBytes : readManifest(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".json"), preparedManifestRef);
+  // Keep each tree's memo in its own HOME, even when their manifest digests are identical.
+  if (fresh || changed) fs.writeFileSync(path.join(manifestRoot, sourceManifestRef.slice(7) + ".json"), sourceBytes, { flag: "wx", mode: 0o600 });
+  const preparedManifestRef = !fresh && !changed ? previous.preparedManifestRef : manifest(workspaceDir, input.baseCommit, [sourceManifestRef], homeDir, changed ? [path.join(manifestRoot, previous.preparedManifestRef.slice(7) + ".memo")] : []);
+  const preparedBytes = !fresh && !changed ? previous.preparedBytes : readManifest(path.join(manifestRoot, preparedManifestRef.slice(7) + ".json"), preparedManifestRef);
   if (fresh || changed) {
-    const completed = new Map([[sourceManifestRef, sourceBytes], [preparedManifestRef, preparedBytes]]);
-    for (const [ref, bytes] of completed) fs.writeFileSync(path.join(manifestRoot, ref.slice(7) + ".json"), bytes, { flag: "wx", mode: 0o600 });
-    // Carry the prepared tree's stat hashes into the captured home; seed inodes differ.
-    try { fs.copyFileSync(path.join(workerRoot, "manifests", preparedManifestRef.slice(7) + ".memo"), path.join(manifestRoot, preparedManifestRef.slice(7) + ".memo")); }
-    catch { /* Optional cache: registration can always hash the tree. */ }
     const completionDirectory = ownedDirectory(completionRoot, sourceManifestRef.slice(7), true);
     // Publish this content-addressed pair last. Root B/P artifacts alone cannot
     // turn an interrupted setup into a reusable completed environment.

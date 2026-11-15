@@ -80,7 +80,8 @@ function verifyLaunchAgentStopProbe(
   return probe.runtime.pid;
 }
 
-async function waitForLaunchAgentUnloaded(
+/** Waits until launchd unloads the job and every PID it ran has exited. */
+export async function waitForLaunchAgentUnloaded(
   serviceTarget: string,
   initialPids: readonly number[],
   assertCurrent?: () => void,

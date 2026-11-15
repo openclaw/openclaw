@@ -45,6 +45,7 @@ import { shareSidebarSessionRows } from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { serializeSessionRow } from "./session-row-serialization.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { prepareSessionRowSelection } from "./session-utils-list.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -448,6 +449,7 @@ it("coalesces cold sidebar selection across row slices only for the same princip
     using _ = retainList(context);
     await initializeSessionReadContext(context);
     const projection = getSessionRowProjection(context)!;
+    const membership = vi.spyOn(projection, "hasMembership");
     await projection.withSelectionPreparation(async () => {
       await projection.prepareSelection();
       const read = (client: typeof alice, limit = 100) =>
@@ -469,7 +471,116 @@ it("coalesces cold sidebar selection across row slices only for the same princip
       expect(other.sessions[0]!.sessionId).toBe("cold-128");
       expect(other.owners).not.toBe(results[0]!.owners);
       expect((await read(alice, 1)).sessions).toHaveLength(1);
+      expect(membership).not.toHaveBeenCalled();
     });
+  }));
+
+it("resolves archived-only profile references before filtering active sessions", () =>
+  withListReader("archive-profile-reader", async ({ context, client }) => {
+    const visible = ensureProfileForEmail("archive-profile-visible@example.test").id;
+    const hidden = ensureProfileForEmail("archive-profile-hidden@example.test").id;
+    for (const [key, creator, archivedAt, visibility] of [
+      ["active", client.authenticatedUserProfile!.profileId, undefined, "shared"],
+      ["archived", visible, 0, "shared"],
+      ["hidden", hidden, 0, "draft"],
+    ] as const) {
+      writeListEntry(`agent:main:${key}`, {
+        sessionId: key,
+        updatedAt: 1,
+        createdActor: profileActor(creator),
+        archivedAt,
+        visibility,
+      });
+    }
+    using _ = retainList(context);
+    expect((await readList(context, client, {})).sessions.map(({ key }) => key)).toEqual([
+      "agent:main:active",
+    ]);
+    // Omit includePeople: involvingProfileId alone must retain full-roster resolution.
+    for (const archived of [false, true, "all"] as const) {
+      for (const profileId of [visible, hidden]) {
+        for (const involvingProfileId of [profileId, profileId.replaceAll("-", "").slice(0, 12)]) {
+          const result = await readList(context, client, { archived, involvingProfileId });
+          expect(result.involvingProfileId).toBe(profileId === visible ? visible : undefined);
+          const keys = profileId === visible && archived !== false ? ["agent:main:archived"] : [];
+          expect(result.sessions.map(({ key }) => key)).toEqual(keys);
+          expect(result.totalCount).toBe(keys.length);
+        }
+      }
+    }
+  }));
+
+it("visits only the requested archive population and preserves viewer isolation across moves", () =>
+  withListReader("archive-alice", async ({ context, client: alice }) => {
+    const bob = roleClient("view", "archive-bob");
+    prepareGatewayRecipientProfile(bob);
+    // These keys share a hash partition, so unrelated archive writes used to invalidate it.
+    const keys = [0, 13, 35, 57].map((id) => `agent:main:archive-${id}`);
+    const entries = keys.map((sessionId, index) => ({
+      sessionId,
+      updatedAt: index + 1,
+      archivedAt: index > 1 ? 0 : undefined,
+      createdActor: profileActor(alice.authenticatedUserProfile!.profileId),
+      visibility: index % 2 ? ("draft" as const) : ("shared" as const),
+    }));
+    const put = (index: number) =>
+      replaceSessionEntrySync({ agentId: "main", sessionKey: keys[index]! }, entries[index]!);
+    entries.forEach((_entry, index) => put(index));
+    using _ = retainList(context);
+    await initializeSessionReadContext(context);
+    const projection = getSessionRowProjection(context)!;
+    await projection.prepareSelection();
+    const prepared = prepareSessionRowSelection(projection, {}, { ordered: true });
+    let visited = 0;
+    for (const { entries: partitionEntries } of prepared.partitions!) {
+      const each = partitionEntries.forEach.bind(partitionEntries);
+      vi.spyOn(partitionEntries, "forEach").mockImplementation((callback, receiver) =>
+        each((value, key, map) => {
+          visited++;
+          callback.call(receiver, value, key, map);
+        }),
+      );
+      const values = partitionEntries.values.bind(partitionEntries);
+      vi.spyOn(partitionEntries, "values").mockImplementation(function* () {
+        for (const pair of values()) {
+          visited++;
+          yield pair;
+        }
+        return undefined;
+      });
+    }
+    const read = async (
+      archived: boolean | "all" | undefined,
+      expected: number[],
+      work: number,
+      client = alice,
+    ) => {
+      visited = 0;
+      const result = await readList(context, client, archived === undefined ? {} : { archived });
+      expect(result.sessions.map(({ key }) => key)).toEqual(expected.map((index) => keys[index]));
+      expect(result.totalCount).toBe(expected.length);
+      expect(visited).toBe(work);
+    };
+    await read(undefined, [1, 0], 2);
+    await read(true, [3, 2], 2);
+    await read("all", [3, 2, 1, 0], 4);
+    entries[2]!.updatedAt = 5;
+    put(2);
+    await read(undefined, [1, 0], 0);
+    await read(true, [2, 3], 2);
+    await read("all", [2, 3, 1, 0], 2);
+    await read(undefined, [0], 2, bob);
+    await read(true, [2], 2, bob);
+    entries[0]!.archivedAt = 0;
+    put(0);
+    await read(undefined, [1], 1);
+    await read(true, [2, 3, 0], 3);
+    await read("all", [2, 3, 1, 0], 4);
+    entries[2]!.archivedAt = undefined;
+    put(2);
+    await read(undefined, [2], 2, bob);
+    await read(true, [0], 2, bob);
+    await read("all", [2, 0], 4, bob);
   }));
 
 it("shares encoded socket lists by identity and refreshes compact, published, and clock facts", async () => {

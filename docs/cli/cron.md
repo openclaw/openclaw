@@ -28,10 +28,13 @@ authentication, calls to the configured local loopback Gateway do not open the
 shared state database for device authentication. Remote and explicit URL targets
 retain their device authentication and pairing requirements.
 
-Ctrl-C or SIGTERM cancels a pending `list` or `show` read without printing a late
-result or failure document. The CLI exits with status 130 or 143, respectively.
+Ctrl-C or SIGTERM cancels a pending `list`, `show`, `status`, `get`, `runs`, or
+read-only `scratch` read without printing a late result or failure document. The CLI
+exits with status 130 or 143, respectively.
 An `add` or `edit` mutation already sent to the Gateway still waits for its
 receipt during cleanup and reports any failure; interrupting does not undo it.
+
+File inputs for `--script`, `--trigger-script`, and `scratch --file` must be regular files; symbolic links to regular files are supported. FIFOs and other special files are rejected without waiting for input. To pipe content, use `-` to read from stdin instead.
 
 ## Create jobs quickly
 
@@ -213,7 +216,7 @@ Isolated automation chat delivery is shared between the agent and the runner:
 - `webhook` posts the finished payload to a URL.
 - `none` disables automatic conversation results and external notifications.
 
-Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results fail if the creating conversation was deleted or reset; recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
+Agent, command, and script results belong to the chat or topic that receives them. An explicit different destination gets the result instead of the creating conversation, including for CLI and older jobs without a creating session. With no external route, the creating conversation receives it; WebChat shows the same message live and after reload. Retries do not duplicate results. Resetting an explicitly configured external destination does not stop delivery: the result enters its current session. Implicit agent-turn announcements and routeless WebChat results follow the creating conversation through message edits, branch switches, and resets; they fail visibly if it was deleted. Recreate the job or set explicit external delivery coordinates. Command and script announcements retain an already resolved route without a source-generation check, as before. A confirmed external send remains delivered, with a warning if the conversation write fails. See [Automation delivery](/automation/cron-jobs/delivery).
 
 Use `automations add|create --webhook <url>` or `automations edit <job-id> --webhook <url>` to set webhook delivery. Do not combine `--webhook` with chat delivery flags such as `--announce`, `--no-deliver`, `--channel`, `--to`, `--thread-id`, or `--account`.
 

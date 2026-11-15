@@ -37,12 +37,19 @@ type WorkspaceManifestSnapshot = Awaited<ReturnType<typeof readActualWorkspaceMa
 type WorkspaceManifestCapture = Omit<WorkspaceManifestSnapshot, "rawManifest">;
 
 export type WorkspaceManifestValueInputs = {
+  "workspace.manifest.template": {
+    root: string;
+    baseCommit: string;
+    buildCacheInputs: string[];
+    previous?: { rawManifest: string; manifestRef: string; changedPaths: string[] };
+  };
   "workspace.manifest.capture": {
     root: string;
     baseCommit: string | null;
     preserveDirectories?: readonly string[];
     includePaths?: readonly string[];
     buildCacheInputs?: string[];
+    gitIgnore?: { paths: string[]; retainedPaths: string[] };
     hashes?: WorkspaceComputationHashes;
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
@@ -70,6 +77,12 @@ export type WorkspaceManifestValueInputs = {
     source: WorkerWorkspaceManifest;
     prepared: WorkerWorkspaceManifest;
     incoming: WorkerWorkspaceManifest;
+  };
+  "workspace.reconcile.patch": {
+    root: string;
+    stagingRoot: string;
+    baseEntries: WorkerWorkspaceManifestEntry[];
+    appliedEntries: WorkerWorkspaceManifestEntry[];
   };
   "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
@@ -105,6 +118,7 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
 };
 
 export type WorkspaceManifestValueOutputs = {
+  "workspace.manifest.template": Omit<WorkspaceManifestSnapshot, "manifest">;
   "workspace.manifest.capture": WorkspaceComputationHashResult<WorkspaceManifestCapture>;
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
   "workspace.manifest.document": WorkspaceComputationHashResult<
@@ -118,6 +132,12 @@ export type WorkspaceManifestValueOutputs = {
   "workspace.manifest.tree-input": null;
   "workspace.manifest.serialize": { raw: string; manifestRef: string };
   "workspace.manifest.overlay": WorkspaceManifestCapture;
+  "workspace.reconcile.patch": {
+    patch: Uint8Array<ArrayBuffer>;
+    baseTree: string;
+    basePack: Uint8Array<ArrayBuffer>;
+    basePackSha256: string;
+  };
   "workspace.reconcile.preflight": WorkspaceComputationHashResult<{
     applyPaths: Set<string>;
     conflictPaths: string[];
@@ -131,6 +151,10 @@ export type WorkspaceManifestComputationOperations = {
     output: WorkspaceManifestValueOutputs[Type];
   };
 } & {
+  "workspace.reconcile.diff": {
+    input: { root: string; baseTree: string; currentTree: string };
+    output: Uint8Array<ArrayBuffer>;
+  };
   "workspace.manifest.local": {
     input: { owner: string };
     output: LocalWorkspaceManifestValue;
