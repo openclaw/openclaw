@@ -10,6 +10,7 @@ import {
   runBuiltRuntime,
 } from "../../commands/doctor-config-preflight.process.test-support.js";
 import { runStartupConfigPreflight } from "../../commands/startup-config-preflight.js";
+import { createConfigIO } from "../../config/io.factory.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -277,6 +278,48 @@ it.skipIf(!connection)(
         expect(await fs.readFile(state.configPath, "utf8")).toBe(restartConfig);
       },
     );
+  },
+);
+
+it.skipIf(!connection)(
+  "previews and applies config backup recovery under Gateway PostgreSQL admission",
+  async () => {
+    await withHistoricalPostgresState({}, async ({ state }) => {
+      expect(threadId).toBe(0);
+      expect(() => assertEngineStoreExecutionAllowed()).toThrow("must run in a worker");
+      const configDirectory = path.dirname(state.configPath);
+      const authored = await fs.readFile(state.configPath, "utf8");
+      // The parsed backup is unchanged; its size makes the existing recovery policy inspect it.
+      const backup = authored + " ".repeat(authored.length * 2);
+      await fs.writeFile(`${state.configPath}.bak`, backup);
+      const current = await createConfigIO({
+        env: state.env,
+        observe: false,
+        pluginValidation: "core-only",
+      }).readConfigFileSnapshot();
+      expect(current.valid).toBe(true);
+      const plan = await createConfigIO({ env: state.env, observe: false }).prepareConfigRecovery(
+        current,
+      );
+      expect(plan?.snapshot).toMatchObject({ valid: true, raw: backup });
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(authored);
+      expect(await fs.readFile(`${state.configPath}.bak`, "utf8")).toBe(backup);
+      expect(
+        (await fs.readdir(configDirectory)).filter((name) => name.includes(".clobbered.")),
+      ).toEqual([]);
+      const recovered = await runStartupConfigPreflight({ gateway: true, observe: false });
+      await using caches = new AsyncDisposableStack();
+      caches.use(recovered.pluginCache);
+      expect(recovered.snapshot.valid).toBe(true);
+      expect(await fs.readFile(state.configPath, "utf8")).toBe(backup);
+      expect(await fs.readFile(`${state.configPath}.bak`, "utf8")).toBe(backup);
+      const archived = (await fs.readdir(configDirectory)).filter((name) =>
+        name.includes(".clobbered."),
+      );
+      expect(archived).toHaveLength(1);
+      expect(await fs.readFile(path.join(configDirectory, archived[0]!), "utf8")).toBe(authored);
+      expect(() => assertEngineStoreExecutionAllowed()).toThrow("must run in a worker");
+    });
   },
 );
 

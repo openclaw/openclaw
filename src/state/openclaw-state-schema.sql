@@ -2103,6 +2103,7 @@ CREATE TABLE IF NOT EXISTS session_repository_workspaces (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   disk_authority_json TEXT,
+  recovery_json TEXT,
   UNIQUE (agent_id, session_key),
   CHECK (base_manifest_hash IS NULL OR base_commit IS NOT NULL),
   CHECK ((checkpoint_ref IS NULL AND manifest_hash IS NULL)
@@ -2214,6 +2215,7 @@ CREATE TABLE IF NOT EXISTS worker_session_placements (
   state_changed_at_ms INTEGER NOT NULL,
   terminal_reason TEXT,
   terminal_at_ms INTEGER,
+  confirmed_loss_recovery_json TEXT,
   CHECK (
     (state IN ('local', 'requested')
       AND environment_id IS NULL AND active_owner_epoch IS NULL

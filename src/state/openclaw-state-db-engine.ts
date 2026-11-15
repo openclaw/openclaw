@@ -48,6 +48,7 @@ import { withLegacyWorkerResourceReceipts } from "./openclaw-state-db-schema-v37
 import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v38-repository-disk.js";
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v41-worker-loss-recovery.js";
 import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
@@ -175,9 +176,17 @@ function statePostgresVersionSql(version: number): string {
 }
 
 function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
-  const statePostgresSchemaV39 = {
+  const statePostgresSchemaV40 = {
     ...statePostgresSchema,
-    postgres: withLegacyWorkerProvisionSource(statePostgresSchema.postgres),
+    postgres: withLegacyWorkerLossRecovery(statePostgresSchema.postgres),
+    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyWorkerLossRecovery(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV39 = {
+    ...statePostgresSchemaV40,
+    postgres: withLegacyWorkerProvisionSource(statePostgresSchemaV40.postgres),
   };
   const statePostgresSchemaV38 = {
     ...statePostgresSchemaV39,
@@ -399,7 +408,7 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
     {
       version: 40,
       fromSchema: statePostgresSchemaV39,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV40,
       sql: `ALTER TABLE worker_environments ADD COLUMN provision_source_json text COLLATE "C";
         UPDATE worker_environments
         SET provision_source_json = '{"kind":"unavailable"}'
@@ -407,6 +416,14 @@ function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
           OR state = 'bootstrapping' AND owner_epoch = 0)
           AND provision_source_json IS NULL;
         ${statePostgresVersionSql(40)}`,
+    },
+    {
+      version: 41,
+      fromSchema: statePostgresSchemaV40,
+      schema: statePostgresSchema,
+      sql: `ALTER TABLE IF EXISTS session_repository_workspaces ADD COLUMN recovery_json text COLLATE "C";
+        ALTER TABLE worker_session_placements ADD COLUMN confirmed_loss_recovery_json text COLLATE "C";
+        ${statePostgresVersionSql(41)}`,
     },
   ];
 }

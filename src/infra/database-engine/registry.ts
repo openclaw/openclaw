@@ -1,4 +1,4 @@
-import type { DatabaseEngineFamily, DatabaseEngineId } from "./types.js";
+import type { DatabaseEngineFamily, DatabaseEngineId, DatabaseEngineSelection } from "./types.js";
 export type { DatabaseEngineId } from "./types.js";
 
 // Keep schema validation independent of the complete, schema-inferred application config.
@@ -34,6 +34,18 @@ const stores: readonly DatabaseEngineStore[] = [
 
 export function listDatabaseEngineStores(): readonly DatabaseEngineStore[] {
   return stores;
+}
+
+/** Local companions carry anchors; portable domain rows stay in their current PostgreSQL stores. */
+export function isPostgresCompanionSelection(
+  selection: DatabaseEngineSelection | undefined,
+): selection is DatabaseEngineSelection & {
+  postgres: NonNullable<DatabaseEngineSelection["postgres"]>;
+} {
+  return (
+    Boolean(selection?.postgres) &&
+    stores.every((store) => !store.postgres || selection?.effectiveEngines[store.id] === "postgres")
+  );
 }
 
 export function selectDatabaseEngine(

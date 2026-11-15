@@ -32,6 +32,7 @@ import {
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
 } from "./gateway-state-owner-errors.js";
+import { requestSqliteWorkerSchemaMaintenance } from "./sqlite-writer-admission-client.js";
 import { inspectStaleLockOwner } from "./stale-lock-file.js";
 
 const ownerInspections = new AsyncLocalStorage<{ deadOwner?: { path: string; raw: string } }>();
@@ -110,7 +111,7 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
     throw new StateDatabaseAccessError(unavailable);
   }
   // Ordinary SQLite access does not reclaim the owner or borrow schema custody.
-  // Unknown namespaces retain maintenance contention without probing a local PID.
+  // Only an exact broker grant can qualify same-process maintenance with unknown OS facts.
   const namespace = classifyGatewayLockProcessNamespace(owner, ownerPath);
   const staleReason = comparableStateOwnerStaleReason(owner, namespace);
   if (staleReason) {
@@ -129,6 +130,16 @@ export function assertPersistedStateDatabaseAccessAllowed(params: {
   }
   const role = owner.role ?? "gateway";
   if (role === "gateway" || role === "agent-embedded") {
+    return;
+  }
+  if (
+    namespace === "unknown" &&
+    owner.pid === process.pid &&
+    !isMainThread &&
+    requestSqliteWorkerSchemaMaintenance(databasePath)
+  ) {
+    // Missing OS facts cannot lend custody. The host granted this exact operation
+    // its retained schema lease after checking the path and current maintenance owner.
     return;
   }
   if (namespace === "same" && owner.pid === process.pid) {

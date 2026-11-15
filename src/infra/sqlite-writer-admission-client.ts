@@ -60,6 +60,18 @@ export function assertSqliteWorkerRequestAuthority(owner: SqliteWorkerOperationC
   }
 }
 
+/** Schema work borrows live host authority through the same retained job port. */
+export function requestSqliteWorkerSchemaMaintenance(databasePath: string): boolean {
+  if (!currentAdmission.getStore()) {
+    return false;
+  }
+  requestSqliteWorkerOperationAdmission({
+    stage: "prepare",
+    facts: { kind: "schema-maintenance", databasePath },
+  });
+  return true;
+}
+
 /** Ask the live host owner for a native stage; preparation precedes writer-lock acquisition. */
 export function requestSqliteWorkerOperationAdmission(
   request: SqliteWorkerAdmissionRequest,

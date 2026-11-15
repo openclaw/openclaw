@@ -50,7 +50,6 @@ export { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission
 export {
   withSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmissionAsync,
-  requestSqliteWorkerSchemaMaintenance,
   takeSqliteWorkerOperationAdmissionAttachment,
 } from "./sqlite-worker-operation-scope.js";
 

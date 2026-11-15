@@ -2,11 +2,21 @@ import { loadBundledPluginPublicArtifactModuleFromCandidatesSync } from "../../p
 import { historicalIndexOrderingPort } from "./historical-index-ordering-port.js";
 import {
   DatabasePortDataError,
+  type DatabasePortDescriptorIdentity,
   type DatabasePortProvider,
   type PortDescriptor,
 } from "./port-descriptor.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
 import metadata from "./team-reports-port.generated.json" with { type: "json" };
+
+export function readTeamReportsPortIdentity(): DatabasePortDescriptorIdentity {
+  return {
+    id: metadata.id,
+    version: metadata.version,
+    tables: metadata.tables,
+    expectedCatalog: expectedPostgresCatalog(metadata),
+  };
+}
 
 export async function loadTeamReportsPortDescriptor(
   owner?: Parameters<DatabasePortProvider["loadDescriptor"]>[0],
@@ -35,9 +45,9 @@ export async function loadTeamReportsPortDescriptor(
   }
   const descriptor: PortDescriptor = {
     ...metadata,
+    ...readTeamReportsPortIdentity(),
     preData: api.postgres.slice(metadata.preData[0], metadata.preData[1]),
     postData: api.postgres.slice(metadata.postData[0], metadata.postData[1]),
-    expectedCatalog: expectedPostgresCatalog(metadata),
     inspectSqliteSource(db) {
       try {
         return api.inspectSqliteSource(db);

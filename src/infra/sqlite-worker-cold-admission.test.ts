@@ -92,9 +92,11 @@ it.each([
          const { exchangeSqliteDatabaseAdmissions } = await import(workerData.relay);
          const {
            requestSqliteWorkerOperationAdmission,
-           requestSqliteWorkerSchemaMaintenance,
            withSqliteWorkerOperationAdmission,
          } = await import(workerData.admission);
+         const { requestSqliteWorkerSchemaMaintenance } = await import(
+           new URL("./sqlite-writer-admission-client.ts", workerData.admission).href
+         );
          const { databasePath, requestedPath, transport, scenario, port } = workerData;
          const checkpoint = new Int32Array(workerData.checkpoint);
          const yieldToHost = (kind) => {

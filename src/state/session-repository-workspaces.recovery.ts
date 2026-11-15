@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { Selectable } from "kysely";
+import { z } from "zod";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -8,6 +9,7 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
+import type { RepositoryWorkspaceRecovery as RepositoryWorkspaceLossRecovery } from "./session-repository-workspaces.types.js";
 
 export type RepositoryWorkspaceRecovery = Selectable<DB["session_repository_workspaces"]>;
 
@@ -59,8 +61,36 @@ export function restoreRepositoryWorkspaceInDatabase(
         revision: source.revision,
         createdAtMs: source.created_at_ms,
         updatedAtMs: source.updated_at_ms,
+        ...(source.recovery_json
+          ? { recovery: readRepositoryWorkspaceRecovery(source.recovery_json) }
+          : {}),
       },
     ]);
   }
   return { workspaceRestored: !existing };
+}
+
+const commit = z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u);
+const manifest = z.string().regex(/^sha256:[a-f0-9]{64}$/u);
+const recoverySchema = z.strictObject({
+  reason: z.enum(["missing-checkpoint-artifact", "missing-worker"]),
+  atMs: z.number().int().nonnegative(),
+  original: z.strictObject({
+    revision: z.number().int().nonnegative(),
+    baseCommit: commit.nullable(),
+    baseManifestHash: manifest.nullable(),
+    checkpointRef: z
+      .string()
+      .regex(/^refs\/openclaw\/worker-results\/[A-Za-z0-9-]+$/u)
+      .nullable(),
+    manifestHash: manifest.nullable(),
+  }),
+  sourceCommit: commit,
+  source: z.enum(["published-branch", "recorded-base"]),
+  unrecoverablePrivateContent: z.literal(true),
+});
+
+/** Validate persisted metadata once where the database row enters the owner. */
+export function readRepositoryWorkspaceRecovery(raw: string): RepositoryWorkspaceLossRecovery {
+  return recoverySchema.parse(JSON.parse(raw));
 }

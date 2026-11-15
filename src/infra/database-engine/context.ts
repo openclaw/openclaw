@@ -10,7 +10,9 @@ export type { DatabaseEngineSelection } from "./types.js";
 
 const state = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseEngineSelection"),
-  (): { selection?: DatabaseEngineSelection } => ({}),
+  (): { selection?: DatabaseEngineSelection; readOnly: boolean; preparingWriter?: boolean } => ({
+    readOnly: false,
+  }),
 );
 const maintenance = resolveGlobalSingleton(
   Symbol.for("openclaw.databaseEngineMaintenanceSelection"),
@@ -19,7 +21,57 @@ const maintenance = resolveGlobalSingleton(
 
 /** An explicit SQLite selection is distinct from an entry point awaiting config. */
 export function getDatabaseEngineSelection() {
-  return maintenance.getStore() ?? state.selection;
+  const scoped = maintenance.getStore();
+  const selected = scoped ?? state.selection;
+  return selected && state.readOnly && scoped?.access !== "read-write"
+    ? {
+        ...selected,
+        access: state.preparingWriter ? ("writer-preparation" as const) : ("read-only" as const),
+      }
+    : selected;
+}
+
+/** Candidate startup owns this gate; activation must present its actual writer custody. */
+export function setDatabaseEngineReadOnlyAdmission(readOnly: true): void;
+export function setDatabaseEngineReadOnlyAdmission(readOnly: false, assertWriter: () => void): void;
+export function setDatabaseEngineReadOnlyAdmission(
+  readOnly: boolean,
+  assertWriter?: () => void,
+): void {
+  if (!readOnly) {
+    if (!assertWriter) {
+      throw new Error("Database write activation requires current Gateway ownership");
+    }
+    assertWriter();
+  }
+  state.readOnly = readOnly;
+  state.preparingWriter = false;
+}
+
+/** Writer-capable sockets are prepared under enforced read transactions, never toggled in place. */
+export function prepareDatabaseEngineWriterAdmission(assertWriter: () => void): void {
+  assertWriter();
+  state.readOnly = true;
+  state.preparingWriter = true;
+}
+
+export function isDatabaseEngineReadOnlyAdmission(): boolean {
+  return (
+    maintenance.getStore()?.access !== "read-write" &&
+    (state.readOnly ||
+      getDatabaseEngineSelection()?.access === "read-only" ||
+      getDatabaseEngineSelection()?.access === "writer-preparation")
+  );
+}
+
+export function isDatabaseEnginePhysicalReadOnlyAdmission(): boolean {
+  if (maintenance.getStore()?.access === "read-write") {
+    return false;
+  }
+  return (
+    (state.readOnly && !state.preparingWriter) ||
+    getDatabaseEngineSelection()?.access === "read-only"
+  );
 }
 
 /** Config-driven operations reuse only their own captured selection, never a running Gateway's. */
@@ -38,7 +90,13 @@ export function withDatabaseEngineSelection<T>(
 /** Each store consumes its boot-selected family without resolving configuration again. */
 export function getDatabaseEngineInput(family: DatabaseEngineFamily): DatabaseEngineInput {
   const selection = getDatabaseEngineSelection();
-  return selection?.effectiveEngines[family] === "postgres" ? selection.postgres : undefined;
+  return selection?.effectiveEngines[family] === "postgres"
+    ? selection.access === "read-only" && selection.postgres
+      ? { ...selection.postgres, readOnly: true }
+      : selection.access === "writer-preparation" && selection.postgres
+        ? { ...selection.postgres, readOnlySchema: true }
+        : selection.postgres
+    : undefined;
 }
 
 /** Boot owns this process-lifetime fact; asynchronous callers never change it. */

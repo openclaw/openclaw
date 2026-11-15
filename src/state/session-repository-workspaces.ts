@@ -33,6 +33,7 @@ import {
 } from "./session-repository-workspaces.receipts.js";
 import type {
   RepositoryWorkspaceBase,
+  RepositoryWorkspaceBranchReset,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
   RepositoryWorkspaceDiskBinding,
@@ -336,6 +337,22 @@ export function createSessionRepositoryWorkspaceStore(
       const { assertCurrent, ...request } = input;
       return requireWorkspace(
         await mutate({ type: "repositoryWorkspaces.retireDisk", input: request }, assertCurrent),
+      );
+    },
+    async resetToBranch(input: Guarded<RepositoryWorkspaceBranchReset>) {
+      return requireWorkspace(
+        await mutate(
+          {
+            type: "repositoryWorkspaces.resetToBranch",
+            input: {
+              sourceCommit: input.sourceCommit,
+              recovery: input.recovery,
+              workspaceId: input.workspaceId,
+              expectedRevision: input.expectedRevision,
+            },
+          },
+          input.assertCurrent,
+        ),
       );
     },
     async acceptCheckpoint(input: Guarded<RepositoryWorkspaceCheckpoint>) {

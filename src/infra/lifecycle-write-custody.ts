@@ -1,7 +1,7 @@
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
-export type LifecycleWriteCustodyPhase = "migration" | "backup";
+export type LifecycleWriteCustodyPhase = "migration" | "backup" | "audit-persistence";
 
 const owners = resolveGlobalSingleton(
   Symbol.for("openclaw.lifecycleWriteCustody"),

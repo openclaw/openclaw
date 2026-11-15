@@ -60,6 +60,7 @@ export function selectWorkerPlacementRows(db: EngineConnection, sessionIds: read
       "last_transcript_ack_cursor",
       "last_live_event_ack_cursor",
       "recovery_error",
+      "confirmed_loss_recovery_json",
       "terminal_reason",
       "terminal_at_ms",
       "turn_claim_owner",
@@ -389,6 +390,7 @@ export function transitionValues(
       "live ACK cursor",
     ),
     recovery_error: text(patch.recoveryError, current.recoveryError, "recovery error"),
+    confirmed_loss_recovery_json: null,
     terminal_reason:
       to === "failed"
         ? patch.terminalReason === undefined

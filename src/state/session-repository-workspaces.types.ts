@@ -1,6 +1,22 @@
 import type { WorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import type { WorkerResourceReceipt } from "../plugins/capability-provider.types.js";
 
+/** Most recent lossy source replacement; later checkpoints retain this provenance. */
+export type RepositoryWorkspaceRecovery = {
+  reason: "missing-checkpoint-artifact" | "missing-worker";
+  atMs: number;
+  original: {
+    revision: number;
+    baseCommit: string | null;
+    baseManifestHash: string | null;
+    checkpointRef: string | null;
+    manifestHash: string | null;
+  };
+  sourceCommit: string;
+  source: "published-branch" | "recorded-base";
+  unrecoverablePrivateContent: true;
+};
+
 /** The retained resource, not a Gateway checkpoint, owns this repository. */
 export type RepositoryWorkspaceDiskAuthority = {
   environmentId: string;
@@ -20,6 +36,7 @@ export type SessionRepositoryWorkspaceRecord = {
   checkpointRef: string | null;
   manifestHash: string | null;
   diskAuthority?: RepositoryWorkspaceDiskAuthority;
+  recovery?: RepositoryWorkspaceRecovery;
   revision: number;
   createdAtMs: number;
   updatedAtMs: number;
@@ -36,6 +53,10 @@ export type RepositoryWorkspaceCreate = RepositoryWorkspaceOwner & {
 export type RepositoryWorkspaceMutation = { workspaceId: string; expectedRevision: number };
 export type RepositoryWorkspaceDiskBinding = RepositoryWorkspaceMutation & {
   diskAuthority: RepositoryWorkspaceDiskAuthority;
+};
+export type RepositoryWorkspaceBranchReset = RepositoryWorkspaceMutation & {
+  sourceCommit: string;
+  recovery?: Pick<RepositoryWorkspaceRecovery, "reason" | "source">;
 };
 export type RepositoryWorkspaceBase = RepositoryWorkspaceMutation & {
   baseCommit: string;

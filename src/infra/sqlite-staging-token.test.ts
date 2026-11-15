@@ -3,11 +3,38 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  installDatabaseEngineSelection,
+  setDatabaseEngineReadOnlyAdmission,
+} from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { acquireSqliteStagingToken, SqliteStagingRetiredError } from "./sqlite-staging-token.js";
 import { readDatabaseIdentityBirthtime } from "./sqlite-worker-identity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("retires an owned private capture token while keeping portable files read-only", () => {
+  const directory = tempDirs.make("sqlite-staging-token-fenced-");
+  const source = path.join(tempDirs.make("sqlite-staging-source-"), "source.sqlite");
+  using original = openNodeSqliteDatabase(source);
+  original.exec("CREATE TABLE retained(value TEXT); INSERT INTO retained VALUES('preserved')");
+  installDatabaseEngineSelection({ effectiveEngines: resolveDatabaseFamilyEngines({}) });
+  setDatabaseEngineReadOnlyAdmission(true);
+  try {
+    const token = acquireSqliteStagingToken(directory, "create");
+    token(true);
+    expect(() => acquireSqliteStagingToken(directory, "read")).toThrow(SqliteStagingRetiredError);
+    using guarded = openNodeSqliteDatabase(source);
+    expect(guarded.prepare("SELECT value FROM retained").get()).toEqual({ value: "preserved" });
+    expect(() => guarded.exec("INSERT INTO retained VALUES('forbidden')")).toThrow(
+      /readonly|read.only/i,
+    );
+  } finally {
+    resetDatabaseEngineSelectionForTest();
+  }
+});
 
 it("keeps read custody after creator release and rejects late readers after retirement", () => {
   const directory = tempDirs.make("sqlite-staging-token-");

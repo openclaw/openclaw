@@ -2,6 +2,7 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { isDatabaseEnginePhysicalReadOnlyAdmission } from "./database-engine/context.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { rememberSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
@@ -71,10 +72,22 @@ export function resolveImmutableSqliteFileUri(
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */
 export function openNodeSqliteDatabase(
-  location: string,
-  options?: NodeSqliteDatabaseOptions,
+  suppliedLocation: string,
+  suppliedOptions?: NodeSqliteDatabaseOptions,
   expectedAdmissionIdentity?: string,
 ): import("node:sqlite").DatabaseSync {
+  let location = suppliedLocation;
+  let options = suppliedOptions;
+  if (
+    isDatabaseEnginePhysicalReadOnlyAdmission() &&
+    location !== ":memory:" &&
+    !(location.startsWith("file:") && /[?&]mode=memory(?:&|$)/u.test(location))
+  ) {
+    options = { ...options, readOnly: true };
+    location = location.startsWith("file:")
+      ? location.replace(/([?&])mode=rw(?:c)?(?=&|$)/u, "$1mode=ro")
+      : location;
+  }
   const sqlite = requireNodeSqlite();
   // Callers may pass file: URIs or already-namespaced paths from specialized
   // resolvers; location normalization must remain idempotent for those forms.

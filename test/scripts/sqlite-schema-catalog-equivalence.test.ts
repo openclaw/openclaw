@@ -14,6 +14,7 @@ import { extractSqliteTableSchema } from "../../src/infra/sqlite-schema-sql.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../src/state/openclaw-agent-db-contract.js";
 import { getOpenClawAgentMigrationSchema } from "../../src/state/openclaw-agent-schema-history.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../src/state/openclaw-agent-schema.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { withLegacyWorkspaceBootstrapDeferred } from "../../src/state/openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "../../src/state/openclaw-state-db-schema-v40-worker-provision-source.js";
 import {
@@ -61,6 +62,7 @@ describe("generated SQLite schema catalogs", () => {
     const registeredSql = new Set(inputs.map(({ sql }) => sql));
     const expected = [
       OPENCLAW_STATE_SCHEMA_SQL,
+      getOpenClawStatePredecessorSchema(OPENCLAW_STATE_SCHEMA_VERSION - 1),
       OPENCLAW_AGENT_SCHEMA_SQL,
       DAEMON_RUNTIME_PIN_SCHEMA_SQL,
     ];
@@ -127,7 +129,7 @@ describe("generated SQLite schema catalogs", () => {
   ] as const)(
     "keeps the pre-provision-source catalog readable after a build swap (%s)",
     (flags, hash) => {
-      const predecessor = withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL);
+      const predecessor = withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40));
       const historical = flags
         ? getOpenClawStateRuntimeSchema(
             { includeVersionLazyAdditiveTables: flags[0], includeAgentDeletionJournal: flags[1] },
@@ -147,7 +149,7 @@ describe("generated SQLite schema catalogs", () => {
     const historical = getOpenClawStateRuntimeSchema(
       options,
       withLegacyWorkspaceBootstrapDeferred(
-        withLegacyWorkerProvisionSource(OPENCLAW_STATE_SCHEMA_SQL),
+        withLegacyWorkerProvisionSource(getOpenClawStatePredecessorSchema(40)),
       ),
     );
     expect(createHash("sha256").update(historical).digest("hex")).toBe(

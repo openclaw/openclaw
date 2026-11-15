@@ -24,7 +24,9 @@ import {
   requireRepositoryWorkspaceDiskAuthority,
 } from "./session-repository-workspaces.authority.js";
 import { repositoryWorkspacePublication } from "./session-repository-workspaces.receipts.js";
+import { readRepositoryWorkspaceRecovery } from "./session-repository-workspaces.recovery.js";
 import type {
+  RepositoryWorkspaceBranchReset,
   RepositoryWorkspaceBase,
   RepositoryWorkspaceCheckpoint,
   RepositoryWorkspaceCreate,
@@ -89,6 +91,7 @@ function project(row: Selectable<SessionRepositoryWorkspaces>): SessionRepositor
           ),
         }
       : {}),
+    ...(row.recovery_json ? { recovery: readRepositoryWorkspaceRecovery(row.recovery_json) } : {}),
     revision: row.revision,
     createdAtMs: row.created_at_ms,
     updatedAtMs: row.updated_at_ms,
@@ -244,6 +247,52 @@ export function bindSessionRepositoryWorkspaceBaseInDatabase(
     return {
       base_commit: input.baseCommit,
       ...(input.baseManifestHash ? { base_manifest_hash: input.baseManifestHash } : {}),
+    };
+  });
+}
+
+/** Persist the admitted replacement SHA before dropping the lost worker checkpoint binding. */
+export function resetSessionRepositoryWorkspaceToBranchInDatabase(
+  db: EngineConnection,
+  input: RepositoryWorkspaceBranchReset,
+  nowMs: number,
+): RepositoryWorkspaceMutationResult {
+  if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(input.sourceCommit)) {
+    throw new Error("Repository recovery requires an admitted immutable source");
+  }
+  return mutate(db, input, nowMs, (current) => {
+    if (current.diskAuthority) {
+      throw new Error("Retained workspace disk is authoritative; source replacement is refused");
+    }
+    return {
+      requested_ref: input.sourceCommit,
+      base_commit: null,
+      base_manifest_hash: null,
+      checkpoint_ref: null,
+      manifest_hash: null,
+      ...(input.recovery
+        ? {
+            // Copy accepted facts from the CAS-protected row, never a caller's old snapshot.
+            recovery_json: JSON.stringify({
+              ...input.recovery,
+              atMs: nowMs,
+              // A retry before any replacement checkpoint is accepted must not erase
+              // the unavailable checkpoint's provenance with the reset row's nulls.
+              original:
+                !current.checkpointRef && current.recovery
+                  ? current.recovery.original
+                  : {
+                      revision: current.revision,
+                      baseCommit: current.baseCommit,
+                      baseManifestHash: current.baseManifestHash,
+                      checkpointRef: current.checkpointRef,
+                      manifestHash: current.manifestHash,
+                    },
+              sourceCommit: input.sourceCommit,
+              unrecoverablePrivateContent: true,
+            }),
+          }
+        : {}),
     };
   });
 }

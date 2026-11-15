@@ -139,7 +139,7 @@ function createStatementCache(client: pg.Client) {
 }
 
 function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
-  const { port, signal, url, connectTimeoutMs, lockTimeoutMs, statementTimeoutMs } = data;
+  const { port, signal, url, connectTimeoutMs, lockTimeoutMs, statementTimeoutMs, readOnly } = data;
   let schema = data.schema;
   const control = new Int32Array(signal);
   let client: pg.Client;
@@ -185,8 +185,9 @@ function attachConnection(data: BridgeWorkerData, clients: Set<() => void>) {
     await client.connect();
     await client.query(
       "SELECT set_config('lock_timeout', $1, false), " +
-        "set_config('statement_timeout', $2, false), set_config('search_path', $3, false)",
-      [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath],
+        "set_config('statement_timeout', $2, false), set_config('search_path', $3, false), " +
+        "set_config('default_transaction_read_only', $4, false)",
+      [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`, searchPath, readOnly ? "on" : "off"],
     );
     if (data.readOnly) {
       await client.query("SET default_transaction_read_only = on");

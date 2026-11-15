@@ -75,6 +75,7 @@ const workspaceSchema = z.strictObject({
   created_at_ms: time,
   updated_at_ms: time,
   disk_authority_json: z.string().nullable(),
+  recovery_json: z.string().nullable().optional().default(null),
 });
 
 async function captureClosedDependencyImage(file: string, expectedHash: string) {

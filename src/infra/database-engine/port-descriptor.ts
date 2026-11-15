@@ -16,11 +16,19 @@ export type { PortDescriptor, PortEndpoint, PortRow, PortTable } from "./port-ty
 
 export { DatabasePortDataError };
 
+/** Expected schema facts cannot admit or mutate a store. */
+export type DatabasePortDescriptorIdentity = Pick<
+  PortDescriptor,
+  "id" | "version" | "tables" | "expectedCatalog" | "fragments"
+>;
+
 export type DatabasePortProvider = {
   id: string;
   minimumPostgresVersion: number;
   /** Resolve the selected installation before loading its public port artifact. */
   requiresPluginOwner?: true;
+  /** Host-pinned expected schema facts, independent of executable plugin availability. */
+  loadIdentity?: () => Promise<DatabasePortDescriptorIdentity>;
   resolveRoots(context: {
     config: OpenClawConfig;
     stateDir: string;

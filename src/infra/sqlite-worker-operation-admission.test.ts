@@ -40,7 +40,6 @@ import {
   deferSqliteWorkerCommitReceipt,
   observeSqliteWorkerCommittedFacts as observeCommits,
   requestSqliteWorkerOperationAdmission as requestAdmission,
-  requestSqliteWorkerSchemaMaintenance as requestSchema,
   withSqliteWorkerOperationAdmission as withAdmission,
   type SqliteWorkerAdmissionRequest,
 } from "./sqlite-worker-operation-admission.js";
@@ -54,6 +53,7 @@ import {
   SqliteWorkerSlotCustody,
   readSqliteWorkerRequestCustody,
 } from "./sqlite-worker-request-custody.js";
+import { requestSqliteWorkerSchemaMaintenance as requestSchema } from "./sqlite-writer-admission-client.js";
 import { getWorkerMessageMetrics } from "./worker-message-metrics.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -979,9 +979,10 @@ it("retains native COMMIT evidence when an earlier notification fails", () => {
 it("refuses escaped continuations and captured scopes after synchronous operation exit", async () => {
   vi.resetModules();
   const duplicate = await import("./sqlite-worker-operation-admission.js");
+  const writer = await import("./sqlite-writer-admission-client.js");
   const { port1 } = channelFixture();
   const requests = vi.spyOn(port1, "postMessage");
-  const schemaRequest = () => duplicate.requestSqliteWorkerSchemaMaintenance("synthetic.sqlite");
+  const schemaRequest = () => writer.requestSqliteWorkerSchemaMaintenance("synthetic.sqlite");
   const request = () =>
     duplicate.requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
   for (const escapedRequest of [request, schemaRequest]) {

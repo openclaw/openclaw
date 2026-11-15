@@ -1,3 +1,7 @@
+import {
+  getDatabaseEngineSelection,
+  isDatabaseEngineReadOnlyAdmission,
+} from "../infra/database-engine/context.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { runPluginSharedStateWork } from "../plugins/plugin-shared-state-admission.js";
@@ -76,10 +80,24 @@ export function runOpenClawStateWorkerOperation<T>(
   options: OperationOptions & { existingOnly: boolean },
 ): Promise<T | undefined>;
 export async function runOpenClawStateWorkerOperation<T>(
-  context: OpenClawStateWorkerContext,
+  capturedContext: OpenClawStateWorkerContext,
   operation: (scope: DomainScope) => Promise<T>,
   options?: OperationOptions,
 ): Promise<T | undefined> {
+  let context = capturedContext;
+  if (
+    context.databaseEngineSelection?.access === "writer-preparation" &&
+    !isDatabaseEngineReadOnlyAdmission()
+  ) {
+    // Activation changes operation policy, never this captured source or database identity.
+    context = {
+      ...context,
+      databaseEngineSelection: {
+        ...context.databaseEngineSelection,
+        access: getDatabaseEngineSelection()?.access,
+      },
+    };
+  }
   return runPluginSharedStateWork(() =>
     runWithCapturedWorkerContext(context, async () => {
       try {

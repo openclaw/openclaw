@@ -54,6 +54,7 @@ export const databaseEngineAdapters: {
             readOnly: store.input.readOnly,
             lockTimeoutMs: POSTGRES_LOCK_TIMEOUT_MS,
             statementTimeoutMs: POSTGRES_STATEMENT_TIMEOUT_MS,
+            ...(store.input.readOnly ? { readOnly: true } : {}),
           },
         );
       } catch (error) {

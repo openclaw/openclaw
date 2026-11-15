@@ -62,10 +62,23 @@ Doctor completes recognized schema-1 databases that predate the audit ledger bef
 | 38      | Repository disk authority and the original authority of pending workspace results                                                                                                                                                                                                                                                              | Unreleased          |
 | 39      | Immutable retained-worker acquisition policy, pending pause/resume operations, and provider observations                                                                                                                                                                                                                                       | Unreleased          |
 | 40      | Original requesting authority retained with pending worker provisioning                                                                                                                                                                                                                                                                        | Unreleased          |
+| 41      | Repository source-replacement provenance and confirmed lost-worker predecessor facts                                                                                                                                                                                                                                                           | Unreleased          |
 
 Earlier beta releases first included schema 1 in `v2026.5.30-beta.1`, schema 2
 in `v2026.7.2-beta.1`, schema 3 in `v2026.7.2-beta.2`, schema 5 in
 `v2026.7.2-beta.4`, and schema 6 in `v2026.7.2-beta.5`.
+
+### State schema 41
+
+Schema 41 adds nullable `session_repository_workspaces.recovery_json` and
+`worker_session_placements.confirmed_loss_recovery_json`. Existing rows retain
+all source and placement bindings; migration does not infer a lost worker or
+replace workspace content. An authorized replacement records the original
+checkpoint provenance and admitted replacement commit before changing source.
+Exact confirmed predecessor facts let native runtimes distinguish replacement
+from reconnect without replaying work. SQLite and PostgreSQL use the same
+versioned migration and preserve the predecessor in the update capture. Restore
+the verified migration capture before downgrading.
 
 ### State schema 40
 

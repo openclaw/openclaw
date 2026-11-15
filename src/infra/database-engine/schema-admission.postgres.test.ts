@@ -9,12 +9,14 @@ import {
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
+import { withDatabaseEngineSelection } from "./context.js";
 import type { StoreSchema } from "./contract.js";
 import {
   createPostgresEngineTestFixture,
   openPostgresEngineTestStore,
 } from "./engine-store.test-support.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { resolveDatabaseFamilyEngines } from "./registry.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -28,7 +30,11 @@ const schema: StoreSchema = { id: "fixture", version: 1, sqlite: "", postgres: d
 
 function fixture(
   test: (input: {
-    open: (schema?: StoreSchema, existingVersion?: boolean) => PostgresSyncConnection;
+    open: (
+      schema?: StoreSchema,
+      existingVersion?: boolean,
+      access?: "read-only" | "writer-preparation",
+    ) => PostgresSyncConnection;
     db: PostgresSyncConnection;
     invalidate: () => void;
   }) => void,
@@ -46,6 +52,68 @@ function fixture(
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
+  it("admits existing read-only stores without migrations and PostgreSQL rejects hidden writes", () => {
+    fixture(({ db, open, invalidate }) => {
+      db.exec("INSERT INTO items (id, value) VALUES (1, 0)");
+      const read = open(schema, false, "read-only");
+      expect(read.prepare("SELECT id FROM items").all()).toEqual([{ id: 1 }]);
+      expect(() =>
+        read
+          .prepare(
+            "WITH written AS (INSERT INTO items (id, value) VALUES (2, 0) RETURNING id) SELECT * FROM written",
+          )
+          .all(),
+      ).toThrow(/read.only/i);
+      expect(db.prepare("SELECT id FROM items").all()).toEqual([{ id: 1 }]);
+      invalidate();
+      expect(() =>
+        open(
+          {
+            ...schema,
+            version: 2,
+            postgresMigrations: [
+              {
+                version: 2,
+                sql: "ALTER TABLE items ADD COLUMN other TEXT",
+                fromSchema: { postgres: ddl },
+                schema: { postgres: ddl },
+              },
+            ],
+          },
+          false,
+          "read-only",
+        ),
+      ).toThrow(/version mismatch/);
+      expect(
+        db.prepare("SELECT version FROM openclaw_schema_meta WHERE store = 'fixture'").get(),
+      ).toEqual({ version: 1 });
+    });
+  });
+
+  it("prepares future writer sockets under enforced read transactions and activates without reconnecting them", () => {
+    fixture(({ db, open }) => {
+      const future = open(schema, false, "writer-preparation");
+      const pid = future.prepare("SELECT pg_backend_pid() AS pid").get();
+      withDatabaseEngineSelection(
+        {
+          access: "writer-preparation",
+          effectiveEngines: resolveDatabaseFamilyEngines({ database: { engine: "postgres" } }),
+          postgres: { connection: connection!, schemaPrefix: "r2" },
+        },
+        () => {
+          expect(
+            future.prepare("SELECT current_setting('transaction_read_only') AS access").get(),
+          ).toEqual({ access: "on" });
+          expect(() =>
+            future.runTransaction(() => future.exec("INSERT INTO items (id, value) VALUES (3, 0)")),
+          ).toThrow(/read.only/i);
+        },
+      );
+      expect(future.prepare("SELECT pg_backend_pid() AS pid").get()).toEqual(pid);
+      future.exec("INSERT INTO items (id, value) VALUES (3, 0)");
+      expect(db.prepare("SELECT id FROM items").all()).toEqual([{ id: 3 }]);
+    });
+  });
   it("keeps migration callbacks out of worker admission snapshots", () => {
     fixture(({ open, invalidate }) => {
       invalidate();

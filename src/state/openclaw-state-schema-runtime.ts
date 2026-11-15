@@ -16,6 +16,7 @@ import { withLegacyRepositoryDiskAuthority } from "./openclaw-state-db-schema-v3
 import { withLegacyWorkerRetention } from "./openclaw-state-db-schema-v39-worker-retention.js";
 import { withLegacyStateV40Additions } from "./openclaw-state-db-schema-v40-lazy-additions.js";
 import { withLegacyWorkerProvisionSource } from "./openclaw-state-db-schema-v40-worker-provision-source.js";
+import { withLegacyWorkerLossRecovery } from "./openclaw-state-db-schema-v41-worker-loss-recovery.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 
 const runtimeSchemaCache = new Map<string, string>();
@@ -77,6 +78,7 @@ export function getOpenClawStateRuntimeSchema(
 export function getOpenClawStatePredecessorSchema(version: number): string {
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
   for (const [introduced, transform] of [
+    [41, withLegacyWorkerLossRecovery],
     [40, withLegacyWorkerProvisionSource],
     [40, withLegacyStateV40Additions],
     [39, withLegacyWorkerRetention],
