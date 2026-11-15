@@ -16,32 +16,82 @@ afterEach(() => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-/** The managed service as the service manager reports it; only its start command matters here. */
-function serviceStarting(entrypoint: string) {
+/** The managed service as the service manager reports it: a loaded, running user unit. */
+function serviceStarting(
+  entrypoint: string,
+  definition: { kind: "writable" } | { kind: "sealed"; reason: "inspection-failed" } = {
+    kind: "writable",
+  },
+) {
+  fs.mkdirSync(path.dirname(entrypoint), { recursive: true });
+  fs.writeFileSync(entrypoint, "", { flag: "a" });
   vi.spyOn(servicePlan, "isGatewayServiceManagementAllowedForUpdate").mockReturnValue(true);
   vi.spyOn(servicePlan, "readManagedGatewayServiceForUpdate").mockResolvedValue({
-    command: { programArguments: [process.execPath, entrypoint, "gateway", "--port", "18789"] },
+    // A Node service; Bun-run services are never refreshed in place.
+    command: { programArguments: ["/usr/bin/node", entrypoint, "gateway", "--port", "18789"] },
+    env: {},
+    installed: true,
+    running: true,
+    loadState: { status: "loaded" },
+    runtime: { status: "running", systemd: { managerUid: 1000 } },
+    definitionMutationCapability: definition,
+    verdict: { kind: "owned", root: path.dirname(entrypoint), refreshDefinition: true },
   } as never);
 }
 
 describe.skipIf(process.platform === "win32")("npm destination on a release link", () => {
-  it("refuses before any change when the service starts the release by its real path", async () => {
+  it("switches and leaves the rebind to the restart when the service definition can be refreshed", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     const release = fixture.addRelease("r1", "2026.11.3");
     fixture.linkTo("r1");
-    serviceStarting(path.join(release, "openclaw.mjs"));
+    serviceStarting(path.join(release, "dist", "index.js"));
 
     const destination = await inspectNpmGlobalDestination(
       fixture.slot,
       createNpmTarget(fixture.globalRoot),
     );
 
-    expect(destination.kind).toBe("foreign");
-    expect("message" in destination && destination.message).toMatch(
-      /gateway install --force.*package path/su,
-    );
+    expect(destination).toMatchObject({
+      kind: "owned",
+      releaseBoundService: {
+        releaseRoot: release,
+        inPlace: false,
+        installTarget: { packageRoot: fixture.slot },
+      },
+    });
     expect(fs.readlinkSync(fixture.slot)).toBe("../../releases/r1/lib/node_modules/openclaw");
   });
+
+  it.each([
+    ["the service definition is sealed", { kind: "sealed", reason: "inspection-failed" }, true],
+    ["the update does not restart the Gateway", { kind: "writable" }, false],
+  ] as const)(
+    "updates the selected release in place with a warning when %s",
+    async (_case, definition, restart) => {
+      const fixture = createPackageReleasePrefixFixture(dir);
+      const release = fixture.addRelease("r1", "2026.11.3");
+      fixture.linkTo("r1");
+      serviceStarting(path.join(release, "dist", "index.js"), definition);
+
+      const destination = await inspectNpmGlobalDestination(
+        fixture.slot,
+        createNpmTarget(fixture.globalRoot),
+        { restart },
+      );
+
+      expect(destination).toMatchObject({
+        kind: "owned",
+        releaseBoundService: {
+          releaseRoot: release,
+          inPlace: true,
+          installTarget: { globalRoot: path.dirname(release), packageRoot: release },
+        },
+      });
+      expect(destination.kind === "owned" && destination.releaseBoundService?.warning).toMatch(
+        /inside the release.*gateway install --force/su,
+      );
+    },
+  );
 
   it("admits a service that starts the package path", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);

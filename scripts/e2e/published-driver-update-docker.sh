@@ -9,7 +9,8 @@ set -euo pipefail
 # Follow-up updates by the candidate's own updater each add one update to the envelope.
 cell_budget=1125
 case "${OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP:-}" in
-  switch | rollback | refused) cell_budget=2025 ;;
+  switch | rollback | rebind) cell_budget=2025 ;;
+  launcher) cell_budget=2925 ;;
 esac
 CELL_DEADLINE_EPOCH_SECONDS="${CELL_DEADLINE_EPOCH_SECONDS:-$(( $(date +%s) + cell_budget ))}"
 if ! [[ "$CELL_DEADLINE_EPOCH_SECONDS" =~ ^[1-9][0-9]*$ ]]; then

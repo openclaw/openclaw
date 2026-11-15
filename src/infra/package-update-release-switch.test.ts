@@ -1,12 +1,15 @@
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as durability from "./directory-durability.js";
 import { readPackageReleaseSlotSync } from "./package-release-slot-path.js";
-import type { PackageReleaseRecord } from "./package-release-slot.js";
+import { resolvePackageReleaseStage, type PackageReleaseRecord } from "./package-release-slot.js";
 import { createPackageReleasePrefixFixture } from "./package-release-slot.test-support.js";
+import { prepareStagedPackageInstall } from "./package-update-lifecycle.js";
 import { stagePackageRelease } from "./package-update-release-switch.test-support.js";
+import { createNpmTarget } from "./package-update-steps.test-support.js";
 import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
 import { swapStagedPackageInstall } from "./package-update-swap.js";
 
@@ -236,27 +239,88 @@ describe.skipIf(process.platform === "win32")("package release switch", () => {
     ]);
   });
 
-  it("refuses a candidate with a different launcher before stopping anything", async () => {
+  it("takes the package swap when the candidate's launchers differ, and the next update adopts again", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     const previous = fixture.addRelease("r1", "2026.11.3");
     fixture.linkTo("r1");
-    const params = await stagePackageRelease(fixture, "2026.12.1");
-    const launcher = path.join(params.stage.layout.binDir, "openclaw");
-    fs.rmSync(launcher);
-    fs.symlinkSync("../lib/node_modules/openclaw/bin/run.js", launcher);
-    let stopped = false;
+    const before = snapshotTree(previous);
+    const newLauncher = "../lib/node_modules/openclaw/bin/run.js";
+    const withLauncher = async (version: string) => {
+      const params = await stagePackageRelease(fixture, version);
+      const launcher = path.join(params.stage.layout.binDir, "openclaw");
+      fs.rmSync(launcher);
+      fs.symlinkSync(newLauncher, launcher);
+      return params;
+    };
+    const params = await withLauncher("2026.12.1");
+    let stops = 0;
+    let recorded = false;
 
     const result = await swapStagedPackageInstall({
       ...params,
       beforeActivate: async () => {
-        stopped = true;
+        stops += 1;
+      },
+      onPackageRelease: () => {
+        recorded = true;
       },
     });
 
-    expect(result.status).toBe("failed");
-    expect(result.step.stderrTail).toMatch(/differs from/u);
-    expect(stopped).toBe(false);
-    expect(selected(fixture.slot)).toBe(previous);
+    expect(result.status).toBe("committed");
+    expect(result.step.exitCode).toBe(0);
+    expect(result.step.advisory?.message).toMatch(/release layout.*launcher openclaw/su);
+    expect(stops).toBe(1);
+    expect(recorded).toBe(false);
+    // The swap replaced the link with the candidate and its launcher; r1 is untouched.
+    expect(fs.lstatSync(fixture.slot).isDirectory()).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(fixture.slot, "package.json"), "utf8")),
+    ).toMatchObject({ version: "2026.12.1" });
+    expect(fs.readlinkSync(fixture.launcher)).toBe(newLauncher);
+    expect(snapshotTree(previous)).toEqual(before);
+
+    const next = await withLauncher("2026.12.2");
+    let record: PackageReleaseRecord | undefined;
+    const adopted = await swapStagedPackageInstall({
+      ...next,
+      onPackageRelease: (value) => {
+        record = value;
+      },
+    });
+    expect(adopted.status).toBe("committed");
+    expect(record?.adoption).toBe(true);
+    expect(record?.from.version).toBe("2026.12.1");
+    expect(selected(fixture.slot)).toBe(next.stage.packageRoot);
+  });
+
+  it("takes the package swap when the previous directory cannot be adopted", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    fixture.writePlainPackage("2026.11.3", "build-old");
+    const params = await stagePackageRelease(fixture, "2026.12.1");
+    const mkdir = fsp.mkdir.bind(fsp);
+    // The adoption prefix (labelled with the installed version) cannot be created.
+    vi.spyOn(fsp, "mkdir").mockImplementation(async (target, options) => {
+      if (path.basename(String(target)).startsWith("2026.11.3-")) {
+        throw Object.assign(new Error("EACCES: permission denied, mkdir"), { code: "EACCES" });
+      }
+      return await mkdir(target, options);
+    });
+    let recorded = false;
+
+    const result = await swapStagedPackageInstall({
+      ...params,
+      onPackageRelease: () => {
+        recorded = true;
+      },
+    });
+
+    expect(result.status).toBe("committed");
+    expect(result.step.advisory?.message).toMatch(/release layout.*EACCES/su);
+    expect(recorded).toBe(false);
+    expect(fs.lstatSync(fixture.slot).isDirectory()).toBe(true);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(fixture.slot, "package.json"), "utf8")),
+    ).toMatchObject({ version: "2026.12.1" });
   });
 
   it("points the link back when verification fails without a retained transaction", async () => {
@@ -280,5 +344,119 @@ describe.skipIf(process.platform === "win32")("package release switch", () => {
     expect(result.status).toBe("failed");
     expect(result.status === "failed" && result.packageRollbackVerified).toBe(true);
     expect(selected(fixture.slot)).toBe(previous);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("package release stage", () => {
+  const env = () => ({ ...process.env, OPENCLAW_STATE_DIR: path.join(dir, "state") });
+  const release = (fixture: ReturnType<typeof createPackageReleasePrefixFixture>) => ({
+    slot: fixture.slot,
+    prefix: fixture.prefix,
+    label: "2026.12.1",
+  });
+
+  /** Install a candidate into the prepared stage, as npm leaves it. */
+  function installInto(stage: NonNullable<Awaited<ReturnType<typeof prepare>>["stagedInstall"]>) {
+    fs.mkdirSync(path.join(stage.packageRoot, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stage.packageRoot, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "2026.12.1" }),
+    );
+    fs.writeFileSync(path.join(stage.packageRoot, "openclaw.mjs"), "export {};\n");
+    fs.mkdirSync(stage.layout.binDir, { recursive: true });
+    fs.symlinkSync(
+      "../lib/node_modules/openclaw/openclaw.mjs",
+      path.join(stage.layout.binDir, "openclaw"),
+    );
+  }
+  const prepare = (fixture: ReturnType<typeof createPackageReleasePrefixFixture>) =>
+    prepareStagedPackageInstall(
+      createNpmTarget(fixture.globalRoot),
+      "openclaw",
+      undefined,
+      env(),
+      release(fixture),
+    );
+
+  it("stages beside the package path when releases/ cannot be created, then swaps", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    fixture.writePlainPackage("2026.11.3");
+    // Something that is not a directory occupies the releases path.
+    fs.writeFileSync(path.join(fixture.prefix, "releases"), "");
+
+    const prepared = await prepare(fixture);
+    expect(prepared.failedStep).toBeNull();
+    const stage = prepared.stagedInstall!;
+    expect(stage.release).toBeUndefined();
+    expect(path.dirname(stage.prefix)).toBe(fixture.globalRoot);
+    installInto(stage);
+
+    const result = await swapStagedPackageInstall({
+      installTarget: createNpmTarget(fixture.globalRoot),
+      packageName: "openclaw",
+      stage,
+    });
+    expect(result.status).toBe("committed");
+    expect(result.step.advisory?.message).toMatch(/release layout.*could not be created/su);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(fixture.slot, "package.json"), "utf8")),
+    ).toMatchObject({ version: "2026.12.1" });
+  });
+
+  it("updates the selected release in place behind the link when the install target names it", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    const releaseRoot = fixture.addRelease("r1", "2026.11.3");
+    fixture.linkTo("r1");
+    // A service bound to the release path that this run cannot rebind selects the release itself.
+    const target = {
+      ...createNpmTarget(fixture.globalRoot),
+      globalRoot: path.dirname(releaseRoot),
+      packageRoot: releaseRoot,
+    };
+    expect(
+      resolvePackageReleaseStage({
+        installTarget: target,
+        packageName: "openclaw",
+        installSpec: "openclaw@2026.12.1",
+        env: env(),
+      }),
+    ).toBeUndefined();
+    const prepared = await prepareStagedPackageInstall(target, "openclaw", undefined, env());
+    const stage = prepared.stagedInstall!;
+    installInto(stage);
+
+    const result = await swapStagedPackageInstall({
+      installTarget: target,
+      packageName: "openclaw",
+      stage,
+    });
+
+    expect(result.status).toBe("committed");
+    expect(fs.readlinkSync(fixture.slot)).toBe("../../releases/r1/lib/node_modules/openclaw");
+    expect(
+      JSON.parse(fs.readFileSync(path.join(fixture.slot, "package.json"), "utf8")),
+    ).toMatchObject({ version: "2026.12.1" });
+  });
+
+  it("stages beside the package path when releases/ is on another filesystem", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    fixture.writePlainPackage("2026.11.3");
+    const stat = fsp.stat.bind(fsp);
+    // The release directory reports another device than the package path's parent.
+    vi.spyOn(fsp, "stat").mockImplementation(async (target, options) => {
+      const value = await stat(target, options as never);
+      return String(target).includes(`${path.sep}releases${path.sep}`)
+        ? Object.assign(value, { dev: value.dev + 1 })
+        : value;
+    });
+
+    const prepared = await prepare(fixture);
+    vi.restoreAllMocks();
+    const stage = prepared.stagedInstall!;
+    expect(stage.release).toBeUndefined();
+    expect(stage.releaseUnavailable).toMatch(/another filesystem/u);
+    expect(path.dirname(stage.prefix)).toBe(fixture.globalRoot);
+    // The allocated release directory held nothing and is gone.
+    expect(fs.readdirSync(path.join(fixture.prefix, "releases"))).toEqual([]);
   });
 });

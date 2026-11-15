@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { syncDirectoryIfSupported } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
+import { formatErrorMessage } from "./errors.js";
 import {
   packageReleaseGlobalRoot,
   PACKAGE_RELEASES_DIR,
@@ -98,6 +99,36 @@ export async function createPackageReleasePrefix(prefix: string, label: string):
   );
   await fs.mkdir(releasePrefix);
   return releasePrefix;
+}
+
+/**
+ * Allocate this update's release stage, or say why the release layout cannot be
+ * used for it. Adoption renames the package directory into `releases/`, so the
+ * releases must be on the package path's filesystem.
+ */
+export async function createPackageReleaseStage(
+  release: PackageReleaseTarget & { label: string },
+  globalRoot: string,
+): Promise<{ prefix: string } | { unavailable: string }> {
+  let prefix: string | undefined;
+  try {
+    prefix = await createPackageReleasePrefix(release.prefix, release.label);
+    const [stage, slotParent] = await Promise.all([fs.stat(prefix), fs.stat(globalRoot)]);
+    if (stage.dev === slotParent.dev) {
+      return { prefix };
+    }
+    await fs.rm(prefix, { recursive: true, force: true });
+    return {
+      unavailable: `${path.join(release.prefix, PACKAGE_RELEASES_DIR)} is on another filesystem than ${globalRoot}`,
+    };
+  } catch (error) {
+    if (prefix) {
+      await fs.rm(prefix, { recursive: true, force: true }).catch(() => {});
+    }
+    return {
+      unavailable: `release directories could not be created in ${path.join(release.prefix, PACKAGE_RELEASES_DIR)}: ${formatErrorMessage(error)}`,
+    };
+  }
 }
 
 function assertSameLink(
@@ -205,15 +236,6 @@ export async function adoptPackageReleaseSlot(params: {
   let temporary: string | undefined;
   try {
     await fs.mkdir(releaseGlobalRoot, { recursive: true });
-    const [slotStat, releaseStat] = await Promise.all([
-      fs.lstat(params.slot, { bigint: true }),
-      fs.stat(releaseGlobalRoot, { bigint: true }),
-    ]);
-    if (slotStat.dev !== releaseStat.dev) {
-      throw new Error(
-        `Package releases at ${params.releasePrefix} are on another filesystem than ${params.slot}; the installation was left unchanged.`,
-      );
-    }
     await sweepPackageReleaseTemporaryLinks(globalRoot);
     const created = await createTemporaryLink(globalRoot, target);
     temporary = created.temporary;
@@ -252,10 +274,14 @@ export async function adoptPackageReleaseSlot(params: {
 }
 
 /**
- * The candidate's launchers must be the links the prefix already has, so that
- * nothing outside the release changes when the link moves.
+ * The first candidate launcher that is not the link the prefix already has. A
+ * release switch changes nothing outside the release, so a difference needs the
+ * swap, which replaces launchers.
  */
-export async function assertPackageReleaseLaunchers(releaseBinDir: string, binDir: string) {
+export async function findPackageReleaseLauncherDifference(
+  releaseBinDir: string,
+  binDir: string,
+): Promise<string | null> {
   const names = (await fs.readdir(releaseBinDir).catch(ignoreMissingPath)) ?? [];
   for (const name of names) {
     const [candidate, installed] = await Promise.all([
@@ -263,11 +289,10 @@ export async function assertPackageReleaseLaunchers(releaseBinDir: string, binDi
       fs.readlink(path.join(binDir, name)).catch(() => null),
     ]);
     if (candidate === null || candidate !== installed) {
-      throw new Error(
-        `Launcher ${name} in the candidate (${candidate ?? "not a link"}) differs from ${path.join(binDir, name)} (${installed ?? "missing or not a link"}); the release switch was refused before any change. Install this version with \`npm install -g\` into this prefix, which replaces the release link with a directory; the next update converts it again.`,
-      );
+      return `launcher ${name} in the candidate (${candidate ?? "not a link"}) differs from ${path.join(binDir, name)} (${installed ?? "missing or not a link"})`;
     }
   }
+  return null;
 }
 
 /** The prefixes `install-cli.sh` and the durable service copy own. */

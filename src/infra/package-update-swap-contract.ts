@@ -52,6 +52,8 @@ export type StagedPackageInstall = {
   activationCustody?: boolean;
   /** Set when the stage is a release behind the package link of this prefix. */
   release?: PackageReleaseTarget;
+  /** Why this update could not use the release layout; reported by the swap that replaces it. */
+  releaseUnavailable?: string;
 };
 
 export type StagedPackageSwapParams = {

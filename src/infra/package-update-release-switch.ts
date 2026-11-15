@@ -7,9 +7,9 @@ import { packageReleaseGlobalRoot } from "./package-release-slot-path.js";
 import {
   adoptPackageReleaseSlot,
   assertPackageReleaseIdentity,
-  assertPackageReleaseLaunchers,
   capturePackageReleaseSlot,
   createPackageReleasePrefix,
+  findPackageReleaseLauncherDifference,
   packageReleaseLinkTarget,
   readPackageReleaseIdentity,
   switchPackageReleaseLink,
@@ -32,14 +32,48 @@ import type { UpdateStepResult } from "./update-step-result.js";
 import { SystemPackageOwnershipError } from "./update-system-package-ownership.js";
 
 /**
+ * The release layout is an optimisation. When it cannot be used for this update,
+ * `swap` installs the same stage, and the step records why; the next update tries
+ * the layout again.
+ */
+export async function installStagedPackage(
+  params: StagedPackageSwapParams,
+  swap: (params: StagedPackageSwapParams) => Promise<StagedPackageSwapResult>,
+): Promise<StagedPackageSwapResult> {
+  if (params.stage.release) {
+    const switched = await switchStagedPackageRelease(params);
+    if (switched.status !== "unavailable") {
+      return switched;
+    }
+    delete params.stage.release;
+    params.stage.releaseUnavailable = switched.reason;
+  }
+  const unavailable = params.stage.releaseUnavailable;
+  const result = await swap(params);
+  if (unavailable) {
+    const warning = `The release layout was not used for this update (${unavailable}); the package was replaced in place instead. The next update tries the release layout again.`;
+    const { step } = result;
+    step.warnings = [warning, ...(step.warnings ?? [])];
+    if (step.exitCode === 0) {
+      step.advisory = {
+        kind: "recoverable-maintenance",
+        message: [warning, step.advisory?.message].filter(Boolean).join("\n"),
+      };
+    }
+  }
+  return result;
+}
+
+/**
  * Activates a staged release by repointing the package link. The previous
  * release is never written, so rollback points the link back after checking the
  * previous release against its recorded identity. A plain package directory is
- * first adopted as the previous release.
+ * first adopted as the previous release. Returns `unavailable`, with nothing
+ * stopped or changed, when the layout cannot be used for this update.
  */
-export async function switchStagedPackageRelease(
+async function switchStagedPackageRelease(
   params: StagedPackageSwapParams,
-): Promise<StagedPackageSwapResult> {
+): Promise<StagedPackageSwapResult | { status: "unavailable"; reason: string }> {
   const startedAt = Date.now();
   const release = params.stage.release;
   if (!release) {
@@ -92,34 +126,26 @@ export async function switchStagedPackageRelease(
     }
   };
 
+  // The layout is an optimisation: anything that rules it out for this update is
+  // found before the Gateway stops, and the swap installs the candidate instead.
+  assertCurrent();
+  let plan: Awaited<ReturnType<typeof planSwitch>>;
+  try {
+    plan = await planSwitch();
+  } catch (error) {
+    if (adoptionPrefix) {
+      await removePackageUpdatePath(adoptionPrefix);
+    }
+    return { status: "unavailable", reason: formatErrorMessage(error) };
+  }
+  if (typeof plan === "string") {
+    return { status: "unavailable", reason: plan };
+  }
+  const { captured, candidate, previousRoot, record } = plan;
+
   try {
     assertCurrent();
     params.reserveInstallSlot?.(slot);
-    // Nothing outside the release may change, so the launchers must already match.
-    await assertPackageReleaseLaunchers(
-      params.stage.layout.binDir,
-      path.join(release.prefix, "bin"),
-    );
-    const captured = await capturePackageReleaseSlot(slot);
-    const candidate = await readPackageReleaseIdentity(candidateRoot);
-    if (captured.kind === "directory") {
-      adoptionPrefix = await createPackageReleasePrefix(
-        release.prefix,
-        captured.release.version ?? "adopted",
-      );
-      await fs.mkdir(packageReleaseGlobalRoot(adoptionPrefix), { recursive: true });
-    }
-    // Where the previous release lives once it is a release; until adoption, the directory itself.
-    const previousRoot = adoptionPrefix
-      ? path.join(packageReleaseGlobalRoot(adoptionPrefix), path.basename(slot))
-      : captured.release.path;
-    previous = captured.release;
-    const record = UpdateRunPackageReleaseSchema.parse({
-      slot,
-      from: { ...previous, path: previousRoot },
-      to: candidate,
-      ...(adoptionPrefix ? { adoption: true } : {}),
-    });
     const replayLocalOverrides = await preparePackageSwapLocalOverrides({
       ...params,
       hadPackage: true,
@@ -150,7 +176,7 @@ export async function switchStagedPackageRelease(
         assertCurrent,
       });
       adoptionPrefix = undefined;
-      previous = { ...previous, path: adopted.releaseRoot };
+      previous = { ...previous!, path: adopted.releaseRoot };
       selectedLink = adopted;
     } else {
       selectedLink = captured;
@@ -204,6 +230,42 @@ export async function switchStagedPackageRelease(
       errors.push(...(await restorePrevious(assertCurrent)));
     }
     return results.failed(slot, error, errors, retained ? false : packageRollbackVerified);
+  }
+
+  async function planSwitch() {
+    // Nothing outside the release changes, so the launchers must already match.
+    const launcherDifference = await findPackageReleaseLauncherDifference(
+      params.stage.layout.binDir,
+      path.join(release!.prefix, "bin"),
+    );
+    if (launcherDifference) {
+      return launcherDifference;
+    }
+    const slotCapture = await capturePackageReleaseSlot(slot);
+    const candidateIdentity = await readPackageReleaseIdentity(candidateRoot);
+    if (slotCapture.kind === "directory") {
+      adoptionPrefix = await createPackageReleasePrefix(
+        release!.prefix,
+        slotCapture.release.version ?? "adopted",
+      );
+      await fs.mkdir(packageReleaseGlobalRoot(adoptionPrefix), { recursive: true });
+    }
+    // Where the previous release lives once it is a release; until adoption, the directory itself.
+    const previousPath = adoptionPrefix
+      ? path.join(packageReleaseGlobalRoot(adoptionPrefix), path.basename(slot))
+      : slotCapture.release.path;
+    previous = slotCapture.release;
+    return {
+      captured: slotCapture,
+      candidate: candidateIdentity,
+      previousRoot: previousPath,
+      record: UpdateRunPackageReleaseSchema.parse({
+        slot,
+        from: { ...previous, path: previousPath },
+        to: candidateIdentity,
+        ...(adoptionPrefix ? { adoption: true } : {}),
+      }),
+    };
   }
 
   async function collect(): Promise<string[]> {

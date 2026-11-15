@@ -8,7 +8,7 @@ import {
   PackageLifecycleOwnershipError,
   type PackageLifecycleScript,
 } from "./package-lifecycle.js";
-import { createPackageReleasePrefix, type PackageReleaseTarget } from "./package-release-slot.js";
+import { createPackageReleaseStage, type PackageReleaseTarget } from "./package-release-slot.js";
 import { classifyPackageUpdatePermissionFailure } from "./package-update-manager-preflight.js";
 import type { StagedPackageInstall } from "./package-update-swap-contract.js";
 import { mergePathPrepend } from "./path-prepend.js";
@@ -123,6 +123,7 @@ export async function prepareStagedPackageInstall(
     let native: StagedPackageInstall["native"];
     let prefix: string;
     let layout: StagedPackageInstall["layout"];
+    let releaseUnavailable: string | undefined;
     if (nativeOptions) {
       const prepared = await prepareNativePackageStage({
         installTarget,
@@ -146,16 +147,24 @@ export async function prepareStagedPackageInstall(
       }
       await fs.mkdir(targetLayout.globalRoot, { recursive: true });
       // A release is installed where it will stay; the link switch moves nothing.
+      const releaseStage = release
+        ? await createPackageReleaseStage(release, targetLayout.globalRoot)
+        : undefined;
+      if (releaseStage && "unavailable" in releaseStage) {
+        releaseUnavailable = releaseStage.unavailable;
+      }
       // Active stages must stay outside cleanupGlobalRenameDirs' disposable ".openclaw-" namespace.
-      prefix = release
-        ? await createPackageReleasePrefix(release.prefix, release.label)
-        : await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
+      prefix =
+        releaseStage && "prefix" in releaseStage
+          ? releaseStage.prefix
+          : await fs.mkdtemp(path.join(targetLayout.globalRoot, ".openclaw.update-stage-"));
       layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
     }
     // Isolated pnpm resolves its newly created owner after installation.
     const packageRoot = path.join(layout.globalRoot, packageName);
+    const releaseStaged = release !== undefined && !releaseUnavailable;
     // Release collection owns an unselected release; orphan stage cleanup does not.
-    if (!native && !release) {
+    if (!native && !releaseStaged) {
       await recordManagedUpdatePackageStage({ prefix, packageRoot }, env).catch(
         (error: unknown) => {
           console.warn(
@@ -175,7 +184,10 @@ export async function prepareStagedPackageInstall(
           packageRoot,
         },
         ...(native ? { native } : {}),
-        ...(release && !native ? { release: { slot: release.slot, prefix: release.prefix } } : {}),
+        ...(releaseStaged && release && !native
+          ? { release: { slot: release.slot, prefix: release.prefix } }
+          : {}),
+        ...(releaseUnavailable ? { releaseUnavailable } : {}),
       },
       failedStep: null,
     };

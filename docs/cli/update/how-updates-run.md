@@ -1587,12 +1587,23 @@ dies there, `openclaw` cannot start, the old package is intact under
 names it. Rename that link onto `lib/node_modules/openclaw` to restore the
 installation, then run the update again.
 
-The switch refuses before stopping the Gateway when the new release's `bin`
-launchers are not the links the prefix already has, and when the Gateway
-service starts a path inside a release instead of the package path (an older
-OpenClaw can write that when it reinstalls the service through the link). The
-refusal names the `openclaw gateway install --force` command that binds the
-service to the package path. npm global prefixes you
+The release layout is an optimisation, and an update never fails because it
+cannot be used. When the new release's `bin` launchers are not the links the
+prefix already has, when `releases/` cannot be created or is on another
+filesystem than the package path, or when the installed package cannot be read
+as a release, the update finds this before it stops the Gateway and replaces
+the package path with the swap described above instead. The update result
+carries a warning that names the reason, and the next update tries the release
+layout again.
+
+When the Gateway service starts a path inside a release instead of the package
+path (an older OpenClaw can write that when it reinstalls the service through
+the link), the update switches releases and its restart reinstalls the service
+against the package path. When the update cannot rewrite the service definition,
+or runs with `--no-restart`, it replaces the selected release in place, so the
+Gateway still starts the new version, and warns with the
+`openclaw gateway install --force` command that binds the service to the
+package path. npm global prefixes you
 manage yourself, pnpm, Bun, Git checkouts, and Windows keep the swap described
 above. A link to a checkout made with `npm link` is not a release and stays on
 the swap. A manual `npm install -g` into an owned prefix replaces the link with

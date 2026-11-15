@@ -35,7 +35,7 @@ import {
   createNpmPackageRootLinkLifecycle,
   verifyRetainedNpmRootRecovery,
 } from "./package-update-npm-root.js";
-import { switchStagedPackageRelease } from "./package-update-release-switch.js";
+import { installStagedPackage } from "./package-update-release-switch.js";
 import {
   PackageUpdateActivationError,
   type PackageUpdateTransaction,
@@ -64,12 +64,13 @@ import { SystemPackageOwnershipError } from "./update-system-package-ownership.j
 
 export { removePackageUpdatePath } from "./package-update-filesystem.js";
 
-export async function swapStagedPackageInstall(
+/** Install a verified stage: the release switch where it can be used, otherwise the swap below. */
+export const swapStagedPackageInstall = (params: StagedPackageSwapParams) =>
+  installStagedPackage(params, swapStagedPackageDirectory);
+
+async function swapStagedPackageDirectory(
   params: StagedPackageSwapParams,
 ): Promise<StagedPackageSwapResult> {
-  if (params.stage.release) {
-    return await switchStagedPackageRelease(params);
-  }
   const startedAt = Date.now();
   let activePackageRoot = params.installTarget.packageRoot;
   const native = params.stage.native;
