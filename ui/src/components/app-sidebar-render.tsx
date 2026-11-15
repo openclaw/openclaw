@@ -2,7 +2,12 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { titleForRoute } from "../app-navigation.ts";
-import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
+import {
+  isRouteId,
+  pluginTabLocation,
+  pluginTabKey,
+  isSessionRouteId,
+} from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import type { NativeGateway, NativeGatewaysSnapshot } from "../app/native-gateways.runtime.ts";
@@ -78,6 +83,16 @@ function railSessionsItem(host: AppSidebarRenderHost) {
         host.onExitSettings();
       } else if (!isMobileNavLayout() && host.navigationCollapsed) {
         host.onToggleSidebar?.();
+      }
+      // Off a session page, Sessions returns to the session last open; the mobile drawer
+      // closes on navigation, so there it only opens the list.
+      if (!host.onExitSettings && !isMobileNavLayout() && !isSessionRouteId(host.activeRouteId)) {
+        if (host.sessionKey) {
+          // Its preferred face, as choosing it in the list would open it.
+          host.selectSession(host.sessionKey);
+        } else {
+          host.onNavigate?.("chat");
+        }
       }
       host.invalidate();
     },
