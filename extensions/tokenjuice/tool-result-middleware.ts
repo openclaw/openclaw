@@ -66,6 +66,10 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
   });
 
   return async (event) => {
+    // Code Mode pairs code and command aliases; it is not a shell result.
+    if (event.toolName === "exec" && typeof event.args.code === "string") {
+      return undefined;
+    }
     const current = event.result;
     const workdir = event.args.workdir;
     const cwd = event.cwd?.trim()
@@ -73,23 +77,36 @@ export function createTokenjuiceAgentToolResultMiddleware(): AgentToolResultMidd
       : typeof workdir === "string" && workdir.trim()
         ? workdir
         : process.cwd();
+    const details = normalizeDetails(event, current);
     const next = await handler?.(
       {
         toolName: event.toolName,
         input: event.args,
         content: current.content,
-        details: normalizeDetails(event, current),
+        details,
         isError: event.isError,
       },
       { cwd },
     );
-    return next
-      ? {
-          result: Object.assign({}, current, {
-            content: next.content ?? current.content,
-            details: next.details ?? current.details,
-          }),
-        }
-      : undefined;
+    if (!next) {
+      return undefined;
+    }
+    const nextDetails = next.details ?? details;
+    return {
+      result: Object.assign({}, current, {
+        content: next.content ?? current.content,
+        // Code Mode consumes shell details; mirror only the transformed text.
+        details:
+          next.content && isRecord(nextDetails)
+            ? {
+                ...nextDetails,
+                aggregated: next.content
+                  .filter((block) => block.type === "text")
+                  .map((block) => block.text)
+                  .join("\n"),
+              }
+            : nextDetails,
+      }),
+    };
   };
 }
