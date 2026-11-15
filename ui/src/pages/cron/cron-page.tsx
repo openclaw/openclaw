@@ -5,6 +5,11 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import {
+  automationsSidebarShown,
+  openedCronJob,
+  setOpenedCronJob,
+} from "../../lib/cron/automations-navigation.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -112,6 +117,14 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
+          sidebarListsJobs={!pageHeader().filtered && automationsSidebarShown()}
+          onClosePanel={() => {
+            // Closing the automation leaves Automations on its empty state for this tab.
+            viewProps().onClosePanel();
+            const context = props.page.context();
+            setOpenedCronJob(context.gateway, null);
+            context.replace("cron", { search: "" });
+          }}
           canManageJob={canPresentJob}
           canCreate={canPresentCreate()}
           phoneLayout={phoneList()}
@@ -134,9 +147,17 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   createEffect(
     () => props.routeSearch ?? "",
     (search) => {
+      const route = resolveCronRouteData(search);
+      // Returning to Automations in this tab reopens the automation left open.
+      const opened = openedCronJob(context.gateway);
+      if (!search && opened) {
+        context.replace("cron", { search: `?job=${encodeURIComponent(opened)}` });
+        return;
+      }
+      setOpenedCronJob(context.gateway, route.jobId);
       page.setRouteSearch(search);
       // `?new` is the sidebar's New automation entry.
-      if (resolveCronRouteData(search).create) {
+      if (route.create) {
         page.actions.onOpenCreate();
       }
     },
