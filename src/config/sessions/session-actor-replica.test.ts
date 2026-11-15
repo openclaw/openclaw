@@ -296,7 +296,7 @@ it("keeps transcript replacement charges within the shared byte and entry budget
       retainText(cell.state, "x".repeat(characters));
     try {
       const first = create(false, true);
-      const second = create(true);
+      const second = create(true, true);
       const third = create();
       const firstTranscript = retain(first, 1024 * 1024);
       retain(second, 1024 * 1024);
@@ -313,7 +313,10 @@ it("keeps transcript replacement charges within the shared byte and entry budget
         },
       };
       retainSessionActorTranscriptReplica(first.state, grown);
-      expect(readSessionActorTranscriptReplica(second.state)).toBeUndefined();
+      expect([
+        readSessionActorTranscriptReplica(second.state),
+        second.replica.beginCommand().preimage?.entry,
+      ]).toEqual([undefined, second.state.entry]);
       expect(readSessionActorTranscriptReplica(third.state)).toBe(thirdTranscript);
       expect(readSessionActorTranscriptReplica(first.state)).toBe(grown);
       retain(first, 512 * 1024);
