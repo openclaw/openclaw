@@ -106,6 +106,8 @@ suite.define(() => {
             );
           };
           await capture("1-ask-name");
+          // Listening early turns on chooser interception well before the keypress that needs it.
+          page.on("filechooser", () => {});
           await name.fill("Sam Rivera");
           await name.press("Enter");
           await gateway.waitForRequest("users.setDisplayName", {
@@ -118,9 +120,57 @@ suite.define(() => {
           const upload = step.getByRole("button", { name: "Upload photo", exact: true });
           // The button stays disabled until the name save settles.
           await expect.poll(() => upload.isEnabled()).toBe(true);
+          await page.evaluate(() => {
+            const w = window as unknown as { __dbg: string[] };
+            w.__dbg = [];
+            const d = (e: Element | null) =>
+              e
+                ? e.tagName +
+                  "." +
+                  (e as HTMLElement).className +
+                  ":" +
+                  (e.textContent ?? "").slice(0, 20) +
+                  (e.isConnected ? "" : "(detached)")
+                : "null";
+            document.addEventListener(
+              "focusin",
+              (e) => w.__dbg.push("focusin " + d(e.target as Element)),
+              true,
+            );
+            document.addEventListener(
+              "focusout",
+              (e) => w.__dbg.push("focusout " + d(e.target as Element)),
+              true,
+            );
+            document.addEventListener(
+              "keydown",
+              (e) => w.__dbg.push("keydown " + e.key + " @" + d(e.target as Element)),
+              true,
+            );
+            document.addEventListener(
+              "click",
+              (e) => w.__dbg.push("click @" + d(e.target as Element) + " trusted=" + e.isTrusted),
+              true,
+            );
+          });
           await upload.focus();
-          const chooser = page.waitForEvent("filechooser");
+          const chooser = page.waitForEvent("filechooser", { timeout: 4000 }).catch(() => null);
           await page.keyboard.press("Enter");
+          await page.waitForTimeout(1500);
+          await writeFile(
+            "/tmp/mw-dbg-" + viewport.width + "-" + Date.now() + ".json",
+            JSON.stringify(
+              await page.evaluate(() => ({
+                log: (window as unknown as { __dbg: string[] }).__dbg,
+                active: document.activeElement?.tagName + "." + document.activeElement?.className,
+                steps: document.querySelectorAll(".openclaw-id-welcome-step").length,
+                btn: Array.from(document.querySelectorAll(".openclaw-id-welcome-step button")).map(
+                  (b) => b.textContent + ":" + (b as HTMLButtonElement).disabled,
+                ),
+              })),
+            ),
+          );
+          if (!(await chooser)) throw new Error("no chooser");
           await chooser;
           await step.getByRole("button", { name: "Not now", exact: true }).click();
           await composer.first().waitFor();
