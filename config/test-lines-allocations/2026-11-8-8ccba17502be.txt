@@ -1,0 +1,5 @@
+43
+# LOCAL 2026.11.8 row 86; source 8ccba17502be656770e594fdd38f9fb4e85c545c.
+# Binds host callbacks at current execution scope rather than retaining first warm-transport turn context. Scope limits: Synthetic warm transport context, not actual CLI subprocess. Parent personal sibling Codex read required before claiming shared Codex compatibility.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
