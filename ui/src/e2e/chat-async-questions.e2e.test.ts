@@ -90,7 +90,7 @@ suite.define(() => {
     });
   });
 
-  it("keeps the docked question and composer within a 390 px viewport", async () => {
+  it("keeps the expanded question and restored composer within a 390 px viewport", async () => {
     const width = 390;
     await suite.withPage(
       { viewport: { width: 1440, height: 1200 }, colorScheme: "dark", reducedMotion: "reduce" },
@@ -104,21 +104,25 @@ suite.define(() => {
         const desktop = await panel.boundingBox();
         expect(desktop).not.toBeNull();
         await page.setViewportSize({ width, height: 844 });
-        const assertDock = async () => {
+        const assertDock = async (expanded = true) => {
           await expectBrowser(panel).toBeInViewport({ ratio: 1 });
-          await expectBrowser(composer).toBeInViewport({ ratio: 1 });
-          const questionBox = (await panel.boundingBox())!;
-          const composerBox = (await composer.boundingBox())!;
-          expect(questionBox.x).toBeCloseTo(composerBox.x, 0);
-          expect(questionBox.width).toBeCloseTo(composerBox.width, 0);
-          expect(questionBox.y + questionBox.height).toBeLessThanOrEqual(composerBox.y);
+          if (expanded) {
+            await expectBrowser(composer).toBeHidden();
+          } else {
+            await expectBrowser(composer).toBeInViewport({ ratio: 1 });
+            const questionBox = (await panel.boundingBox())!;
+            const composerBox = (await composer.boundingBox())!;
+            expect(questionBox.x).toBeCloseTo(composerBox.x, 0);
+            expect(questionBox.width).toBeCloseTo(composerBox.width, 0);
+            expect(questionBox.y + questionBox.height).toBeLessThanOrEqual(composerBox.y);
+          }
           expect(
             await page.evaluate(() => document.documentElement.scrollWidth),
           ).toBeLessThanOrEqual(width);
         };
         await assertDock();
         await panel.getByRole("button", { name: "Collapse question" }).click();
-        await assertDock();
+        await assertDock(false);
         await expectBrowser(panel).toContainText("1 unanswered question");
         await panel.getByRole("button", { name: "Expand question" }).click();
         await expectBrowser(panel).not.toHaveClass(/chat-question-panel--collapsed/);
@@ -182,6 +186,7 @@ suite.define(() => {
           await card.getByRole("radio", { name: /Engineers/ }).getAttribute("aria-checked"),
         ).toBe("true");
         await expectRequestCountStable(gateway, "chat.send", 0);
+        await card.getByRole("button", { name: "Collapse question", exact: true }).click();
         await page.locator(".chat-group.user .chat-bubble").hover();
         await page
           .locator(".chat-group.user")
@@ -193,6 +198,7 @@ suite.define(() => {
         await expect.poll(() => composerReply.textContent()).toContain(replyMessage.content);
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         await composer.fill("Keep this separate composer draft.");
+        await card.getByRole("button", { name: "Expand question", exact: true }).click();
         const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
         await custom.fill("/stop is an example for the whole team");
         expect(
@@ -365,9 +371,10 @@ suite.define(() => {
       expect(await initialExpand.textContent()).toContain("1 unanswered question");
       expect(await card.getByRole("textbox").count()).toBe(0);
       expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await composer.inputValue()).toBe("Continue researching while I decide.");
       await initialExpand.click();
       await card.getByText(title, { exact: true }).waitFor();
-      expect(await composer.inputValue()).toBe("Continue researching while I decide.");
+      await expectBrowser(composer).toBeHidden();
       const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
       await custom.fill("Readers new to the project");
       await card.getByRole("button", { name: "Collapse question", exact: true }).click();
@@ -404,7 +411,7 @@ suite.define(() => {
       await card.getByRole("button", { name: "Next", exact: true }).click();
       await card.getByText(title, { exact: true }).waitFor();
       expect(await custom.inputValue()).toBe("Readers new to the project");
-      expect(await composer.isVisible()).toBe(true);
+      await expectBrowser(composer).toBeHidden();
       await card.getByRole("button", { name: "Previous", exact: true }).click();
       await card.getByText(blockingTitle, { exact: true }).waitFor();
       const answers = { answers: { destination: ["Project notes"] } };

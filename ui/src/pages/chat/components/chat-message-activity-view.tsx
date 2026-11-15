@@ -60,7 +60,7 @@ function prepareActivityGroup(
   if (!data) {
     return undefined;
   }
-  const { firstGroup, entries, toolContexts, activityKeys, activity, representedActivity } = data;
+  const { firstGroup, entries, toolContexts, activityKeys, representedActivity } = data;
   const cardGroups = source?.cardGroups ?? data.cardGroups;
   const selectedCards = new Set<ToolCard>();
   if (source) {
@@ -96,11 +96,6 @@ function prepareActivityGroup(
         .map((item) => [activityKeys.get(item)!, item]),
     ).values(),
   ];
-  const headline = selectActivityHeadline(
-    currentActivity,
-    preparedByCard,
-    opts.subagents?.subagentSessions,
-  );
   const activityKey = source?.key ?? firstGroup.key;
   const activityDisclosureId = `activity:${activityKey}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(activityKey).toString(16)}`;
@@ -146,6 +141,12 @@ function prepareActivityGroup(
         (!opts.activityRunId ||
           entries.some(({ message }) => transcriptRunId(message) === opts.activityRunId)),
       );
+  const rawHeadlineActivity = activeGroup && visibleActivity.length === 0 ? summaryActivity : [];
+  const headline = selectActivityHeadline(
+    currentActivity.length ? currentActivity : rawHeadlineActivity,
+    summaryByCard,
+    opts.subagents?.subagentSessions,
+  );
   const codeExecutions = new Set<string>();
   const executedCommands = new Set<string>();
   for (const card of cards) {
@@ -257,12 +258,15 @@ function prepareActivityGroup(
     resolveHeadline: (key: string) => {
       // A displayed operation keeps its current outcome when its execution
       // container disappears from the visual group after children arrive.
-      const recorded = activity.findLast(
-        (item) => activeRunActivity.has(item) && (item.toolCallId ?? item.itemId) === key,
-      );
+      const matches = (item: ReturnType<typeof readPreparedActivity>[number]) =>
+        activeRunActivity.has(item) && (item.toolCallId ?? item.itemId) === key;
+      const recorded =
+        visibleActivity.findLast(matches) ??
+        [...preparedByCard.values()].findLast(matches) ??
+        rawHeadlineActivity.findLast((item) => (item.toolCallId ?? item.itemId) === key);
       return selectActivityHeadline(
         recorded ? [recorded] : [],
-        preparedByCard,
+        summaryByCard,
         opts.subagents?.subagentSessions,
       );
     },
@@ -301,6 +305,7 @@ function ActivityGroupBody(props: {
   renderEntries: () => JSX.Element;
   inline?: boolean;
   liveBubble?: boolean;
+  headlinePresentation?: ReturnType<typeof createActivityHeadlinePresentation>;
 }) {
   let disclosureContent: HTMLSpanElement | undefined;
   const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
@@ -312,28 +317,9 @@ function ActivityGroupBody(props: {
     compact() &&
     (props.liveBubble ??
       props.groups.some((group) => group.key === props.options.bubbleActivityGroupKey));
-  const presentation = createActivityHeadlinePresentation({
-    get scope() {
-      return JSON.stringify([
-        props.options.sessionKey,
-        props.options.connectionEpoch,
-        props.options.activityRunId,
-        state().activityDisclosureId,
-      ]);
-    },
-    get activity() {
-      return state().activityExpanded ? undefined : state().headline;
-    },
-    get resolveActivity() {
-      return state().resolveHeadline;
-    },
-    get active() {
-      return state().activeGroup && !state().activityExpanded && !exposed();
-    },
-  });
   return (
     <div
-      hidden={presentation.pending()}
+      hidden={props.headlinePresentation?.pending() ?? false}
       class={[
         "chat-activity-group",
         {
@@ -367,7 +353,9 @@ function ActivityGroupBody(props: {
           <ChatActivityHeadline
             bubbleMode={liveBubble() && !state().activityExpanded}
             contentRef={(element) => (disclosureContent = element)}
-            activity={presentation.selected()}
+            activity={
+              props.headlinePresentation ? props.headlinePresentation.selected() : state().headline
+            }
             summary={state().groupSummaryLabel}
             pluginToolIcons={props.options.pluginToolIcons}
             outcomes={describeToolGroup(state().visibleActivity, {
@@ -404,37 +392,79 @@ export type ActivityGroupContentProps = {
 };
 
 function ActivityOperationSegments(props: ActivityGroupContentProps & { state: ActivityState }) {
-  const segments = createMemo(() => segmentActivityGroup(props.groups, props.options, props.state));
+  const segments = createMemo(() => {
+    const source = segmentActivityGroup(props.groups, props.options, props.state);
+    let boundary: string | undefined;
+    return source.map((segment, index) => {
+      if (segment.standalone) {
+        boundary = segment.key;
+        return { segment, boundary, prepared: undefined };
+      }
+      const { context, entries } = segment;
+      const operations = entries.flatMap((entry) =>
+        entry.operation ? [entry.operation.group] : (entry.message?.operations ?? []),
+      );
+      const selected = new Set([
+        ...entries.flatMap((entry) => (entry.activity ? [entry.activity] : [])),
+        ...operations.flatMap((operation) =>
+          [operation.card, ...descendantCards(operation)].flatMap((card) => {
+            const activity = context.state.preparedByCard.get(card);
+            return activity ? [activity] : [];
+          }),
+        ),
+      ]);
+      const isTail = index === source.length - 1;
+      const prepared = prepareActivityGroup(context.groups, context.options, {
+        data: context.state.data,
+        cardGroups: operations,
+        toolCardOverrides: context.state.toolCardOverrides,
+        currentRunActivity: isTail ? context.state.currentRunActivity : new Set(),
+        activeGroup: isTail && context.state.activeGroup,
+        visibleActivity: selected,
+        key: segment.key,
+      });
+      return { segment, boundary, prepared };
+    });
+  });
+  const activeSegment = () => segments().at(-1);
+  // Inline layout can split the same work into new DOM groups. Its active
+  // headline keeps one clock; recorded standalone events establish new boundaries.
+  const headlinePresentation = createActivityHeadlinePresentation({
+    get scope() {
+      const active = activeSegment();
+      return JSON.stringify([
+        props.options.sessionKey,
+        props.options.connectionEpoch,
+        props.options.activityRunId ?? transcriptRunId(props.state.firstGroup.messages[0]?.message),
+        props.state.firstGroup.key,
+        active?.boundary,
+        Boolean(active?.prepared),
+      ]);
+    },
+    get activity() {
+      const state = activeSegment()?.prepared;
+      return state?.activityExpanded ? undefined : state?.headline;
+    },
+    resolveActivity: (key) => activeSegment()?.prepared?.resolveHeadline(key),
+    get active() {
+      const active = activeSegment();
+      const state = active?.prepared;
+      return Boolean(
+        state?.activeGroup &&
+        !state.activityExpanded &&
+        !(state.soleStep && !props.options.bubbleMode) &&
+        !active?.segment.inline,
+      );
+    },
+  });
 
   return (
     <>
-      <For each={segments()} keyed={(segment) => segment.key}>
-        {(segment) => {
-          const isTail = () => segment().key === segments().at(-1)?.key;
-          const prepared = createMemo(() => {
-            const { context, entries: segmentEntries } = segment();
-            const operations = segmentEntries.flatMap((entry) =>
-              entry.operation ? [entry.operation.group] : (entry.message?.operations ?? []),
-            );
-            const selected = new Set([
-              ...segmentEntries.flatMap((entry) => (entry.activity ? [entry.activity] : [])),
-              ...operations.flatMap((operation) =>
-                [operation.card, ...descendantCards(operation)].flatMap((card) => {
-                  const activity = context.state.preparedByCard.get(card);
-                  return activity ? [activity] : [];
-                }),
-              ),
-            ]);
-            return prepareActivityGroup(context.groups, context.options, {
-              data: context.state.data,
-              cardGroups: operations,
-              toolCardOverrides: context.state.toolCardOverrides,
-              currentRunActivity: isTail() ? context.state.currentRunActivity : new Set(),
-              activeGroup: isTail() && context.state.activeGroup,
-              visibleActivity: selected,
-              key: segment().key,
-            });
-          });
+      <For each={segments()} keyed={(item) => item.segment.key}>
+        {(item) => {
+          const segment = () => item().segment;
+          const isTail = () => item() === activeSegment();
+          const prepared = () => item().prepared;
           const entries = () => (
             <For each={segment().entries} keyed={(entry) => entry.key}>
               {(entry) => (
@@ -477,6 +507,7 @@ function ActivityOperationSegments(props: ActivityGroupContentProps & { state: A
                       options={segment().context.options}
                       state={state()}
                       renderEntries={entries}
+                      headlinePresentation={isTail() ? headlinePresentation : undefined}
                       inline={segment().inline}
                       liveBubble={
                         isTail() &&

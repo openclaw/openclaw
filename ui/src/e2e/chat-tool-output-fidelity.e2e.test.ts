@@ -121,9 +121,7 @@ suite.define(() => {
         const row = page.locator('.chat-tool-msg-summary[aria-expanded="false"]').first();
         await row.click();
         await capture(page, artifacts, "01-expanded");
-        expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain(
-          "run JavaScript",
-        );
+        expect(await page.locator(".chat-tool-msg-summary").textContent()).toContain("Ran code");
         const body = page.locator(".chat-tool-msg-body");
         expect(await body.locator(".chat-tool-card__outcome").textContent()).toBe("Completed");
         const visibleOutput = body.locator(".chat-tool-card__block-content").first();
@@ -164,7 +162,9 @@ suite.define(() => {
         });
         const expandOutput = async () => {
           await expandGroups(page, "Output is ready for inspection.");
-          const row = page.locator(".chat-tool-msg-summary", { hasText: "Capture command output" });
+          const row = page.locator(".chat-tool-msg-summary", {
+            hasText: "printf 'capture output'",
+          });
           await row.waitFor();
           if ((await row.getAttribute("aria-expanded")) !== "true") {
             await row.click();

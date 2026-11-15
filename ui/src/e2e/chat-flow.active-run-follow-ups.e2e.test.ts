@@ -165,6 +165,7 @@ suite.define(() => {
       methodResponses: { "chat.startup": history, "chat.history": history },
     });
     await page.goto(`${suite.server.baseUrl}chat`);
+    await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
     const tool = page
       .locator(".chat-tool-msg-summary")
       .getByRole("img", { name: "exec", exact: true });

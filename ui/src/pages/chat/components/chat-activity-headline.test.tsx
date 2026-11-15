@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
+import { inlineCommandPresentation } from "../chat-inline-command-presentation.ts";
 import { createActivityGroupHarness } from "./chat-message-native.test-support.tsx";
 import {
   createAssistantMessage,
@@ -233,6 +234,38 @@ const liveOptions = {
   runActive: true,
   activityRunId: "active-run",
 };
+
+it("preserves a pending headline deadline when inline presentation splits and rejoins work", async () => {
+  const inline = await inlineCommandPresentation();
+  const first = { ...prepared("write-a"), name: "write" };
+  const second = { ...prepared("write-b"), name: "write" };
+  const draw = (includeSecond: boolean, inlineCommands: boolean) =>
+    renderActivityFixture(
+      [
+        group("command", [{ ...prepared("command", "completed"), name: "exec" }], "active-run", {
+          command: "printf ready",
+        }),
+        group(
+          "writes",
+          includeSecond ? [{ ...first, status: "completed", phase: "end" }, second] : [first],
+        ),
+      ],
+      { ...liveOptions, inlineCommands: inlineCommands ? inline : undefined },
+    );
+  await draw(false, false);
+  expectAfter(200, "Writing write-a.ts…");
+  advanceTimersByTime(100);
+  await draw(true, false);
+  expect(label()).toBe("Wrote write-a.ts");
+  advanceTimersByTime(150);
+  await draw(true, true);
+  expect(label()).toBe("Wrote write-a.ts");
+  expect(query("summary")?.closest<HTMLElement>(".chat-activity-group")?.hidden).toBe(false);
+  expectAfter(749, "Wrote write-a.ts");
+  expectAfter(1, "Writing write-b.ts…");
+  await draw(true, false);
+  expect(label()).toBe("Writing write-b.ts…");
+});
 
 it("keeps accessible disclosure identity while the current action advances", () => {
   let expanded = false;

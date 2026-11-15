@@ -120,6 +120,7 @@ suite.define(() => {
             if (delivery === "receipt-first") {
               await result();
             }
+            await page.locator('.chat-activity-group__summary[aria-expanded="false"]').click();
           }
           const screenshotSummary = page.locator("button.chat-tool-msg-summary", {
             hasText: /^Computer\s*screenshot$/,

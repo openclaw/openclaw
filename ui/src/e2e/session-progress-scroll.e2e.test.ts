@@ -105,7 +105,11 @@ suite.define(() => {
           .locator(".chat-tool-msg-summary")
           .filter({ hasText: "cat scroll-evidence.txt" })
           .click();
-        const outputScroller = home.locator(".chat-tool-term__out").last();
+        const outputScroller = home
+          .locator(".chat-activity-group__body", {
+            has: page.locator(".chat-tool-term__out"),
+          })
+          .last();
         await outputScroller.waitFor({ state: "visible" });
         expect(
           await outputScroller.evaluate((element) => element.scrollHeight - element.clientHeight),

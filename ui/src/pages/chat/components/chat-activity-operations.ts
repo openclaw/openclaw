@@ -15,7 +15,9 @@ export function isInlineCommandCard(card: ToolCard): boolean {
 }
 
 export function isStandaloneActivity(card: ToolCard): boolean {
+  const name = unwrapToolCallForDisplay(card).name.trim().toLowerCase();
   return (
+    name === "view_image" ||
     resolveSessionLaunchPresentation(card) !== null ||
     Boolean(readNodePermissionRequest(asNullableRecord(card.details)?.permissionMissing))
   );

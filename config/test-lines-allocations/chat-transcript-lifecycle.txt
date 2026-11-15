@@ -3,4 +3,6 @@
 # Distinct owner contracts cover nested calls, execution outcomes, permission
 # boundaries, file ownership, disclosure/focus, live/history/steer identity,
 # persistent browser-cache reload, and inline/composer question continuity.
-1278
+# Existing browser fixtures exercise lossless 60-call retention, actual delivery
+# boundaries, and question takeover; one regression preserves cadence across mode changes.
+1383
