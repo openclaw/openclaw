@@ -35,10 +35,8 @@ if (!isMainThread && process.env.ROLLUP_MEASURE_SOURCE) {
     });
     return result;
   };
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply restores the original database receiver below.
-  const prepare = DatabaseSync.prototype.prepare;
-  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply restores the original database receiver below.
-  const exec = DatabaseSync.prototype.exec;
+  const prepare = Function.prototype.call.bind(DatabaseSync.prototype.prepare);
+  const exec = Function.prototype.call.bind(DatabaseSync.prototype.exec);
   let measurement;
   let profileNumber = 0;
   DatabaseSync.prototype.exec = function (sql) {
@@ -54,7 +52,7 @@ if (!isMainThread && process.env.ROLLUP_MEASURE_SOURCE) {
         post("Profiler.enable");
         post("Profiler.start");
       }
-      const result = Reflect.apply(exec, this, [sql]);
+      const result = exec(this, sql);
       measurement = { started: performance.now(), cpu: process.threadCpuUsage(), records: [] };
       return result;
     }
@@ -62,7 +60,7 @@ if (!isMainThread && process.env.ROLLUP_MEASURE_SOURCE) {
       const sample = measurement;
       measurement = undefined;
       const callbackMs = performance.now() - sample.started;
-      const result = Reflect.apply(exec, this, [sql]);
+      const result = exec(this, sql);
       const holdMs = performance.now() - sample.started;
       const cpu = process.threadCpuUsage(sample.cpu);
       const allocation = mode === "allocation" ? post("HeapProfiler.stopSampling") : undefined;
@@ -83,12 +81,12 @@ if (!isMainThread && process.env.ROLLUP_MEASURE_SOURCE) {
       }
       return result;
     }
-    return Reflect.apply(exec, this, [sql]);
+    return exec(this, sql);
   };
   DatabaseSync.prototype.prepare = function (sql) {
-    const statement = Reflect.apply(prepare, this, [sql]);
+    const statement = prepare(this, sql);
     const explain = (args) =>
-      Reflect.apply(prepare, this, ["EXPLAIN QUERY PLAN " + sql])
+      prepare(this, "EXPLAIN QUERY PLAN " + sql)
         .all(...args)
         .map((row) => row.detail);
     if (!/^(select|insert|delete|update)\b/i.test(sql)) {

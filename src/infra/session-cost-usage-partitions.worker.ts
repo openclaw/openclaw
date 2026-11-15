@@ -40,10 +40,11 @@ export function deleteSessionCostUsagePartitionsInDatabase(
   assertUsagePartitionWorker();
   const kysely = getNodeSqliteKysely<CacheDatabase>(db);
   // Keep range probes indexed even when statistics still describe a one-row cache.
-  /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
-  const entries = sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
-    sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
-  );
+  const entries =
+    /* kysely-allow-raw: SQLite's table index hint follows the alias; PostgreSQL omits it. */
+    sql<DB["cache_entries"]>`"cache_entries"`.as<"cache_entries">(
+      sql`"cache_entries" ${engineIndexHint(db, "sqlite_autoindex_cache_entries_1")}`,
+    );
   // Combining ranges lets stale small-table statistics turn a refresh into a full scan.
   for (const row of params.filter((param) => param.replacePartitions)) {
     executeSqliteQuerySync(
