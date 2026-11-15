@@ -58,6 +58,24 @@ const fixture = createPublicationTestFixture();
 
 const withFixture = fixture.withFixture;
 
+it.skipIf(process.platform === "win32")(
+  "journals a plain package reached through a symlinked prefix",
+  withFixture(async (f) => {
+    // packageRoot is <prefix>/lib/node_modules/openclaw; spell it through a link to the prefix.
+    const prefix = path.dirname(path.dirname(path.dirname(f.packageRoot)));
+    const alias = `${prefix}-alias`;
+    fs.symlinkSync(prefix, alias);
+    const liveRoot = path.join(alias, path.relative(prefix, f.packageRoot));
+    await withPublicationFence(liveRoot, async (fence) => {
+      const prepared = preparePackageActivation({
+        ...(await activationParams(f, fence)),
+        liveRoot,
+      });
+      await expect(prepared).resolves.toBeDefined();
+    });
+  }),
+);
+
 it
   .skipIf(process.platform === "win32")
   .each([
