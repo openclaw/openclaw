@@ -41,18 +41,10 @@ suite.define(() => {
           await trigger.click();
           const picker = page.locator(".chat-controls__model-picker[open]").first();
           await picker.locator("[data-chat-model-search]").waitFor();
-          await page.screenshot({
-            path: suite.artifactDir + "/" + route + "-pending.png",
-            animations: "disabled",
-          });
           const prematureLabel = await trigger.textContent();
           await gateway.setMethodResponse("models.list", { models: [model], modelSelectionPolicy });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await picker.locator('[data-chat-model-option="example/model-a"]').waitFor();
-          await page.screenshot({
-            path: suite.artifactDir + "/" + route + "-ready.png",
-            animations: "disabled",
-          });
           await gateway.setMethodResponse("models.list", { models: [], modelSelectionPolicy });
           await gateway.emitGatewayEvent("chat.metadata.changed", {});
           await expect.poll(() => trigger.textContent()).toContain(emptyLabel);
