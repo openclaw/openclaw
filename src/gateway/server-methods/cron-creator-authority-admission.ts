@@ -46,7 +46,6 @@ export function isDirectGatewayUserClient(client: GatewayClient | null | undefin
     internal?.syntheticClient !== true &&
     internal?.senderAttribution === undefined &&
     internal?.approvalRuntime !== true &&
-    internal?.cronRunContinuation !== true &&
     internal?.agentRuntimeIdentity === undefined &&
     internal?.pluginRuntimeOwnerId === undefined &&
     internal?.agentRunTracking === undefined &&
@@ -112,15 +111,10 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   isCurrent?: () => boolean;
   request: AgentRunRequest;
   inputProvenance?: InputProvenance;
-  hasRestoredCronContinuation: boolean;
   isOneShotModelRun: boolean;
 }): GatewayCronCreatorAuthorityAdmission | undefined {
   const request = params.request;
-  if (
-    params.client?.internal?.syntheticClient === true &&
-    !params.hasRestoredCronContinuation &&
-    !params.isOneShotModelRun
-  ) {
+  if (params.client?.internal?.syntheticClient === true && !params.isOneShotModelRun) {
     const continuation = consumeRequesterCronAuthorityAdmission({
       runId: params.runId,
       sessionKey: params.resolvedSessionKey,
@@ -134,7 +128,6 @@ export function resolveGatewayCronCreatorAuthorityAdmission(params: {
   return resolveDirectOperatorAuthority({
     ...params,
     disallowed:
-      params.hasRestoredCronContinuation ||
       params.isOneShotModelRun ||
       request.modelRun === true ||
       request.acpTurnSource !== undefined ||

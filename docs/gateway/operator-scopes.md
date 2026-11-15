@@ -361,6 +361,10 @@ not consume identity-scope grants and are unaffected by these edits. Pending han
 mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
+Temporary access-policy evaluation failures refuse the affected operation without
+revoking accepted work, including restart recovery and subagent completions.
+Completion delivery keeps its existing retry policy; definite denial or a changed
+original grant still cancels retained work.
 
 When `gateway.roles.default` is set, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a
@@ -398,6 +402,53 @@ Discovery does not grant or revoke access to existing sessions: the role's
 separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
+
+### OpenClaw ID member roles
+
+OpenClaw ID member connections resolve the membership role directly from
+`gateway.roles.definitions`, even without `gateway.roles.default`. The membership
+role takes precedence over any profile assignment; other connection types retain
+their own authorization rules. Its `accessPolicyPlugin`, when set, is required
+even without named-role enforcement. `users.setRole` refuses assigning a named role to
+an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
+profile assignment with `role: null` remains allowed.
+
+Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
+`operator`, `viewer`, and `guest` presets. Existing definitions, defaults, and assignments
+are preserved. Installing presets rewrites the config file as JSON through the
+standard config writer and removes JSON5 comments. Startup installs them before
+publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
+activation that cannot apply at runtime is reported in OpenClaw ID service status
+with a request to restart the Gateway.
+
+The operator preset grants read, write, approvals, questions, and
+talk scopes with all agents and writable shared sessions. The viewer preset
+allows all agents and viewable shared sessions but grants only
+`operator.sessions.read`: conversation browsing, not logs, `users.list`, or general
+Gateway diagnostics. The guest preset grants `operator.sessions.write`, all agents,
+viewable shared sessions, and `sandbox: "required"`. Operator remains the default
+invite role. These are editable definitions; custom member roles may
+include `operator.admin` and pairing scopes with no built-in ceiling.
+
+A member's sandbox requirement comes from the membership definition, even when
+`gateway.roles.default` is absent or their profile has a different named role
+through another sign-in. New sessions record that requirement before execution;
+forks, checkpoint branches, delegated children, and authorized cron and recovery
+work retain that requirement. Their sessions' exec and file tools run in a
+per-person sandbox. **Access** warns when an invite's role requires sandboxing
+but the configured Docker or Podman backend is unavailable; set up
+[sandboxing](/gateway/sandboxing) for those tools. Before inviting someone you do
+not trust with the machine, review the [sandbox exclusions](/gateway/operator-scopes#sandbox-exclusions):
+select the QuickJS Code Mode executor, exclude CLI backends with the role's
+`modelPolicy`, and keep such roles off worker profiles. Direct paired-node
+commands require separate scope and node-policy restrictions; the stock guest
+preset does not grant `operator.write` or `operator.admin`.
+
+Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
+API, and retained/recovered work. Definition changes apply through config reload;
+removed permissions cannot survive in a connected member or its retained work.
+Owner-device and node authority is independent of member definitions. See
+[OpenClaw ID remote access](/concepts/experimental-features#member-roles).
 
 ### Access program grants
 
@@ -524,10 +575,11 @@ Visitor Access requires an explicit model policy; its Codex runs require the
 qualified integration.
 
 The optional `sandbox` policy defaults to `"inherit"`, which keeps the agent's
-configured sandbox mode. Set `sandbox: "required"` to sandbox every new session
-created by an authenticated person with that role, even when the agent's
-sandbox mode is `"off"`. The example lets maintainers use host execution on
-`roboclaw` while guest-created sessions on the same agent remain sandboxed.
+configured sandbox mode. Set `sandbox: "required"` to require a sandbox for the
+exec and file tools in every new session created by an authenticated person with
+that role, even when the agent's sandbox mode is `"off"`. The example lets
+maintainers use host execution on `roboclaw` while guest-created sessions on the
+same agent use a per-person sandbox for those tools.
 
 Required sandboxes are isolated per authenticated session creator, not merely
 per agent or per session. Different guests using the same agent receive separate
@@ -555,11 +607,12 @@ overwrites emit a `session-sqlite` warning. Inspect them with
 [`openclaw logs --follow`](/cli/logs). Existing unstamped sessions and new sessions
 whose creator does not require sandboxing retain their existing behavior.
 
-A person whose role requires sandboxing cannot start a run in an existing
-host-execution session, even when explicitly invited. Required sessions
-fail if their sandbox backend is unavailable or provisioning fails. They never
-fall back to the Gateway or a node. `/elevated`, `exec` host overrides, and
-configured host targets cannot bypass this restriction.
+Session-run admission rejects a target lacking the required sandbox stamp, even
+when the requester is explicitly invited. For a required session's exec and file
+tools, an unavailable sandbox backend or failed provisioning is an error, not a
+fallback to the Gateway or a node. `/elevated`, `exec` host overrides, and
+configured host targets do not bypass that exec-tool policy. This is not a
+restriction on every execution path available to the role.
 
 By default, the agent's managed GitHub identity is not injected into sandboxed
 execution: `GH_CONFIG_DIR` is absent, and `GH_TOKEN` and `GITHUB_TOKEN` are blanked.
@@ -572,6 +625,8 @@ naming the agent. `openclaw security audit` warns for each opted-in agent. See
 [GitHub identity](/gateway/config-tools/github-identity#sandbox-opt-in) for the
 credential boundary and backend requirements.
 
+<a id="sandbox-exclusions" />
+
 A required sandbox contains the session's exec and file tools. It does not
 contain these paths, so configure them before admitting people you do not trust
 with the Gateway host:
@@ -581,6 +636,10 @@ with the Gateway host:
 - [CLI backends](/gateway/cli-backends) such as Claude CLI own their native
   tools and sandboxing on the Gateway host. Exclude them with the role's
   `modelPolicy`.
+- A role that also grants `operator.write` or `operator.admin` can call
+  `node.invoke`, for example `system.run`, directly on a paired node without a
+  session. A sandbox requirement does not contain that path; node command policy
+  and approvals still apply. The stock OpenClaw ID guest preset lacks those scopes.
 - `worker-turn` cloud workers receive the agent's shared GitHub identity
   regardless of `allowInSandbox`. Keep restricted people off worker profiles.
 - `sessions.others: "view"` exposes complete shared transcripts, including tool

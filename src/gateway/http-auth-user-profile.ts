@@ -213,7 +213,11 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
   const options = { assertCurrent };
   const authenticatedUserId = normalizeOptionalString(params.authResult.user);
   const rolesConfigured = isNamedOperatorRoleEnforcementEnabled(params.cfg);
-  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg);
+  const openclawIdPrincipal =
+    params.authResult.method === "trusted-proxy" ? params.authResult.openclawId : undefined;
+  const accessPoliciesConfigured = hasGatewayOperatorAccessPolicies(params.cfg, {
+    openclawIdPrincipal,
+  });
   if (!authenticatedUserId) {
     if (
       shouldUseGatewayOwnerProfile({
@@ -281,6 +285,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
       profile.updatedAt,
       assertCurrent,
       usesSharedSecretGatewayMethod(params.authResult.method) ? undefined : params.cfg,
+      openclawIdPrincipal,
     );
     const delegation = params.authResult.delegation;
     if (delegation) {
@@ -309,9 +314,10 @@ async function prepareHttpProfile(
   updatedAt: number,
   assertCurrent: () => void,
   cfg?: OpenClawConfig,
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal,
 ) {
   assertCurrent();
-  if (cfg && hasGatewayOperatorAccessPolicies(cfg)) {
+  if (cfg && hasGatewayOperatorAccessPolicies(cfg, { openclawIdPrincipal })) {
     (await prepareUserProfileCatalog()).release();
     assertCurrent();
   }
@@ -330,7 +336,7 @@ async function prepareHttpProfile(
       )
     : undefined;
   const operatorAccessAuthority = cfg
-    ? resolveGatewayOperatorAccessAuthority(profileId, cfg)
+    ? resolveGatewayOperatorAccessAuthority(profileId, cfg, { openclawIdPrincipal })
     : undefined;
   assertCurrent();
   if (!authority.isCurrent()) {

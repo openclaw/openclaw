@@ -340,7 +340,6 @@ function ChatComposerCompanion(input: ChatViewInput) {
   const composer = createMemo(() => merge(input.props, { displayQueue: input.frame.displayQueue }));
   const questionPanel = createComposerQuestionPanel(
     () => input.questions,
-    undefined,
     () => input.getTranscriptElement,
   );
   return (

@@ -19,7 +19,6 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
       defaultAgentId: state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
       // A cron reload's replacement starts while the previous owner's runs settle here.
       liveReceiptIds: listLiveCronRunReceiptIds(state),
-      failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
     },
   });
   applyCronRuntimeRowsToState(state, outcome.jobs, outcome.removedJobIds);

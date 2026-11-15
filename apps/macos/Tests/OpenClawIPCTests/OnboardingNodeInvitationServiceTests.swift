@@ -48,6 +48,38 @@ struct OnboardingNodeInvitationServiceTests {
         let node_key: Key
     }
 
+    @Test
+    func `invitation origin is used when none is entered, and an entered origin is validated first`() async throws {
+        let fixtureURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("shared/OpenClawKit/Tests/OpenClawKitTests/Fixtures/OpenClawIDNodeEnrollment.json")
+        let fixture = try JSONDecoder().decode(Fixture.self, from: Data(contentsOf: fixtureURL))
+        let carried = fixture.node_invite.link + "&d=https%3A%2F%2Fcarried.example"
+        var pasted = carried
+        let service = OnboardingNodeInvitationService(
+            databaseURL: URL(fileURLWithPath: "/unused-node-enrollment.sqlite"),
+            readInvitation: { pasted },
+            describeNode: {
+                try OpenClawIDNodeEnrollmentDescription(
+                    displayName: "Build node", platform: "macos", commands: [], caps: [])
+            },
+            install: { _ in Issue.record("Reviewing an invitation must not install a node") },
+            isConnected: { _ in false })
+        let hostname = try OpenClawIDNodeEnrollmentLink(carried).hostname
+        let expected = OnboardingOpenClawIDStep.addMac(claw: hostname, device: "Build node", capabilities: "")
+        #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "")) == expected)
+        #expect(try await service.perform(.pasteNodeInvitation(discoveryOrigin: "https://override.example")) == expected)
+        await #expect(throws: OpenClawIDNodeEnrollmentError.invalidLink) {
+            try await service.perform(.pasteNodeInvitation(discoveryOrigin: "http://override.example"))
+        }
+        pasted = fixture.node_invite.link
+        await #expect(throws: OpenClawIDNodeEnrollmentError.discoveryOriginRequired) {
+            try await service.perform(.pasteNodeInvitation(discoveryOrigin: ""))
+        }
+        service.cancel()
+    }
+
     @Test(arguments: [false, true])
     func `owner-approved invitation installs once and cancellation rejects a late descriptor`(
         cancel: Bool) async throws

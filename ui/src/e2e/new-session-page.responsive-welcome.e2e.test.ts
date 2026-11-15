@@ -100,6 +100,20 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await waitForLayoutSettled(page, ".new-session-page__triggers button");
 
+      const nameOffset = await page
+        .locator(".agent-chat__welcome-identity")
+        .evaluate((identity) => {
+          const name = identity
+            .querySelector(".agent-select__label, h2:not(.sr-only)")!
+            .getBoundingClientRect();
+          const portrait = identity
+            .querySelector(".agent-chat__welcome-avatar")!
+            .getBoundingClientRect();
+          return name.left + name.width / 2 - (portrait.left + portrait.width / 2);
+        });
+      // The chevron must not pull the displayed name off the avatar’s centerline.
+      expect(Math.abs(nameOffset)).toBeLessThan(1);
+
       if (captureUiProofEnabled && width === 390 && agentCount === 2) {
         await evaluateControlUiContext(page, (context) => context.theme.setMode("dark"));
         await pollAttribute(page.locator("html"), "data-theme-mode").toBe("dark");

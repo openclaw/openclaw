@@ -8,7 +8,7 @@ import {
   type DiscoverAuthStorageOptions,
 } from "./agent-auth-discovery.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
-import { normalizeDiscoveredAgentModel } from "./model-discovery-normalize.js";
+import { createDiscoveredAgentModelNormalizer } from "./model-discovery-normalize.js";
 import type {
   PluginModelCatalogMetadataSnapshot,
   PersistedPluginModelCatalog,
@@ -73,28 +73,28 @@ function normalizeOpenClawModelRegistry(
   const refreshAsync = registry.refreshAsync.bind(registry);
   const shouldNormalize = options?.normalizeModels !== false;
   const findCache = new Map<string, Model | undefined>();
-  const normalizeEntry = (entry: Model) => {
+  const createNormalizer = () => {
     if (!shouldNormalize) {
-      return entry;
+      return (entry: Model) => entry;
     }
     if (!agentDir) {
       throw new Error("agent directory is required for model normalization");
     }
-    return normalizeDiscoveredAgentModel(entry, agentDir, {
+    return createDiscoveredAgentModelNormalizer(agentDir, {
       ...options,
       ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
     });
   };
 
-  registry.getAll = () => getAll().map(normalizeEntry);
-  registry.getAvailable = () => getAvailable().map(normalizeEntry);
+  registry.getAll = () => getAll().map(createNormalizer());
+  registry.getAvailable = () => getAvailable().map(createNormalizer());
   registry.find = (provider: string, modelId: string) => {
     const key = `${provider}\0${modelId}`;
     if (findCache.has(key)) {
       return findCache.get(key);
     }
     const fallbackEntry = find(provider, modelId);
-    const resolved = fallbackEntry ? normalizeEntry(fallbackEntry) : undefined;
+    const resolved = fallbackEntry ? createNormalizer()(fallbackEntry) : undefined;
     findCache.set(key, resolved);
     return resolved;
   };

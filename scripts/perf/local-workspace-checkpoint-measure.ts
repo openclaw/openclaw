@@ -22,6 +22,8 @@
  * --mode reconcile instead calls the ordinary projection synchronization owner once
  * per request. --reconcile-target canonical|projection selects guest export or host
  * import; --reconcile-changed-files N changes N existing files at their original size.
+ * --reconcile-traffic records serialized localWorkspace requests by operation and phase.
+ * Phase durations are exclusive; existing checkpointPhases remain nested.
  * Freeze complete source arms for this mode so real worker entrypoints match the owner.
  * --mode file-read uses the same Gateway with a real Docker guest continuously
  * writing its private projection. Use --requests 30 --burst 1 --read-interval-ms 2000
@@ -193,6 +195,7 @@ const { values } = parseArgs({
     "settlement-socket": { type: "string" },
     "all-mutating": { type: "boolean", default: false },
     "tools-per-turn": { type: "string", default: "10" },
+    "reconcile-traffic": { type: "boolean", default: false },
     "reconcile-target": { type: "string", default: "canonical" },
     "reconcile-changed-files": { type: "string", default: "1" },
     requests: { type: "string", default: "2048" },
@@ -234,7 +237,7 @@ function installFingerprintObservers(destination: string) {
       "  async (command, channel, control) => {",
       `  async (command, channel, control) => {
     const fingerprintMetrics = { contentHashCount: 0, contentReadBytes: 0,
-      fingerprintHitCount: 0, fingerprintMissCount: 0 };
+      fingerprintHitCount: 0, fingerprintMissCount: 0, packedRecords: 0 };
     Reflect.set(globalThis, "__workspaceFingerprintMetrics", fingerprintMetrics);`,
     ],
     [
@@ -272,6 +275,14 @@ function installFingerprintObservers(destination: string) {
         measured.target = "target" in action ? action.target : null;
       }
       const result = await executeLocalWorkspaceManifestRead(snapshot, action, records);`,
+    ],
+  ]);
+  rewrite("src/gateway/worker-environments/local-workspace-cas.ts", [
+    [
+      "  const batches: Uint8Array[] = [];",
+      `  const measured = Reflect.get(globalThis, "__workspaceFingerprintMetrics");
+  if (measured) { measured.packedRecords += packs.reduce((sum, pack) => sum + pack.records.length, 0); }
+  const batches: Uint8Array[] = [];`,
     ],
   ]);
   rewrite("src/infra/git-worker.ts", [
@@ -523,8 +534,8 @@ const reusableSerial =
   !values["agent-db-fixture"] &&
   siblingWorktrees === 0;
 assert(
-  !fingerprintImport || reusableSerial,
-  "Fingerprint import requires the simple serial fixture",
+  !fingerprintImport || reusableSerial || reconcile,
+  "Fingerprint counters require the simple serial fixture or reconcile mode",
 );
 if (fingerprintImport) {
   const frozen = path.join(sourceRoot, "checkpoint-source.json");
@@ -810,6 +821,8 @@ const owners = [
   "src/gateway/worker-environments/local-workspace-state.ts",
   "src/gateway/worker-environments/local-workspace-checkpoint.ts",
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts",
+  "src/gateway/worker-environments/local-workspace-cas.ts",
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts",
   "src/gateway/worker-environments/local-workspace-fingerprints.ts",
   "src/gateway/worker-environments/workspace-actual-manifest.ts",
   "src/agents/worktrees/filesystem-native.ts",
@@ -823,6 +836,8 @@ const owners = [
   "src/gateway/control-ui-assistant-media-read.ts",
   "src/gateway/worker-environments/local-workspace-checkout.ts",
   "src/gateway/worker-environments/local-workspace-store.kernel.ts",
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
@@ -893,10 +908,37 @@ type FingerprintMetrics = {
   contentReadBytes: number;
   fingerprintHitCount: number;
   fingerprintMissCount: number;
+  packedRecords: number;
 };
 const fingerprintMetrics: FingerprintMetrics[] = [];
+const reconcileTraffic: Array<{
+  phase: string;
+  operation: string;
+  bytes: number;
+  action?: string;
+}> = [];
+const reconcilePhases: Array<{ phase: string; durationMs: number }> = [];
+let reconcilePhase = "idle";
+let reconcilePhaseStarted = performance.now();
+const markReconcilePhase = (phase: string) => {
+  const now = performance.now();
+  reconcilePhases.push({ phase: reconcilePhase, durationMs: now - reconcilePhaseStarted });
+  reconcilePhase = phase;
+  reconcilePhaseStarted = now;
+};
 const leaseSources = new Map<string, { scope: string; stack: string; calls: number }>();
 Object.assign(globalThis, {
+  __reconcilePhase: markReconcilePhase,
+  __reconcileTraffic: (operation: string, input: { action?: { kind?: string } }, bytes: number) => {
+    if (operation.startsWith("localWorkspace.")) {
+      reconcileTraffic.push({
+        phase: reconcilePhase,
+        operation,
+        bytes,
+        action: input.action?.kind,
+      });
+    }
+  },
   __recordWorkspaceFingerprintMetrics: (metrics: FingerprintMetrics) =>
     fingerprintMetrics.push(metrics),
   __containerCommandMeasure: (command: string) => containerCommands.push(command),
@@ -976,6 +1018,25 @@ registerHooks({
   load(url, context, nextLoad) {
     const relative = url.startsWith("file:") ? path.relative(root, fileURLToPath(url)) : "";
     let code = source.get(relative);
+    if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
+      assert(code.includes(anchor));
+      code = code.replace(
+        anchor,
+        anchor + "\nglobalThis.__reconcileTraffic(commandType, command.input, payload.byteLength);",
+      );
+    }
+    if (
+      values["reconcile-traffic"] &&
+      relative === "src/gateway/worker-environments/local-workspace-projection-operation.ts"
+    ) {
+      code = fs.readFileSync(path.join(root, relative), "utf8");
+      code = code.replaceAll(
+        /options\.onPhase\?\.\(([^;]+)\);/g,
+        "globalThis.__reconcilePhase($1); $&",
+      );
+    }
     const phaseFunctions: Record<string, string[]> = {
       "src/agents/worktrees/filesystem-native.ts": ["read", "write"],
       "src/gateway/worker-environments/workspace-manifest-worker.ts": ["computeWorkspaceManifest"],
@@ -1093,7 +1154,6 @@ process.env = createGatewayBenchEnv(path.join(output, "home"), configPath, {
   caseEnv: {
     ...(dockerHost ? { DOCKER_HOST: dockerHost } : {}),
     OPENCLAW_STATE_DIR: path.join(output, "state"),
-    TMPDIR: path.join(output, "tmp"),
     OPENCLAW_SKIP_CHANNELS: "1",
     DEVELOPER_DIR: "/Applications/Xcode.app/Contents/Developer",
     GIT_CONFIG_GLOBAL: "/dev/null",
@@ -2682,13 +2742,39 @@ measurement: try {
   finalizations.length = 0;
   pauseDurationsMs.length = 0;
   checkpointPhases.length = 0;
+  fingerprintMetrics.length = 0;
+  reconcileTraffic.length = 0;
+  reconcilePhases.length = 0;
+  reconcilePhase = "idle";
+  reconcilePhaseStarted = performance.now();
   leaseSources.clear();
   const { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } =
     await import("../../src/infra/diagnostic-events.js");
   await waitForDiagnosticEventsDrained();
   const leaseRequests: Record<string, number> = {};
+  const workspaceRequests: Array<{
+    requestClass: string;
+    durationMs?: number;
+    executionMs?: number;
+  }> = [];
   stopLeaseDiagnostics = onInternalDiagnosticEvent(
     (event) => {
+      if (
+        values["reconcile-traffic"] &&
+        event.type === "worker.request" &&
+        event.phase === "completed" &&
+        event.requestClass.startsWith("localWorkspace")
+      ) {
+        const timing = event.timing;
+        workspaceRequests.push({
+          requestClass: event.requestClass,
+          durationMs: event.durationMs,
+          executionMs:
+            timing?.executeStarted !== undefined && timing.executeFinished !== undefined
+              ? timing.executeFinished - timing.executeStarted
+              : undefined,
+        });
+      }
       if (
         event.type === "worker.request" &&
         event.phase === "completed" &&
@@ -2770,6 +2856,7 @@ measurement: try {
   const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const memoryBefore = process.memoryUsage();
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
   let representativeResult: unknown;
@@ -2814,6 +2901,9 @@ measurement: try {
         }
       }),
     );
+  }
+  if (values["reconcile-traffic"]) {
+    markReconcilePhase("idle");
   }
   const cleanupSettlementStarted = performance.now();
   if (nativeTurns) {
@@ -2889,6 +2979,10 @@ measurement: try {
   };
   const report = {
     mode: values.mode,
+    workspaceRequests: values["reconcile-traffic"] ? [...workspaceRequests] : undefined,
+    fingerprintMetrics: fingerprintImport ? [...fingerprintMetrics] : undefined,
+    reconcileTraffic: values["reconcile-traffic"] ? [...reconcileTraffic] : undefined,
+    reconcilePhases: values["reconcile-traffic"] ? [...reconcilePhases] : undefined,
     sourceAuthorityProof,
     operatorAdmissions: values["source-authority"] ? admissions : undefined,
     harnessSha256,
@@ -3039,6 +3133,7 @@ measurement: try {
     gcMs,
     gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
+    memoryBefore,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,

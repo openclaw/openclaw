@@ -69,7 +69,6 @@ type CreateTelegramOutboundAdapterOptions = Pick<
   | "beforeDeliverPayload"
   | "shouldSuppressLocalPayloadPrompt"
   | "shouldTreatDeliveredTextAsVisible"
-  | "targetsMatchForReplySuppression"
   | "preferFinalAssistantVisibleText"
 > & {
   resolveSend?: ResolveTelegramSendFn;
@@ -363,7 +362,6 @@ export function createTelegramOutboundAdapter(
     shouldSuppressLocalPayloadPrompt: options.shouldSuppressLocalPayloadPrompt,
     beforeDeliverPayload: options.beforeDeliverPayload,
     shouldTreatDeliveredTextAsVisible: options.shouldTreatDeliveredTextAsVisible,
-    targetsMatchForReplySuppression: options.targetsMatchForReplySuppression,
     preferFinalAssistantVisibleText: options.preferFinalAssistantVisibleText,
     normalizePayload: ({ payload }) => normalizeTelegramMetadataOnlyPayload(payload),
     normalizePayloadBatch: ({ payloads }) => normalizeTelegramFallbackPayloadBatch(payloads),

@@ -62,7 +62,7 @@ export function resolveChatHistorySelectorError(
     return "sessionId requires messageId";
   }
   if (pageCursor && retainedSessionId && pageCursor.sessionId !== retainedSessionId) {
-    return "history page cursor does not belong to retained transcript";
+    return "history page cursor does not belong to retained chat history";
   }
   return undefined;
 }

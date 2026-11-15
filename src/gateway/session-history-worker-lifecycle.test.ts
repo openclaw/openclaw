@@ -22,9 +22,8 @@ import { readSessionHistoryPageInWorker } from "../config/sessions/session-histo
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  maintenanceLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   prewarmSessionHistoryWorker,
@@ -99,7 +98,7 @@ afterEach(async () => {
   memorySessionActorOwners.reset();
   observed.dispatch = undefined;
   await Promise.all(
-    [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
+    [historyLane, sessionStoreLane].map(async (lane) => {
       clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
