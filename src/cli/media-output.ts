@@ -10,11 +10,15 @@ export { publishOutputFileAtomically };
 export async function resolveMediaOutputPath(input: string): Promise<string> {
   const basename = path.basename(input);
   if (basename === "." || basename === "..") {
-    throw new Error(`Media output must name a file: ${input}`);
+    throw new Error(
+      `Media output must name a file: ${input}. Choose an output filename instead of "." or "..", then retry.`,
+    );
   }
   const parent = await resolvePathPrefix(path.dirname(input));
   if (parent.unresolvedSegments.includes("..")) {
-    throw new Error(`Media output traverses a missing directory: ${input}`);
+    throw new Error(
+      `Media output traverses a missing directory: ${input}. Create the missing parent directory first, or choose a path through existing directories, then retry.`,
+    );
   }
   return path.join(parent.existingPath, ...parent.unresolvedSegments, basename);
 }

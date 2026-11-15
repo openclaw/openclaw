@@ -47,7 +47,9 @@ it("refuses an unreachable parent without replacing an existing output", async (
       outputCount: 1,
       subdir: "images",
     }),
-  ).rejects.toThrow("Media output traverses a missing directory");
+  ).rejects.toThrow(
+    "Create the missing parent directory first, or choose a path through existing directories, then retry.",
+  );
   expect(await fs.readFile(output, "utf8")).toBe("keep-existing");
   expect(await fs.readdir(dir)).toEqual(["result.png"]);
 });
@@ -64,7 +66,7 @@ it.each([".", ".."])('refuses a final "%s" without changing the output parent', 
       outputCount: 1,
       subdir: "images",
     }),
-  ).rejects.toThrow("Media output must name a file");
+  ).rejects.toThrow('Choose an output filename instead of "." or "..", then retry.');
   expect(await fs.readFile(file, "utf8")).toBe("keep-existing");
   expect(await fs.readdir(dir)).toEqual(["plain.png"]);
 });
