@@ -267,3 +267,15 @@ it("records the selected memory plugin in forget --json while Memory Core is the
   expect(owner.json).toEqual(report);
   expect(owner.error).toBe("");
 });
+
+it("keeps the disabled notice off renderMemorySearch --json stdout", async () => {
+  const { renderMemorySearch } = await import("./cli-search-output.js");
+  const logs = spyRuntimeLogs(defaultRuntime);
+  const json = spyRuntimeJson(defaultRuntime);
+  renderMemorySearch({ agentId: "main", status: "disabled" }, true);
+  expect(firstWrittenJsonArg(json)).toEqual({ agentId: "main", status: "disabled" });
+  expect(logs).not.toHaveBeenCalled();
+
+  renderMemorySearch({ agentId: "main", status: "disabled" }, false);
+  expect(output(logs)).toBe("Memory search disabled.");
+});

@@ -161,6 +161,8 @@ export async function withMemoryCommand(params: {
   runInBackgroundContext?: MemoryCoreRuntimeHost["runInBackgroundContext"];
   /** Refuse instead of answering from the sidecar index when another plugin owns the slot. */
   requiresMemorySlot?: boolean;
+  /** Observe agents whose memory search is disabled; the plain-text notice stays off --json stdout. */
+  onDisabledAgent?: (agentId: string) => void;
   run: (context: { manager: MemoryManager; cfg: OpenClawConfig; agentId: string }) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const { agent, json } = params.options;
@@ -203,8 +205,11 @@ export async function withMemoryCommand(params: {
         }),
       onMissing: (error) => {
         if (!error?.trim()) {
-          defaultRuntime.log("Memory search disabled.");
+          if (json !== true) {
+            defaultRuntime.log("Memory search disabled.");
+          }
           onUnavailable?.({ agentId, status: "disabled" });
+          params.onDisabledAgent?.(agentId);
           return;
         }
         const message = `${params.commandName} failed (${agentId}): ${error}`;

@@ -10,8 +10,9 @@ import { terminalText } from "openclaw/plugin-sdk/terminal-safe-text";
 export function renderMemorySearch(result: MemoryCliSearchOutcome, json?: boolean): void {
   if ("status" in result) {
     if (result.status === "disabled") {
-      defaultRuntime.log("Memory search disabled.");
-      if (json) {
+      if (!json) {
+        defaultRuntime.log("Memory search disabled.");
+      } else {
         defaultRuntime.writeJson(result);
       }
     } else {

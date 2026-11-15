@@ -207,7 +207,7 @@ export async function runMemoryStatus(
   const deep = Boolean(opts.deep || opts.index);
   const allResults: Array<{
     agentId: string;
-    status: ReturnType<MemoryManager["status"]>;
+    status: ReturnType<MemoryManager["status"]> | "disabled";
     excludedConfiguredSources?: "sessions"[];
     embeddingProbe?: MemoryEmbeddingProbeResult;
     indexError?: string;
@@ -225,6 +225,7 @@ export async function runMemoryStatus(
     purpose: opts.index || opts.fix ? "cli" : "status",
     inspectSources: true,
     ...hostOptions,
+    onDisabledAgent: (agentId) => allResults.push({ agentId, status: "disabled" }),
     run: async ({ manager, cfg: agentCfg, agentId }) => {
       let embeddingProbe: MemoryEmbeddingProbeResult | undefined;
       let indexError: string | undefined;
@@ -316,6 +317,10 @@ export async function runMemoryStatus(
   }
   const label = (text: string) => muted(`${text}:`);
   for (const result of allResults) {
+    // Disabled agents already reported their plain-text notice from the acquisition path.
+    if (result.status === "disabled") {
+      continue;
+    }
     const {
       agentId,
       status,
