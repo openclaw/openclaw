@@ -6,16 +6,21 @@ import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core
 import { formatCliCommand } from "../../cli/command-format.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { decodeUtf8Input } from "../../infra/utf8-input.js";
+import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 
 const MODELS_AUTH_STDIN_MAX_BYTES = 1024 * 1024;
 
 export async function readPipedStdin(
   stream: AsyncIterable<unknown> = process.stdin,
 ): Promise<string> {
+  const signal = getAsyncWorkSignal();
   const bytes = await readByteStreamWithLimit(stream, {
     maxBytes: MODELS_AUTH_STDIN_MAX_BYTES,
+    signal,
     onOverflow: ({ maxBytes }) => new Error(`Piped auth input exceeds ${maxBytes} bytes.`),
   });
+  // A cancellation accepted after EOF must not persist the piped credential.
+  signal?.throwIfAborted();
   return decodeUtf8Input(bytes, "Piped auth input");
 }
 

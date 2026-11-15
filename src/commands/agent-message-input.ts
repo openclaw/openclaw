@@ -4,6 +4,7 @@ import { TextDecoder } from "node:util";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 
 const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
@@ -27,10 +28,14 @@ const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
 export async function readAgentMessageFile(messageFile: string): Promise<string> {
   let buffer: Buffer;
   if (messageFile === "-") {
+    const signal = getAsyncWorkSignal();
     buffer = await readByteStreamWithLimit(process.stdin, {
       maxBytes: AGENT_MESSAGE_FILE_MAX_BYTES,
+      signal,
       onOverflow: () => new Error(`Message stdin exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes`),
     });
+    // A cancellation accepted after EOF must not dispatch the message as an agent turn.
+    signal?.throwIfAborted();
   } else {
     // Open the original path so the kernel preserves symlink and procfs magic-link
     // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
