@@ -109,6 +109,9 @@ it.each(["chip", "roster"] as const)(
     const newSessionLink = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session");
     expect(findAll(".sidebar-new-session")).toHaveLength(1);
     expect(find(".sidebar-brand__collapse")).toBeNull();
+    // With its panel closed, the Sessions item reopens it.
+    sidebar.navigationCollapsed = true;
+    await sidebar.updateComplete;
     find<HTMLButtonElement>('[data-navigation-view="sessions"]')?.click();
     find<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();

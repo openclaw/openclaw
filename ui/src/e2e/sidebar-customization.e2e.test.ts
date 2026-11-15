@@ -611,8 +611,9 @@ suite.define(() => {
       await expect.poll(() => paletteInput.isVisible()).toBe(false);
 
       // Collapsing the list retains the personal icon rail; its view buttons
-      // provide the matching expand controls.
-      const collapseButton = page.locator('[data-navigation-view][aria-pressed="true"]');
+      // provide the matching expand controls. The panel owns collapse: the
+      // Sessions avatar opens the agent menu while its panel is open.
+      const collapseButton = sidebar.getByRole("button", { name: "Collapse sidebar", exact: true });
       await collapseButton.click();
       await expect
         .poll(() => page.locator(".shell").getAttribute("class"))
@@ -750,7 +751,7 @@ suite.define(() => {
           .filter({ has: page.getByRole("link", { name: "Sessions", exact: true }) })
           .getByRole("button", { name: "Pin", exact: true })
           .click();
-        await sidebar.getByRole("button", { name: "Sessions", exact: true }).click();
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         const home = sidebar.locator(".sidebar-footer-bar__home");
         await expect.poll(() => home.isVisible()).toBe(true);
 

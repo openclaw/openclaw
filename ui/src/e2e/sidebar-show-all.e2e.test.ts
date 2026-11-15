@@ -71,6 +71,11 @@ suite.define(() => {
             await tab.click();
             await shellClass().toContain("shell--nav-collapsed");
           }
+          if (panel !== "sessions") {
+            // Outside Sessions the avatar opens Sessions; the next click opens the switcher.
+            await switcher.click();
+            await polledAttribute(sessionTab, "aria-pressed").toBe("true");
+          }
           await switcher.click();
           await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
           await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });

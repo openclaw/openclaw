@@ -146,9 +146,9 @@ suite.define(() => {
             expect(Math.abs(measured.offset), measured.control).toBeLessThanOrEqual(0.5);
             expect(measured.size, measured.control).toBe(geometry[0]!.size);
           }
-          // The top stack (agent card, New session, views, search) keeps one 8px pitch;
-          // New session differs from its neighbors only by its accent fill.
-          for (let index = 1; index < 6; index += 1) {
+          // The top stack (agent card, New session, Pages, People, search) keeps one 8px
+          // pitch; New session differs from its neighbors only by its accent fill.
+          for (let index = 1; index < 5; index += 1) {
             const control = geometry[index]!;
             expect(control.top - geometry[index - 1]!.bottom, control.control).toBeCloseTo(8, 1);
           }

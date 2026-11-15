@@ -46,7 +46,9 @@ suite.define(() =>
           const navigationToggle =
             width < 900
               ? navigationDrawerToggle(page)
-              : page.locator('[data-navigation-view][aria-pressed="true"]:visible');
+              : page
+                  .locator("openclaw-app-sidebar")
+                  .getByRole("button", { name: "Collapse sidebar", exact: true });
           await navigationToggle.click();
           const collapsedClass = width < 900 ? "shell--nav-drawer-open" : "shell--nav-collapsed";
           await page.locator(`.${collapsedClass}`).waitFor();

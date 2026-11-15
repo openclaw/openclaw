@@ -1,6 +1,7 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
+import { titleForRoute } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation, pluginTabKey } from "../app-route-paths.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -16,6 +17,7 @@ import { KEYBOARD_SHORTCUT_COMBOS } from "../lib/keyboard-shortcut-contract.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
@@ -52,7 +54,47 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
   return snapshot?.gateways.find((gateway) => gateway.id === snapshot.currentId) ?? null;
 }
 
+/**
+ * The rail's top identity item is the Sessions item. Outside Sessions it opens
+ * Sessions; in Sessions with the sidebar closed it opens the sidebar; in
+ * Sessions with the sidebar open it opens the agent (or workspace) switcher.
+ */
+function railSessionsItem(host: AppSidebarRenderHost) {
+  const current = () =>
+    host.navigationVisible && !host.onExitSettings && host.navigationView === "sessions";
+  const menuReady = () => current() && (isMobileNavLayout() || !host.navigationCollapsed);
+  return {
+    // Like the other rail views, the item reads as selected only while its panel is open.
+    pressed: () => current() && !host.navigationCollapsed,
+    menuReady,
+    label: (menuLabel: string) => (menuReady() ? menuLabel : titleForRoute("sessions", t)),
+    activate: (trigger: HTMLElement) => {
+      if (menuReady()) {
+        host.sidebarMenus.toggleAgentMenu(trigger);
+        return;
+      }
+      host.navigationView = "sessions";
+      if (host.onExitSettings) {
+        host.onExitSettings();
+      } else if (!isMobileNavLayout() && host.navigationCollapsed) {
+        host.onToggleSidebar?.();
+      }
+      host.invalidate();
+    },
+    // Focus returns here and shell chrome anchors to it like the other view buttons.
+    register: (element: HTMLElement) => {
+      host.navigationViewElements.set("sessions", element);
+      return () => {
+        if (host.navigationViewElements.get("sessions") === element) {
+          host.navigationViewElements.delete("sessions");
+        }
+      };
+    },
+  };
+}
+
 export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Element {
+  const sessions = railSessionsItem(host);
   let menuTrigger: HTMLButtonElement | undefined;
   const chipAgent = createMemo(() => host.activeChipAgent()),
     cardAgentId = () => chipAgent().activeId,
@@ -134,14 +176,16 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
           ]}
         >
           <button
-            ref={(element) => (menuTrigger = element)}
+            ref={[(element) => (menuTrigger = element), elementRef(sessions.register)]}
             type="button"
             class="sidebar-agent-card__main"
+            data-navigation-view="sessions"
             aria-haspopup="menu"
             aria-expanded={menuOpen() ? "true" : "false"}
-            aria-label={`${cardName()} · ${menuLabel()}`}
+            aria-pressed={sessions.pressed() ? "true" : "false"}
+            aria-label={`${cardName()} · ${sessions.label(menuLabel())}`}
             onPointerMove={(event) => {
-              if (cardAgents().length > 1) {
+              if (cardAgents().length > 1 && sessions.menuReady()) {
                 host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
               }
             }}
@@ -153,7 +197,7 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): SolidJSX.Ele
             }}
             onClick={(event) => {
               event.stopPropagation();
-              host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+              sessions.activate(event.currentTarget);
             }}
           >
             <span
@@ -240,6 +284,7 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
 }
 
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Element {
+  const sessions = railSessionsItem(host);
   let button: HTMLButtonElement | undefined;
   const focusHeader = () => button?.focus();
   onSettled(() => () => {
@@ -271,21 +316,28 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): SolidJSX.Elem
       <button
         type="button"
         class="sidebar-workspace-header__main"
-        ref={(element) => {
-          button = element;
-          host.sidebarMenus.focusAgentRoster = focusHeader;
-        }}
+        data-navigation-view="sessions"
+        ref={[
+          (element: HTMLButtonElement) => {
+            button = element;
+            host.sidebarMenus.focusAgentRoster = focusHeader;
+          },
+          elementRef(sessions.register),
+        ]}
         aria-haspopup="menu"
         aria-expanded={menuOpen() ? "true" : "false"}
-        aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
+        aria-pressed={sessions.pressed() ? "true" : "false"}
+        aria-label={`${name()} · ${sessions.label(t("agentChip.workspaceMenuLabel"))}`}
         onPointerMove={(event) => {
-          host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+          if (sessions.menuReady()) {
+            host.sidebarMenus.scheduleAgentMenuHoverOpen(event.currentTarget, event);
+          }
         }}
         onPointerLeave={() => host.sidebarMenus.handleAgentMenuTriggerPointerLeave()}
         onPointerDown={(event: PointerEvent) => event.stopPropagation()}
         onClick={(event) => {
           event.stopPropagation();
-          host.sidebarMenus.toggleAgentMenu(event.currentTarget);
+          sessions.activate(event.currentTarget);
         }}
         onContextMenu={(event) => {
           event.preventDefault();

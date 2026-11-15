@@ -5,7 +5,12 @@ import { de } from "../i18n/locales/de.ts";
 import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
-import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
+import {
+  createGateway,
+  createSessions,
+  mountSidebar,
+  TWO_AGENTS,
+} from "../test-helpers/app-sidebar.ts";
 import {
   createGatewayRequestMock,
   createTestGatewayClient,
@@ -306,6 +311,47 @@ describe("sidebar rail pin menu", () => {
     await sidebar.updateComplete;
     expect(usage().querySelector("mask")).not.toBeNull();
     expect(online().querySelector('[fill-rule="evenodd"]')).not.toBeNull();
+  });
+
+  it("opens Sessions, then the sidebar, then the agent menu from the rail avatar", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+      "panel",
+      TWO_AGENTS,
+    );
+    sidebar.navigationView = "pages";
+    sidebar.onToggleSidebar = () => (sidebar.navigationCollapsed = !sidebar.navigationCollapsed);
+    await sidebar.updateComplete;
+    const agent = sidebar.querySelector<HTMLButtonElement>(
+      ".sidebar-rail .sidebar-agent-card__main",
+    )!;
+    const click = async () => {
+      agent.click();
+      await sidebar.updateComplete;
+      await vi.dynamicImportSettled();
+      await sidebar.updateComplete;
+    };
+    const state = () => [
+      agent.getAttribute("aria-label"),
+      agent.getAttribute("aria-pressed"),
+      sidebar.navigationView,
+      sidebar.navigationCollapsed,
+      sidebar.querySelector(".sidebar-agent-menu") !== null,
+    ];
+    expect(state()).toEqual(["Molty · Sessions", "false", "pages", false, false]);
+    // Outside Sessions: go to Sessions.
+    await click();
+    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);
+    // In Sessions with the sidebar closed: open the sidebar.
+    sidebar.navigationCollapsed = true;
+    await sidebar.updateComplete;
+    expect(state()).toEqual(["Molty · Sessions", "false", "sessions", true, false]);
+    await click();
+    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, false]);
+    // In Sessions with the sidebar open: open the agent switcher.
+    await click();
+    expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, true]);
   });
 
   it.each([

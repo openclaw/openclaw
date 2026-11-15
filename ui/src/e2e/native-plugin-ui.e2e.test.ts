@@ -482,12 +482,13 @@ suite.define(() => {
       await focusChatSidePanel(page);
       expect(await accessory.count()).toBe(1);
       await expect.poll(() => accessory.isVisible()).toBe(false);
-      await sidebar(page, "Sessions").click();
+      await page.locator('openclaw-app-sidebar [data-navigation-view="sessions"]').click();
       await selectChatLayoutAction(page, "Restore split");
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await restoreChatAsMain(page);
       await expectOneAccessory();
-      await sidebar(page, "Sessions").click();
+      // Sessions is already open here; its panel owns collapse.
+      await sidebar(page, "Collapse sidebar").click();
       await selectChatLayoutAction(page, "Minimize side panel");
       await expect.poll(() => page.locator(".board-session-surface").isVisible()).toBe(false);
       await expectOneAccessory();
@@ -568,7 +569,7 @@ suite.define(() => {
       await outcome(page).toContain("view has ended");
       await openHomeFullPage(page);
       await expectOneAccessory();
-      await sidebar(page, "Sessions").click();
+      await page.locator('openclaw-app-sidebar [data-navigation-view="sessions"]').click();
       await page
         .locator(`.sidebar-recent-session[data-session-key="${otherSessionKey}"] a`)
         .click();
@@ -713,7 +714,9 @@ suite.define(() => {
       const navigationSidebar = page.locator("openclaw-app-sidebar");
       for (const collapsed of [false, true]) {
         if (collapsed) {
-          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
+          await navigationSidebar
+            .getByRole("button", { name: "Collapse sidebar", exact: true })
+            .click();
         }
         await navigationSidebar.locator(".sidebar-shell").waitFor({
           state: collapsed ? "hidden" : "visible",

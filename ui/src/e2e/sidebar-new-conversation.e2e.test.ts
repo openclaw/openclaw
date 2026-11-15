@@ -47,7 +47,11 @@ suite.define(() => {
             0,
           );
         }
-        await page.locator('[data-navigation-view="sessions"]').click();
+        // The Sessions rail item opens the agent menu here; the panel owns collapse.
+        await page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true })
+          .click();
         await page.locator(".shell--nav-collapsed").waitFor();
         expect(await create.boundingBox()).toEqual(initial);
         expect(await page.locator(".shell-chrome-controls__new-thread").count()).toBe(0);

@@ -47,10 +47,12 @@ suite.define(() => {
       }, direction);
     }
     const native = install === installNativeWebChrome;
-    const toggle = native
-      ? ".macos-titlebar-controls__sidebar"
-      : '[data-navigation-view][aria-pressed="true"]';
-    await page.locator(toggle).click();
+    if (native) {
+      await page.locator(".macos-titlebar-controls__sidebar").click();
+    } else {
+      // The keyboard toggle works on every route, including settings takeovers.
+      await page.keyboard.press("ControlOrMeta+B");
+    }
     await expect
       .poll(() => page.locator(".shell").getAttribute("class"))
       .toContain("shell--nav-collapsed");
