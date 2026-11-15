@@ -170,10 +170,7 @@ const sessionSourceScopes = new AsyncLocalStorage<
 
 const synchronousSources = new WeakSet<SessionSourceAssertion>();
 // Compositions own their dispatch; nesting must not enter the same guard twice.
-const composedSources = new WeakMap<
-  SessionSourceAssertion,
-  { run: () => void; forward: boolean }
->();
+const composedSources = new WeakSet<SessionSourceAssertion>();
 let validatedSources: Map<SessionSourceAssertion, object> | undefined;
 
 /** Host-owned immutable bindings only; opaque callbacks must never acquire this contract. */
@@ -193,12 +190,7 @@ export function withSessionSourceValidation<T>(run: () => T): T {
   }
 }
 
-function assertSessionSource(assertion: SessionSourceAssertion): void {
-  const composed = composedSources.get(assertion);
-  const run = composed?.run ?? assertion;
-  if (composed?.forward && validatedSources) {
-    return run();
-  }
+function assertSessionSource(assertion: SessionSourceAssertion, run = assertion): void {
   if (!synchronousSources.has(assertion)) {
     const previous = validatedSources;
     previous?.clear();
@@ -485,7 +477,11 @@ export function composeSessionSourceAssertion(
   const assertSources = () => {
     for (const source of sources) {
       if (source) {
-        assertSessionSource(source);
+        if (composedSources.has(source)) {
+          source();
+        } else {
+          assertSessionSource(source);
+        }
       }
     }
   };
@@ -532,24 +528,31 @@ export function composeSessionSourceAssertion(
       throw failure;
     }
   };
+  const synchronous = sources.every((source) => !source || synchronousSources.has(source));
+  const forward = check === forwardSessionSources && synchronous;
   const run = () => {
     const scoped = sessionSourceScopes.getStore()?.get(assertion);
     return scoped ? scoped.assertCurrent() : check(assertSources);
   };
   const assertion: PreparedSessionSourceAssertion & {
     prepareSessionSourceEffect: () => Promise<PreparedSessionSourceEffect>;
-  } = Object.assign(() => assertSessionSource(assertion), {
-    onSessionCompactionCommitted: (transition: SessionAdmissionTransition, entry: SessionEntry) => {
-      for (const source of new Set(sources)) {
-        source?.onSessionCompactionCommitted?.(transition, entry);
-      }
+  } = Object.assign(
+    () => (forward && validatedSources ? run() : assertSessionSource(assertion, run)),
+    {
+      onSessionCompactionCommitted: (
+        transition: SessionAdmissionTransition,
+        entry: SessionEntry,
+      ) => {
+        for (const source of new Set(sources)) {
+          source?.onSessionCompactionCommitted?.(transition, entry);
+        }
+      },
+      prepareSessionSource: () => prepare(),
+      prepareSessionSourceScope: () => prepare(true),
+      prepareSessionSourceEffect: prepareEffect,
     },
-    prepareSessionSource: () => prepare(),
-    prepareSessionSourceScope: () => prepare(true),
-    prepareSessionSourceEffect: prepareEffect,
-  });
-  const synchronous = sources.every((source) => !source || synchronousSources.has(source));
-  composedSources.set(assertion, { run, forward: check === forwardSessionSources && synchronous });
+  );
+  composedSources.add(assertion);
   if ((options?.synchronousCheck || check === forwardSessionSources) && synchronous) {
     bindSynchronousSessionSource(assertion);
   }

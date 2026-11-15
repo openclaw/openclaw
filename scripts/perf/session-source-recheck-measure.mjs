@@ -5,7 +5,8 @@
 // Acceptance: fewer issued-source checks and sampled bytes with no repeatable CPU
 // regression. Serial AB/BA; separate timing/allocation passes (1024-byte sampling).
 // 64 caller graphs, 8 forwarding layers and 8 synchronous effects per synthetic
-// turn. This isolates composition, not model turns, SQLite IO or Gateway latency.
+// turn. Repeat with --opaque to keep every callback live as an opaque boundary.
+// This isolates composition, not model turns, SQLite IO or Gateway latency.
 import assert from "node:assert/strict";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -18,6 +19,7 @@ const { values } = parseArgs({
     candidate: { type: "string" },
     iterations: { type: "string", default: "5000" },
     pairs: { type: "string", default: "5" },
+    opaque: { type: "boolean", default: false },
   },
 });
 assert(values.base && values.candidate && globalThis.gc);
@@ -44,7 +46,9 @@ try {
             checks++;
             assert(!revoked, "source revoked");
           };
-          owner.bindSynchronousSessionSource(source);
+          if (!values.opaque) {
+            owner.bindSynchronousSessionSource(source);
+          }
           let graph = source;
           for (let depth = 0; depth < 8; depth++) {
             graph = owner.composeSessionSourceAssertion([graph, source]);
@@ -101,7 +105,14 @@ try {
   }
   console.log(
     JSON.stringify(
-      { node: process.version, callers: 64, depth: 8, effectsPerTurn: 8, results },
+      {
+        node: process.version,
+        opaque: values.opaque,
+        callers: 64,
+        depth: 8,
+        effectsPerTurn: 8,
+        results,
+      },
       null,
       2,
     ),
