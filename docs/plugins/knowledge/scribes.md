@@ -96,9 +96,10 @@ text shown.
 2. It sends that conversation the prompt: what the scribe does, its settings as
    plain bullets, and numbered steps. No vault content is included.
 3. An ongoing scribe creates one automation for itself and reports `on`. The
-   Scribes tab then runs that automation once as its first run; the setup turn
-   never runs it. If the page is closed when setup finishes, the first run starts
-   the next time the Scribes tab loads.
+   Scribes tab then requests that automation’s first run; the setup turn never
+   runs it. If the page is closed when setup finishes, the first run is requested
+   the next time the Scribes tab loads. A request can wait for scheduler capacity.
+   The page shows **Run requested** until the scheduler reports it running.
    A once scribe does its work and reports back. Nothing is scheduled.
 
 Scribes run as you, with your private access to the store, and use the agent's
@@ -231,7 +232,7 @@ source.
 
 | Control            | Effect                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Run now            | Runs the automation immediately. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                                                                                                |
+| Run now            | Requests a run of the automation. It can wait for scheduler capacity; acceptance is not a running-state report. If a run is already in progress, it does not start another.                                                                                                                                                                                                                                 |
 | Disable / Enable   | Disables or enables scheduled runs. While an enabled automation is running, **Stop and disable** also requests cancellation. Enable schedules future runs; it does not resume a cancelled run. **Run now** remains an explicit override.                                                                                                                                                                    |
 | Remove automation… | Removes the automation and requests cancellation of any active run. The conversation is kept.                                                                                                                                                                                                                                                                                                               |
 | Open conversation  | Opens the scribe's conversation.                                                                                                                                                                                                                                                                                                                                                                            |
