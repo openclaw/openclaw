@@ -322,13 +322,12 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
-    const appendContext = (content: string, includePersonalUser = false, missing = false) => {
+    const appendContext = (content: string, includePersonalUser = false) => {
       remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
       result.push({
         path: pathValue,
         content,
         ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
-        ...(missing ? { missing: true as const } : {}),
       });
     };
     if (file.missing) {
@@ -337,10 +336,7 @@ export function buildBootstrapContextFiles(
       if (!cappedMissingText) {
         break;
       }
-      // Keep the SDK contract on the absolute marker; prompt preparation
-      // (prepareContextFilesForPrompt) renders workspace-relative markers via
-      // the `missing` flag and owns the budget for the shortened spelling.
-      appendContext(cappedMissingText, false, true);
+      appendContext(cappedMissingText);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {

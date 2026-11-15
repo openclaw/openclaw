@@ -35,7 +35,6 @@ describe("Cross-workspace provider cache proof", () => {
       contextFiles.push({
         path: `${ws}/TOOLS.md`,
         content: `[MISSING] Expected at: ${ws}/TOOLS.md`.slice(0, 27) + "…",
-        missing: true,
       });
       const p = await nativeProviderFixture(
         servers,

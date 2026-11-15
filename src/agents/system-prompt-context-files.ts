@@ -32,6 +32,25 @@ function sanitizeContextFileContentForPrompt(content: string): string {
   return content.replaceAll(DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK, "").replace(/\n{3,}/g, "\n\n");
 }
 
+const MISSING_BOOTSTRAP_MARKER_PREFIX = "[MISSING] Expected at:";
+
+function isMissingBootstrapMarker(content: string, filePath: string): boolean {
+  if (!content.trimStart().startsWith(MISSING_BOOTSTRAP_MARKER_PREFIX)) {
+    return false;
+  }
+  if (content.includes("\n") || content.includes("\r")) {
+    return false;
+  }
+  const rawExpected = content.trimStart().slice(MISSING_BOOTSTRAP_MARKER_PREFIX.length).trimStart();
+  const expectedPath = rawExpected.endsWith("…") ? rawExpected.slice(0, -1) : rawExpected;
+  const normalizedExpected = normalizeContextFilePath(expectedPath);
+  const normalizedFile = normalizeContextFilePath(filePath);
+  return (
+    normalizedFile === normalizedExpected ||
+    (normalizedExpected.length > 0 && normalizedFile.startsWith(normalizedExpected))
+  );
+}
+
 export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
   contextFiles: readonly T[],
   options: {
@@ -75,7 +94,10 @@ export function prepareContextFilesForPrompt<T extends EmbeddedContextFile>(
         }
       }
       let content = file.content;
-      if (file.missing && roots.length > 0) {
+      const isMissing =
+        (file as { missing?: boolean }).missing === true ||
+        isMissingBootstrapMarker(file.content, file.path);
+      if (isMissing && roots.length > 0) {
         const fullMarker = `[MISSING] Expected at: ${headingPath}`;
         content =
           fullMarker.length <= content.length
