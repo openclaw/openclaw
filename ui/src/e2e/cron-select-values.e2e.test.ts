@@ -9,7 +9,6 @@ import {
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
 import { collapseNav, cronJob, cronList, cronRuns } from "./cron-fixtures.test-support.ts";
-import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron select values mocked Gateway E2E",
@@ -213,8 +212,10 @@ suite.define(() => {
           if (narrow) {
             await page.setViewportSize({ width: 1416, height: 707 });
           }
-          const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+          // Automations shows its own sidebar, so leave for Usage from the rail.
+          await page
+            .locator('openclaw-app-sidebar:visible [data-sidebar-entry="route:usage"] a')
+            .click();
           await expect.poll(() => scrollPadding(page)).toBe(initialPadding);
         },
       );

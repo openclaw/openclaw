@@ -1,5 +1,7 @@
 import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
+import { pathForRoute } from "../app-route-paths.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
@@ -377,6 +379,21 @@ export function renderSessionSection(params: {
                     <Icon name="moreHorizontal" />
                   </button>
                 )}
+              </Show>
+              {/* Opens the Sessions page beside this list, which stays open. Sections derived
+                  from a person keep their actions in the shared toolbar. */}
+              <Show when={!derivedSection()}>
+                <a
+                  class="sidebar-session-group-actions sidebar-session-group-open"
+                  href={pathForRoute("sessions", host().basePath)}
+                  title={t("sessionsView.openSessionsPage")}
+                  aria-label={t("sessionsView.openSessionsPage")}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => host().onNavigate?.("sessions"))
+                  }
+                >
+                  <Icon name="maximize" />
+                </a>
               </Show>
             </>
           }
