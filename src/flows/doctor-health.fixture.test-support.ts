@@ -15,11 +15,13 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureFullEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { mocks } from "./doctor-health.test-support.js";
 
 export function useDoctorHealthFixture(currentAgentIds: readonly string[] = []) {
   let sharedStateTemplate: Buffer;
+  let environment: ReturnType<typeof captureFullEnv>;
   const currentAgentTemplates = new Map<string, Buffer>();
 
   function materializeCurrentAgentDatabases(env: NodeJS.ProcessEnv) {
@@ -57,7 +59,10 @@ export function useDoctorHealthFixture(currentAgentIds: readonly string[] = []) 
   }
 
   aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
-  afterEach(() => vi.unstubAllEnvs());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    environment.restore();
+  });
 
   beforeAll(async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -74,6 +79,7 @@ export function useDoctorHealthFixture(currentAgentIds: readonly string[] = []) 
   });
 
   beforeEach(() => {
+    environment = captureFullEnv();
     vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", undefined);
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);

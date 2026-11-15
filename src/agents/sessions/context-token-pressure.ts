@@ -242,7 +242,11 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
     ? params.fixedTokenPressure.systemTokens + MESSAGE_BOUNDARY_OVERHEAD_TOKENS
     : estimateRenderedPromptTokens({ systemPrompt: params.systemPrompt, prompt: "" });
   // Apply the safety margin once to the complete request before provider tokenization.
-  return (request: { messages: AgentMessage[]; prompt: string; imageCount?: number }): number => {
+  return (request: {
+    messages: Iterable<AgentMessage>;
+    prompt: string;
+    imageCount?: number;
+  }): number => {
     let messageTokens = 0;
     const completions = new Map<string, { estimated: number; measured: number }>();
     for (const message of request.messages) {
@@ -282,35 +286,40 @@ export function createFreshLlmBoundaryTokenEstimator(params: {
   };
 }
 
-export function estimateVariableRequestTokens(messages: AgentMessage[], prompt: string): number {
+export function estimateVariableRequestTokens(
+  messages: Iterable<AgentMessage>,
+  prompt: string,
+): number {
   const estimateTokens = createFreshLlmBoundaryTokenEstimator({});
   return estimateTokens({ messages, prompt }) - estimateTokens({ messages: [], prompt: "" });
 }
 
 export function estimateCompactionHistoryTokens(
-  messages: AgentMessage[],
+  messages: Iterable<AgentMessage>,
   budget?: {
     pendingTokens: number;
     pendingUserTokens?: number;
     pendingUserIdempotencyKey?: string;
   },
 ): number {
-  // A key identifies overlapping input, not proof that its content is replaced.
-  // A retained carrier can reuse a larger canonical user, so charge the larger representation.
-  const pending =
-    budget?.pendingTokens && budget.pendingUserIdempotencyKey
-      ? messages.findLast(
-          (message) =>
-            message.role === "user" &&
-            "idempotencyKey" in message &&
-            message.idempotencyKey === budget.pendingUserIdempotencyKey,
-        )
-      : undefined;
-  const overlap = pending
-    ? Math.min(
-        estimateCompactionHistoryTokens([pending]),
-        budget?.pendingUserTokens ?? budget?.pendingTokens ?? 0,
-      )
-    : 0;
-  return estimateVariableRequestTokens(messages, "") - overlap;
+  let overlap = 0;
+  function* observed() {
+    for (const message of messages) {
+      if (
+        budget?.pendingTokens &&
+        budget.pendingUserIdempotencyKey &&
+        message.role === "user" &&
+        "idempotencyKey" in message &&
+        message.idempotencyKey === budget.pendingUserIdempotencyKey
+      ) {
+        overlap = Math.min(
+          estimateVariableRequestTokens([message], ""),
+          budget.pendingUserTokens ?? budget.pendingTokens,
+        );
+      }
+      yield message;
+    }
+  }
+  const total = estimateVariableRequestTokens(observed(), "");
+  return total - overlap;
 }

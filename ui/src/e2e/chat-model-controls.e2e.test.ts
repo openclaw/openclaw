@@ -560,6 +560,8 @@ suite.define(() => {
           await expect
             .poll(() => menu.getByRole("option", { name: new RegExp(longName) }).count())
             .toBe(1);
+          // Escape clears a search query before it dismisses the picker.
+          await menu.locator("[data-chat-model-search]").fill("");
           await page.keyboard.press("Escape");
           await expect
             .poll(() => model.evaluate((node) => node === document.activeElement))

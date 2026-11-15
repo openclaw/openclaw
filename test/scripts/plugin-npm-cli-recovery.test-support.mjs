@@ -9,7 +9,6 @@ import {
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
   RECEIPT_RECOVERY_SCHEMA,
-  RECEIPT_RECOVERY_WORKFLOW,
   receiptRecoveryChildInputs,
   receiptRecoverySourceRequest,
 } from "../../scripts/full-release-receipt-recovery.mjs";
@@ -19,6 +18,7 @@ import {
   releaseCompositeJobsSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { canonicalizeJsonValue } from "../../scripts/lib/canonical-json.mjs";
+import { RECEIPT_RECOVERY_WORKFLOW } from "../../scripts/lib/release-evidence-identity.mjs";
 import { fullReleaseCandidateManifestFixture } from "../helpers/full-release-candidate.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 

@@ -1,6 +1,6 @@
 import { promisify } from "node:util";
-import { deserialize, serialize } from "node:v8";
-import { deflateRaw, deflateRawSync, inflateRawSync } from "node:zlib";
+import { serialize } from "node:v8";
+import { deflateRaw, deflateRawSync } from "node:zlib";
 import { startWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRunEndContext,
@@ -22,12 +22,10 @@ import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
-import type {
-  LocalWorkspaceBaselineDocument,
-  LocalWorkspaceManifestAction,
-} from "./local-workspace-manifest-scan.js";
+import type { LocalWorkspaceManifestAction } from "./local-workspace-manifest-scan.js";
 import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
 import type {
+  LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestMutation,
   LocalWorkspaceManifestValue,
   LocalWorkspaceMutation,
@@ -203,6 +201,7 @@ export function withLocalWorkspaceStore<T>(
                 const mutate = async (
                   mutation: LocalWorkspaceMutation,
                   guard: WorktreeWorkerAuthority = params.workerAuthority ?? {},
+                  preparedMutation?: Uint8Array,
                 ) => {
                   assertCurrent();
                   if (mutation.kind === "update" && mutation.manifest) {
@@ -218,14 +217,15 @@ export function withLocalWorkspaceStore<T>(
                       removed: [],
                     };
                   }
-                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined = mutation;
+                  let wireMutation: LocalWorkspaceMutation | Uint8Array | undefined =
+                    preparedMutation ?? mutation;
                   const source =
                     mutation.kind === "create"
                       ? mutation.row
                       : mutation.kind === "update"
                         ? mutation.patch
                         : undefined;
-                  if (typeof source?.source_paths_json === "string") {
+                  if (!preparedMutation && typeof source?.source_paths_json === "string") {
                     const paths = prepareLocalWorkspaceSourcePathSet(source.source_paths_json);
                     await prepare([deflateRawSync(serialize({ paths }))]);
                     source.source_paths_digest = localWorkspaceDigestBytes(paths.digest);
@@ -251,13 +251,15 @@ export function withLocalWorkspaceStore<T>(
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
                   // Compress large inventories to fit the broker's existing queue budget.
-                  const serialized = serialize(wireMutation);
-                  const compressed =
-                    serialized.byteLength > 32 * 1024 * 1024
-                      ? await compressMutation(serialized)
-                      : undefined;
-                  if (compressed && compressed.byteLength < serialized.byteLength) {
-                    wireMutation = compressed;
+                  if (!preparedMutation) {
+                    const serialized = serialize(wireMutation);
+                    const compressed =
+                      serialized.byteLength > 32 * 1024 * 1024
+                        ? await compressMutation(serialized)
+                        : undefined;
+                    if (compressed && compressed.byteLength < serialized.byteLength) {
+                      wireMutation = compressed;
+                    }
                   }
                   let admission: SqliteWorkerOperationAdmission | undefined;
                   let settled: Promise<SqliteWorkerOperationSettlement> | undefined;
@@ -402,10 +404,16 @@ export function withLocalWorkspaceStore<T>(
                 };
                 const accept: LocalWorkspaceStore["accept"] = async (prepared, guard) => {
                   await prepare(prepared.preparations ?? []);
-                  const mutationBytes = inflateRawSync(prepared.mutation);
-                  // SAFETY: prepareUpdate serializes this owner-created mutation after immutable preparation.
-                  const mutation = deserialize(mutationBytes) as LocalWorkspaceMutation;
-                  await mutate(mutation, guard);
+                  await mutate(
+                    {
+                      kind: "update",
+                      revision: prepared.revision,
+                      patch: prepared.patch,
+                      rejectedResult: prepared.rejectedResult,
+                    },
+                    guard,
+                    prepared.mutation,
+                  );
                   return row!;
                 };
                 return await run({
