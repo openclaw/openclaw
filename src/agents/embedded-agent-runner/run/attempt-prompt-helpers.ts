@@ -405,6 +405,7 @@ export function buildAfterTurnRuntimeContext(params: {
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {
+        agentId,
         sessionKey: params.attempt.sessionKey,
         sandboxSessionKey: params.attempt.sandboxSessionKey,
         sandboxAgentId: params.attempt.sandboxAgentId,

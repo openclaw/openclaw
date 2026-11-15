@@ -156,6 +156,8 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
     "Per-agent client-side compaction overrides. Omitted settings inherit agents.defaults.compaction.",
   "agents.entries.*.compaction.maxSummaryChars":
     "Per-agent persisted client-side summary character ceiling (1000–200000), overriding agents.defaults.compaction.maxSummaryChars. The active model token budget may require a smaller summary.",
+  "agents.entries.*.compaction.model":
+    "Per-agent provider/model or configured bare alias used only for compaction summarization, overriding agents.defaults.compaction.model for this agent's sessions. Leave unset to inherit the shared setting.",
   "agents.defaults.compaction.identifierPolicy":
     'Identifier-preservation policy for compaction summaries: "strict" prepends built-in opaque-identifier retention guidance (default), while "off" disables this prefix.',
   "agents.defaults.compaction.recentTurnsPreserve":
