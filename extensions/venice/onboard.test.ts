@@ -13,9 +13,9 @@ describe("Venice onboarding", () => {
     expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
       VENICE_DEFAULT_MODEL_REF,
     );
-    expect(VENICE_DEFAULT_MODEL_REF).toBe("venice/zai-org-glm-4.7");
+    expect(VENICE_DEFAULT_MODEL_REF).toBe("venice/deepseek-v4-1-flash-1017-uncensored");
     expect(config.agents?.defaults?.models).toEqual({
-      [VENICE_DEFAULT_MODEL_REF]: { alias: "GLM 4.7" },
+      [VENICE_DEFAULT_MODEL_REF]: { alias: "DeepSeek V4.1 Flash 1017 Uncensored" },
     });
   });
 
