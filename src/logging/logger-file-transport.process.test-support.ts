@@ -211,15 +211,29 @@ await runWithWorkerStartObserver(
       /synthetic file transport record/,
     );
 
-    const failed = path.join(directory, "failed.log");
-    fs.mkdirSync(failed);
+    const directoryTarget = path.join(directory, "directory.log");
+    fs.mkdirSync(directoryTarget);
+    setLoggerOverride({ level: "info", file: directoryTarget });
+    getLogger().info("rejected file target");
+    await fileLogTransport.flush();
+    fs.rmdirSync(directoryTarget);
+    getLogger().info("recovered file target");
+    await fileLogTransport.flush();
+    assert.match(fs.readFileSync(directoryTarget, "utf8"), /recovered file target/);
+
+    const blockedParent = path.join(directory, "blocked-parent");
+    const failed = path.join(blockedParent, "failed.log");
+    fs.writeFileSync(blockedParent, "blocking parent file");
     setLoggerOverride({ level: "info", file: failed });
     getLogger().info("rejected target");
     await fileLogTransport.flush();
-    fs.rmdirSync(failed);
+    fs.unlinkSync(blockedParent);
     getLogger().info("recovered target");
     await fileLogTransport.flush();
-    assert.match(fs.readFileSync(failed, "utf8"), /recovered target/);
+    assert.ok(fs.existsSync(failed), "Log writes must recover after repairing the directory");
+    const recovered = fs.readFileSync(failed, "utf8");
+    assert.match(recovered, /recovered target/);
+    assert.doesNotMatch(recovered, /rejected target/);
     assert.equal(starts.length, 1, "One serial logger worker owns all file targets");
 
     const { readConfiguredLogTailInWorker } = await import("./log-tail-worker.js");
