@@ -832,7 +832,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/config/sessions/session-accessor.sqlite-participants.test.ts",
     "src/config/sessions/session-logical-entry-read.worker.test.ts",
     "src/gateway/session-activity-summaries.retry.test.ts",
   ].map((testFile): PolicyTestWatch => ({
@@ -1738,13 +1737,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: [
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
       "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
-    ],
-  },
-  {
-    testFile: "src/config/sessions/session-accessor.sqlite-prepared-admission.test.ts",
-    watchGlobs: [
-      "src/infra/sqlite-integrity.worker.ts",
-      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     ],
   },
   {

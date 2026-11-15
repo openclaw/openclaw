@@ -3905,8 +3905,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     );
   });
 
-  it("prepares the provider runtime for selected extension target extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts", () => {
-    const target = "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts";
+  it("prepares the provider runtime for selected extension target extensions/telegram/src/polling-session.test.ts", () => {
+    const target = "extensions/telegram/src/polling-session.test.ts";
 
     const owners = (changedTests([target]) ?? []).filter((shard) =>
       (shard.groups ?? [shard]).some((group) => group.includePatterns?.includes(target)),

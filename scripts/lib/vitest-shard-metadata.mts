@@ -243,7 +243,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   ["src/cli/doctor-output.process.test.ts", 90],
   ["src/cli/mcp-cli.probe-exit.process.test.ts", 7],
   ["src/cli/one-shot-exit.test.ts", 25],
-  ["src/cli/update-cli/update-command-lease.test.ts", 86],
   ["src/cli/update-finalization-output.process.test.ts", 25],
   // The few CI-derived slow-file hints needed for the three new stripes are
   // rounded checkmark durations from canonical-main run 31691151297.
@@ -258,7 +257,6 @@ const STRIPE_FILE_SECONDS_HINTS = new Map<string, number>([
   // equal-weight default packs them into one stripe and rebuilds the whale.
   ["src/agents/embedded-agent-runner/compact.hooks.test.ts", 39],
   ["src/agents/embedded-agent-runner/model.test.ts", 13],
-  ["src/agents/embedded-agent-runner/run.compaction-runtime.test.ts", 53],
   ["src/agents/embedded-agent-runner/run.harness-auth-failover.test.ts", 8],
   ["src/agents/embedded-agent-runner/run.shared-integration.test.ts", 77],
   ["src/gateway/dashboard-session-title.test.ts", 23],

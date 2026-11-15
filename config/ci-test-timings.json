@@ -2166,7 +2166,6 @@
     "extensions/qa-lab/src/plugin-subagent-self-yield-followup.e2e.test.ts": 24,
     "extensions/telegram/src/bot.media.downloads-media-file-path-no-file-download.e2e.test.ts": 7,
     "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts": 2,
-    "extensions/telegram/src/bot.media.warning-topics.e2e.test.ts": 5,
     "extensions/telegram/src/telegram-ingress-coalescing.e2e.test.ts": 3,
     "extensions/whatsapp/src/auto-reply.web-auto-reply.connection-and-logging.e2e.test.ts": 1,
     "packages/ai/src/package.e2e.test.ts": 13,
@@ -2181,14 +2180,12 @@
     "src/agents/cli-runner.fault-sequences.e2e.test.ts": 5,
     "src/agents/embedded-agent-runner.e2e.test.ts": 5,
     "src/agents/embedded-agent-runner.run-embedded-agent.auth-profile-rotation.e2e.test.ts": 11,
-    "src/agents/embedded-agent-runner.run-embedded-agent.fault-sequences.e2e.test.ts": 3,
     "src/agents/model-fallback.reply-entry.e2e.test.ts": 3,
     "src/agents/model-fallback.run-embedded.e2e.test.ts": 9,
     "src/agents/sandbox-agent-config.agent-specific-sandbox-config.e2e.test.ts": 3,
     "src/agents/sandbox/fs-bridge.backend.e2e.test.ts": 1,
     "src/agents/subagents/announce/subagent-announce.format.e2e.test.ts": 1,
     "src/agents/subagents/registry/subagent-registry.archive.e2e.test.ts": 1,
-    "src/agents/subagents/registry/subagent-registry.lifecycle-retry-grace.e2e.test.ts": 1,
     "src/agents/subagents/registry/subagent-registry.nested.e2e.test.ts": 1,
     "src/auto-reply/reply.triggers.trigger-handling.e2e.test.ts": 11,
     "src/auto-reply/reply/agent-runner.runreplyagent.e2e.test.ts": 46,
@@ -2783,7 +2780,6 @@
           "OPENCLAW_VITEST_MAX_WORKERS": "2"
         },
         "includePatterns": [
-          "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
           "extensions/telegram/src/polling-session.test.ts"
         ],
         "pretestBuildMode": "runtime",
@@ -4582,7 +4578,6 @@
       "ui/src/e2e/worktrees.e2e.test.ts": 9,
       "ui/src/e2e/x-plugin.e2e.test.ts": 8,
       "ui/src/lib/openclaw-id/onepassword-save.retention.e2e.test.ts": 1,
-      "ui/src/pages/agents-home/templates-catalog.e2e.test.ts": 98,
       "ui/src/pages/chat/background-tasks.e2e.test.ts": 22,
       "ui/src/pages/chat/components/chat-clawhub-card.e2e.test.ts": 4,
       "ui/src/pages/chat/critical-observer-notice.e2e.test.ts": 8,
