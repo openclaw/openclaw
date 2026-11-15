@@ -212,6 +212,32 @@ describe("upgradeStateDirectory external config", () => {
   });
 });
 
+describe("upgradeStateDirectory code roots", () => {
+  it("leaves Git release installations out of the private copy", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-code-"));
+    dirs.push(root);
+    const stateDir = path.join(root, "state");
+    const corpus = fileURLToPath(
+      new URL("../../test/fixtures/state-corpus-populated/2026.10.10/state/", import.meta.url),
+    );
+    fs.cpSync(corpus, stateDir, { recursive: true });
+    const release = path.join(stateDir, "git-install", "releases", "r1", "package.json");
+    fs.mkdirSync(path.dirname(release), { recursive: true });
+    fs.writeFileSync(release, "{}");
+    const copied: boolean[] = [];
+    await upgradeStateDirectory({
+      env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: path.join(stateDir, "x.json") },
+      log: { info: () => {}, warn: () => {} },
+      runChain: async (chain) => {
+        copied.push(fs.existsSync(path.join(chain.stateDir, "git-install")));
+        throw new ChainStepError("injected", "stop after the copy");
+      },
+    });
+    expect(copied).toEqual([false]);
+    expect(fs.readFileSync(release, "utf8")).toBe("{}");
+  });
+});
+
 describe("upgradeStateDirectory resume", () => {
   it("releases retained handles before finishing an interrupted plan", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-upgrade-resume-"));

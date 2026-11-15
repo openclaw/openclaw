@@ -336,7 +336,8 @@ export async function upgradeStateDirectory(params: {
     resolveManagedWorktreeRoot(env, config.worktreeRoot),
     // Plugin storage is not a core migration input. Knowledge Doctor only
     // normalizes config; browser profile storage belongs to the browser plugin.
-    ...["knowledge", "browser", "backups", "cache", "locks", "tmp"].map((name) =>
+    // Git release installations are code, never state; copying them doubles every release.
+    ...["knowledge", "browser", "backups", "cache", "locks", "tmp", "git-install"].map((name) =>
       path.join(stateDir, name),
     ),
   ].flatMap((dir) => {
