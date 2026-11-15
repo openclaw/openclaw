@@ -3332,11 +3332,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     shards: typeof fullSuiteVitestShards;
     timings: Record<string, number>;
     fileTimings?: Readonly<Record<string, number>>;
+    githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
     options: {
       compactMode: "push" | "pull-request";
       runnerBackend?: string;
       includeReleaseOnlyPluginShards: false;
+      includeReleaseOnlyToolingShards?: boolean;
+      includePrExemptRuntimeTests?: boolean;
+      includeProofTests?: boolean;
       compactNodeJobCap?: number;
     };
   }) {
@@ -3345,7 +3349,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     mockFixture("timings", () => ({
       ...testTimings,
       readCompactGroupTimings: () => params.timings,
-      ...(params.fileTimings ? { readToolingFileTimings: () => params.fileTimings! } : {}),
+      ...(params.fileTimings
+        ? {
+            readToolingFileTimings: (profile?: CiTimingProfile) =>
+              profile === "github"
+                ? (params.githubFileTimings ?? params.fileTimings!)
+                : params.fileTimings!,
+          }
+        : {}),
     }));
     mockFixture("metadata", () => ({
       ...shardMetadata,
@@ -3364,6 +3375,74 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       ["metadata", "fast"],
     );
   }
+
+  it.each<{
+    label: string;
+    runnerBackend?: string;
+    compactMode?: "push" | "pull-request";
+    retainedSeconds?: number;
+    githubSeconds?: number;
+    known?: boolean;
+    discardSiblings?: boolean;
+    expectedSeconds: number;
+  }>([
+    { label: "scaled Blacksmith fallback", expectedSeconds: 32 },
+    { label: "direct GitHub timing", githubSeconds: 30, expectedSeconds: 30 },
+    { label: "startup floor", retainedSeconds: 1, expectedSeconds: 25 },
+    { label: "unknown retained file", known: false, expectedSeconds: 128 },
+    {
+      label: "nonbinding retained cost",
+      retainedSeconds: 80,
+      expectedSeconds: 128,
+    },
+    {
+      label: "unchanged selection",
+      retainedSeconds: 80,
+      discardSiblings: false,
+      expectedSeconds: 128,
+    },
+    { label: "Blacksmith parent floor", runnerBackend: "blacksmith", expectedSeconds: 80 },
+    { label: "hybrid parent floor", runnerBackend: "hybrid", expectedSeconds: 80 },
+    { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
+  ])("prices implicit reduced tooling with $label", async (params) => {
+    const retained = "test/vitest-pr-exempt-retention.test.ts";
+    // Fill the sixteen parent stripes before placing the retained file with a sibling.
+    const discarded =
+      params.discardSiblings === false
+        ? []
+        : Array.from({ length: 16 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+    const retainedSeconds = params.retainedSeconds ?? 20;
+    const discardedSeconds = 80;
+    const jobs = await createToolingFixturePlan({
+      files: [...discarded, retained],
+      shards: [
+        fixtureShard("core-tooling", [configPath("tooling")], configPath("full-core-tooling")),
+      ],
+      timings: {},
+      fileTimings: {
+        ...Object.fromEntries(discarded.map((file) => [file, discardedSeconds])),
+        ...(params.known === false ? {} : { [retained]: retainedSeconds }),
+      },
+      githubFileTimings:
+        params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
+      fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      options: {
+        compactMode: params.compactMode ?? "push",
+        runnerBackend: params.runnerBackend ?? "github",
+        includeReleaseOnlyPluginShards: false,
+        includeReleaseOnlyToolingShards: false,
+        includePrExemptRuntimeTests: true,
+        includeProofTests: true,
+      },
+    });
+    expectPlanFiles(jobs, [retained]);
+    const job = only(jobs);
+    expect(job.predictedTestSeconds).toBeCloseTo(params.expectedSeconds);
+    expect(job.planConcurrency).toBe(1);
+    expect(workers(only(job.groups))).toBe("2");
+    expect(job.requiresDist).toBe(false);
+    expect(job.pretestBuildMode).toBeUndefined();
+  });
 
   it.each([undefined, "blacksmith"])(
     "preserves compiler/artifact capacity (%s)",

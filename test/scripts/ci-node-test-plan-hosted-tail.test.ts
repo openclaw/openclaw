@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { createNodeWorkerE2eTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { listWholeConfigSplitFiles } from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
@@ -7,11 +8,15 @@ import {
 } from "../../scripts/lib/ci-node-test-plan.mts";
 
 const options = {
+  compact: true,
   compactMode: "push",
+  mainValidation: false,
   runnerBackend: "github",
+  includeProofTests: true,
   includeReleaseOnlyPluginShards: false,
   includeReleaseOnlyToolingShards: false,
   includeReleaseOnlyRuntimeTests: false,
+  includePrExemptRuntimeTests: true,
 } as const;
 
 afterEach(() => vi.unstubAllEnvs());
@@ -19,10 +24,53 @@ afterEach(() => vi.unstubAllEnvs());
 it("keeps hourly hosted tails parallel without losing tests or increasing worker limits", () => {
   vi.stubEnv("CI", "true");
   vi.stubEnv("OPENCLAW_CI_TEST_TIMINGS", "1");
+  vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
   const owners = createNodeTestShards(options);
-  const jobs = createNodeTestShardBundles({ ...options, compactNodeJobCap: 70 });
-  expect(jobs.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(70);
-  expect(jobs.length).toBeLessThanOrEqual(90);
+  const workerRows = createNodeWorkerE2eTestShards();
+  expect(workerRows).toHaveLength(2);
+  expect(workerRows.every((row) => !row.requiresDist && row.planConcurrency === 1)).toBe(true);
+  const jobs = createNodeTestShardBundles({
+    ...options,
+    compactNodeJobCap: 70 - workerRows.length,
+  });
+  expect(jobs.filter((job) => !job.requiresDist).length + workerRows.length).toBeLessThanOrEqual(
+    70,
+  );
+  expect(jobs.length).toBeLessThanOrEqual(69);
+
+  const reducedOwners = owners.filter(
+    (owner) =>
+      /^core-tooling-\d+$/u.test(owner.shardName) || owner.shardName === "agentic-cli-process",
+  );
+  const expectedFiles = reducedOwners.flatMap((owner) =>
+    (owner.includePatterns ?? listWholeConfigSplitFiles(owner.shardName)!).map((file) =>
+      JSON.stringify([owner.configs, file]),
+    ),
+  );
+  const actualFiles: string[] = [];
+  for (const job of jobs) {
+    for (const group of job.groups) {
+      if (
+        !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(group.shard_name) &&
+        !/^agentic-cli-process(?:-hosted-\d+)?$/u.test(group.shard_name)
+      ) {
+        continue;
+      }
+      expect(group.includePatterns?.length).toBeGreaterThan(0);
+      actualFiles.push(
+        ...group.includePatterns!.map((file) => JSON.stringify([group.configs, file])),
+      );
+      expect(job.planConcurrency).toBe(1);
+      expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+      expect([undefined, "2"]).toContain(job.env?.OPENCLAW_VITEST_MAX_WORKERS);
+      if (!group.requiresDist && group.pretestBuildMode === undefined) {
+        expect(group.fallbackMaxWorkers).toBeUndefined();
+        expect(group.minTotalMemoryBytes).toBeUndefined();
+      }
+    }
+  }
+  // Compare multisets: a duplicate must not hide a missing retained file.
+  expect(actualFiles.toSorted()).toEqual(expectedFiles.toSorted());
 
   for (const [ownerName, maxFiles] of [
     ["agentic-control-plane-agent-chat", 30],
