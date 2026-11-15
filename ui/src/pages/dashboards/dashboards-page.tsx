@@ -4,6 +4,7 @@ import { loadSettings, patchSettings } from "../../app/settings.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectSessionList } from "../../lib/reactive/domain-capabilities.ts";
+import { sectionLocation, sectionSidebarShown } from "../../lib/section-navigation.ts";
 import { dashboardSessionListQuery } from "../../lib/sessions/session-requests.ts";
 import type { DashboardGalleryFilters, DashboardsRouteData } from "./gallery-filters.ts";
 import { dashboardsRouteData } from "./route.ts";
@@ -11,6 +12,13 @@ import { DashboardsView } from "./view.tsx";
 
 export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
   const context = useApplication();
+  // Returning to Dashboards in this tab reopens the dashboard left open from its sidebar.
+  onSettled(() => {
+    const opened = sectionLocation(context.gateway, "dashboards");
+    if (opened) {
+      context.replace(opened.route, opened.options);
+    }
+  });
   // Display (view, ordering, grouping) is remembered per browser, like other view preferences.
   const [filters, setFilters] = createStore<DashboardGalleryFilters>({
     query: "",
@@ -105,6 +113,7 @@ export function DashboardsPage(props: { routeData?: DashboardsRouteData }) {
           onNavigate: context.navigate,
         }}
         gatewaySnapshot={gateway.read().snapshot}
+        sidebarListsDashboards={sectionSidebarShown("dashboards")}
       />
     </openclaw-dashboards-page>
   );

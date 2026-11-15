@@ -8,8 +8,14 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
+import { useApplication } from "../lib/reactive/context.ts";
 import { formatRelativeTimestamp } from "../lib/reactive/format.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import {
+  createSectionSidebarPresence,
+  rememberSectionLocation,
+} from "../lib/section-navigation.ts";
+import { resolveSessionPreferredFace } from "../lib/sessions/route-navigation.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
@@ -114,6 +120,8 @@ export function SidebarPagesMenu(props: {
 
 /** The Dashboards section: every managed dashboard, newest first, with its author and update. */
 export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.Element {
+  const app = useApplication();
+  createSectionSidebarPresence("dashboards", () => props.host.navigationCollapsed);
   const dashboards = () => props.host.navigationCatalog.dashboards;
   const dashboardRows = createMemo(() =>
     props.host.sidebarSnapshot
@@ -151,7 +159,32 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
           );
           return (
             <div class="sidebar-pages__entry">
-              <div class="sidebar-zone-entry" data-sidebar-entry={key}>
+              <div
+                class="sidebar-zone-entry"
+                data-sidebar-entry={key}
+                // Remember where the row went, so returning to Dashboards in this tab reopens it.
+                onClick={(event) => {
+                  const link = event
+                    .composedPath()
+                    .find(
+                      (target): target is HTMLAnchorElement => target instanceof HTMLAnchorElement,
+                    );
+                  // The row handles the click first, so only plain clicks count here.
+                  const plain =
+                    event.button === 0 &&
+                    !event.metaKey &&
+                    !event.ctrlKey &&
+                    !event.shiftKey &&
+                    !event.altKey;
+                  if (link && plain) {
+                    const url = new URL(link.href);
+                    rememberSectionLocation(app.gateway, "dashboards", {
+                      route: resolveSessionPreferredFace(row),
+                      options: { pathname: url.pathname, search: url.search },
+                    });
+                  }
+                }}
+              >
                 {content}
               </div>
               <PinToggle host={props.host} entry={key} />

@@ -3,6 +3,13 @@
   min-height: var(--settings-control-height);
 }
 
+/* With no dashboard open beside its sidebar, the page centers its prompt. */
+.dashboards-overview-empty {
+  display: grid;
+  place-items: center;
+  min-height: min(60vh, 520px);
+}
+
 .dashboards-gallery {
   width: 100%;
   padding-top: var(--space-6);

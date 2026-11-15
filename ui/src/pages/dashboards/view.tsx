@@ -21,6 +21,7 @@ import {
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../components/solid/panel-empty-state.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
@@ -554,6 +555,8 @@ export function DashboardsView(props: {
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
+  /** The open Dashboards sidebar lists every dashboard, so the page need not. */
+  sidebarListsDashboards?: boolean;
 }) {
   const readiness = () => {
     latest(props.readReady);
@@ -567,7 +570,13 @@ export function DashboardsView(props: {
         docsUrl="https://docs.openclaw.ai/web/dashboards"
         class="dashboards-header"
         actions={
-          <Show when={props.data?.result?.sessions.length ? props.data : undefined}>
+          <Show
+            when={
+              !props.sidebarListsDashboards && props.data?.result?.sessions.length
+                ? props.data
+                : undefined
+            }
+          >
             {(data) => (
               <div class="dashboards-tools">
                 <DashboardSearch
@@ -587,45 +596,76 @@ export function DashboardsView(props: {
         }
       />
       <SettingsWorkspace>
-        <Loading
-          on={!props.data?.result && !props.data?.error}
-          fallback={<DashboardGallerySkeleton view={props.filters.view} />}
-        >
-          <Show
-            when={!props.data?.result && isPending(props.readReady)}
-            fallback={
-              <Errored
-                fallback={(error) => (
-                  <PanelRefreshStatus
-                    status={{
-                      error: formatUiError(error()),
-                      hasLoaded: Boolean(props.data?.result),
-                      stale: Boolean(props.data?.result),
-                      awaitingGateway: false,
-                    }}
-                    errorMessage={t("dashboardsPage.loadError", {
-                      error: formatUiError(error()),
-                    })}
-                  />
-                )}
-              >
-                {readiness()}
-              </Errored>
-            }
-          >
-            <DashboardGallerySkeleton view={props.filters.view} />
-          </Show>
-          <Show when={props.data?.result ? props.data : undefined}>
-            {(data) => (
-              <DashboardList
-                data={data()}
-                filters={props.filters}
-                handlers={props.handlers}
-                gatewaySnapshot={props.gatewaySnapshot}
+        <Show
+          when={!props.sidebarListsDashboards}
+          fallback={
+            // The sidebar lists every dashboard; the page waits for one to open.
+            <div class="dashboards-overview-empty">
+              <PanelEmptyState
+                icon={<Icon name="dashboards" />}
+                heading={
+                  props.data?.result?.sessions.length
+                    ? t("tabs.dashboards")
+                    : t("dashboardsPage.emptyTitle")
+                }
+                description={t("dashboardsPage.emptyDescription")}
+                action={
+                  <Show when={props.handlers.onNavigate}>
+                    {(navigate) => (
+                      <button
+                        type="button"
+                        class="btn primary btn--sm"
+                        onClick={() => navigate()("new-session")}
+                      >
+                        <Icon name="plus" /> {t("chat.runControls.newSession")}
+                      </button>
+                    )}
+                  </Show>
+                }
               />
-            )}
-          </Show>
-        </Loading>
+            </div>
+          }
+        >
+          <Loading
+            on={!props.data?.result && !props.data?.error}
+            fallback={<DashboardGallerySkeleton view={props.filters.view} />}
+          >
+            <Show
+              when={!props.data?.result && isPending(props.readReady)}
+              fallback={
+                <Errored
+                  fallback={(error) => (
+                    <PanelRefreshStatus
+                      status={{
+                        error: formatUiError(error()),
+                        hasLoaded: Boolean(props.data?.result),
+                        stale: Boolean(props.data?.result),
+                        awaitingGateway: false,
+                      }}
+                      errorMessage={t("dashboardsPage.loadError", {
+                        error: formatUiError(error()),
+                      })}
+                    />
+                  )}
+                >
+                  {readiness()}
+                </Errored>
+              }
+            >
+              <DashboardGallerySkeleton view={props.filters.view} />
+            </Show>
+            <Show when={props.data?.result ? props.data : undefined}>
+              {(data) => (
+                <DashboardList
+                  data={data()}
+                  filters={props.filters}
+                  handlers={props.handlers}
+                  gatewaySnapshot={props.gatewaySnapshot}
+                />
+              )}
+            </Show>
+          </Loading>
+        </Show>
       </SettingsWorkspace>
     </>
   );
