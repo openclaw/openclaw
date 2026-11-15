@@ -310,7 +310,10 @@ export function anonymizeParentRow(
   if (!row || row.missing) {
     return row;
   }
-  const link = job.sourceConversation;
+  const source = job.operatorSource
+    ? decodeGatewayOperatorRecoverySource(job.operatorSource.source)
+    : undefined;
+  const link = source && source.kind !== "gateway" ? source : job.sourceConversation;
   const worktreePath = "/work/parent/worktree";
   return {
     sessionId: row.sessionId === link?.sessionId ? "parent-session" : "replaced-session",
