@@ -61,4 +61,21 @@ describe("stripBootEchoFromOutboundText", () => {
       expect(stripBootEchoFromOutboundText(text, text)).toBe("");
     }
   });
+
+  it("keeps memory bounded for a boot prompt with more windows than a Set can hold", () => {
+    // 8,388,700 distinct characters have more than 2^24 windows of 80 and 81 characters.
+    const bytes = new Uint8Array(8_388_700);
+    let state = 1;
+    for (let index = 0; index < bytes.length; index++) {
+      state = (Math.imul(state, 1_664_525) + 1_013_904_223) | 0;
+      bytes[index] = 97 + ((state >>> 24) % 26);
+    }
+    const bootPrompt = new TextDecoder().decode(bytes);
+    const echo = `Report: ${bootPrompt.slice(-200, -100)}`;
+    const heapBefore = process.memoryUsage().heapUsed;
+
+    expect(stripBootEchoFromOutboundText(echo, bootPrompt)).toBe("");
+    expect(process.memoryUsage().heapUsed - heapBefore).toBeLessThan(64 * 2 ** 20);
+    expect(stripBootEchoFromOutboundText("x".repeat(120), bootPrompt)).toBe("x".repeat(120));
+  });
 });
