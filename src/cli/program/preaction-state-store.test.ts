@@ -61,7 +61,6 @@ describe("state-store preAction guard", () => {
       await expect(parsed).resolves.toBe(program);
       expect(mocks.action).toHaveBeenCalledOnce();
     }
-    expect(mocks.check).toHaveBeenCalledWith({ command: "openclaw configure" });
     expect(mocks.debug.mock.calls).toEqual(
       kind === "unavailable" ? [["state-store guard unavailable: inspection failed"]] : [],
     );

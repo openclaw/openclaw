@@ -21,10 +21,9 @@ vi.mock("../gateway/probe.js", async (importOriginal) => ({
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readServiceCommand }),
 }));
-
+import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { checkCliGatewayStateDir, compareCliGatewayStateDirs } from "./state-dir-gateway-check.js";
-
 describe("state-dir-gateway-check", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let root: string;
@@ -32,7 +31,6 @@ describe("state-dir-gateway-check", () => {
     checkCliGatewayStateDir({ command: "openclaw configure", config });
   const serviceEnv = (environment: NodeJS.ProcessEnv) =>
     mocks.readServiceCommand.mockResolvedValue({ environment });
-
   beforeEach(async () => {
     root = tempDirs.make("openclaw-state-dir-check-");
     vi.stubEnv("OPENCLAW_STATE_DIR", root);
@@ -41,7 +39,6 @@ describe("state-dir-gateway-check", () => {
     mocks.probeGateway.mockReset().mockResolvedValue({ ok: false });
     mocks.readServiceCommand.mockReset().mockResolvedValue(null);
   });
-
   afterEach(() => vi.unstubAllEnvs());
 
   it("uses canonical path identity for a missing config below a symlink", async () => {
@@ -143,16 +140,20 @@ describe("state-dir-gateway-check", () => {
     }
   });
 
-  it("stops an interrupted status read before offline service diagnostics", async () => {
+  it.each(["status", "probe"])("rejects an interrupted %s read", async (stage) => {
     const work = new AsyncWorkScope();
-    mocks.callGateway.mockImplementation(async (options: { signal?: AbortSignal }) => {
+    mocks.callGateway.mockRejectedValue(
+      new GatewayCredentialsRequiredError({ method: "status", configPath: "openclaw.json" }),
+    );
+    const read = stage === "status" ? mocks.callGateway : mocks.probeGateway;
+    read.mockImplementation(async (options: { signal?: AbortSignal }) => {
       expect(options.signal).toBe(work.signal);
       work.beginClose();
-      options.signal?.throwIfAborted();
+      return { ok: false, error: "aborted" };
     });
     await expect(work.run(() => check())).rejects.toMatchObject({ name: "AbortError" });
-    expect(mocks.readServiceCommand).not.toHaveBeenCalled();
-    expect(mocks.probeGateway).not.toHaveBeenCalled();
+    expect(mocks.readServiceCommand).toHaveBeenCalledTimes(stage === "probe" ? 1 : 0);
+    expect(mocks.probeGateway).toHaveBeenCalledTimes(stage === "probe" ? 1 : 0);
   });
 
   it("allows an offline command and does not probe an ordinary transport failure", async () => {

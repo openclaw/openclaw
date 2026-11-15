@@ -203,6 +203,7 @@ export async function checkCliGatewayStateDir(params: {
       suppressStoredDeviceAuth: true,
       signal,
     });
+    signal?.throwIfAborted();
     if (probe.gatewayReached) {
       return {
         kind: "warn",
