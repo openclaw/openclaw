@@ -1,3 +1,4 @@
+import "./agent-runner-execution.test-support.js"; // Register mocks before eager runtime imports.
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -15,8 +16,10 @@ import {
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
-import {
-  createCliFollowupRun as createCliRun,
+import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
+
+const {
+  createCliFollowupRun: createCliRun,
   createMinimalRunAgentTurnParams,
   expectMockCallArgFields,
   getExecuteAgentTurnForTest,
@@ -24,9 +27,7 @@ import {
   requireMockCall,
   requireRecord,
   setupAgentRunnerExecutionTestState,
-} from "./agent-runner-execution.test-support.js";
-import { createTestUserTurnRecorder } from "./agent-runner-execution.transcript.test-support.js";
-
+} = await import("./agent-runner-execution.test-support.js");
 const state = await setupAgentRunnerExecutionTestState();
 // Placement admission reaches CLI runtime selection through Gateway session utilities. A static
 // import would evaluate that graph before the harness mocks register, binding real CLI detection.

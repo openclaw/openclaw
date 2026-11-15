@@ -2,6 +2,8 @@ import { assert, describe, expect, it, vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Model, StreamFn, Usage } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import { iterateSessionContextMessages } from "../session/session.js";
+import { selectResetKeptEntries } from "../session/tool-result-pairing.js";
 import {
   InvalidSummaryOutputError,
   SummaryOutputBudgetError,
@@ -16,6 +18,7 @@ import {
   findCutPoint,
   getLastAssistantUsage,
   prepareCompaction,
+  prepareCompactionFromSource,
   shouldCompact,
 } from "./compaction.js";
 import {
@@ -212,7 +215,7 @@ describe("session-entry compaction budgeting", () => {
   });
 
   it("omits private shell history from a genuine split-turn summary prefix", () => {
-    const latestRequest = `request-start ${"x".repeat(1_000)} request-end`;
+    const latestRequest = `request-start ${"x".repeat(1_000)} request-end token=FAKEtok12345`;
     const entries: SessionTreeEntry[] = [
       userEntry(latestRequest, 0),
       assistantEntry("earlier work", 1, 10),
@@ -235,7 +238,7 @@ describe("session-entry compaction budgeting", () => {
     });
     expect(preparation.latestUnresolvedUserRequest).toHaveLength(800);
     expect(preparation.latestUnresolvedUserRequest).toMatch(
-      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end$/s,
+      /^request-start .+\[\.\.\. latest user request truncated \.\.\.\].+ request-end \[redacted\]$/s,
     );
     expect(preparation).not.toHaveProperty("splitTurnCompleted");
     expect(JSON.stringify(preparation)).not.toContain("private output");
@@ -658,3 +661,107 @@ describe("compactWithoutSummary", () => {
     expect(result.ok && result.value.firstKeptEntryId).toBe("kept-entry");
   });
 });
+
+it.each(["none", "compaction", "reset"] as const)(
+  "plans a %s boundary from transient payloads without losing file outcomes or the request",
+  (boundary) => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry(user("past", 1), 0),
+      createMessageEntry(assistant("done", { timestamp: 2 }), 1),
+    ];
+    if (boundary === "reset") {
+      entries.push(resetEntry(2, "entry-0"));
+    } else if (boundary === "compaction") {
+      entries.push({
+        type: "compaction",
+        id: "entry-2",
+        parentId: "entry-1",
+        timestamp: new Date(3).toISOString(),
+        summary: "checkpoint",
+        firstKeptEntryId: "entry-0",
+        tokensBefore: 100,
+      });
+    }
+    const requestIndex = entries.length;
+    for (const message of [
+      user("Keep this exact pending request.", 4),
+      assistant(
+        [
+          toolCall("read", { path: "read.ts" }, "read"),
+          toolCall(
+            "edit",
+            { file_path: "unchanged.ts", newText: "large payload".repeat(100) },
+            "edit",
+          ),
+        ],
+        { timestamp: 5 },
+      ),
+      toolResult("large result".repeat(100), {
+        toolCallId: "edit",
+        toolName: "edit",
+        details: { changed: false },
+        timestamp: 6,
+      }),
+      assistant("latest response", { timestamp: 7 }),
+    ]) {
+      entries.push(createMessageEntry(message, entries.length));
+    }
+    let release = () => {};
+    const source = {
+      length: entries.length,
+      metadata: (index: number) => entries[index],
+      get(index: number): SessionTreeEntry | undefined {
+        release();
+        const entry = entries[index];
+        if (entry?.type !== "message") {
+          return entry;
+        }
+        const { proxy, revoke } = Proxy.revocable(structuredClone(entry.message), {});
+        release = revoke;
+        return { ...entry, message: proxy };
+      },
+    };
+    const result = prepareCompactionFromSource(
+      source,
+      {
+        messages: () =>
+          iterateSessionContextMessages(entries, (entry) => {
+            const hydrated = source.get(entries.indexOf(entry));
+            assert(hydrated);
+            return hydrated;
+          }),
+        resetKeptEntryIndices: (start, end) =>
+          selectResetKeptEntries(entries.slice(start, end)).map((entry) => entries.indexOf(entry)),
+      },
+      { enabled: true, reserveTokens: 0, keepRecentTokens: 1 },
+      "unresolved",
+      {
+        requestBoundary: { entryId: `entry-${requestIndex}`, preserve: false },
+      },
+    );
+    assert(result.ok && result.value);
+    const preparation = result.value;
+    expect(preparation.firstKeptEntryId).toBe(`entry-${entries.length - 1}`);
+    expect(preparation.isSplitTurn).toBe(true);
+    expect(preparation.latestUnresolvedUserRequest).toBe("Keep this exact pending request.");
+    expect(preparation.previousSummary).toBe(boundary === "compaction" ? "checkpoint" : undefined);
+    expect(preparation.fileOps).toEqual({
+      read: new Set(["read.ts"]),
+      written: new Set(),
+      edited: new Set(),
+    });
+    expect(
+      Array.from({ length: preparation.messagesToSummarize.length }, (_, index) => {
+        const message = preparation.messagesToSummarize.get(index);
+        assert(message);
+        return structuredClone(message.role === "user" ? message.content : message.role);
+      }),
+    ).toEqual(["past", "assistant"]);
+    expect(
+      Array.from(
+        { length: preparation.turnPrefixMessages.length },
+        (_, index) => preparation.turnPrefixMessages.get(index)?.role,
+      ),
+    ).toEqual(["user", "assistant", "toolResult"]);
+  },
+);

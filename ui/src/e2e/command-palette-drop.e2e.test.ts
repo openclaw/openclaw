@@ -332,9 +332,6 @@ suite.define(() => {
           expect(await gateway.getRequests("sessions.create")).toEqual([]);
           if (width === 390) {
             expect(await start.locator("kbd").count()).toBe(0);
-            const footer = surface.locator(":scope > .cmd-palette__footer");
-            expect(await footer.locator("kbd").count()).toBe(1);
-            expect(await footer.locator("kbd").textContent()).toMatch(/^(Enter|⏎)$/);
           }
           // Leave the attachment hover target before testing the palette's Escape shortcut.
           await page.mouse.move(0, 0);

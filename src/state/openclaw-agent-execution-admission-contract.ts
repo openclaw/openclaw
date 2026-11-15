@@ -16,7 +16,11 @@ export type AgentDatabaseRequestExecutionSource = {
   assertCurrent(): void;
   onRegistryChange?: (change: AgentDatabaseRegistryChange) => void;
   createAdmission(params: {
-    attachment: { kind: "agent-execution"; startupJournal: boolean };
+    attachment: {
+      kind: "agent-execution";
+      startupJournal: boolean;
+      startupIntegrityRequired: boolean;
+    };
     nativeLocations: readonly string[];
     authorize(request: SqliteWorkerAdmissionRequest): void;
     assertCurrent(): void;

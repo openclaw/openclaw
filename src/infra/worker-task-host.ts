@@ -50,6 +50,10 @@ const diagnosticTaskKinds = new Set([
   "model-context",
   "context-messages",
   "transcript-search",
+  "session-target-prepare",
+  "session-store-target",
+  "session-target-inventory",
+  "combined-store-topology",
 ]);
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
@@ -171,7 +175,13 @@ export function createWorkerTaskHost(
           operation === undefined ? "task" : classifyWorkerRequest(operation),
         );
     },
-    describeTask(url, input) {
+    describeTask(url, input, diagnosticOperation) {
+      if (diagnosticOperation !== undefined) {
+        const operation = diagnosticTaskKinds.has(diagnosticOperation)
+          ? diagnosticOperation
+          : classifyWorkerRequest(diagnosticOperation);
+        return `${workerRequestKind(url)}.${operation}`;
+      }
       // Inspect a data property only: diagnostics must not execute an input getter.
       const kind: unknown =
         input !== null && typeof input === "object"

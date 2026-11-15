@@ -1,3 +1,0 @@
-# Completed-repair shell admission, drift refusals and interrupted retirement
-# require production-owner regression coverage (102 counted test lines).
-102

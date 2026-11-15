@@ -249,8 +249,8 @@ async function replayPrivateKickoff(text: string, fault?: string) {
 describe("terminal private kickoff progress oracle", () => {
   it.each([
     "<b>Working</b>",
-    "<b>Working</b>\n<b>🤖 Sub-agent</b> <i>running</i>",
-    "<b>Working</b>\n<b>🤖 Sub-agent</b>",
+    "<b>Working</b>\n🤖 <b>Sub-agent</b> <i>running</i>",
+    "<b>Working</b>\n🤖 <b>Sub-agent</b>",
   ])("accepts the public spawn status %s", async (text) => {
     await expect(replayPrivateKickoff(text)).resolves.toMatchObject({ status: "pass" });
   });
@@ -260,8 +260,8 @@ describe("terminal private kickoff progress oracle", () => {
     "<b>Working</b>\nQA-PARENT-PRIVATE-CHILD1-0123456789ABCDEF0123456789ABCDEF",
     "<b>Working</b>\nMEDIA:qa-private-result.png",
     "<b>Working</b>\nNO_REPLY",
-    "<b>Working</b>\n<b>🛠️ Exec</b> <i>running</i>",
-    "<b>Working</b>\n<b>🤖 Sub-agent</b>\nprivate child prose",
+    "<b>Working</b>\n🛠️ <b>Exec</b> <i>running</i>",
+    "<b>Working</b>\n🤖 <b>Sub-agent</b>\nprivate child prose",
     "<b>Working</b>\nqa-terminal-private-first: completed",
   ])("rejects non-fixture status %s", async (text) => {
     await expect(replayPrivateKickoff(text)).rejects.toThrow(
@@ -273,7 +273,7 @@ describe("terminal private kickoff progress oracle", () => {
     "does not relax the %s boundary for accepted public text",
     async (fault) => {
       await expect(
-        replayPrivateKickoff("<b>Working</b>\n<b>🤖 Sub-agent</b>", fault),
+        replayPrivateKickoff("<b>Working</b>\n🤖 <b>Sub-agent</b>", fault),
       ).rejects.toThrow(
         fault === "transient"
           ? "private completion leaked a transient"

@@ -1,4 +1,3 @@
-import { addAbortListener } from "node:events";
 import path from "node:path";
 import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
@@ -39,6 +38,7 @@ import {
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import { AgentDatabaseExecutionLifetime } from "./openclaw-agent-execution-authority.js";
 import type {
+  AgentDatabaseExecutionState,
   AgentDatabaseExecutionFileIdentity,
   AgentDatabaseExecutionScope,
   AgentDatabaseFileExecutionOwner,
@@ -46,6 +46,7 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "./openclaw-agent-execution-contract.js";
 import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-native.js";
+import { captureAgentDatabasePreparedIntegrity } from "./openclaw-agent-execution-preparation.js";
 import {
   type AgentDatabaseExecutionPreparedTarget,
   assertBorrowedAgentDatabaseFileIdentity,
@@ -65,12 +66,6 @@ import {
 } from "./openclaw-state-lease-heartbeat-shared.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
-export type AgentDatabaseExecutionState = {
-  owners: Map<string, AgentDatabaseFileExecutionOwner>;
-  // LRU entries keep their slots during eviction and after failed cleanup.
-  idle: Set<AgentDatabaseFileExecutionOwner>;
-};
-
 const log = createSubsystemLogger("state/agent-db");
 const MAX_IDLE_EXECUTORS = 4;
 
@@ -83,6 +78,7 @@ export function createAgentDatabaseExecution(
   const { agentId, pathname, identity, initialIdentity, expectedCreationIdentity } = prepared;
   const context = captureOpenClawStateWorkerContext({ env: options.env });
   const executionOptions = { agentId, path: pathname, env: context.environment };
+  const observePreparedIntegrity = captureAgentDatabasePreparedIntegrity(executionOptions);
   const deletionCleanup = getAgentDeletionDatabaseCleanup(executionOptions);
   const cleanupOwner = deletionCleanup?.ownsDatabase ? deletionCleanup : undefined;
   const creationClaim = creationClaims.captureAgentCreationClaim(options);
@@ -101,7 +97,6 @@ export function createAgentDatabaseExecution(
   let closing: Promise<void> | undefined;
   let unregisterShared: (() => void) | undefined;
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
-  let idleDrainListener: Disposable | undefined;
 
   const acceptFileIdentity = (received: AgentDatabaseExecutionFileIdentity) => {
     if (
@@ -115,8 +110,6 @@ export function createAgentDatabaseExecution(
   };
 
   const clearIdleTimer = () => {
-    idleDrainListener?.[Symbol.dispose]();
-    idleDrainListener = undefined;
     clearTimeout(idleTimer);
     idleTimer = undefined;
   };
@@ -222,6 +215,7 @@ export function createAgentDatabaseExecution(
       retainAgentDatabaseStartupWorker(agentId, { env: context.environment }, () =>
         closeNative(created),
       ),
+      observePreparedIntegrity,
     );
     return created;
   }
@@ -365,7 +359,7 @@ export function createAgentDatabaseExecution(
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
       const creatingTarget = creating ? Object.freeze({ ...creating }) : undefined;
-      if (fileIdentity) {
+      if (fileIdentity && (creatingTarget || borrowedPath !== identity.canonicalPath)) {
         assertExistingDatabaseIdentity(
           borrowedPath,
           `file:${fileIdentity.physicalIdentity}`,
@@ -610,12 +604,6 @@ export function createAgentDatabaseExecution(
               );
               idleTimer = timer;
               timer.unref();
-              // Marker persistence precedes shutdown retirement of idle generations.
-              idleDrainListener = addAbortListener(cleanupSignal, () => {
-                runInDetachedAsyncContext(() => {
-                  void owner.closeIdle().catch(reportCleanupFailure);
-                });
-              });
               return;
             }
             // The completed command stays acknowledged; the resource owner retains cleanup.
@@ -627,6 +615,10 @@ export function createAgentDatabaseExecution(
       return borrowed;
     },
     async closeIdle() {
+      // Shutdown drains retained idle owners after readers; active borrowers still join close.
+      if (getGatewayShutdownCleanupSignal().aborted && executionState.idle.has(owner)) {
+        return;
+      }
       await closeNative();
       // A reborrow may have retained the owner or started its next native generation.
       if (borrowers === 0 && !generation) {

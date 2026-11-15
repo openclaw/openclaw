@@ -524,15 +524,15 @@ describe("personal GitHub through authenticated Gateway RPC", () => {
   it("lets an identified reader manage only My GitHub without changing sign-in or agent identity", async () => {
     const before = getUserProfileListItem(owner());
     const connection = await connect();
-    const status = await rpc(alice, "users.github.status");
-    expect(status.mock.calls[0]?.[1]).toMatchObject({
+    expect((await rpc(alice, "users.github.status")).mock.calls[0]?.[1]).toMatchObject({
       personal: { state: "connected", account: { accountId: 101, login: "personal-alice" } },
       system: { source: "system-detected", account: { login: "system-bot" } },
     });
     expect(getUserProfileListItem(owner())).toEqual(before);
     expect(config.tools?.github).toBeUndefined();
     expect(prepareGitHubToolEnvironment({ config, agentId: "main" }).localIdentityEnv).toEqual({});
-    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile: before });
+    const profile = { ...before, gitCoauthorAvailable: false };
+    expect(await rpc(alice, "users.self")).toHaveBeenCalledWith(true, { profile });
     for (const [method, missingScope] of [
       ["tools.github.authorize.start", "operator.admin"],
       ["tools.github.configure", "operator.admin"],

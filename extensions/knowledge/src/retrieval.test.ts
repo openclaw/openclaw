@@ -1,13 +1,13 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile, readFile, rm, rename, link, symlink } from "node:fs/promises";
 import path from "node:path";
-import { constants } from "node:sqlite";
+import { constants, DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { stringify } from "yaml";
 import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
-import { keywordExpression, keywordSearch } from "./retrieval.js";
+import { keywordExpression, keywordSearch, verifyKeywordIndex } from "./retrieval.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
 import {
@@ -20,7 +20,7 @@ import {
   operatorContext,
 } from "./test-support.js";
 import { COMPACT_SNIPPET_CHARS } from "./tool-result-contract.js";
-import { AGENT_HIT_LIMIT, leanToolResults } from "./tool-results.js";
+import { leanToolResults } from "./tool-results.js";
 
 const tempDirs = useTestTempDirs();
 
@@ -383,7 +383,7 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   const f = await fixture();
   await f.put("title_record", "Needle", "text", { tags: ["chosen"] });
   await f.put("body_record", "Other", "needle", { tags: ["chosen"] });
-  for (let n = 0; n <= AGENT_HIT_LIMIT; n++) {
+  for (let n = 0; n <= 10; n++) {
     await f.put(`haystack_${n}`, "Other", "haystack");
   }
   const first = await f.service.grep({ query: "needle", limit: 1 }, f.owner);
@@ -397,8 +397,8 @@ it("ranking preserves pagination and scope without rereading the filtered corpus
   expect(next.freshness.indexedAt).toBe(first.freshness.indexedAt);
   // Agent calls that omit limit get the agent page size, not the storage default.
   const agentPage = await f.agent.grep({ query: "haystack" }, f.owner);
-  expect(agentPage.hits.length).toBe(AGENT_HIT_LIMIT);
-  expect(agentPage.nextOffset).toBe(AGENT_HIT_LIMIT);
+  expect(agentPage.hits.length).toBe(10);
+  expect(agentPage.nextOffset).toBe(10);
   await f.put("outside_record", "Needle", "needle ".repeat(100));
   const storage = new KnowledgeStorage(f.config, f.store);
   const data = await storage.run(plainAccess(), (vault) => vault.scan());
@@ -615,4 +615,89 @@ it("superseded-record edits update the persistent history index and the search s
     db.exec(`DROP TABLE ${String(fts.name)}`);
   });
   expect(ids(await f.service.grep({ query: "inkword" }, f.owner))).toStrictEqual(["plan_two"]);
+});
+
+it("filtered ranking leaves the main writer available and preserves complete results", async () => {
+  const f = await fixture();
+  await f.put("writer_direct", "Orchid", "orchid flower", { tags: ["selected"] });
+  await f.put("writer_old", "Earlier", "orchid flower", superseded("writer_current"));
+  await f.put("writer_current", "Current", "replacement", { tags: ["selected"] });
+  await f.put("writer_outside", "Orchid", "orchid flower");
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const data = await storage.run(plainAccess(), (vault) => vault.scan());
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
+  try {
+    f.store.withDatabase((db) => {
+      const input = { query: "orchid", tag: "selected", limit: 1, offset: 1 };
+      const expected = keywordSearch(db, data, input, "writer-test", "1");
+      expect(expected.index.state).toBe("ready");
+      expect(expected.hits[0]?.via?.id).toBe("writer_old");
+      const writer = new DatabaseSync(db.location()!);
+      try {
+        writer.exec("BEGIN IMMEDIATE");
+        try {
+          expect(verifyKeywordIndex(db, data, "writer-test", "1")?.has("writer_current")).toBe(
+            true,
+          );
+          expect(JSON.stringify(keywordSearch(db, data, input, "writer-test", "1"))).toBe(
+            JSON.stringify(expected),
+          );
+        } finally {
+          writer.exec("ROLLBACK");
+        }
+        let attempted = false;
+        let writerError: unknown;
+        db.setAuthorizer((action, _table, _column, schema) => {
+          if (!attempted && schema === "temp" && action === constants.SQLITE_CREATE_VTABLE) {
+            attempted = true;
+            try {
+              writer.exec(
+                "BEGIN IMMEDIATE; INSERT INTO keyword_state_v1 VALUES ('other-writer','snapshot','now'); COMMIT",
+              );
+            } catch (error) {
+              writerError = error;
+            }
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          const actual = keywordSearch(db, data, input, "writer-test", "1");
+          expect(attempted).toBe(true);
+          expect(writerError).toBeUndefined();
+          expect(JSON.stringify(actual)).toBe(JSON.stringify(expected));
+          expect(
+            writer
+              .prepare("SELECT snapshot FROM keyword_state_v1 WHERE binding='other-writer'")
+              .get()?.snapshot,
+          ).toBe("snapshot");
+        } finally {
+          db.setAuthorizer(null);
+        }
+        // A sibling WAL commit between index inspection and a required update
+        // must not strand reconciliation on an obsolete read snapshot.
+        db.exec("PRAGMA journal_mode=WAL");
+        let intervened = false;
+        db.setAuthorizer((action, table) => {
+          if (!intervened && action === constants.SQLITE_READ && table === "keyword_state_v1") {
+            intervened = true;
+            writer.exec(
+              "INSERT INTO keyword_state_v1 VALUES ('intervening-writer','snapshot','now')",
+            );
+          }
+          return constants.SQLITE_OK;
+        });
+        const refreshed = keywordSearch(db, data, input, "writer-test", "2");
+        expect(intervened).toBe(true);
+        expect(refreshed.index.state).toBe("ready");
+        expect(refreshed.index.snapshot).not.toBe(expected.index.snapshot);
+        expect(refreshed.hits).toEqual(expected.hits);
+      } finally {
+        db.setAuthorizer(null);
+        writer.close();
+      }
+    });
+  } finally {
+    vi.useRealTimers();
+  }
 });

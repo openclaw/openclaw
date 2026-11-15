@@ -17,6 +17,7 @@ import { prepareSessionGenerationFacts } from "../config/sessions/session-delive
 import { readSessionEntryInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isNamedOperatorRoleEnforcementEnabled } from "../gateway/operator-role-enforcement.js";
 import { resolveCreatorSandbox } from "../gateway/operator-role-policy.js";
 import { decodeGatewayOperatorRecoverySource } from "../gateway/operator-run-recovery-source.codec.js";
 import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
@@ -121,7 +122,10 @@ export async function checkRequesterOwner(
         } catch {
           return false;
         }
-        return !current.gateway?.roles || requester.profileId === GATEWAY_OWNER_PROFILE_ID;
+        return (
+          !isNamedOperatorRoleEnforcementEnabled(current) ||
+          requester.profileId === GATEWAY_OWNER_PROFILE_ID
+        );
       });
     }
     case "unknown":
@@ -371,7 +375,10 @@ export async function admitScheduledOccurrence(
                 (job.operatorSource?.source.kind === "gateway"
                   ? operatorScopeSatisfied("operator.admin", run.operatorAuthority.scopes)
                   : run.operatorAuthority.openclawIdPrincipal?.kind !== "member")
-            : requesterOwner?.owner,
+            : // A fired condition can wait long for a run slot after admission, so the
+              // requester's owner bit is read again for each run, not reused.
+              (requesterOwner?.isOwner?.(selectLiveRuntimeConfig(run.cfg)) ??
+                requesterOwner?.owner),
         );
         result = buildScheduledExecutionContext(job, facts);
       } catch (error) {

@@ -110,7 +110,7 @@ export async function buildGatewayTemplateAddPlan(
     manifest: source.manifest,
     templateMarkdownBody: source.templateMarkdownBody,
     packageBootstrap: source.packageBootstrap,
-    openClawProfile: source.openClawProfile,
+    bundledSources: source.snapshot.bundledSources,
     source: source.source,
     diagnostics: source.diagnostics,
     context: {
@@ -131,8 +131,11 @@ export async function buildGatewayTemplateAddPlan(
             : context.sourceMcpServers,
       packagePreflight:
         context.packagePreflight ??
-        ((pkg, destinationWorkspace) =>
-          preflightTemplatePackage(pkg, destinationWorkspace, { config: context.config })),
+        ((pkg, destinationWorkspace, sourceContext) =>
+          preflightTemplatePackage(pkg, destinationWorkspace, {
+            config: context.config,
+            ...sourceContext,
+          })),
     },
   });
 }

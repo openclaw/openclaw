@@ -687,7 +687,7 @@ suite.define(() => {
     await menu.getByRole("dialog").waitFor();
     expect(await menu.locator("#sidebar-sessions-owner").count()).toBe(0);
     await menu.locator("#sidebar-sessions-group").click();
-    expect(await menu.getByRole("option", { name: "Person", exact: true }).count()).toBe(0);
+    await expectBrowser(menu.getByRole("option", { name: "Person", exact: true })).toBeVisible();
     await page.keyboard.press("Escape");
     await menu.locator("#sidebar-sessions-sort").click();
     expect(await menu.getByRole("option", { name: "Owners", exact: true }).count()).toBe(0);

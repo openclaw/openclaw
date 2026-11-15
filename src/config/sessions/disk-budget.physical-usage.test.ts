@@ -50,6 +50,37 @@ async function addSessionArtifacts(directory: string, index: number): Promise<vo
 }
 
 describe("physical session disk usage", () => {
+  it("loads database ownership inspection only for multi-store scans", async () => {
+    await withTestDir({ prefix: "openclaw-disk-scan-imports-" }, async (directory) => {
+      const databasePath = path.join(directory, "custom.sqlite");
+      await fs.writeFile(databasePath, Buffer.alloc(321));
+      const selectTargets = vi.fn(() => [databasePath]);
+      const loadTargets = vi.fn(() => ({
+        listDurableSqliteTargetPathsForSessionStorePath: selectTargets,
+      }));
+      vi.resetModules();
+      // mock-isolation: Observe cold ownership loading without initializing the database graph.
+      vi.doMock("./session-sqlite-target.js", loadTargets);
+      try {
+        const { readSessionPhysicalDiskUsage: scan } = await import("./disk-budget-files.js");
+        await expect(scan(databasePath)).resolves.toEqual({
+          databaseWalBytes: 0,
+          totalBytes: 321,
+        });
+        expect(loadTargets).not.toHaveBeenCalled();
+
+        await fs.writeFile(path.join(directory, "custom.other.sqlite"), Buffer.alloc(123));
+        const storePath = path.join(directory, "custom.json");
+        await scan(storePath);
+        expect(loadTargets).toHaveBeenCalledOnce();
+        expect(selectTargets).toHaveBeenCalledExactlyOnceWith(storePath);
+      } finally {
+        vi.doUnmock("./session-sqlite-target.js");
+        vi.resetModules();
+      }
+    });
+  });
+
   // Bun does not emit Node's PROMISE async-hook events.
   it.skipIf(Boolean(process.versions.bun))(
     "bounds per-artifact promise allocation inside the scan worker",

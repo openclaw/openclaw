@@ -653,7 +653,9 @@ export async function* executeClaudeCli(
           secretInput,
           currentContext: () => session.currentTurn?.context,
           initialize: {
-            appendSystemPrompt: context.systemPrompt,
+            // Replace Claude Code's default prompt rather than appending to it, so the
+            // agent does not run under Claude Code's identity and coding-CLI guidance.
+            systemPrompt: context.systemPrompt,
             // Native snapshots must not override the host's refreshed prompt on resume.
             systemPromptSnapshot: false,
             excludeDynamicSections,
@@ -724,7 +726,7 @@ export async function* executeClaudeCli(
             throw new Error("The Claude CLI turn is no longer active.");
           }
           turn.interrupted = true;
-          // The host requests this only after consuming a successful yield tool result.
+          // The host requests this only after a consumed yield or final source-reply result.
           // Native interrupt would persist a false user stop in the resumable transcript.
           turn.sawTerminalResult = true;
           // Native output owns the session ID; the input ID may still name a fork's parent.

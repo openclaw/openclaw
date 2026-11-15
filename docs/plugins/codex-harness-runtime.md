@@ -86,11 +86,12 @@ app-server, including a Desktop executable selected for Computer Use, skill
 catalogs, persona files, memory-provider instructions, plugin-injected system
 context, and tool-routed `MEMORY.md` guidance
 are appended to the parent model request instructions by a private inference
-relay. Native base and catalog instructions remain unchanged; this new context
+relay. Native base instructions remain unchanged; this new context
 is not written to native conversation history or automatically inherited by
 native subagents. Connections without that relay carry eligible skills, persona, and memory
-in thread developer instructions instead, preserving delivery when the model
-owns collaboration-mode instructions. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
+in thread developer instructions instead. Ordinary managed sessions also carry
+[capability-aware collaboration guidance](/plugins/codex-harness-runtime/permissions)
+there instead of the native catalogue's Default-mode block. Native children can inherit that fallback context; selected personal `users/<profile-id>/USER.md` overlays are excluded and require the managed parent-only relay. See [workspace bootstrap files](/plugins/codex-harness-reference/workspace-bootstrap-files)
 for fallback refresh and inheritance semantics. Plugin `before_prompt_build`
 system context is prepared for each turn; changing recall results does not reload
 the managed thread or block follow-up messages while a background command runs.

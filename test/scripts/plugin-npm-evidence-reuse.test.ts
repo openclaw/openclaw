@@ -883,6 +883,9 @@ it.each(["load", "consume"])("keeps %s output behind the final fresh check", asy
   expect(readFileSync(f.output, "utf8")).toContain(
     command === "load" ? "has_candidates=true" : "tarball_sha256=",
   );
+  if (command === "load") {
+    expect(readFileSync(f.output, "utf8")).toContain("core_deferrals=[]");
+  }
 });
 
 it.each(["permission", "tag", "frv-attempt", "carrier-attempt", "expiry"])(

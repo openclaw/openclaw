@@ -8,6 +8,7 @@ import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispa
 import type { GatewayLifecycleTypingParams } from "../../../gateway/server-instance-runtime.types.js";
 import { getGatewayLifecycleRuntime } from "../../../gateway/server-lifecycle-runtime-context.js";
 import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
+import { sendMessage as sendSubagentAnnounceMessage } from "../../../infra/outbound/message.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
@@ -34,10 +35,7 @@ import {
   SourceOwnerChangedError,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
-import {
-  sendSubagentAnnounceMessage,
-  tryResolveSubagentRequesterAgentId,
-} from "./subagent-announce-delivery.runtime.js";
+import { tryResolveSubagentRequesterAgentId } from "./subagent-announce-delivery.runtime.js";
 import {
   sourceOwnerChangedResult,
   type SubagentAnnounceDeliveryResult,
@@ -92,16 +90,16 @@ export async function runAnnounceAgentCall(params: {
   timer?.unref();
   try {
     signal.throwIfAborted();
-    const dispatch = async () => {
-      if (params.onBeforeDispatch) {
-        await params.onBeforeDispatch();
-      }
-      signal.throwIfAborted();
-      if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
-        throw new SourceOwnerChangedError();
-      }
-      return runOutsideAdmittedGenerationScopes(() =>
-        dispatchGatewayMethodInProcess("agent", params.agentParams, {
+    const dispatch = () =>
+      runOutsideAdmittedGenerationScopes(async () => {
+        if (params.onBeforeDispatch) {
+          await params.onBeforeDispatch();
+        }
+        signal.throwIfAborted();
+        if (!params.isExecutionAllowed() || params.isSourceSessionAdmissionAllowed?.() === false) {
+          throw new SourceOwnerChangedError();
+        }
+        return dispatchGatewayMethodInProcess("agent", params.agentParams, {
           controllerInput: params.controllerInput,
           cancelOnDeadline: true,
           privateCompletion: params.privateCompletion,
@@ -174,9 +172,8 @@ export async function runAnnounceAgentCall(params: {
             }
           },
           resolveGatewayContext: params.resolveGatewayContext,
-        }),
-      );
-    };
+        });
+      });
     const continuationCaller = params.controllerInput?.continuationCaller;
     const dispatched = runOutsideOperatorToolGatewayAuthority(() =>
       continuationCaller ? continuationCaller.run(dispatch) : dispatch(),

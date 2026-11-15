@@ -1,7 +1,7 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
+import { validateConfigSchemaLookupResult } from "../validators/operations.js";
 import {
-  ConfigSchemaLookupResultSchema,
   ConfigSchemaResponseSchema,
   UpdateAvailableSchema,
   UpdateHoldParamsSchema,
@@ -33,12 +33,12 @@ describe("ConfigSchemaResponseSchema", () => {
 });
 
 describe("ConfigSchemaLookupResultSchema", () => {
-  it("accepts a documentation URL in the resolved hint", () => {
+  it("accepts documentation and inherited-default metadata in the resolved hint", () => {
     expect(
-      Value.Check(ConfigSchemaLookupResultSchema, {
+      validateConfigSchemaLookupResult({
         path: "gateway",
         schema: { type: "object" },
-        hint: { docsUrl: "https://docs.openclaw.ai/gateway" },
+        hint: { docsUrl: "https://docs.openclaw.ai/gateway", inheritedDefault: true },
         children: [],
       }),
     ).toBe(true);

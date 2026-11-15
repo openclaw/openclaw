@@ -133,7 +133,13 @@ export function createMobileHeaderSessionMenu(options: {
   const body = (name: "assign-owner" | "group" | "advanced" | "icon") =>
     options.view
       .compact(name)
-      .filter((entry) => !entry.id.startsWith("compact:back") && entry.id !== "back-divider");
+      // This sheet owns its search field; the shared row belongs to regular menus.
+      .filter(
+        (entry) =>
+          !entry.id.startsWith("compact:back") &&
+          entry.id !== "back-divider" &&
+          entry.id !== "groups-search",
+      );
   const select = (item: MenuItem) => {
     // Restore the trigger before pane removal starts its survivor-focus handoff.
     const closeBeforeAction = item.id === "open-command-palette" || item.id === "layout:close-pane";
@@ -359,9 +365,7 @@ export function createMobileHeaderSessionMenu(options: {
     if (!host || !source) {
       return;
     }
-    if (kind === "icon") {
-      options.view.appearance.prepare();
-    }
+    options.view.prepareView(kind);
     const page: HeaderSessionMenuPage = {
       key:
         kind === "assign-owner"

@@ -67,6 +67,7 @@ export function prepareCatalogExecutor(options?: {
   const input: StreamInput = {
     attempt: {
       runId: "run-output-schema",
+      toolUsageRecorder: undefined,
       sessionId: "session-output-schema",
       sessionKey: options?.sessionKey ?? "agent:main:main",
       replyOperation: options?.replyOperation,
@@ -86,6 +87,7 @@ export function prepareCatalogExecutor(options?: {
       coreBuiltinToolNames: new Set(),
       replaySafeToolNames: new Set(),
       codeModeExecToolNames: new Set(),
+      toolUsageIdsByName: new Map(),
       sideEffectToolOwners: new Map(),
       trustedLocalMediaToolNames: new Set(options?.trustedLocalMediaToolNames),
     },

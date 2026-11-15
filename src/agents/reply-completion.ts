@@ -105,6 +105,14 @@ export function resolveCommandReplyExpectation(params: {
   if (isExecCompletionInputProvenance(params.opts.inputProvenance)) {
     return "optional";
   }
+  // WebChat also names the internal routing sentinel. Human conversations accept
+  // explicit silence, while internal work still owes its caller a result.
+  if (
+    params.messageChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (!provenance || provenance.kind === "external_user")
+  ) {
+    return "required";
+  }
   if (
     !params.messageChannel ||
     params.messageChannel === INTERNAL_MESSAGE_CHANNEL ||

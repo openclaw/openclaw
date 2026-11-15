@@ -1,9 +1,9 @@
-import fs from "node:fs";
+import fsp from "node:fs/promises";
 import path from "node:path";
-import { readFileWindowFullySync } from "@openclaw/fs-safe/advanced";
-import { safeRealpathSync, safeStatSync } from "@openclaw/fs-safe/path";
+import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
+import { realpathForExec } from "./exec-command-resolution.js";
 
-function pathComponentsFromRootSync(targetPath: string): string[] {
+function pathComponentsFromRoot(targetPath: string): string[] {
   const parts: string[] = [];
   let cursor = path.resolve(targetPath);
   while (true) {
@@ -16,30 +16,30 @@ function pathComponentsFromRootSync(targetPath: string): string[] {
   }
 }
 
-function isOwnedByCurrentProcessSync(candidate: string): boolean {
+async function isOwnedByCurrentProcess(candidate: string): Promise<boolean> {
   if (process.platform === "win32" || typeof process.getuid !== "function") {
     return false;
   }
-  const stat = safeStatSync(candidate);
+  const stat = await fsp.stat(candidate).catch(() => null);
   return stat !== null && stat.uid === process.getuid();
 }
 
-function isMutableByCurrentProcessSync(candidate: string): boolean {
+async function isMutableByCurrentProcess(candidate: string): Promise<boolean> {
   try {
-    fs.accessSync(candidate, fs.constants.W_OK);
+    await fsp.access(candidate, fsp.constants.W_OK);
     return true;
   } catch {
-    return isOwnedByCurrentProcessSync(candidate);
+    return await isOwnedByCurrentProcess(candidate);
   }
 }
 
-export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean {
-  for (const component of pathComponentsFromRootSync(targetPath)) {
+export async function hasMutableSymlinkPathComponent(targetPath: string): Promise<boolean> {
+  for (const component of pathComponentsFromRoot(targetPath)) {
     try {
-      if (!fs.lstatSync(component).isSymbolicLink()) {
+      if (!(await fsp.lstat(component)).isSymbolicLink()) {
         continue;
       }
-      if (isMutableByCurrentProcessSync(path.dirname(component))) {
+      if (await isMutableByCurrentProcess(path.dirname(component))) {
         return true;
       }
     } catch {
@@ -49,20 +49,20 @@ export function hasMutableSymlinkPathComponentSync(targetPath: string): boolean 
   return false;
 }
 
-function isMutableShellPathSync(targetPath: string): boolean {
+async function isMutableShellPath(targetPath: string): Promise<boolean> {
   return (
-    isMutableByCurrentProcessSync(targetPath) ||
-    isMutableByCurrentProcessSync(path.dirname(targetPath)) ||
-    hasMutableSymlinkPathComponentSync(targetPath)
+    (await isMutableByCurrentProcess(targetPath)) ||
+    (await isMutableByCurrentProcess(path.dirname(targetPath))) ||
+    (await hasMutableSymlinkPathComponent(targetPath))
   );
 }
 
-export function pathLooksMutableForShellPayloadSync(targetPath: string): boolean {
-  if (isMutableShellPathSync(targetPath)) {
+export async function pathLooksMutableForShellPayload(targetPath: string): Promise<boolean> {
+  if (await isMutableShellPath(targetPath)) {
     return true;
   }
-  const realPath = safeRealpathSync(targetPath);
-  return !realPath || isMutableShellPathSync(realPath);
+  const realPath = await realpathForExec(targetPath).catch(() => null);
+  return !realPath || (await isMutableShellPath(realPath));
 }
 
 export function looksLikePathToken(token: string): boolean {
@@ -79,12 +79,15 @@ export function looksLikeExplicitPathToken(token: string): boolean {
   );
 }
 
-export function resolvesToExistingFileSync(rawOperand: string, cwd: string | undefined): boolean {
+export async function resolvesToExistingFile(
+  rawOperand: string,
+  cwd: string | undefined,
+): Promise<boolean> {
   if (!rawOperand) {
     return false;
   }
   try {
-    return fs.statSync(path.resolve(cwd ?? process.cwd(), rawOperand)).isFile();
+    return (await fsp.stat(path.resolve(cwd ?? process.cwd(), rawOperand))).isFile();
   } catch {
     return false;
   }
@@ -107,19 +110,19 @@ function isKnownBinaryExecutableHeader(buffer: Buffer): boolean {
   return peOffset <= buffer.length - 4 && buffer.readUInt32BE(peOffset) === 0x50450000;
 }
 
-export function isLikelyScriptLikePathSync(targetPath: string): boolean {
-  if (!safeStatSync(targetPath)?.isFile()) {
+export async function isLikelyScriptLikePath(targetPath: string): Promise<boolean> {
+  if (!(await fsp.stat(targetPath).catch(() => null))?.isFile()) {
     return true;
   }
   let header: Buffer;
   try {
-    const fd = fs.openSync(targetPath, "r");
+    const fd = await fsp.open(targetPath, "r");
     try {
       header = Buffer.alloc(1024);
-      const bytesRead = readFileWindowFullySync(fd, header, 0);
+      const bytesRead = await readFileWindowFully(fd, header, 0);
       header = header.subarray(0, bytesRead);
     } finally {
-      fs.closeSync(fd);
+      await fd.close();
     }
   } catch {
     return true;

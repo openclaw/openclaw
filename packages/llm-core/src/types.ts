@@ -531,6 +531,8 @@ export interface AssistantMessage {
     mediaUrls?: string[];
     replyToCurrent?: true;
     replyToId?: string;
+    /** Consumed transport input; implicit reply policy still applies. */
+    sourceMessageId?: string;
     /** @deprecated Ignored; omit this field. Retained until the next Plugin SDK major. */
     textPhaseRequiresTerminal?: true;
     /** Parsed once at the assistant write boundary; delivery resolves policy from these facts. */

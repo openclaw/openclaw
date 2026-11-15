@@ -53,6 +53,7 @@ type PageOptions = {
   workspaceFileNames?: string[];
   riskConsentRequired?: boolean;
   reviewRequiredOnce?: "plugin" | "skill";
+  bundledReview?: boolean;
   clawHubTrustWarning?: string;
   applyWait?: Promise<void>;
 };
@@ -153,8 +154,23 @@ export function createPage(options: PageOptions = {}) {
           scheduledJobs: 0,
           contents: {
             instructions,
-            skills: [{ name: "@openclaw/research", version: "1.2.0" }],
-            integrations: [{ name: "@openclaw/workflow-tools", kind: "plugin", version: "1.2.0" }],
+            skills: [
+              {
+                name: "@openclaw/research",
+                source: "clawhub",
+                ref: "@openclaw/research",
+                version: "1.2.0",
+              },
+            ],
+            integrations: [
+              {
+                name: "@openclaw/workflow-tools",
+                kind: "plugin",
+                source: "clawhub",
+                ref: "@openclaw/workflow-tools",
+                version: "1.2.0",
+              },
+            ],
             automations: [],
           },
         },
@@ -190,10 +206,19 @@ export function createPage(options: PageOptions = {}) {
                 {
                   actionId: "plugin:@openclaw/workflow-tools",
                   pluginId: "workflow-tools",
-                  ref: "@openclaw/workflow-tools",
-                  version: "1.2.0",
+                  ...(options.bundledReview
+                    ? {
+                        source: "bundled",
+                        path: "plugins/workflow-tools",
+                        digest: `sha256:${"a".repeat(64)}`,
+                      }
+                    : {
+                        source: "clawhub",
+                        ref: "@openclaw/workflow-tools",
+                        version: "1.2.0",
+                        integrity: `sha256-${"A".repeat(43)}=`,
+                      }),
                   ownerAction: "install",
-                  integrity: `sha256-${"A".repeat(43)}=`,
                   declaredCapabilities: {
                     ...createPluginDeclaredSurface(),
                     tools: ["workflow.start"],
@@ -210,9 +235,19 @@ export function createPage(options: PageOptions = {}) {
             ? [
                 {
                   actionId: "skill:@openclaw/research",
-                  ref: "@openclaw/research",
-                  version: "1.2.0",
-                  integrity: "sha256:reviewed-skill",
+                  ...(options.bundledReview
+                    ? {
+                        source: "bundled",
+                        path: "skills/research",
+                        name: "research",
+                        digest: `sha256:${"b".repeat(64)}`,
+                      }
+                    : {
+                        source: "clawhub",
+                        ref: "@openclaw/research",
+                        version: "1.2.0",
+                        integrity: "sha256:reviewed-skill",
+                      }),
                   riskWarning: "This skill needs your trust.",
                   reviewToken: "review-research",
                 },

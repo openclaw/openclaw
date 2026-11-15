@@ -117,6 +117,7 @@ const projected: TemplateLifecyclePlanResult = {
 };
 const skillReview = {
   actionId: "skill:@community/triage",
+  source: "clawhub" as const,
   ref: "@community/triage",
   version: "1.0.0",
   integrity: "sha256:artifact",
@@ -539,6 +540,7 @@ describe("Gateway Template Add application", () => {
     const input = applyInput();
     const acknowledgement = {
       actionId: skillReview.actionId,
+      source: "clawhub" as const,
       ref: skillReview.ref,
       reviewToken: skillReview.reviewToken,
       acknowledgeRiskWarning: true as const,

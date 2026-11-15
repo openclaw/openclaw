@@ -1,3 +1,0 @@
-# Real manifest and workflow-shell proof of Android test owners, lint transfer,
-# conservative shared/build/missing/full fallback and retained-failure propagation.
-62

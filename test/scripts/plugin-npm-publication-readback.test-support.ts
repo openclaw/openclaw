@@ -104,7 +104,9 @@ export async function createNpmPublicationReadbackFixture(
   const runAttempt = 2;
   const replanned = mode === "replanned-failed";
   const deferredAuth = mode === "deferred-auth";
-  const noPublication = fault === "no-publish" || mode === "prior-deferred" || replanned;
+  const operatorDeferred = mode === "operator-deferred";
+  const noPublication =
+    fault === "no-publish" || mode === "prior-deferred" || replanned || operatorDeferred;
   const parentRunId = 300;
   const parentRunAttempt = 1;
   const publisherAttempt = mode === "retained-publisher" || replanned ? 1 : 2;
@@ -321,7 +323,22 @@ export async function createNpmPublicationReadbackFixture(
       sourceSha,
       all: selected,
       candidates,
-      skippedPublished: selected.filter((entry) => !candidates.includes(entry)),
+      skippedPublished: operatorDeferred
+        ? []
+        : selected.filter((entry) => !candidates.includes(entry)),
+      ...(operatorDeferred
+        ? {
+            coreDeferrals: [
+              {
+                packageName,
+                version,
+                sourceSha: fault === "deferred-invalid" ? "c".repeat(40) : sourceSha,
+                reason: "npm-trusted-publisher-exchange-http-404",
+                evidence: "https://github.com/openclaw/openclaw/actions/runs/12/job/34",
+              },
+            ],
+          }
+        : {}),
     },
   });
   const planMetadata = metadata(43, `plugin-npm-plan-${runId}-${plannerAttempt}`, planZip, runId);
@@ -420,6 +437,9 @@ export async function createNpmPublicationReadbackFixture(
       );
     }
     if (url.startsWith("https://registry.npmjs.org/")) {
+      if (operatorDeferred && fault !== "deferred-published") {
+        return new Response(null, { status: fault === "deferred-registry-error" ? 403 : 404 });
+      }
       if (deferredAuth) {
         throw new Error("Deferred package registry readback must stay owned by recovery.");
       }

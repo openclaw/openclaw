@@ -506,7 +506,7 @@ it.each([
     getCommittedRuntimeConfig: () => config,
   });
   context.githubPublicationService = coordinator;
-  const receipt = vi
+  const sharedPublication = vi
     .spyOn(coordinator, "latestShared")
     .mockResolvedValue({ result: publication, confirmation: null });
   vi.spyOn(publicationIdentity, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
@@ -518,9 +518,9 @@ it.each([
   let merged = false;
   let reads = 0;
   const writes: unknown[] = [];
-  const github = vi
-    .spyOn(publicationTransport, "runPublicationCommand")
-    .mockImplementation(async (argv, options) => {
+  vi.spyOn(publicationTransport, "runPublicationCommand").mockImplementation(
+    async (argv, options) => {
+      // Match the subprocess boundary: rejected attempts execute no GitHub I/O.
       options?.beforeRun?.();
       if (selfRemoving) {
         expect(context.cron.getJob(job.id)).toBeUndefined();
@@ -549,7 +549,8 @@ it.each([
         }
       }
       return publicationCommandResult(merged);
-    });
+    },
+  );
   const restartEntered = createDeferredCore();
   const restartContinue = createDeferredCore();
   let entered = 0;
@@ -737,9 +738,11 @@ it.each([
       clock.setTime(expectDefined(execution.getJob(job.id)?.state.nextRunAtMs, "scheduled timer"));
       const tick = onTimer(schedulerState);
       if (queuedEdit) {
+        // The due run stays queued, without a running marker, until the creating turn ends.
         await vi.waitFor(() => {
-          expect(execution.getJob(job.id)?.state.runningReceiptId).toEqual(expect.any(String));
+          expect(execution.getJob(job.id)?.state.queuedAtMs).toEqual(expect.any(Number));
         });
+        expect(execution.getJob(job.id)?.state.runningReceiptId).toBeUndefined();
         expect(entered).toBe(0);
         if (managerRename) {
           await managerUpdate({ name: "Manager-authored instructions" });
@@ -907,7 +910,7 @@ it.each([
           { details: { state: "merged", mergeCommit: "b".repeat(40) } },
         ]);
         expect(writes).toEqual([{ sha: "a".repeat(40), merge_method: "merge" }]);
-        expect(receipt).toHaveBeenCalled();
+        expect(sharedPublication).toHaveBeenCalled();
         if (scenario === "paused force run") {
           expect(execution.getJob(job.id)).toMatchObject({
             enabled: false,
@@ -929,7 +932,6 @@ it.each([
             ? "missing scope: operator.write"
             : "require full operator write permission",
         );
-        expect(results).toEqual([]);
       }
     }
     if (
@@ -945,8 +947,9 @@ it.each([
       scenario !== "role revoked during merge"
     ) {
       expect(writes).toEqual([]);
-      expect(github).not.toHaveBeenCalled();
-      expect(receipt).not.toHaveBeenCalled();
+      expect(reads).toBe(0);
+      // Local publication lookup may precede the guard; denied actions disclose no result.
+      expect(results).toEqual([]);
     }
     if (recurring) {
       const valid = expectDefined((await fixture.read())[0], "stored continuation");

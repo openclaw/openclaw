@@ -145,12 +145,23 @@ export async function applyTemplateAdd(
                 acknowledgeRiskWarning: review.riskWarning ? true : undefined,
               })),
             acknowledgeSkillWarnings: plan.skillReviews.map(
-              (review): TemplateSkillAcknowledgement => ({
-                actionId: review.actionId,
-                ref: review.ref,
-                reviewToken: review.reviewToken,
-                acknowledgeRiskWarning: true,
-              }),
+              (review): TemplateSkillAcknowledgement =>
+                "path" in review
+                  ? {
+                      actionId: review.actionId,
+                      source: "bundled",
+                      path: review.path,
+                      digest: review.digest,
+                      reviewToken: review.reviewToken,
+                      acknowledgeRiskWarning: true,
+                    }
+                  : {
+                      actionId: review.actionId,
+                      source: "clawhub",
+                      ref: review.ref,
+                      reviewToken: review.reviewToken,
+                      acknowledgeRiskWarning: true,
+                    },
             ),
           }
         : {}),

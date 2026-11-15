@@ -10,7 +10,7 @@ import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 
 registerOpenClawIdEnglish();
 
-export function buildOpenClawIdKeyAttention(
+function buildOpenClawIdKeyAttention(
   status: OpenClawIdStatusResult,
   publication?: OpenClawIdPublication | null,
 ): SidebarAttentionItem | null {

@@ -538,7 +538,7 @@ html.openclaw-native-desktop[data-native-platform="macos"] {
         transparent var(--openclaw-native-titlebar-height, 52px),
         var(--border) 0
       )
-      1;
+      0 1;
   }
 
   /* A collapsed rail is the only nav surface left, so the titlebar row
@@ -549,7 +549,7 @@ html.openclaw-native-desktop[data-native-platform="macos"] {
           transparent var(--openclaw-native-titlebar-height, 52px),
           var(--resize-handle-rest-color) 0
         )
-        1;
+        0 1;
     }
 
     .sidebar {
@@ -565,6 +565,13 @@ html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-pla
   .shell:not(.shell--mobile-nav)
   .sidebar-rail {
   padding-top: calc((var(--rail-header-height) - var(--sidebar-rail-control-size)) / 2);
+}
+
+/* In Settings, non-Mac native history controls occupy the rail's usual top row. */
+html.openclaw-native-web-chrome:not(.openclaw-native-macos):not([data-native-platform="macos"])
+  .shell--settings:not(.shell--mobile-nav)
+  .sidebar-rail {
+  padding-top: var(--openclaw-native-titlebar-height, 52px);
 }
 
 /* Installed Mac apps inject !important padding; keep Settings' clearance, but
@@ -840,6 +847,33 @@ html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-he
 }
 
 html.openclaw-native-macos:not(.openclaw-native-web-chrome) {
+  .sidebar-session-toolbar__collapse {
+    display: none;
+  }
+}
+
+html.openclaw-native-macos.openclaw-native-web-chrome
+  .shell:not(.shell--mobile-nav, .shell--embed, .shell--onboarding) {
+  .sidebar {
+    background: transparent;
+  }
+
+  .sidebar-rail {
+    padding-top: 8px;
+    border-inline-end: 0;
+    border-image: none;
+  }
+
+  .sidebar-shell,
+  .settings-sidebar {
+    background: var(--sidebar-bg);
+  }
+
+  .sidebar-panel-header {
+    min-height: 48px;
+    padding-left: 12px;
+  }
+
   .sidebar-session-toolbar__collapse {
     display: none;
   }

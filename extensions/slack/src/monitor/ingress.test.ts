@@ -189,6 +189,8 @@ describe("Slack durable ingress", () => {
         : expect(receiving).resolves.toBeUndefined();
       try {
         await ackStarted.promise;
+        // Slack must be able to retry until its event is safely stored.
+        expect((await queue.listPending()).map((row) => row.id)).toContain("Ev-ack-order");
         expect(processEvent).not.toHaveBeenCalled();
 
         ackGate.resolve();

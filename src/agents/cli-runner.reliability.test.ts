@@ -1909,7 +1909,7 @@ describe("runCliAgent reliability", () => {
     },
   );
 
-  it("keeps native control operations out of restrictive prompt preparation", async () => {
+  it("keeps hooks and prompt bytes out of native control operations", async () => {
     const { dir, sessionFile, sessionTarget } = createSessionFixture({
       history: [{ role: "user", content: "earlier ask" }],
     });
@@ -1955,7 +1955,7 @@ describe("runCliAgent reliability", () => {
         workspaceDir: dir,
         config,
         prompt: "/compact",
-        extraSystemPrompt: "must not attach to a control operation",
+        extraSystemPrompt: "session system prompt",
         finalizePromptForResolvedTools: () => "mutated",
         provider: "control-cli",
         model: "model",
@@ -1974,7 +1974,7 @@ describe("runCliAgent reliability", () => {
       expect(context.params.prompt).toBe("/compact");
       expect(context.params.cliToolAvailability).toBeUndefined();
       expect(context.reusableCliSession).toEqual({ mode: "reuse", sessionId: "native-session" });
-      expect(context.systemPrompt).toBe("");
+      expect(context.systemPrompt).toContain("session system prompt");
       expect(context.contextEngine).toBeUndefined();
       expect(context.claudeSkillsPlugin.args).toEqual([]);
     } finally {

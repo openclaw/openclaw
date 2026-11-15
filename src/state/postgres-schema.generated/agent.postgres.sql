@@ -23,6 +23,14 @@ CREATE TABLE "acp_parent_stream_events" (
   PRIMARY KEY ("session_id", "run_id", "seq")
 );
 
+CREATE TABLE "agent_tool_usage" (
+  "tool_id" text COLLATE "C" NOT NULL,
+  "score" double precision NOT NULL,
+  "updated_at" bigint NOT NULL,
+  PRIMARY KEY ("tool_id"),
+  CHECK (("score" >= 0))
+);
+
 CREATE TABLE "auth_profile_state" (
   "state_key" text COLLATE "C" NOT NULL,
   "state_json" text COLLATE "C" NOT NULL,

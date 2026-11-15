@@ -1071,26 +1071,26 @@ it.each([
   },
 );
 
-it("fails index --force when the memory index has orphaned provenance", async () => {
-  const args = ["index", "--force"];
+it("fails index --force after full verification records orphaned provenance", async () => {
   const stateDir = path.join(fixtureRoot, `corrupt-state-${workspaceCaseId++}`);
   const workspaceDir = path.join(fixtureRoot, `corrupt-workspace-${workspaceCaseId++}`);
-  const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-  const databasePath = await seedMemoryIndexWithOrphanedProvenance(env);
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  const databasePath = await seedMemoryIndexWithOrphanedProvenance();
   const cfg = indexConfig(workspaceDir, {
     model: "",
     rememberAcrossConversations: false,
     cache: { enabled: false },
     query: { hybrid: { enabled: true } },
   });
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   getRuntimeConfig.mockReturnValue(cfg);
   await useRealManager();
   const error = spyRuntimeErrors(defaultRuntime);
-  await run(args);
-  expect(resolveOpenClawAgentSqlitePath({ agentId: "main", env })).toBe(databasePath);
+  const log = spyRuntimeLogs(defaultRuntime);
+  await run(["index", "--force"]);
+  expect(resolveOpenClawAgentSqlitePath({ agentId: "main" })).toBe(databasePath);
   expect(process.exitCode).toBe(1);
   expect(error).toHaveBeenCalledWith(expect.stringContaining("SQLite foreign_key_check failed"));
+  expectNotLogged(log, "Memory index updated");
 });
 
 it.each([

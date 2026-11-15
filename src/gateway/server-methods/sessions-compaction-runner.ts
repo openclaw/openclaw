@@ -65,6 +65,7 @@ export async function prepareGatewaySessionCompaction(
   }
   const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
     signal: params.abortSignal,
+    metadataOnly: true,
   });
   const { entry, runtimeEntry, sessionManager } = prepared;
   if (!entry || !runtimeEntry) {
@@ -78,6 +79,9 @@ export async function prepareGatewaySessionCompaction(
   }
   if (!preparedSession) {
     return { entry };
+  }
+  if (prepared.metadataOnly) {
+    return { entry, preparedSession };
   }
   try {
     const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {
@@ -155,6 +159,9 @@ export async function runGatewaySessionCompaction(
           : undefined,
       conversationRoutePeerId: primaryConversation?.routeContext?.peerId,
       chatType: primaryConversation?.kind,
+      messageChannel: primaryConversation?.channel,
+      skillsSnapshot: params.entry.skillsSnapshot,
+      toolOverrides: params.entry.toolOverrides,
       provider: resolvedModel.provider,
       model: resolvedModel.model,
       contextTokenBudget,

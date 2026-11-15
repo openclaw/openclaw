@@ -560,11 +560,11 @@ openclaw-pending-session-create {
 .chat-virtual-sizer,
 .chat-virtual-block {
   transition-property: none;
+  width: 100%;
 }
 
 .chat-virtual-sizer {
   position: relative;
-  width: 100%;
 }
 
 .chat-thread-inner--virtual {
@@ -579,7 +579,6 @@ openclaw-pending-session-create {
   position: absolute;
   top: 0;
   left: 0;
-  width: 100%;
 }
 
 /* Browser flow preserves adjacency even when smooth scrolling skips a row's
@@ -592,18 +591,26 @@ openclaw-pending-session-create {
   display: flow-root;
   width: 100%;
   contain: content;
-}
 
-/* Small notice rows must enter at their real height, not the virtual estimate. */
-.chat-virtual-row:has(> .chat-notice) {
-  content-visibility: visible;
-  contain: none;
-}
+  /* WebKit restyles hidden parked subtrees that retain layout boxes.
+     Chromium needs those boxes for timely forecast paint. */
+  @supports (-webkit-nbsp-mode: space) {
+    &[data-prepared-row]:not([data-preparing-row]) {
+      display: none;
+    }
+  }
 
-.chat-virtual-row:focus-within {
-  /* Footer controls use a -4px block margin. Paint containment must clear
-     that overhang plus the 2px focus outline and its 3px offset. */
-  overflow-clip-margin: 10px;
+  /* Small notice rows must enter at their real height, not the virtual estimate. */
+  &:has(> .chat-notice) {
+    content-visibility: visible;
+    contain: none;
+  }
+
+  &:focus-within {
+    /* Footer controls use a -4px block margin. Paint containment must clear
+       that overhang plus the 2px focus outline and its 3px offset. */
+    overflow-clip-margin: 10px;
+  }
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
@@ -1241,41 +1248,26 @@ openclaw-chat-video-player {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 14px 16px;
 }
 
-.chat-assistant-attachment-card.chat-assistant-attachment-card--voice-note {
-  width: 360px;
-}
-
-.chat-assistant-attachment-card--voice-note .chat-audio-player__timeline {
-  order: 1;
-}
-
-.chat-assistant-attachment-card--voice-note .chat-audio-player__time {
-  order: 2;
-}
-
-.chat-assistant-attachment-card--voice-note .chat-audio-player__volume {
-  order: 3;
-}
-
+.chat-audio-player,
 .chat-assistant-attachment-card--audio .chat-media-preparing {
   padding: 14px 16px;
 }
 
-.chat-audio-player:focus-visible {
+.chat-audio-player:focus-visible,
+.chat-audio-player :focus-visible,
+.chat-audio-player__waveform:has(:focus-visible) {
   outline: 2px solid var(--ring);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 
 .chat-audio-player__toggle,
 .chat-audio-player__volume {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
+  display: grid;
+  place-items: center;
+  width: var(--hit, 32px);
+  height: var(--hit, 32px);
   flex: none;
   padding: 0;
   border: 0;
@@ -1283,123 +1275,14 @@ openclaw-chat-video-player {
   cursor: var(--cursor-action);
 }
 
-.chat-audio-player__toggle {
-  color: var(--primary-foreground);
-  background: var(--primary);
-  transition: background-color 120ms ease;
-}
-
-.chat-audio-player__toggle:hover {
-  background: var(--primary-hover);
-}
-
-.chat-audio-player__toggle:active {
-  background: var(--primary-active);
-}
-
-.chat-audio-player__toggle:focus-visible,
-.chat-audio-player__volume:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-}
-
-.chat-audio-player__toggle svg :is(polygon, rect) {
-  fill: currentColor;
-}
-
 .chat-audio-player__timeline {
   display: flex;
-  align-items: center;
   min-width: 0;
   flex: 1;
-}
-
-.chat-audio-player__seek {
-  width: 100%;
-  height: 4px;
-  margin: 0;
-  border-radius: 999px;
-  appearance: none;
-  background: linear-gradient(
-    to right,
-    var(--accent) 0 var(--chat-audio-progress),
-    color-mix(in srgb, var(--muted) 48%, transparent) var(--chat-audio-progress)
-      var(--chat-audio-buffered),
-    color-mix(in srgb, var(--border) 72%, transparent) var(--chat-audio-buffered) 100%
-  );
-  cursor: var(--cursor-action);
-}
-
-.chat-audio-player__seek::-webkit-slider-thumb {
-  width: 12px;
-  height: 12px;
-  appearance: none;
-  border: 2px solid var(--card);
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.chat-audio-player__seek::-moz-range-thumb {
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--card);
-  border-radius: 999px;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
-}
-
-.chat-bubble .chat-audio-player__seek::-webkit-slider-thumb {
-  border-color: var(--chat-attachment-surface, var(--card));
-}
-
-.chat-bubble .chat-audio-player__seek::-moz-range-thumb {
-  border-color: var(--chat-attachment-surface, var(--card));
-}
-
-.chat-audio-player__seek:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 4px;
-}
-
-.chat-audio-player__waveform {
-  position: relative;
-  min-width: 0;
-  height: 22px;
-  flex: 1;
-}
-
-.chat-audio-player__waveform svg {
-  display: block;
-  width: 100%;
-  height: 22px;
-  overflow: visible;
-}
-
-.chat-audio-player__waveform rect {
-  fill: color-mix(in srgb, var(--muted) 62%, transparent);
-}
-
-.chat-audio-player__waveform rect.is-played {
-  fill: var(--accent);
-}
-
-.chat-audio-player__seek--waveform {
-  position: absolute;
-  inset: 0;
-  height: 22px;
-  opacity: 0;
-}
-
-.chat-audio-player__waveform:has(.chat-audio-player__seek:focus-visible) {
-  border-radius: 4px;
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
 }
 
 .chat-audio-player__time {
-  display: block;
-  width: 62px;
+  min-width: 62px;
   flex: none;
   color: var(--muted);
   font-size: 11px;
@@ -1408,28 +1291,135 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-audio-player__seek {
+  width: 100%;
+  height: var(--hit, 4px);
+  margin: 0;
+  border-radius: 999px;
+  appearance: none;
+  background: linear-gradient(
+      90deg,
+      var(--accent) var(--chat-audio-progress),
+      color-mix(in srgb, var(--muted) 48%, transparent) 0 var(--chat-audio-buffered),
+      color-mix(in srgb, var(--border) 72%, transparent) 0
+    )
+    center / 100% 4px no-repeat;
+  cursor: var(--cursor-action);
+
+  &::-webkit-slider-thumb {
+    width: 12px;
+    height: 12px;
+    appearance: none;
+    border: 2px solid var(--thumb, var(--card));
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  &::-moz-range-thumb {
+    width: 9px;
+    height: 9px;
+    border: 2px solid var(--thumb, var(--card));
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+  }
+
+  &:focus-visible {
+    outline-offset: 4px;
+  }
+}
+
+.chat-audio-player__seek--waveform {
+  position: absolute;
+  inset: 0;
+  height: 100%;
+  opacity: 0;
+}
+
+.chat-audio-player__waveform {
+  position: relative;
+  align-content: center;
+  min-width: 0;
+  height: var(--hit, 22px);
+  flex: 1;
+
+  & svg {
+    display: block;
+    width: 100%;
+    height: 22px;
+    overflow: visible;
+  }
+
+  & rect {
+    fill: color-mix(in srgb, var(--muted) 62%, transparent);
+  }
+
+  & rect.is-played {
+    fill: var(--accent);
+  }
+
+  &:has(:focus-visible) {
+    border-radius: 4px;
+  }
+}
+
+.chat-audio-player__toggle {
+  color: var(--primary-foreground);
+  background: var(--primary);
+  transition: background-color 120ms ease;
+
+  &:hover {
+    background: var(--primary-hover);
+  }
+
+  &:active {
+    background: var(--primary-active);
+  }
+
+  & svg :is(polygon, rect) {
+    fill: currentColor;
+  }
+}
+
 .chat-audio-player__volume {
   color: var(--muted);
   background: transparent;
   transition:
     color 120ms ease,
     background-color 120ms ease;
+
+  &:hover {
+    color: var(--text-strong);
+    background: color-mix(in srgb, var(--text) 10%, transparent);
+  }
+
+  & svg {
+    width: 17px;
+    height: 17px;
+  }
 }
 
-.chat-audio-player__volume:hover {
-  color: var(--text-strong);
-  background: color-mix(in srgb, var(--text) 10%, transparent);
+.chat-assistant-attachment-card--voice-note {
+  &.chat-assistant-attachment-card {
+    width: 360px;
+  }
+  & .chat-audio-player__time {
+    order: 1;
+  }
+
+  & .chat-audio-player__volume {
+    order: 2;
+  }
 }
 
-.chat-audio-player__volume svg {
-  width: 17px;
-  height: 17px;
+.chat-audio-player:focus-visible {
+  outline-offset: -2px;
 }
 
-.chat-audio-player__media {
-  display: none;
+.chat-bubble .chat-audio-player {
+  --thumb: var(--chat-attachment-surface, var(--card));
 }
-
 .chat-assistant-video-frame {
   position: relative;
   display: grid;
@@ -2866,6 +2856,10 @@ openclaw-chat-ci-details {
 }
 
 @media (pointer: coarse) {
+  .chat-audio-player {
+    --hit: 44px;
+  }
+
   .chat-subagent-detail__stop {
     min-width: 44px;
     min-height: 44px;

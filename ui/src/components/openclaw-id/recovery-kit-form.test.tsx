@@ -31,7 +31,12 @@ async function mountKit(accountEmail: string | null = "owner@example.test") {
         saved={saved()}
         onContinue={continued}
       >
-        <RecoveryKitPanel details={details} saved={saved()} onSaved={setSaved} />
+        <RecoveryKitPanel
+          details={details}
+          accountEmail={accountEmail}
+          saved={saved()}
+          onSaved={setSaved}
+        />
         <button type="submit" disabled={!saved()}>
           Continue
         </button>
@@ -78,10 +83,10 @@ describe("native recovery kit form", () => {
     view.getByRole("button", { name: "Hide" }).click();
     flush();
     expect(view.password.type).toBe("password");
-    // Even requestSubmit cannot bypass the saved toggle.
+    // Even requestSubmit cannot bypass the saved checkbox.
     view.form.requestSubmit();
     expect(view.continued).not.toHaveBeenCalled();
-    view.getByRole("switch").click();
+    view.getByRole("checkbox").click();
     flush();
     expect(view.continued).not.toHaveBeenCalled();
     const submit = vi.fn((event: SubmitEvent) => ({
@@ -100,7 +105,7 @@ describe("native recovery kit form", () => {
 
   it("cancels a queued continuation if the kit is discarded during submit", async () => {
     const view = await mountKit();
-    view.getByRole("switch").click();
+    view.getByRole("checkbox").click();
     flush();
     view.form.addEventListener("submit", () => view.unmount(), { once: true });
     view.getByRole("button", { name: "Continue" }).click();

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { resolveManagedUpdateLeaseDatabasePath } from "../../infra/update-managed-service-handoff-lease.js";
@@ -14,10 +14,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
-import {
-  createLeaseDiagnostics,
-  projectLeaseDiagnosticFrames,
-} from "./session-delivery-generation-diagnostics.js";
+import { createLeaseDiagnostics } from "./session-delivery-generation-diagnostics.js";
 import {
   SessionDeliveryGenerationUnavailableError,
   SessionDeliveryGenerationRevokedError,
@@ -308,8 +305,24 @@ it.each([false, true])(
   },
 );
 
-it("projects only bounded package positions and rejects unsafe stack forms", () => {
-  const root = path.resolve("/package");
+it("logs only bounded package positions and rejects unsafe stack forms", () => {
+  const root = fileURLToPath(new URL("../../../", import.meta.url));
+  const seen = records();
+  const capture = vi.spyOn(Error, "captureStackTrace");
+  const project = (stack: string) => {
+    capture.mockImplementation((holder) =>
+      Object.defineProperty(holder, "stack", { value: stack }),
+    );
+    const diagnostics = createLeaseDiagnostics(() => ({
+      active: true,
+      invalidated: true,
+      revoked: false,
+    }));
+    diagnostics.flip("row-invalidated");
+    diagnostics.unavailable("active-invalidated");
+    expect(seen).toHaveLength(1);
+    return seen.pop()!.flip;
+  };
   const negative = [
     "/outside/src/a.ts:1:2",
     "/package/node_modules/a.ts:1:2",
@@ -332,7 +345,8 @@ it("projects only bounded package positions and rejects unsafe stack forms", () 
     }),
   ];
   for (const frame of negative) {
-    expect(projectLeaseDiagnosticFrames("    at " + frame, root)).toEqual({
+    expect(project("    at " + frame.replaceAll("/package/", root))).toEqual({
+      kind: "row-invalidated",
       captured: false,
       notCapturedReason: "no-accepted-frames",
     });
@@ -341,21 +355,15 @@ it("projects only bounded package positions and rejects unsafe stack forms", () 
     { length: 6 },
     (_, i) => `    at async fn (${pathToFileURL(path.join(root, "src", `a${i}.ts`)).href}:1:2)`,
   ).join("\n");
-  expect(projectLeaseDiagnosticFrames(stack, root)).toEqual({
+  expect(project(stack)).toEqual({
+    kind: "row-invalidated",
     captured: true,
     frames: ["src/a0.ts:1:2", "src/a1.ts:1:2", "src/a2.ts:1:2", "src/a3.ts:1:2"],
     async: true,
   });
-  expect(
-    projectLeaseDiagnosticFrames(
-      `    at ${pathToFileURL(path.join(root, "src", "a\u0080.ts")).href}:1:2`,
-      root,
-    ),
-  ).toEqual({ captured: true, frames: ["src/a\u0080.ts:1:2"], async: false });
-  expect(projectLeaseDiagnosticFrames(stack, undefined)).toEqual({
-    captured: false,
-    notCapturedReason: "root-unresolved",
-  });
+  expect(project(`    at ${pathToFileURL(path.join(root, "src", "a\u0080.ts")).href}:1:2`)).toEqual(
+    { kind: "row-invalidated", captured: true, frames: ["src/a\u0080.ts:1:2"], async: false },
+  );
 });
 it("returns the identical error and cause even if logging throws", () => {
   const cause = new Error("CAUSE_CANARY");

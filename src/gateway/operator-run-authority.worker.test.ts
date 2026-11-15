@@ -6,6 +6,7 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { classifySqliteMutation } from "../infra/sqlite-schema-mutation.js";
@@ -24,6 +25,7 @@ import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
+import { MEMBER_ROLE_PRESETS } from "./openclaw-id/member-role-presets.test-support.js";
 import {
   setOpenClawIdTunnelPrincipalLookup,
   type OpenClawIdTunnelPrincipal,
@@ -131,7 +133,9 @@ function readerConfig(scopes: GatewayOperatorRoleDefinition["scopes"], withDenie
   };
   return {
     agents: { defaults: { model: "fixture/a" } },
-    gateway: { roles: { definitions: { reader, ...(withDenied ? { denied } : {}) } } },
+    gateway: {
+      roles: { default: "reader", definitions: { reader, ...(withDenied ? { denied } : {}) } },
+    },
   } satisfies OpenClawConfig;
 }
 function registerProof(
@@ -593,6 +597,11 @@ it("uses membership authority for operator runs despite a read-only named-role d
           },
         },
       };
+      cfg.gateway!.roles!.definitions = {
+        ...cfg.gateway!.roles!.definitions,
+        ...MEMBER_ROLE_PRESETS,
+      };
+      setRuntimeConfigSnapshot(cfg);
       context.getRuntimeConfig = () => cfg;
       const admitted: OpenClawIdTunnelPrincipal = {
         kind: "member",

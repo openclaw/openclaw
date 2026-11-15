@@ -85,9 +85,13 @@ Blocking jobs include the CI coverage gate, seal/evidence,
 Build Artifacts, install smoke, survivor lanes, `update-first-hop-compat*`, pack/npm
 qualification, package integrity, and all Linux/Windows/macOS Gateway checks,
 including Windows packaged install/upgrade checks in Release Checks. A cancelled
-run still blocks. The selected `openclaw/ci-gate` must succeed; failed, missing,
-skipped, or cancelled coverage blocks. Only exact failed live-provider or
-Telegram leaves may use the checked-in release-tooling policy. FRV itself must
+run still blocks. The selected `openclaw/ci-gate` must succeed unless its
+failed causes are entirely covered by checked-in exact-job grants. Missing,
+skipped, or cancelled required coverage still blocks. Exact failed live-provider
+or Telegram leaves and the operator-accepted `2026.11.5-beta.3` and
+candidate-bound `2026.11.4` jobs may use the checked-in release-tooling policy.
+The exact candidate, job, version, and any attempt restrictions remain mandatory.
+FRV itself must
 conclude **success** before publication; the publisher has no waiver path.
 Validation covers source CI, packages, plugins,
 Gateway installs and upgrades, and selected app, UI, Telegram, QA, and
@@ -166,6 +170,28 @@ The default remains normal ClawHub publication. A deferred run records
 ClawHub proof. GitHub, Docker, and platform activation may continue, but the
 full release remains incomplete until independent ClawHub recovery verifies the
 original artifacts. Deferral does not authorize repacking or replacing them.
+
+### Explicit beta plugin authentication deferrals
+
+For an original all-package core beta publication with prepared qualification,
+the existing `prepared_plugins` JSON input accepts an optional operator-reviewed
+`corePluginDeferrals` array. An object containing only this array preserves normal
+publication; when artifact descriptors are present, retain the original `npm` and
+`clawhub` descriptors unchanged. Each entry names
+`packageName`, `version`, `sourceSha`, `reason`, and the original GitHub Actions
+job URL in `evidence`. Reasons are `npm-eneedauth` or
+`npm-trusted-publisher-exchange-http-404`; the latter describes a verified
+trusted-publisher token exchange failure, not an arbitrary registry 404. The
+human-approved parent receipt binds the declaration to the exact release source
+and tooling run. It is not available for stable or selected-package publication.
+
+The complete original roster and qualified artifacts remain verified, including
+the deferred packages. Every nondeferred package must be public before core npm
+publication. Final readback retains each original failure and explicit deferred
+disposition; it does not invent a successful publication. If a deferred version
+has since become public, normal registry integrity and selector checks apply.
+Deferred packages still require separately authorized recovery using their
+original qualified bytes.
 
 ### Watch publication
 

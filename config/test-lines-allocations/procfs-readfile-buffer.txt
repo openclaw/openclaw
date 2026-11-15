@@ -1,3 +1,0 @@
-# Large thread lists, RSS/swap records, cgroup accounting, and supervisor fixtures
-# cover buffer overflow fallback and the retained native runtime reader.
-36

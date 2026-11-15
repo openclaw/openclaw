@@ -18,7 +18,7 @@ Write only the request-specific JSON draft at `.openclaw/template-drafts/<draftI
 }
 ```
 
-The manifest is the complete `CLAW.md` text. The UI's review service appends the four scope fields and builds the archive using OpenClaw's existing Template project builder. The `name` is a lowercase unscoped package slug; `version` is exact semver. The person can change the name and description during review.
+The manifest is the complete `CLAW.md` text. The UI's review service appends the four scope fields and builds the archive using OpenClaw's existing Template project builder. The `name` is a lowercase unscoped package slug; `version` is exact semver. Review is read-only. For requested changes, revise this request's private proposal and call `screen(action="template_review", draftId="<this request's draftId>")` again to show a fresh review before publication.
 
 For each portable workspace file, add its newly authored contents to `files`, for example `{ "path": "workspace/AGENTS.md", "content": "..." }`, and map it in manifest frontmatter:
 
@@ -35,15 +35,15 @@ workspace:
 Use `workspace.bootstrapFiles` for supported startup files and `workspace.files` for other managed files. A nonempty `CLAW.md` body already supplies `SOUL.md`; do not also map `SOUL.md` separately. Include optional dependencies only when relevant:
 
 ```yaml
-packages:
-  - kind: skill
-    source: clawhub
-    ref: "@publisher/skill-name"
+skills:
+  - path: skills/portable-checklist
+  - ref: "@publisher/skill-name"
     version: 1.2.3
-  - kind: plugin
-    source: clawhub
-    ref: "@publisher/plugin-name"
+plugins:
+  - ref: "@publisher/plugin-name"
     version: 2.0.0
 ```
 
-These package entries reference ClawHub versions. They do not copy skill or plugin code into the Template archive. Keep tokens, credentials, personal accounts, and runtime-specific model choices out of the draft. The review service rejects unsafe paths and credential-like contents before publication.
+Each entry is either `{ path }` for a newly authored bundled folder, or `{ ref, version }` for an exact ClawHub release. For the bundled skill example, include `skills/portable-checklist/SKILL.md` and its supporting text files in `files`; the builder selects them automatically. A skill folder needs a valid root `SKILL.md` with a description. Never invent a registry reference or version for local content. Referenced releases do not copy code into the archive. Keep tokens, credentials, personal accounts, and runtime-specific model choices out of the draft. The review service rejects unsafe paths and credential-like contents before publication.
+
+Put supported native settings such as tools, sandbox, memory, heartbeat, groupChat, and humanDelay directly under `agent`. `CLAW.md` owns all configuration; keep `schemaVersion: 1` and use the top-level `skills` and `plugins` lists for dependencies.

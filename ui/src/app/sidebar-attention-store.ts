@@ -44,7 +44,7 @@ export type SidebarAttentionStore = ReturnType<typeof createSidebarAttentionStor
 export function createSidebarAttentionStore(sources: SidebarAttentionStoreSources) {
   const listeners = createChangeListeners();
   let owner: SidebarAttentionStoreOwner | null = null;
-  // Settings intentionally mounts no Inbox, so dismissal retirement belongs to this eager facade.
+  // Retire dismissals even when no Inbox presenter is mounted, such as mobile Settings.
   const synchronizeScopeUpgradeDismissal = () => {
     const snapshot = sources.gateway.snapshot;
     const scopes = snapshot.hello?.auth?.scopes;

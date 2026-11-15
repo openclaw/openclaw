@@ -245,10 +245,10 @@ export const scheduleGatewayRestartMock = vi.fn(
   }),
 );
 
-const readGatewayOwnerLeaseMock = vi.hoisted(() =>
-  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLease>(),
+const readGatewayOwnerLeaseAsyncMock = vi.hoisted(() =>
+  vi.fn<typeof import("../../infra/gateway-owner-lease.js").readGatewayOwnerLeaseAsync>(),
 );
-export { readGatewayOwnerLeaseMock };
+export { readGatewayOwnerLeaseAsyncMock };
 
 export type UpdateRunPayload = {
   runId: string;
@@ -373,7 +373,7 @@ vi.mock("../../daemon/gateway-entrypoint.js", async (original) => ({
 
 vi.mock("../../infra/gateway-owner-lease.js", async (original) => ({
   ...(await original<typeof import("../../infra/gateway-owner-lease.js")>()),
-  readGatewayOwnerLease: readGatewayOwnerLeaseMock,
+  readGatewayOwnerLeaseAsync: readGatewayOwnerLeaseAsyncMock,
 }));
 
 vi.mock("../../../packages/gateway-protocol/src/index.js", async (importOriginal) => ({
@@ -491,7 +491,7 @@ beforeEach(() => {
   }));
   scheduleGatewayRestartMock.mockClear();
   scheduleGatewayRestartMock.mockReturnValue({ scheduled: true });
-  readGatewayOwnerLeaseMock.mockReset().mockImplementation(() =>
+  readGatewayOwnerLeaseAsyncMock.mockReset().mockImplementation(async () =>
     detectRespawnSupervisorMock.mock.results.at(-1)?.value
       ? undefined
       : {

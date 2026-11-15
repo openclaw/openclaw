@@ -1,2 +1,0 @@
-# Image-alt extraction regression with visible container controls (issue #195013).
-20

@@ -13,7 +13,7 @@ on:
         required: false
         type: string
       prepared_plugins:
-        description: Exact npm and ClawHub artifact descriptors supplied by OpenClaw Release Button; empty preserves the existing release/repair path
+        description: Optional npm/ClawHub artifact descriptors and corePluginDeferrals approval intent; intent alone preserves the existing release/repair path
         required: false
         type: string
       retired_line_publication_reason:
@@ -155,6 +155,7 @@ jobs:
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.signed_tag.outputs.sha }}
       signed_tag_object_sha: ${{ steps.signed_tag.outputs.tag_object_sha }}
+      prepared_plugins: ${{ steps.inputs.outputs.prepared_plugins }}
       expected_validation_branch: ${{ steps.inputs.outputs.expected_validation_branch }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
       preflight_artifact_run_id: ${{ steps.preflight_artifact.outputs.run_id }}
@@ -204,6 +205,11 @@ jobs:
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
+          # Approval intent is not an artifact descriptor or a route conversion.
+          if [[ -n "$PREPARED_PLUGINS" ]]; then
+            PREPARED_PLUGINS="$(jq -cr 'if type != "object" then error("prepared_plugins must be an object") elif keys == ["corePluginDeferrals"] then "" else del(.corePluginDeferrals) | tojson end' <<< "$PREPARED_PLUGINS")"
+          fi
+          printf 'prepared_plugins=%s\n' "$PREPARED_PLUGINS" >> "$GITHUB_OUTPUT"
           RELEASE_EVIDENCE_MODE="${RELEASE_EVIDENCE_MODE:-full-release-validation}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ID="${FOCUSED_RELEASE_EVIDENCE_RUN_ID:-}"
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT="${FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT:-}"
@@ -739,7 +745,7 @@ jobs:
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           RELEASE_PLUGINS: ${{ inputs.plugins }}
-          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          PREPARED_PLUGINS: ${{ steps.inputs.outputs.prepared_plugins }}
           WINDOWS_NODE_TAG: ${{ inputs.windows_node_tag }}
           WINDOWS_NODE_INSTALLER_DIGESTS: ${{ inputs.windows_node_installer_digests }}
           EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
@@ -1487,6 +1493,10 @@ jobs:
         id: approval_receipt
         env:
           GH_TOKEN: ${{ github.token }}
+          PUBLISH_OPENCLAW_NPM: ${{ inputs.publish_openclaw_npm }}
+          PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
+          PREPARED_PUBLICATION_INPUT: ${{ inputs.prepared_plugins }}
+          PREPARED_NPM_ARTIFACT: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
           RELEASE_TAG: ${{ inputs.tag }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
@@ -1570,10 +1580,10 @@ jobs:
           retention-days: 30
 
       - name: Verify all prepared plugin bytes before publication
-        if: inputs.prepared_plugins != ''
+        if: needs.resolve_release_target.outputs.prepared_plugins != ''
         env:
           GH_TOKEN: ${{ github.token }}
-          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          PREPARED_PLUGINS: ${{ needs.resolve_release_target.outputs.prepared_plugins }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -1606,6 +1616,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
+          PREPARED_PLUGINS: ${{ needs.resolve_release_target.outputs.prepared_plugins }}
           PARENT_WORKFLOW_SHA: ${{ github.workflow_sha }}
           FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.full_release_validation_run_attempt }}
           FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT: ${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}
@@ -1618,8 +1629,9 @@ jobs:
           jq --arg ref "$CHILD_WORKFLOW_REF" --arg sha "$PARENT_WORKFLOW_SHA" \
             --arg full_attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" \
             --arg focused_attempt "$FOCUSED_RELEASE_EVIDENCE_RUN_ATTEMPT" \
+            --arg prepared "$PREPARED_PLUGINS" \
             --arg acknowledgement "$PLUGIN_SDK_API_ACKNOWLEDGEMENT" \
-            '.inputs + {release_profile: "clawhub-only", publish_openclaw_npm: "false", publish_docker_only: "false", finalize_release_before_docker: "false", openclaw_npm_resume_run_id: "", wait_for_clawhub: "true", full_release_validation_run_attempt: $full_attempt, focused_release_evidence_run_attempt: $focused_attempt, plugin_sdk_api_acknowledgement: $acknowledgement} | {state: "intent", workflow: "openclaw-release-publish.yml", ref: $ref, workflowSha: $sha, inputs: .}' \
+            '.inputs + {prepared_plugins: $prepared, release_profile: "clawhub-only", publish_openclaw_npm: "false", publish_docker_only: "false", finalize_release_before_docker: "false", openclaw_npm_resume_run_id: "", wait_for_clawhub: "true", full_release_validation_run_attempt: $full_attempt, focused_release_evidence_run_attempt: $focused_attempt, plugin_sdk_api_acknowledgement: $acknowledgement} | {state: "intent", workflow: "openclaw-release-publish.yml", ref: $ref, workflowSha: $sha, inputs: .}' \
             "$GITHUB_EVENT_PATH" > "$receipt"
           # Record intent before the single mutation. An uncertain response is
           # retained for reconciliation, never retried by this core publisher.
@@ -1658,7 +1670,7 @@ jobs:
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
-          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          PREPARED_PLUGINS: ${{ needs.resolve_release_target.outputs.prepared_plugins }}
         run: |
           set -euo pipefail
           source "${GITHUB_WORKSPACE}/.release-harness/scripts/lib/release-publish-children.sh"
@@ -1888,7 +1900,7 @@ jobs:
           FULL_RELEASE_VALIDATION_MANIFEST_DIR: ${{ runner.temp }}/full-release-validation-manifest
           FOCUSED_RELEASE_EVIDENCE_DIR: ${{ runner.temp }}/authorized-beta-focused-evidence
           CLAWHUB_PLAN_PATH: ${{ runner.temp }}/openclaw-release-clawhub-plan.json
-          PREPARED_PLUGINS: ${{ inputs.prepared_plugins }}
+          PREPARED_PLUGINS: ${{ needs.resolve_release_target.outputs.prepared_plugins }}
           QUALIFIED_PLUGIN_NPM: ${{ needs.resolve_release_target.outputs.plugin_npm_artifact }}
         run: |
           set -euo pipefail
@@ -2170,8 +2182,8 @@ jobs:
             echo "- OpenClaw npm publish: already on npm; resuming postpublish stages" >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
-          # Verify the original complete roster after the child settles. A successful
-          # deferred bootstrap is not proof that its package bytes are public.
+          # Verify every original qualified package after the child settles. Only
+          # the exact operator-approved deferrals may remain unpublished.
           if [[ -n "${PREPARED_NPM_ARTIFACT:-}" ]]; then
             node --input-type=module <<'NODE'
           import { main } from './.release-harness/scripts/plugin-npm-prepared-release.mjs';
@@ -2179,6 +2191,7 @@ jobs:
           await main(['load', '--report-capacity', 'true', '--source-sha', env.TARGET_SHA, '--selection-mode', 'all-publishable',
             '--npm-dist-tag', env.RELEASE_NPM_DIST_TAG === 'extended-stable' ? 'extended-stable' : 'default',
             '--require-published', 'true',
+            '--core-deferral-parent', 'true',
             '--cache-dir', env.RUNNER_TEMP + '/core-roster-downloads',
             '--output-dir', env.RUNNER_TEMP + '/core-roster-packages',
             '--output', env.RUNNER_TEMP + '/core-roster.json',
@@ -2576,8 +2589,8 @@ jobs:
   approve_github_release:
     name: Approve verified GitHub release activation
     # Approval waits must not hold the Linux updater publication queue.
-    needs: [publish, publish_docker]
-    if: ${{ always() && !inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
+    needs: [resolve_release_target, publish, publish_docker]
+    if: ${{ always() && !inputs.finalize_release_before_docker && needs.resolve_release_target.outputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release
@@ -2592,10 +2605,17 @@ jobs:
     name: Finalize GitHub release
     # Reconcile the same release after Docker; the opt-in early path reuses its approval.
     # Apps attach independently after npm and Gateway Docker evidence is complete.
-    needs: [publish, publish_docker, approve_github_release, finalize_github_release_before_docker]
+    needs:
+      [
+        resolve_release_target,
+        publish,
+        publish_docker,
+        approve_github_release,
+        finalize_github_release_before_docker,
+      ]
     # Prepared releases become visible in the outer button workflow only after
     # this parent reaches an allowed terminal state and ClawHub is verified.
-    if: ${{ always() && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' && (needs.approve_github_release.result == 'success' || (inputs.finalize_release_before_docker && needs.finalize_github_release_before_docker.result == 'success')) }}
+    if: ${{ always() && needs.resolve_release_target.outputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' && (needs.approve_github_release.result == 'success' || (inputs.finalize_release_before_docker && needs.finalize_github_release_before_docker.result == 'success')) }}
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
     concurrency:
       group: linux-app-release-publish
@@ -2692,8 +2712,8 @@ jobs:
 
   approve_github_release_before_docker:
     name: Approve GitHub release before Docker
-    needs: [publish]
-    if: ${{ inputs.finalize_release_before_docker && inputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' }}
+    needs: [resolve_release_target, publish]
+    if: ${{ inputs.finalize_release_before_docker && needs.resolve_release_target.outputs.prepared_plugins == '' && inputs.publish_openclaw_npm && needs.publish.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: npm-release

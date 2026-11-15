@@ -274,6 +274,17 @@ export function retainPreparedPluginGeneration(
   };
 }
 
+/** Shared builds outlive their requesting turn: they hold the generation, not the turn's scope. */
+export function runWithPreparedPluginGeneration<T>(
+  generation: PreparedModelRuntimePluginGeneration,
+  build: () => Promise<T>,
+): Promise<T> {
+  return pluginInvocationContext.exit(async () => {
+    await using _ = { [Symbol.asyncDispose]: retainPreparedPluginGeneration(generation) };
+    return await build();
+  });
+}
+
 /** Each admitted lease owns callable authority independently of its parent's lifetime. */
 export function createPreparedModelRuntimeLease(
   snapshot: PreparedModelRuntimeSnapshot,

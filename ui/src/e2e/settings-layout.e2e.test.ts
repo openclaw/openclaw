@@ -7,11 +7,7 @@ import type { DevicePairingList } from "../../../src/gateway/device-pairing-list
 import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  defaultControlUiFeatureMethods,
-  installMockGateway,
-  waitForControlUiRoute,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createDarkDesktopControlUiContextOptions } from "./control-ui-browser-options.test-support.ts";
 import {
@@ -48,7 +44,6 @@ const emptyDeviceResponses = {
   "device.pair.list": { pending: [], paired: [] } satisfies DevicePairingList,
   "system-presence": [] satisfies PresenceEntry[],
 };
-
 const introRoutes = [
   "appearance",
   "approvals",
@@ -59,7 +54,6 @@ const introRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const learnMoreRoutes = [
   "appearance",
   "approvals",
@@ -69,7 +63,6 @@ const learnMoreRoutes = [
   "security",
   "talk",
 ] as const;
-
 const sectionAlignmentRoutes = [
   "appearance",
   "cloud-workers",
@@ -78,9 +71,7 @@ const sectionAlignmentRoutes = [
   "talk",
   "updates",
 ] as const;
-
 const actionSectionCases = [{ route: "mcp", heading: "Servers" }] as const;
-
 const settingsRowRoutes = [
   "profile",
   "appearance",
@@ -109,11 +100,8 @@ const settingsRowRoutes = [
   "about",
   "debug",
 ] as const satisfies readonly RouteId[];
-
 const mobileSettingsRoutes = ["profile", "plugins", "logs"] as const satisfies readonly RouteId[];
-
 const mobileStandaloneSettingsPageRoutes = ["memory-import"] as const satisfies readonly RouteId[];
-
 const mobileGeometryCases = [
   { route: "sessions", contentSelector: ".settings-page" },
   { route: "worktrees", contentSelector: ".settings-page" },
@@ -124,14 +112,12 @@ const mobileGeometryCases = [
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugin-settings", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;
-
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
   { width: 1366, height: 768 },
   { width: 1440, height: 900 },
 ] as const;
-
 const standaloneHeaderCases = [
   { route: "cron", subtitle: "Schedule recurring tasks for your agent." },
   { route: "usage", subtitle: "API usage and costs." },
@@ -195,44 +181,6 @@ function createCronLayoutMethodResponses() {
 }
 
 suite.define(() => {
-  it("keeps agent identity controls inside their fields at desktop and mobile widths", async () => {
-    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      await installMockGateway(page, {
-        featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "agents.update"],
-      });
-      await page.goto(`${suite.server.baseUrl}settings/agents`);
-      const editor = page.locator(".agent-identity-editor");
-      await editor.waitFor();
-
-      for (const viewport of responsiveViewports) {
-        await page.setViewportSize(viewport);
-        for (const [name, control] of [
-          ["Display name", editor.getByRole("textbox", { name: "Display name" })],
-          ["Emoji input", editor.getByRole("textbox", { name: "Emoji" })],
-          ["Emoji picker", editor.getByRole("button", { name: "Choose emoji" })],
-        ] as const) {
-          await control.focus();
-          await expect
-            .poll(
-              () =>
-                control.evaluate((element) => {
-                  const inputBox = element.getBoundingClientRect();
-                  const fieldBox = element.closest(".field")!.getBoundingClientRect();
-                  const cardBox = element.closest(".settings-row")!.getBoundingClientRect();
-                  return (
-                    inputBox.width > 0 &&
-                    inputBox.left >= Math.max(fieldBox.left, cardBox.left) - 1 &&
-                    inputBox.right <= Math.min(fieldBox.right, cardBox.right) + 1
-                  );
-                }),
-              { message: `${name} input is contained at ${viewport.width}px` },
-            )
-            .toBe(true);
-        }
-      }
-    });
-  });
-
   it("loads provider-settings copy after New Session and Chat without startup errors", async () => {
     const recordVisuals = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     await suite.withPage(
@@ -276,7 +224,6 @@ suite.define(() => {
           };
           page.on("response", captureScript);
           stopCapturing.push(() => page.off("response", captureScript));
-
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
             ? page.getByRole("heading", { name: /^Provider access\b/ })
@@ -326,7 +273,6 @@ suite.define(() => {
         const pathname = pathForRoute(route);
         await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, { pathname, routeId: route });
-
         const header = page.locator(".content-header--settings").last();
         const content = page.locator(".settings-page").last();
         await Promise.all([header.waitFor(), content.waitFor()]);

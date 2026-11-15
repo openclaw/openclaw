@@ -13,15 +13,8 @@ import {
 import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliFailureLines, formatCliJsonFailure } from "../cli/failure-output.js";
 import type { OpenClawConfig } from "../config/config.js";
-import * as embeddedStateLock from "../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
-import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
-import {
-  acquireGatewayLock,
-  GatewayLockError,
-  type GatewayLockOptions,
-} from "../infra/gateway-lock.js";
-import { GatewayStateOwnerContentionError } from "../infra/gateway-state-owner.js";
+import * as processSignalBridge from "../infra/process-signal-bridge.js";
+import { captureNativeSignalBridge } from "../infra/process-signal-bridge.test-support.js";
 import { loggingState } from "../logging/state.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -31,15 +24,13 @@ import {
   createExplicitSystemAgentConfig,
   createGatewayNormalCloseError,
   createGatewayTimeoutError,
-  createLocalGatewayLockOptions,
   gatewaySuccessReply,
   remoteGatewayConfig,
   settleGatewayAgentRequest,
 } from "./agent-via-gateway.test-support.js";
 import type { agentCommand as AgentCommand } from "./agent.js";
 
-const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
+const createNativeBridge = processSignalBridge.createProcessSignalBridge;
 
 const loadConfig = vi.hoisted(() => vi.fn());
 const loadConfigWithShellEnvFallback = vi.hoisted(() => vi.fn());
@@ -99,16 +90,8 @@ let originalExitCode: NodeJS.Process["exitCode"];
 function captureAgentCliSignals() {
   const signals = captureNativeSignalBridge(createNativeBridge);
   signalCaptures.push(signals);
-  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
-    signals.create,
-  );
+  vi.spyOn(processSignalBridge, "createProcessSignalBridge").mockImplementationOnce(signals.create);
   return signals;
-}
-
-function useLocalGatewayLockOptions(options: GatewayLockOptions) {
-  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
-    acquireNativeStateLock({ ...params, options }),
-  );
 }
 
 function runText(options: CommandOptions, output = runtime) {
@@ -268,6 +251,10 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: loadRuntimeConfig,
   captureRuntimeConfigAsyncReader: () => async () => loadRuntimeConfig(),
   loadConfig: loadRuntimeConfig,
+}));
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  runWithLocalStateOwner: async (params: { runLocal: () => unknown }) => params.runLocal(),
 }));
 // mock-isolation: exercise dispatch without opening a live Gateway connection.
 vi.mock("../gateway/call.js", () => ({
@@ -496,69 +483,6 @@ it.each([false, true])("reads literal UTF-8 files (symlink chain=%s)", async (sy
   });
   expect(gatewayRequest().config).toBe(loadConfig.mock.results[0]?.value);
   expectUncalled(agentCommand, loadAgentSessionModuleMock);
-});
-
-it("refuses --local before embedded startup when a live Gateway owns the state directory", async () => {
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123_456);
-  const lockOptions = createLocalGatewayLockOptions(testStore.dir);
-  useLocalGatewayLockOptions(lockOptions);
-  const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-  expect(gatewayLock).not.toBeNull();
-  if (!gatewayLock) {
-    throw new Error("Expected live Gateway fixture lock");
-  }
-
-  try {
-    await expect(runJson({ to: "+1555", local: true, json: true })).rejects.toThrow(
-      `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Run without --local to use it, or stop the Gateway first (openclaw gateway stop).`,
-    );
-    expectUncalled(agentCommand, startOneShotDiagnosticsExporters, jsonRuntime.writeJson);
-  } finally {
-    await gatewayLock.release();
-  }
-});
-
-it("holds one agent-embedded state lock for the run and rejects a concurrent --local run", async () => {
-  const { dir } = testStore;
-  let elapsedMs = 0;
-  const lockOptions = createLocalGatewayLockOptions(dir, {
-    now: () => elapsedMs,
-    sleep: async (ms) => {
-      elapsedMs += ms;
-    },
-  });
-  useLocalGatewayLockOptions(lockOptions);
-  const firstRunStarted = createDeferredCore();
-  const firstRunFinished = createDeferredCore();
-  agentCommand.mockImplementationOnce(async () => {
-    firstRunStarted.resolve();
-    await firstRunFinished.promise;
-  });
-  const firstRun = runTo({ message: "first", local: true });
-  const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-  try {
-    await Promise.race([firstRunStarted.promise, firstRun]);
-    const payload: unknown = JSON.parse(fs.readFileSync(stateLockPath, "utf8"));
-    expect(payload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
-
-    const secondRun = runTo({ message: "second", local: true });
-    await expect(secondRun).rejects.toBeInstanceOf(GatewayLockError);
-    await expect(secondRun).rejects.toMatchObject({
-      message: expect.stringContaining("wait for the current OpenClaw operation to finish"),
-      cause: expect.any(GatewayStateOwnerContentionError),
-    });
-    await expect(secondRun).rejects.toMatchObject({
-      message: expect.stringContaining(path.join(fs.realpathSync(dir), "state", "openclaw.sqlite")),
-      cause: {
-        databasePath: path.join(fs.realpathSync(dir), "state", "openclaw.sqlite"),
-      },
-    });
-    expect(agentCommand).toHaveBeenCalledTimes(1);
-  } finally {
-    firstRunFinished.resolve();
-    await firstRun;
-  }
-  expect(fs.existsSync(stateLockPath)).toBe(false);
 });
 
 it.each([
@@ -816,10 +740,7 @@ it.each([
 ] as const)(
   "releases local state after $signal ($outcome)",
   async ({ signal, exitCode, outcome }) => {
-    const { dir } = testStore;
     const signals = captureAgentCliSignals();
-    const lockOptions = createLocalGatewayLockOptions(dir);
-    useLocalGatewayLockOptions(lockOptions);
     agentCommand.mockImplementationOnce(async (opts: { abortSignal?: AbortSignal }) => {
       expect(opts.abortSignal).toBeInstanceOf(AbortSignal);
       return await new Promise((resolve, reject) => {
@@ -846,12 +767,9 @@ it.each([
 
     const run = runTo({ local: true });
     await waitForAgentCommandCall();
-    const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-    expect(fs.existsSync(stateLockPath)).toBe(true);
     signals.emit(signal);
 
     await expect(run).resolves.toBeUndefined();
-    expect(fs.existsSync(stateLockPath)).toBe(false);
     expect(callGateway).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(exitCode);
     expectNoSignalListeners(signals);

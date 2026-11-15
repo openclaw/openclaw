@@ -14,13 +14,15 @@ Every model has a context window: the maximum number of tokens it can process. W
 2. The summary is saved in the session transcript.
 3. Recent messages are kept intact.
 
+In the Control UI, the **Context compacted** divider shows the tokens saved and the percentage reduction from the pre-compaction token count when both before and after counts are available.
+
 OpenClaw keeps assistant tool calls paired with their matching `toolResult` entries when it picks a compaction split point. If the point lands inside a tool block, OpenClaw moves the boundary so the pair stays together and the current unsummarized tail is preserved.
 
 Compaction and branch summaries omit an edit or write from modified-file metadata when its matching tool result explicitly reports `changed: false`. An earlier change to the same path remains recorded. Missing results and errors without that explicit outcome remain conservative: an error alone does not prove that no file changed.
 
 Built-in compaction summarizes the older history in one model request, whatever the size of the session or the context window. A split turn adds one request for the turn prefix, and a failed safeguard quality audit adds one request per corrective attempt. Each request's conversation input is capped at 160,000 characters (about 40,000 tokens), or less when the summarizer's own context window is smaller. A larger history is filled in this order: the newest messages verbatim, in half of that budget; your older messages, which carry the asks, decisions and corrections, in a quarter, each trimmed to at most 2,000 characters and spread evenly across the history when they do not all fit; the oldest messages, in a tenth; and evenly spaced runs of the remaining messages, trimmed to 6,000 characters each. Each gap is marked with the number of messages left out, and the summarizer is told not to guess their content and to keep the previous summary's facts. Chinese, Japanese, and Korean (CJK) characters count by their approximate token weight. The bound applies to the summarizer input only; the transcript keeps every message.
 
-Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
+Ordinary long tool results use a 2,000-character summary-input projection, including an explicit truncation marker. It keeps the beginning and end so terminal result codes survive. When a history exceeds the summary input cap, tool results older than the newest messages use a 500-character projection instead, which leaves room for more of your messages and the assistant's replies. Existing diagnostic-preservation rules stay in place, and short results pass through unchanged. Text in the omitted middle can still be lost; the full result remains in the transcript.
 
 The full conversation history stays on disk. Compaction only changes what the model sees on the next turn.
 
@@ -117,6 +119,14 @@ For OpenAI-compatible Chat Completions, an automatically context-capped response
 Before automatically reducing the output budget for an OpenAI-compatible tool request, OpenClaw uses a minimum output budget equal to one eighth of the model’s declared maximum output, bounded between 16 and 2,048 tokens. If that minimum cannot fit, compaction runs before the request is sent. Requests without active tools keep the 16-token floor, and explicit output limits that fit remain valid.
 
 Overflow recovery trims tool results within the current model-context window. Older messages and reset boundaries remain in retained history without being copied into new transcript entries.
+
+Before using the Responses compact endpoint, OpenClaw checks that its input fits
+the model and request window. Oversized input goes directly to the bounded client
+summarizer. If the endpoint still reports context overflow during automatic
+compaction, OpenClaw logs the reason and commits a deterministic reduction without
+another model request. Recent turns and the pending request stay in context;
+older messages remain in saved history. Manual `/compact` keeps trying the bounded
+client summarizer after an endpoint failure.
 
 If overflow recovery cannot make the prompt fit, the failed reply suggests `/reset`, `/new`, or a larger-context model. If the recovery compaction itself fails, for example because the summary model errors or times out, the reply says so and suggests trying again or running `/compact`. The Control UI shows this guidance in Details and keeps it in saved chat history. For a single oversized prompt, shorten the prompt before resending it in a new session.
 
@@ -251,17 +261,41 @@ This works with local models too, for example a second Ollama model dedicated to
 
 When unset, compaction starts with the active session model. If summarization fails with a model-fallback-eligible provider error, OpenClaw retries that compaction attempt through the session's existing model fallback chain. The fallback choice is temporary and is not written back to session state. An explicit `agents.defaults.compaction.model` override remains exact and does not inherit the session fallback chain.
 
-If the summarizer refuses the request, built-in compaction keeps the prepared recent
-history without requesting another summary. This applies to automatic maintenance
-and `/compact`. A persisted marker records that older messages were omitted without
-a new summary; saved history remains intact. A warning always explains the trim and
-asks you to resend essential older details, even when ordinary compaction notices
-are disabled. If the current request cannot fit, reduce it or use `/new` and resend
-the context needed to continue. Provider refusals do not switch models.
+If the summarizer refuses the request and that chain has another distinct model,
+OpenClaw requests the summary once more from the next model in the chain, with that
+model's own credentials. A summary from that model is committed normally, and its
+compaction details record that model's `provider/model` as `summaryRoute`; Gateway
+logs record `[compaction] summary refused by ...; retrying the summary once on ...`.
+The refusing model is never asked again, and the retry never walks further down the
+chain.
+
+If there is no other model, or the retry also refuses or fails, built-in compaction
+keeps the prepared recent history without another summary request. This applies to
+automatic maintenance and `/compact`. A persisted marker records that older messages
+were omitted without a new summary; saved history remains intact. A warning always
+explains the trim and asks you to resend essential older details, even when ordinary
+compaction notices are disabled. If the current request cannot fit, reduce it or use
+`/new` and resend the context needed to continue. An explicit
+`agents.defaults.compaction.model` has no chain, so its refusals go straight to this
+trim.
 
 Preflight compaction also uses that chain when the primary auth profile is already in cooldown. Each candidate must pass auth admission before summarization; a healthy fallback can compact the session without waiting for the primary cooldown to expire.
 
 In safeguard mode, provider timeouts and rate limits from built-in summarization remain eligible for that chain when no earlier summary can be reused. A summary deadline or an HTTP 408 or 504 instead uses the automatic timeout fallback (see [Auto-compaction](#auto-compaction)). Caller cancellation and failed safeguard quality checks do not trigger a model switch.
+
+When a safeguard summary fails for any reason other than a refusal (a timeout,
+overload, network error or malformed output), compaction is cancelled and history is
+kept. The exception is a compaction that the next request requires, such as a
+required preflight compaction before a turn that no longer fits. That compaction
+instead keeps the prepared recent history without a summary, as after a refusal,
+and the reply continues. It commits on the route that failed rather than trying the
+model fallback chain. Channels show the degraded-compaction warning, and the
+session status reports degraded history. Without this, every turn in that session
+fails with `Preflight compaction required but failed` until the summarizer recovers.
+
+Each failed or cancelled safeguard attempt is saved in the session transcript as an
+`openclaw.compaction-attempt` entry with its failure class, whether the compaction
+was required, tokens before and outcome. These entries never enter model context.
 
 ### Summary size
 
@@ -287,6 +321,17 @@ fit the active model's token budget beside instructions, tools, and retained
 history. Larger summaries increase context usage and replay cost on subsequent
 requests. They do not increase the summarizer's input or output allowance, recover
 facts already lost from earlier summaries, or change provider-native compaction.
+
+After the capped summary, client-side compaction appends a deterministic record of
+the compacted region, built without a model: recent user-role messages quoted with
+their recorded origin, the most-referenced identifiers, and the last assistant
+replies, with credential shapes redacted. It has its own budget of up to 6,000
+characters (never more than `maxSummaryChars`) outside the summary ceiling. It
+shrinks or is dropped when the active model's token budget has no room for it.
+Each compaction replaces the previous record instead of summarizing it again.
+The same credential redaction applies to every text the summary quotes from the
+conversation: preserved recent turns, split-turn context, the latest request, and
+extracted identifiers. The stored transcript keeps the original text.
 
 ### Identifier preservation
 

@@ -4,6 +4,7 @@ import * as normalization from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import * as promptPool from "../sessions/system-prompt-pool.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { createComputerTool } from "../tools/computer-tool.js";
 import {
@@ -191,6 +192,10 @@ describe("system prompt series", () => {
     const updated = project(second);
     expect(updated.systemPrompt).toBe(first);
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
+    const pool = vi.spyOn(promptPool, "shareSystemPromptPrefix");
+    expect(project(second).update).toBeUndefined();
+    expect(pool).not.toHaveBeenCalled();
+    pool.mockRestore();
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
 
@@ -215,7 +220,7 @@ describe("system prompt series", () => {
       expect(compacted.restart).toBe(true);
       expect(compacted.systemPrompt).toBe(changed);
       expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
+      beginSessionSystemPrompt(state);
       expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
     },
   );
@@ -262,7 +267,7 @@ describe("system prompt series", () => {
     await persist(entries);
     const state = fixture.state;
     const first = project(changed, entries);
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const retry = project(changed, entries);
     expect(retry.update?.content).toBe(first.update?.content);
     await expect(
@@ -297,7 +302,7 @@ describe("system prompt series", () => {
     ).rejects.toThrow("checkpoint acknowledgment rejected");
     expect(entries.at(-1)).toMatchObject({ data: { renderedPrefix: changed.trimEnd() } });
 
-    beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+    beginSessionSystemPrompt(state);
     const restored = project(base, entries);
     expect(restored.restart).toBe(false);
     expect(restored.systemPrompt).toBe(base.trimEnd());
@@ -322,7 +327,7 @@ describe("system prompt series", () => {
         fixture.reload();
       }
       const state = fixture.state;
-      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => entries });
+      beginSessionSystemPrompt(state);
       const recovered = project(base, entries);
       expect(recovered.restart).toBe(true);
       expect(recovered.update).toBeUndefined();
@@ -371,25 +376,6 @@ describe("system prompt series", () => {
       expect(prepareSessionSystemPrompt(input).update).toBeUndefined();
     },
   );
-
-  it("retires earlier overrides when switching to a route that rebuilds the prompt", async () => {
-    const entries: SessionEntry[] = [];
-    project(base);
-    await persist(entries);
-    project(changed, entries);
-    await persist(entries);
-    const state = fixture.state;
-    expect(
-      beginSessionSystemPrompt({
-        state,
-        routeKey: "other",
-        enabled: false,
-        getEntries: () => entries,
-      }),
-    ).toBe(true);
-    expect(state.systemPrompt).toBeUndefined();
-    expect(project(changed, entries).restart).toBe(true);
-  });
 
   it("restores the pinned series and delivers intervening changes", async () => {
     const entries: SessionEntry[] = [];

@@ -232,10 +232,10 @@ function snapshotAgentEventMetadata(event: AgentEventPayload): AgentEventPayload
       typeof value === "boolean" ||
       (typeof value === "string" && value.length <= 256)
     ) {
-      Object.defineProperty(data, key, { value, enumerable: true });
+      Object.defineProperty(data, key, { ...descriptor, configurable: true, writable: true });
     }
   }
-  return structuredClone({ ...event, data });
+  return { ...event, data, ...(event.preamble && { preamble: { ...event.preamble } }) };
 }
 
 export function dispatchPluginAgentEventSubscriptions(params: {

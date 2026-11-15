@@ -4,6 +4,7 @@ import path from "node:path";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { isMissingPathError } from "../infra/errno.js";
+import { resolveRequiredOsHomeDir } from "../infra/home-dir.js";
 import { hasCompletedLegacyAgentDirMigration } from "../infra/state-migrations.agent-dir-receipt.js";
 import { resolveLegacyProfileMigrationExceptions } from "../infra/state-migrations.profile-scope.js";
 import { isUpdateRehearsalReadOnlyPath } from "../infra/update-rehearsal-paths.js";
@@ -38,7 +39,9 @@ export function resolveInstallAgentDir(
     (loaded ??= typeof cfg === "function" ? cfg(baseEnv) : { config: cfg, env: baseEnv });
   const overrideDir = () =>
     deps?.agentDir ??
-    ((loaded?.env ?? baseEnv).OPENCLAW_AGENT_DIR?.replace(/^~(?=\/|$)/, () => homedir()) ||
+    ((loaded?.env ?? baseEnv).OPENCLAW_AGENT_DIR?.replace(/^~(?=\/|$)/, () =>
+      resolveRequiredOsHomeDir(loaded?.env ?? baseEnv, homedir),
+    ) ||
       undefined);
   const agentId = () => {
     const { config } = read();

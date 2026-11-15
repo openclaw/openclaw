@@ -289,9 +289,9 @@ export function childEvalArgs(source: string): string[] {
       loader.push(arg, value);
     }
   });
-  const hooks = `import { registerHooks } from "node:module";
+  const hooks = `import nodeModule from "node:module";
     const sdk = ${JSON.stringify(sdkUrls())};
-    registerHooks({ resolve(specifier, context, next) {
+    nodeModule.registerHooks({ resolve(specifier, context, next) {
       const url = sdk[specifier];
       return url ? { url, shortCircuit: true } : next(specifier, context);
     } });`;

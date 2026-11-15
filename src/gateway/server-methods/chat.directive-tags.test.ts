@@ -1237,7 +1237,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it.each(["copied-leaf", null])(
+  // A branch switch keeps the transcript identity, so the session id no longer
+  // fences a stale pane. The fence is the appended `leaf` control: a pane that
+  // still displays the pre-switch leaf, or claims the empty root, is refused even
+  // though it names the session's current id.
+  it.each(["active-sibling", null])(
     "rejects leaf %s from before a branch switch",
     async (expectedLeafEntryId) => {
       const { context, respond, send } = await createSqliteChatRequest(
@@ -1269,7 +1273,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         env: suiteFixtureEnv,
         path: suiteDatabasePath,
       });
-      const staleSessionId = mockState.sessionId;
+      const preSwitchSessionId = mockState.sessionId;
       const switched = await switchSessionBranch({
         agentId: "main",
         env: suiteFixtureEnv,
@@ -1281,7 +1285,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       if (switched.status !== "created") {
         throw new Error("expected branch switch test invariant");
       }
-      expect(switched.entry.sessionId).not.toBe(staleSessionId);
+      // The in-place switch keeps the id the stale pane is still holding.
+      expect(switched.entry.sessionId).toBe(preSwitchSessionId);
       mockState.sessionId = switched.entry.sessionId;
       const before = loadTranscriptEventsSync(transcriptScope());
       expect(resolveSessionTranscriptActiveLeafEntryId(before)).toBe("copied-leaf");
@@ -1290,7 +1295,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         idempotencyKey: "idem-rotated-exact-leaf",
         requestParams: {
           expectedLeafEntryId,
-          sessionId: staleSessionId,
+          sessionId: preSwitchSessionId,
         },
         waitFor: "none",
       });
@@ -4309,10 +4314,10 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("leaves ACP bridge user persistence to the agent runtime", async () => {
+  it("persists ACP bridge photos as durable user-turn media", async () => {
     await createReadyChatTranscript("openclaw-chat-send-user-transcript-acp-images-");
     mockState.triggerAgentRunStart = true;
-    setSavedMediaResults(["/tmp/should-not-be-used.png", "image/png"]);
+    setSavedMediaResults(["/tmp/acp.png", "image/png", "acp.png"]);
     await createChatRequestFixture().send({
       idempotencyKey: "idem-user-transcript-acp-images",
       message: "bridge image",
@@ -4332,16 +4337,17 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expectBroadcast: false,
     });
 
+    // The bridge defers its commit to the agent runtime, so the resolved user turn is
+    // the durable record the Control UI reloads. Only the managed claim survives there:
+    // the staged path and the uploaded bytes stay out, and the model still receives the
+    // photo exactly once, from the inline prompt image.
     await waitForAssertion(() => {
-      expect(mockState.savedMediaCalls).toStrictEqual([]);
-      expect(findUserUpdate()).toBeUndefined();
-      expect(mockState.lastDispatchUserTurnInput).toEqual(
-        createExpectedAcpUserTurn({
-          content: "bridge image",
-          idempotencyKey: "idem-user-transcript-acp-images:user",
-          provenance: { kind: "external_user" },
-        }),
-      );
+      const userTurn = mockState.lastDispatchUserTurnInput as { content?: unknown } | undefined;
+      const claim = [expect.objectContaining({ url: "media://inbound/acp.png", kind: "image" })];
+      expect(mockState.savedMediaCalls).toHaveLength(1);
+      expect(mockState.lastDispatchImages).toHaveLength(1);
+      expect(userTurn?.content).toBe("bridge image");
+      expectClaimOnlyTranscriptMedia(userTurn, claim, ["/tmp/acp.png"]);
     });
   });
 

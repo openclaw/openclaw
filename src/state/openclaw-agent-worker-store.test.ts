@@ -187,15 +187,12 @@ it.each([false, true])(
       expect(readLeases()).toEqual(retainedLeases);
       beginGatewayShutdownCleanup();
       const cleanupThread = await following.execute(append("cleanup"), allow);
-      if (retainGeneration) {
-        expect(cleanupThread).toBe(firstThread);
-        expect(readLeases()).toEqual(retainedLeases);
-      } else {
-        expect(readLeases()).toEqual(hostLeases);
-      }
+      expect(cleanupThread).toBe(firstThread);
+      expect(readLeases()).toEqual(retainGeneration ? retainedLeases : hostLeases);
       expectValues(db, ["first", "second", "third", "cleanup"]);
       await following.close();
       await execution?.release();
+      await closeOpenClawAgentDatabasesAsync();
       await vi.waitFor(() => expect(db.isOpen).toBe(false));
       expect(readLeases()).toEqual([]);
       expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);

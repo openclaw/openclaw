@@ -244,8 +244,6 @@ describe("release readiness contract", () => {
 
   it.each([
     ["unsealed input", { prepared_plugins: "{}" }],
-    ["retired soak waiver", { stable_soak_waiver: "2026.9.2 approved" }],
-    ["retired lane waiver", { lane_waiver: "2026.9.2 approved" }],
     ["moving source", { tag: "main" }],
     ["wrong beta channel", { npm_dist_tag: "latest" }],
     ["alpha owner", { tag: "v2026.9.2-alpha.1", npm_dist_tag: "alpha" }],
@@ -2438,7 +2436,13 @@ describe("prepared Windows handoff", () => {
           prepared_plugins: request.inputs.prepared_plugins,
           publish_openclaw_npm: true,
         },
-        needs: { publish: { result: "success" }, publish_docker: { result: "success" } },
+        needs: {
+          resolve_release_target: {
+            outputs: { prepared_plugins: request.inputs.prepared_plugins },
+          },
+          publish: { result: "success" },
+          publish_docker: { result: "success" },
+        },
       });
       expect(finalizesParent).toBe(false);
       expect(parent.jobs.publish_windows.if).toContain(

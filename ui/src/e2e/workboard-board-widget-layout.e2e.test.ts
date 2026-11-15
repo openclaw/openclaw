@@ -249,7 +249,7 @@ suite.define(() => {
         expect(proof.classes.split(" ")).toEqual(
           expect.arrayContaining(["openclaw-native-macos", "openclaw-native-web-chrome"]),
         );
-        expect(proof.inset).toBe("52px");
+        expect(proof.inset).toBe("40px");
         expect(proof.nativeFlag && proof.nativeStyle).toBe(true);
       }
     });

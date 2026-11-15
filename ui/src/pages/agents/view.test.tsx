@@ -448,7 +448,7 @@ describe("renderAgents", () => {
     expect(inheritedSelection?.textContent?.trim()).toBe("Inherit default (openai/gpt-5.4)");
   });
 
-  it("shows canonical model names alongside configured aliases in agent options", async () => {
+  it("omits redundant family aliases and preserves custom aliases in agent options", async () => {
     const container = document.createElement("div");
     const configForm = {
       agents: {
@@ -517,8 +517,8 @@ describe("renderAgents", () => {
       ]),
     );
 
-    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8 · opus");
-    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5 · sonnet");
+    expect(options.get("anthropic/claude-opus-4-8")).toBe("Opus 4.8");
+    expect(options.get("anthropic/claude-sonnet-5")).toBe("Sonnet 5");
     expect(options.get("nvidia/moonshotai/kimi-k2.5")).toBe("Kimi K2.5 (NVIDIA)");
     expect(options.get("local/unlisted-model")).toBe("Alpha local model (local/unlisted-model)");
     expect(options.get("google/gemini-3-flash-preview")).toBe(

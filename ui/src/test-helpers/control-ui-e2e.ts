@@ -176,10 +176,9 @@ export async function waitForControlUiSettingsTakeover(
   pathname = "/settings/appearance",
 ): Promise<{ search: Locator; sidebar: Locator }> {
   await waitForControlUiRoute(page, { pathname, routeId: "appearance" });
-  const appSidebar = page.locator("openclaw-app-sidebar");
   const sidebar = page.locator(".settings-sidebar");
   const search = sidebar.getByRole("searchbox", { name: "Search settings" });
-  await appSidebar.waitFor({ state: "detached" });
+  await page.locator(".sidebar-shell").waitFor({ state: "hidden" });
   await search.waitFor({ state: "visible" });
   return { search, sidebar };
 }
@@ -737,6 +736,7 @@ function installControlUiMockGateway(
     {
       rows: canonicalSessionRows,
       mainKey: scenario.mainSessionKey,
+      models: scenario.models,
     },
     isRecord,
   );
@@ -2380,9 +2380,7 @@ function installControlUiMockGateway(
       isViteHmr ||
       scenario.webSocketPassthroughPrefixes.some((prefix) => resolvedUrl.startsWith(prefix))
     ) {
-      return protocols === undefined
-        ? new NativeWebSocket(resolvedUrl)
-        : new NativeWebSocket(resolvedUrl, protocols);
+      return new NativeWebSocket(resolvedUrl, protocols);
     }
     return new MockWebSocket(resolvedUrl);
   };
