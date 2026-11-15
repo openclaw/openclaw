@@ -10,13 +10,18 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createTempDir, createVault } = createMemoryWikiTestHarness();
 
-const OKF_LITERAL_LINK_EXAMPLES = [
+const OKF_UNCHANGED_LINK_EXAMPLES = [
   "`[customers](/tables/customers.md)`",
   "```markdown\n[customers](/tables/customers.md)\n```",
   "    [customers](/tables/customers.md)",
   "> ```markdown\n> [customers](/tables/customers.md)\n> ```",
   "``\n[customers](/tables/customers.md)\n``",
   "- ```markdown\n  [customers](/tables/customers.md)\n  ```",
+  "<!-- [example](/tables/customers.md) -->",
+  "\\[example](/tables/customers.md)",
+  "[reference][customers]\n\n[customers]: /tables/customers.md",
+  "[Missing](missing(draft).md)",
+  "[External](https://example.invalid/plan(draft).md)",
 ];
 
 async function writeConcept(file: string, title: string, body: string, type = "BigQuery Table") {
@@ -34,13 +39,8 @@ async function createImport(bundleName: string) {
     if (!name) {
       expect(paths).toHaveLength(1);
     }
-    return path.join(
-      config.vault.path,
-      expectDefined(
-        name ? paths.find((entry) => entry.includes(name)) : paths[0],
-        "imported OKF page",
-      ),
-    );
+    const relativePath = name ? paths.find((entry) => entry.includes(name)) : paths[0];
+    return path.join(config.vault.path, expectDefined(relativePath, "imported OKF page"));
   };
   const read = (file: string) => fs.readFile(file, "utf8");
   const write = (file: string, body: string, title = "Customers") =>
@@ -77,14 +77,18 @@ async function writeOkfBundle(bundlePath: string) {
     },
     [
       "# Schema",
-      "Joined with [Customers](/tables/customers.md) and the [weekly metric](../metrics/weekly%20active%20users.md?view=compact#columns).",
-      'Titled link to [weekly metric](../metrics/weekly%20active%20users.md "metric docs").',
-      ...OKF_LITERAL_LINK_EXAMPLES,
+      "Joined with [Customers](/tables/customers.md) and the [weekly metric](../metrics/weekly%20(active)%20users.md?view=compact#columns).",
+      'Titled link to [Angle](<../metrics/weekly (active) users.md?x=1&amp;y=2#notes> "metric docs").',
+      "[Encoded **draft** \\[v1\\]](../metrics/weekly%20(active)%20users.md)",
+      "![Image](../metrics/weekly%20\\(active\\)%20users.md)",
+      "[Multiline](\n<../metrics/weekly (active) users.md>\n'multiline title')",
+      "[![Nested](../metrics/weekly%20(active)%20users.md)](../metrics/weekly%20(active)%20users.md)",
+      ...OKF_UNCHANGED_LINK_EXAMPLES,
       "External citation stays as [BigQuery](https://cloud.google.com/bigquery).",
     ].join("\n\n"),
   );
   await write(
-    "metrics/weekly active users.md",
+    "metrics/weekly (active) users.md",
     { type: "Metric", title: "Weekly Active Users" },
     "Computed from [orders](../tables/orders.md).\n",
   );
@@ -93,7 +97,7 @@ async function writeOkfBundle(bundlePath: string) {
 
 describe("importMemoryWikiOkfBundle", () => {
   it("imports searchable OKF concept pages that can round-trip into another vault", async () => {
-    const { rootDir, bundlePath, config, run, page, read } = await createImport("sales-okf");
+    const { bundlePath, config, run, page, read } = await createImport("sales-okf");
     await writeOkfBundle(bundlePath);
     const result = await run();
 
@@ -109,35 +113,37 @@ describe("importMemoryWikiOkfBundle", () => {
       pageType: "concept",
       sourceType: "okf",
       provenanceMode: "okf-import",
+      sourceIds: [expect.stringMatching(/^source\.okf\.sales-okf$/)],
     });
-    expect(orders.frontmatter.sourceIds).toEqual([
-      expect.stringMatching(/^source\.okf\.sales-okf$/),
-    ]);
-    for (const target of ["tables-customers", "metrics-weekly-active-users"]) {
-      expect(orders.body).toMatch(new RegExp(`\\]\\(okf-sales-okf-${target}-`));
-      expect(orders.frontmatter.relationships).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            targetPath: expect.stringMatching(new RegExp(`^concepts/okf-sales-okf-${target}-`)),
-            kind: "okf-link",
-          }),
-        ]),
-      );
-    }
-    expect(orders.body).toContain('"metric docs"');
-    expect(orders.body).toMatch(
-      /\[weekly metric\]\(okf-sales-okf-metrics-weekly-active-users-[^)]+\.md\?view=compact#columns\)/,
+    const customers = parseWikiMarkdown(await read(page(result.pagePaths, "customers")));
+    expect(customers.frontmatter.okf).toHaveProperty("frontmatter.producer_field.owner", "data");
+    expect(orders.frontmatter.relationships).toMatchObject(
+      ["tables-customers", "metrics-weekly-active-users"].map((target) => ({
+        targetPath: expect.stringMatching(new RegExp(`^concepts/okf-sales-okf-${target}-`)),
+        kind: "okf-link",
+      })),
     );
-    for (const example of OKF_LITERAL_LINK_EXAMPLES) {
+    const metricTarget = path.basename(page(result.pagePaths, "metrics-weekly-active-users"));
+    const links = fromMarkdown(orders.body).children.flatMap((node) =>
+      node.type === "paragraph"
+        ? node.children.filter((child) => child.type === "link" || child.type === "image")
+        : [],
+    );
+    expect(links.slice(0, 7).map((link) => [link.url, link.title])).toEqual([
+      [path.basename(page(result.pagePaths, "customers")), null],
+      [`${metricTarget}?view=compact#columns`, null],
+      [`${metricTarget}?x=1&y=2#notes`, "metric docs"],
+      [metricTarget, null],
+      [metricTarget, null],
+      [metricTarget, "multiline title"],
+      [metricTarget, null],
+    ]);
+    expect(links[6]).toMatchObject({ children: [{ type: "image", url: metricTarget }] });
+    expect(orders.body).toContain("[Encoded **draft** \\[v1\\]](");
+    for (const example of OKF_UNCHANGED_LINK_EXAMPLES) {
       expect(orders.body).toContain(example);
     }
     expect(orders.body).toContain("https://cloud.google.com/bigquery");
-
-    const customers = parseWikiMarkdown(await read(page(result.pagePaths, "customers")));
-    expect(customers.frontmatter).toMatchObject({
-      okf: { frontmatter: { producer_field: { owner: "data" } } },
-    });
-
     const searchResults = await searchMemoryWiki({
       config,
       query: "completed order",
@@ -147,70 +153,11 @@ describe("importMemoryWikiOkfBundle", () => {
       path.relative(config.vault.path, ordersPath).split(path.sep).join("/"),
     );
 
-    const exportedBundle = path.join(rootDir, "exported-okf");
-    await fs.cp(path.join(config.vault.path, "concepts"), exportedBundle, { recursive: true });
-    const { config: destination } = await createVault({
-      rootDir: path.join(rootDir, "destination"),
-    });
-    const reimport = await importMemoryWikiOkfBundle({
-      config: destination,
-      bundlePath: exportedBundle,
-      nowMs: Date.UTC(2026, 5, 12, 11),
-    });
+    const exported = await createImport("exported-okf");
+    await fs.cp(path.join(config.vault.path, "concepts"), exported.bundlePath, { recursive: true });
+    const reimport = await exported.run(Date.UTC(2026, 5, 12, 11));
     expect(reimport).toMatchObject({ importedCount: 3, skippedCount: 0, warnings: [] });
     expect(orders.frontmatter.type).toBe("BigQuery Table");
-  });
-
-  it("rewrites parsed inline destinations while preserving labels, titles, and literal examples", async () => {
-    const { run, page, read, write } = await createImport("links-okf");
-    await write("tables/plan (draft).md", "Target body.", "Plan");
-    const literal = [
-      "`[example](<tables/plan (draft).md>)`",
-      "<!-- [example](tables/plan%20(draft).md) -->",
-      "\\[example](tables/plan%20(draft).md)",
-      "[reference][plan]\n\n[plan]: <tables/plan (draft).md>",
-      "[Missing](missing(draft).md)",
-      "[External](https://example.invalid/plan(draft).md)",
-    ];
-    await write(
-      "source.md",
-      [
-        '[Angle](<tables/plan (draft).md?x=1&amp;y=2#notes> "angle title")',
-        "[Encoded **draft** \\[v1\\]](tables/plan%20(draft).md)",
-        "![Image](tables/plan%20\\(draft\\).md)",
-        "[Multiline](\n<tables/plan (draft).md>\n'multiline title')",
-        "[![Nested](tables/plan%20(draft).md)](tables/plan%20(draft).md)",
-        ...literal,
-      ].join("\n\n"),
-      "Source",
-    );
-
-    const result = await run();
-    const target = path.basename(page(result.pagePaths, "plan-draft"));
-    const source = parseWikiMarkdown(await read(page(result.pagePaths, "source")));
-    const links = fromMarkdown(source.body).children.flatMap((node) =>
-      node.type === "paragraph"
-        ? node.children.filter((child) => child.type === "link" || child.type === "image")
-        : [],
-    );
-    expect(links.slice(0, 4).map((link) => ({ url: link.url, title: link.title }))).toEqual([
-      { url: `${target}?x=1&y=2#notes`, title: "angle title" },
-      { url: target, title: null },
-      { url: target, title: null },
-      { url: target, title: "multiline title" },
-    ]);
-    expect(links[4]).toMatchObject({
-      type: "link",
-      url: target,
-      children: [{ type: "image", url: target }],
-    });
-    expect(source.body).toContain("[Encoded **draft** \\[v1\\]](");
-    for (const example of literal) {
-      expect(source.body).toContain(example);
-    }
-    expect(source.frontmatter.relationships).toEqual([
-      expect.objectContaining({ targetPath: `concepts/${target}`, kind: "okf-link" }),
-    ]);
   });
 
   it("prunes repository metadata and dependency subtrees", async () => {
