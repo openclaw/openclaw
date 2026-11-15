@@ -1,4 +1,5 @@
 import path from "node:path";
+import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import { expectDefined } from "@openclaw/normalization-core";
 import {
   normalizeOptionalString,
@@ -33,6 +34,20 @@ import { applyAgentConfig, listAgentEntries } from "./agents.config.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 
 const normalizeWorkspacePath = (input: string) => path.resolve(expandHomePrefix(input));
+
+function resolveIdentitySourcePath(input: string): string {
+  try {
+    const resolved = resolvePathPrefixSync(expandHomePrefix(input));
+    if (resolved.unresolvedSegments.includes("..")) {
+      throw new Error("Parent traversal crosses a missing directory");
+    }
+    return path.join(resolved.existingPath, ...resolved.unresolvedSegments);
+  } catch (error) {
+    return throwExpectedCliError(
+      `Cannot resolve identity source ${input}: ${formatErrorMessage(error)}. Choose a path through existing directories, then retry.`,
+    );
+  }
+}
 
 export async function agentsSetIdentityCommand(opts: {
   agent?: string;
@@ -81,10 +96,10 @@ export async function agentsSetIdentityCommand(opts: {
   let workspaceLocatorDir: string | undefined;
 
   if (identityFileRaw) {
-    identityFilePath = normalizeWorkspacePath(identityFileRaw);
+    identityFilePath = resolveIdentitySourcePath(identityFileRaw);
     workspaceDir = path.dirname(identityFilePath);
   } else if (workspaceRaw) {
-    workspaceLocatorDir = normalizeWorkspacePath(workspaceRaw);
+    workspaceLocatorDir = resolveIdentitySourcePath(workspaceRaw);
     workspaceDir = workspaceLocatorDir;
   } else if (agentId && wantsIdentityFile) {
     workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
@@ -99,10 +114,15 @@ export async function agentsSetIdentityCommand(opts: {
       list.length > 0
         ? list.map((entry) => normalizeAgentId(entry.id))
         : [resolveDefaultAgentId(cfg)];
-    const normalizedTarget = normalizeWorkspacePath(resolvedWorkspace);
-    const matches = ids.filter(
-      (id) => normalizeWorkspacePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget,
-    );
+    const normalizedTarget = resolveIdentitySourcePath(resolvedWorkspace);
+    const matches = ids.filter((id) => {
+      try {
+        return resolveIdentitySourcePath(resolveAgentWorkspaceDir(cfg, id)) === normalizedTarget;
+      } catch {
+        // An unusable workspace cannot identify this source or block other agents.
+        return false;
+      }
+    });
     if (matches.length === 0) {
       throwExpectedCliError(
         `No agent workspace matches ${shortenHomePath(resolvedWorkspace)}. Pass --agent to target a specific agent.`,

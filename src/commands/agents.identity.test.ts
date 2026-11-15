@@ -65,7 +65,7 @@ async function jsonIdentity(options: IdentityOptions) {
 }
 
 async function createIdentityWorkspace(subdir = "work") {
-  const root = await makeTempWorkspace("openclaw-identity-");
+  const root = await fs.realpath(await makeTempWorkspace("openclaw-identity-"));
   const workspace = path.join(root, subdir);
   await fs.mkdir(workspace, { recursive: true });
   return { root, workspace };
@@ -250,6 +250,65 @@ describe("agents set-identity command", () => {
         identity: { name: "Selected identity" },
       });
       await expect(fs.readFile(neighborPath, "utf8")).resolves.toBe("- Name: Wrong neighbor\n");
+    },
+  );
+
+  it
+    .skipIf(process.platform === "win32")
+    .each(["identityFile", "workspace", "implicit-workspace"] as const)(
+    "imports the physical %s source before collapsing parents",
+    async (source) => {
+      const { root, workspace: storedWorkspace } = await createIdentityWorkspace("stored");
+      const physical = path.join(root, "physical");
+      const selected = path.join(physical, "source");
+      const neighbor = path.join(root, "source");
+      await fs.mkdir(path.join(physical, "nested"), { recursive: true });
+      await fs.mkdir(selected);
+      await fs.mkdir(neighbor);
+      await fs.symlink(path.join(physical, "nested"), path.join(root, "link"), "dir");
+      await fs.symlink("unreadable", path.join(root, "unreadable"), "dir");
+      await writeIdentityFile(selected, ["- Name: Selected identity"]);
+      await writeIdentityFile(neighbor, ["- Name: Wrong neighbor"]);
+      const implicit = source === "implicit-workspace";
+      const mainWorkspace = implicit ? selected : storedWorkspace;
+      setAgents({
+        entries: {
+          main: { workspace: mainWorkspace },
+          other: { workspace: neighbor },
+          stale: { workspace: path.join(root, "unreadable") },
+        },
+      });
+      const identityFile = source === "identityFile";
+      const input = `${root}/link/../source${identityFile ? "/IDENTITY.md" : ""}`;
+
+      expect(
+        await jsonIdentity({
+          ...(implicit ? {} : { agent: "main" }),
+          [identityFile ? "identityFile" : "workspace"]: input,
+          fromIdentity: true,
+        }),
+      ).toMatchObject({ agentId: "main", identity: { name: "Selected identity" } });
+      expect(writtenAgent()).toMatchObject({
+        workspace: mainWorkspace,
+        identity: { name: "Selected identity" },
+      });
+      expect(writtenAgent("other")).toEqual({ workspace: neighbor });
+      await expect(fs.readFile(path.join(neighbor, "IDENTITY.md"), "utf8")).resolves.toBe(
+        "- Name: Wrong neighbor\n",
+      );
+    },
+  );
+
+  it.each(["identityFile", "workspace"] as const)(
+    "does not import a neighboring %s through a missing parent",
+    async (source) => {
+      const { root, workspace } = await createIdentityWorkspace("source");
+      await writeIdentityFile(workspace, ["- Name: Wrong neighbor"]);
+      const input = `${root}/missing/../source${source === "identityFile" ? "/IDENTITY.md" : ""}`;
+      await expectIdentityCommandFailure(
+        { agent: "main", [source]: input, fromIdentity: true },
+        /Parent traversal crosses a missing directory.*Choose a path/s,
+      );
     },
   );
 
