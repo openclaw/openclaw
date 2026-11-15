@@ -155,13 +155,11 @@ suite.define(() => {
       await page
         .getByRole("button", { name: "Add profile", exact: true })
         .waitFor({ state: "hidden" });
-      await page.screenshot({ path: suite.artifactDir + "/cloud-config-pending.png" });
       const falseEmpty = await page
         .getByText("No cloud device profiles yet.", { exact: true })
         .count();
       await gateway.resolveDeferred("config.get", configResponse(config, "ready"));
       await page.getByRole("button", { name: "Edit: build-fleet", exact: true }).waitFor();
-      await page.screenshot({ path: suite.artifactDir + "/cloud-config-ready.png" });
       expect(falseEmpty).toBe(0);
     });
   });
@@ -178,7 +176,6 @@ suite.define(() => {
       await expect
         .poll(() => evaluateControlUiContext(page, (app) => app.runtimeConfig.state.lastError))
         .toContain("Cloud profile configuration could not be read");
-      await page.screenshot({ path: suite.artifactDir + "/cloud-config-failed.png" });
       const surface = page.locator("openclaw-cloud-workers-page");
       expect(
         await surface.getByText("No cloud device profiles yet.", { exact: true }).count(),
