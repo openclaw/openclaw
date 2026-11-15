@@ -484,6 +484,8 @@ it("keeps unchanged draft instructions neutral while support files still need re
   await waitText(page, "Rollback with make undo.");
   expect(button(page, "Apply")?.disabled).toBe(false);
   expect(button(page, "Discard")?.disabled).toBe(false);
+  expect(request).not.toHaveBeenCalledWith("skills.workshop.applyDraft", expect.anything());
+  expect(request).not.toHaveBeenCalledWith("skills.workshop.discardDraft", expect.anything());
 });
 
 it("shows only the drafts list on the Drafts tab of an agent with no learned skills", async () => {
