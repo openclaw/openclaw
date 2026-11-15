@@ -16,7 +16,8 @@ function configuredOwner(input: Parameters<typeof prepareModelRuntimeOwner>[0]):
 describe("configured model runtime refresh inputs", () => {
   it("refreshes only the published owners of a scoped publication (#194911)", () => {
     const owner = (agentId: string) => ({
-      input: { agentId },
+      // Refresh also reads the headless-startup gate from the owner's config.
+      input: { agentId, config: {} },
       provenance: "configured",
       snapshot: { loadFullModelCatalog: vi.fn(async () => ({ entries: [] })) },
     });
