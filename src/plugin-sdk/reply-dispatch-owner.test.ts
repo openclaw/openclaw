@@ -54,7 +54,11 @@ function makeOwner() {
   return { host: new LegacyPluginSdkResourceHost(reply), reply };
 }
 
-const surfaces = [
+type SurfaceResult = Awaited<
+  ReturnType<LegacyPluginSdkReplyDispatch[keyof LegacyPluginSdkReplyDispatch]>
+>;
+
+const surfaces: { name: string; call: () => Promise<SurfaceResult> }[] = [
   { name: "ACP", call: () => tryDispatchAcpReplyHook(event, context) },
   { name: "buffered", call: () => dispatchReplyWithBufferedBlockDispatcher(providerParams) },
   { name: "plain", call: () => dispatchReplyWithDispatcher(providerParams) },
