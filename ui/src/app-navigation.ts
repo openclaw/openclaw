@@ -126,6 +126,14 @@ export function serializeSidebarEntry(entry: SidebarZoneEntry): string {
     : `${entry.rail ? "session-rail" : "session"}:${entry.key}`;
 }
 
+/**
+ * Native section pins lead the rail, above the Pages control and its separator;
+ * plugin, session and person pins always follow it, bundled plugins included.
+ */
+export function isRailSectionPin(entry: string): boolean {
+  return entry.startsWith("route:");
+}
+
 /** Personal session pins render in the Sessions list's Pinned section, not the rail. */
 export function personalSessionPinKeys(entries: readonly string[]): Set<string> {
   const keys = new Set<string>();
