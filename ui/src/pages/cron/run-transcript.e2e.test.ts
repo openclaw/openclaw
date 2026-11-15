@@ -58,7 +58,7 @@ async function installCron(page: Page, methodResponses: Record<string, unknown>)
 }
 async function openRunHistory(page: Page) {
   await page.getByRole("tab", { name: "Activity history", exact: true }).click();
-  const button = buttonNamed(page.locator(".cron-run-entry"), "View transcript");
+  const button = buttonNamed(page.locator(".cron-run-entry"), "View chat");
   await button.click();
   return { button, region: transcriptRegion(page) };
 }

@@ -71,7 +71,7 @@ it("explains an unsupported mention result without exposing schema issues", asyn
   );
   await waitForSolid(() =>
     expect(container.querySelector('[role="alert"]')?.textContent).toBe(
-      "Couldn’t load this app’s resources. Try again.",
+      "This app returned a resource list OpenClaw can’t read.",
     ),
   );
   expect(request).toHaveBeenCalledWith("mcp.app.mention", {

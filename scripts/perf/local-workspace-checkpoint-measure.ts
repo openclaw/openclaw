@@ -836,6 +836,8 @@ const owners = [
   "src/gateway/control-ui-assistant-media-read.ts",
   "src/gateway/worker-environments/local-workspace-checkout.ts",
   "src/gateway/worker-environments/local-workspace-store.kernel.ts",
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
   ...(!values.revision ? ["src/gateway/worker-environments/local-workspace-read.ts"] : []),
   "src/agents/worktrees/gc-artifacts.ts",
   "src/state/openclaw-state-lease-acquisition.ts",
@@ -1018,7 +1020,7 @@ registerHooks({
     let code = source.get(relative);
     if (values["reconcile-traffic"] && relative === "src/infra/sqlite-worker-client.ts") {
       code = fs.readFileSync(path.join(root, relative), "utf8");
-      const anchor = "payload = serialize({ type: commandType, input: command.input });";
+      const anchor = "payload = v8.serialize({ type: commandType, input: command.input });";
       assert(code.includes(anchor));
       code = code.replace(
         anchor,
@@ -2854,6 +2856,7 @@ measurement: try {
   const spans: Record<string, { count: number; totalMs: number }> = {};
   const latencies: number[] = [];
   const allocatedBefore = getHeapStatistics().total_allocated_bytes;
+  const memoryBefore = process.memoryUsage();
   let resultHash: string | undefined;
   let semanticResultHash: string | undefined;
   let representativeResult: unknown;
@@ -3130,6 +3133,7 @@ measurement: try {
     gcMs,
     gcByKind,
     gcMsPerMinute: (gcMs * 60_000) / elapsedMs,
+    memoryBefore,
     memory: process.memoryUsage(),
     resultHash,
     semanticResultHash,
