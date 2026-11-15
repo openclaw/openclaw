@@ -179,12 +179,21 @@ describe("scheduled occurrence admission", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it.each(MATRIX)(
-    "a paused $kind occurrence on $sessionTarget (trigger: $withTrigger) runs nothing",
-    async ({ kind, sessionTarget, withTrigger }) => {
+  it.each(
+    MATRIX.flatMap(({ kind, sessionTarget, withTrigger }) =>
+      (["archived", "removed"] as const).map((reason) => ({
+        kind,
+        sessionTarget,
+        withTrigger,
+        reason,
+      })),
+    ),
+  )(
+    "a $reason parent for $kind on $sessionTarget (trigger: $withTrigger) respects lifecycle",
+    async ({ kind, sessionTarget, withTrigger, reason }) => {
       const { state, seen } = harness();
       const pause = {
-        reason: "archived" as const,
+        reason,
         parentSessionKey: "agent:main:dashboard:parent",
       };
       state.deps.admitScheduledOccurrence = async () => ({
@@ -195,8 +204,8 @@ describe("scheduled occurrence admission", () => {
         ...makeCronJob({ payload: payloadFor(kind), sessionTarget }),
         ...(withTrigger ? { trigger: { script: "return { fire: true }" } } : {}),
       });
-      if (kind === "command") {
-        // Command jobs do not pause on a missing parent; they still run with the occurrence.
+      if (kind === "command" && reason === "archived") {
+        // Preserve the separate archive contract; deletion must stop commands too.
         expect(result).not.toHaveProperty("parentUnavailable");
         if (sessionTarget !== "main") {
           expect(seen.map((call) => call.executor)).toContain("runCommandJob");

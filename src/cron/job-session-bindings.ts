@@ -122,11 +122,14 @@ class CronJobBindingStaleError extends Error {
   }
 }
 
-/** Disables enabled jobs bound to any archived session with one job-list scan. */
+/** Disables enabled jobs bound to lifecycle targets with one job-list scan. */
 export async function disableCronJobsBoundToSessions(params: {
   cron: Pick<CronServiceContract, "list" | "updateWithPrecondition" | "getDefaultAgentId">;
   cfg: OpenClawConfig;
   sessionKeys: readonly string[];
+  /** Physical owner for unqualified keys such as global. */
+  agentId?: string;
+  assertCanDisable?: (job: CronStoredJob) => void;
 }): Promise<Map<string, string[]>> {
   const sessionKeys = [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))];
   const disabledBySession = new Map(sessionKeys.map((sessionKey) => [sessionKey, [] as string[]]));
@@ -144,7 +147,11 @@ export async function disableCronJobsBoundToSessions(params: {
       cfg: params.cfg,
       defaultAgentId,
     });
-    return [...boundKeys.keys()].filter((sessionKey) => targetKeys.has(sessionKey));
+    return [...boundKeys].flatMap(([sessionKey, agentId]) =>
+      targetKeys.has(sessionKey) && (!params.agentId || params.agentId === agentId)
+        ? [sessionKey]
+        : [],
+    );
   };
   const failures: unknown[] = [];
   for (const job of jobs) {
@@ -161,6 +168,7 @@ export async function disableCronJobsBoundToSessions(params: {
         if (lockedMatches.length === 0) {
           throw new CronJobBindingStaleError();
         }
+        params.assertCanDisable?.(currentJob);
       });
       for (const sessionKey of lockedMatches) {
         disabledBySession.get(sessionKey)?.push(job.id);
@@ -176,7 +184,7 @@ export async function disableCronJobsBoundToSessions(params: {
     const subject =
       sessionKeys.length === 1
         ? `bound to ${sessionKeys[0]}`
-        : `bound to ${sessionKeys.length} archived sessions`;
+        : `bound to ${sessionKeys.length} sessions`;
     throw new AggregateError(
       failures,
       `failed to disable ${failures.length} cron job(s) ${subject}`,

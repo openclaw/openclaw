@@ -29,9 +29,12 @@ export function resolvePausedOccurrence(
   job: CronStoredJob,
   occurrence: ScheduledOccurrence,
 ): CronJobExecutionResult | undefined {
-  // Command jobs never pause: they run host commands, use none of the parent's
-  // access, and still consume the occurrence.
-  if (!occurrence.pause || job.payload.kind === "command") {
+  // Commands need no parent workspace, but an explicitly deleted parent ends
+  // future runs just as it does for other parent-bound payloads.
+  if (
+    !occurrence.pause ||
+    (job.payload.kind === "command" && occurrence.pause.reason !== "removed")
+  ) {
     return undefined;
   }
   return {

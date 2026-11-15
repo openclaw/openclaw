@@ -666,7 +666,7 @@ describe("session organizer destructive confirmations", () => {
   });
 
   it.each([1, 2])(
-    "warns that automations can continue after deleting %i conversations",
+    "explains automation disablement before deleting %i conversations",
     async (count) => {
       patchSettings({ sessionDeleteConfirm: false });
       const info = vi.spyOn(console, "info").mockImplementation(() => {});
@@ -689,10 +689,10 @@ describe("session organizer destructive confirmations", () => {
         .soft(document.body.textContent)
         .toContain(
           count === 1
-            ? 'Automations linked to "Batch 0" may keep running after deletion.'
-            : "Automations linked to 2 of these conversations may keep running after deletion.",
+            ? 'Automations linked to "Batch 0" will be disabled.'
+            : "Automations linked to 2 of these conversations will be disabled.",
         );
-      expect.soft(document.body.textContent).toContain("Disable or remove them separately.");
+      expect.soft(document.body.textContent).toContain("Commands already running may finish.");
       expect(document.body.textContent).toContain("Nightly digest (job-1)");
       expect(document.body.querySelector(".exec-approval-skip")).toBeNull();
       expect(actions.textContent).toContain("Delete anyway");

@@ -275,9 +275,9 @@ const enSessionOrganization = {
     automationPauseArchiveOther:
       "Automations are bound to {count} of these conversations. Archiving a conversation pauses its automations.",
     automationDeleteWarningOne:
-      'Automations linked to "{session}" may keep running after deletion. Disable or remove them separately.',
+      'Automations linked to "{session}" will be disabled. Commands already running may finish.',
     automationDeleteWarningOther:
-      "Automations linked to {count} of these conversations may keep running after deletion. Disable or remove them separately.",
+      "Automations linked to {count} of these conversations will be disabled. Commands already running may finish.",
     automationPauseUnlisted: "Automation names are unavailable right now.",
     automationPauseMore: "+{count} more",
     archiveAnyway: "Archive anyway",

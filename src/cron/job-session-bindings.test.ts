@@ -194,3 +194,21 @@ test.each([
     ]),
   );
 });
+
+test("disables only the selected agent's unqualified global binding", async () => {
+  const jobs = ["ops", "research"].map((agentId) =>
+    job({ id: agentId, agentId, sessionTarget: "session:global" }),
+  );
+  const update = fakeUpdateWithPrecondition(() => jobs);
+  const disabled = await disableCronJobsBoundToSessions({
+    cron: {
+      list: async () => jobs,
+      updateWithPrecondition: update,
+      getDefaultAgentId: () => "main",
+    },
+    cfg: { session: { scope: "global" } },
+    sessionKeys: ["global"],
+    agentId: "research",
+  });
+  expect(disabled.get("global")).toEqual(["research"]);
+});
