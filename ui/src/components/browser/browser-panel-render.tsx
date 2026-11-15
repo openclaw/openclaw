@@ -373,6 +373,7 @@ export function BrowserPanelChrome(
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.openExternal")}
+          title={t("browser.openExternalTooltip")}
           icon={<Icon name="externalLink" />}
           newTab
           disabled={!activeUrl()}
@@ -381,6 +382,7 @@ export function BrowserPanelChrome(
         <PanelIconButton
           class="rail-header__action bp-icon"
           label={t("browser.close")}
+          title={false}
           icon={<Icon name="x" />}
           onClick={() => props.onClose()}
         />

@@ -82,6 +82,17 @@ it.each<[string, string[], string[]?]>([
   }
 });
 
+it("preserves authored Windows file actions before rejecting unsupported schemes", () => {
+  const source = "[Read](C:/repo/notes.md) [Unsafe](javascript:alert)";
+  const link = workspaceLink(render(source), "C:/repo/notes.md");
+  expect(link?.textContent).toBe("Read");
+  for (const options of [{ fileLinks: true }, {}]) {
+    const fragment = render(source, options);
+    expect(fragment.querySelector("a[href]")).toBeNull();
+    expect(fragment.textContent).toContain("Unsafe");
+  }
+});
+
 it("keeps authored CSV focusable and non-navigating", () => {
   const path = "inventory report.CSV";
   const markdown = `[Read inventory](${encodeURI(path)})`;

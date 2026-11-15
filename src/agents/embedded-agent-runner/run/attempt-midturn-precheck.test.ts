@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../../../../packages/ai/src/host.js";
 import { createOpenAICompletionsTransportStreamFn } from "../../../../packages/ai/src/transports/openai-completions-transport.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
@@ -22,6 +22,15 @@ import { createToolResultPromptProjectionState } from "../session-prompt-state.j
 import { submitEmbeddedAttemptPrompt } from "./attempt-prompt-submit.js";
 import { createBaseInput } from "./attempt-prompt-submit.test-support.js";
 import { installEmbeddedAttemptContextGuards } from "./attempt-setup.js";
+
+// Admission cases change the system prompt or tool definitions between requests on purpose;
+// they exercise request admission, not the session prefix invariant.
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_PROMPT_CACHE_ASSERT", "0");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const { createFixture } = await vi.hoisted(
   async () => await import("./attempt-execution-phase.test-support.js"),

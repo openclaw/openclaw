@@ -14,20 +14,20 @@ import { PageRow, Ref, Row } from "./tool-rows.js";
 /** Maximum agent search snippet length in UTF-16 code units. */
 export const COMPACT_SNIPPET_CHARS = 200;
 
-export const Incomplete = Type.Optional(
+const Incomplete = Type.Optional(
   Type.Object(
     { complete: Type.Literal(false), message: text(1500) },
     { additionalProperties: false },
   ),
 );
 
-export const page = {
+const page = {
   total: Type.Integer(),
   nextOffset: Type.Optional(Type.Integer()),
   snapshot: Type.Optional(text(64)),
 };
 
-export const Issue = Type.Object({ path: text(500), code: text(80), message: text(1000) });
+const Issue = Type.Object({ path: text(500), code: text(80), message: text(1000) });
 const recordFields = RecordOutput.properties;
 export const LeanEvidence = Type.Object(
   {
@@ -44,7 +44,7 @@ export const LeanEvidence = Type.Object(
   },
   { additionalProperties: false },
 );
-export const LeanRecordFields = Type.Object(
+const LeanRecordFields = Type.Object(
   {
     id: text(96),
     revision: Type.Integer(),
@@ -151,7 +151,7 @@ export const LeanRecordOutput = Type.Object(
 );
 export type LeanRecordOutput = Static<typeof LeanRecordOutput>;
 
-export const Via = Type.Object(
+const Via = Type.Object(
   { id: text(96), revision: Type.Integer() },
   { additionalProperties: false },
 );
@@ -255,7 +255,7 @@ export const LeanRecordsOutput = Type.Object(
   { additionalProperties: false },
 );
 
-export const LeanDefinition = Type.Object(
+const LeanDefinition = Type.Object(
   {
     name: text(64),
     kind: text(30),

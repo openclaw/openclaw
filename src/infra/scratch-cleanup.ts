@@ -1,13 +1,24 @@
+import { randomUUID } from "node:crypto";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 import { root as openRoot, type Root } from "@openclaw/fs-safe/root";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SCRATCH_TTL_MS } from "../shared/scratch-expiry.js";
 import { hasErrnoCode } from "./errno.js";
+import type { FsSafeCopyReply } from "./fs-safe-copy-worker-contract.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import {
+  SCRATCH_MAX_ENTRIES,
+  SCRATCH_DELETE_BATCH_SIZE,
+  type ScratchTreeRequest,
+  type ScratchTreeResult,
+} from "./scratch-cleanup-tree.js";
+import { createWorkerMutationAuthority } from "./worker-mutation-authority.js";
+import { WorkerTaskPool } from "./worker-task-pool.js";
 
-const MAX_SCAN_ENTRIES = 2_000_000;
 const MAX_TOP_LEVEL_ENTRIES = 256;
 const MAX_TOP_LEVEL_NAMES = 4096;
-const MAX_DEPTH = 64;
-const DELETE_BATCH_SIZE = 128;
 const DELETE_BATCH_DELAY_MS = 100;
 
 export type ScratchCleanupTarget = {
@@ -63,6 +74,7 @@ export async function cleanScratch(params: {
   pause: (milliseconds: number) => Promise<void>;
   cursor: ScratchCleanupCursor;
   onProgress?: (result: ScratchCleanupResult) => void;
+  signal?: AbortSignal;
 }): Promise<ScratchCleanupResult> {
   const result: ScratchCleanupResult = {
     entriesRemoved: 0,
@@ -115,7 +127,6 @@ export async function cleanScratch(params: {
         cursor.kind = target.kind;
         cursor.filesystem = await openRoot(target.root, {
           symlinks: "reject",
-          mutationSymlinks: "reject",
         });
         if (cursor.filesystem.rootReal !== path.resolve(target.root)) {
           throw new Error("scratch root uses a symlink; entry retained");
@@ -129,58 +140,121 @@ export async function cleanScratch(params: {
       const walk = async (
         relativePath: string,
         stat: Awaited<ReturnType<Root["stat"]>>,
-        depth: number,
         remove: boolean,
-        entryCount: { value: number },
       ): Promise<number> => {
-        if (depth > MAX_DEPTH || entryCount.value >= MAX_SCAN_ENTRIES) {
-          throw new ScratchBudgetExhausted(false);
-        }
-        if ((remove ? removalVisits : result.scanned) >= MAX_SCAN_ENTRIES) {
-          throw new ScratchBudgetExhausted(true);
-        }
-        entryCount.value++;
-        if (remove) {
-          removalVisits++;
-        } else {
-          result.scanned++;
-        }
-        params.assertCurrent();
-        if (stat.isSymbolicLink || (!stat.isDirectory && !stat.isFile)) {
-          throw new Error("scratch contains a symlink or special file; entry retained");
-        }
-        let newest = stat.isFile ? stat.mtimeMs : -Infinity;
-        if (stat.isDirectory) {
-          for await (const child of root.entries(relativePath, {
-            order: "filesystem",
-            symlinks: "reject",
-          })) {
-            newest = Math.max(
-              newest,
-              await walk(path.join(relativePath, child.name), child, depth + 1, remove, entryCount),
-            );
-            if (!remove && newest >= cutoff) {
-              return newest;
+        if (!stat.isDirectory) {
+          params.assertCurrent();
+          if (!stat.isSymbolicLink && !stat.isFile) {
+            throw new Error("scratch contains a special file; entry retained");
+          }
+          if (remove) {
+            removalVisits++;
+            if (result.filesRemoved > 0 && result.filesRemoved % SCRATCH_DELETE_BATCH_SIZE === 0) {
+              await params.pause(DELETE_BATCH_DELAY_MS);
+              await target.prepare?.();
             }
+            await root.remove(relativePath, { assertBeforeMutation: assertIdle });
+            result.filesRemoved++;
+            result.bytesRemoved += stat.isFile ? stat.size : 0;
+          } else {
+            result.scanned++;
           }
+          return stat.mtimeMs;
         }
-        if (remove) {
-          if (result.filesRemoved > 0 && result.filesRemoved % DELETE_BATCH_SIZE === 0) {
-            await params.pause(DELETE_BATCH_DELAY_MS);
-            await target.prepare?.();
+        const runtime = resolveGlobalSingleton<{
+          pool?: WorkerTaskPool<ScratchTreeRequest, FsSafeCopyReply>;
+        }>(
+          Symbol.for("openclaw.scratchCleanupTrees"),
+          () => ({}),
+          async (owned) => {
+            const pool = owned.pool;
+            owned.pool = undefined;
+            await pool?.close();
+          },
+        );
+        const pool = (runtime.pool ??= new WorkerTaskPool({
+          workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.fsSafeCopy),
+          maxWorkers: 1,
+          idleTimeoutMs: 30_000,
+        }));
+        let visits = 0;
+        let files = 0;
+        let bytes = 0;
+        const progress = (next: ScratchTreeResult) => {
+          if (remove) {
+            removalVisits += next.visited - visits;
+            result.filesRemoved += next.filesRemoved - files;
+            result.bytesRemoved += next.bytesRemoved - bytes;
+          } else {
+            result.scanned += next.visited - visits;
           }
-          await root.remove(relativePath, { assertBeforeMutation: assertIdle });
-          result.filesRemoved++;
-          result.bytesRemoved += stat.isFile ? stat.size : 0;
+          visits = next.visited;
+          files = next.filesRemoved;
+          bytes = next.bytesRemoved;
+        };
+        let checkpoint: Promise<void> | undefined;
+        let refusal: { error: unknown } | undefined;
+        const authority = createWorkerMutationAuthority(() => {
+          if (refusal) {
+            throw refusal.error;
+          }
+          params.assertCurrent();
+        }, params.signal);
+        let next: FsSafeCopyReply;
+        try {
+          next = await pool.run(
+            {
+              type: "scratch",
+              decision: authority.buffer,
+              root: target.root,
+              relativePath,
+              identity: { dev: stat.dev, ino: stat.ino, exactIdentity: stat.exactIdentity },
+              cutoff,
+              remaining: SCRATCH_MAX_ENTRIES - (remove ? removalVisits : result.scanned),
+              remove,
+              removedBefore: result.filesRemoved,
+            },
+            {
+              signal: params.signal,
+              inputBytes: Buffer.byteLength(target.root) + Buffer.byteLength(relativePath),
+              onNotification: (value) => {
+                // SAFETY: The private filesystem worker sends only this task's progress receipt.
+                progress(value as ScratchTreeResult);
+                checkpoint = (async () => {
+                  try {
+                    await params.pause(DELETE_BATCH_DELAY_MS);
+                  } catch (error) {
+                    refusal = { error };
+                  }
+                  authority.onNotification();
+                })();
+              },
+            },
+          );
+        } finally {
+          await checkpoint;
+          authority.dispose();
         }
-        return newest;
+        authority.throwIfRefused();
+        params.assertCurrent();
+        if (next.type !== "scratch") {
+          throw new Error(next.type === "failed" ? next.message : "Invalid scratch worker receipt");
+        }
+        progress(next);
+        if (next.error) {
+          if (next.retry !== undefined) {
+            throw new ScratchBudgetExhausted(next.retry);
+          }
+          throw new Error(next.error);
+        }
+        return next.newest;
       };
       while (true) {
         if (
           names >= MAX_TOP_LEVEL_NAMES ||
           inspected >= MAX_TOP_LEVEL_ENTRIES ||
-          result.scanned >= MAX_SCAN_ENTRIES ||
-          removalVisits >= MAX_SCAN_ENTRIES
+          result.scanned >= SCRATCH_MAX_ENTRIES ||
+          removalVisits >= SCRATCH_MAX_ENTRIES
         ) {
           result.deferred++;
           return result;
@@ -213,10 +287,37 @@ export async function cleanScratch(params: {
         inspected++;
         assertIdle();
         try {
-          const newest = await walk(relativePath, stat, 0, false, { value: 0 });
+          const newest = await walk(relativePath, stat, false);
           if ((newest === -Infinity ? stat.mtimeMs : newest) < cutoff) {
             await target.prepare?.();
-            await walk(relativePath, await root.stat(relativePath), 0, true, { value: 0 });
+            assertIdle();
+            if (stat.isDirectory) {
+              const original = relativePath;
+              const claimed = path.join(
+                path.dirname(relativePath),
+                `${target.kind === "coverage" ? "node-coverage" : ".reclaim"}-${randomUUID()}`,
+              );
+              // Remove the expired name from task custody before handing its tree to the worker.
+              await root.move(original, claimed, {
+                // The generated destination also permits fs-safe's portable rename path.
+                overwrite: true,
+                assertBeforeMutation: () => {
+                  assertIdle();
+                  const current = lstatSync(path.join(target.root, original), { bigint: true });
+                  const expected = stat.exactIdentity;
+                  if (
+                    expected
+                      ? current.dev !== expected.dev || current.ino !== expected.ino
+                      : Number(current.dev) !== stat.dev || Number(current.ino) !== stat.ino
+                  ) {
+                    throw new Error("scratch entry identity changed; entry retained");
+                  }
+                },
+              });
+              relativePath = claimed;
+              cursor.pending = claimed;
+            }
+            await walk(relativePath, stat, true);
             result.entriesRemoved++;
           }
         } catch (error) {

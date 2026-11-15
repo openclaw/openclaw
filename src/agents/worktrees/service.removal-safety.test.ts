@@ -168,6 +168,12 @@ describe("managed removal custody", () => {
   it.each(["local", "promisor", "unavailable", "corrupt"])("removal (%s)", async (state) => {
     const source = repo;
     await fs.writeFile(path.join(source, "second.txt"), "second blob\n");
+    // Cross Git's output buffer boundary and verify the final partial buffer too.
+    const batchFiles =
+      state === "local" ? Array.from({ length: 257 }, (_, i) => `batch-${i}.txt`) : [];
+    for (const name of batchFiles) {
+      await fs.writeFile(path.join(source, name), `${name}\n`);
+    }
     await git(source, "add", ".");
     await git(source, "commit", "-m", "two promised blobs");
     await git(source, "config", "uploadpack.allowFilter", "true");
@@ -216,6 +222,9 @@ describe("managed removal custody", () => {
       const restored = await service.restore({ id: created.id });
       expect(await read(restored.path)).toBe("base\n");
       expect(await read(restored.path, "second.txt")).toBe("second blob\n");
+      for (const name of batchFiles) {
+        expect(await read(restored.path, name)).toBe(`${name}\n`);
+      }
     }
     expect((await fs.readFile(trace, "utf8")).match(/built-in: git fetch /g) ?? []).toHaveLength(
       state === "promisor" || state === "unavailable" ? 1 : 0,

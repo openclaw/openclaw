@@ -87,7 +87,7 @@ it("retains a protected parent through private completion and owner reentry", as
       const request = harness.requests.findLast(({ method }) => method === "turn/start")?.params;
       const instructions = continuity.readManagedInstructions(harness.client, request);
       const conversation = instructions.match(
-        /## OpenClaw conversation instructions\n\n[^\n]+\n\n<conversation_instructions>\n\n([\s\S]*?)\n\nCurrent OpenClaw tool bindings for this turn[^\n]*\n\n<\/conversation_instructions>$/,
+        /## OpenClaw conversation instructions\n\n[^\n]+\n\n<conversation_instructions>\n\n([\s\S]*?)\n\n### Tool Bindings\n\nCurrent OpenClaw tool bindings for this turn[^\n]*\n\n<\/conversation_instructions>$/,
       )?.[1];
       expect(conversation).toBe(text ?? "No additional conversation instructions for this turn.");
       expect(instructions).not.toContain(

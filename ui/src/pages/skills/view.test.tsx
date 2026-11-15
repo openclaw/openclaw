@@ -159,22 +159,29 @@ describe("renderSkills", () => {
     }
   });
 
+  const secretRef = { source: "env", provider: "default", id: "KEY" };
   it.each([
     { editValue: "   ", disabled: true },
     { editValue: "  sk-test  ", disabled: false },
+    { editValue: "sk-test", disabled: true, apiKey: secretRef, text: "Set by a SecretRef." },
+    { editValue: "sk-test", disabled: true, error: "denied", text: "Couldn't read the config" },
   ])(
-    "only enables credential replacement for nonblank input: $editValue",
-    async ({ editValue, disabled }) => {
+    "only enables credential replacement for nonblank input over plaintext: %o",
+    async ({ editValue, disabled, apiKey, error, text }) => {
       const container = document.createElement("div");
       installDialogMethod("showModal", function () {
         expect(this.isConnected).toBe(true);
         this.setAttribute("open", "");
       });
       const onSaveKey = vi.fn();
+      const retry = vi.fn();
+      const config = { skills: { entries: { "repo-skill": { apiKey } } } };
+      const snapshot = error ? null : { config, parsed: config, valid: true };
 
       renderView(container, {
         detailKey: "repo-skill",
         edits: { "repo-skill": editValue },
+        apiKeyConfig: { snapshot: () => snapshot, error: () => error ?? null, retry },
         onSaveKey,
       });
       document.body.append(container);
@@ -189,13 +196,17 @@ describe("renderSkills", () => {
         "API key (OPENAI_API_KEY)",
       );
       expect(save?.disabled).toBe(disabled);
+      expect(input?.disabled).toBe(Boolean(text));
+      expect(`${input?.placeholder} ${container.textContent}`).toContain(text ?? "");
+      findButton(container, "Retry")?.click();
+      expect(retry).toHaveBeenCalledTimes(error ? 1 : 0);
 
       save?.click();
 
       if (disabled) {
         expect(onSaveKey).not.toHaveBeenCalled();
       } else {
-        expect(onSaveKey).toHaveBeenCalledWith("repo-skill");
+        expect(onSaveKey).toHaveBeenCalledWith("repo-skill", expect.any(Function));
       }
     },
   );

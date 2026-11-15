@@ -32,7 +32,7 @@ import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../lib/reactive/layout-measurement.ts";
 import { observeWindowResize } from "../../lib/reactive/window-resize.ts";
 import { TemplateArtwork } from "./template-artwork.tsx";
-import "../../styles/agents-home.css";
+import "../../styles/templates-catalog.css";
 import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 import {

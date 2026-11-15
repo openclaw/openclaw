@@ -1,4 +1,0 @@
-300
-# Generation/commit/policy isolation and retirement; exact cached-vs-full owner captures.
-# Random Git deltas, modes, symlinks, empty directories, staged membership, installer bytes,
-# and replacement refs protect the new incremental source-hash contract.

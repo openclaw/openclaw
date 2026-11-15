@@ -104,21 +104,29 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
-  it("resolves the selected database once per captured owner assertion and rejects successors", () => {
+  it("checks captured process custody without lock polling and rejects successors", async () => {
     const owner = gatewayOwner(databasePath, root);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.writeFileSync(databasePath, "synthetic database");
     const captured = captureGatewayStateOwner(databasePath)!;
     const realpath = vi.spyOn(fs.realpathSync, "native");
+    const stat = vi.spyOn(fs, "lstatSync");
+    const open = vi.spyOn(fs, "openSync");
     captured.assertCurrent();
+    owner.assertCurrent();
+    (await captured.prepareAccess())();
     expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
-    expect(realpath.mock.calls.some(([pathname]) => pathname === path.dirname(owner.path))).toBe(
-      false,
-    );
+    expect(stat).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    stat.mockRestore();
+    open.mockRestore();
     realpath.mockRestore();
     owner.release();
     gatewayOwner(databasePath, root);
     expect(() => captured.assertCurrent()).toThrow();
+    await expect(
+      captured.prepareAccess().then((assertCurrent) => assertCurrent()),
+    ).rejects.toThrow();
   });
 
   it.skipIf(process.platform === "win32")("rejects a retargeted captured owner alias", () => {
@@ -396,29 +404,32 @@ describe("Gateway state ownership", () => {
       const replacedPath = kind === "owner" ? lease.path : projectionPath(root);
       const original = kind === "owner" ? fs.readFileSync(replacedPath) : undefined;
       const retainedAccess = await captureStateDatabaseAccess(databasePath);
-      const replace = () => {
+      const replace = async () => {
         fs.writeFileSync(replacedPath, "replacement");
         if (kind === "owner") {
-          // Reads must record loss once, before the lease or write checks observe it.
+          // The verification worker records physical loss; host guards consume its publication.
+          await expect(retainedAccess.prepareAccess()).rejects.toThrow(
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
+          );
           expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
-            /lock removed\/replaced; restart the Gateway\.$/u,
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway\.$/u,
           );
           expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-            "lock removed/replaced; restart the Gateway",
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
           );
         }
-        expect(() => lease.assertCurrent()).toThrow("no longer current");
+        expect(() => lease.assertCurrent()).toThrow(/no longer current|removed or replaced/u);
         expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
           kind === "owner" ? GatewayStateOwnerContentionError : "no longer current",
         );
       };
       try {
         if (kind === "projection") {
-          lease.run(replace);
+          await lease.run(replace);
         } else {
-          replace();
+          await replace();
           await expect(retainedAccess.prepareAccess()).rejects.toThrow(
-            "lock removed/replaced; restart the Gateway",
+            /lock (?:was )?removed(?:\/| or )replaced; restart the Gateway/u,
           );
         }
       } finally {

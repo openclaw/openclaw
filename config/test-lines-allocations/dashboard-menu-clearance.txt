@@ -1,3 +1,0 @@
-# Real registered Workboard mini / dashboard host regression: desktop, tablet, and phone
-# hit geometry plus center-click navigation; jsdom cannot prove occlusion. Exact own net growth.
-108

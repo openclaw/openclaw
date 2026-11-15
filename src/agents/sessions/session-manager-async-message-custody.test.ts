@@ -11,6 +11,7 @@ import {
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
 } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { appendSessionManagerActor } from "./session-manager-actor-append.js";
 import { assistantText, withSessionState } from "./session-manager-fixtures.test-support.js";
 import { withSelectedTranscriptReader } from "./session-manager-reader.test-support.js";
 import { SessionManager } from "./session-manager.js";
@@ -137,3 +138,86 @@ it.each([false, true])(
       }
     }),
 );
+
+it("avoids duplicate outer actor checks and refuses authority revoked by a fresh-message callback", () =>
+  withSessionState("actor-assertion-work", async ({ scope: target, state }) => {
+    const manager = await SessionManager.openAsync(target);
+    await manager.appendMessageAsync(user("seed"));
+    await withSelectedTranscriptReader(
+      target,
+      async (selected) => {
+        const actor = expectDefined(selected, "Expected durable actor");
+        const controller = new AbortController();
+        let checks = 0;
+        const assertCurrent = () => {
+          checks++;
+          controller.signal.throwIfAborted();
+        };
+        const grantChecks: number[] = [];
+        const append = actor.appendToolResult.bind(actor);
+        const observed = vi
+          .spyOn(actor, "appendToolResult")
+          .mockImplementation((command, authority, observer) =>
+            append(
+              command,
+              {
+                ...authority,
+                authorize(...args) {
+                  const before = checks;
+                  authority.authorize(...args);
+                  grantChecks.push(checks - before);
+                },
+              },
+              observer,
+            ),
+          );
+        try {
+          const message = makeTextToolResult(
+            "synthetic-tool",
+            "lookup",
+            "Synthetic result",
+            false,
+            2,
+          );
+          const persist = (beforeFreshMessageCommit?: () => void) =>
+            appendSessionManagerActor({
+              actor,
+              toolResult: true,
+              message,
+              assertCurrent,
+              beforeFreshMessageCommit,
+              append: {
+                kind: "metadata",
+                input: {
+                  scope: target,
+                  event: {
+                    type: "message",
+                    id: `result-${checks}`,
+                    parentId: manager.getLeafId(),
+                    timestamp: new Date(2).toISOString(),
+                  },
+                  message: {
+                    messageJson: JSON.stringify(message),
+                    cwd: state.workspaceDir,
+                    validateTurn: true,
+                  },
+                  options: { appendIntent: "active-branch" },
+                },
+              },
+            });
+          await persist();
+          // The commit also brackets message admission; transaction admission has no callback.
+          expect(grantChecks).toEqual([1, 3]);
+          const before = await loadTranscriptEvents(target);
+          expect(before.at(-1)).toMatchObject({ message });
+          await expect(
+            persist(() => controller.abort(new Error("Writer revoked"))),
+          ).rejects.toThrow("Writer revoked");
+          expect(await loadTranscriptEvents(target)).toEqual(before);
+        } finally {
+          observed.mockRestore();
+        }
+      },
+      true,
+    );
+  }));

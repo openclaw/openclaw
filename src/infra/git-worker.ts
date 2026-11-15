@@ -34,6 +34,7 @@ import type {
 import { GIT_WORKER_HOST_BATCH_LIMIT } from "./git-worker-contract.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { createWorkerMutationAuthority } from "./worker-mutation-authority.js";
 import {
   WorkerTaskError,
   createOwnedWorkerTaskPool,
@@ -61,6 +62,9 @@ const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
 const operationDiagnostics = channel("openclaw.git.operation");
 const SPAWN_OPERATIONS = {
+  "github.profile-token": "github.identity",
+  "github.profile-stage": "github.identity",
+  "github.profile-refresh": "github.identity",
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
   "checkout.revision": "checkout.revision",
@@ -146,7 +150,9 @@ function poolFor(
         command.type === "worktree.eviction-repositories" ||
         command.type === "worktree.eviction-purge"
       ? "worktreeMaintenance"
-      : command.type.startsWith("worktree.")
+      : command.type.startsWith("worktree.") ||
+          command.type === "github.profile-stage" ||
+          command.type === "github.profile-refresh"
         ? "worktrees"
         : command.type.startsWith("workspace.")
           ? "workspace"
@@ -224,10 +230,11 @@ export async function runGitWorkerOperation<Command extends GitWorkerCommand>(
   const admitted = transferList
     ? structuredClone(command, { transfer: [...new Set(transferList)] })
     : structuredClone(command);
-  const baseEnv = { ...process.env };
+  const baseEnv = command.type.startsWith("github.profile-") ? {} : { ...process.env };
   // Pooled workers do not inherit later environment changes. Git discovery
   // overrides must disable direct metadata reads for this admission too.
   admitted.filesystemRefs =
+    !command.type.startsWith("github.profile-") &&
     options.git === undefined &&
     !Object.entries(baseEnv).some(
       ([key, value]) =>
@@ -487,6 +494,11 @@ async function executeOperation(
       };
     }
   };
+  const authority =
+    command.type === "github.profile-refresh"
+      ? createWorkerMutationAuthority(() => options.assertCurrent?.(), options.signal)
+      : undefined;
+  command.mutationAuthority = authority?.buffer;
   try {
     const enqueuedAt = measure ? performance.now() : 0;
     const input = measure
@@ -504,6 +516,7 @@ async function executeOperation(
       transferList: options.transferList,
       signal: options.signal,
       timeoutMs: WORKER_PHASE_TIMEOUT_MS,
+      onNotification: authority?.onNotification,
       // Host exchanges retain the command's own deadline and process-tree cleanup.
       onRequest: (value, context) => {
         if (firstHostRequest) {
@@ -531,6 +544,7 @@ async function executeOperation(
       },
     });
     timing?.markPhase();
+    authority?.throwIfRefused();
     if (!reply.ok) {
       if (reply.error.origin !== undefined && hostErrors.has(reply.error.origin)) {
         throw hostErrors.get(reply.error.origin);
@@ -544,7 +558,11 @@ async function executeOperation(
     }
     outcome = "returned";
     return reply.value;
+  } catch (error) {
+    authority?.throwIfRefused();
+    throw error;
   } finally {
+    authority?.dispose();
     let cleanupSucceeded = false;
     try {
       // A cancellation may terminate the worker before its host callback completes.

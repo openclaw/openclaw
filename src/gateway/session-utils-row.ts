@@ -275,7 +275,6 @@ export function readSessionRowInputs(params: {
       estimatedCostUsd: lightweight
         ? asNonNegativeFiniteNumber(entry?.estimatedCostUsd)
         : resolveEstimatedSessionCostUsd({
-            cfg,
             provider,
             model,
             entry,

@@ -43,6 +43,24 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: celeris":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/celeris/**"
+          - "docs/providers/celeris.md"
+          - "docs/plugins/reference/celeris.md"
+"plugin: fastino":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/fastino/**"
+          - "docs/providers/fastino.md"
+          - "docs/plugins/reference/fastino.md"
+"plugin: nace":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/nace/**"
+          - "docs/providers/nace.md"
+          - "docs/plugins/reference/nace.md"
 "plugin: typesafe":
   - changed-files:
       - any-glob-to-any-file:

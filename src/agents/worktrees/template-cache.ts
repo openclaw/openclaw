@@ -244,6 +244,7 @@ export async function prepareWorktreeTemplate(params: {
   sourceCommit: string;
   backend: string;
   reuseOnly?: boolean;
+  backgroundUsedAt?: number;
   requireSpace: () => Promise<void>;
   /** Immutable generations consume producer validation; mutable templates revalidate on reuse. */
   validate?: (
@@ -275,7 +276,7 @@ export async function prepareWorktreeTemplate(params: {
           cacheKey: params.cacheKey,
           contentKey: params.contentKey,
           backend: params.backend,
-          now: retainCommits ? params.now() : undefined,
+          now: retainCommits ? (params.backgroundUsedAt ?? params.now()) : undefined,
         },
         assertCallerCurrent,
       );
@@ -371,8 +372,9 @@ export async function prepareWorktreeTemplate(params: {
           }
           if (valid && existing.contentKey === params.contentKey) {
             retained = await retainWorktreeTemplate(params.env, existing, assertCurrent);
-            if (!hasReaders) {
-              await markTemplateReadyAsync(params.env, existing.id, params.now(), assertCurrent);
+            const usedAt = params.backgroundUsedAt ?? params.now();
+            if (!hasReaders && usedAt > existing.lastUsedAt) {
+              await markTemplateReadyAsync(params.env, existing.id, usedAt, assertCurrent);
             }
             setWorktreePreparationTemplate("warm", { reason: "ready" });
             return retained;
@@ -423,7 +425,7 @@ export async function prepareWorktreeTemplate(params: {
           contentKey: params.contentKey,
           status: "preparing",
           createdAt: params.now(),
-          lastUsedAt: params.now(),
+          lastUsedAt: Math.max(params.backgroundUsedAt ?? params.now(), existing?.lastUsedAt ?? 0),
         };
         await reserveTemplateAsync(params.env, record, assertCurrent);
         built = true;
@@ -455,14 +457,20 @@ export async function prepareWorktreeTemplate(params: {
         }
         const cacheKey =
           existing?.contentKey === params.contentKey ? existing.cacheKey : params.cacheKey;
-        await markTemplateReadyAsync(params.env, id, params.now(), assertCurrent, {
-          cacheKey,
-          previousId: existing?.id,
-          retainedCacheKey:
-            retainCommits && refreshable && existing && existing.contentKey !== params.contentKey
-              ? retainedWorktreeTemplateKey(params.cacheKey, existing.contentKey)
-              : undefined,
-        });
+        await markTemplateReadyAsync(
+          params.env,
+          id,
+          params.backgroundUsedAt === undefined ? params.now() : record.lastUsedAt,
+          assertCurrent,
+          {
+            cacheKey,
+            previousId: existing?.id,
+            retainedCacheKey:
+              retainCommits && refreshable && existing && existing.contentKey !== params.contentKey
+                ? retainedWorktreeTemplateKey(params.cacheKey, existing.contentKey)
+                : undefined,
+          },
+        );
         setWorktreePreparationTemplate(refreshed ? "warm" : "cold", { reason: "ready" });
         return { ...retained, cacheKey, status: "ready" as const };
       },

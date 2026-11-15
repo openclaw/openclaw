@@ -10,6 +10,7 @@ const catalog = {
     personalGroupNew: sharedSessions.personalGroupNew,
     advanced: "Advanced",
     searchGroups: "Search groups",
+    noGroupsMatch: "No groups match your search.",
     unassigned: "Unassigned",
     mobileConversation: "Conversation",
     mobileCopyPreviewLink: "Copy preview link",

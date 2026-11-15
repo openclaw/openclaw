@@ -223,7 +223,13 @@ suite.define(() => {
             runId,
             content: "Synthetic final reply: the report is ready.",
             timestamp: 1_800_000_040_000,
-            __openclaw: { id: "cold-40", seq: 41, runId, replyToId: "cold-38" },
+            __openclaw: {
+              id: "cold-40",
+              seq: 41,
+              runId,
+              replyToId: "cold-38",
+              recordTimestampMs: 1_800_000_218_000,
+            },
           },
         ];
         const gateway = await installMockGateway(page, {

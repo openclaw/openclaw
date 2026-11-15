@@ -237,6 +237,21 @@ obtain main. For ordinary task isolation outside the managed lifecycle, native
 also shares objects. A linked worktree still requires access to its canonical
 Git directory and does not fix an inaccessible `scripts/pr workspace` result.
 
+Never clone the base's local path for landing or recovery: Git's default local
+clone hardlinks its packs, so a forgotten clone pins packs retired by base
+maintenance. Do not copy or relink packs into existing task scratch. Use the
+shared worktree owner above; its cleanup owns the checkout when the task ends.
+Disposable legacy clones under `.openclaw/tmp/` expire through scratch maintenance,
+including their dependency symlinks and hardlinked objects. Keep unfinished
+durable work outside scratch.
+
+Start native operations with the current trusted `scripts/pr`, which selects
+canonical-main code, rather than invoking a historical PR branch's `pr-lib`
+helpers directly. Retained workflows keep their pinned code and outcome namespace;
+use `prepare-workflow-successor` below when they need newer tooling, after
+reconciling any pending operation. Repeatedly fetching main from an old clone
+does not upgrade its running wrapper.
+
 PR review and landing need commits and trees for merge-base, ancestry checks,
 and log ranges, plus blobs for the checked-out files, diffs, and merges. They do
 not need every historical blob. The source-acquisition owner retains the base's

@@ -336,7 +336,6 @@ export function createVideoGenerateTool(
           model,
           options,
           signal,
-          findDuplicate: createVideoGenerateDuplicateGuardResult,
           acquire: async (config) =>
             options?.preparedModelRuntime?.acquireMediaCapabilityProviders
               ? acquireMediaGenerationToolProviders("videoGenerationProviders", {

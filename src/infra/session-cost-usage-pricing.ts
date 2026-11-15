@@ -173,6 +173,18 @@ function hasAmbiguousRequestTier(usage: NormalizedUsage, cost: ModelCostConfig):
   return promptTokens > context.promptTokens && promptTokens >= secondTier.range[0];
 }
 
+/** Prices one transcript row's counters, or returns undefined when their sum hides request tiers. */
+export function estimateTranscriptUsageCost(
+  usage: NormalizedUsage,
+  cost: ModelCostConfig,
+): ReturnType<typeof calculateUsageCost> | undefined {
+  if (hasAmbiguousRequestTier(usage, cost)) {
+    return undefined;
+  }
+  const estimated = calculateUsageCost(usage, cost);
+  return Number.isFinite(estimated.total) ? estimated : undefined;
+}
+
 /** Whether the catalog price can change this entry's estimate; read before applying it. */
 export function usageCostEstimateUsesPricing(entry: UsageCostEstimateEntry): boolean {
   return entry.costTotal === undefined || computeUsageTokenTotals(entry.usage).totalTokens > 0;
@@ -188,11 +200,7 @@ export function applyUsageCostEstimate(
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (entry.costTotal === undefined || totalTokens > 0) {
-    const estimated =
-      cost && !hasAmbiguousRequestTier(entry.usage, cost)
-        ? calculateUsageCost(entry.usage, cost)
-        : undefined;
-    entry.costBreakdown = estimated && Number.isFinite(estimated.total) ? estimated : undefined;
+    entry.costBreakdown = cost ? estimateTranscriptUsageCost(entry.usage, cost) : undefined;
     entry.costTotal = entry.costBreakdown?.total;
   }
   return entry;

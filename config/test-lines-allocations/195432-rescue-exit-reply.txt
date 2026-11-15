@@ -1,0 +1,2 @@
+13
+# #195432: regression for rescue commands that finish with a non-zero exit (doctor with warnings) and must still reply.

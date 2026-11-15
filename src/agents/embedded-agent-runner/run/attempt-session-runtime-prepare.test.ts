@@ -1,15 +1,21 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { buildSessionContext } from "../../../../packages/agent-core/src/harness/session/session.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../../config/runtime-snapshot.js";
 import type { SessionEntryCohortReader } from "../../../config/sessions/session-entry-read-runtime.types.js";
 import {
   captureOwnedTranscriptWriteAssertion,
   getOwnedSessionTranscriptReader,
 } from "../../../config/sessions/transcript-write-context.js";
+import * as processExec from "../../../process/exec.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
@@ -17,11 +23,28 @@ import {
   prepareSystemAgentRunAdmission,
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
+import { createOpenClawCodingToolsInternal } from "../../agent-tools.js";
+import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
+import { resolveConversationCapabilityProfile } from "../../conversation-capability-profile.js";
+import { commandResult } from "../../github-identity.test-support.js";
+import {
+  clearNativeGitHubTokenCache,
+  refreshNativeGitHubConfiguration,
+} from "../../github-read-identity.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
+import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import type { SessionEntry } from "../../sessions/session-manager-types.js";
 import {
   sessionManagerReadToolResultProjectionEntries,
   sessionManagerReadTranscriptBranch,
 } from "../../sessions/session-manager-view-types.js";
+import { createMcpStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createToolSearchTools, applyToolSearchCatalog } from "../../tool-search.js";
+import { createGitHubPublishTool } from "../../tools/github-publish-tool.js";
+import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
+import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
+import { prepareEmbeddedAttemptToolCatalog } from "./attempt-tool-catalog.js";
 
 const mocks = vi.hoisted(() => ({
   createAnthropicPayloadLogger: vi.fn(),
@@ -39,10 +62,17 @@ const mocks = vi.hoisted(() => ({
   >(async () => "/tmp/trajectory.jsonl"),
   prepareTransport: vi.fn(),
   restoreProjections: vi.fn(),
+  readToolUsage: vi.fn<typeof import("../../../config/sessions/tool-usage.js").readAgentToolUsage>(
+    async () => [],
+  ),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: mocks.createAnthropicPayloadLogger,
+}));
+vi.mock("../../../config/sessions/tool-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../config/sessions/tool-usage.js")>()),
+  readAgentToolUsage: mocks.readToolUsage,
 }));
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", async (importOriginal) => ({
@@ -79,6 +109,7 @@ vi.mock("./attempt-transcript-helpers.js", () => ({
   resolveAttemptTrajectorySessionFile: mocks.trajectoryPath,
 }));
 
+import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { persistSessionSystemPrompt } from "../session-prompt-state.js";
 import { prepareEmbeddedAttemptSessionRuntime } from "./attempt-session-runtime-prepare.js";
 import {
@@ -251,11 +282,12 @@ function createFixture() {
     },
     toolBase: { codeModeControlsEnabledForRun: false },
     toolCatalog: {
+      installToolListingPin: vi.fn(async () => false),
       effectiveTools: [],
       toolSearchRunPlan: { replayAllowedToolNames: new Set(["read"]) },
     },
     bundleTools: { clientTools: [], uncompactedEffectiveTools: [] },
-    systemPrompt: { systemPromptText: "initial prompt" },
+    prepareSystemPrompt: async () => ({ systemPromptText: "initial prompt" }),
     sessionLock: {
       transcriptLifecycle: {},
       ownedTranscriptWriteContext: {
@@ -289,11 +321,321 @@ afterEach(async () => {
 });
 
 describe("prepareEmbeddedAttemptSessionRuntime", () => {
+  it.each([false, true])(
+    "keeps established GitHub listing through async discovery and refreshes on config change (codeMode=%s)",
+    async (codeMode) => {
+      const fixture = createHistoryFixture();
+      const owner = await vi.importActual<typeof import("../session-prompt-state.js")>(
+        "../session-prompt-state.js",
+      );
+      mocks.retainSessionPromptState.mockImplementation(owner.retainEmbeddedSessionPromptState);
+      vi.stubEnv("GH_TOKEN", undefined);
+      vi.stubEnv("GITHUB_TOKEN", undefined);
+      const native = vi
+        .spyOn(processExec, "runCommandBuffered")
+        .mockResolvedValue(commandResult("", 1));
+      clearNativeGitHubTokenCache();
+      onTestFinished(() => {
+        native.mockRestore();
+        clearNativeGitHubTokenCache();
+        clearRuntimeConfigSnapshot();
+        fixture.resources.promptStateLease?.[Symbol.dispose]();
+        owner.clearEmbeddedSessionPromptStates([fixture.input.attempt.sessionId]);
+      });
+      let emitted = "";
+      const createSession = mocks.prepareAgentSession.getMockImplementation()!;
+      mocks.prepareAgentSession.mockImplementation(async (input) => {
+        const prepared = prepareEmbeddedAttemptClientTools({
+          attempt: input.attempt,
+          ...input.clientToolPreparation,
+        });
+        emitted = JSON.stringify(
+          prepared.allCustomTools.map(({ name, description, parameters }) => ({
+            name,
+            description,
+            parameters,
+          })),
+        );
+        return createSession(input);
+      });
+      const baseConfig = {
+        agents: { entries: { main: {} } },
+        tools: { codeMode, toolSearch: false },
+      };
+      let config: NonNullable<PrepareInput["attempt"]["config"]> = baseConfig;
+      setRuntimeConfigSnapshot(config);
+      const render = async (trigger: "user" | "event", sandboxed = false) => {
+        fixture.resources.promptStateLease?.[Symbol.dispose]();
+        Object.assign(fixture.input.attempt, {
+          config,
+          trigger,
+          model: makeProviderModelFixture({
+            provider: "openai",
+            id: "listing-proof",
+            baseUrl: "http://127.0.0.1:1",
+            api: "openai-responses",
+          }),
+        });
+        const sandbox = sandboxed ? createSandboxTestContext() : null;
+        fixture.input.setup = createAttemptSetupFixture({ sandbox });
+        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+          config,
+          agentId: "main",
+          sessionKey: fixture.input.attempt.sessionKey,
+          modelToolsEnabled: true,
+        });
+        onTestFinished(runtime.cleanup);
+        const tools = createOpenClawCodingToolsInternal({
+          config,
+          sessionKey: fixture.input.attempt.sessionKey,
+          githubPublicationAvailable: true,
+          githubPublicationConfigurationAware: true,
+          wrapBeforeToolCallHook: false,
+        })
+          .filter((tool) => tool.name.startsWith("github_"))
+          .map((tool) =>
+            sandbox && tool.name === "github_publish" ? createGitHubPublishTool({ sandbox }) : tool,
+          );
+        fixture.input.bundleTools.uncompactedEffectiveTools = tools;
+        Object.assign(fixture.input.toolBase, {
+          toolSurfaceRuntime: runtime,
+          toolsEnabled: true,
+          codeModeControlsEnabledForRun: codeMode,
+          toolSearchControlsEnabledForRun: false,
+          toolSearchConfig: runtime.plan.toolSearchConfig,
+          toolSearchRuntimeConfig: config,
+          toolSearchCatalogRef: runtime.toolSearchCatalogRef,
+          localModelLeanPreserveToolNames: [],
+          runtimeCapabilityProfile: resolveConversationCapabilityProfile({
+            config,
+            agentId: "main",
+          }),
+        });
+        fixture.input.toolCatalog = await prepareEmbeddedAttemptToolCatalog({
+          attempt: fixture.input.attempt,
+          setup: fixture.input.setup,
+          preparedToolBase: fixture.input.toolBase,
+          bundleTools: fixture.input.bundleTools,
+          abortSignal: fixture.input.runAbortSignal,
+          executeCodeModeTool: async () => ({ content: [], details: {} }),
+        });
+        fixture.input.prepareSystemPrompt = async () =>
+          ({
+            systemPromptText: "initial prompt",
+            prepareToolPrompt: async () => (prompt: string) => prompt,
+          }) as never;
+        const prepared = await fixture.prepare();
+        const publication =
+          runtime.toolSearchCatalogRef?.current?.entries.find(
+            (entry) => entry.name === "github_publish",
+          )?.tool ??
+          fixture.input.toolCatalog.effectiveTools.find((tool) => tool.name === "github_publish");
+        const result = {
+          publicationSchema: publication?.parameters,
+          definitions: emitted,
+          catalog: buildCodeModeCatalogPrompt(
+            { config, catalogRef: runtime.toolSearchCatalogRef },
+            runtime.toolSearchCatalogRef?.current?.entries ?? [],
+          ),
+        };
+        (await prepared.prepareSystemPromptUpdate!("listing proof")).commit?.();
+        await owner.persistSessionSystemPrompt(prepared.sessionPromptState, (customType, data) =>
+          fixture.appendCustomEntryAsync(customType, structuredClone(data)),
+        );
+        return result;
+      };
+      const initial = await render("user");
+      native.mockImplementation(async (argv) =>
+        commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+      );
+      await refreshNativeGitHubConfiguration();
+      expect(await render("event")).toEqual(initial);
+      native.mockResolvedValue(commandResult("", 1));
+      await refreshNativeGitHubConfiguration();
+      expect(await render("user")).toEqual(initial);
+      native.mockImplementation(async (argv) =>
+        commandResult(argv[2] === "status" ? '{"hosts":{}}' : "", argv[2] === "status" ? 0 : 1),
+      );
+      await refreshNativeGitHubConfiguration();
+      config = {
+        ...config,
+        tools: { ...config.tools, github: { profileId: "ghp_11111111111111111111111111111111" } },
+      };
+      setRuntimeConfigSnapshot(config);
+      await render("user");
+      const rebound = await render("event", true);
+      expect(rebound.publicationSchema).not.toHaveProperty("properties.workspacePath");
+      config = baseConfig;
+      setRuntimeConfigSnapshot(config);
+      const refreshed = await render("user");
+      expect(refreshed).not.toEqual(initial);
+      expect(refreshed.publicationSchema).toMatchObject({
+        properties: { action: { enum: ["readiness"] } },
+      });
+      native.mockResolvedValue(commandResult("", 1));
+      await refreshNativeGitHubConfiguration();
+      expect(await render("event")).toEqual(refreshed);
+      expect(await render("user")).toEqual(refreshed);
+      fixture.input.toolCatalog.refreshTools(() => {});
+      const latest = mocks.prepareAgentSession.mock.calls.at(-1)![0];
+      const toolRefresh = prepareEmbeddedAttemptClientTools({
+        attempt: latest.attempt,
+        ...latest.clientToolPreparation,
+      });
+      expect(
+        toolRefresh.allCustomTools.find((tool) => tool.name === "github_publish")?.parameters,
+      ).toMatchObject({
+        properties: { action: { enum: expect.arrayContaining(["publish"]) } },
+      });
+    },
+  );
+  it.each([false, true])(
+    "ranks the MCP directory from learned MCP usage only with the lab on (%s)",
+    async (enabled) => {
+      const fixture = createFixture();
+      const config = { tools: { toolSearch: { mode: "tools" as const } } };
+      const catalogRef = {};
+      const mcpTools = Array.from({ length: 400 }, (_, index) =>
+        createMcpStubTool("granola", `op_${index}`, "Reads meeting notes for the caller."),
+      );
+      const controls = createToolSearchTools({ config, runtimeConfig: config, catalogRef });
+      const { tools } = applyToolSearchCatalog({
+        tools: [...controls, ...mcpTools],
+        config,
+        catalogRef,
+      });
+      const searchDescription = (list: { name: string; description: string }[]) =>
+        list.find((tool) => tool.name === "tool_search")!.description;
+      const description = searchDescription(tools);
+      expect(description).toContain("- granola server: 400 tools, names omitted");
+      const usage = (tool: string) => [{ toolId: `mcp:granola:${tool}`, score: 4, updatedAt: 1 }];
+      mocks.readToolUsage.mockReset().mockResolvedValueOnce(usage("granola__op_321"));
+      fixture.input.attempt.config = {
+        ...config,
+        agents: { defaults: { experimental: { usageRankedToolIndex: enabled } } },
+      };
+      fixture.input.toolBase.toolSearchCatalogRef = catalogRef;
+      const refreshTools = vi.fn();
+      Object.assign(fixture.agentSession, { refreshTools });
+      const runtime = await fixture.prepare();
+      const { pinTools } = mocks.prepareAgentSession.mock.calls.at(-1)![0].clientToolPreparation;
+      const sent = searchDescription(pinTools(tools));
+      if (!enabled) {
+        expect(mocks.readToolUsage).not.toHaveBeenCalled();
+        expect(sent).toBe(description);
+        return;
+      }
+      expect(sent).toContain("- mcp:granola:granola__op_321\n");
+      Object.assign(fixture.sessionManager, {
+        getSessionTarget: () => undefined,
+        getSessionId: () => "history-session",
+        appendCustomEntryAsync: vi.fn(async () => "checkpoint"),
+      });
+      Object.assign(fixture.activeSession, { agent: { state: { messages: [] } } });
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).not.toHaveBeenCalled();
+      // Committed compaction refreshes the snapshot; tools re-pin before the next request.
+      Object.assign(fixture.sessionManager, {
+        [sessionManagerReadTranscriptBranch]: () => [{ type: "compaction", id: "compacted" }],
+        getBoundaryCount: () => 1,
+      });
+      mocks.readToolUsage.mockResolvedValueOnce(usage("granola__op_399"));
+      await runtime.prepareSystemPromptUpdate!("unchanged");
+      expect(refreshTools).toHaveBeenCalledOnce();
+      const repinned = searchDescription(pinTools(tools));
+      expect(repinned).toContain("- mcp:granola:granola__op_399\n");
+      expect(repinned).not.toContain("- mcp:granola:granola__op_321\n");
+    },
+  );
+
+  it("passes the frozen ranking to renderers after disabling the lab without a boundary", async () => {
+    const fixture = createFixture();
+    const first = await fixture.prepare();
+    const snapshot = {
+      version: 1 as const,
+      at: 100,
+      orderedToolIds: ["openclaw:core:read"],
+      newcomers: { "openclaw:core:read": 100 },
+    };
+    first.sessionPromptState.usageRanking!.snapshot = snapshot;
+    fixture.input.toolBase.toolSearchCatalogRef = {
+      current: {
+        entries: [
+          {
+            id: "openclaw:core:read",
+            name: "read",
+            source: "openclaw",
+            description: "read",
+            tool: {
+              name: "read",
+              label: "read",
+              description: "read",
+              parameters: Type.Object({}),
+              execute: async () => ({ content: [], details: {} }),
+            },
+          },
+        ],
+        counterScope: "synthetic",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    };
+    const render = vi.fn<PrepareInput["prepareSystemPrompt"]>(async () => ({
+      runtimeChannel: undefined,
+      runtimeInfo: { model: "test-model" },
+      systemPromptReport: undefined,
+      systemPromptText: "unchanged",
+    }));
+    fixture.input.prepareSystemPrompt = render;
+    await fixture.prepare();
+    expect(render.mock.calls[0]?.[0]?.()).toBe(snapshot);
+  });
+
+  it.each([
+    ["proxy", "claude-opus-5", "anthropic-messages", "https://proxy.example.test"],
+    ["custom-openai", "gpt-5.4-mini", "openai-completions", "https://compat.example.test/v1"],
+    ["google", "gemini-3-pro", "google-generative-ai", "https://generativelanguage.googleapis.com"],
+    [
+      "amazon-bedrock",
+      "anthropic.claude-opus-5",
+      "bedrock-converse-stream",
+      "https://bedrock-runtime.us-east-1.amazonaws.com",
+    ],
+  ] as const)(
+    "pins the session prompt on %s %s (%s) without in-history system messages",
+    async (provider, id, api, baseUrl) => {
+      const fixture = createHistoryFixture();
+      const model = makeProviderModelFixture({ provider, id, api, baseUrl });
+      const policy = resolveTranscriptPolicy({
+        config: {},
+        directApiKey: true,
+        provider: model.provider,
+        modelApi: model.api,
+        modelId: model.id,
+        model,
+      });
+      expect(policy.inHistorySystemUpdates).toBeFalsy();
+      Object.assign(fixture.transcriptPolicy, policy);
+      const userTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const admitted = await userTurn.prepareSystemPromptUpdate!(
+        "## Tooling\n- exec\n- suggest_task",
+      );
+      admitted.commit?.();
+      await fixture.persist(userTurn);
+      // An inter-session turn renders without the task-suggestion grant.
+      const sendTurn = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
+      const next = await sendTurn.prepareSystemPromptUpdate!("## Tooling\n- exec");
+      expect(next.systemPrompt).toBe(admitted.systemPrompt);
+      expect(next.update?.content).toContain("## Tooling\n- exec");
+    },
+  );
+
   it("clears an unsent prompt without reading history when prompt updates remain enabled", async () => {
     const fixture = createHistoryFixture();
     const first = await prepareEmbeddedAttemptSessionRuntime(fixture.input);
     const prompt = await first.prepareSystemPromptUpdate!("## Policy\nUnsent update");
-    prompt.commit();
+    expectDefined(prompt.commit, "in-history prompt commit")();
     expect(first.sessionPromptState.pendingSystemPrompt?.renderedPrefix).toBe(
       "## Policy\nUnsent update",
     );
@@ -320,7 +662,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const prompt = `## User\n${profile ?? "Shared"} guidance`;
       const prepared = await runtime.prepareSystemPromptUpdate!(prompt, true);
       expect(prepared).toMatchObject({ restart: true, systemPrompt: prompt });
-      prepared.commit();
+      expectDefined(prepared.commit, "in-history prompt commit")();
       await fixture.persist(runtime);
     }
   });
@@ -421,10 +763,10 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       const routeR = fixture.input.attempt.modelId;
       const firstRuntime = await fixture.prepare();
       const initial = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nA");
-      initial.commit();
+      expectDefined(initial.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
       const changed = await firstRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      changed.commit();
+      expectDefined(changed.commit, "in-history prompt commit")();
       recordUpdate(changed.update!);
       agentState.messages.push(changed.update!);
       await persistSessionSystemPrompt(firstRuntime.sessionPromptState, appendCustomEntryAsync);
@@ -443,11 +785,11 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       fixture.input.attempt.modelId = routeR;
       const resumedRuntime = await fixture.prepare();
       const resumed = await resumedRuntime.prepareSystemPromptUpdate!("## Policy\nB", true);
-      expect(resumed.restart).toBe(true);
+      expect(resumed).toMatchObject({ restart: true });
       expect(resumed.systemPrompt).toBe("## Policy\nB");
       expect(resumed.update).toBeUndefined();
       expect(agentState.messages).toEqual([]);
-      resumed.commit();
+      expectDefined(resumed.commit, "in-history prompt commit")();
       await persistSessionSystemPrompt(resumedRuntime.sessionPromptState, appendCustomEntryAsync);
       expect(entries.at(-1)).toMatchObject({
         data: { prefix: "## Policy\nB", renderedPrefix: "## Policy\nB" },
@@ -478,7 +820,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     // Failed replay admission never calls the returned projection's commit.
     const retry = await prepare(prompt);
     expect(retry.update?.content).toBe(permissionNotice);
-    retry.commit();
+    expectDefined(retry.commit, "in-history prompt commit")();
     recordUpdate(retry.update!);
     await persist(runtime);
     expect(buildSessionContext(entries).messages).toContainEqual(
@@ -488,7 +830,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
 
     const pinned = retry.systemPrompt;
     const restricted = await prepare("## Tools\nNo tools are available.");
-    restricted.commit();
+    expectDefined(restricted.commit, "in-history prompt commit")();
     await persist(runtime);
     expect((await prepare(pinned)).update).toBeUndefined();
     const restored = await prepare(pinned, true);

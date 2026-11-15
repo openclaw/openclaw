@@ -4,6 +4,7 @@ import { asOptionalRecord, readStringField } from "openclaw/plugin-sdk/string-co
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { Browser, ConnectOverCDPTransport } from "playwright-core";
+import { cdpNetworkLogs, createCdpNetworkLog } from "./cdp-network-log.js";
 import { isWebSocketUrl, openCdpWebSocket } from "./cdp.helpers.js";
 import { resolveBrowserEngine } from "./engines/registry.js";
 import type { BrowserEngineId } from "./engines/types.js";
@@ -121,6 +122,7 @@ export async function connectOverCdpTransport(
   connectionUrl: string,
   opts: CdpTransportOptions,
 ): Promise<Browser> {
+  const networkLog = createCdpNetworkLog();
   const normalizer = resolveBrowserEngine(opts.engine).createCdpNormalizer?.();
   const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
   const pageTargetIdsBySession = new Map<string, string>();
@@ -141,6 +143,7 @@ export async function connectOverCdpTransport(
         return;
       }
       transportClosed = true;
+      networkLog.clear();
       normalizer?.clear();
       if (onClose) {
         onClose(reason);
@@ -307,6 +310,7 @@ export async function connectOverCdpTransport(
               releaseContextlessTarget(contextlessParams);
               continue;
             }
+            networkLog.receive(parsed);
             scheduleMessage(parsed);
           }
         } catch {
@@ -321,11 +325,13 @@ export async function connectOverCdpTransport(
     });
     // Target-command state diagnoses only the cold attach. Stop retaining
     // traffic once Playwright owns a usable browser for the cached session.
+    cdpNetworkLogs.set(browser, networkLog);
     trackInitializationCommands = false;
     pageTargetIdsBySession.clear();
     pendingTargetCommands.clear();
     return browser;
   } catch (error) {
+    networkLog.clear();
     normalizer?.clear();
     wire.close();
     if (isConnectTimeout(error)) {

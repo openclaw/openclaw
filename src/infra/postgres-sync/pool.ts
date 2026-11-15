@@ -17,10 +17,13 @@ import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
 import { recordPostgresPoolSelfRoot, trackNativeWorkerForCpu } from "../worker-cpu.js";
 import { workerScriptName } from "../worker-diagnostic-script.js";
 import {
+  closePostgresPool,
   postgresPoolState as state,
   type PostgresPoolEndpoint,
   type PostgresPoolEndpoints,
 } from "./pool-state.js";
+
+export { closePostgresPool } from "./pool-state.js";
 
 export type PostgresPoolSetup =
   | { host: MessagePort }
@@ -214,18 +217,4 @@ export async function preparePostgresPoolForUpdate(nextStep: string): Promise<vo
       workers.forEach((worker) => worker.unref());
     }
   }
-}
-
-/** Executable cleanup calls this after SQL hosts and native backend-close settlement. */
-export async function closePostgresPool(): Promise<void> {
-  const workers = state.workers;
-  state.workers = undefined;
-  for (const { port } of state.endpoints?.services ?? []) {
-    port.close();
-  }
-  state.endpoints = undefined;
-  state.ready = [];
-  state.refresh = undefined;
-  state.failure = undefined;
-  await Promise.all(workers?.map((worker) => worker.terminate()) ?? []);
 }

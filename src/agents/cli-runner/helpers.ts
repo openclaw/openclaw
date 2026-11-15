@@ -39,7 +39,8 @@ import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
-const sweptCliImageRoots = new Set<string>();
+const CLI_IMAGE_SWEEP_RECURRENCE_MS = 24 * 60 * 60 * 1_000;
+const lastCliImageRootSweepMs = new Map<string, number>();
 
 export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
@@ -235,13 +236,16 @@ function resolveCliImageFileName(image: ImageContent): string {
 }
 
 async function sweepCliImageRoot(imageRoot: string): Promise<void> {
-  if (sweptCliImageRoots.has(imageRoot)) {
+  const nowMs = Date.now();
+  const lastSweep = lastCliImageRootSweepMs.get(imageRoot);
+  if (lastSweep !== undefined && nowMs - lastSweep < CLI_IMAGE_SWEEP_RECURRENCE_MS) {
     return;
   }
-  sweptCliImageRoots.add(imageRoot);
+  lastCliImageRootSweepMs.set(imageRoot, nowMs);
   try {
     await fileStore({ rootDir: imageRoot }).pruneExpired({ ttlMs: CLI_IMAGE_SWEEP_TTL_MS });
   } catch (error) {
+    lastCliImageRootSweepMs.delete(imageRoot);
     cliBackendLog.debug(`cli image cache sweep failed: ${String(error)}`);
   }
 }

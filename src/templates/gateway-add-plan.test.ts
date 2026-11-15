@@ -432,7 +432,7 @@ describe("Gateway Template Add plan", () => {
             enabled: true,
             schedule: { cron: "0 * * * *", timezone: "UTC" },
             session: "isolated",
-            delivery: "last-channel",
+            delivery: "none",
             message: "Review active incidents and prepare a concise status summary.",
             messageDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
           },

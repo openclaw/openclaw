@@ -107,6 +107,13 @@ wait for it to exit, and rerun the same command.
 - Interactive mode offers optional auth copying. When the fleet has no default agent, choose a source agent or **Skip copying auth profiles** (the default). Selecting a source still requires confirmation before copying. Only portable static credentials (`api_key` and static `token` profiles) are copied unless a credential opts out with `copyToAgents: false`; OAuth refresh-token profiles are not copied unless a provider opts in with `copyToAgents: true`. Without a copy, OAuth stays available through the shared auth base. If the source agent has its own local OAuth profile, sign in separately for the new agent.
 - An agent id whose deletion has finished can be recreated with `agents add`. Creation claims the finished deletion record when it publishes the new agent, including when the wizard copies or configures auth. An id whose deletion cleanup is still pending is refused until cleanup finishes.
 
+Retained and held agent databases stay outside Gateway startup, runtime discovery,
+and update migrations. Requests to a held agent return restoration guidance while
+healthy agents remain available. Explicit `agents add` restoration verifies their ownership
+and backs up and migrates an older SQLite schema before publishing the agent.
+Stop the Gateway before restoring an older schema. A failed restoration leaves
+the database held; `openclaw doctor --fix` provides inspection and restoration guidance.
+
 With PostgreSQL agent storage, a retained local anchor must still match an initialized
 server namespace. If that namespace is missing, empty, or belongs to another store,
 creation refuses before changing the workspace or configuration. Restore a matching

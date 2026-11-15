@@ -56,11 +56,16 @@ type UpdateMetadataMemoryWikiMutation = MemoryWikiMutationMetadata & {
 
 type ApplyMemoryWikiMutation = CreateSynthesisMemoryWikiMutation | UpdateMetadataMemoryWikiMutation;
 
+type MetadataListChanges = Partial<
+  Record<"sourceIds" | "claims" | "contradictions" | "questions", { before: number; after: number }>
+>;
+
 type ApplyMemoryWikiMutationResult = {
   changed: boolean;
   operation: ApplyMemoryWikiMutation["op"];
   pagePath: string;
   pageId?: string;
+  metadataListChanges?: MetadataListChanges;
   compile: CompileMemoryWikiResult;
 };
 
@@ -287,7 +292,12 @@ async function applyUpdateMetadataMutation(params: {
   config: ResolvedMemoryWikiConfig;
   mutation: UpdateMetadataMemoryWikiMutation;
   signal?: AbortSignal;
-}): Promise<{ changed: boolean; pagePath: string; pageId?: string }> {
+}): Promise<{
+  changed: boolean;
+  pagePath: string;
+  pageId?: string;
+  metadataListChanges?: MetadataListChanges;
+}> {
   const page = await readMemoryWikiPageByLookup(
     params.config.vault.path,
     params.mutation.lookup,
@@ -297,19 +307,34 @@ async function applyUpdateMetadataMutation(params: {
     throw new Error(`Wiki page not found: ${params.mutation.lookup}`);
   }
   const parsed = page.parsed;
+  const frontmatter = buildUpdatedFrontmatter({
+    original: parsed.frontmatter,
+    mutation: params.mutation,
+  });
+  const metadataListChanges: MetadataListChanges = {};
+  for (const key of ["sourceIds", "claims", "contradictions", "questions"] as const) {
+    if (params.mutation[key] !== undefined) {
+      const count = (value: unknown) =>
+        key === "claims"
+          ? normalizeWikiClaims(value).length
+          : normalizeSingleOrTrimmedStringList(value).length;
+      metadataListChanges[key] = {
+        before: count(parsed.frontmatter[key]),
+        after: count(frontmatter[key]),
+      };
+    }
+  }
   const changed = await writeWikiPage({
     rootDir: params.config.vault.path,
     relativePath: page.relativePath,
-    frontmatter: buildUpdatedFrontmatter({
-      original: parsed.frontmatter,
-      mutation: params.mutation,
-    }),
+    frontmatter,
     body: parsed.body,
   });
   return {
     changed,
     pagePath: page.relativePath,
     ...(page.id ? { pageId: page.id } : {}),
+    ...(Object.keys(metadataListChanges).length > 0 ? { metadataListChanges } : {}),
   };
 }
 
@@ -341,10 +366,8 @@ export async function applyMemoryWikiMutation(params: {
       params.signal ? { signal: params.signal } : undefined,
     );
     return {
-      changed: result.changed,
+      ...result,
       operation: params.mutation.op,
-      pagePath: result.pagePath,
-      ...(result.pageId ? { pageId: result.pageId } : {}),
       compile,
     };
   });

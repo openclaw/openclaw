@@ -11,10 +11,9 @@ import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import * as embeddedStateLock from "../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../infra/embedded-state-lock.test-support.js";
-import * as gatewayLockProcessModule from "../infra/gateway-lock-process.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
+import * as processSignalBridge from "../infra/process-signal-bridge.js";
+import { captureNativeSignalBridge } from "../infra/process-signal-bridge.test-support.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { createSqliteAuditRecordWriter } from "../infra/sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
@@ -30,8 +29,7 @@ import { runAgentExecWithMock as runExec } from "./agent-exec.test-helpers.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const acquireStateLock = embeddedStateLock.acquireEmbeddedStateLock;
-const createSignalBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
+const createSignalBridge = processSignalBridge.createProcessSignalBridge;
 const signalCaptures: ReturnType<typeof captureNativeSignalBridge>[] = [];
 afterEach(() => {
   try {
@@ -45,29 +43,17 @@ afterEach(() => {
 });
 const success = () => ({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
 function stateFixture() {
-  const stateDir = tempDirs.make("openclaw-agent-exec-lock-");
-  const lockDir = path.join(stateDir, "gateway-locks");
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123_456);
-  const lockOptions = {
-    allowInTests: true,
-    env: {
-      ...process.env,
-      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
-      OPENCLAW_STATE_DIR: stateDir,
-    },
-    lockDir,
-    timeoutMs: 100,
-  };
-  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
-    acquireStateLock({ ...params, options: lockOptions }),
-  );
-  return { stateDir, lockOptions, lockPath: path.join(lockDir, "gateway.state.lock") };
+  return { stateDir: tempDirs.make("openclaw-agent-exec-lock-") };
 }
-async function expectLock(lockPath: string) {
-  expect(JSON.parse(await fs.readFile(lockPath, "utf8"))).toMatchObject({
-    pid: process.pid,
-    role: "agent-embedded",
-  });
+/** The --state-dir owner is this process while it holds custody. */
+async function expectOwner(stateDir: string, held: boolean) {
+  const env = {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+  };
+  const owner = await readActiveGatewayLockIdentity({ env, includeEmbedded: true });
+  expect(owner?.pid).toBe(held ? process.pid : undefined);
 }
 
 describe("agent exec retained-state ownership", () => {
@@ -103,7 +89,7 @@ describe("agent exec retained-state ownership", () => {
         expect(cleanupScope.outcome).toBe("uncertain");
         expect(process.env.OPENCLAW_STATE_DIR).toBe(previousStateDir);
         if (fixture) {
-          await expectLock(fixture.lockPath);
+          await expectOwner(fixture.stateDir, true);
         }
         await expect(fs.readFile(path.join(stateDir, "owned-work"), "utf8")).resolves.toBe(
           "still owned",
@@ -116,37 +102,16 @@ describe("agent exec retained-state ownership", () => {
     },
   );
 
-  it("refuses a state directory owned by a live Gateway", async () => {
-    const { stateDir, lockOptions } = stateFixture();
-    const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
-    if (!gatewayLock) {
-      throw new Error("Expected live Gateway fixture lock");
-    }
-    const runAgent = vi.fn(async () => success());
-    const runtime = createTestRuntime();
-    try {
-      const result = await runExec("inspect", { stateDir }, runtime, runAgent);
-      expect(result.exitCode).toBe(1);
-      expect(runAgent).not.toHaveBeenCalled();
-      expect(runtime.error).toHaveBeenCalledWith(
-        `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Omit --state-dir to use isolated temporary state, or stop the Gateway first (openclaw gateway stop).`,
-      );
-    } finally {
-      await gatewayLock.release();
-    }
-  });
-
-  it("holds and releases the embedded state lock around the run", async () => {
-    const { stateDir, lockPath } = stateFixture();
+  it("holds and releases state ownership around the run", async () => {
+    const { stateDir } = stateFixture();
     await fs.writeFile(path.join(stateDir, "keep.txt"), "keep");
     const result = await runExec("inspect", { stateDir }, createTestRuntime(), async () => {
-      await expectLock(lockPath);
+      await expectOwner(stateDir, true);
       return success();
     });
     expect(result.exitCode).toBe(0);
-    await expect(fs.stat(lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectOwner(stateDir, false);
     await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
-    expect((await fs.readdir(stateDir)).toSorted()).toEqual(["gateway-locks", "keep.txt", "tmp"]);
   });
 
   it.each([
@@ -161,7 +126,7 @@ describe("agent exec retained-state ownership", () => {
     const entered = createDeferred();
     const runtime = createTestRuntime();
     let stateDir = "";
-    vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
+    vi.spyOn(processSignalBridge, "createProcessSignalBridge").mockImplementationOnce(
       signals.create,
     );
     const run = runExec(
@@ -192,7 +157,7 @@ describe("agent exec retained-state ownership", () => {
     signals.emit(testCase.signal);
     await run;
     if (fixture) {
-      await expect(fs.stat(fixture.lockPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expectOwner(fixture.stateDir, false);
       await expect(fs.readFile(path.join(stateDir, "keep.txt"), "utf8")).resolves.toBe("keep");
     } else {
       await expect(fs.stat(stateDir)).rejects.toMatchObject({ code: "ENOENT" });

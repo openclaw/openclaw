@@ -5,13 +5,7 @@ import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { getAgentDir } from "../config.js";
 import { AuthStorage as CoreAuthStorage } from "./auth-storage.core.js";
 
-export type {
-  AuthStatus,
-  ApiKeyCredential,
-  AuthCredential,
-  AuthStorageBackend,
-  AuthStorageData,
-} from "./auth-storage.core.js";
+export type { ApiKeyCredential, AuthStorageData } from "./auth-storage.core.js";
 export { OAuthProviderConfiguredUnavailableError } from "./auth-storage.core.js";
 export type AuthStorage = CoreAuthStorage;
 

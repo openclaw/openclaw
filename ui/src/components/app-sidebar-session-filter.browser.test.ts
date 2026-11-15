@@ -55,7 +55,7 @@ const ownerOptions = (root: Element) =>
   ].map((label) => label.textContent!.trim());
 
 async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
-  const { page, userEvent } = await import("vitest/browser");
+  const { page, server, userEvent } = await import("vitest/browser");
   const role = (kind: Parameters<typeof page.getByRole>[0], name: string | RegExp) =>
     page.getByRole(kind, { name, exact: true });
   await page.viewport(width, 560);
@@ -95,8 +95,10 @@ async function mountFilters(width: number, teammates = 0, otherOwner = "Bob") {
     await role("button", label).click();
     await role("option", value).click();
   };
-  const tabTo = async (kind: Parameters<typeof role>[0], name: string) => {
-    await userEvent.tab();
+  const nativeOptionTab = server.browser === "webkit" && server.platform === "darwin";
+  const tabTo = async (kind: Parameters<typeof role>[0], name: string, shift = false) => {
+    const key = shift ? "{Shift>}{Tab}{/Shift}" : "{Tab}";
+    await userEvent.keyboard(nativeOptionTab ? `{Alt>}${key}{/Alt}` : key);
     await expect.element(role(kind, name)).toHaveFocus();
   };
   return { ...mounted, sessions, page, userEvent, role, query, choose, tabTo };
@@ -217,8 +219,9 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       await userEvent.keyboard("bo");
       await expect.poll(() => ownerOptions(sidebar)).toEqual(["Bob"]);
       await expect.element(role("combobox", "Search")).toHaveFocus();
+      // Escape clears the query and keeps the field; the next Escape closes.
       await userEvent.keyboard("{Escape}");
-      expect(query(".picker-select__search")).toBeNull();
+      await expect.element(role("combobox", "Search")).toHaveValue("");
       await expect.poll(() => ownerOptions(sidebar)).toHaveLength(4);
       // Focus returns before the closing frame releases native occlusion.
       const ownersHidden = new Promise<void>((resolve) => {
@@ -379,7 +382,7 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     const grouping = query("#sidebar-sessions-group")!;
     grouping.focus();
     await tabTo("button", "Sort by: Last updated");
-    await userEvent.tab({ shift: true });
+    await tabTo("button", "Group by: Custom groups", true);
     await expect.element(grouping).toHaveFocus();
     await role("heading", "Filters").click();
     const automation = role("switch", "Show automation sessions");
@@ -603,6 +606,78 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(ownerOptions(sidebar)).toEqual(["All owners", "Involving me", label]);
     },
   );
+
+  it("keeps Last updated pin-neutral across list refreshes without reordering personal pins", async () => {
+    const { sidebar, sessions, role, choose } = await mountFilters(1280);
+    const base = sessions.result;
+    const seed = base.sessions[0]!;
+    const rows = [
+      {
+        ...seed,
+        key: "agent:main:stored-a",
+        label: "Earlier stored pin",
+        category: undefined,
+        lastActivityAt: 300,
+        pinned: true,
+        pinnedAt: 20,
+      },
+      {
+        ...seed,
+        key: "agent:main:stored-b",
+        label: "Oldest stored pin",
+        category: undefined,
+        lastActivityAt: 200,
+        pinned: true,
+        pinnedAt: 40,
+      },
+      {
+        ...seed,
+        key: "agent:main:recent",
+        label: "Latest conversation",
+        category: undefined,
+        lastActivityAt: 400,
+      },
+      { ...seed, key: "agent:main:personal-a", category: undefined, lastActivityAt: 50 },
+      { ...seed, key: "agent:main:personal-b", category: undefined, lastActivityAt: 60 },
+      { ...seed, key: "agent:main:grouped", category: "Research", lastActivityAt: 500 },
+    ];
+    const publish = async (entries = rows) => {
+      sessions.publishList({ result: { ...base, sessions: entries } });
+      await sidebar.updateComplete;
+    };
+    await publish();
+    sidebar.sidebarEntries = ["session:agent:main:personal-a", "session:agent:main:personal-b"];
+    await sidebar.updateComplete;
+    await role("button", /^Filter & sort · /).click();
+    await choose(/^Sort by:/, "Last updated");
+    const order = (section: string) =>
+      [
+        ...sidebar.querySelectorAll<HTMLElement>(
+          '[data-session-section="' + section + '"] .sidebar-recent-session',
+        ),
+      ].map((row) => row.dataset.sessionKey);
+    const expected = ["agent:main:recent", "agent:main:stored-a", "agent:main:stored-b"];
+    await expect.poll(() => order("ungrouped")).toEqual(expected);
+    expect(order("pinned")).toEqual(["agent:main:personal-a", "agent:main:personal-b"]);
+    expect(order("category:Research")).toEqual(["agent:main:grouped"]);
+    await publish(rows.toReversed());
+    await expect.poll(() => order("ungrouped")).toEqual(expected);
+    const metadataChanged = structuredClone(rows);
+    Object.assign(metadataChanged[1]!, {
+      updatedAt: (seed.updatedAt ?? 0) + 9_000,
+      pinnedAt: 10_000,
+    });
+    await publish(metadataChanged);
+    await expect.poll(() => order("ungrouped")).toEqual(expected);
+    const activityChanged = structuredClone(rows);
+    activityChanged[0]!.lastActivityAt = 600;
+    await publish(activityChanged);
+    await expect
+      .poll(() => order("ungrouped"))
+      .toEqual(["agent:main:stored-a", "agent:main:recent", "agent:main:stored-b"]);
+    expect(order("pinned")).toEqual(["agent:main:personal-a", "agent:main:personal-b"]);
+    expect(sessions.row("agent:main:stored-a").pinned).toBe(true);
+  });
 
   it("applies every preference instantly and resets filters and display", async () => {
     const { sidebar, page, role, query, choose } = await mountFilters(1440);

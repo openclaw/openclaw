@@ -39,7 +39,7 @@ const pendingAuthorizations = resolveGlobalMap<string, PendingAuthorization>(
 export class ProviderBrowserSignInUnavailableError extends Error {
   constructor() {
     super(
-      "Browser sign-in needs a secure Gateway address reachable from your browser. Open the dashboard on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
+      "Browser sign-in needs a secure Gateway address reachable from your browser. Open OpenClaw on this Gateway's HTTPS address or its local loopback address, then retry; or use the CLI sign-in flow.",
     );
   }
 }

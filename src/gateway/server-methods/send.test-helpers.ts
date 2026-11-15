@@ -23,6 +23,7 @@ export function messageActionClientForTests(
         kind: "agentRuntime" as const,
         agentId: "main",
         sessionKey,
+        operationalRunInstance: createOperationalRunInstanceRef("message-action-test-run"),
         messageActionContext: messageActionContextFromSessionKeyForTests(sessionKey),
         ...overrides,
       },

@@ -32,11 +32,11 @@ const resolveSandbox = (workdir: string | undefined, config = sandbox()) =>
   resolveExecWorkdir({ host: "sandbox", workdir, sandbox: config });
 const local = (options: { workdir?: string; defaultCwd?: string } = {}) =>
   resolveExecWorkdir({ host: "gateway", ...options });
-const resolved = (
-  hostCwd: string,
-  containerCwd: string,
-  scriptPreflightCwd: string | null = hostCwd,
-) => ({ kind: "sandbox", hostCwd, containerCwd, scriptPreflightCwd });
+const resolved = (hostCwd: string, containerCwd: string) => ({
+  kind: "sandbox",
+  hostCwd,
+  containerCwd,
+});
 const unavailable = (requestedCwd: string) => ({ kind: "unavailable", requestedCwd });
 const expectUnavailable = (workdir: string, config = sandbox()) =>
   expect(resolveSandbox(workdir, config)).resolves.toEqual(unavailable(workdir));
@@ -152,7 +152,7 @@ it.each([
     const validateWorkdir = vi.fn(async (cwd: string) => cwd);
     await expect(
       resolveSandbox(workdir, backend({ ...overrides, validateWorkdir })),
-    ).resolves.toEqual(resolved(workspaceDir, expected, null));
+    ).resolves.toEqual(resolved(workspaceDir, expected));
     expect(validateWorkdir).toHaveBeenCalledWith(expected);
   },
 );

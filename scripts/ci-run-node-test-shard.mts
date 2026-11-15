@@ -23,6 +23,7 @@ import { StringDecoder } from "node:string_decoder";
 import { fileURLToPath } from "node:url";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { decodeNodeTestGroups } from "./lib/ci-node-test-groups-codec.mts";
+import { resolveCiTestAuditConfig } from "./lib/ci-test-observations.mjs";
 import type { CiTestRuntimePolicy, CiTestRuntimeSelection } from "./lib/ci-test-runtime.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { isConstrainedCiCheckHost, isExclusiveCiTestConfig } from "./lib/local-check-runtime.mts";
@@ -597,6 +598,18 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
         (baseEnv.GITHUB_RUN_ID ?? "").endsWith("0"))),
   );
   const observedRuntimes = new Set<string>();
+  const auditCliRoot = baseEnv.OPENCLAW_CI_TEST_AUDIT_CLI_DIR;
+  const observeAuditCli = Boolean(
+    auditCliRoot &&
+    baseEnv.GITHUB_EVENT_NAME === "schedule" &&
+    baseEnv.GITHUB_RUN_ATTEMPT === "1" &&
+    !plans.some(
+      (entry) =>
+        entry.kind === "group" &&
+        entry.plan.configs.includes("test/vitest/vitest.unit-fast.config.ts"),
+    ),
+  );
+  let observedAuditCli = false;
   const extraArgs = (entry: ShardPlan) =>
     [
       inheritedEnv,
@@ -980,18 +993,31 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           }
           Object.assign(childEnv, selection.env, preparedBuildEnv);
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_DIR;
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY;
+          delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG;
+          const auditConfig = resolveCiTestAuditConfig(selectedArgs);
+          const auditCli =
+            observeAuditCli &&
+            !observedAuditCli &&
+            auditConfig &&
+            vitestExtraArgs.length === 0 &&
+            (auditConfig === "test/vitest/vitest.cli-process.config.ts" || runtime === "bun");
           if (
-            observe &&
             !nativeBun &&
-            !observedRuntimes.has(runtime) &&
-            selectedArgs.length === 1 &&
-            selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"
+            (auditCli ||
+              (observe &&
+                !observedRuntimes.has(runtime) &&
+                selectedArgs.length === 1 &&
+                selectedArgs[0] === "test/vitest/vitest.unit-fast.config.ts"))
           ) {
             try {
-              mkdirSync(observationRoot!, { recursive: true });
-              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(
-                join(observationRoot!, `${runtime}-`),
-              );
+              const root = auditCli ? auditCliRoot! : observationRoot!;
+              mkdirSync(root, { recursive: true });
+              childEnv.OPENCLAW_VITEST_OBSERVATION_DIR = mkdtempSync(join(root, `${runtime}-`));
+              if (auditCli) {
+                childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY = "1";
+                childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG = auditConfig;
+              }
               // Runtime membership and native sharding are already decided. Adding
               // experimental flags before that boundary changes Bun eligibility.
               args = [
@@ -1001,9 +1027,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
                 "--reporter=verbose",
                 ...(childEnv.GITHUB_ACTIONS === "true" ? ["--reporter=github-actions"] : []),
                 "--reporter=./scripts/lib/vitest-resource-reporter.mts",
-                "--experimental.recordDependencies",
+                ...(auditCli ? [] : ["--experimental.recordDependencies"]),
               ];
-              observedRuntimes.add(runtime);
+              if (auditCli) {
+                observedAuditCli = true;
+              } else {
+                observedRuntimes.add(runtime);
+              }
               try {
                 const { writeCiTestLaunchInputs } = await import("./lib/ci-test-launch-inputs.mts");
                 writeCiTestLaunchInputs({

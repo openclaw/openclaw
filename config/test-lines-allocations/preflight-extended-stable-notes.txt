@@ -1,2 +1,0 @@
-56
-# Exercise extended-stable preflight rendering, canonical readback, retirement rejection, and exclusion from regular stable closeout.

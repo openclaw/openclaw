@@ -1,6 +1,7 @@
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
@@ -61,9 +62,8 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       adjustTextareaHeight(target);
       queueMicrotask(() => {
         if (target.isConnected) {
-          target.focus({ preventScroll: true });
-          target.selectionStart = insertion.caret;
-          target.selectionEnd = insertion.caret;
+          focusComposerInput(target, { preventScroll: true });
+          selectComposerInput(target, insertion.caret, insertion.caret);
         }
       });
       return insertion.value;
