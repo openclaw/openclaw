@@ -134,9 +134,24 @@ describe("transcript expansion", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps a later activity segment open through hydration (bubbles=%s)",
-    async (chatBubbleMode) => {
+  it.each([
+    [false, false],
+    [true, false],
+    [false, true],
+  ])(
+    "keeps a later activity segment open through hydration (bubbles=%s, history gap=%s)",
+    async (chatBubbleMode, historyGap) => {
+      const history = historyGap
+        ? [
+            {
+              role: "toolResult",
+              toolCallId: "older-read",
+              toolName: "read",
+              content: "Earlier result",
+              timestamp: 500,
+            },
+          ]
+        : [];
       const runId = "segmented-run";
       const prompt = {
         role: "user",
@@ -171,14 +186,19 @@ describe("transcript expansion", () => {
         refreshToolStreamMessage(entry);
         return entry.message;
       });
-      const props = threadProps("segmented", "agent:main:dashboard:segmented", [prompt], {
-        showToolCalls: true,
-        runId,
-        runActive: true,
-        runWorking: true,
-        chatBubbleMode,
-        toolMessages: live,
-      });
+      const props = threadProps(
+        "segmented",
+        "agent:main:dashboard:segmented",
+        [...history, prompt],
+        {
+          showToolCalls: true,
+          runId,
+          runActive: true,
+          runWorking: true,
+          chatBubbleMode,
+          toolMessages: live,
+        },
+      );
       const transcript = createTestTranscript(props.paneId);
       const container = document.body.appendChild(document.createElement("div"));
       onTestFinished(() => {
@@ -193,7 +213,15 @@ describe("transcript expansion", () => {
       await waitForSolid(() => expect(summaries()).toHaveLength(2));
       summaries()[1]!.click();
       await waitForSolid(() => expect(summaries()[1]!.getAttribute("aria-expanded")).toBe("true"));
+      if (historyGap) {
+        props.toolMessages = [];
+        props.runActive = false;
+        props.runWorking = false;
+        draw();
+        await settleToolBridges(container);
+      }
       props.messages = [
+        ...history,
         prompt,
         ...calls.map(({ id, name, args, timestamp }, index) => ({
           role: "assistant",

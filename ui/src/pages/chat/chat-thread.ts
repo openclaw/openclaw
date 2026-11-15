@@ -665,9 +665,20 @@ export function syncToolCardExpansionState(
   }
   if (!isFilteredProjection) {
     carryMovedDisclosures(state, state.calls, calls, writeExpansionState);
-    // Reconnect temporarily clears live rows before restoring stored history.
-    // Keep their call associations with the explicit choices retained below.
+    // A history refresh can remove live rows while older tools remain visible.
+    // Keep explicitly chosen activity segments tied to their run-scoped calls.
     if (calls.size > 0) {
+      const represented = new Set(calls.values());
+      for (const [id, call] of state.calls ?? []) {
+        if (
+          id.startsWith("activity:") &&
+          explicit.has(id) &&
+          !calls.has(id) &&
+          !represented.has(call)
+        ) {
+          calls.set(id, call);
+        }
+      }
       state.calls = calls;
     }
   }
