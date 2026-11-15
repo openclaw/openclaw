@@ -78,7 +78,7 @@ async function openPeople(
     const toggle = navigationDrawerToggle(page);
     await toggle[touch]();
   }
-  const online = page.locator(".sidebar-rail").getByRole("button", { name: "Users", exact: true });
+  const online = page.locator(".sidebar-rail").getByRole("button", { name: "People", exact: true });
   await online[touch ? "tap" : "click"]();
   if (!touch) {
     // On a desktop People opens Activity; return to the session with the people list open.

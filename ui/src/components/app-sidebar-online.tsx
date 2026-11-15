@@ -35,7 +35,7 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
   return (
     <section
       class="sidebar-online"
-      aria-label={t("presence.usersTitle")}
+      aria-label={t("presence.peopleTitle")}
       data-session-section={sectionId}
     >
       {host.peopleView?.directory()?.loading && (
@@ -67,6 +67,14 @@ export function AppSidebarOnline(props: { host: AppSidebarRenderHost }) {
             />
           )}
         </For>
+      </div>
+      {/* The people below follow the filter: who is online, or every user. */}
+      <div class="sidebar-online__heading">
+        <span class="sidebar-recent-sessions__label-text">
+          {host.people.presenceFilter === "online"
+            ? t("presence.rosterTitle")
+            : t("presence.usersTitle")}
+        </span>
       </div>
       <div class="sidebar-online__list">
         {listUsers().length === 0 ? (

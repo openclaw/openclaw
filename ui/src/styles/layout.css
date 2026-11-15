@@ -2465,6 +2465,14 @@ div.shell.shell--onboarding {
   text-transform: uppercase;
 }
 
+/* The people list's heading matches the Sessions group headings, without a toggle. */
+.sidebar-online__heading {
+  display: flex;
+  align-items: center;
+  min-height: 30px;
+  padding-inline: calc(var(--sidebar-inset) + 2px) 8px;
+}
+
 /* Activity heads the Users section above its people. */
 .sidebar-online__overview {
   margin-block-end: 6px;
