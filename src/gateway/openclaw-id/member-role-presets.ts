@@ -14,24 +14,25 @@ import {
 import type { OpenClawIdStatus } from "./service-status.js";
 
 /** Ordinary editable definitions installed when OpenClaw ID is activated. */
-const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", GatewayOperatorRoleDefinition> = {
-  operator: {
-    sessions: { others: "write" },
-    agents: "*",
-    scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
-  },
-  guest: {
-    sessions: { others: "view" },
-    agents: "*",
-    scopes: [SESSION_WRITE_SCOPE],
-    sandbox: "required",
-  },
-  viewer: {
-    sessions: { others: "view" },
-    agents: "*",
-    scopes: [SESSION_READ_SCOPE],
-  },
-};
+const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", GatewayOperatorRoleDefinition> =
+  {
+    operator: {
+      sessions: { others: "write" },
+      agents: "*",
+      scopes: [READ_SCOPE, WRITE_SCOPE, APPROVALS_SCOPE, QUESTIONS_SCOPE, TALK_SCOPE],
+    },
+    guest: {
+      sessions: { others: "view" },
+      agents: "*",
+      scopes: [SESSION_WRITE_SCOPE],
+      sandbox: "required",
+    },
+    viewer: {
+      sessions: { others: "view" },
+      agents: "*",
+      scopes: [SESSION_READ_SCOPE],
+    },
+  };
 
 /** Seeds once per activation, never on ordinary definition edits or deletions. */
 export function createMemberRolePresetActivation(log: { warn: (message: string) => void }) {
