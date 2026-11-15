@@ -29,7 +29,7 @@ import type { SessionActorAppend, SessionActorAppendCommitted } from "./session-
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import { hydrateSessionActorState } from "./session-actor-hydration.worker.js";
 import { writableSessionActorMap } from "./session-actor-transaction.js";
-import { assertCanonicalSessionKeyWrite } from "./session-canonical-key.js";
+import { assertCanonicalSessionKeyWrite } from "./session-canonical-row.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,

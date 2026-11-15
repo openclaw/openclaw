@@ -146,6 +146,89 @@ suite.define(() => {
       },
     );
   });
+  it("starts a new goal from an achieved goal without a manual clear", async () => {
+    const artifacts = captureProof
+      ? createControlUiE2eArtifactDir("goal-completed-start")
+      : undefined;
+    if (artifacts) {
+      console.log("Completed goal screenshots:", artifacts);
+    }
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, colorScheme: "light" },
+      async ({ page }) => {
+        const now = Date.now();
+        const row = createControlUiSessionRow("agent:main:main", "Deployment checklist", now, {
+          sessionId: "deployment-session",
+          goal: {
+            schemaVersion: 1,
+            id: "completed-goal",
+            objective: "Verify the deployment checklist",
+            status: "complete",
+            createdAt: now - 60_000,
+            updatedAt: now,
+            completedAt: now,
+            tokenStart: 0,
+            tokensUsed: 12_400,
+            continuationTurns: 3,
+          },
+        });
+        const gateway = await installMockGateway(page, {
+          sessionKey: row.key,
+          sessions: [row],
+          sessionInfo: row,
+          heldMethods: ["chat.send"],
+          historyMessages: [chatMessage("assistant", "The deployment checklist is verified.")],
+        });
+        await page.goto(suite.server.baseUrl + "chat/main");
+        const card = page.locator(".agent-chat__goal");
+        const input = page.locator(".agent-chat__composer-combobox textarea");
+        await card.getByText("Goal achieved", { exact: true }).waitFor();
+        await input.fill("/goal start Write the rollout notes");
+        await input.press("Enter");
+        try {
+          const request = await gateway.waitForRequest("chat.send");
+          expect(request.params).toMatchObject({
+            message: "Write the rollout notes",
+            intent: { kind: "session-goal-start" },
+          });
+          expect(await page.getByRole("dialog").count()).toBe(0);
+          expect(await gateway.getRequests("sessions.goal.clear")).toHaveLength(0);
+          expect(await gateway.getRequests("sessions.goal.update")).toHaveLength(0);
+          const goal = {
+            schemaVersion: 1,
+            id: "next-goal",
+            objective: "Write the rollout notes",
+            status: "active",
+            createdAt: now + 1,
+            updatedAt: now + 1,
+            tokenStart: 12_400,
+            tokensUsed: 0,
+            continuationTurns: 0,
+          };
+          await gateway.setSessionsListResponse({ sessions: [{ ...row, goal }] });
+          await gateway.resolveDeferred("chat.send", {
+            status: "started",
+            runId: "rollout-notes-turn",
+            goalId: goal.id,
+            goal,
+            sessionId: row.sessionId,
+            action: "start",
+          });
+          await gateway.emitGatewayEvent("sessions.changed", { ...row, goal, reason: "goal" });
+          await expect.poll(() => input.inputValue()).toBe("");
+          await card.getByText("Pursuing goal", { exact: true }).waitFor();
+          expect(await card.locator(".agent-chat__goal-objective").textContent()).toBe(
+            "Write the rollout notes",
+          );
+        } finally {
+          if (artifacts) {
+            await captureFrame(artifacts, "submitted.png", page.locator("body"), [card, input]);
+          }
+        }
+      },
+    );
+  });
+
   it("confirms a running goal without stopping on Cancel and adopts its resumed turn", async () => {
     const artifacts = captureProof
       ? createControlUiE2eArtifactDir("goal-replace-running")

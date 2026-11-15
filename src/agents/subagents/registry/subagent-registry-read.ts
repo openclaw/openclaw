@@ -39,7 +39,10 @@ import {
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { owesRequesterCompletion } from "./subagent-requester-settle-identity.js";
+import {
+  isRequesterSettleWakeForRun,
+  owesRequesterCompletion,
+} from "./subagent-requester-settle-identity.js";
 import {
   compareSubagentRunGeneration,
   copySubagentRunRuntimeOwner,
@@ -205,6 +208,7 @@ export function resolveSessionYieldWait(
     | "sessionId"
     | "lifecycleRevision"
     | "lifecycleRunId"
+    | "lastRunId"
     | "activeWriterRunId"
     | "archivedAt"
     | "incognito"
@@ -216,6 +220,26 @@ export function resolveSessionYieldWait(
 ): YieldWaitSource | "unreachable" {
   if (session.archivedAt !== undefined || session.incognito) {
     return undefined;
+  }
+  const interruptedRunId = session.lifecycleRunId ?? session.lastRunId;
+  if (interruptedRunId?.startsWith("announce:")) {
+    for (const child of getSubagentRunsForRequesterSession(sessionKey)) {
+      if (
+        child.completionRequesterSessionId === session.sessionId &&
+        child.completionRequesterLifecycleRevision === session.lifecycleRevision &&
+        !subagentRuns.isCompletionAuthorityRetired(child) &&
+        isRequesterSettleWakeForRun({
+          entry: child,
+          runId: interruptedRunId,
+          requesterSessionKey: sessionKey,
+          requesterAgentId: agentId,
+          runsById: subagentRuns,
+        })
+      ) {
+        // The retained input owns this continuation; a separate restart turn would duplicate it.
+        return "waiting";
+      }
+    }
   }
   const ownWait = getLatestLiveSubagentRunByChildSessionKey(
     sessionKey,

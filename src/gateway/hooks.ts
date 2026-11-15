@@ -268,17 +268,36 @@ function normalizeHookPayloadAgentId(raw: unknown): Result<string | undefined, s
     : { ok: false, error: "agentId must be a non-empty string" };
 }
 
+type HookWakeMode = "now" | "next-heartbeat";
+
+// Omitted, null, and blank keep the default; spelling variants map; anything else is rejected
+// so a typo never turns a deferred wake into an immediate one.
+function normalizeHookWakeMode(raw: unknown, field: string): Result<HookWakeMode, string> {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: "now" };
+  }
+  const mode = typeof raw === "string" ? raw.trim().toLowerCase().replaceAll("_", "-") : undefined;
+  if (mode === "" || mode === "now") {
+    return { ok: true, value: "now" };
+  }
+  if (mode === "next-heartbeat") {
+    return { ok: true, value: "next-heartbeat" };
+  }
+  return { ok: false, error: `${field} must be now or next-heartbeat` };
+}
+
 export function normalizeWakePayload(
   payload: Record<string, unknown>,
-): Result<
-  { text: string; mode: "now" | "next-heartbeat"; agentId?: string; sessionKey?: string },
-  string
-> {
+): Result<{ text: string; mode: HookWakeMode; agentId?: string; sessionKey?: string }, string> {
   const normalizedText = normalizeOptionalString(payload.text) ?? "";
   if (!normalizedText) {
     return { ok: false, error: "text required" };
   }
-  const mode = payload.mode === "next-heartbeat" ? "next-heartbeat" : "now";
+  const wakeMode = normalizeHookWakeMode(payload.mode, "mode");
+  if (!wakeMode.ok) {
+    return wakeMode;
+  }
+  const mode = wakeMode.value;
   const agentId = normalizeHookPayloadAgentId(payload.agentId);
   if (!agentId.ok) {
     return agentId;
@@ -306,7 +325,7 @@ type HookAgentPayload = {
   name: string;
   agentId?: string;
   idempotencyKey?: string;
-  wakeMode: "now" | "next-heartbeat";
+  wakeMode: HookWakeMode;
   sessionKey?: string;
   sessionMode: HookSessionMode;
   deliver: boolean;
@@ -649,7 +668,10 @@ export function normalizeAgentPayload(
     payload.idempotencyKey,
     MAX_HOOK_IDEMPOTENCY_KEY_LENGTH,
   );
-  const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
+  const wakeMode = normalizeHookWakeMode(payload.wakeMode, "wakeMode");
+  if (!wakeMode.ok) {
+    return wakeMode;
+  }
   const sessionKey = normalizeOptionalString(payload.sessionKey);
   if (payload.sessionKey !== undefined && !sessionKey) {
     return { ok: false, error: "sessionKey must be a non-empty string" };
@@ -690,7 +712,7 @@ export function normalizeAgentPayload(
       name,
       agentId: agentId.value,
       idempotencyKey,
-      wakeMode,
+      wakeMode: wakeMode.value,
       sessionKey,
       sessionMode,
       ...delivery.value,

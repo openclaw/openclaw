@@ -100,6 +100,12 @@ credentials, or private URLs, and the links suppress the browser referrer. Revie
 anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
 for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
+## Answer an agent question
+
+Agent questions appear above the message box. You can keep writing or queue a
+follow-up while the question is expanded; sending a chat message does not answer
+the question. Use its choices and **Submit**, or **Skip**, to resolve it.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
@@ -112,10 +118,15 @@ Send or clear any existing composer draft first; recovery never replaces it.
 Editing requires permission to rewind the conversation and is unavailable while
 a run is active. **Try again** still continues the existing conversation without
 replaying the original message, because earlier actions may already have run.
-Rewinding does not undo external actions. Large local histories are copied incrementally.
-If an individual event or the history navigation metadata exceeds the safe memory
-budget, the request fails without changing the conversation; other sessions remain
-available. Export the transcript to inspect it.
+Rewinding does not undo external actions. Rewinding and switching branches keep
+the existing conversation and move only its active branch, so neither copies the
+transcript. Both still read its history navigation, and a selection far from the
+current branch is republished by background reconciliation, so their cost follows
+the shape and size of that navigation rather than the stored message bytes.
+Forking a conversation copies its history incrementally. If the selected message,
+an individual event, or the history navigation metadata exceeds the safe memory
+budget, that rewind or fork fails without changing the conversation; other
+sessions remain available. Export the transcript to inspect it.
 
 ## Command palette file attachments
 

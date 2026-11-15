@@ -28,7 +28,7 @@ import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-de
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
-import { resolveAgentLifecycleTerminalMetadata } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
+import { resolveDeferredLifecycleTerminal } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import type { VerboseLevel } from "../../auto-reply/thinking.js";
 import type { CliSessionBinding } from "../../config/sessions.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
@@ -713,17 +713,17 @@ export function createCronPromptExecutor(
       .finally(() => {
         cronRunExecSource.dispose();
       });
+    const terminal = resolveDeferredLifecycleTerminal(
+      fallbackResult.result,
+      params.lifecycle.getDeferredError(),
+    );
     const executionError =
-      params.lifecycle.getDeferredError() ??
+      terminal.error ??
       (fallbackResult.result.meta.error || fallbackResult.outcome === "exhausted"
         ? "Agent run failed"
         : undefined);
     if (executionError) {
-      params.lifecycle.capture(
-        "error",
-        executionError,
-        resolveAgentLifecycleTerminalMetadata(fallbackResult.result.meta),
-      );
+      params.lifecycle.capture("error", executionError, terminal.metadata);
     } else {
       params.lifecycle.capture("end", fallbackResult.result);
     }
