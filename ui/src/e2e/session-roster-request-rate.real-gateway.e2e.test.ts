@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type {
   RequestFrame,
@@ -388,6 +389,94 @@ suite.define(() => {
       });
     } finally {
       await disconnectGatewayClient(emitter);
+    }
+  });
+
+  // Diagnostic for #199621: records current semantics, not a proposed membership fix.
+  it("changes agent scope when the sidebar owner filter is cleared", async () => {
+    if (!instance) {
+      throw new Error("Gateway fixture is not running");
+    }
+    const owner = instance;
+    const client = await connectGatewayClient({
+      url: owner.url,
+      token: owner.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    const main = "agent:main:owner-scope-main";
+    const research = "agent:research:owner-scope-research";
+    const other = "agent:main:owner-scope-other";
+    try {
+      for (const agentId of ["main", "research"]) {
+        await client.request("sessions.create", { agentId, key: "agent:" + agentId + ":main" });
+      }
+      for (const key of [main, research, other]) {
+        await client.request("sessions.create", { key, agentId: key.split(":")[1], label: key });
+        await client.request("sessions.assignOwner", {
+          key,
+          owner: { type: "human", id: key === other ? otherOwnerId : viewerId },
+        });
+      }
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const queries: Record<string, unknown>[] = [];
+        page.on("websocket", (socket) => {
+          socket.on("framesent", ({ payload }) => {
+            const frame: unknown = JSON.parse(payload.toString());
+            if (!isRecord(frame) || frame.type !== "req" || frame.method !== "sessions.list") {
+              return;
+            }
+            const params = frame.params;
+            if (isRecord(params) && params.source === "sidebar" && !params.spawnedBy) {
+              queries.push(params);
+            }
+          });
+        });
+        const url = new URL("sessions", suite.server.baseUrl);
+        url.hash = "token=" + encodeURIComponent(owner.gatewayToken);
+        expect((await page.goto(url.toString()))?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const rows = sidebar.locator("[data-session-key]");
+        const row = sidebar.locator('[data-session-key="' + main + '"]');
+        await row.waitFor();
+        await row.locator("a.sidebar-recent-session__link").click();
+        const toggle = sidebar.locator('[data-navigation-view="sessions"]');
+        if ((await toggle.getAttribute("aria-pressed")) === "false") {
+          await toggle.click();
+        }
+        const chatUrl = page.url();
+        for (const ownerFilter of ["owner:" + viewerId, "all", "owner:" + viewerId]) {
+          const previousQueries = queries.length;
+          await chooseSidebarOwner(page, ownerFilter);
+          const mine = ownerFilter !== "all";
+          await expect.poll(() => queries.length).toBeGreaterThan(previousQueries);
+          expect(queries.at(-1)?.ownerId).toBe(mine ? viewerId : undefined);
+          expect(queries.at(-1)?.agentId).toBe(mine ? undefined : "main");
+          await expect
+            .poll(async () =>
+              rows.evaluateAll((elements) =>
+                [
+                  ...new Set(elements.map((element) => element.getAttribute("data-session-key"))),
+                ].toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+              ),
+            )
+            .toEqual(
+              (mine ? [main, research] : [main, other]).toSorted((left, right) =>
+                left.localeCompare(right),
+              ),
+            );
+          expect(page.url()).toBe(chatUrl);
+          expect(
+            await evaluateControlUiContext(
+              page,
+              (context) => context.agentSelection.state.selectedId,
+            ),
+          ).toBe("main");
+        }
+      });
+    } finally {
+      await disconnectGatewayClient(client);
     }
   });
 });
