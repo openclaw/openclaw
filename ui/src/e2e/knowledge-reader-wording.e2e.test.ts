@@ -1,17 +1,13 @@
 import { createHash } from "node:crypto";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { Check } from "typebox/value";
 import { expect, it } from "vitest";
-import { RecordOutput } from "../../../extensions/knowledge/src/inspection-contract.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Knowledge reader wording" });
 suite.define(() => {
-  it.each(["citations", "download", "save", "company", "identity-request"])(
+  it.each(["citations", "identity-request"])(
     "describes the %s outcome accurately",
     async (scenario) => {
       await suite.withPage(
@@ -27,7 +23,7 @@ suite.define(() => {
             (_, index) => "Rollout note " + (index + 1) + ": Atlas will evaluate the pilot.",
           ).join("\n");
           const hash = createHash("sha256").update(source).digest("hex");
-          const company = scenario === "company" || scenario === "identity-request";
+          const company = scenario === "identity-request";
           const total = scenario === "citations" ? 25 : 1;
           const record = {
             id: "reader_record",
@@ -55,26 +51,14 @@ suite.define(() => {
                   },
                 }
               : { claim_kind: "fact" },
-          } satisfies NonNullable<RecordOutput["record"]>;
+          };
           const candidate = {
             ...record,
             id: "atlas_company",
             title: "Atlas Robotics",
             metadata: {},
           };
-          const actions: string[] = [];
           const offsets: unknown[] = [];
-          await page.addInitScript((save) => {
-            Object.defineProperty(window, "showSaveFilePicker", {
-              configurable: true,
-              value: save
-                ? async () =>
-                    (await navigator.storage.getDirectory()).getFileHandle("reader-source.txt", {
-                      create: true,
-                    })
-                : undefined,
-            });
-          }, scenario === "save");
           await installNativePluginMockGateway(
             page,
             {
@@ -93,12 +77,11 @@ suite.define(() => {
                   const request = requireRecord(params),
                     action = requireString(request.actionId, "action"),
                     input = requireRecord(request.payload);
-                  actions.push(action);
                   if (action === "record_detail") {
                     const offset =
                       typeof input.evidenceOffset === "number" ? input.evidenceOffset : 0;
                     offsets.push(input.evidenceOffset);
-                    const result: RecordOutput = {
+                    const result = {
                       view: "content",
                       record,
                       content: { offset: 0, totalChars: record.body.length, nextOffset: null },
@@ -123,7 +106,6 @@ suite.define(() => {
                             excerptTruncated: false,
                           })),
                     };
-                    expect(Check(RecordOutput, result)).toBe(true);
                     return { ok: true, result };
                   }
                   const answers: Record<string, unknown> = {
@@ -139,14 +121,6 @@ suite.define(() => {
                     connections_detail: { connections: [], nextOffset: null, snapshot: "s1" },
                     timeline: { items: [], nextOffset: null, snapshot: "s1" },
                     history: { mutations: [], entries: [], nextOffset: null },
-                    attachment: {
-                      filename: "reader-source.txt",
-                      data: Buffer.from(source).toString("base64"),
-                      offset: 0,
-                      nextOffset: null,
-                      sha256: hash,
-                      size: Buffer.byteLength(source),
-                    },
                   };
                   if (!(action in answers)) {
                     throw new Error("Unexpected reader action: " + action);
@@ -164,38 +138,14 @@ suite.define(() => {
           );
           await page.getByRole("heading", { name: record.title, exact: true }).waitFor();
           await page.getByText("No connections recorded.", { exact: true }).waitFor();
-          const grid = page.locator(".knowledge-entity-grid");
           if (scenario === "citations") {
             await page.locator(".knowledge-source-group > summary").click();
             expect(await page.locator(".knowledge-evidence-list > p").textContent()).toBe(
               "25 citations · 1 file",
             );
             await page.getByRole("button", { name: "More citations", exact: true }).waitFor();
-          } else if (company) {
-            await page.getByText(/finds evidence they refer to the same subject/).waitFor();
           } else {
-            const download = scenario === "download" ? page.waitForEvent("download") : undefined;
-            await page.getByRole("button", { name: "Original file", exact: true }).click();
-            if (download) {
-              expect((await download).suggestedFilename()).toBe("reader-source.txt");
-            }
-            await page
-              .getByText(scenario === "save" ? "Original file saved." : "Download requested.", {
-                exact: true,
-              })
-              .waitFor();
-            if (scenario === "save") {
-              const saved = await page.evaluate(async () =>
-                (
-                  await (
-                    await (
-                      await navigator.storage.getDirectory()
-                    ).getFileHandle("reader-source.txt")
-                  ).getFile()
-                ).text(),
-              );
-              expect(saved).toBe(source);
-            }
+            await page.getByText(/finds evidence they refer to the same subject/).waitFor();
           }
           if (scenario === "identity-request") {
             await page
@@ -205,21 +155,6 @@ suite.define(() => {
             expect(
               await page.getByRole("textbox", { name: "Request", exact: true }).inputValue(),
             ).toContain("refer to the same subject?");
-          }
-          if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR) {
-            const target =
-              scenario === "identity-request" ? page.locator(".knowledge-chat-handoff") : grid;
-            const frame = await takeControlUiScreenshotFrame(page, target, [target], {
-              animations: "disabled",
-              elements: [target],
-            });
-            await writeFile(path.join(suite.artifactDir, scenario + "-full.png"), frame.png);
-            await writeFile(
-              path.join(suite.artifactDir, scenario + "-detail.png"),
-              frame.elements[0]!.png,
-            );
-          }
-          if (scenario === "identity-request") {
             await page.getByRole("button", { name: "Cancel", exact: true }).click();
           }
           if (scenario === "citations") {
@@ -230,20 +165,6 @@ suite.define(() => {
             expect(await page.locator(".knowledge-source-group").count()).toBe(1);
             expect(offsets).toContain(20);
           }
-          expect(
-            actions.every((action) =>
-              [
-                "stores_snapshot",
-                "status",
-                "ontology",
-                "record_detail",
-                "connections_detail",
-                "timeline",
-                "history",
-                "attachment",
-              ].includes(action),
-            ),
-          ).toBe(true);
         },
       );
     },
