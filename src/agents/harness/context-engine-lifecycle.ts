@@ -130,14 +130,16 @@ export async function bootstrapHarnessContextEngine(
     config?: OpenClawConfig;
     warn: (message: string) => void;
   },
-): Promise<void> {
+): Promise<boolean> {
   if (
     !params.hadSessionFile ||
     !(params.contextEngine?.bootstrap || params.contextEngine?.maintain)
   ) {
-    return;
+    return false;
   }
-  await runWithHarnessSourceFence(params, async () => {
+  // Resolves true when the transcript may have changed. Pre-turn bootstrap gets no rewrite
+  // capability, so only maintenance can change rows, and it reports when it did.
+  return await runWithHarnessSourceFence(params, async () => {
     try {
       const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
       const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
@@ -151,7 +153,7 @@ export async function bootstrapHarnessContextEngine(
           runtimeContext,
         });
       }
-      await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
+      const maintenance = await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
@@ -163,8 +165,13 @@ export async function bootstrapHarnessContextEngine(
         runtimeSettings,
         config: params.config,
       });
+      // Maintenance resolves undefined after a logged failure; a partial rewrite is possible then.
+      return typeof params.contextEngine?.maintain === "function"
+        ? (maintenance?.changed ?? true)
+        : false;
     } catch (bootstrapErr) {
       params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
+      return true;
     }
   });
 }

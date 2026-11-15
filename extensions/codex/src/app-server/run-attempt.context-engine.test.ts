@@ -15,6 +15,7 @@ import { registerSandboxBackend } from "openclaw/plugin-sdk/sandbox";
 import { formatSqliteSessionFileMarker } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { awaitGateBeforeSettlement } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as attemptContext from "./attempt-context.js";
 import {
   assistantMessage,
   setupRunAttemptTestHooks,
@@ -679,4 +680,35 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(promptHookMessages.map((message) => message.role)).toEqual(["assistant", "user"]);
     expect(getRequestInputText(harness)).toContain(params.prompt);
   });
+
+  it.each([
+    ["leaves the transcript unchanged", "unchanged", 1],
+    ["changes the transcript", "changed", 2],
+    ["fails after writing", "failed", 2],
+  ] as const)(
+    "rereads history after bootstrap only when maintenance %s",
+    async (_case, outcome, reads) => {
+      sessionManager().appendMessage(userMessage("PRIOR_HISTORY", 1));
+      const maintain = vi.fn(async () => {
+        if (outcome !== "unchanged") {
+          sessionManager().appendMessage(userMessage("MAINTAINED_HISTORY", 2));
+        }
+        if (outcome === "failed") {
+          throw new Error("maintenance failed");
+        }
+        return { changed: outcome === "changed", bytesFreed: 0, rewrittenEntries: reads - 1 };
+      });
+      const read = vi.spyOn(attemptContext, "readMirroredSessionHistoryMessages");
+      const { harness, params } = attempt({ contextEngine: createContextEngine({ maintain }) });
+
+      const run = runCodexAppServerAttempt(params);
+      await run.waitForTurnAccepted();
+      expect(read).toHaveBeenCalledTimes(reads);
+      const sent = JSON.stringify(harness.requests);
+      expect(sent).toContain("PRIOR_HISTORY");
+      expect(sent.includes("MAINTAINED_HISTORY")).toBe(outcome !== "unchanged");
+      await harness.completeTurn();
+      await run;
+    },
+  );
 });
