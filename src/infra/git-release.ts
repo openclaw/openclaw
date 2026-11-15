@@ -19,12 +19,19 @@ import {
   switchPackageReleaseLink,
 } from "./package-release-slot.js";
 
-/** An empty release directory; the worktree goes at the returned path. */
-export async function createGitReleaseWorktreeDir(prefix: string, sha: string): Promise<string> {
-  const releasePrefix = await createPackageReleasePrefix(prefix, sha.slice(0, 12));
+/**
+ * A new release directory. The worktree is built at `buildDir`, outside
+ * `node_modules` (Node refuses to strip types there), then moved to `releaseRoot`.
+ */
+export async function createGitReleaseDirs(prefix: string) {
+  const releasePrefix = await createPackageReleasePrefix(prefix, "git");
   const globalRoot = packageReleaseGlobalRoot(releasePrefix);
   await fs.mkdir(globalRoot, { recursive: true });
-  return path.join(globalRoot, "openclaw");
+  return {
+    releasePrefix,
+    buildDir: path.join(releasePrefix, "build"),
+    releaseRoot: path.join(globalRoot, "openclaw"),
+  };
 }
 
 /**

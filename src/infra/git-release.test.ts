@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 async function release(prefix: string, version: string, entry: string) {
-  const root = await createGitReleaseWorktreeDir(prefix, version);
+  const root = (await createGitReleaseDirs(prefix)).releaseRoot;
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.writeFile(
     path.join(root, "package.json"),
