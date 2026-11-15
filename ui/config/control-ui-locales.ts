@@ -203,9 +203,8 @@ export function controlUiLocaleModulesPlugin(buildInputs?: Set<string>): Plugin 
             tag: "script",
             attrs: { "data-cfasync": "false" },
             injectTo: "head-prepend",
-            // Let the entry and route hints admit their graph before locale data.
-            // The entry module starts the connection before DOMContentLoaded.
-            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr";${hints ? `document.addEventListener("DOMContentLoaded",()=>{${hints}},{once:true});` : ""}})();`,
+            // Finish parsing the critical graph's hints before admitting locale data.
+            children: `(()=>{const p=${policy};let saved;try{saved=localStorage.getItem("openclaw.i18n.locale")}catch{}const language=(navigator.language||"").toLowerCase();const locale=p.supported.includes(saved)?saved:(p.rules.find(([pattern])=>new RegExp(pattern).test(language))?.[1]||p.fallback);document.documentElement.dir=p.rtl.includes(locale)?"rtl":"ltr";${hints ? `document.addEventListener("readystatechange",()=>{${hints}},{once:true});` : ""}})();`,
           },
         ];
       },
