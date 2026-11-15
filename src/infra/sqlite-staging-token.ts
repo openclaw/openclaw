@@ -30,7 +30,11 @@ export class SqliteStagingRetiredError extends Error {
 export function acquireSqliteStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean; expectedIdentity?: DatabaseFileIdentity } = {},
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  } = {},
 ): SqliteStagingToken {
   // Cancelled work still reclaims, releases or retires private locks instead of
   // leaving copies behind, but it never mints a new staging owner.
@@ -52,7 +56,11 @@ export function acquireSqliteStagingToken(
 function acquireStagingToken(
   directory: string,
   mode: "create" | "read" | "reclaim",
-  options: { allowMissing?: boolean; expectedIdentity?: DatabaseFileIdentity },
+  options: {
+    allowMissing?: boolean;
+    expectedIdentity?: DatabaseFileIdentity;
+    exclusiveCreate?: boolean;
+  },
 ): SqliteStagingToken {
   const location = path.join(directory, SQLITE_STAGING_TOKEN_FILES[0]);
   const readIdentity = (pathname: string, kind: "directory" | "file") => {
@@ -105,7 +113,7 @@ function acquireStagingToken(
   // This lock primitive needs fixed SQLite commands, not the query-builder graph.
   const read = (sql: string) =>
     executeWithCachedStatement(db, sql, [], (statement) => statement.get());
-  let exclusive = mode === "reclaim";
+  let exclusive = mode === "reclaim" || (mode === "create" && options.exclusiveCreate === true);
   let retired = false;
   const assertIdentity = () => {
     const currentDirectory = readIdentity(directory, "directory");
@@ -157,10 +165,10 @@ function acquireStagingToken(
   const token = Object.assign(release, { beginRetirement });
   try {
     tokenIdentity = existingIdentity ?? readIdentity(location, "file");
-    if (mode === "create") {
-      db.exec("BEGIN IMMEDIATE");
-    } else if (mode === "reclaim") {
+    if (exclusive) {
       db.exec("BEGIN EXCLUSIVE");
+    } else if (mode === "create") {
+      db.exec("BEGIN IMMEDIATE");
     } else {
       db.exec("BEGIN");
     }

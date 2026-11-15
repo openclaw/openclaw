@@ -200,7 +200,7 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 export async function runExecProcess({
   startupSignal: initialStartupSignal,
   onUpdate: initialOnUpdate,
-  beforeSpawn: initialBeforeSpawn,
+  beforeSpawn,
   assertCurrent: initialAssertCurrent,
   initiateSpawn: initialInitiateSpawn,
   releaseSpawn: initialReleaseSpawn,
@@ -230,6 +230,8 @@ export async function runExecProcess({
   notifyOnExit: boolean;
   /** Start-time subagent identity resolved from the persisted spawn envelope. */
   subagentSession?: boolean;
+  /** A one-shot run can await this command's exit only through sessions_yield. */
+  sessionsYieldAvailable?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
@@ -309,7 +311,11 @@ export async function runExecProcess({
     retainExecRequestProcess(opts.requestOwners, waitForExecSession(session));
   }
 
-  const notificationTarget = prepareExecExitNotification(session, opts.subagentSession === true);
+  const notificationTarget = prepareExecExitNotification(
+    session,
+    opts.subagentSession === true,
+    opts.sessionsYieldAvailable === true,
+  );
   if (notificationTarget) {
     await notificationTarget;
   }
@@ -317,7 +323,6 @@ export async function runExecProcess({
   // Foreground delivery keeps its caller context only until yield, abort, or exit.
   // Clearing the callback also releases the completed turn's captured authority.
   let onUpdate = initialOnUpdate && AsyncLocalStorage.bind(initialOnUpdate);
-  let beforeSpawn = initialBeforeSpawn;
   let assertPolicyCurrent: (() => void) | undefined = opts.approvalTransport
     ? () => {
         initialAssertCurrent?.();
@@ -572,7 +577,6 @@ export async function runExecProcess({
       sessionKey: opts.sessionKey,
       target: diagnosticTarget,
     });
-  const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = (input: SpawnInput) =>
     runWithAgentToolSourceExecutionScope(assertSourceActive, async () => {
       const assertSourceCurrent = assertSourceActive;
@@ -653,7 +657,7 @@ export async function runExecProcess({
       onStdout: handleOutput("stdout", sanitizeStdout),
       onStderr: handleOutput("stderr", sanitizeStderr),
     };
-    await assertPreSpawnAuthorized();
+    await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
     if (spawnSpec.mode === "pty") {
       try {
         managedRun = await spawn({
@@ -674,7 +678,7 @@ export async function runExecProcess({
         );
         opts.warnings.push(warning);
         usingPty = false;
-        await assertPreSpawnAuthorized();
+        await launchLifecycle.prepare(assertSourceActive, beforeSpawn);
       }
     }
     if (!managedRun) {
@@ -703,7 +707,6 @@ export async function runExecProcess({
     throw error;
   } finally {
     launchLifecycle.dispose();
-    beforeSpawn = undefined;
     assertPolicyCurrent = undefined;
     assertSourceActive = undefined;
     operatorAuthority = undefined;
@@ -747,9 +750,7 @@ export async function runExecProcess({
     startedAt,
     pid: session.pid ?? undefined,
     promise,
-    kill: () => {
-      managedRun?.cancel("manual-cancel");
-    },
+    kill: () => managedRun?.cancel("manual-cancel"),
     disableUpdates: () => {
       onUpdate = undefined;
     },
