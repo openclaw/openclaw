@@ -10,7 +10,11 @@ import { requestExitAfterOneShotOutput } from "../../cli/one-shot-exit.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
 import { startProxy, stopProxy } from "../../infra/net/proxy/proxy-lifecycle.js";
 import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
-import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
+import {
+  getModelCatalogWarnings,
+  readSelectedGatewayModelCatalog,
+  runModelCatalogReadCommand,
+} from "./catalog-warnings.js";
 import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -24,7 +28,7 @@ const INPUT_PAD = 10;
 const CTX_PAD = 11;
 const STATE_PAD = 5;
 
-export async function modelsListCommand(
+async function runModelsListCommand(
   opts: {
     all?: boolean;
     refresh?: boolean;
@@ -35,8 +39,10 @@ export async function modelsListCommand(
     plain?: boolean;
   },
   runtime: RuntimeEnv,
+  signal?: AbortSignal,
 ) {
   ensureFlagCompatibility(opts);
+  signal?.throwIfAborted();
   const rawProvider = opts.provider?.trim();
   if (rawProvider && /\s/u.test(rawProvider)) {
     const message = `Invalid provider filter "${sanitizeTerminalText(rawProvider)}". Use a provider id such as "moonshot", not a display label.`;
@@ -56,6 +62,7 @@ export async function modelsListCommand(
     cfg,
     params,
     opts.refresh ? MODEL_CATALOG_REFRESH_TIMEOUT_MS : undefined,
+    signal,
   );
   if (!result) {
     runtime.error(
@@ -68,17 +75,20 @@ export async function modelsListCommand(
       { withPreparedModelCatalogOwner },
       { getPreparedModelRuntimeAuthMaterializations },
       { buildModelsListResult },
+      { UnknownModelCatalogProviderError },
     ] = await Promise.all([
       import("../../agents/prepared-model-catalog-owner.js"),
       import("../../agents/prepared-model-catalog.js"),
       import("../../agents/prepared-model-runtime-auth.js"),
       import("../../gateway/server-methods/models-list-result.js"),
+      import("../../gateway/server-methods/models-list-capabilities.js"),
     ]);
     const readLocal = async (refreshOwner?: {
       env: NodeJS.ProcessEnv;
       signal: AbortSignal;
       assertCurrent: () => void;
     }) => {
+      signal?.throwIfAborted();
       const localConfig = await loadModelsConfig({
         commandName: "models list",
         runtime,
@@ -135,20 +145,35 @@ export async function modelsListCommand(
         await stopProxy(proxy);
       }
     };
-    result = opts.refresh
-      ? await runWithLocalStateOwner({
-          method: "models.list",
-          params,
-          target: "local model catalog",
-          onForeignOwner: "refuse",
-          runLocal: async (owner) => {
-            const refreshed = await readLocal(owner);
-            owner.assertCurrent();
-            return refreshed;
-          },
-        })
-      : await readLocal();
+    try {
+      result = opts.refresh
+        ? await runWithLocalStateOwner({
+            method: "models.list",
+            params,
+            target: "local model catalog",
+            onForeignOwner: "refuse",
+            runLocal: async (owner) => {
+              const refreshed = await readLocal(owner);
+              owner.assertCurrent();
+              return refreshed;
+            },
+          })
+        : await readLocal();
+    } catch (error) {
+      // The Gateway answers an unknown provider filter with its message; the local read must too.
+      if (error instanceof UnknownModelCatalogProviderError) {
+        const message = error.message;
+        throw new ExpectedCliError({
+          message,
+          humanOutput: message,
+          machineOutput: message,
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
+  signal?.throwIfAborted();
   for (const warning of getModelCatalogWarnings(result)) {
     runtime.error(`${warning.message} ${warning.fixHint}`);
   }
@@ -270,4 +295,14 @@ export async function modelsListCommand(
     }
   }
   requestExitAfterOneShotOutput(runtime);
+}
+
+export async function modelsListCommand(
+  opts: Parameters<typeof runModelsListCommand>[0],
+  runtime: RuntimeEnv,
+) {
+  await runModelCatalogReadCommand(
+    (signal) => runModelsListCommand(opts, runtime, signal),
+    !opts.refresh,
+  );
 }

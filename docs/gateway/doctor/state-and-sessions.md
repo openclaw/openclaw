@@ -15,6 +15,12 @@ Native SQLite failures include their error codes. Stop the Gateway, preserve the
 database and its SQLite sidecars, resolve the reported cause, then rerun
 `openclaw doctor --fix` against the same state and configuration.
 
+Historical transcript repair scans compressed events without retaining the whole
+scan in the JavaScript heap. Repairs commit bounded batches and advance the
+existing resume cursor only after a session finishes. An interrupted repair can
+be rerun against the same state. This repair adds no schema change and needs no
+larger Node heap.
+
 ## Legacy data and PostgreSQL
 
 Run `openclaw doctor --fix` before porting SQLite stores to PostgreSQL. Port

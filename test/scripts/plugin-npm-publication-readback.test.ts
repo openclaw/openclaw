@@ -168,6 +168,7 @@ it("verifies already-published registry bytes alongside qualified publishers in 
 
 it.each([
   "prepared",
+  "candidate-prepared",
   "retained-qualification",
   "retained-publisher",
   "retained-plan",
@@ -193,6 +194,12 @@ it.each([
   ["direct", "conflicting-bytes", "bytes differ"],
   ["direct", "archive-identity", "qualified artifact"],
   ["direct", "source", "approved package or source"],
+  ["candidate-prepared", "workflow", "approved package or source"],
+  ["candidate-prepared", "producer-sha", "immutable publication tuple"],
+  ["candidate-prepared", "policy", "canonically bind"],
+  ["candidate-prepared", "source-policy", "canonically bind"],
+  ["direct", "same-run-q", "approved package or source"],
+  ["candidate-prepared", "conflicting-bytes", "bytes differ"],
   ["direct", "attempt", "producer-attempt binding"],
   ["direct", "artifact", "immutable publication tuple"],
   ["direct", "none", "release version", version, "2026.9.2-beta.2"],
@@ -228,4 +235,28 @@ it("verifies superseded registry bytes without inventing qualification receipts"
     },
   ]);
   expect(parent.requests.filter((url) => url.endsWith(".tgz"))).toHaveLength(1);
+});
+
+it("retains explicit authentication deferrals without fabricating a published disposition", async () => {
+  const result = await fixture("operator-deferred");
+  await expect(result.verify(packageName, version, "beta")).resolves.toMatchObject({
+    disposition: "deferred-auth",
+    note: expect.stringContaining("npm-trusted-publisher-exchange-http-404"),
+  });
+  expect(result.evidence).toContainEqual(
+    expect.objectContaining({
+      verification: "operator-deferred-auth",
+      packageName,
+      version,
+      evidence: "https://github.com/openclaw/openclaw/actions/runs/12/job/34",
+    }),
+  );
+  expect(result.requests.some((url) => url.startsWith("https://registry.npmjs.org/"))).toBe(true);
+  await expect(fixture("operator-deferred", "deferred-invalid")).rejects.toThrow("exact-source");
+  const published = await fixture("operator-deferred", "deferred-published");
+  await expect(published.verify(packageName, version, "beta")).resolves.toMatchObject({
+    disposition: "published",
+  });
+  const unavailable = await fixture("operator-deferred", "deferred-registry-error");
+  await expect(unavailable.verify(packageName, version, "beta")).rejects.toThrow();
 });

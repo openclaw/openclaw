@@ -11,6 +11,7 @@ import {
   signStatement,
   type PublishSnapshotRequest,
 } from "../../../packages/openclaw-id-protocol/src/index.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOpenClawIdAuthority } from "./authority.js";
 import { memoryStore, nowSeconds, TEST_K_SRV } from "./openclaw-id.test-support.js";
 import { PUBLICATION_REFRESH_MS } from "./publication-retry.js";
@@ -144,6 +145,94 @@ async function expectArmed() {
 }
 
 describe("service publication refresh scheduling", () => {
+  it("invalidates People after a publication refusal settles", async () => {
+    await commitLink();
+    const entered = createDeferred();
+    const response = createDeferred<Response>();
+    const answer = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/snapshot")) {
+        entered.resolve();
+        return response.promise;
+      }
+      return answer(input, init);
+    });
+    const changed = vi.fn();
+    const stop = service.onPeopleChanged(changed);
+    const publishing = service.publish();
+    await entered.promise;
+    changed.mockClear();
+    response.resolve(
+      Response.json(
+        { error: { code: "binding_superseded", message: "newer binding" } },
+        { status: 409 },
+      ),
+    );
+    await expect(publishing).resolves.toMatchObject({
+      state: "failed",
+      code: "binding_superseded",
+    });
+    expect(changed).toHaveBeenCalled();
+    stop();
+  });
+
+  it("keeps a code given to publish for its retries after a transient failure", async () => {
+    await commitLink();
+    await authority.recordDiscovery({
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const codes: unknown[] = [];
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/v1/claws") && init?.method === "POST") {
+        codes.push(JSON.parse(new TextDecoder().decode(init.body as Uint8Array)).code);
+        if (codes.length === 1) {
+          return Response.json({ error: { code: "unavailable", message: "x" } }, { status: 503 });
+        }
+      }
+      return await answer(input, init);
+    });
+    expect(await service.publish("FRESH-CODE")).toMatchObject({ state: "failed", retryable: true });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication?.state).toBe("published"),
+    );
+    expect(codes).toEqual(["FRESH-CODE", "FRESH-CODE"]);
+  });
+
+  it("keeps a code given to publish when the registration lookup fails transiently", async () => {
+    await commitLink();
+    await authority.recordDiscovery({
+      owner_account_id: null,
+      published_binding_seq: 0,
+      published_snapshot_seq: 0,
+    });
+    const answer = vi.mocked(globalThis.fetch).getMockImplementation()!;
+    const codes: unknown[] = [];
+    let lookups = 0;
+    vi.mocked(globalThis.fetch).mockImplementation(async (input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/registration") && ++lookups === 1) {
+        return Response.json({ error: { code: "unavailable", message: "x" } }, { status: 503 });
+      }
+      if (url.endsWith("/v1/claws") && init?.method === "POST") {
+        codes.push(JSON.parse(new TextDecoder().decode(init.body as Uint8Array)).code);
+      }
+      return await answer(input, init);
+    });
+    expect(await service.publish("FRESH-CODE")).toMatchObject({ state: "failed", retryable: true });
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    await vi.waitFor(async () =>
+      expect((await service.linkStatus()).publication?.state).toBe("published"),
+    );
+    expect(lookups).toBeGreaterThan(1);
+    expect(codes).toEqual(["FRESH-CODE"]);
+  });
+
   it("arms after a successful fresh commitLink", async () => {
     await commitLink();
     await expectArmed();

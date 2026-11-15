@@ -243,7 +243,6 @@ public struct ChatSessionsSheet: View {
         } label: {
             chatActionLabel(Text("Groups"), systemImage: "folder")
         }
-        .help("Manage thread groups")
     }
 
     private var selectButton: some View {

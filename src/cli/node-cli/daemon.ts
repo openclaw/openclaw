@@ -138,7 +138,8 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     fail(error instanceof Error ? error.message : String(error));
     return;
   }
-  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess } = gatewayOptions;
+  const { host, port, contextPath, tls, tlsFingerprint, cloudflareAccess, gatewayTarget } =
+    gatewayOptions;
   if (port === null || !Number.isFinite(port) || port <= 0 || port > 65_535) {
     fail(
       opts.port !== undefined
@@ -268,6 +269,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     cliEntrypoint,
+    resumeSavedTarget: gatewayTarget?.kind === "openclaw-id",
     host,
     port,
     contextPath,
@@ -283,6 +285,10 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     runtimePath,
     wrapperPath,
   });
+  if (opts.authFromEnv && gatewayTarget?.kind === "openclaw-id") {
+    fail("OpenClaw ID nodes use their enrolled key, not --auth-from-env");
+    return;
+  }
   if (opts.authFromEnv) {
     programArguments.push("--auth-from-env");
   }
@@ -301,7 +307,13 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
     // runtime toolchain on PATH for sibling binaries when needed.
     extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
-  if (!opts.authFromEnv) {
+  if (gatewayTarget?.kind === "openclaw-id") {
+    // This service resumes an enrolled key, not the installing shell's WebSocket credentials.
+    delete environment.OPENCLAW_GATEWAY_TOKEN;
+    delete environment.OPENCLAW_GATEWAY_PASSWORD;
+    delete environment.CF_ACCESS_CLIENT_ID;
+    delete environment.CF_ACCESS_CLIENT_SECRET;
+  } else if (!opts.authFromEnv) {
     const savedGateway = (await loadNodeHostConfig(installEnv))?.gateway;
     const identity = savedGateway
       ? await loadDeviceIdentityIfPresentAsync({ env: installEnv })

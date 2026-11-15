@@ -310,6 +310,7 @@ async function setupTree(childCount: number, active = false) {
       makeRow(`tree-child-${index}`, { parentSessionKey: root.key }),
     ),
   ];
+  root.childSessions = rows.slice(1).map((row) => row.key);
   const serverRows = structuredClone(rows);
   const failed = rows[1]!;
   const failureMessage = "Child placement changed after confirmation";

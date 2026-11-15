@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
+import { stat } from "node:fs/promises";
 import type { DatabaseSync } from "node:sqlite";
+import { hasErrnoCode } from "../infra/errno.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../infra/sql-connection.js";
 import { getSqliteDatabaseAdmissionIdentityForPath } from "../infra/sqlite-database-admission.js";
 import {
@@ -72,19 +74,47 @@ export function findOpenClawAgentDatabaseIdentity(database: AgentDatabaseOwner) 
 }
 
 /** A retained connection can outlive its pathname or be deserialized away from that file. */
+function currentConnectionIdentity(database: AgentDatabaseOwner) {
+  const anchor = sqlPublicationAnchor(database.db);
+  if (!database.db.isOpen || !anchor.isOpen) {
+    return undefined;
+  }
+  const identity = readOpenClawAgentDatabaseIdentity(database);
+  return normalizeDatabasePath(anchor.location() ?? "") === identity.filename
+    ? identity
+    : undefined;
+}
+
 export function isOpenClawAgentDatabasePathCurrent(
   database: AgentDatabaseOwner & { path: string },
 ): boolean {
-  const anchor = sqlPublicationAnchor(database.db);
-  if (!database.db.isOpen || !anchor.isOpen) {
-    return false;
-  }
-  const { identity, filename } = readOpenClawAgentDatabaseIdentity(database);
-  if (normalizeDatabasePath(anchor.location() ?? "") !== filename) {
+  const identity = currentConnectionIdentity(database);
+  if (!identity) {
     return false;
   }
   const current = statSync(database.path, { bigint: true, throwIfNoEntry: false });
-  return current !== undefined && identity === `${current.dev}:${current.ino}`;
+  return current !== undefined && identity.identity === `${current.dev}:${current.ino}`;
+}
+
+/** Host handoffs retain the connection generation while the physical lookup runs asynchronously. */
+export async function isOpenClawAgentDatabasePathCurrentAsync(
+  database: AgentDatabaseOwner & { path: string },
+): Promise<boolean> {
+  const identity = currentConnectionIdentity(database);
+  if (!identity) {
+    return false;
+  }
+  const current = await stat(database.path, { bigint: true }).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT") || hasErrnoCode(error, "ENOTDIR")) {
+      return undefined;
+    }
+    throw error;
+  });
+  return (
+    currentConnectionIdentity(database) === identity &&
+    current !== undefined &&
+    identity.identity === `${current.dev}:${current.ino}`
+  );
 }
 
 export function assertOpenClawAgentDatabaseIdentity(

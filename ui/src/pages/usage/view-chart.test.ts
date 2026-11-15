@@ -32,7 +32,6 @@ function renderDailyChart(
         selectedDays: [],
         chartMode,
         dailyChartMode,
-        onDailyChartModeChange: () => {},
         providerSeries,
         onSelectDay,
         range: {
@@ -74,7 +73,6 @@ describe("DailyChartCompact", () => {
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "total",
-        onDailyChartModeChange: () => {},
         providerSeries: [],
         onSelectDay: () => {},
         get range() {
@@ -257,7 +255,6 @@ describe("DailyChartCompact", () => {
         selectedDays: [],
         chartMode: "tokens",
         dailyChartMode: "by-provider",
-        onDailyChartModeChange: () => {},
         get providerSeries() {
           return series();
         },

@@ -78,9 +78,14 @@ it("captures external text, clears it on context changes, and retains the conver
   expect(view.container.querySelector("openclaw-chat-pane")).toBe(pane);
 });
 
-it.each([false, true])(
-  "confirms restricted dock Home before loading chat (visible: %s)",
-  async (visible) => {
+it.each([
+  ["none", false],
+  ["none", true],
+  ["view", false],
+  ["view", true],
+] as const)(
+  "confirms %s dock Home before loading chat (visible: %s)",
+  async (sessionCap, visible) => {
     const request = vi.fn(async () => {
       if (!visible) {
         throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "No session found" });
@@ -98,7 +103,7 @@ it.each([false, true])(
       agents: [{ id: "main" }],
     };
     const hello = gatewayHelloForMethods(["sessions.resolve"], ["operator.sessions.write"]);
-    hello.auth!.sessionCap = "none";
+    hello.auth!.sessionCap = sessionCap;
     context.gateway.snapshot.hello = hello;
     const navigate = vi.spyOn(context, "navigate");
     const view = mountSolid(() => (

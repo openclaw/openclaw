@@ -11,7 +11,7 @@ import { parseReplyDirectives } from "./reply-directives.js";
 import { createReplyDispatcherWithTyping } from "./reply-dispatcher.js";
 import { createReplyReferencePlanner } from "./reply-reference.js";
 import {
-  extractShortModelName,
+  resolveModelResponsePrefixContext,
   resolveResponsePrefixTemplate,
 } from "./response-prefix-template.js";
 import { createStreamingDirectiveAccumulator } from "./streaming-directives.js";
@@ -376,6 +376,8 @@ it("normalizes provider/date/latest suffixes while preserving other IDs", () => 
     ["gpt-5.4-latest", "gpt-5.4"],
     ["model-123456789", "model-123456789"],
   ] as const) {
-    expect(extractShortModelName(input), input).toBe(expected);
+    expect(resolveModelResponsePrefixContext({ provider: "p", model: input }).model, input).toBe(
+      expected,
+    );
   }
 });

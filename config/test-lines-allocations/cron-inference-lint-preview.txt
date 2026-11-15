@@ -1,2 +1,0 @@
-14
-# Verify lint previews the runtime-planned account and alternatives that Doctor records.

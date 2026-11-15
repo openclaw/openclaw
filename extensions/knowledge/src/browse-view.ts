@@ -1,6 +1,6 @@
 import type { FeatureOutput } from "openclaw/plugin-sdk/feature-contract";
 import { claimCard, summaryLink } from "./claim-view.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { assertionOrigin as origin, confidenceView } from "./knowledge-presentation.js";
 import { loadingPlaceholder } from "./loading-view.js";
 import type { Page } from "./page-context.js";
@@ -88,7 +88,7 @@ function pageTable(ui: Page, records: Summary[]) {
 /** Load one Browse page for the current kind, type and filters. */
 export async function browse(ui: Page, n: number, target: HTMLElement) {
   const { s, feature, live } = ui;
-  const result = await feature.invoke("records", {
+  const result = await feature.invoke("records_detail", {
     kind: s.kind,
     offset: s.offset,
     limit: s.kind === "claim" ? 20 : 50,
@@ -109,7 +109,7 @@ export function renderBrowse(
   ui: Page,
   n: number,
   target: HTMLElement,
-  result?: FeatureOutput<typeof contract, "records">,
+  result?: FeatureOutput<FullOutputContract, "records_detail">,
 ) {
   const { s, empty, open, load } = ui;
   const layout = el("div", undefined, "knowledge-browse"),
@@ -336,11 +336,10 @@ export function renderBrowse(
     );
   }
   const pages = el("div", undefined, "knowledge-pagination");
-  const capped = result.nextOffset !== null && result.nextOffset > 500;
   pages.append(
     el(
       "span",
-      `${result.total ? s.offset + 1 : 0}–${s.offset + result.records.length} of ${result.total.toLocaleString()} · ${result.total > 550 ? "partial browse access" : `complete list${s.includeHistory ? " · including history" : ""}`}`,
+      `${result.total ? s.offset + 1 : 0}–${s.offset + result.records.length} of ${result.total.toLocaleString()} · complete list${s.includeHistory ? " · including history" : ""}`,
     ),
   );
   const previousOffset = s.browseBack.findLast((seen) => seen < s.offset);
@@ -355,18 +354,9 @@ export function renderBrowse(
     s.offset = result.nextOffset!;
     void load();
   });
-  next.disabled = result.nextOffset === null || capped;
+  next.disabled = result.nextOffset === null;
   pages.append(previous, next);
   data.append(pages);
-  if (capped) {
-    data.append(
-      el(
-        "p",
-        "This server cannot page beyond 550 records. Narrow the type filter to see more.",
-        "knowledge-notice",
-      ),
-    );
-  }
   const results = el("div", undefined, "knowledge-browse-results");
   results.append(panel);
   layout.append(facets, results);

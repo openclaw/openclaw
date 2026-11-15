@@ -56,15 +56,11 @@ export function FailureDetails(props: {
           </>
         ) : undefined}
       </div>
-      <div
-        class={[
-          "muted cron-failure-details__cause",
-          { "cron-failure-details__cause--preview": !props.fullCause },
-        ]}
-        title={cause()}
-      >
-        {cause()}
-      </div>
+      {/* Raw errors are diagnostics: collapsed unless the reader asks for them. */}
+      <details class="cron-error-details" open={props.fullCause}>
+        <summary>{t("cron.attention.errorDetails")}</summary>
+        <pre class="cron-error-details__text">{cause()}</pre>
+      </details>
     </InlineAlert>
   );
 }

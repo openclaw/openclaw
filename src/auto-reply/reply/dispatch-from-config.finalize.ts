@@ -462,12 +462,14 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
     !channelTransformSuppressed &&
     !replyAcceptedByActiveRun;
   let queuedSettleResult: Awaited<ReturnType<typeof turnLedger.settleQueued>> = "settled";
-  if (noVisibleReplyFallbackAllowed()) {
+  if (noVisibleReplyFallbackAllowed() || (explicitSilence && queuedFinal)) {
     // Only a turn that still looks empty pays for settlement: pending admissions
     // must resolve (beforeDeliver cancellation, pre-transport failure) before the
-    // silence verdict. Turns with settled visibility or a policy-suppressed
-    // fallback skip the wait, so deliveries that legitimately outlive the turn
-    // (queued same-session mirroring) cannot deadlock the gate on themselves.
+    // silence verdict. A silent turn that still queued an earlier steered answer
+    // also waits, so that send starts before this dispatch's plugin scope closes.
+    // Turns with settled visibility or a policy-suppressed fallback skip the wait,
+    // so deliveries that legitimately outlive the turn (queued same-session
+    // mirroring) cannot deadlock the gate on themselves.
     queuedSettleResult = await turnLedger.settleQueued(getDispatchAbortSignal());
   }
   if (queuedSettleResult === "settled") {

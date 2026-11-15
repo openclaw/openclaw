@@ -58,22 +58,12 @@ env:
   PREFLIGHT_WORKFLOW_SHA: ${{ github.workflow_sha }}
 
 jobs:
-  check_openclaw_npm:
-    name: Check npm release source
-    if: ${{ inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '') }}
-    # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
-    # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
-    runs-on: &linux_runner_xlarge >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
-      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
-      ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
-      || 'blacksmith-8vcpu-ubuntu-2404') }}
-    outputs:
-      source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
+  validate_npm_request:
+    name: Validate npm preflight request
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
     steps:
-      - &validate_npm_caller
-        name: Validate canonical preflight caller and phase
+      - name: Validate canonical preflight caller and phase
         env:
           WORKFLOW_REF: ${{ github.workflow_ref }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
@@ -97,8 +87,7 @@ jobs:
             *) echo "Unsupported npm preflight phase." >&2; exit 1 ;;
           esac
 
-      - &validate_npm_ref
-        name: Validate release ref input format
+      - name: Validate release ref input format
         env:
           RELEASE_REF: ${{ inputs.tag }}
           PREFLIGHT_ONLY: ${{ inputs.preflight_only }}
@@ -122,13 +111,27 @@ jobs:
             exit 1
           fi
 
-      - &forbid_npm_promotion
-        name: Forbid preflight artifact promotion on validation-only runs
+      - name: Forbid preflight artifact promotion on validation-only runs
         if: ${{ inputs.preflight_only && inputs.preflight_run_id != '' }}
         run: |
           echo "preflight_run_id is only valid for real publish runs."
           exit 1
 
+  check_openclaw_npm:
+    name: Check npm release source
+    needs: validate_npm_request
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase != 'prepare' && (inputs.preflight_phase != 'verify' || inputs.source_check_json == '')) }}
+    # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
+    # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
+    runs-on: &linux_runner_xlarge >-
+      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' ||
+      inputs.use_github_hosted_runners) && 'ubuntu-24.04' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404'))) ||
+      ((vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || inputs.use_github_hosted_runners) && 'ubuntu-24.04'
+      || vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && 'boat-xlarge' || 'blacksmith-8vcpu-ubuntu-2404') }}
+    outputs:
+      source_check_json: ${{ steps.source_evidence.outputs.bundle_json }}
+    steps:
       - &checkout_npm_source
         name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -257,16 +260,14 @@ jobs:
 
   prepare_openclaw_npm:
     name: Prepare publishable npm package
-    if: ${{ inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all' }}
+    needs: validate_npm_request
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase == 'prepare' || inputs.preflight_phase == 'all') }}
     # The 2026-09-01 probe delivered 4 CPUs/15 GiB for 16, versus 8 CPUs/31 GiB for 32.
     # Request 32 to clear parallel-check thresholds; see docs/ci.md#blacksmith-runner-capacity.
     runs-on: *linux_runner_xlarge
     outputs:
       prepared_bundle_json: ${{ steps.describe.outputs.bundle_json }}
     steps:
-      - *validate_npm_caller
-      - *validate_npm_ref
-      - *forbid_npm_promotion
       - *checkout_npm_source
       - *checkout_npm_harness
       - name: Setup supported Node runtime
@@ -424,14 +425,12 @@ jobs:
 
   check_sdk_npm:
     name: Check npm Plugin SDK
-    if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
+    needs: validate_npm_request
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') }}
     runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
-      - *validate_npm_caller
-      - *validate_npm_ref
-      - *forbid_npm_promotion
       - *checkout_npm_source
       - *checkout_npm_harness
 
@@ -554,14 +553,12 @@ jobs:
 
   check_dependencies_npm:
     name: Check npm dependencies
-    if: ${{ inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify' }}
+    needs: validate_npm_request
+    if: ${{ needs.validate_npm_request.result == 'success' && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') }}
     runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
-      - *validate_npm_caller
-      - *validate_npm_ref
-      - *forbid_npm_promotion
       - *checkout_npm_source
       - *checkout_npm_harness
 
@@ -693,17 +690,15 @@ jobs:
 
   check_contents_npm:
     name: Check npm package contents
-    needs: prepare_openclaw_npm
+    needs: [validate_npm_request, prepare_openclaw_npm]
     if: >-
-      ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
+      ${{ !cancelled() && needs.validate_npm_request.result == 'success' &&
+          (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') }}
     runs-on: *linux_runner_xlarge
     outputs:
       proof_json: ${{ steps.proof.outputs.proof_json }}
     steps:
-      - *validate_npm_caller
-      - *validate_npm_ref
-      - *forbid_npm_promotion
       - *checkout_npm_source
       - *checkout_npm_harness
 
@@ -853,6 +848,7 @@ jobs:
     name: Qualify prepared npm package
     needs:
       [
+        validate_npm_request,
         prepare_openclaw_npm,
         check_openclaw_npm,
         check_sdk_npm,
@@ -860,7 +856,8 @@ jobs:
         check_contents_npm,
       ]
     if: >-
-      ${{ !cancelled() && (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
+      ${{ !cancelled() && needs.validate_npm_request.result == 'success' &&
+          (inputs.preflight_phase == 'all' || inputs.preflight_phase == 'verify') &&
           (needs.prepare_openclaw_npm.result == 'success' || inputs.preflight_phase == 'verify') &&
           (needs.check_openclaw_npm.result == 'success' || inputs.source_check_json != '') &&
           needs.check_sdk_npm.result == 'success' && needs.check_dependencies_npm.result == 'success' &&
@@ -871,9 +868,6 @@ jobs:
     outputs:
       qualified_preflight_bundle_json: ${{ steps.qualified_bundle.outputs.bundle_json }}
     steps:
-      - *validate_npm_caller
-      - *validate_npm_ref
-      - *forbid_npm_promotion
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

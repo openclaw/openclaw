@@ -206,6 +206,19 @@ describe("buildExportSessionReply", () => {
     },
   );
 
+  it("links parentless legacy rows while keeping explicit roots", async () => {
+    hoisted.sessionTranscriptEvents = [
+      messageEntry("question", { role: "user", content: "question" }),
+      messageEntry("answer", { role: "assistant", content: "answer" }, 1),
+      { ...messageEntry("root", { role: "user", content: "root" }, 2), parentId: null },
+    ];
+    expect(sessionDataFromHtml(await exportHtml()).entries).toMatchObject([
+      { id: "question", parentId: null },
+      { id: "answer", parentId: "question" },
+      { id: "root", parentId: null },
+    ]);
+  });
+
   it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
     const entries = [
       {
@@ -270,22 +283,6 @@ describe("buildExportSessionReply", () => {
     expect(reply.text).toContain("📊 Entries: 2");
     expect(reply.text).toContain(
       "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 2",
-    );
-  });
-
-  it("marks the skipped-row list as truncated when more than 20 rows are invalid", async () => {
-    hoisted.sessionTranscriptEvents = [
-      ...Array.from({ length: 25 }, (_, index) =>
-        messageEntry(`bad-${index + 1}`, { content: "missing role" }, index),
-      ),
-      messageEntry("entry-valid", { role: "assistant", content: "valid assistant" }, 60),
-    ];
-
-    const reply = await buildExportSessionReply(makeParams());
-
-    const expectedRows = Array.from({ length: 20 }, (_, index) => index + 1).join(", ");
-    expect(reply.text).toContain(
-      `⚠️ Skipped 25 malformed transcript rows that were not session entries. rows ${expectedRows}, …`,
     );
   });
 

@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { formatErrorMessage, readErrorName, toErrorObject } from "../infra/errors.js";
+import { readOperatorAuthorityFailure } from "../infra/operator-authority-error.js";
 import {
   diagnosticLogger as diag,
   logLaneDequeue,
@@ -208,7 +209,11 @@ function drainLane(
             if (!quietFailure && !isExpectedNonErrorLaneFailure(err)) {
               diag.error(
                 `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error=${JSON.stringify(formatErrorMessage(err))}`,
-                { errorName: readErrorName(err) || undefined, ...entry.taskIdentity },
+                {
+                  errorName: readErrorName(err) || undefined,
+                  ...entry.taskIdentity,
+                  ...readOperatorAuthorityFailure(err),
+                },
               );
             } else if (!quietFailure) {
               diag.debug(

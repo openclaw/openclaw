@@ -2,7 +2,10 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   configSnapshot,
   objectSchema,
@@ -103,6 +106,7 @@ suite.define(() => {
     await withPage(async ({ page }) => {
       const initial = config();
       const gateway = await installMockGateway(page, {
+        featureMethods: [...defaultControlUiFeatureMethods, "agents.list", "config.get"],
         methodResponses: {
           "config.get": configSnapshot(initial, "agent-list-initial", true),
           "config.schema": schema,

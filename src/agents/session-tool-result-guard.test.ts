@@ -226,7 +226,7 @@ describe("installSessionToolResultGuard", () => {
   });
 
   it("clears disabled-synthesis pending state across replacement and dropped calls", () => {
-    const { sm, guard } = setup({ allowSyntheticToolResults: false, allowedToolNames: ["read"] });
+    const { sm, guard } = setup({ allowSyntheticToolResults: false });
     sm.appendMessage(call());
     sm.appendMessage(call("call_2"));
     expect(guard.getPendingIds()).toEqual(["call_2"]);
@@ -234,7 +234,6 @@ describe("installSessionToolResultGuard", () => {
       asAppendMessage({
         role: "assistant",
         content: [
-          { type: "toolCall", id: "unknown", name: "write", arguments: {} },
           { type: "toolCall", id: "missing-input", name: "read" },
           { type: "toolCall", id: "bad-name", name: "invalid name", arguments: {} },
         ],

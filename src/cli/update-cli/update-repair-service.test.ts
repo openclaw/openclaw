@@ -7,6 +7,7 @@ import {
   createMockGatewayService,
   mockSystemAccountHome,
 } from "../../daemon/service.test-helpers.js";
+import * as portsProbe from "../../infra/ports-probe.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
@@ -157,6 +158,41 @@ function repair(json = true) {
     }),
   );
 }
+
+it.each(["unavailable", "absent"] as const)(
+  "completes repair with manual guidance for an %s Gateway service",
+  async (kind) => {
+    seed(true);
+    const finalize = mocks.convergence.getMockImplementation()!;
+    mocks.convergence.mockImplementation(async (...args) => {
+      const result = await finalize(...args);
+      // The service disappears after maintenance, before restoration inspects it.
+      vi.mocked(service.readCommand).mockResolvedValue(null);
+      if (kind === "absent") {
+        vi.mocked(service.isLoaded).mockResolvedValue(false);
+        vi.mocked(service.readRuntime).mockResolvedValue({ status: "stopped", missingUnit: true });
+        vi.spyOn(portsProbe, "probePortUsage").mockResolvedValue("free");
+      }
+      return result;
+    });
+    await repair();
+    expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+    expect(events).toEqual(["finalized"]);
+    expect(service.start).not.toHaveBeenCalled();
+    expect(healthApi.waitForGatewayHealthyRestart).not.toHaveBeenCalled();
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "warning",
+        restart: false,
+        postUpdate: expect.objectContaining({
+          doctor: expect.objectContaining({
+            warnings: [expect.stringContaining("openclaw gateway start")],
+          }),
+        }),
+      }),
+    );
+  },
+);
 
 it("finalizes an interrupted managed update, then starts and verifies its stopped Gateway", async () => {
   const original = seed(true);

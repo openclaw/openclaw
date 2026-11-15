@@ -30,6 +30,8 @@ export function fullClaw(text = TEXT): StoredClaw {
     owner_devices: {},
     members: {},
     invites: {},
+    nodes: {},
+    node_invites: {},
   };
   const peers: string[] = [];
   for (let d = 0; d < MAX_OWNER_DEVICES; d += 1) {
@@ -59,6 +61,16 @@ export function fullClaw(text = TEXT): StoredClaw {
       role: "operator",
       peer_keys: keys,
       listed_seq: keys.map(() => SEQ),
+      devices: Object.fromEntries(
+        keys.map((key, k) => [
+          key,
+          {
+            device_pub: ed(2e6 + m * 100 + k),
+            label: text,
+            approved_by: { kind: "member_device", device_fp: fp(m) },
+          },
+        ]),
+      ),
       last_seen: Object.fromEntries(keys.map((key) => [key, NOW])),
     };
   }
@@ -79,7 +91,13 @@ export function fullClaw(text = TEXT): StoredClaw {
       status: "pending",
       proof_key: hex(i),
       created_by: fp(0),
-      pending: { account_id: text, device_pub: ed(i), peer_key: iroh(i), requested_at: NOW },
+      pending: {
+        account_id: text,
+        device_pub: ed(i),
+        label: text,
+        peer_key: iroh(i),
+        requested_at: NOW,
+      },
     };
     reports[id(i)] = {
       account_id: text,

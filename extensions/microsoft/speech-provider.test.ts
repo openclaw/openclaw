@@ -6,7 +6,11 @@ import {
 } from "openclaw/plugin-sdk/proxy-capture";
 import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { isTtsProviderConfigured, resolveTtsConfig } from "openclaw/plugin-sdk/tts-runtime";
+import {
+  isTtsProviderConfigured,
+  isTtsProviderConfiguredAsync,
+  resolveTtsConfig,
+} from "openclaw/plugin-sdk/tts-runtime";
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { installDebugProxyTestResetHooks } from "../test-support/debug-proxy-env-test-helpers.js";
 import { buildMicrosoftSpeechProvider } from "./speech-provider.js";
@@ -135,10 +139,19 @@ describe("Microsoft speech provider", () => {
   );
 });
 
-it("supports the public synchronous TTS readiness API through the compatibility window", () => {
-  const cfg = { tts: { providers: { microsoft: { enabled: true } } } };
-  expect(isTtsProviderConfigured(resolveTtsConfig(cfg), provider, cfg)).toBe(true);
-});
+it.each([
+  [{ enabled: true }, true],
+  [{ enabled: false }, false],
+  [{}, true],
+] as const)(
+  "supports public synchronous and async TTS readiness APIs through the compatibility window (%j)",
+  async (microsoft, expected) => {
+    const cfg = { tts: { providers: { microsoft } } };
+    const config = resolveTtsConfig(cfg);
+    expect(isTtsProviderConfigured(config, provider, cfg)).toBe(expected);
+    expect(await isTtsProviderConfiguredAsync(config, provider, cfg)).toBe(expected);
+  },
+);
 
 it("preserves inherited Microsoft Talk settings and filters blank request overrides", () => {
   const params = { voiceId: " ", outputFormat: " ogg-24khz-16bit-mono-opus " };

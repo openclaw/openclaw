@@ -10,7 +10,7 @@ import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js"
 import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { readMcpOAuthStore } from "./mcp-oauth-store.js";
 import * as oauthStore from "./mcp-oauth-store.js";
-import { resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
+import { readMcpOAuthCredentialsStatus, resolveMcpOAuthAccessToken } from "./mcp-oauth.js";
 import { seedMcpOAuthStoreForTest } from "./mcp-oauth.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,6 +65,9 @@ async function expectFenced(fetchFn: typeof fetch) {
   await reopen();
   await expect(refresh(fetchFn)).rejects.toThrow(/uncertain/);
   expect(fetchFn).toHaveBeenCalledTimes(1);
+  await expect(readMcpOAuthCredentialsStatus(identity)).resolves.toEqual({
+    state: "requires-authorization",
+  });
 }
 function heldRefresh(
   options: Parameters<typeof refresh>[1] = {},
@@ -169,6 +172,23 @@ describe("real MCP SDK token HTTP and durable owner", () => {
     expect((await read()).refreshClaim).toBeUndefined();
     await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
     expect(fetchFn).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { code: "EAI_AGAIN", syscall: "getaddrinfo" },
+    { code: "ECONNREFUSED", syscall: "connect" },
+  ])("restores the grant after $code before the token request", async (cause) => {
+    seed();
+    const fetchFn = vi.fn<typeof fetch>(async () => {
+      throw new TypeError("fetch failed", { cause: Object.assign(new Error(cause.code), cause) });
+    });
+    await expect(refresh(fetchFn)).rejects.toMatchObject({
+      oauthRefreshOutcome: { phase: "before-dispatch", outcome: "not-attempted" },
+    });
+    expect((await read()).refreshClaim).toBeUndefined();
+    fetchFn.mockImplementation(async () => tokens());
+    await expect(refresh(fetchFn)).resolves.toBe("synthetic-new-access");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
   });
 
   it.each(["lost-response", "503", "nested-rejection", "invalid-success", "rejected-fresh"])(

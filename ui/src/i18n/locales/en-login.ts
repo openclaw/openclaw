@@ -7,7 +7,7 @@ const enLogin = {
     help: {
       title: "How to connect",
       step1: "Start the Gateway on this computer:",
-      step2: "Get a one-time dashboard link:",
+      step2: "Get a one-time sign-in link:",
       step3: "Enter the Gateway URL and secret above, or open the link.",
       docsLink: "Read the docs →",
     },
@@ -15,11 +15,10 @@ const enLogin = {
   login: {
     unsupportedBrowser: {
       title: "Update your browser to use OpenClaw",
-      description:
-        "This browser is missing features the Control UI needs to display menus and dialogs.",
+      description: "This browser is missing features OpenClaw needs to display menus and dialogs.",
       apple: "Use macOS 26.2 or iOS 26.2 or later, with Safari 26.2 or later.",
       browsers: "You can also use Chrome or Firefox released within the last six months.",
-      native: "On an older Mac, open this dashboard in an up-to-date browser instead.",
+      native: "On an older Mac, open this page in an up-to-date browser instead.",
       open: "Open in browser",
       opened: "Opened in your default browser.",
       failed: "Couldn’t open your browser. Copy this page’s address into an up-to-date browser.",
@@ -33,14 +32,42 @@ const enLogin = {
       "This is a device setup code for the OpenClaw mobile app, not the Gateway secret. Paste it in the app's Gateway settings instead; the Gateway secret comes from openclaw gateway auth-token --show on the Gateway host.",
     secretPlaceholder: "Paste the token or type the password",
     runOnHost: "Run on this computer",
+    browserPair: {
+      action: "Pair this browser",
+      open: "Pair with a code instead",
+      back: "Sign in with URL and secret",
+      intro:
+        "Pair your own browser for administrator access. This is not a guest invitation. Get a code here, then approve it on the Gateway host.",
+      runOnGatewayHost: "Run on the Gateway host",
+      reconnecting: "Connection interrupted. Retrying with the same code…",
+      cancelling: "Withdrawing the request on the Gateway…",
+      cancelled: "Pairing request withdrawn.",
+      cancelFailed:
+        "Could not confirm cancellation. The request may still be approved. Retry cancellation.",
+      retryCancel: "Retry cancellation",
+      alreadyApproved:
+        "This browser was already approved. Cancel did not revoke its access. Choose Continue to connect.",
+      continue: "Continue",
+      getCode: "Get a code",
+      starting: "Requesting a pairing code…",
+      waiting: "Waiting for approval. Keep this page open.",
+      failure: {
+        identityRequired:
+          "This Gateway requires a verified identity. Use its normal identity-aware sign-in instead of browser code pairing.",
+        declined: "This request was declined on the Gateway host.",
+        expired: "This code expired. Pair this browser again for a new one.",
+        busy: "Too many pairing requests right now. Wait a few minutes and try again.",
+        unavailable: "This Gateway could not start pairing. Reload the page and try again.",
+        noIdentity:
+          "This browser could not create its device key. Open this Gateway over HTTPS or localhost.",
+      },
+    },
     connection: {
       target: "Connecting to {host}",
       secretEntered: "secret entered",
       noSecret: "no secret",
       change: "Change",
     },
-    showSecret: "Show Gateway secret",
-    hideSecret: "Hide Gateway secret",
     toggleSecretVisibility: "Toggle Gateway secret visibility",
     failure: {
       rawError: "Show details",
@@ -103,7 +130,7 @@ const enLogin = {
       trustedProxy: {
         title: "Proxy authentication required",
         summary: "Couldn’t verify your proxy sign-in. Sign in through the proxy to continue.",
-        stepSignIn: "Open the dashboard through the sign-in proxy, not the Gateway directly.",
+        stepSignIn: "Open OpenClaw through the sign-in proxy, not the Gateway directly.",
         stepHeaders:
           "Ask an admin to check identity headers, required-header forwarding on WebSocket upgrade requests, and your account access.",
         stepNoToken: "A Gateway token cannot replace proxy authentication.",
@@ -122,6 +149,13 @@ const enLogin = {
         scopeTitle: "Approve the new access level",
         roleTitle: "Approve the new role",
         metadataTitle: "Re-approve this browser",
+        restoreTitle: "Approve this browser again",
+        restoreSummary:
+          "Couldn’t connect to {host} because this browser’s {role} access is no longer active. The request asks for the same access it had before, nothing new. Approve it on the computer running OpenClaw.",
+        roleSummary:
+          "Couldn’t connect to {host} because this browser is asking for the {role} role, which it doesn’t have yet. Approve the request on the computer running OpenClaw.",
+        scopeSummary:
+          "Couldn’t connect to {host} because this browser is asking for more access: {scopes}. Approve the request on the computer running OpenClaw.",
         summary:
           "Couldn’t connect to {host} until this browser is approved. Approve it on the computer running OpenClaw.",
         upgradeSummary:
@@ -160,10 +194,10 @@ const enLogin = {
       protocol: {
         title: "Protocol mismatch",
         summary:
-          "Couldn’t connect because this page and the Gateway use different versions. Reopen the dashboard.",
+          "Couldn’t connect because this page and the Gateway use different versions. Reopen OpenClaw.",
         refresh: "Refresh page",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "Reopen OpenClaw with openclaw dashboard so the web app and Gateway come from the same install.",
         stepDevUi:
           "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
         stepRestart:

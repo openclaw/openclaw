@@ -34,6 +34,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { createCompactMsFormatter, createMsFormatter } from "../../lib/format.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -44,6 +45,7 @@ import { HistoryRow } from "./approval-history-row.tsx";
 import { GrantRow } from "./standing-grant-row.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
+registerEnglishCatalog(registerRouteSubtitlesEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -450,7 +452,8 @@ export function ApprovalsPage() {
           ) : null}
           {view().connected && !view().approvalsAccess ? (
             <InlineAlert tone="warning" role="status">
-              {t("common.disabled")} · <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
+              {t("approvalPage.accessRequiredDescription")}{" "}
+              <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
             </InlineAlert>
           ) : null}
           {view().approvalsAccess ? (

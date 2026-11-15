@@ -23,6 +23,7 @@ import {
 import {
   buildTelegramNativeCommandCallbackData,
   buildTelegramOpaqueCallbackData,
+  type TelegramTypedCallbackOwner,
 } from "./native-command-callback-data.js";
 import {
   buildTelegramQuestionCallbackData,
@@ -41,6 +42,7 @@ type TelegramInlineButton = {
   callback_data?: string;
   url?: string;
   web_app?: { url: string };
+  disabled?: Record<string, never>;
   style?: TelegramButtonStyle;
 };
 
@@ -54,6 +56,7 @@ export type TelegramDroppedControl = {
   label: string;
   reason:
     | "callback_data_too_long"
+    | "disabled_unsupported"
     | "invalid_action"
     | "question_context_unavailable"
     | "web_app_unavailable";
@@ -62,8 +65,12 @@ export type TelegramDroppedControl = {
 
 export type TelegramButtonBuildOptions = {
   allowWebAppButtons?: boolean;
+  /** Native disabled buttons; older clients show the whole message as unsupported. */
+  supportsDisabled?: boolean;
   onDroppedControl?: (control: TelegramDroppedControl) => void;
   questionOptionIndices?: AskUserQuestionOptionIndices;
+  /** Defaults to plugin ownership: unclaimed taps expire. */
+  typedCallbackOwner?: TelegramTypedCallbackOwner;
 };
 
 export function appendTelegramDroppedControlFallback(
@@ -114,6 +121,13 @@ function toTelegramInlineButton(
   const action = resolveMessagePresentationButtonAction(button);
   if (!action) {
     return recordDroppedControl(button, options, "invalid_action");
+  }
+  // A disabled control never produces a callback or launch: it renders as a native
+  // disabled button where supported, otherwise as fallback label text.
+  if (button.disabled === true) {
+    return options?.supportsDisabled === true
+      ? { text: button.label, disabled: {}, style }
+      : recordDroppedControl(button, options, "disabled_unsupported");
   }
   if (action.type === "url") {
     return { text: button.label, url: action.url, style };
@@ -176,7 +190,7 @@ function toTelegramInlineButton(
     hasTelegramApprovalCallbackPrefix(normalizedCallbackValue) ||
     hasTelegramQuestionCallbackPrefix(normalizedCallbackValue);
   const callbackDataCandidate = needsOpaqueEnvelope
-    ? buildTelegramOpaqueCallbackData(action.value)
+    ? buildTelegramOpaqueCallbackData(action.value, options?.typedCallbackOwner)
     : action.value;
   return callbackButton(
     sanitizeTelegramCallbackData(callbackDataCandidate),
@@ -252,6 +266,7 @@ export function resolveTelegramInlineButtons(
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }
+/** Message-action params: their typed callbacks belong to the agent. */
 export function resolveTelegramButtonsFromParams(
   params: Record<string, unknown>,
   presentation = normalizeMessagePresentation(params.presentation),
@@ -262,7 +277,7 @@ export function resolveTelegramButtonsFromParams(
       presentation,
       interactive: params.interactive,
     },
-    options,
+    { ...options, typedCallbackOwner: "agent" },
   );
 }
 export function buildTelegramControlDegradation(

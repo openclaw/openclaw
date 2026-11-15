@@ -220,9 +220,9 @@ async function prepareCandidateDoctorRuntime(): Promise<void> {
   await fs.writeFile(
     worker,
     `
-    import {registerHooks} from 'node:module';
+    import nodeModule from 'node:module';
     const health = new URL('../../legacy-finalizer/src/flows/doctor-health.js',import.meta.url).href;
-    registerHooks({load(url,context,nextLoad) {
+    nodeModule.registerHooks({load(url,context,nextLoad) {
       return url !== health ? nextLoad(url,context) : {
         format:'module',shortCircuit:true,source:
           'export * from '+JSON.stringify(url+'?fixture-original')+';\\n'+

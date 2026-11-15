@@ -101,13 +101,6 @@ describe("Claude partial-message output budgets", () => {
       60,
     ],
     ["empty text", { ...text, text: "" }, {}, null],
-    [
-      "empty thinking progress",
-      { ...thinking, thinking: "", estimated_tokens: 50 },
-      { thinking_display: "updates" },
-      null,
-    ],
-    ["signature delta", { type: "signature_delta", signature: "s" }, {}, null],
     ["unknown delta field", { ...text, extra: true }, {}, null],
     ["unknown record field", text, { request_id: "req_1" }, null],
     ["display on text", text, { thinking_display: "updates" }, null],

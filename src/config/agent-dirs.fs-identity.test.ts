@@ -57,16 +57,24 @@ describe("agent directory filesystem identity", () => {
     },
   );
 
-  it("does not create configured missing directories or leave probe entries", async () => {
+  it("folds missing case variants only on a case-insensitive volume", async () => {
     await withTestDir({ prefix: "openclaw-agent-dirs-missing-" }, async (root) => {
       const upper = path.join(root, "FutureState");
       const lower = path.join(root, "futurestate");
+      await fs.mkdir(upper);
+      const caseInsensitive = await fs.stat(lower).then(
+        () => true,
+        () => false,
+      );
+      await fs.rmdir(upper);
 
-      findDuplicateAgentDirs({
-        agents: {
-          entries: { upper: { agentDir: upper }, lower: { agentDir: lower } },
-        },
-      });
+      expect(
+        findDuplicateAgentDirs({
+          agents: {
+            entries: { upper: { agentDir: upper }, lower: { agentDir: lower } },
+          },
+        }),
+      ).toEqual(caseInsensitive ? [{ agentDir: upper, agentIds: ["upper", "lower"] }] : []);
 
       await expect(fs.stat(upper)).rejects.toMatchObject({ code: "ENOENT" });
       await expect(fs.stat(lower)).rejects.toMatchObject({ code: "ENOENT" });

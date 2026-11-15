@@ -1,2 +1,0 @@
-# Expired plugin-owned OAuth profiles stay in the model menu only when the loaded plugin owns refresh.
-78

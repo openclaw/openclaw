@@ -406,14 +406,22 @@ list of requirements reaches the agent complete.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
-    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles and sends a completion or failure notice in the same chat |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw using its configured update channel; works with default tool profiles. See notice delivery rules below |
     | `/send on\|off\|inherit` | owner | Set send policy |
 
     Natural-language update requests use the `gateway` tool's `update.run`
     action. `/update` provides the same update operation without requiring a
     functioning model or access to that tool. Both use the Gateway update
     handler, also used by the Control UI. Chat access alone does not grant
-    permission to update. See
+    permission to update.
+
+    External update notices go only to destinations listed in
+    `commands.ownerAllowFrom` or a linked administrator's direct conversation,
+    and require the destination account's `actions.sendMessage` policy to allow
+    sends. Group and channel chats do not inherit a person's owner authority.
+    If a notice is skipped, the outcome stays in the update run record and
+    Control UI; the notice is not redirected to another chat. Internal sessions
+    can receive notices in their transcript. See
     [Updating from chat](/install/updating#from-chat).
 
   </Accordion>
@@ -701,6 +709,7 @@ See [BTW side questions](/tools/btw) for the full behavior.
     - Inline shortcuts (`/help`, `/commands`, `/status`, `/whoami`) also work embedded in normal messages and are stripped before the model sees the remaining text.
     - In Control UI, every non-skill slash command can be selected in the middle of a draft. The command runs separately, only the command invocation is removed, and the surrounding draft remains unsent.
     - A later slash token at the caret keeps its completion menu even when the draft starts with another command. Enter or clicking a command runs only that invocation; Tab completes without sending. Active freeform argument collection still owns slash-like argument text.
+    - A slash token at the start of the draft is the draft's own command even when text follows it, such as `/loop` typed in front of a pasted prompt. Its menu offers every command, selecting completes the token in place and keeps the text as arguments, and selecting `/goal` opens Goal mode with that text as the objective.
     - In Control UI (WebChat), selecting a skill from slash completion inserts the existing `$skill-name` reference into the message (for example, `Please use $weather to check Sydney`).
     - Inline command dispatch follows the same connection, permission, and confirmation checks as sending that command by itself. Typing slash-like prose without selecting or submitting the completion does not execute it.
     - On external channels, unauthorized text command-only messages are silently ignored. Inline `/...` tokens are treated as plain text. Native `/compact` returns an authorization refusal when a channel-admitted sender cannot use the command. Reset denials show a permission reply only when the request and reply stay in WebChat.

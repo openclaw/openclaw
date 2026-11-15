@@ -17,6 +17,7 @@ import {
   selectTelegramGroupPromptContext,
   telegramPromptContextHistory,
 } from "./group-history-window.js";
+import { buildTelegramConversationId } from "./topic-conversation.js";
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
@@ -119,7 +120,7 @@ export async function resolveDispatchTelegramContext(params: {
     params.context.turn.record.updateLastRoute && threadSpec.id != null
       ? {
           ...params.context.turn.record.updateLastRoute,
-          to: `telegram:${params.context.chatId}:topic:${threadSpec.id}`,
+          to: `telegram:${buildTelegramConversationId({ chatId: params.context.chatId, thread: threadSpec })}`,
           threadId: String(threadSpec.id),
         }
       : params.context.turn.record.updateLastRoute;

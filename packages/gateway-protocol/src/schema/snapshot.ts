@@ -174,8 +174,7 @@ const HealthSnapshotSchema = closedObject({
       hotReloadStatus: stringLiteralUnion(["active", "disabled"]),
     }),
   ),
-  // The running process reports the Node binary it will use for child workers.
-  // A deleted Homebrew Cellar path stays reachable at the Gateway port.
+  // Readers see runtime availability; only admins receive the Node binary path.
   childRuntime: Type.Optional(
     closedObject({
       execPath: Type.String(),

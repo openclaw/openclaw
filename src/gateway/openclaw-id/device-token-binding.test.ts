@@ -17,6 +17,7 @@ function owner(bindings: Record<string, string> = {}) {
     record: async (deviceId, role, peerKey) => {
       bindings[`${deviceId}/${role}`] = peerKey;
     },
+    forget: async () => {},
     reportMismatch,
   };
   setDeviceTokenBindingOwner(value);
@@ -92,6 +93,7 @@ describe("device tokens bound to the authenticated endpoint key", () => {
         throw new Error("uncertain storage outcome");
       },
       record: async () => {},
+      forget: async () => {},
       reportMismatch: vi.fn(),
     });
     expect(

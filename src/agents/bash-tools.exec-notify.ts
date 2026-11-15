@@ -1,8 +1,6 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
-import {
-  captureSessionEventTargetForHost as captureSessionEventTarget,
-  enqueueSessionEventForHost as enqueueSessionEvent,
-} from "../auto-reply/reply/session-event-handoff.js";
+import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import {
   hasAgentRunContextExecutionOwner,
   listAgentRunsForSession,
@@ -10,25 +8,28 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  SystemEventQueueFullError,
+} from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
+  listRunningSessions,
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
-  tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
-  compactNotifyOutput,
+  hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 function enqueueExecExitNotification(
   text: string,
   target: NonNullable<ProcessSession["notifySessionTarget"]>,
@@ -53,17 +54,20 @@ function enqueueExecExitNotification(
 export function prepareExecExitNotification(
   session: ProcessSession,
   subagentSession: boolean,
+  sessionsYieldAvailable: boolean,
 ): Promise<void> | undefined {
-  if (
-    !session.notifyOnExit ||
-    !session.sessionKey ||
-    subagentSession ||
-    isSubagentSessionKey(session.sessionKey)
-  ) {
+  if (!session.notifyOnExit || !session.sessionKey) {
     return undefined;
   }
+  const hiddenSubagent = subagentSession || isSubagentSessionKey(session.sessionKey);
+  // A one-shot run ends with its final reply; only a yield awaiting the command resumes it.
+  // Without sessions_yield (collectors, filtered tools) a hidden subagent keeps its passive notice.
+  if (hiddenSubagent && !sessionsYieldAvailable) {
+    return undefined;
+  }
+  const oneShot = hiddenSubagent || isCronRunSessionKey(session.sessionKey);
   // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
-  const targetKey = isCronRunSessionKey(session.sessionKey)
+  const targetKey = oneShot
     ? session.sessionKey
     : resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
   const owner = session.agentId ?? parseAgentSessionKey(targetKey)?.agentId;
@@ -88,10 +92,16 @@ export function prepareExecExitNotification(
           }
         };
       }
+      if (oneShot && sessionsYieldAvailable) {
+        session.exitWakeAfterYield = true;
+      }
       session.notifySessionTarget = target;
     },
     (error: unknown) => {
-      session.notifyOnExit = false;
+      // A hidden subagent keeps its passive completion notice without a wake destination.
+      if (!hiddenSubagent) {
+        session.notifyOnExit = false;
+      }
       logWarn(
         `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
       );
@@ -99,48 +109,141 @@ export function prepareExecExitNotification(
   );
 }
 
+/** A cron run executor resumes its yielded turn in place, keyed by the run that yielded. */
+type ExecYieldResume = { awaited: Set<ProcessSession>; exits: string[]; changed?: () => void };
+const execYieldResumes = new Map<string, ExecYieldResume>();
+
+/** Wake-armed running commands this run started; each one's deadline bounds a yield on it. */
+export function listYieldAwaitableExecs(runId: string | undefined): ProcessSession[] {
+  if (!runId) {
+    return [];
+  }
+  return listRunningSessions().filter(
+    (session) =>
+      session.originRunId === runId && !session.cancellationRequested && hasExitWake(session),
+  );
+}
+
+/** An accepted sessions_yield awaits these commands: each exit resumes the yielded run. */
+export function awaitExecsForYield(sessions: readonly ProcessSession[]): void {
+  for (const session of sessions) {
+    session.resumesYieldedRun = true;
+    if (session.originRunId) {
+      execYieldResumes.get(session.originRunId)?.awaited.add(session);
+    }
+  }
+}
+
+/**
+ * Cron run executor: own resumption of this run's yielded turns until disposed. `next` resolves the
+ * wake text of every awaited exit so far, or undefined once nothing awaited remains.
+ */
+export function openExecYieldResume(runId: string) {
+  const state: ExecYieldResume = { awaited: new Set(), exits: [] };
+  execYieldResumes.set(runId, state);
+  return {
+    async next(signal?: AbortSignal): Promise<string | undefined> {
+      for (;;) {
+        if (state.exits.length > 0) {
+          return state.exits.splice(0).join("\n\n");
+        }
+        if (state.awaited.size === 0 || signal?.aborted) {
+          return undefined;
+        }
+        await new Promise<void>((resolve) => {
+          state.changed = resolve;
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+    },
+    [Symbol.dispose]() {
+      if (execYieldResumes.get(runId) === state) {
+        execYieldResumes.delete(runId);
+      }
+    },
+  };
+}
+
 export async function maybeNotifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
   subagentSession: boolean,
 ) {
+  const resume = session.originRunId ? execYieldResumes.get(session.originRunId) : undefined;
+  if (!resume?.awaited.has(session)) {
+    return notifyOnExit(session, status, subagentSession);
+  }
+  try {
+    const eventText = prepareExecExitWake(session, status);
+    if (eventText) {
+      resume.exits.push(eventText);
+    }
+  } finally {
+    // A suppressed exit (Stop, kill) still releases the yielded run.
+    resume.awaited.delete(session);
+    resume.changed?.();
+  }
+}
+
+/** Claims the exit once and renders its wake text, or undefined when the exit starts no turn. */
+function prepareExecExitWake(
+  session: ProcessSession,
+  status: "completed" | "failed",
+): string | undefined {
   if (session.exitNotified) {
-    return;
+    return undefined;
   }
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
     session.requestCancelled ||
     readExecRequestOwners(session)?.some((owner) => owner.signal.aborted) ||
-    session.terminalPollObserved
+    session.terminalPollObserved ||
+    !session.sessionKey?.trim()
   ) {
-    return;
-  }
-  const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
+    return undefined;
   }
   session.exitNotified = true;
   // Requested stops must not wake another turn to relay leftover output.
   if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
-    return;
+    return undefined;
   }
-  const exitLabel = renderExecExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
+  // The retained tail (last 2,000 chars) lets the woken turn act without process log.
+  const tail = session.tail;
+  const output = tail.trim();
   if (
     status === "completed" &&
     session.exitCode === 0 &&
     !output &&
     session.notifyOnExitEmptySuccess !== true
   ) {
+    return undefined;
+  }
+  const header = `Exec ${status} (${session.id.slice(0, 8)}, ${renderExecExitLabel(session)}, ${
+    formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
+  })`;
+  const summary = !output
+    ? `${header} with no output.`
+    : session.totalOutputChars > tail.length
+      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+          session.totalOutputChars > session.aggregated.length
+            ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
+            : "process log has the rest"
+        }):\n${output}`
+      : `${header}:\n${output}`;
+  return appendExecTimeoutRetryGuidance(summary, session.exitReason);
+}
+
+async function notifyOnExit(
+  session: ProcessSession,
+  status: "completed" | "failed",
+  subagentSession: boolean,
+) {
+  const eventText = prepareExecExitWake(session, status);
+  const sessionKey = session.sessionKey?.trim();
+  if (!eventText || !sessionKey) {
     return;
   }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =
     session.notifySessionTarget?.sessionKey ??
     resolveEventSessionKeyForPolicy(sessionKey, session.eventRouting);
@@ -152,7 +255,8 @@ export async function maybeNotifyOnExit(
     },
     readExecRequestOwners(session),
   );
-  if (!subagentSession && !isSubagentSessionKey(sessionKey)) {
+  // A yielded hidden subagent resumes through an ordinary wake turn; otherwise it gets a passive notice.
+  if (session.resumesYieldedRun || (!subagentSession && !isSubagentSessionKey(sessionKey))) {
     const agentId = session.agentId ?? parseAgentSessionKey(eventSessionKey)?.agentId;
     if (!agentId || !session.notifySessionTarget) {
       logWarn(
@@ -187,12 +291,19 @@ export async function maybeNotifyOnExit(
     return;
   }
   // Subagent results remain available to process poll and the announce owner.
-  const remove = enqueueSystemEventWithReceipt(
-    eventText,
-    session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
-    { allowDuplicate: true },
-  );
-  if (remove) {
-    recordNotifyOnExitRemoval(session, remove);
+  try {
+    const remove = enqueueSystemEventWithReceipt(
+      eventText,
+      session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
+      { allowDuplicate: true },
+    );
+    if (remove) {
+      recordNotifyOnExitRemoval(session, remove);
+    }
+  } catch (error) {
+    if (!(error instanceof SystemEventQueueFullError)) {
+      throw error;
+    }
+    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
   }
 }

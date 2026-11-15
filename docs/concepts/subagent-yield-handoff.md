@@ -42,6 +42,13 @@ registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
 
+A yield can also await wake-armed background commands that the yielding run
+started. Their exit becomes an ordinary exec wake turn in the child session. Like a
+tool handoff result, it names the run that started the command, and reply
+admission continues the paused task only when that run is the paused one. Any
+other exec wake stays a separate follow-up, and a hidden child that did not yield
+gets only a passive notice.
+
 Before admitting another turn in a yielded requester, the recovery owner transfers
 its ended execution's fence to the current durable child batch. The batch is
 revalidated before the write commits; absent or adopted batches, unrelated run
@@ -62,9 +69,24 @@ An outcome the yield already recorded stays: a collector an earlier version left
 `ok` settles as done with the reply its yielded turn ended on, the same result a
 collector that yields now gets. Only a run with no recorded outcome settles as an
 `error` that says why, and its collector completion carries
-`reason: "yielded_without_result"`. Every other paused run stays continuable however long it has been
-paused: a declared message wait, a leaf that an earlier version left paused, and an
-orchestrator waiting on descendants are not bounded by this settlement. A kill
+`reason: "yielded_without_result"`. A declared message wait belongs to its
+requester session across turns until a watched continuation claims it. A claimed
+wait closes with a recorded error when its requester task finishes. Completion
+follows an adopted execution of that task and retains its committed end when a
+later turn replaces the session row. Unrelated pause notices and tool-handoff
+turns do not abandon the waiting child. Missing or archived requester sessions
+close both claimed and unclaimed waits, including restored waits. The sweeper
+also reconciles claims whose requester finished before the child parked.
+Waiting for a live requester or owned descendants has no elapsed-time limit.
+The yielded batch retains the original requester run ID after releasing its
+execution binding. If completion delivery permanently fails without admitting a
+successor, settlement closes that exact parked lifecycle with a recorded error.
+A newer turn, Stop, or reset rejects the stale terminal write.
+Older batches without that run ID record the same delivery-failure notice without
+changing the current lifecycle: a replacement turn may already own it. Their
+failure notice identifies the batch, rather than guessing its original writer.
+A leaf that an earlier version left paused without a recorded wait keeps its
+existing continuation behavior. A kill
 claim on a paused run is never settled over; cancellation stays with the kill path.
 
 Session rows show a continuable paused run as `subagentRunState: "paused"`

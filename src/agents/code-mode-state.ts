@@ -9,10 +9,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { PluginRuntimeCloseRetainedError } from "../plugins/runtime-close-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { observeAgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { raceWithAbortSignal } from "./agent-tools.abort.js";
-import { runBridgeRequest } from "./code-mode-bridge.js";
 import type { CodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "./code-mode-control-tools.js";
 import type {
@@ -35,6 +35,9 @@ import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
 import type { ToolSearchRuntime } from "./tool-search-runtime.js";
 import type { ToolSearchToolContext } from "./tool-search-types.js";
 import { ToolInputError } from "./tools/common.js";
+
+const loadCodeModeBridge = createLazyRuntimeModule(() => import("./code-mode-bridge.js"));
+type RunBridgeRequest = typeof import("./code-mode-bridge.js").runBridgeRequest;
 
 export type CodeModeBridgeDispatchState = {
   started: boolean;
@@ -451,7 +454,9 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
   if (ownedRunId === undefined) {
     removeExpiredRuns();
     if (activeRuns.size + activeRunReservations >= MAX_ACTIVE_CODE_MODE_RUNS) {
-      throw new ToolInputError("too many suspended code mode runs.");
+      throw new ToolInputError(
+        "too many suspended code mode runs. Resume an existing run with wait, or use exec with awaitResults:true to collect an existing tool result without suspending. Do not repeat already-dispatched work.",
+      );
     }
   } else {
     const state = activeRuns.get(ownedRunId);
@@ -476,13 +481,14 @@ export function reserveActiveRunSlot(ownedRunId?: string): () => void {
 
 export function createPendingBridgeStates(
   pendingRequests: PendingBridgeRequest[],
-  params: Omit<Parameters<typeof runBridgeRequest>[0], "request" | "reply" | "signal"> & {
+  params: Omit<Parameters<RunBridgeRequest>[0], "request" | "reply" | "signal"> & {
     inbox: CodeModeProgramDataInbox;
     activeRunId?: string;
     signal: AbortSignal;
     bridgeDispatch: CodeModeBridgeDispatchState;
   },
 ): PendingBridgeState[] {
+  const deadline = performance.now() + params.remainingMs;
   // Pending siblings retain dispatch context, never the original request batch.
   return pendingRequests.map((request) => {
     // Bridge calls start while the guest is parked. The wait tool delivers
@@ -503,7 +509,7 @@ export function createPendingBridgeStates(
     if (request.method !== "sleep") {
       params.bridgeDispatch.started = true;
     }
-    const bridgeCall = runBridgeRequest({
+    const bridgeParams = {
       activeRunId: params.activeRunId,
       workerId: params.bridgeDispatch.workerId,
       runtime: params.runtime,
@@ -514,12 +520,19 @@ export function createPendingBridgeStates(
       parentToolCallId: params.parentToolCallId,
       codeModeRunId: params.codeModeRunId,
       reply,
-      remainingMs: Math.max(1, params.remainingMs),
       completionRequired: params.completionRequired,
       ctx: params.ctx,
       request,
       signal,
       onUpdate: params.onUpdate,
+    };
+    const bridgeCall = loadCodeModeBridge().then(({ runBridgeRequest }) => {
+      // Cold loading consumes the existing call budget rather than extending it.
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        throw new Error("interrupted");
+      }
+      return runBridgeRequest({ ...bridgeParams, remainingMs });
     });
     const completion = raceWithAbortSignal(bridgeCall, signal).catch(() => {
       // Canceled leases are fenced; this cannot retain an arbitrary abort reason.

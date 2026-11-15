@@ -47,6 +47,7 @@ function makeRuntimeModel(id: string, overrides: Partial<Parameters<StreamFn>[0]
 function upstreamModel(id: string, overrides: Record<string, unknown> = {}) {
   return {
     id,
+    modalities: { input: ["text"], output: ["text"] },
     limit: { context: 262_144, output: 32_768 },
     ...overrides,
   };
@@ -262,16 +263,14 @@ describe("opencode-go provider plugin", () => {
       discoveryApiKey: "resolved-opencode-key",
       fetchGuard,
     });
-    expect(result.models).toMatchObject([
+    expect(result.models.filter((model) => model.inference?.chat !== false)).toMatchObject([
       { id: "known", name: "Enriched" },
-      {
-        id: "unknown",
-        provider: "opencode-go",
-        api: "openai-completions",
-        baseUrl: OPENAI_URL,
-        input: ["text"],
-      },
     ]);
+    expect(result.models.find((model) => model.id === "unknown")).toMatchObject({
+      inference: { chat: false },
+      api: "openai-completions",
+      baseUrl: OPENAI_URL,
+    });
     const listingRequest = fetchGuard.mock.calls.find(
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];

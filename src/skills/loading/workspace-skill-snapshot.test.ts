@@ -3,6 +3,8 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readCodeModeSkill, resolveCodeModeSkills } from "../../agents/code-mode-skills.js";
 import { prepareRuntimeSkillEntries } from "../../agents/embedded-agent-runner/skills-prompt.js";
+import { readInstalledSkill, searchInstalledSkills } from "../../agents/installed-skill-catalog.js";
+import { prepareInstalledSkillCatalog } from "../../agents/installed-skill-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withEnvAsync, createPathResolutionEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
@@ -103,6 +105,43 @@ async function createMultiRootFixture() {
 }
 
 describe("buildSkillSnapshot", () => {
+  it("offers bundled template creation to the model for ordinary requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("template-creation");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { allowBundled: ["create-template"] } },
+    });
+
+    expect(snapshot.prompt).toContain("<name>create-template</name>");
+  });
+
+  it("discovers and reads the bundled creative workflow for ordinary design requests", async () => {
+    const workspaceDir = await fixtureSuite.createCaseDir("creative-project");
+    const snapshot = await buildSnapshot(workspaceDir, {
+      bundledSkillsDir: path.resolve("skills"),
+      config: { skills: { load: { watch: false } } },
+    });
+    const installed = prepareInstalledSkillCatalog({ snapshot, workspaceDir });
+
+    for (const query of [
+      "Rebrand our community using the existing project artwork and reference posters",
+      "Design social-media assets and a launch poster from our visual identity",
+    ]) {
+      const found = await searchInstalledSkills(installed, query, 3);
+      expect(
+        found.skills.map((skill) => skill.name),
+        query,
+      ).toContain("creative-project");
+    }
+
+    const location = path.resolve("skills/creative-project/SKILL.md");
+    expect(await readInstalledSkill(installed, "creative-project")).toEqual({
+      name: "creative-project",
+      location,
+      content: await fs.readFile(location, "utf8"),
+    });
+  });
+
   it("keeps custodian skills absent from every non-custodian discovery surface", async () => {
     const workspaceDir = await fixtureSuite.createCaseDir("custodian-gate");
     for (const name of CUSTODIAN_SKILL_NAMES) {

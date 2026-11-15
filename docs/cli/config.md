@@ -661,6 +661,8 @@ instance automatically. A plugin's narrower restart policy or
 describes expected application; it is not a receipt from a running Gateway.
 See [Config hot reload](/gateway/configuration/hot-reload).
 
+When a running Gateway commits the write and it moves a configured model consumer to another billing route (metered API key, subscription/OAuth or token profile, or a CLI runtime's own credentials), the CLI prints the Gateway's warning on stderr. Each warning names the consumer path, the model, and the old and new route. The `config.set`, `config.patch`, and `config.apply` Gateway methods return the same lines as `billingRouteWarnings` on success and write them to the Gateway log. Offline writes (no running Gateway) do not compare billing routes.
+
 Successful `config set` or `config unset` operations that produce no effective config diff print `No change` and leave the JSON5 file byte-for-byte untouched. A `config unset` target that is absent from the authored config exits with status 1 and also leaves the file untouched. Setting an absent key to a value equal to its runtime default is still an authored change and persists the explicit value.
 
 Model references are normalized before a mutation is saved. Core agent model references do not require plugin discovery; provider catalog model IDs reuse compatible prepared plugin metadata or load their manifest normalization policies on demand.

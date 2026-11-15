@@ -12,15 +12,10 @@ import {
 } from "./run-end-lifecycle.js";
 import type { WorktreeRemovalDeferral } from "./types.js";
 
-export async function removalDeferralReason(error: unknown): Promise<string | undefined> {
-  const { OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX } =
-    await import("../../gateway/worker-environments/workspace-manifest-comparison.js");
+export function removalDeferralReason(error: unknown): string | undefined {
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
     if (cause instanceof GitCommandTimeoutError) {
       return "Git removal timed out; cleanup deferred";
-    }
-    if (cause.message.startsWith(OVERSIZED_WORKSPACE_TOTAL_ERROR_PREFIX)) {
-      return "Workspace snapshot exceeds its byte limit; cleanup deferred";
     }
   }
   return undefined;

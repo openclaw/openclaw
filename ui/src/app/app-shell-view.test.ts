@@ -424,7 +424,7 @@ it("keeps one sidebar through drawer and settings takeover transitions", async (
 
   owner.routeState = { routeId: "appearance" };
   refresh();
-  expect(query("openclaw-app-sidebar")).toBeNull();
+  expect(query("openclaw-app-sidebar")).toBe(sidebar);
   expect(owner.navigationSidebar).toBe(sidebar);
 
   owner.routeState = { routeId: "chat" };

@@ -226,7 +226,12 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         catalog,
         currentLayout,
         Boolean(panelControls),
-        ...panelDefinitions.flatMap(({ slot, label, available }) => [slot, label, available]),
+        ...panelDefinitions.flatMap(({ slot, label, icon, available }) => [
+          slot,
+          label,
+          icon,
+          available,
+        ]),
         i18n.getLocale(),
       ],
       () => {

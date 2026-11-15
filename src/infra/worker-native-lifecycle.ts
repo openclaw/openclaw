@@ -29,13 +29,14 @@ import {
 import { createCpuTrackedWorker, receiveWorkerMemoryPort } from "./worker-cpu.js";
 import { observeWorkerMessage, workerMessagePayloadBytes } from "./worker-message-metrics.js";
 import { NativeWorker } from "./worker-native-handle.js";
-import type {
-  NativeWorkerReply,
-  NativeWorkerRuntime,
-  NativeWorkerResourceDescriptor,
-  NativeWorkerResourceConnection,
-  NativeWorkerTaskPorts,
-  RetainedNativeWorker,
+import {
+  NATIVE_WORKER_LIFETIMES_KEY,
+  type NativeWorkerReply,
+  type NativeWorkerRuntime,
+  type NativeWorkerResourceDescriptor,
+  type NativeWorkerResourceConnection,
+  type NativeWorkerTaskPorts,
+  type RetainedNativeWorker,
 } from "./worker-native-lifecycle.types.js";
 import { nativePortIsOpen } from "./worker-native-port.js";
 
@@ -79,7 +80,7 @@ type NativeSource = RetainedNativeWorkerSource & {
 };
 
 const lifetime = resolveGlobalSingleton(
-  Symbol.for("openclaw.nativeWorkerLifetimes"),
+  NATIVE_WORKER_LIFETIMES_KEY,
   (): {
     nextId: number;
     sources: WeakMap<RuntimeWorkerGeneration, NativeSource>;

@@ -16,7 +16,8 @@
   font-size: 20px;
 }
 
-.model-setup-wizard h2 {
+.model-setup-wizard .oc-dialog__title,
+.model-setup-wizard .model-setup-wizard__success-title {
   margin: 0;
   font-size: var(--overlay-modal-title-size);
 }
@@ -46,10 +47,6 @@
 
 .model-setup__loading-section--sign-in .model-setup__loading-row {
   min-height: 68px;
-}
-
-.model-setup__loading-intro {
-  margin: 0 0 12px;
 }
 
 .model-setup__loading-icon,
@@ -120,10 +117,6 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
-}
-
-.model-setup__empty > p {
-  margin: 0 0 12px;
 }
 
 .model-setup__recommendations {
@@ -407,12 +400,17 @@
   outline: none;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body {
+.model-setup-wizard--auth .model-setup-wizard__body,
+.model-setup-wizard--auth .wizard-step__form {
   display: flex;
   flex-direction: column;
 }
 
-.model-setup-wizard--auth .model-setup-wizard__body > .wizard-step__actions:last-child {
+.model-setup-wizard--auth .wizard-step__form {
+  flex: 1;
+}
+
+.model-setup-wizard--auth .wizard-step__actions:last-child {
   margin-top: auto;
 }
 

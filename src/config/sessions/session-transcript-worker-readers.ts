@@ -1,23 +1,25 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import type { WorkerTaskResponse } from "../../infra/worker-task-pool.types.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { CombinedSessionStoreTopologyRequest } from "./combined-store.types.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
+import { withSessionCompactionSource } from "./session-compaction-source.js";
 import { decodeSessionTranscriptWorkerReadError } from "./session-history-worker-errors.js";
 import {
   measureSessionStoreTargetInventoryInputBytes,
   type SessionStoreReadCandidate,
 } from "./session-store-read-candidates.js";
 import type {
+  SessionStoreTargetPreparationRequest,
   SessionStoreTargetReadRequest,
   SessionStoreTargetReadResult,
-  SessionStoreTargetInventoryRequest,
 } from "./session-store-target-inventory.js";
+import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import { getSessionTranscriptHydrationCaller } from "./session-transcript-hydration-caller.js";
 import type { SessionTranscriptHydrationChunk } from "./session-transcript-hydration.types.js";
 import {
   MAX_SESSION_ROW_FACTS_KEYS,
+  type SessionHistoryWorkerRequestRunner,
   type SessionHistoryWorkerInput,
   type SessionHistoryWorkerDatabase,
   type SessionHistoryWorkerPreparedInput,
@@ -25,18 +27,6 @@ import {
 } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import type { InternalSessionEntry } from "./types.js";
-
-export type SessionHistoryWorkerRequestRunner = <
-  Request extends SessionHistoryWorkerPreparedInput,
-  TResult,
->(
-  prepare: () => Request,
-  inputBytes: number,
-  receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
-  signal?: AbortSignal,
-  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  timeoutMs?: number,
-) => Promise<TResult>;
 
 type Readers = Omit<SessionHistoryWorkerDatabase, "assertCurrent">;
 type ReaderContext = { runRequest: SessionHistoryWorkerRequestRunner };
@@ -105,6 +95,14 @@ function reader<Input extends object, Request extends SessionHistoryWorkerPrepar
   };
 }
 const readers: Readers & ThisType<ReaderContext> = {
+  readAgentToolUsage: reader(
+    (input) => ({ kind: "agent-tool-usage", ...input }),
+    (value) => value.status,
+  ),
+  readAgentToolUsageImport: reader(
+    (input) => ({ kind: "agent-tool-usage-import", ...input }),
+    (value) => value.scan,
+  ),
   readTrajectoryEvents: reader(
     (input) => ({ kind: "trajectory-events", ...input }),
     (value) => value.events,
@@ -122,7 +120,7 @@ const readers: Readers & ThisType<ReaderContext> = {
       (value) => value.plan,
       options.signal,
       undefined,
-      options.timeoutMs,
+      { timeoutMs: options.timeoutMs },
     );
   },
   readCleanup: reader(
@@ -139,6 +137,10 @@ const readers: Readers & ThisType<ReaderContext> = {
   ),
   readVisibleDelta: reader(
     (input) => ({ kind: "transcript-visible-delta", ...input }),
+    (value) => value.result,
+  ),
+  readReplayGroups: reader(
+    (input) => ({ kind: "transcript-replay-groups", ...input }),
     (value) => value.result,
   ),
   readSessionMemoryCapture: reader(
@@ -314,11 +316,16 @@ const readers: Readers & ThisType<ReaderContext> = {
   async run(prepare, inputBytes) {
     return this.runRequest(prepare, inputBytes, (value) => value);
   },
+  withCompactionSource(input, consume, signal, timeoutMs) {
+    return withSessionCompactionSource(this.runRequest, input, consume, signal, timeoutMs);
+  },
   async readTranscript(input, signal) {
     const caller = input.caller ?? getSessionTranscriptHydrationCaller();
     const events: TranscriptEvent[] = [];
     const eventJson: string[] | undefined = input.includeEventJson ? [] : undefined;
-    const eventSeqs: number[] | undefined = input.includeEventJson ? [] : undefined;
+    const streamSelection = input.limits && "compaction" in input.limits && input.limits.compaction;
+    const eventSeqs: number[] | undefined =
+      input.includeEventJson || streamSelection ? [] : undefined;
     const parts: Uint8Array[] = [];
     let decoder: TextDecoder | undefined;
     const receiveChunk = (raw: unknown) => {
@@ -352,6 +359,28 @@ const readers: Readers & ThisType<ReaderContext> = {
         if (parts.length !== 0 || events.length !== value.eventCount) {
           throw new Error("Session history worker returned an incomplete transcript");
         }
+        if (value.kind === "streamed-bounded") {
+          const bySequence = new Map(eventSeqs!.map((seq, index) => [seq, events[index]!]));
+          if (
+            bySequence.size !== value.eventCount ||
+            new Set(value.sequences).size !== value.eventCount ||
+            value.sequences.some((seq) => !bySequence.has(seq))
+          ) {
+            throw new Error("Session history worker returned an incomplete selected transcript");
+          }
+          // SQL streams physical order; the semantic window can inject a later boundary
+          // before retained earlier entries, and a migrated header always comes first.
+          return {
+            kind: "bounded",
+            snapshot: {
+              ...value.snapshot,
+              events: value.sequences.map((seq) => bySequence.get(seq)!),
+            },
+            residentRows: value.residentRows,
+            ...(value.transcript ? { transcript: value.transcript } : {}),
+            ...(value.compaction ? { compaction: value.compaction } : {}),
+          };
+        }
         return {
           kind: "full",
           snapshot: {
@@ -362,7 +391,7 @@ const readers: Readers & ThisType<ReaderContext> = {
         };
       },
       signal,
-      input.limits ? undefined : receiveChunk,
+      !input.limits || streamSelection ? receiveChunk : undefined,
     );
   },
   readMaintenance: reader(
@@ -401,13 +430,15 @@ const readers: Readers & ThisType<ReaderContext> = {
     (input) => ({ kind: "session-reactions", ...input }),
     (value) => value.reactions,
   ),
-  async readExactEntries(input, signal) {
+  async readExactEntries({ pointRead, ...input }, signal) {
     const captured = { ...input, env: captureSessionTranscriptStorageEnvironment(input.env) };
     return this.runRequest(
       () => ({ kind: "session-exact-entries", ...captured }),
       JSON.stringify(captured).length * 2,
       shareSummaryRowStrings,
       signal,
+      undefined,
+      { pointRead },
     );
   },
   async readRowFacts(input) {
@@ -510,8 +541,26 @@ const readers: Readers & ThisType<ReaderContext> = {
 };
 
 // Discovery uses routing settings; model and plugin config stays with host consumers.
-export function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
+function sessionDiscoveryConfig({ agents, acp, session }: OpenClawConfig) {
   return { agents, acp, session };
+}
+
+/** Routing projection and byte accounting belong to the discovery request serializer. */
+export function prepareSessionStoreTargetDiscovery(request: SessionStoreTargetPreparationRequest) {
+  const prepared =
+    "config" in request ? { ...request, config: sessionDiscoveryConfig(request.config) } : request;
+  return {
+    request: prepared,
+    inputBytes:
+      "inventory" in prepared
+        ? measureSessionStoreTargetInventoryInputBytes(prepared)
+        : "observePaths" in prepared && prepared.observePaths.inventory
+          ? measureSessionStoreTargetInventoryInputBytes({
+              ...prepared,
+              paths: prepared.observePaths.inventory.paths,
+            })
+          : JSON.stringify(prepared).length * 2,
+  };
 }
 
 export function createSessionStoreTargetReaders(

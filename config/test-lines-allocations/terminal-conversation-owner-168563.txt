@@ -1,2 +1,0 @@
-27
-# Exercise conversation ownership and ambiguous-owner refusal through terminal.open.

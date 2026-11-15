@@ -141,6 +141,11 @@ export async function captureAnthropicExchange(
     anthropicServerCompaction?: boolean;
     anthropicCompactThreshold?: number;
     contextManagement?: unknown;
+    /** Responses for the first requests, in order, before the scripted success. */
+    leadingResponses?: readonly (() => Response)[];
+    onClaudeCodeVersionRequired?: (version: string) => void;
+    onFastModeUnsupported?: (modelId: string) => void;
+    onPayloadPatch?: (payload: Record<string, unknown>) => void;
   } = {},
 ) {
   const requests: Array<{ payload: Record<string, unknown>; headers: Headers }> = [];
@@ -153,7 +158,8 @@ export async function captureAnthropicExchange(
       throw new Error("Expected an Anthropic request object");
     }
     requests.push({ payload, headers: new Headers(init?.headers) });
-    return createAnthropicResponse(options.events ?? anthropicEvents);
+    const leading = options.leadingResponses?.[requests.length - 1];
+    return leading ? leading() : createAnthropicResponse(options.events ?? anthropicEvents);
   };
   configureAiTransportHost({
     ...getAiTransportHost(),
@@ -180,6 +186,8 @@ export async function captureAnthropicExchange(
     cacheTtlPruning: options.cacheTtlPruning,
     anthropicServerCompaction: options.anthropicServerCompaction,
     anthropicCompactThreshold: options.anthropicCompactThreshold,
+    onClaudeCodeVersionRequired: options.onClaudeCodeVersionRequired,
+    onFastModeUnsupported: options.onFastModeUnsupported,
     onPayload: (payload: unknown) => {
       if (!isRecord(payload)) {
         throw new Error("Expected an Anthropic request object");
@@ -190,6 +198,7 @@ export async function captureAnthropicExchange(
       if (options.contextManagement !== undefined) {
         payload.context_management = options.contextManagement;
       }
+      options.onPayloadPatch?.(payload);
     },
   } as const;
   const [{ streamSimpleAnthropic }, { createAnthropicMessagesTransportStreamFn: createTransport }] =
