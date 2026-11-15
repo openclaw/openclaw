@@ -86,34 +86,35 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   // reachable this way and stays unbilled, matching the retired-copy accounting
   // this replaced. Emission order carries no meaning.
   const activeUserTurn = addPath(tree.leafId);
-  // A branch whose tip was written before this transcript existed was written,
-  // and billed, in the transcript it was copied from. Pre-upgrade rewinds copied
-  // the whole transcript and appended a control displacing the old tip, and the
-  // retained source still bills that tip on its own active path; billing it here
-  // too would count the turn twice. Such a branch keeps the active-path-only
-  // accounting it had before in-place cuts. Later copies name what their source
-  // counted in `inheritedThrough`, which stays authoritative: a copied branch the
-  // source never billed (an inactive sibling) is still this transcript's spend.
+  // v2026.11.3 rewinds and switches copied the whole transcript under a newer
+  // header without `inheritedThrough`, then appended their own control. That
+  // control displaced the source's active tip: the path the retained source
+  // bills, so it is this copy's inherited history. Controls copied along with
+  // the history belong to older transcripts, which billed their branches. A
+  // copied branch the source never billed (a switched-to sibling) stays here.
   const header = records.find((record) => record.type === "session");
   const createdAtMs =
     readInheritedThrough(header).length === 0 ? readTimestampMs(header) : undefined;
-  const billBranch = (leafId: string | null) => {
-    const tipMs =
-      createdAtMs === undefined || leafId === null
-        ? undefined
-        : readTimestampMs(tree.byId.get(leafId)?.entry);
-    if (tipMs === undefined || createdAtMs === undefined || tipMs >= createdAtMs) {
-      addPath(leafId);
-    }
+  const copied = (record: Record<string, unknown> | undefined) => {
+    const writtenAtMs = readTimestampMs(record);
+    return createdAtMs !== undefined && writtenAtMs !== undefined && writtenAtMs < createdAtMs;
   };
+  let sourceTip: string | undefined;
   for (const node of tree.nodes) {
     if (!isSessionTranscriptLeafControl(node.entry) || node.leafId === undefined) {
       // An invalid control changed no navigation, so it displaced no branch.
       continue;
     }
-    billBranch(node.leafId);
-    if (node.displacedLeafId !== undefined) {
-      billBranch(node.displacedLeafId);
+    if (copied(node.entry)) {
+      continue;
+    }
+    const displaced = node.displacedLeafId;
+    if (sourceTip === undefined && displaced && copied(tree.byId.get(displaced)?.entry)) {
+      sourceTip = displaced;
+    }
+    addPath(node.leafId);
+    if (displaced !== undefined) {
+      addPath(displaced);
     }
   }
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
@@ -137,6 +138,7 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   const selection = dropInheritedTranscriptEvents(
     records,
     billed.length === 0 && !tree.hasLeafControl ? [...records] : billed,
+    sourceTip === undefined ? [] : [sourceTip],
   );
   // A transcript the visible-event owner leaves entirely active has no branch to
   // resolve timing against, so it keeps the flat, file-order timing its legacy
@@ -196,8 +198,13 @@ export function selectBilledUsageEntries(
 export function dropInheritedTranscriptEvents<T extends Record<string, unknown>>(
   records: readonly T[],
   selected: T[],
+  /** Inherited tips inferred for a copy written before the header marker existed. */
+  inferredThrough: readonly string[] = [],
 ): T[] {
-  const through = readInheritedThrough(records.find((record) => record.type === "session"));
+  const through = [
+    ...readInheritedThrough(records.find((record) => record.type === "session")),
+    ...inferredThrough,
+  ];
   if (through.length === 0) {
     return selected;
   }

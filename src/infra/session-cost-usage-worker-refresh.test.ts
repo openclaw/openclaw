@@ -310,12 +310,20 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
       window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
     ].reduce((sum, rows) => sum + tokensOf(rows), 0),
   ).toBe(70);
-  // v2026.11.3 copied without `inheritedThrough` under a newer header; the source bills a2.
-  const cut = { type: "leaf", id: "stable-cut", parentId: "a2", targetId: "a1" };
-  const stableCopy = [createSessionTranscriptHeader(), ...branchedSource().slice(1), cut];
-  expect(tokensOf(window("v2026.11.3-source", [], [])) + tokensOf(stableCopy)).toBe(40);
+  // v2026.11.3 copied without `inheritedThrough`, then displaced the source's tip a2 with its
+  // own control: the source bills that path, a switch copy keeps the sibling a2b it never billed.
+  const stableCopy = (targetId: string, ...leaves: TranscriptEvent[]) => [
+    createSessionTranscriptHeader(),
+    ...branchedSource().slice(1),
+    { type: "leaf", id: "stable", parentId: "a2", targetId, timestamp: new Date().toISOString() },
+    ...leaves,
+  ];
+  const rewound = { type: "leaf", id: "rewound", parentId: "stable", targetId: "a1" };
+  expect([stableCopy("a1"), stableCopy("a2b"), stableCopy("a2b", rewound)].map(tokensOf)).toEqual([
+    0, 40, 40,
+  ]);
   // Rewinding the marked switch copy in place keeps its own a2b, which its source never billed.
-  const upgraded = [switchLeaf, { ...cut, id: "upgraded-cut", parentId: "97c81933" }];
+  const upgraded = [switchLeaf, { ...rewound, parentId: "97c81933" }];
   expect(tokensOf(window("source", [], [])) + tokensOf(window("c", ["a2"], upgraded))).toBe(70);
 });
 
