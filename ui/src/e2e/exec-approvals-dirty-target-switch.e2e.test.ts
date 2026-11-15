@@ -107,19 +107,6 @@ suite.define(() => {
           )
           .toBe(true);
         expect(await gateway.getRequests("exec.approvals.set")).toHaveLength(0);
-        if (await discard.isVisible()) {
-          await page
-            .getByRole("dialog", { name: "Discard unsaved approval changes?", exact: true })
-            .evaluate(async (dialog) => {
-              await Promise.allSettled(
-                dialog.getAnimations().map((animation) => animation.finished),
-              );
-              await new Promise<void>((resolve) => {
-                requestAnimationFrame(() => resolve());
-              });
-            });
-        }
-        await page.screenshot({ path: suite.artifactDir + "/reverted-policy-switch.png" });
         expect(await discard.count()).toBe(0);
         await expect.poll(() => hostSelect.inputValue()).toBe("node-alpha");
       }),
