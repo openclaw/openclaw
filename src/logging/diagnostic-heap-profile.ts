@@ -431,8 +431,8 @@ export async function captureDiagnosticHeapProfile(
           disable: (session) => session.post("HeapProfiler.disable"),
         }),
       sanitize: (profile, packageRoot, measurement) =>
-        // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
         sanitizeDiagnosticHeapProfile(
+          // SAFETY: The native protocol includes IDs and samples omitted by Node's declarations.
           profile as SamplingProfile,
           packageRoot,
           {
