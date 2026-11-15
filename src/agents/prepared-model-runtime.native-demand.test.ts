@@ -26,7 +26,6 @@ import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { AgentHarness } from "./harness/types.js";
 import { harnessRegistry, snapshot } from "./model-catalog-fixtures.test-support.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { loadPreparedModelCatalogSnapshot as loadCatalog } from "./prepared-model-catalog.js";
 import {
   getPreparedModelRuntimeSnapshot as readSnapshot,
@@ -485,10 +484,14 @@ it("lets an unrelated plugin reload while native discovery is hung (#199521)", a
     releaseReservation();
     await vi.advanceTimersByTimeAsync(5_000);
     expect((await served).entries).toContainEqual(expect.objectContaining(saved));
-    await vi.advanceTimersByTimeAsync(PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
-    // The deadline ends discovery's hold; the hung call itself keeps its own plugin until it settles.
-    expect(harnessPlugin!.retainedWorkCount).toBe(0);
+    // The harness's own deadline owns its call; its plugin stays held until the call settles.
+    expect(harnessPlugin!.retainedWorkCount).toBe(1);
     expect(harnessPlugin!.ordinaryCallCount).toBe(1);
+    hung.resolve([]);
+    await vi.waitFor(() => {
+      expect(harnessPlugin!.retainedWorkCount).toBe(0);
+      expect(harnessPlugin!.ordinaryCallCount).toBe(0);
+    });
   } finally {
     hung.resolve([]);
     vi.useRealTimers();

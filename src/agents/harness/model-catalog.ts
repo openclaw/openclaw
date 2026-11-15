@@ -1,6 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { raceWithTimeout } from "@openclaw/retry";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog-outcome.js";
 import { copyProviderCatalogOutcomes } from "../../plugins/provider-catalog-result.js";
@@ -18,7 +17,6 @@ import {
 import { resolveConfiguredModelEntries } from "../configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../defaults.js";
 import { enrichHarnessRows, modelCatalogRouteVariantKey } from "../model-catalog-entry.js";
-import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "../model-catalog-timeouts.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../model-catalog.types.js";
 import type { ModelRef } from "../model-ref-shared.js";
 import {
@@ -206,24 +204,13 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     let listedRows: readonly ModelCatalogEntry[];
     let outcomes: readonly ProviderCatalogOutcome[] = [];
     try {
-      // Discovery holds its plugin generation, which defers replacing every plugin in it
-      // (#199521). Stop waiting at the catalog budget; the plugin's own call keeps running.
-      const loaded = await raceWithTimeout(
-        harness.loadModelCatalog({
-          config: params.observationConfig ?? params.cfg,
-          agentId: params.agentId,
-          agentDir: params.agentDir,
-          workspaceDir: params.workspaceDir,
-          configuredModelRefs,
-        }),
-        PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
-        () => {
-          throw new Error(
-            `${runtime} model catalog discovery timed out after ${PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS / 1000}s`,
-          );
-        },
-        { ref: false },
-      );
+      const loaded = await harness.loadModelCatalog({
+        config: params.observationConfig ?? params.cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        configuredModelRefs,
+      });
       // v2026.9.5 plugins return plain rows; structured results also own discovery outcomes.
       if (isCatalogRowList(loaded)) {
         listedRows = loaded;
