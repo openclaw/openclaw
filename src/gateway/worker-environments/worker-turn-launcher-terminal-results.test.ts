@@ -86,11 +86,8 @@ function recoveringWorker(options: { beforeAck?: () => Promise<unknown>; retry?:
       const leafId = await completed.appendMessageAsync(completedWorkerMessage());
       return fx.acknowledgeCompletedWorkerTurn(request.turnClaim, leafId);
     }),
-    // Refresh input before dispatch; exercise failure only when collecting the completed turn.
     reconcileWorkspace: vi
-      .fn<WorkerTunnelHandle["reconcileWorkspace"]>(
-        options.retry ? fx.reconcileUnchangedLocalWorkspace : fail,
-      )
+      .fn(options.retry ? fx.reconcileUnchangedLocalWorkspace : fail)
       .mockImplementationOnce(fx.reconcileUnchangedLocalWorkspace)
       .mockImplementationOnce(fail),
   });

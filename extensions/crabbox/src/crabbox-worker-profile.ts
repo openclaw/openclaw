@@ -4,6 +4,7 @@ import {
   WorkerProviderError,
   type WorkerMachineOption,
   type WorkerProfile,
+  type WorkerRetentionPolicy,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { isSecretRef, isValidSecretRef } from "openclaw/plugin-sdk/secret-input";
 import type { SecretRef } from "openclaw/plugin-sdk/secret-ref-runtime";
@@ -14,11 +15,13 @@ import {
 import { CRABBOX_HEARTBEAT_TIMEOUT_MS } from "./crabbox-worker-timeouts.js";
 
 const PROFILE_KEYS = new Set([
+  "azureSandboxDiskId",
   "binary",
   "class",
   "desktop",
   "idleTimeout",
   "provider",
+  "runSetupScript",
   "setup",
   "setupEnv",
   "setupSecrets",
@@ -43,6 +46,7 @@ const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
 };
 
 type CrabboxProfile = {
+  azureSandboxDiskId?: string;
   binary?: string;
   class?: string;
   desktop?: boolean;
@@ -191,6 +195,15 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     );
   }
   const setupSecrets = parseCrabboxSetupSecrets(profile.setupSecrets);
+  const azureSandboxDiskId = nonEmptyString(profile.azureSandboxDiskId);
+  if (
+    profile.azureSandboxDiskId !== undefined &&
+    (provider !== "azure-sandbox" || !azureSandboxDiskId || azureSandboxDiskId.length > 256)
+  ) {
+    throw new WorkerProviderError(
+      "Crabbox Azure Sandbox disk ID requires an azure-sandbox profile and a non-empty string of at most 256 characters",
+    );
+  }
   const desktop = profile.desktop;
   if (desktop !== undefined && typeof desktop !== "boolean") {
     throw new WorkerProviderError("Crabbox profile desktop must be a boolean");
@@ -205,6 +218,7 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
   return {
+    ...(azureSandboxDiskId ? { azureSandboxDiskId } : {}),
     binary,
     class: machineClass,
     desktop,
@@ -225,13 +239,35 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
 }
 
 /** Existing pre-egress leases retain inspection/release, never new setup or capture. */
-export function parseCrabboxCleanupProfile(profile: WorkerProfile): CrabboxProfile {
+export function parseCrabboxCleanupProfile(
+  profile: Parameters<typeof parseCrabboxProfile>[0],
+): CrabboxProfile {
   const { setupEnv: retiredSetupEnv, ...settings } = profile;
   const parsed = parseCrabboxProfile(settings);
   if (retiredSetupEnv !== undefined) {
     parsed.warmImage = false;
   }
   return parsed;
+}
+
+export function isReservedCrabboxSetupSecretName(name: string): boolean {
+  return (
+    [
+      "CRABBOX_ENV_ALLOW",
+      "HOME",
+      "PATH",
+      "LANG",
+      "NODE_EXTRA_CA_CERTS",
+      "SSL_CERT_FILE",
+      "CURL_CA_BUNDLE",
+      "GIT_SSL_CAINFO",
+      "REQUESTS_CA_BUNDLE",
+      "NODE_USE_ENV_PROXY",
+      "CRABBOX_SETUP_PROXY",
+    ].includes(name) ||
+    /^(?:https?|all|no)_proxy$/iu.test(name) ||
+    name.startsWith("OPENCLAW_")
+  );
 }
 
 export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupSecrets"] {
@@ -252,23 +288,7 @@ export function parseCrabboxSetupSecrets(value: unknown): CrabboxProfile["setupS
         "Crabbox profile setupSecrets keys must be valid POSIX environment variable names",
       );
     }
-    if (
-      [
-        "CRABBOX_ENV_ALLOW",
-        "HOME",
-        "PATH",
-        "LANG",
-        "NODE_EXTRA_CA_CERTS",
-        "SSL_CERT_FILE",
-        "CURL_CA_BUNDLE",
-        "GIT_SSL_CAINFO",
-        "REQUESTS_CA_BUNDLE",
-        "NODE_USE_ENV_PROXY",
-        "CRABBOX_SETUP_PROXY",
-      ].includes(name) ||
-      /^(?:https?|all|no)_proxy$/iu.test(name) ||
-      name.startsWith("OPENCLAW_")
-    ) {
+    if (isReservedCrabboxSetupSecretName(name)) {
       throw new WorkerProviderError(`Crabbox profile setupSecrets name ${name} is reserved`);
     }
     if (!isSecretRef(ref) || !isValidSecretRef(ref) || ref.source !== "store") {
@@ -309,6 +329,7 @@ export function resolveCrabboxWarmImageProfileKey(
     .update(
       JSON.stringify({
         backendProvider: profile.provider,
+        ...(profile.azureSandboxDiskId ? { azureSandboxDiskId: profile.azureSandboxDiskId } : {}),
         // Missing target in persisted Linux keys already means Linux.
         ...(profile.target !== "linux" ? { target: profile.target } : {}),
         setup: profile.setup ?? "",
@@ -336,7 +357,7 @@ export function resolveCrabboxPreparationTarget(
     machineClass ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
-  return (effective.warmImage || Object.keys(effective.setupSecrets ?? {}).length > 0) &&
+  return supportsResolvedCrabboxProjectPreparation(effective) &&
     effective.class &&
     effective.target === "linux"
     ? {
@@ -358,12 +379,28 @@ export function supportsCrabboxProjectPreparation(
     machineClass ?? parsed.class,
     os === undefined ? parsed.target : parseCrabboxOperatingSystem(os),
   );
-  return resolved.warmImage || Object.keys(resolved.setupSecrets ?? {}).length > 0;
+  return supportsResolvedCrabboxProjectPreparation(resolved);
+}
+
+function supportsResolvedCrabboxProjectPreparation(resolved: CrabboxProfile): boolean {
+  return (
+    Boolean(resolved.warmImage) ||
+    Object.keys(resolved.setupSecrets ?? {}).length > 0 ||
+    Boolean(
+      resolved.provider === "azure-sandbox" &&
+      resolved.azureSandboxDiskId &&
+      resolved.target === "linux" &&
+      resolved.class,
+    )
+  );
 }
 
 export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): number | undefined {
   const parsed = parseCrabboxProfile(profile);
-  return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
+  // The pool passes original settings; placement may supply the required machine class.
+  return (parsed.warmImage === false && !parsed.azureSandboxDiskId) || parsed.target !== "linux"
+    ? undefined
+    : parsed.idleTimeoutMs;
 }
 
 // Setup belongs to the configured target's interpreter, not the requested OS.
@@ -470,10 +507,20 @@ export function buildCrabboxAllocationArgs(
   profile: CrabboxProfile,
   leaseId: string,
   slug: string,
+  retention?: WorkerRetentionPolicy,
 ): string[] {
   const args = [
     "--provider",
     profile.provider,
+    ...(retention
+      ? [
+          "--azure-sandbox-retention",
+          "session-disk",
+          "--azure-sandbox-owner-binding",
+          retention.ownerBinding,
+        ]
+      : []),
+    ...(profile.azureSandboxDiskId ? ["--azure-sandbox-disk-id", profile.azureSandboxDiskId] : []),
     "--network",
     "public",
     "--tailscale=false",
@@ -485,7 +532,7 @@ export function buildCrabboxAllocationArgs(
       : []),
     ...(profile.target === "macos" ? ["--target", "macos", "--market", "on-demand"] : []),
     "--ttl",
-    profile.ttl,
+    retention ? `${retention.computeWindowSeconds}s` : profile.ttl,
     "--idle-timeout",
     profile.idleTimeout,
     "--lease-id",

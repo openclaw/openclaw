@@ -5,6 +5,7 @@ import {
   createRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { hasUsableOAuthCredential, type OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { isRecoverableOAuthRefreshFailure } from "openclaw/plugin-sdk/provider-oauth-runtime";
 import { jsonResponse, requestUrl, withProxyFixture } from "openclaw/plugin-sdk/test-env";
@@ -487,14 +488,57 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
-  it("preserves the cached xAI expiry when token lifetimes overflow safe milliseconds", async () => {
+  it.each([
+    {},
+    { expires_in: "120s" },
+    { access_token: createJwt({ exp: OVERFLOW_SECONDS }), expires_in: OVERFLOW_SECONDS },
+    { id_token: createJwt({ exp: 4_000_000_000 }) },
+  ])("rejects refresh responses without an access-token lifetime: %j", async (fields) => {
+    mockResponses(jsonResponse({ access_token: "access-2", ...fields }));
+    await expect(refresh()).rejects.toMatchObject({
+      cause: { message: expect.stringContaining("missing a usable access-token lifetime") },
+    });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("rejects device-code login without an access-token lifetime", async () => {
+    mockLoginFetch(LOGIN_DEVICE_CODE, { access_token: "access-2", refresh_token: "refresh-2" });
+    await expect(runLogin()).rejects.toThrow("missing a usable access-token lifetime");
+  });
+
+  it.each(["expires_in", "JWT exp"])("reuses a refresh until its new %s expiry", async (source) => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_000_000);
+    const fields = source === "expires_in" ? { expires_in: 3600 } : {};
     fetchImpl.mockImplementation(async () =>
       jsonResponse({
-        access_token: createJwt({ exp: OVERFLOW_SECONDS }),
-        expires_in: OVERFLOW_SECONDS,
+        access_token: createJwt({ exp: 4600 }),
+        refresh_token: "refresh-2",
+        ...fields,
       }),
     );
-    expect(await refresh()).toMatchObject({ expires: 100 });
+    let credential: OAuthCredential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 1_060_000,
+      tokenEndpoint: TOKEN_URL,
+    };
+    for (const now of [1_000_000, 1_001_000, 4_299_999]) {
+      vi.setSystemTime(now);
+      if (!hasUsableOAuthCredential(credential)) {
+        credential = await refreshXaiOAuthCredential(credential);
+      }
+      expect(credential.expires).toBe(4_600_000);
+      expect(hasUsableOAuthCredential(credential)).toBe(true);
+    }
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    vi.setSystemTime(4_300_000);
+    expect(hasUsableOAuthCredential(credential)).toBe(false);
+    expect(hasUsableOAuthCredential(credential, { refreshMarginMs: 0 })).toBe(true);
+    vi.setSystemTime(4_600_000);
+    expect(hasUsableOAuthCredential(credential, { refreshMarginMs: 0 })).toBe(false);
   });
 
   it.each(["subscription", "api"] as const)("device-code login from %s setup", async (setup) => {
@@ -609,14 +653,14 @@ describe("xAI OAuth", () => {
       headers: undefined,
       request: { auth: undefined, headers: undefined },
     });
-    expect(savedProvider?.models.map((model) => model.id)).toEqual(["grok-4.6"]);
+    expect(savedProvider?.models?.map((model) => model.id)).toEqual(["grok-4.6"]);
     expect(
       fetchImpl.mock.calls
         .map(([input]) => requestUrl(input))
         .filter((url) => url.endsWith("/models")),
     ).toEqual([MODELS_URL]);
-    expect(savedProvider?.models[0]?.thinkingLevelMap).toBeUndefined();
-    expect(savedProvider?.models[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.thinkingLevelMap).toBeUndefined();
+    expect(savedProvider?.models?.[0]?.compat?.supportedReasoningEfforts).toBeUndefined();
     if (setup === "api") {
       expect(savedProvider?.request?.allowPrivateNetwork).toBe(false);
     }
@@ -779,7 +823,7 @@ describe("xAI OAuth", () => {
       polls += 1;
       return polls < 3
         ? jsonResponse({ error: polls === 1 ? "authorization_pending" : "slow_down" }, 400)
-        : jsonResponse({ access_token: "access", refresh_token: "refresh" });
+        : jsonResponse({ access_token: "access", refresh_token: "refresh", expires_in: 3600 });
     });
     const startedAt = Date.now();
     await login.requested.promise;

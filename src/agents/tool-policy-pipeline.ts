@@ -1,12 +1,12 @@
+import { rememberBoundedKey } from "../infra/dedupe.js";
 /**
  * Applies layered tool policy in runtime resolution order. Policy diagnostics
  * stay tied to the layer that introduced them, while plugin groups are
  * expanded only after unknown core/plugin entries are classified.
  */
-import { isFrozenClawToolAllowPolicy } from "../claws/tool-policy-runtime.js";
-import { rememberBoundedKey } from "../infra/dedupe.js";
+import { isFrozenTemplateToolAllowPolicy } from "../templates/tool-policy-runtime.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { isKnownCoreToolId } from "./tool-catalog.js";
+import { CORE_TOOL_GROUPS, isKnownCoreToolId, isRunGrantedCoreToolId } from "./core-tool-facts.js";
 import { auditToolPolicyFilter } from "./tool-policy-audit.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
 import {
@@ -35,6 +35,12 @@ export type ConfiguredToolPolicySources = Partial<
     ToolPolicySource
   >
 >;
+
+// Built-in groups stay core entries even when the inspected subset lacks every
+// member, such as the bundle-tool pass that runs after core tools are validated.
+function isKnownCoreToolPolicyEntry(entry: string): boolean {
+  return isKnownCoreToolId(entry) || Object.hasOwn(CORE_TOOL_GROUPS, entry);
+}
 
 export type ToolPolicyPipelineStep = {
   policy: ToolPolicyLike | undefined;
@@ -146,7 +152,7 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
     }
 
     const policy = step.policy;
-    const frozenAllow = isFrozenClawToolAllowPolicy(policy);
+    const frozenAllow = isFrozenTemplateToolAllowPolicy(policy);
     if (step.stripPluginOnlyAllowlist) {
       // Plugin-only allowlists are valid for deferred tools; warn only for entries that cannot match.
       // Read declarations per layer because callbacks can update the next layer.
@@ -162,14 +168,15 @@ export function applyToolPolicyPipeline<TTool extends { name: string }>(params: 
             normalizeToolPolicyName(entry),
           ),
         );
-        const gatedCoreEntries = resolved.unknownAllowlist.filter((entry) =>
-          isKnownCoreToolId(entry),
+        const gatedCoreEntries = resolved.unknownAllowlist.filter(
+          (entry) => isKnownCoreToolPolicyEntry(entry) && !isRunGrantedCoreToolId(entry),
         );
         const warnableGatedCoreEntries = step.suppressUnavailableCoreToolWarning
           ? []
           : gatedCoreEntries.filter((entry) => !unavailableCoreWarningAllowlist.has(entry));
         const otherEntries = resolved.unknownAllowlist.filter(
-          (entry) => !isKnownCoreToolId(entry) && !unavailableCoreWarningAllowlist.has(entry),
+          (entry) =>
+            !isKnownCoreToolPolicyEntry(entry) && !unavailableCoreWarningAllowlist.has(entry),
         );
         const warningEntries = [...warnableGatedCoreEntries, ...otherEntries];
         if (warningEntries.length > 0) {

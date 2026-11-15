@@ -22,13 +22,12 @@ const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTrans
 // V8's default young generation lets each idle reader keep ~60 MiB of nursery.
 export const SESSION_TRANSCRIPT_WORKER_LIMITS = {
   maxOldGenerationSizeMb: 512,
-  maxYoungGenerationSizeMb: 32,
+  maxYoungGenerationSizeMb: 16,
 };
 
 export function createSessionTranscriptHistoryPool(
   maxWorkers = resolveWorkerPoolSize("singleton"),
   onRotationComplete?: () => void,
-  options: { prewarmHistory?: true } = {},
 ) {
   let canCloseNativeResources: boolean | undefined;
   const pool = createOwnedWorkerTaskPool<
@@ -54,7 +53,6 @@ export function createSessionTranscriptHistoryPool(
           options: {
             workerData: {
               databaseEngineSelection: getDatabaseEngineSelection(),
-              ...options,
             },
           },
         };
@@ -100,5 +98,15 @@ export type SessionDatabaseWorkerLane = {
   native: boolean;
   pending: number;
   idleTimer?: NodeJS.Timeout;
+  idleSince?: number;
+  idleCleanupListener?: Disposable;
   rotation?: Promise<void>;
+};
+
+export type SessionCostWorkerLane = SessionDatabaseWorkerLane & {
+  pool: WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>;
+};
+
+export type SessionHistoryWorkerLane = SessionDatabaseWorkerLane & {
+  pool: ReturnType<typeof createSessionTranscriptHistoryPool>;
 };

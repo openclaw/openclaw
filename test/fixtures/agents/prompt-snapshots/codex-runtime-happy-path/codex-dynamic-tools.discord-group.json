@@ -10,7 +10,11 @@
           },
           "action": {
             "description": "Select one action. For action=\"send\", provide message or another send payload; fields for other actions do not count as send content.",
-            "enum": ["broadcast", "react", "send"],
+            "enum": [
+              "broadcast",
+              "react",
+              "send"
+            ],
             "type": "string"
           },
           "asDocument": {
@@ -35,7 +39,12 @@
                   "type": "string"
                 },
                 "type": {
-                  "enum": ["image", "audio", "video", "file"],
+                  "enum": [
+                    "image",
+                    "audio",
+                    "video",
+                    "file"
+                  ],
                   "type": "string"
                 }
               },
@@ -171,14 +180,16 @@
             "type": "string"
           }
         },
-        "required": ["action"],
+        "required": [
+          "action"
+        ],
         "type": "object"
       },
       "name": "message",
       "type": "function"
     },
     "sessions_spawn": {
-      "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent. Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, and cloud profiles require `visible=true`. `visible=true`: durable visible supervised child session. Use when the user needs to revisit or steer delegated child work; an explicit request for a new independent session is not child delegation. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Omit `placement` or use `{kind:\"local\"}` for local execution. `{kind:\"profile\",profileId,os?,machineClass?}` selects a configured cloud profile and requires `visible=true` and `worktree=true`. Cloud placement creates first, dispatches, then starts the task; failures retain the child for inspection, never fall back locally. Session listing/addressing obeys `tools.sessions.visibility` (all: all sessions, cross-agent per tools.agentToAgent).  Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
+      "description": "Spawn child session; default `runtime=\"subagent\"`. `mode=\"run\"` one-shot; `mode=\"session\"` persistent/thread-bound only on supporting requester channel. `agentId` targets a configured agent (see agents_list); `model` overrides its model; `cleanup` delete|keep hidden child session; `sandbox` inherit|require. Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner. Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work. This includes substantial, bounded API/service investigations that can be handed off with the needed context and capabilities. For hidden subagents, omit `visible` or set it false, and report results through the parent. Native hidden or visible children support `worktree=true` with optional `projectId`, `worktreeName`, and `worktreeBaseRef`. Hidden `projectId` requires `worktree=true`; name/base always require it. Preparation is asynchronous; the first turn waits for the managed checkout. Hidden `cleanup=delete` uses session snapshot/removal; `keep` retains it. ACP does not support managed-worktree parameters. `group`, `projectGitUrl`, cloud profiles, and paired devices require `visible=true`. `visible=true`: durable visible supervised child session. Use when the user needs to revisit or steer delegated child work; an explicit request for a new independent session is not child delegation. Shows in web UI sidebar; works without UI: announcing runs report back, progress checkable. `group` places it in a custom sidebar group (a new name creates the group); omission or an empty string leaves it ungrouped. Subagent only; omit `mode` (`mode=\"run\"` is also accepted), `thread`, `thinking`, and `lightContext`; `attachments=[]` and omitted/blank `attachAs.mountPath` are accepted, but nonempty attachment staging is unsupported; inherits the caller tool-policy ceiling except for configured deny-only `delegateToolsTo` grants (not tool arguments); select a registered project with `projectId` or a managed GitHub clone with `projectGitUrl` (mutually exclusive with each other and `cwd`); may check out a git worktree via `worktree`/`worktreeName`/`worktreeBaseRef`. When its accepted result includes `sessionUrl`, channel acknowledgements put the session URL on the first line and `Owner: <label>` on the second line. Omit `placement` or use `{kind:\"local\"}` for local execution. `{kind:\"profile\",profileId,os?,machineClass?}` selects a configured cloud profile; `{kind:\"device\",deviceId}` selects one paired device by node ID. Both require `visible=true` and `worktree=true`. Placement creates first, dispatches, then starts the task; an unavailable or incompatible target fails, retains the child for inspection, and never falls back locally. Session listing/addressing obeys `tools.sessions.visibility` (all: all sessions, cross-agent per tools.agentToAgent).  Inherits parent workspace. Native task arrives in the child's initial `[Subagent Task]` message. Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated. A PR/report, long runtime, or isolated worktree alone does not justify a sidebar session. A request for a subagent does not request a separate session. No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn, do non-overlap work; follow the receipt's completion mode. When diagnosing a missing result from an announcing child, use `subagents` to inspect execution and delivery status. Recover existing results or follow up within the still-authorized task; respect intentional cancellation and never loop-poll.",
       "inputSchema": {
         "properties": {
           "agentId": {
@@ -201,7 +212,10 @@
                   "type": "string"
                 },
                 "encoding": {
-                  "enum": ["utf8", "base64"],
+                  "enum": [
+                    "utf8",
+                    "base64"
+                  ],
                   "type": "string"
                 },
                 "mimeType": {
@@ -211,7 +225,10 @@
                   "type": "string"
                 }
               },
-              "required": ["name", "content"],
+              "required": [
+                "name",
+                "content"
+              ],
               "type": "object"
             },
             "maxItems": 50,
@@ -223,26 +240,38 @@
           },
           "cleanup": {
             "description": "Hidden session cleanup; delete snapshots and removes its managed worktree through session cleanup. visible=true always keeps the session.",
-            "enum": ["delete", "keep"],
+            "enum": [
+              "delete",
+              "keep"
+            ],
             "type": "string"
           },
           "completionTarget": {
             "description": "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
-            "enum": ["parent"],
+            "enum": [
+              "parent"
+            ],
             "type": "string"
           },
           "context": {
             "description": "Native: explicit context=\"isolated\" starts clean; context=\"fork\" copies requester transcript and requires the same agent. Omitted context follows configured threadBindings.defaultSpawnContext policy (fork by default) with thread=true; without a thread it is isolated.",
-            "enum": ["isolated", "fork"],
+            "enum": [
+              "isolated",
+              "fork"
+            ],
             "type": "string"
           },
           "cwd": {
-            "description": "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+            "description": "Child working directory. File tools resolve relative paths against cwd. With configuration-only containment, cwd also binds their workspace root. With an explicit restricted permission mode, a hidden native child keeps its inherited recorded root; changing cwd cannot widen it. Required roots, sender restrictions, and sandbox boundaries still apply. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
             "type": "string"
           },
           "cyberAccessProgram": {
             "description": "Child OpenAI cyber Access (Blue=daybreak_blue, Red=daybreak_red). Omit: same-agent, same-model child keeps requester Access. Child run fails if its account/model lacks the program. Subagent only.",
-            "enum": ["standard", "daybreak_blue", "daybreak_red"],
+            "enum": [
+              "standard",
+              "daybreak_blue",
+              "daybreak_red"
+            ],
             "type": "string"
           },
           "expectsCompletionMessage": {
@@ -278,7 +307,10 @@
           },
           "mode": {
             "description": "\"run\" one-shot; \"session\" persistent/thread-bound. Visible sessions accept only omitted/default \"run\" and remain persistent.",
-            "enum": ["run", "session"],
+            "enum": [
+              "run",
+              "session"
+            ],
             "type": "string"
           },
           "model": {
@@ -295,7 +327,9 @@
                     "type": "string"
                   }
                 },
-                "required": ["kind"],
+                "required": [
+                  "kind"
+                ],
                 "type": "object"
               },
               {
@@ -322,11 +356,34 @@
                     "type": "string"
                   }
                 },
-                "required": ["kind", "profileId"],
+                "required": [
+                  "kind",
+                  "profileId"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "deviceId": {
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "pattern": "^\\S(?:.*\\S)?$",
+                    "type": "string"
+                  },
+                  "kind": {
+                    "const": "device",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "deviceId"
+                ],
                 "type": "object"
               }
             ],
-            "description": "Execution placement: omitted or {kind: \"local\"} uses local execution for native and ACP runs. {kind: \"profile\", profileId, os?, machineClass?} selects a configured cloud profile and requires visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after cloud dispatch."
+            "description": "Execution placement: omitted or {kind: \"local\"} uses local execution for native and ACP runs. {kind: \"profile\", profileId, os?, machineClass?} selects a configured cloud profile; {kind: \"device\", deviceId} selects one paired device by its node ID. Both require visible=true and worktree=true. Never supply placeholder selectors. Omitted cloud selectors use profile defaults; the first task starts only after dispatch, and an unavailable or incompatible device fails without running elsewhere."
           },
           "projectGitUrl": {
             "description": "GitHub HTTPS or git@github.com repository URL for a visible session's managed clone; mutually exclusive with projectId and cwd. Local paths and file URLs are not accepted.",
@@ -339,7 +396,9 @@
           },
           "runtime": {
             "description": "Runtime; visible=true and managed worktrees require \"subagent\".",
-            "enum": ["subagent"],
+            "enum": [
+              "subagent"
+            ],
             "type": "string"
           },
           "runTimeoutSeconds": {
@@ -349,7 +408,10 @@
           },
           "sandbox": {
             "description": "\"inherit\" parent sandbox policy; \"require\" fails unless child is sandboxed.",
-            "enum": ["inherit", "require"],
+            "enum": [
+              "inherit",
+              "require"
+            ],
             "type": "string"
           },
           "task": {
@@ -389,7 +451,9 @@
             "type": "string"
           }
         },
-        "required": ["task"],
+        "required": [
+          "task"
+        ],
         "type": "object"
       },
       "name": "sessions_spawn",

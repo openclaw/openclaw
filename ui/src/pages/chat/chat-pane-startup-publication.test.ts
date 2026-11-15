@@ -41,7 +41,9 @@ it("publishes placement status without admitting another transcript message", as
     startedAt: 1,
     error: "Synthetic placement startup failed",
   });
-  expect(pane.textContent).toContain("Synthetic placement startup failed");
+  await waitForSolid(() =>
+    expect(pane.textContent).toContain("Synthetic placement startup failed"),
+  );
   expect(pane.state.chatMessages).toEqual([]);
 
   publish(null);

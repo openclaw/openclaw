@@ -4,12 +4,12 @@ import { IdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
-import { resolveIdentityHue } from "../../lib/identity-avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { participantPalette } from "../../lib/reactive/participant-palette.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "../chat/components/chat-author-avatar.ts";
 import { hasUserFileAttachments } from "../chat/components/chat-message-attachments.ts";
 import { AssistantAttachments, MessageImages } from "../chat/components/chat-message-deferred.tsx";
-import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
+import { projectMessageMedia } from "../chat/components/chat-message-media-projection.ts";
 import { MessageJson, MessageMarkdown } from "../chat/components/chat-message-text-view.tsx";
 import { ChatWorkingIndicator } from "../chat/components/chat-working-indicator.tsx";
 import type { NewSessionBodyProps } from "./draft-body.solid.tsx";
@@ -23,27 +23,21 @@ export function NewSessionSubmission(props: {
 }) {
   const key = "new-session-submission";
   const normalized = createMemo(() => normalizeMessage(props.message));
-  const senderHue = createMemo(() => {
-    const sender = normalized().sender;
-    return sender ? resolveIdentityHue(sender) : null;
-  });
   const media = createMemo(() => projectMessageMedia(props.message, normalized().content));
   const hasUserFiles = createMemo(() => hasUserFileAttachments(media().attachments));
   const markdown = createMemo(() => resolveMessageDisplayMarkdown(props.message, normalized()));
   const json = createMemo(() => parseMarkdownJson(markdown()));
   const imageOptions = createMemo(() => ({ onOpenImage: props.onOpenImage }));
   const textOptions = { role: "user", isStreaming: false };
-  const markdownOptions = { codeBlockChrome: "none" } as const;
-  // Keep Markdown passive until Chat mounts its interaction owners. Uploaded
-  // images have their own lightbox handler and remain interactive while pending.
+  // Keep Markdown passive until Chat mounts its interaction owners; fences use
+  // Chat's markup so their rows do not reflow at handoff. Uploaded images have
+  // their own lightbox handler and remain interactive while pending.
+  const markdownOptions = { codeBlockChrome: "none", codeBlockInteraction: "wrap" } as const;
   return (
     <div class="new-session-page__starting chat-thread-inner">
       <div
-        class={[
-          "chat-group user chat-group--with-footer",
-          { "chat-group--sender-tint": senderHue() !== null },
-        ]}
-        style={senderHue() === null ? undefined : `--chat-sender-hue: ${senderHue()}`}
+        class="chat-group user chat-group--with-footer"
+        style={participantPalette.read()?.style(null)}
         data-chat-row-key={key}
       >
         <Show when={props.avatarPlacement === "gutter" ? normalized().sender : undefined}>

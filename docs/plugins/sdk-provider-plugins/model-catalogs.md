@@ -53,7 +53,10 @@ transport SecretRefs and applies its existing private-network, proxy, and TLS po
 The authored configuration keeps its original secret references.
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
-single-provider helper into shared discovery:
+single-provider helper into shared discovery. Bundled providers with such an
+API must list models live, through this option or a `buildProvider` that
+discovers, so the account's listing decides which models appear and new vendor
+models need no OpenClaw release:
 
 ```typescript
 catalog: {
@@ -80,7 +83,7 @@ behaviors:
 | Endpoint       | The default URL is `models` relative to the effective provider `baseUrl`, including an operator override when `allowExplicitBaseUrl` is enabled. Use `endpointPath` for another relative path. Use `endpointUrl: { url, requireBaseUrl }` only for a fixed vendor URL; discovery is skipped unless the effective base URL still equals `requireBaseUrl`, so a custom proxy credential is not sent to the vendor.                                                                                                                                                                                                |
 | Network limits | Fetches use OpenClaw's SSRF guard, one 5-second timeout budget across pagination, a 4 MiB response limit per page, and a 50-page limit. Cross-origin pagination links are rejected; credentials are removed after a cross-origin redirect.                                                                                                                                                                                                                                                                                                                                                                      |
 | Cache          | Successful, non-empty catalogs are cached for 60 seconds by provider, endpoint, and resolved credential. Empty or unusable results are not cached.                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; every other listed chat ID becomes a conservative text/chat row, so new models appear without an OpenClaw release. Disabled, archived, deprecated, past-`shutdown_date`, explicitly non-chat, embedding, reranking, moderation, speech, transcription, realtime, audio, image, video, and legacy completions rows are excluded, including static IDs. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                   |
+| Filtering      | The listing decides which models exist. Exact live IDs keep their trusted static metadata; new IDs require declared chat support or text output. Disabled, archived, deprecated, past-`shutdown_date`, and explicitly non-chat rows are excluded, including static IDs. IDs without either a catalog declaration or affirmative live capabilities are hidden. Use `readRows` only to select rows from a nonstandard response envelope; provider-specific model semantics still belong in a custom catalog.                                                                                                      |
 | Admission      | Optional. Set `acceptUnknownModel: ({ id, record }) => boolean` when your request shaping is model-version specific, so discovery cannot publish a model you cannot yet build a valid request for. It is called only for IDs your static catalog does not already publish; known IDs bypass it and keep their published metadata. Return `false` to drop the row. Providers that omit it keep the previous behavior unchanged. Prefer comparing the vendor's advertised capabilities against your own contract checks over a hand-maintained model list, and reject the row when it carries no capability data. |
 | Failure        | Live discovery is advisory. Auth, network, timeout, pagination, parsing, empty-catalog, and filtering failures return the provider-owned static seed instead of removing the provider.                                                                                                                                                                                                                                                                                                                                                                                                                          |
 
@@ -94,12 +97,21 @@ response-cache entries only for the keys acquired by that request. Repeated
 reads within the same acquisition share the refreshed value; concurrent callers
 share pending work. Ordinary acquisition keeps its existing cache lifetime.
 
+Setup menus also use the projected chat capability. For example, oMLX's declared
+`llm`/`vlm` types and Bifrost's architecture output modalities qualify chat rows.
+An older server that lists only unfamiliar IDs must supply capability metadata
+or use an explicitly configured chat model; an ID alone does not establish support.
+Provider-specific capability trees, such as Anthropic's Messages thinking and
+effort metadata, are translated by the provider projection before shared admission.
+
 Passive model-list reads that wait for a configuration replacement resume against
 the newly committed catalog and configuration. They do not retry with the retired
 configuration. Exact runtime acquisitions remain bound to their requested configuration.
 
-Bundled providers set `discoveryMode: "strict"` in their catalog options.
-This code option keeps successful empty results empty and reports failed
+Bundled providers also set `discoveryMode: "strict"` in their catalog options.
+It changes only how discovery reports results and never enables discovery:
+with a static or manifest-backed `buildProvider` and no `liveModelDiscovery`
+or custom `run`, the provider serves its static rows. This code option keeps successful empty results empty and reports failed
 acquisition through `ProviderCatalogResult.outcomes`, rather than returning
 seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 `auth-rejected` outcome; other acquisition failures produce `unavailable`.
@@ -218,8 +230,16 @@ provider-auth headers, cache admission, and static fallback.
 Use `buildLiveModelProviderConfig` when the plugin builds the provider config
 itself. Without `projectRows`, the listing decides which models exist: every
 listed chat model is published, static `models` rows only enrich matching IDs,
-and non-chat rows are filtered by the same rules as `liveModelDiscovery`. To
-restrict the list, pass `readModelId(row)` and return `undefined` for rows the
+and non-chat rows are filtered by the same rules as `liveModelDiscovery`.
+Declared non-text output (including `modalities.output`) or disabled chat support
+excludes a model from chat choices. A new ID requires declared text output or
+chat support; IDs without capability metadata require an exact catalog match.
+Saved selections remain pinned when discovery excludes them from chat; the next
+turn asks the user to pick another model before making an inference request.
+Discovery retains these rows with `inference.chat: false`; projections must
+preserve that route-bound fact so chat listings hide them and saved pins keep a
+useful diagnosis.
+To restrict the list, pass `readModelId(row)` and return `undefined` for rows the
 provider does not support; the returned string also becomes the model ID. Pass
 `projectRows` when the live API publishes richer model metadata:
 
@@ -326,6 +346,12 @@ receive an optional `signal`. Shutdown and plugin/config replacement abort it.
 Stop awaited acquisition when it aborts and finish resource cleanup before the
 hook settles. OpenClaw discards cancelled results and joins cleanup before a
 replacement can acquire the same agent resources.
+
+A native-login synthetic auth result can include optional `nativeAuth.display`
+metadata: `kind: "subscription" | "api" | "native"` and a validated `plan` label.
+Use only non-secret facts reported by the native runtime. This display metadata
+travels with the prepared auth generation; it does not grant authority, create
+a saved profile, or change the native runtime's token/refresh ownership.
 
 For a separate authoritative metadata feed, the same
 `provider-catalog-live-runtime` subpath exposes `ProviderCatalogSnapshot`:

@@ -1,50 +1,49 @@
 import type { Static } from "typebox";
+import {
+  ErrorCodes,
+  SETUP_ADMISSION_BUSY_ERROR_CODE,
+  TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE,
+  WIZARD_NOT_FOUND_ERROR_CODE,
+} from "./gateway-error-codes.js";
+import { MISSING_SCOPE_ERROR_CODE, type MissingScopeErrorDetails } from "./missing-scope-error.js";
 import { asProtocolRecord } from "./protocol-value-normalization.js";
 import type * as ErrorSchemas from "./schema/error-codes.js";
+
+export { ErrorCodes, type ErrorCode } from "./gateway-error-codes.js";
+export {
+  readMissingScopeError,
+  readMissingScopeErrorDetails,
+  type MissingScopeErrorDetails,
+} from "./missing-scope-error.js";
 
 /** Display projection for an assistant failure without visible reply content. */
 export const GATEWAY_ASSISTANT_ERROR_FALLBACK_TEXT =
   "The agent run failed before producing a reply.";
 
-/** Gateway JSON-RPC style error codes shared by clients and server handlers. */
-export const ErrorCodes = {
-  /** @deprecated Retained for source compatibility; no current server emitter. */
-  NOT_LINKED: "NOT_LINKED",
-  /** Device exists but still needs an explicit pairing approval. */
-  NOT_PAIRED: "NOT_PAIRED",
-  /** @deprecated Retained for source compatibility; no current server emitter. */
-  AGENT_TIMEOUT: "AGENT_TIMEOUT",
-  /** Request payload failed protocol validation or method preconditions. */
-  INVALID_REQUEST: "INVALID_REQUEST",
-  /** Authenticated caller lacks permission for the requested operation. */
-  FORBIDDEN: "FORBIDDEN",
-  /** Approval resolution referenced a missing or expired approval request. */
-  APPROVAL_NOT_FOUND: "APPROVAL_NOT_FOUND",
-  /** Gateway service or required backend is temporarily unavailable. */
-  UNAVAILABLE: "UNAVAILABLE",
-} as const;
-
-/** Closed set of canonical gateway error code strings. */
-export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
+const CRON_JOB_NOT_FOUND = "CRON_JOB_NOT_FOUND";
+const MCP_APP_VIEW_EXPIRED = "MCP_APP_VIEW_EXPIRED";
+const GITHUB_PUBLICATION_SELECTION_REJECTED = "GITHUB_PUBLICATION_SELECTION_REJECTED";
+const CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED = "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED";
+const TEMPLATE_REVIEW_REQUIRED = "TEMPLATE_REVIEW_REQUIRED";
 
 /** Stable discriminants for structured method-level failures. */
 export const GatewayErrorDetailCodes = {
-  CRON_JOB_NOT_FOUND: "CRON_JOB_NOT_FOUND",
-  MISSING_SCOPE: "MISSING_SCOPE",
-  MCP_APP_VIEW_EXPIRED: "MCP_APP_VIEW_EXPIRED",
+  CRON_JOB_NOT_FOUND,
+  MISSING_SCOPE: MISSING_SCOPE_ERROR_CODE,
+  MCP_APP_VIEW_EXPIRED,
   OUTBOUND_DELIVERY_QUEUED: "OUTBOUND_DELIVERY_QUEUED",
   USER_PREFS_LIMIT_EXCEEDED: "USER_PREFS_LIMIT_EXCEEDED",
   SESSION_COMPANION_BUSY: "SESSION_COMPANION_BUSY",
   PROJECT_CLONE_FAILED: "PROJECT_CLONE_FAILED",
   UNKNOWN_AGENT_ID: "UNKNOWN_AGENT_ID",
-  WIZARD_NOT_FOUND: "WIZARD_NOT_FOUND",
-  SETUP_ADMISSION_BUSY: "SETUP_ADMISSION_BUSY",
-  GITHUB_PUBLICATION_SELECTION_REJECTED: "GITHUB_PUBLICATION_SELECTION_REJECTED",
+  WIZARD_NOT_FOUND: WIZARD_NOT_FOUND_ERROR_CODE,
+  SETUP_ADMISSION_BUSY: SETUP_ADMISSION_BUSY_ERROR_CODE,
+  GITHUB_PUBLICATION_SELECTION_REJECTED,
   SESSION_WORKSPACE_RECOVERY_REQUIRED: "SESSION_WORKSPACE_RECOVERY_REQUIRED",
-  TASK_WORKTREE_SOURCE_REQUIRED: "TASK_WORKTREE_SOURCE_REQUIRED",
+  TASK_WORKTREE_SOURCE_REQUIRED: TASK_WORKTREE_SOURCE_REQUIRED_ERROR_CODE,
   TASK_HISTORY_PREVIEW_CAPACITY: "TASK_HISTORY_PREVIEW_CAPACITY",
-  CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED: "CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED",
-  CLAW_REVIEW_REQUIRED: "CLAW_REVIEW_REQUIRED",
+  CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED,
+  TEMPLATE_REVIEW_REQUIRED,
   PENDING_INPUT_NOT_RETIRED: "PENDING_INPUT_NOT_RETIRED",
   OPENCLAW_CONFIG_READONLY: "OPENCLAW_CONFIG_READONLY",
 } as const;
@@ -53,9 +52,6 @@ export const GatewayErrorDetailCodes = {
 export type CronJobNotFoundErrorDetails = Static<
   typeof ErrorSchemas.CronJobNotFoundErrorDetailsSchema
 >;
-
-/** Missing operator-scope details shared by WebSocket and HTTP responses. */
-export type MissingScopeErrorDetails = Static<typeof ErrorSchemas.MissingScopeErrorDetailsSchema>;
 
 export type McpAppViewExpiredErrorDetails = Static<
   typeof ErrorSchemas.McpAppViewExpiredErrorDetailsSchema
@@ -117,8 +113,8 @@ export type ClawHubRiskAcknowledgementRequiredErrorDetails = Static<
   typeof ErrorSchemas.ClawHubRiskAcknowledgementRequiredErrorDetailsSchema
 >;
 
-export type ClawReviewRequiredErrorDetails = Static<
-  typeof ErrorSchemas.ClawReviewRequiredErrorDetailsSchema
+export type TemplateReviewRequiredErrorDetails = Static<
+  typeof ErrorSchemas.TemplateReviewRequiredErrorDetailsSchema
 >;
 
 /** Requested pending inputs that are still queued or held by a settling turn. */
@@ -141,7 +137,7 @@ export type GatewayErrorDetails =
   | SessionWorkspaceRecoveryRequiredErrorDetails
   | TaskWorktreeSourceRequiredErrorDetails
   | ClawHubRiskAcknowledgementRequiredErrorDetails
-  | ClawReviewRequiredErrorDetails
+  | TemplateReviewRequiredErrorDetails
   | PendingInputNotRetiredErrorDetails
   | { code: typeof GatewayErrorDetailCodes.TASK_HISTORY_PREVIEW_CAPACITY }
   | { code: typeof GatewayErrorDetailCodes.OPENCLAW_CONFIG_READONLY };
@@ -153,23 +149,23 @@ export function readClawHubRiskAcknowledgementRequiredError(
   const details = asProtocolRecord(record?.details);
   const warning = typeof details?.warning === "string" ? details.warning.trim() : "";
   return record?.code === ErrorCodes.INVALID_REQUEST &&
-    details?.code === GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
+    details?.code === CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED &&
     warning
-    ? { code: GatewayErrorDetailCodes.CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
+    ? { code: CLAWHUB_RISK_ACKNOWLEDGEMENT_REQUIRED, warning }
     : null;
 }
 
-export function readClawReviewRequiredError(error: unknown): ClawReviewRequiredErrorDetails | null {
+export function readTemplateReviewRequiredError(
+  error: unknown,
+): TemplateReviewRequiredErrorDetails | null {
   const record = asProtocolRecord(error);
   const details = asProtocolRecord(record?.details);
   return record?.code === ErrorCodes.INVALID_REQUEST &&
-    details?.code === GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED &&
+    details?.code === TEMPLATE_REVIEW_REQUIRED &&
     (details.kind === "plugin" || details.kind === "skill")
-    ? { code: GatewayErrorDetailCodes.CLAW_REVIEW_REQUIRED, kind: details.kind }
+    ? { code: TEMPLATE_REVIEW_REQUIRED, kind: details.kind }
     : null;
 }
-
-const LEGACY_MISSING_SCOPE_PATTERN = /\bmissing scope:\s*([a-z0-9._-]+)/i;
 
 export function readGitHubPublicationSelectionRejectedError(
   error: unknown,
@@ -177,7 +173,7 @@ export function readGitHubPublicationSelectionRejectedError(
   const record = asProtocolRecord(error);
   const details = asProtocolRecord(record?.details);
   return record?.code === ErrorCodes.UNAVAILABLE &&
-    details?.code === GatewayErrorDetailCodes.GITHUB_PUBLICATION_SELECTION_REJECTED &&
+    details?.code === GITHUB_PUBLICATION_SELECTION_REJECTED &&
     Object.keys(details).length === 2 &&
     typeof details.idempotencyKey === "string" &&
     details.idempotencyKey.length > 0
@@ -189,67 +185,14 @@ export function readGitHubPublicationSelectionRejectedError(
 export function readCronJobNotFoundError(error: unknown): CronJobNotFoundErrorDetails | null {
   const record = asProtocolRecord(error);
   const details = asProtocolRecord(record?.details);
-  if (details?.code !== GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND) {
+  if (details?.code !== CRON_JOB_NOT_FOUND) {
     return null;
   }
   const jobId = typeof details.jobId === "string" ? details.jobId.trim() : "";
-  return jobId ? { code: GatewayErrorDetailCodes.CRON_JOB_NOT_FOUND, jobId } : null;
-}
-
-/** Reads validated missing-scope details from an untrusted protocol payload. */
-export function readMissingScopeErrorDetails(details: unknown): MissingScopeErrorDetails | null {
-  const record = asProtocolRecord(details);
-  if (record?.code !== GatewayErrorDetailCodes.MISSING_SCOPE) {
-    return null;
-  }
-  const missingScope = typeof record.missingScope === "string" ? record.missingScope.trim() : "";
-  const requiredScopes = Array.isArray(record.requiredScopes)
-    ? record.requiredScopes.map((scope) => (typeof scope === "string" ? scope.trim() : ""))
-    : [];
-  if (!missingScope || requiredScopes.length === 0 || requiredScopes.some((scope) => !scope)) {
-    return null;
-  }
-  return {
-    code: GatewayErrorDetailCodes.MISSING_SCOPE,
-    missingScope,
-    requiredScopes,
-  };
+  return jobId ? { code: CRON_JOB_NOT_FOUND, jobId } : null;
 }
 
 export function isMcpAppViewExpiredError(error: unknown): boolean {
   const record = asProtocolRecord(error);
-  return asProtocolRecord(record?.details)?.code === GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED;
-}
-
-/**
- * Reads a method-level missing-scope failure, preferring structured details.
- * The message fallback keeps clients compatible with gateways predating structured details.
- */
-export function readMissingScopeError(error: unknown): MissingScopeErrorDetails | null {
-  const record = asProtocolRecord(error);
-  if (!record) {
-    return null;
-  }
-  const structured = readMissingScopeErrorDetails(record.details);
-  if (structured) {
-    return structured;
-  }
-  const code =
-    typeof record.gatewayCode === "string"
-      ? record.gatewayCode
-      : typeof record.code === "string"
-        ? record.code
-        : "";
-  if (code !== ErrorCodes.FORBIDDEN && code !== ErrorCodes.INVALID_REQUEST) {
-    return null;
-  }
-  const message = typeof record.message === "string" ? record.message : "";
-  const missingScope = message.match(LEGACY_MISSING_SCOPE_PATTERN)?.[1];
-  return missingScope
-    ? {
-        code: GatewayErrorDetailCodes.MISSING_SCOPE,
-        missingScope,
-        requiredScopes: [missingScope],
-      }
-    : null;
+  return asProtocolRecord(record?.details)?.code === MCP_APP_VIEW_EXPIRED;
 }

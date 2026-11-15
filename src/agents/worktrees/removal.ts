@@ -71,7 +71,7 @@ export async function removeSettledManagedWorktree(
     snapshotRetentionMs: number;
   },
   timing: ReturnType<typeof startGitOperationTiming>,
-  prepareArchive?: (snapshot: string) => Promise<void>,
+  prepareArchive?: () => Promise<(snapshot: string) => Promise<void>>,
 ): Promise<RemoveManagedWorktreeResult> {
   const { env, getConfig, snapshotRetentionMs } = context;
   let params = input;
@@ -161,6 +161,7 @@ export async function removeSettledManagedWorktree(
         killProcessTree: true,
       });
     }
+    const archive = await prepareArchive?.();
     timing?.markRemovalStage("snapshot");
     const retirementName = params.exactState ? `.openclaw-retiring-${randomUUID()}` : undefined;
     let snapshotRef: string | undefined;
@@ -282,7 +283,7 @@ export async function removeSettledManagedWorktree(
       }
     }
     if (snapshot) {
-      await prepareArchive?.(snapshot);
+      await archive?.(snapshot);
     }
     // Pin the completed capture before deletion. Failed or interrupted deletion
     // must never replace it with a snapshot of a partially removed checkout.

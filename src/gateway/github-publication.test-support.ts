@@ -54,6 +54,7 @@ import {
 const mocks = vi.hoisted(() => ({
   matchesIdentity: vi.fn(),
   prepareIdentity: vi.fn(),
+  prepareRepositoryIntegration: vi.fn(),
   runCommand: vi.fn(),
   findWorktree: vi.fn(),
   readWorktree: vi.fn(),
@@ -241,7 +242,11 @@ export function createTestGitHubPublicationRuntime({
   getCommittedRuntimeConfig = currentGitHubPublicationConfig,
   ...params
 }: PublicationFixtureOptions<Parameters<typeof createRuntime>[0]>) {
-  const runtime = createRuntime({ ...params, getCommittedRuntimeConfig });
+  const runtime = createRuntime({
+    prepareRepositoryIntegration: mocks.prepareRepositoryIntegration,
+    ...params,
+    getCommittedRuntimeConfig,
+  });
   onTestFinished(() => runtime.close());
   return { ...runtime, coordinator: withSystemRequesterFixture(runtime.coordinator) };
 }
@@ -254,7 +259,13 @@ export function createTestGitHubPublicationCoordinator(
     placements: createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
   },
 ) {
-  return withSystemRequesterFixture(createCoordinator({ ...params, getCommittedRuntimeConfig }));
+  return withSystemRequesterFixture(
+    createCoordinator({
+      prepareRepositoryIntegration: mocks.prepareRepositoryIntegration,
+      ...params,
+      getCommittedRuntimeConfig,
+    }),
+  );
 }
 
 export const SESSION_KEY = "agent:main:dashboard:publication";
@@ -304,6 +315,19 @@ export function commandResult(stdout = "", code = 0) {
     stdout: Buffer.from(stdout),
     stderr: Buffer.alloc(0),
   };
+}
+
+type CommandOverride = ReturnType<typeof commandResult> | void;
+
+/** Answer or observe selected commands; unanswered ones fall through to the installed transport. */
+export function overrideCommands(
+  override: (argv: string[], input?: string) => CommandOverride | Promise<CommandOverride>,
+) {
+  const fallback = mocks.runCommand.getMockImplementation()!;
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { input?: string }) =>
+      (await override(argv, options?.input)) ?? (await fallback(argv, options)),
+  );
 }
 
 export function seedLocalPublication(
@@ -582,7 +606,7 @@ export function installGitHubPublicationTestHarness(
       account: { accountId: 42, login: "roboclaw-bot", avatarUrl: null },
       env: {
         GH_CONFIG_DIR: "/private/github-profile",
-        GH_TOKEN: undefined,
+        GH_TOKEN: "synthetic-shared-publication-token",
         GITHUB_TOKEN: undefined,
       },
     });
@@ -609,88 +633,22 @@ export function installGitHubPublicationTestHarness(
         worktree: { id: "worktree-1", branch: BRANCH, repoRoot: "/repo" },
       },
     }));
-    const replies: Record<string, [string?, number?]> = {
-      "git symbolic-ref --quiet --short HEAD": [`${BRANCH}\n`],
-      [`git symbolic-ref --quiet refs/heads/${BRANCH}`]: ["", 1],
-      "git rev-parse --verify --quiet MERGE_HEAD": ["", 1],
-      "git rev-parse --verify HEAD^{commit}": [`${OLD_HEAD}\n`],
-      "git show -s --no-show-signature --format=%H%n%T%n%P%n%B HEAD": [
-        `${OLD_HEAD}\n${WORKSPACE_TREE}\n${OLD_HEAD}\nexisting commit\n`,
-      ],
-      "git config --local --includes --bool --get extensions.worktreeConfig": ["", 1],
-      "git rev-parse --git-path info/attributes": [path.join(root, "missing-info-attributes")],
-      "git rev-parse --git-path info/grafts": [path.join(root, "missing-grafts")],
-      "git var GIT_ATTR_GLOBAL": [path.join(root, "missing-global-attributes")],
-      "git var GIT_ATTR_SYSTEM": [path.join(root, "missing-global-attributes")],
-      [`git rev-parse ${BASE_HEAD}^{tree}`]: ["e".repeat(40) + "\n"],
-      "git rev-parse --verify --end-of-options origin/main^{commit}": [`${BASE_HEAD}\n`],
-    };
-    let remotePublished = false;
-    mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
-      commands.push(argv);
-      commandCalls.push({ argv, input: options?.input });
-      const command = argv.join(" ");
-      if (replies[command]) {
-        return commandResult(...replies[command]);
-      }
-
-      if (
-        command.startsWith(
-          "gh api --hostname github.com repos/openclaw/openclaw --jq {fork, default_branch, parent:",
-        )
-      ) {
-        return commandResult('{"fork":false,"default_branch":"main"}\n');
-      }
-      const baseRefPrefix = "gh api --hostname github.com repos/openclaw/openclaw/git/ref/heads/";
-      if (command.startsWith(baseRefPrefix)) {
-        const branch = command.slice(baseRefPrefix.length).split(" --jq", 1)[0];
-        return commandResult(JSON.stringify({ ref: `refs/heads/${branch}`, sha: BASE_HEAD }));
-      }
-
-      if (
-        (argv.includes("--includes") && argv.includes("--get-regexp")) ||
-        (argv[0] === "git" &&
-          argv[1] === "config" &&
-          (argv.includes("--global") || argv.includes("--system")) &&
-          argv.includes("core.attributesFile"))
-      ) {
-        return commandResult("", 1);
-      }
-      if (command.startsWith("git ls-tree -r -z --full-tree ")) {
-        return commandResult();
-      }
-      if (argv.includes("rev-parse") && argv.includes("--git-path") && argv.at(-1) === "index") {
-        return commandResult(syntheticIndex);
-      }
-      if (command.endsWith("write-tree")) {
-        return commandResult(`${WORKSPACE_TREE}\n`);
-      }
-      if (command.startsWith("git commit-tree ")) {
-        return commandResult(`${NEW_HEAD}\n`);
-      }
-
-      if (
-        command.startsWith(
-          "git -c credential.helper= -c credential.helper=!gh auth git-credential ls-remote",
-        )
-      ) {
-        return commandResult(remotePublished ? `${NEW_HEAD}\trefs/heads/${BRANCH}\n` : "");
-      }
-      if (argv.includes("push")) {
-        remotePublished = true;
-        return commandResult();
-      }
-      if (command.includes(" repos/openclaw/openclaw/pulls ") && command.includes("state=all")) {
-        return commandResult("[]\n");
-      }
-      if (
-        command ===
-        "gh api --hostname github.com --method POST repos/openclaw/openclaw/pulls --input -"
-      ) {
-        return commandResult('{"html_url":"https://github.com/openclaw/openclaw/pull/125200"}\n');
-      }
-      return commandResult();
-    });
+    const { createSyntheticPublicationTransport } =
+      await import("./github-publication-git.test-support.js");
+    mocks.runCommand.mockImplementation(
+      createSyntheticPublicationTransport({
+        root,
+        syntheticIndex,
+        branch: BRANCH,
+        oldHead: OLD_HEAD,
+        newHead: NEW_HEAD,
+        workspaceTree: WORKSPACE_TREE,
+        baseHead: BASE_HEAD,
+        commands,
+        commandCalls,
+        commandResult,
+      }),
+    );
     // Source-policy selection reads canonical session custody, including the
     // creation-time sandbox required by authenticated requester fixtures.
     setRuntimeConfigSnapshot({

@@ -1,5 +1,5 @@
 ---
-summary: "Publish coding sessions for shared viewing and independent Team continuation"
+summary: "Publish coding sessions for shared viewing and live Team continuation"
 read_when:
   - Sharing a Claude Code or Codex session with trusted Gateway operators
   - Continuing a beamed conversation with a Team agent
@@ -94,10 +94,13 @@ A successful upload returns the stable Beam id and a relative Control UI URL:
 ```json
 {
   "ok": true,
+  "publicationId": "abcdef0123456789abcdef0123456789",
   "beamId": "0123456789abcdef0123456789abcdef",
   "url": "/beam/fix-the-upload-flow-0123456789ab"
 }
 ```
+
+Restricted Visitor uploads additionally return `"canView": true`: the current publishing Visitor can open their own retained snapshot while their invitation remains active. The URL is not public access or authorization, and other guests cannot use it to read the snapshot. Other successful receipts may omit `canView`.
 
 The returned URL uses the session title slug followed by a 12-character lowercase
 hexadecimal id prefix, matching regular session links. The id remains authoritative:
@@ -115,11 +118,15 @@ Uploading the same `beamId` updates the existing catalog row when its `updatedAt
 
 ## Continue on the Team Gateway
 
-Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized history from the retained Beam row into it, and sends your message there. Ignored stale uploads cannot change that continuation source. The original Beam stays unchanged, and later source uploads do not alter the copied session.
+Publishing alone shares a read-only snapshot. To move the logical conversation, use the updated Beam skill's `handoff` command with the exact source session. The sender durably retires that Beam identity before network dispatch, obtains the receiver's `publicationId`, and explicitly releases that generation with `handoffId`. Release requires the original verified publisher; shared-token and older ownerless snapshots cannot be claimed through this route. A lost acknowledgment can retry the same generation but cannot recreate an expired publication.
 
-OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. Each copied transcript item is marked as untrusted external content. The copied session also includes a notice that the old content is reference material rather than operator instructions, names the model choice, and explains that the session cannot access the source machine or its tools.
+After release, send a message in the Beam composer or use the skill's `continue` command with your existing authenticated remote OpenClaw profile. The first continuation binds one ordinary Team conversation for the selected agent. Its bounded, sanitized source history seeds the conversation once. New messages run there with the destination's own account and tools. The source runtime session ID does not need to survive this handoff.
 
-Continuation is a copy, not remote resume or two-way synchronization. Each operator may create an independent continuation from the same Beam.
+Reopening the original Beam link resolves the existing conversation through a read-only lookup, subject to current publisher access and ordinary destination read permissions. Retrying continuation uses that same logical conversation. Neither path imports history again or chooses another agent. Released sources reject later snapshot writes with `409` and an ownership receipt, without changing history or extending retention. Source Beam `read` and `continue` commands route to the authoritative Team conversation through normal authentication. Beam does not stop the original local harness; independent local turns after release are not Team turns.
+
+Model preferences resolve through the destination's configured aliases and provider-declared model/version equivalence. OpenClaw selects the available canonical destination model under normal policy. An unavailable preference leaves model selection unset so the destination's configured default resolves normally. Source credentials and account selections never transfer. A denied destination model or expired authority cannot grant access through this handoff.
+
+Copied history remains untrusted reference material. Only new operator messages authorize actions. Initialization errors are visible. A proven pre-commit failure or completed rollback may retry the same destination; uncertain, pending, deleted or mismatched destinations require reconciliation instead of silently creating another conversation.
 
 ## Storage and visibility
 
@@ -127,8 +134,12 @@ Beam stores sanitized payloads in OpenClaw's shared SQLite-backed plugin state:
 
 - at most 500 sessions
 - seven-day retention refreshed by each accepted update
-- oldest-entry eviction when the catalog reaches its bound
+- oldest-entry eviction for staff uploads when the catalog reaches its bound
+- at most 20 live rows per verified publisher for restricted Visitor creation; existing owned rows can still be refreshed
+- restricted Visitor creation is rejected at the shared 500-row cap, rather than evicting an existing snapshot
 - server receipt time controls catalog ordering; clients cannot move themselves ahead with a forged timestamp
+
+Ownership release and destination binding persist separately as SQLite-backed plugin metadata, without retaining transcript items. Snapshot expiry, eviction and archive cannot restore source ownership or allocate a replacement destination. After a destination exists, the Beam link can resolve it after snapshot removal. A snapshot that expires before destination creation cannot be imported later; the source remains retired and needs reconciliation. Retention does not bypass invitation or destination access checks.
 
 The sidebar reuses an in-memory metadata inventory rather than loading every
 transcript on each poll. Uploads and deletions invalidate that inventory immediately;
@@ -137,9 +148,17 @@ and refreshes it every 30 seconds to pick up changes made by other processes.
 Expired entries are hidden on every list. Transcript reads and continuation always
 read the underlying store. No stored-data migration is needed on update.
 
-The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Uploading or continuing requires `operator.write` or `operator.admin`; agent access policy must also allow the chosen agent. Any write-authorized operator that knows a Beam id can update that row. Uploader attribution does not grant ownership or change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+The catalog is intentionally shared across the Gateway operator domain. Every client with `operator.read` can view every beamed session. Staff with `operator.write` or `operator.admin` can upload and update any row. Shared-catalog continuation requires staff write access. The original restricted publisher can also continue their own Beam through the returned link, subject to their current Visitor grant and the normal Team session-creation and agent policies.
 
-A continuation belongs to the authenticated operator who creates it. From then on it follows ordinary session sharing, sandbox, tool, and model policy for that Team agent. Access to the original Beam does not grant access to another operator's continuation.
+A restricted guest with `operator.sessions.write`, a durable verified OpenClaw profile, and a current Visitor Access invitation can publish a new row or refresh only a row they initially published. The receiver records the immutable initial publisher separately from mutable uploader attribution; neither field is accepted from the request body. Staff updates preserve that owner. Older live rows without an initial publisher cannot be claimed by a guest, even when their uploader attribution matches. Deletion or expiry ends that retained row; re-upload creates a new row under the normal creation rules.
+
+Guest publication does not grant shared catalog listing, foreign or ownerless snapshot access, or deletion. The returned Beam link uses separate `beam.owned.list`, `beam.owned.read`, and `beam.owned.continue` methods, admitted with the existing `operator.sessions.write` scope and a current verified Visitor grant. They expose only rows whose immutable initial publisher matches the authenticated profile and omit uploader profile attribution. The publisher can type and send directly on that page: the first send transparently adopts the retained snapshot into a normal Team session through the same continuation owner as the shared catalog. The source remains unchanged, failed adoption keeps the draft, and subsequent chat uses ordinary Team session permissions. This narrow source access grants no Home access. Staff continue using the shared operator catalog. Current identity, role, transport, and the original Visitor grant are rechecked after awaited work and at state-write admission. Revoking and reinviting a visitor cannot revive an in-flight request captured under the old grant. Ownership and both creation quotas are checked in one worker-owned state transaction. Limit refusals return `429`; foreign or ownerless retained-row updates return `403`. Stale uploads to an owned row keep the normal success receipt without refreshing retention.
+
+Uploader attribution alone does not change access. OpenClaw operator scopes are not tenant isolation; use a separate Gateway when sessions must be isolated between teams or machines.
+
+Ownership needs no SQL schema migration or backfill. Older retained rows remain ownerless. Rolling back to an older receiver restores its staff-only upload behavior; an accepted upload by that older receiver can discard the new ownership field. After upgrading again, those ownerless rows remain unavailable for guest refresh until deletion or expiry permits a new row. Rollback does not change the seven-day retention or staff eviction policy.
+
+The bound conversation belongs to its authenticated creator and follows ordinary session sharing, sandbox, tool, and model policy. Source publication ownership does not grant destination membership. Deleting or expiring an unreleased publication ends discovery through its Beam link; re-uploading creates a new publication lifecycle. Once released and bound, the retained binding keeps the Beam link pointed at the same authorized conversation even after snapshot deletion or expiry, and further source uploads remain rejected. Deleting the snapshot never deletes the destination conversation.
 
 User turns are attributed to the verified publisher of the current snapshot, using their current profile name and avatar, including merged profiles. Beam's upload format does not identify individual authors within a multi-user transcript. The uploader reference shares the snapshot's seven-day retention and is replaced on each upload. Shared-token uploads, failed profile resolution, and older snapshots without a recorded uploader display **User**; they never inherit the viewer's identity or a previous uploader's identity. Reupload an older snapshot through personal authentication to attribute it.
 
@@ -148,16 +167,16 @@ User turns are attributed to the verified publisher of the current snapshot, usi
 Any operator with `operator.write` can delete a Beam from its sidebar row menu.
 After confirmation, the sidebar hides the row while deletion finishes. If deletion
 fails, the row returns and an error appears. Successful deletion is permanent.
-Re-uploading the same `beamId` recreates the
+For an unreleased source, re-uploading the same `beamId` recreates the
 row, whether through the manual skill or a still-active mirror's next upload.
 Mirrors skip unchanged snapshots, so recreation does not necessarily happen on
-the next poll. Deleting a Beam does not affect continuations already created from it.
+the next poll. A released source cannot be recreated by uploading. Deleting its snapshot preserves the conversation binding and does not delete the destination conversation.
 
 ## Security boundary
 
 Beam publication is not remote control.
 
-- Continuing makes an independent Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
+- The logical conversation continues in a Gateway-owned session. Beam itself has no filesystem, terminal, tool, or node capability.
 - It accepts text-only normalized transcript items, not HTML, scripts, archives, attachments, or server-fetched URLs.
 - The official skill removes raw tool results, reasoning, prompts, local paths, credentials, cookies, and auth material before upload.
 - The receiver treats every transcript as untrusted text. The first message in the Beam composer is the explicit operator action that copies it into a new session.

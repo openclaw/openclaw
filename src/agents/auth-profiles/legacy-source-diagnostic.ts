@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shortenHomePath } from "../../utils.js";
 import {
@@ -263,6 +264,7 @@ function recordAuthProfileMigrationRequired(
   const previous = migrationRequiredByDatabase.get(databasePath);
   // Scoped reads may discover more providers, but only lifecycle clear may release any.
   const retained = previous ? new AuthProfileMigrationRequiredError(error, previous) : error;
+  materializeErrorStack(retained);
   migrationRequiredByDatabase.set(databasePath, retained);
   if (previous?.message !== retained.message) {
     log.warn(retained.message, {

@@ -10,7 +10,7 @@ import {
   type JSONRPCMessage,
 } from "@modelcontextprotocol/client";
 import { getDefaultEnvironment } from "@modelcontextprotocol/client/stdio";
-import { throwCollectedErrors } from "../infra/error-graph-internal.js";
+import { materializeErrorStack, throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -20,6 +20,7 @@ import {
   OwnedStdioCleanupError,
   type OwnedStdioProcess,
 } from "../process/owned-stdio.js";
+import { runWithSpawnBrokerAdmission } from "../process/spawn-broker/admission.js";
 import type { ProcessCleanupResult } from "../process/supervisor/types.js";
 import { parseMcpDockerCommand } from "./mcp-docker-command.js";
 import { McpStdioFrameDecoder } from "./mcp-stdio-frame-decoder.js";
@@ -86,16 +87,20 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       try {
         await fs.mkdir(prepareDataDir, { recursive: true });
       } catch (error) {
-        throw new Error(
+        const failure = new Error(
           `unable to prepare PLUGIN_DATA directory "${prepareDataDir}": ${formatErrorMessage(error)}`,
           { cause: error },
         );
+        materializeErrorStack(failure);
+        throw failure;
       }
     }
 
     // Directory preparation may finish after shutdown has retired this launch.
     if (this.startupAbort.signal.aborted) {
-      throw new Error("MCP stdio transport is closed");
+      const failure = new Error("MCP stdio transport is closed");
+      materializeErrorStack(failure);
+      throw failure;
     }
 
     try {
@@ -114,20 +119,22 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
       if (this.startupAbort.signal.aborted) {
         throw new Error("MCP stdio transport is closed");
       }
-      const child = await createOwnedStdioProcess({
-        argv: this.docker
-          ? [this.docker.command, ...this.docker.args]
-          : [this.serverParams.command, ...(this.serverParams.args ?? [])],
-        cwd: this.serverParams.cwd,
-        env: this.docker?.env ?? env,
-        ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
-        // A canceled Docker client can leave an accepted daemon-side create in
-        // flight. Custody must see its CID before host-process cancellation.
-        ...(this.docker
-          ? { assertCurrent: this.docker.assertCurrent }
-          : { abortSignal: this.startupAbort.signal }),
-        stderrDestination: this.stderrStream,
-      });
+      const child = await runWithSpawnBrokerAdmission("mcp", () =>
+        createOwnedStdioProcess({
+          argv: this.docker
+            ? [this.docker.command, ...this.docker.args]
+            : [this.serverParams.command, ...(this.serverParams.args ?? [])],
+          cwd: this.serverParams.cwd,
+          env: this.docker?.env ?? env,
+          ...(this.serverParams.exactEnv ? { exactEnv: true as const } : {}),
+          // A canceled Docker client can leave an accepted daemon-side create in
+          // flight. Custody must see its CID before host-process cancellation.
+          ...(this.docker
+            ? { assertCurrent: this.docker.assertCurrent }
+            : { abortSignal: this.startupAbort.signal }),
+          stderrDestination: this.stderrStream,
+        }),
+      );
       this.process = child;
       child.onError((error) => this.notifyError(error));
       const receive = (chunk: Buffer) => {
@@ -168,6 +175,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         },
       );
     } catch (error) {
+      materializeErrorStack(error);
       if (error instanceof OwnedStdioCleanupError) {
         this.startupCleanupError = error;
         recordAgentCleanupFailure();
@@ -264,6 +272,7 @@ export class OpenClawStdioClientTransport extends EventTarget implements Transpo
         }
         throwCollectedErrors(failures, "MCP container and host-process cleanup failed");
       } catch (error) {
+        materializeErrorStack(error);
         recordAgentCleanupFailure();
         throw error;
       } finally {

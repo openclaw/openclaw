@@ -1,7 +1,8 @@
 import { createMemo, createSignal, onCleanup } from "solid-js";
-import { isKnownCoreToolId } from "../../../../src/agents/tool-catalog.ts";
+import { isKnownCoreToolId } from "../../../../src/agents/core-tool-facts.ts";
 import type { ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import type { PluginListResult } from "../../lib/plugins/index.ts";
 import { fetchPluginActivityIconBlobUrl, fetchPluginIconBlobUrl } from "../plugins/icon-loader.ts";
 import { PluginIconOwner } from "../plugins/plugin-icon-owner.ts";
@@ -20,7 +21,9 @@ export function createChatToolIcons(readSource: () => ToolIconSource): PluginToo
   const readBinding = () => {
     const { context, session } = readSource();
     const { snapshot, connectionRevision: revision } = context.gateway;
-    return snapshot.phase === "connected" && snapshot.client && session
+    return snapshot.client &&
+      session &&
+      canCallGatewayMethod(snapshot, "plugins.list", "operator.read")
       ? { client: snapshot.client, session, revision }
       : null;
   };

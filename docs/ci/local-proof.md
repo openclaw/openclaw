@@ -8,6 +8,11 @@ read_when:
 
 ## Local equivalents
 
+Changed-file, backport, and Plugin SDK comparisons acquire missing commit objects
+from `origin` with normal history negotiation before reading their trees. They
+retain the clone's blob filter, refs, and `FETCH_HEAD`; unavailable local ref names
+remain errors. Local-availability probes do not fetch implicitly.
+
 Strict managed commands join their process group and captured output before
 releasing temporary resources. A leader can exit before an unreferenced helper
 finishes responding to stdin EOF, so normal POSIX exit reserves half the existing
@@ -142,6 +147,22 @@ Missing active translations or resources, active placeholder drift, invalid
 artifact syntax, and other generated-output differences remain blocking. Generator sync
 and the standalone Android and Apple checks retain their strict behavior.
 
+### Delegating changed compilers in CI
+
+`check:changed --delegate-compilers` retains the selected formatting, lint, guards,
+owner tests, and graph-boundary check. The changed-check planner exposes the removed
+compiler work as `delegatedTypeGraphs`; it does not infer compiler commands from
+printed output. Narrow core-test checks keep their shared boundary inventory inline.
+The aggregate `tsgo:all` project-reference build also stays inline.
+
+A CI caller must give `ci-check-plan` the same exact changed paths and base commit,
+with `typeGraphBoundaryOwner: "changed-check"`, then execute every returned type row
+through the native compiler runner. Pass those paths explicitly to `check:changed`
+so both planners use the same scope rather than a separate trivia-filtered diff.
+Keep noncompiler checks in the changed-check lane; do not also select a native lint
+lane. Compiler jobs and the changed-check job are all required for success. Omitting
+compiler jobs is not successful changed-file proof. The default CLI is unchanged.
+
 ### Opt-in compiler evidence
 
 Keep `pnpm check:timed` (or `check:changed --timed`) for stage timings and
@@ -266,6 +287,9 @@ pre-commit run zizmor --all-files
 
 ## Surface ratchets
 
+Release branches keep line limits non-blocking and skip line-count ratchets, except explicit pruning.
+Oxlint emits line-limit warnings rather than disabling the rules, so existing
+size suppressions remain valid while unused non-size suppressions still fail.
 Size, length, count, and measured performance limits are errors locally and
 warnings in GitHub Actions. `scripts/lib/check-limits.mts` owns this decision
 using GitHub's `GITHUB_ACTIONS=true` signal. `CI=1` alone does not soften checks:
@@ -307,17 +331,25 @@ contents, its fresh current analysis also supplies the comparison counts.
 Changed snapshots retain both full analyses and historical-cache validation.
 Frozen targets without the aggregate command retain their original commands.
 
-`pnpm check:test-lines-ratchet` compares total tracked test lines with the
-integer ceiling in `config/test-lines-baseline.txt`, counting newline-terminated
-lines like `wc -l` in `*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
-`*test-helpers*`, and `**/test-support/**`. In `checks-fast-baseline-ratchets`, an
-over-ceiling tree fails only when this change's net test-line delta against the
-comparison base is positive; non-growing changes pass with an over-ceiling notice,
-while runs without a base retain the absolute ceiling check. Run
-`pnpm check:test-lines-ratchet --prune` to lower the ceiling to the current total;
-this command never raises it. A higher ceiling requires a deliberate manual
-edit and justification in the PR, and the check reports the increase against
-the comparison base.
+<a id="test-line-budget" />
+
+`pnpm check:test-lines-ratchet` measures this change's net test-line delta
+between its comparison base and head. Other changes' growth never counts. A
+change may add up to 400 net test lines without a record. Above that, add a
+`config/test-lines-allocations/<change>.txt` record that covers the excess and
+explain its necessity in the PR. Each record contains one non-negative integer,
+with optional `#` comments. Only records that this change adds or raises give
+credit; merged records have no further effect and can be deleted at any time.
+On failure, the checker prints the net count, the allowance, the credit and the
+lines to remove or allocate.
+
+The checker counts literal newline bytes, like `wc -l`, in
+`*.test.{ts,tsx,mts,mjs,js,cjs}`, `*.test-support.ts`,
+`*test-helpers*`, and `**/test-support/**`. Locally it compares against the
+merge base with `origin/main`; `--staged` compares the index with `HEAD`. Pull
+request CI compares the merge tree with its first parent; a `main` push compares
+with the previous tip, so one push of several squash commits counts their sum.
+Release branches skip the check.
 
 The max-lines suppression inventory and the environment-variable count budget
 must describe the tree, and that check blocks in GitHub Actions as well as
@@ -426,27 +458,43 @@ Local changed-test routing lives in `scripts/test-projects.test-support.mts` and
 
 Follow the canonical
 [proof policy](https://github.com/openclaw/openclaw/blob/main/.agents/skills/openclaw-testing/SKILL.md#proof-policy).
-For its remote exceptions, `.crabbox.yaml` defaults to `blacksmith-testbox`.
-That workflow hydrates credentials: untrusted contributor/fork code requires
+For its remote exceptions, `.crabbox.yaml` defaults to `boat` and local Actions
+hydration. The OpenClaw wrapper selects `class: fast` (8 vCPU / 16 GB) for new
+Boat leases unless sizing or an alternate `CRABBOX_CONFIG` is explicit. The
+repository keeps `class: standard`: native Crabbox uses 4 vCPU / 8 GB on Boat,
+and other providers retain their existing sizing. Boat account environment secrets
+are disabled with `asciiBox.noEnv`; `asciiBox.noSnapshots` disables snapshots and
+`asciiBox.visibility: private` keeps new VMs private. The configured Crabbox
+environment allowlist still applies. Explicit Blacksmith Testbox workflows
+hydrate credentials: untrusted contributor/fork code requires
 secretless fork CI or sanitized direct AWS, never local execution or Testbox.
 The wrapper uses the bundled Crabbox plugin's binary manager. All providers and
-cloud-worker profiles require Crabbox 0.79.2 or newer. This includes task-owned
+cloud-worker profiles require Crabbox 0.83.0 or newer. This includes task-owned
 Testbox SSH teardown, which prevents persistent SSH masters from keeping idle
-Testboxes alive. Missing or older binaries use a verified managed 0.79.2 release
+Testboxes alive. Missing or older binaries use a verified managed 0.83.0 release
 before provider discovery or lease work. The original binary stays untouched.
+
+For native Linux/WSL command-lifecycle or cancellation proof, verify the selected
+binary's runtime pack before allocating a lease. Use a complete matching Crabbox
+distribution, or set `CRABBOX_RUNTIME_ARTIFACTS` to a verified manifest. The
+companions must come from the same frozen source, and the manifest must bind the
+exact controller binary. Follow Crabbox's
+[runtime artifact instructions](https://github.com/openclaw/crabbox/blob/main/scripts/runtime-artifacts/README.md)
+for preparation and verification. A development CLI without a runtime pack uses
+legacy SSH supervision; its version string alone does not establish native
+supervision. Keep CLI-only results separate from native lifecycle and
+cancellation evidence.
+
 Provider readiness and broker authentication still determine
 which configured backend can run the proof.
 The check workflow hydrates its pinned dispatch commit with a depth-1 checkout;
 the changed gate later reconstructs the exact merge base and synced final tree.
-Routine dispatched check leases request `blacksmith-16vcpu-ubuntu-2404` through
-`ci-check-testbox.yml`, with a 60-minute total GitHub job deadline including
+Standard dispatched check leases request `blacksmith-4vcpu-ubuntu-2404` through
+`ci-check-testbox.yml`, with a default 60-minute total GitHub job deadline including
 hydration. The explicit `ci-check-high-memory-testbox.yml` workflow requests
-`blacksmith-32vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
+`blacksmith-8vcpu-ubuntu-2404` and retains 240 minutes for memory-heavy full-suite
 gates. Select it only for a justified memory need, not merely for more time; see
 [Testbox runner sizing](/reference/test/remote-proof#testbox-runner-sizing).
-A native capacity check measured eight CPUs and 30.95 GiB of memory on the
-32-class, compared with 15.42 GiB on the 16-class. This supplies headroom for
-isolated runtime validation without increasing the number of jobs or workers.
 Workloads still admit work from observed resources; the runner label is not a
 capacity guarantee. PR hydration checks remain on `ubuntu-24.04`.
 
@@ -454,7 +502,7 @@ The outer GitHub deadline can terminate active SSH commands. Both profiles have
 a separate 15-minute idle limit; active SSH prevents idle expiry, not the outer
 job deadline. Individual test deadlines also remain separate limits. The standard
 workflow accepts an explicit `timeout_minutes` input up to 240 minutes, but
-managed Crabbox 0.79.2 does not forward arbitrary workflow inputs, including
+managed Crabbox 0.82.0 does not forward arbitrary workflow inputs, including
 `timeout_minutes`, and `--ttl` does not extend a Testbox job. Plan routine proof
 within its total-job budget rather than treating TTL or a larger runner as a
 deadline override.
@@ -591,14 +639,15 @@ node scripts/crabbox-wrapper.mjs run --help | sed -n '1,120p'
 The repo wrapper validates the selected Crabbox binary and provider before running. In Codex worktrees or linked/sparse checkouts, avoid the local `pnpm crabbox:run` script because pnpm may reconcile dependencies before Crabbox starts; invoke the node wrapper directly instead:
 
 ```bash
-node scripts/crabbox-wrapper.mjs run --provider blacksmith-testbox --timing-json --shell -- "pnpm test <path-or-filter>"
+node scripts/crabbox-wrapper.mjs run --timing-json --shell -- "pnpm test <path-or-filter>"
 ```
 
 A supported sibling or `PATH` binary can run directly. The wrapper automatically
 replaces an outdated selection with the plugin-managed binary; rebuilding the
 sibling checkout is no longer a prerequisite for proof.
 
-The `blacksmith:` block in `.crabbox.yaml` pins the org, workflow, and job defaults.
+For explicitly selected Testbox proof, the `blacksmith:` block in `.crabbox.yaml`
+pins the org, workflow, and job defaults.
 The wrapper enforces workflow ref `main` while syncing the selected local source,
 so the explicit flags below are optional. Explicit clean-machine changed-gate parity:
 
@@ -714,17 +763,18 @@ For admission/queue handling, follow the canonical proof policy above.
 For explicitly selected AWS capacity, use the
 [direct-provider commands](https://github.com/openclaw/openclaw/blob/main/.agents/skills/crabbox/references/operations.md#direct-aws).
 
-Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` defaults to `class: standard`, on-demand market, and `capacity.hints: true` so brokered AWS leases print selected region/market, quota pressure, Spot fallback, and high-pressure class warnings. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
+Under AWS pressure, avoid `class=beast` unless the task really needs 48xlarge-class CPU. A `beast` request starts at 192 vCPUs and is the easiest way to trip regional EC2 Spot or On-Demand Standard quota. The repo-owned `.crabbox.yaml` keeps `class: standard` for explicit AWS proof; on-demand market and `capacity.hints: true` retain AWS capacity diagnostics. Use `fast` for heavier broad checks, `large` only after standard/fast are not enough, and `beast` only for exceptional CPU-bound lanes such as full-suite or all-plugin Docker matrices, explicit release/blocker validation, or high-core performance profiling. Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work, ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Use `--market on-demand` for capacity diagnosis so Spot market churn is not mixed into the signal.
 
 `.crabbox.yaml` owns provider, sync, and GitHub Actions hydration defaults. Crabbox sync never transfers `.git`, so the hydrated Actions checkout keeps its own remote Git metadata instead of syncing maintainer-local remotes and object stores, and the repo config additionally excludes local runtime/build artifacts (such as `.artifacts` and test reports) that should never be transferred. `.github/workflows/crabbox-hydrate.yml` owns checkout, Node/pnpm setup, `origin/main` fetch, and the non-secret environment handoff for owned-cloud `crabbox run --id <cbx_id>` commands.
 
-Direct leases require Crabbox 0.79.2 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
+Direct leases require Crabbox 0.83.0 or newer. TTL counts from creation, including hydration; idle timeout counts inactivity. The earlier deadline wins. Defaults are 30 minutes each, with a four-hour maximum unless an owner or organization override allows more. Effective policy may clamp requests and live leases; inspect the lease and read policy notices. The Azure `prewarm` and `changed` jobs request four hours total and 90 minutes idle explicitly. The hydration workflow's keepalive holds its Actions job open; it does not renew a Crabbox lease. `keep` and `stop: never` do not prevent expiry.
 
 Plain heartbeats, setup, synchronization, and desktop activity do not extend total lifetime. `run` may extend only while a command executes, subject to provider support, budget, and policy. Creation-fixed providers need sufficient TTL at allocation. `directLeases: deny` requires the configured coordinator route. Do not change providers to avoid that policy. `crabbox list --retained` adds kept terminal resources with unconfirmed cleanup to the default live listing; use exact-ID inspection and a waiting stop to prove cleanup.
 
 Linux hydration keeps physical workspace `node_modules` directories and pnpm's
-default `.pnpm` virtual store. Only the package-content store uses the persistent
-`/var/cache/crabbox/pnpm/store` volume; its fallback lives at
+default `.pnpm` virtual store. Providers with cache-volume support can persist the
+package-content store at `/var/cache/crabbox/pnpm/store`; Boat uses lease-local
+disk, not the optional 80/40-GB volumes. The fallback store lives at
 `.cache/openclaw-pnpm-store` beside the workspace dependencies. Ordinary POSIX
 sync preserves these ignored directories, so frozen reinstalls and later build
 commands use the same owned install. Hydration checks the tooling loader before

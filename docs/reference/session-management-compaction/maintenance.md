@@ -166,10 +166,24 @@ asynchronous restoration first. Storage and usage inventory can count cold
 transcripts without restoring them. Usage refreshes and exact-range reports read
 verified archive chunks directly when existing rollups cannot answer the request;
 they keep transcript payloads cold and store results in the existing usage cache.
+Full raw-transcript reads, exact event matching, message-presence checks, and
+latest-assistant text reads also consume verified archive chunks without restoring
+payloads. Matching preserves newest-first selection and active-branch membership;
+a stale active projection still uses restoration and reconciliation. These reads
+verify the entire archive before returning a result, so corruption cannot look
+like missing history. Repeated reads decompress the archive again rather than
+keeping its payload resident. Conversation writes, indexed chat pages, model-context
+reads, and activity-summary generation retain their existing restoration path.
+Archive/unarchive notifications check recap freshness before loading a transcript;
+a current recap does not trigger restoration. New activity and terminal runs still
+request recap work.
 Text search excludes cold transcript contents and
 reports how many archived transcripts it excluded; restored transcripts become
-searchable again. Import and cross-store repair refuse cold transcripts that
-have not been restored, rather than copying an incomplete history.
+searchable again. Doctor's canonical session-key repair restores affected cold
+generations through their physical store owner before copying or archiving history,
+including keys retained from a renamed agent. Archive verification failures preserve
+the cold history and stop that repair. Other imports and cross-store repairs require
+restoration before copying history.
 
 After restoration, the running Gateway keeps that transcript hot for 24 hours
 to avoid repeatedly extracting recently viewed history. This cooldown is local

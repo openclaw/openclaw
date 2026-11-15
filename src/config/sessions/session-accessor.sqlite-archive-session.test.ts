@@ -7,11 +7,13 @@ import type { Worker } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { expectBytesEqual } from "../../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { readSessionArchiveText } from "../../../test/helpers/session-archive.js";
 import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as nativeWorkerRecovery from "../../infra/gateway-native-worker-recovery.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
@@ -33,7 +35,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { readSessionArchiveContentSync } from "./archive-compression.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
@@ -57,7 +58,10 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as archivePublication from "./session-archive-publication.js";
-import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import {
+  restoreSessionColdTranscript,
+  runSessionColdStorageMaintenance,
+} from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
@@ -159,7 +163,7 @@ describe("SQLite transcript archive sessions", () => {
   function expectArchivedEvent(archivePath: string | undefined, event: unknown) {
     expect(archivePath).toBeTruthy();
     expect(
-      readSessionArchiveContentSync(archivePath ?? "")
+      readSessionArchiveText(archivePath ?? "")
         .trim()
         .split("\n"),
     ).toEqual([JSON.stringify(event)]);
@@ -354,14 +358,15 @@ describe("SQLite transcript archive sessions", () => {
               return result;
             },
           );
-          const restored = loadTranscriptEvents(fixture.scope);
+          // Read-only probes stream cold archives (#185955); only explicit restoration mutates.
+          const restored = restoreSessionColdTranscript(fixture.scope);
           await entered.promise;
           expect(carriers).toHaveLength(1);
           const exited = once(carrier, "exit");
           finishClose?.();
           finishClose = undefined;
           await exited;
-          expect(await restored).toHaveLength(3);
+          expect(await restored.then(() => loadTranscriptEvents(fixture.scope))).toHaveLength(3);
           expect(carriers).toHaveLength(2);
           expect(leases()).toEqual(baselineLeases);
           expect(fixture.snapshot()).toEqual(original);
@@ -898,7 +903,7 @@ describe("SQLite transcript archive sessions", () => {
         replaced = true;
         release.resolve();
         await expect(deletion).rejects.toThrow(/replaced|file identity changed/);
-        expect(fs.readFileSync(database.path)).toEqual(replacementBytes);
+        expectBytesEqual(fs.readFileSync(database.path), replacementBytes, database.path);
       } finally {
         release.resolve();
         await Promise.allSettled([deletion]);

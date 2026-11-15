@@ -3,6 +3,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as mcp from "../../gateway/mcp-http.loopback-runtime.js";
 import { onAgentEventForRun } from "../../infra/agent-events.js";
 import type { CliBackendExecute } from "../../plugins/cli-backend.types.js";
+import { classifyEmbeddedAgentRunResultForModelFallback } from "../embedded-agent-runner/result-fallback-classifier.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { buildCliRunResult } from "./cli-run-settlement.js";
 import {
   closePluginTestAdmissions,
@@ -88,7 +90,22 @@ it.each([
     sessionBindingDisabled: false,
     preparedContextAgentMeta: {},
   });
+  const attempts: string[] = [];
+  const outcome = await runWithModelFallback({
+    cfg: undefined,
+    provider: "external",
+    model: "primary",
+    fallbacksOverride: ["external/fallback"],
+    skipAuthProfileRuntime: true,
+    run: async (_provider, model) => {
+      attempts.push(model);
+      return result;
+    },
+    classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  });
   expect(order).toEqual(interruptible ? ["answered", "yield"] : ["answered"]);
+  expect(attempts).toEqual(["primary"]);
+  expect(outcome.attempts).toEqual([]);
   if (interruptible) {
     expect(assistantEvents).toEqual([]);
   }
@@ -102,3 +119,71 @@ it.each([
     agentMeta: { sessionId: "sdk-session", cliSessionBinding: { sessionId: "sdk-session" } },
   });
 });
+
+it.each([true, false])(
+  "ends the turn after a mirrored final WebChat reply (interruptible %s)",
+  async (interruptible) => {
+    const order: string[] = [];
+    const { context } = await createExecution();
+    context.mcpDeliveryCapture = true;
+    context.params.messageChannel = "webchat";
+    context.params.terminalReplyExpectation = "result-required";
+    const lateReply = "I sent the answer with the message tool.";
+    const execute: CliBackendExecute = async function* (execution) {
+      if (interruptible) {
+        execution.registerTurnInterrupt?.({
+          interrupt: async (reason) => {
+            order.push(reason);
+          },
+        });
+      }
+      yield { type: "system", subtype: "init", session_id: "sdk-session" };
+      const args = { action: "send", message: "Die Hauptstadt ist Paris.", final: true };
+      yield message("assistant", [
+        { type: "tool_use", id: "send-1", name: "mcp__openclaw__message", input: args },
+      ]);
+      const key = execution.env.OPENCLAW_MCP_CLI_CAPTURE_KEY;
+      const request = mcp.markMcpLoopbackRequestStarted(key);
+      const call = mcp.markMcpLoopbackToolCallStarted({
+        requestCaptureHandle: request,
+        toolName: "message",
+        args,
+      });
+      if (!call) {
+        throw new Error("Missing production MCP capture");
+      }
+      const result = {
+        content: [{ type: "text", text: "sent" }],
+        details: {
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+          sourceReply: { text: "Die Hauptstadt ist Paris." },
+          messageDelivery: {
+            status: "settled",
+            partialDelivery: false,
+            createdThreadIds: [],
+            sourceReplyDelivered: true,
+          },
+        },
+      };
+      mcp.recordMcpLoopbackToolCallResult({
+        captureHandle: call,
+        toolName: "message",
+        args,
+        outcome: "completed",
+        result,
+      });
+      mcp.markMcpLoopbackToolCallFinished(call);
+      mcp.markMcpLoopbackRequestFinished(request);
+      yield message("user", [{ type: "tool_result", tool_use_id: "send-1", ...result }]);
+      order.push("receipt");
+      yield message("assistant", [{ type: "text", text: lateReply }]);
+      yield { ...SUCCESS_RESULT, result: lateReply };
+    };
+    context.executionTarget = { kind: "plugin", execute };
+    const output = await executePreparedCliRun(context);
+    expect(order).toEqual(interruptible ? ["receipt", "source_reply"] : ["receipt"]);
+    expect(output.text).toBe(interruptible ? "" : lateReply);
+    expect(prepareCliRunTerminalReply(context, output).text).toBe("Die Hauptstadt ist Paris.");
+  },
+);

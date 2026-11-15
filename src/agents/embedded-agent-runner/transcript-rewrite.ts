@@ -1,6 +1,7 @@
 /** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
+import { readBackgroundResultPlacement } from "../../../packages/agent-core/src/harness/session/background-result-placement.js";
 import { withSessionPendingInputRelocation } from "../../config/sessions/session-accessor.js";
 import type {
   TranscriptRewriteReplacement,
@@ -98,8 +99,18 @@ async function appendBranchEntry(params: {
       return sessionManager.appendThinkingLevelChange(entry.thinkingLevel);
     case "model_change":
       return sessionManager.appendModelChange(entry.provider, entry.modelId);
-    case "custom":
-      return sessionManager.appendCustomEntryAsync(entry.customType, entry.data);
+    case "custom": {
+      const placement = readBackgroundResultPlacement(entry);
+      return sessionManager.appendCustomEntryAsync(
+        entry.customType,
+        placement
+          ? {
+              afterEntryId: remapEntryId(placement.afterEntryId, rewrittenEntryIds),
+              resultEntryIds: placement.resultEntryIds.map((id) => rewrittenEntryIds.get(id) ?? id),
+            }
+          : entry.data,
+      );
+    }
     case "custom_message":
       return sessionManager.appendCustomMessageEntryAsync(
         entry.customType,

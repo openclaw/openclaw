@@ -1,6 +1,8 @@
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
+import { createBackupProgressLogger } from "../infra/backup-progress.js";
 import { resolveBackupNamespace, type BackupRetentionOptions } from "../infra/backup-retention.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { beginLifecycleWriteCustody } from "../infra/lifecycle-write-custody.js";
@@ -27,7 +29,9 @@ export async function backupCreateCommand(
       (value) => value !== undefined,
     )
   ) {
-    throw new Error("--namespace, --claim-namespace, and retention flags require --to <location>.");
+    throwExpectedCliError(
+      "--namespace, --claim-namespace, and retention flags require --to <location>.",
+    );
   }
   let archivePath = opts.output ?? (opts.to === undefined ? process.cwd() : `storage://${opts.to}`);
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");
@@ -37,6 +41,10 @@ export async function backupCreateCommand(
   const releaseExitGate = registerSignalExitGate(finished.promise, () => stopArchive?.());
   let failure: unknown;
   let namespace = opts.namespace;
+  const progressLogger = createBackupProgressLogger((message) =>
+    opts.json ? runtime.error(message) : runtime.log(message),
+  );
+  const onProgress = opts.onProgress ?? progressLogger;
   try {
     if (opts.to !== undefined) {
       namespace = resolveBackupNamespace(opts.namespace);
@@ -45,9 +53,10 @@ export async function backupCreateCommand(
       stopArchive = stop;
       const options = {
         ...opts,
+        onProgress,
         log:
           opts.log ??
-          (opts.json ? undefined : (message: string) => runtime.log(sanitizeTerminalText(message))),
+          (opts.json ? undefined : (message: string) => runtime.log(terminalText`${message}`)),
       };
       if (opts.to !== undefined) {
         const { createOffsiteBackupArchive } = await import("./backup-remote.js");
@@ -58,7 +67,7 @@ export async function backupCreateCommand(
     archivePath = result.archivePath;
     if (opts.verify && !opts.dryRun && !result.verified) {
       const { verifyBackupArchive } = await import("./backup-verify.js");
-      await verifyBackupArchive(result.archivePath);
+      await verifyBackupArchive(result.archivePath, [], onProgress);
       result.verified = true;
     }
     if (!opts.dryRun) {
@@ -80,33 +89,37 @@ export async function backupCreateCommand(
     if (opts.json) {
       writeRuntimeJson(runtime, result);
     } else {
-      const lines = [`Backup archive: ${result.archivePath}`];
-      lines.push(`Included ${result.assets.length} path${result.assets.length === 1 ? "" : "s"}:`);
+      const lines = [terminalText`Backup archive: ${result.archivePath}`];
+      lines.push(
+        terminalText`Included ${result.assets.length} path${result.assets.length === 1 ? "" : "s"}:`,
+      );
       for (const asset of result.assets) {
-        lines.push(`- ${asset.kind}: ${asset.displayPath}`);
+        lines.push(terminalText`- ${asset.kind}: ${asset.displayPath}`);
       }
       if (result.skipped.length > 0) {
         lines.push(
-          `Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`,
+          terminalText`Skipped ${result.skipped.length} path${result.skipped.length === 1 ? "" : "s"}:`,
         );
         for (const entry of result.skipped) {
           const coverage =
             entry.reason === "covered" && entry.coveredBy ? ` by ${entry.coveredBy}` : "";
-          lines.push(`- ${entry.kind}: ${entry.displayPath} (${entry.reason}${coverage})`);
+          lines.push(
+            terminalText`- ${entry.kind}: ${entry.displayPath} (${entry.reason}${coverage})`,
+          );
         }
       }
       for (const link of result.externalSymbolicLinks ?? []) {
         lines.push(
-          `External link preserved (target not copied through link): ${JSON.stringify(link.entryPath)} -> ${JSON.stringify(link.linkpath)}`,
+          terminalText`External link preserved (target not copied through link): ${JSON.stringify(link.entryPath)} -> ${JSON.stringify(link.linkpath)}`,
         );
       }
       if (result.dryRun) {
         lines.push("Dry run only; archive was not written.");
       } else {
-        lines.push(`Created ${result.archivePath}`);
+        lines.push(terminalText`Created ${result.archivePath}`);
         if (result.skippedVolatileCount > 0) {
           lines.push(
-            `Skipped ${result.skippedVolatileCount} volatile file${
+            terminalText`Skipped ${result.skippedVolatileCount} volatile file${
               result.skippedVolatileCount === 1 ? "" : "s"
             } (live sessions, cron logs, queues, managed runtime paths, sockets, pid/tmp).`,
           );
@@ -115,13 +128,11 @@ export async function backupCreateCommand(
           lines.push("Archive verification: passed");
         }
       }
-      lines.push(...(result.warnings ?? []));
-      runtime.log(lines.map(sanitizeTerminalText).join("\n"));
+      lines.push(...(result.warnings ?? []).map((warning) => terminalText`${warning}`));
+      runtime.log(lines.join("\n"));
       if (result.location) {
         runtime.log(
-          sanitizeTerminalText(
-            `Uploaded to ${result.location.name}/backups/${result.location.namespace}/${result.location.key} (${result.location.storedBytes} stored bytes).${result.localArchiveRetained ? " Local archive retained." : ""}`,
-          ),
+          terminalText`Uploaded to ${result.location.name}/backups/${result.location.namespace}/${result.location.key} (${result.location.storedBytes} stored bytes).${result.localArchiveRetained ? " Local archive retained." : ""}`,
         );
       }
       if (result.retention) {
@@ -144,6 +155,7 @@ export async function backupCreateCommand(
     }
     throw error;
   } finally {
+    progressLogger.finish();
     releaseCustody?.(failure);
     finished.resolve();
     releaseExitGate();

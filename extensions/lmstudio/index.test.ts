@@ -346,8 +346,8 @@ describe("lmstudio plugin", () => {
           supportsUsageInStreaming: true,
           codeMode: "preferred",
           supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
-          reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+          supportedReasoningEfforts: ["off", "on"],
+          reasoningEffortMap: { off: "off", high: "on" },
         },
       },
       ...["phi-4", "fractional-window"].map((id) => ({

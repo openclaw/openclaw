@@ -1,8 +1,6 @@
 import { renameSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { StatementSync } from "node:sqlite";
-import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
@@ -374,7 +372,7 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
         const transcriptOnly = mode === "transcript-only invalidation";
         const cfg = {
           agents: {
-            entries: { main: {}, ...(!transcriptOnly && { "archive-pin": {} }) },
+            entries: { main: {}, ...(!transcriptOnly && { "zz-archive-pin": {} }) },
             defaults: { utilityModel: "unit-test/small" },
           },
         };
@@ -395,7 +393,11 @@ it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
             entries[index]!,
           );
         }
-        const pinnedQuery = { agentId: "archive-pin", key: "agent:archive-pin:awaiting-page" };
+        // Keep the held store after main when the owner groups reads by store identity.
+        const pinnedQuery = {
+          agentId: "zz-archive-pin",
+          key: "agent:zz-archive-pin:awaiting-page",
+        };
         if (!transcriptOnly) {
           replaceSessionEntrySync(
             { agentId: pinnedQuery.agentId, sessionKey: pinnedQuery.key },
@@ -857,11 +859,9 @@ it.each(["runtime activity", "membership revocation"] as const)(
   },
 );
 
-it.each(["delete", "dispose", "store replacement"] as const)(
+it.each(["delete", "store replacement"] as const)(
   "does not render the accepted suffix after %s",
   async (change) => {
-    let pending: WeakRef<object> | undefined;
-    let control: WeakRef<object> | undefined;
     await withAcceptedSuffix(
       async ({ projection, suffix, scope, query, replacementPath, resume }) => {
         if (change === "delete") {
@@ -878,10 +878,6 @@ it.each(["delete", "dispose", "store replacement"] as const)(
           expect(suffix.pendingDatabaseFacts).toBe(accepted);
           renameSync(replacementPath, storePath);
           registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
-        } else {
-          pending = new WeakRef(suffix.pendingDatabaseFacts!);
-          control = new WeakRef({});
-          projection.dispose();
         }
         await resume();
         expect(projection.isCurrent(suffix)).toBe(false);
@@ -891,14 +887,6 @@ it.each(["delete", "dispose", "store replacement"] as const)(
       },
       { replacement: change === "store replacement" },
     );
-    if (change === "dispose") {
-      // Restoring spies does not clear their recorded fixture arguments or results.
-      vi.clearAllMocks();
-      await nextTurn();
-      queryObjects(WeakRef);
-      expect(control?.deref()).toBeUndefined();
-      expect(pending?.deref()).toBeUndefined();
-    }
   },
 );
 

@@ -6,7 +6,6 @@ import {
   sectionOf,
   TABLE_OFFSETS,
   TOTALS_WIDTH,
-  UNAVAILABLE,
   type UsageCostQuarterBlock,
   type UsageQuarterRange,
 } from "./session-cost-usage-quarters.js";
@@ -211,9 +210,6 @@ function addTotalsToObject(target: CostUsageTotals, source: Float64Array, offset
   target.cacheReadCost += source[offset + 8]!;
   target.cacheWriteCost += source[offset + 9]!;
   target.missingCostEntries += source[offset + 10]!;
-  if (source[offset + UNAVAILABLE]) {
-    target.usageReport = { state: "unavailable" };
-  }
 }
 
 const summaryScratch = { days: new Float64Array(64 * TOTALS_WIDTH) };

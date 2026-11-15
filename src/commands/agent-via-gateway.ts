@@ -1,6 +1,4 @@
 // Gateway-first agent CLI implementation with explicit --local embedded execution.
-import fs from "node:fs/promises";
-import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -25,6 +23,7 @@ import { measureAgentStartup } from "../agents/startup-timing.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { readCliGatewayRunFailure, recordCliGatewayRunFailure } from "../cli/failure-output.js";
 import { prepareCliGatewayStateAccess } from "../cli/gateway-rpc.runtime.js";
 import { withProgress } from "../cli/progress.js";
@@ -45,13 +44,7 @@ import {
 import { isGatewaySecretRefUnavailableError } from "../gateway/credentials.js";
 import { assertGatewayCliMessageContext } from "../gateway/operator-cli-message-input.js";
 import { READ_SCOPE } from "../gateway/operator-scopes.js";
-import { readFileDescriptorBounded } from "../infra/boundary-file-read.js";
-import {
-  acquireEmbeddedStateLock,
-  createEmbeddedStateSignalBridge,
-  type EmbeddedStateSignal,
-} from "../infra/embedded-state-lock.js";
-import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
+import { createProcessSignalBridge, type ProcessSignal } from "../infra/process-signal-bridge.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import {
   startOneShotDiagnosticsExporters,
@@ -69,6 +62,7 @@ import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { normalizeMessageChannel } from "../utils/message-channel-normalize.js";
 import { sleep } from "../utils/sleep.js";
 import { resolveAgentGatewayIdentity } from "./agent-gateway-identity.js";
+import { readAgentMessageFile } from "./agent-message-input.js";
 
 type AgentGatewayResult = {
   payloads?: Array<{
@@ -130,7 +124,7 @@ type AgentDispatchOpts = Omit<AgentCliOpts, "messageFile"> & {
   localGatewayCompatibilityAgentId?: string;
 };
 
-type AgentCliSignal = EmbeddedStateSignal;
+type AgentCliSignal = ProcessSignal;
 type GatewayAbortRequest = (...args: Parameters<GatewayRequestFunction>) => Promise<unknown>;
 
 function usesImplicitRemoteCompatibilityDefault(roster: RemoteGatewayRoster): boolean {
@@ -162,7 +156,6 @@ const AGENT_CLI_SIGNAL_EXIT_CODES: Record<AgentCliSignal, number> = {
   SIGINT: 130,
   SIGTERM: 143,
 };
-const MESSAGE_FILE_DECODER = new TextDecoder("utf-8", { fatal: true });
 
 type EmbeddedAgentCommandOpts = Parameters<typeof import("./agent.js").agentCommand>[0];
 
@@ -252,71 +245,13 @@ async function loadRemoteGatewayRosterWithShellEnvFallback(
   }
 }
 
-function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string {
-  return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
-}
-
-function missingAgentMessageError(): Error {
-  return new Error(
-    `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
-  );
-}
-
-function formatMessageFileReadFailure(messageFile: string, err: unknown): string {
-  const code =
-    typeof (err as { code?: unknown })?.code === "string" ? (err as { code: string }).code : "";
-  if (code === "ENOENT") {
-    return `Message file not found: ${messageFile}`;
-  }
-  if (code === "EISDIR") {
-    return `Message file is a directory: ${messageFile}`;
-  }
-  const message = err instanceof Error ? err.message : String(err);
-  return `Unable to read message file ${messageFile}: ${message}`;
-}
-
-// Agent messages are prompt text; a 4 MiB cap gives generous headroom for
-// long system prompts while preventing a symlink/huge-file path from OOMing
-// the CLI before dispatch.
-const AGENT_MESSAGE_FILE_MAX_BYTES = 4 * 1024 * 1024;
-
-async function readAgentMessageFile(messageFile: string): Promise<string> {
-  // Open the original path so the kernel preserves symlink and procfs magic-link
-  // behavior (notably piped /dev/stdin), then inspect that exact descriptor.
-  let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
-  let buffer: Buffer;
-  try {
-    handle = await fs.open(messageFile, "r");
-    const stat = await handle.stat();
-    if (stat.isDirectory()) {
-      // Keep the legacy fs.readFile directory UX.
-      throw Object.assign(new Error("Message file is a directory"), { code: "EISDIR" });
-    }
-    // Regular files fail fast. Streams report size 0, so the descriptor reader
-    // enforces the same limit byte-by-byte while preserving FIFO behavior.
-    if (stat.isFile() && stat.size > AGENT_MESSAGE_FILE_MAX_BYTES) {
-      throw new Error(`File exceeds ${AGENT_MESSAGE_FILE_MAX_BYTES} bytes: ${messageFile}`);
-    }
-    buffer = await readFileDescriptorBounded(handle.fd, AGENT_MESSAGE_FILE_MAX_BYTES);
-  } catch (err) {
-    throw new Error(formatMessageFileReadFailure(messageFile, err), { cause: err });
-  } finally {
-    await handle?.close().catch(() => undefined);
-  }
-  try {
-    return MESSAGE_FILE_DECODER.decode(buffer).replace(/^\uFEFF/, "");
-  } catch {
-    throw new Error(`Message file must be valid UTF-8: ${messageFile}`);
-  }
-}
-
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
       ? parseStrictNonNegativeInteger(opts.timeout)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (raw === undefined) {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
     );
   }
@@ -356,7 +291,7 @@ function validateExplicitSessionKeyForDispatch(
   }
 
   if (classifySessionKeyShape(sessionKey) === "malformed_agent") {
-    throw new Error(
+    throwExpectedCliError(
       `Invalid --session-key "${sessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
     );
   }
@@ -368,7 +303,7 @@ function validateExplicitSessionKeyForDispatch(
   const agentId = normalizeAgentId(agentIdRaw);
   const sessionAgentId = resolveAgentIdFromSessionKey(sessionKey);
   if (sessionAgentId !== agentId) {
-    throw new Error(
+    throwExpectedCliError(
       `Agent id "${agentIdRaw}" does not match session key agent "${sessionAgentId}".`,
     );
   }
@@ -570,7 +505,7 @@ function formatInFlightGatewayAgentMessage(response: GatewayAgentResponse): stri
 async function agentViaGatewayCommand(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
-  signalBridge: ReturnType<typeof createEmbeddedStateSignalBridge>,
+  signalBridge: ReturnType<typeof createProcessSignalBridge>,
   runContext: { accepted?: ReturnType<typeof readAcceptedRunContext> },
 ) {
   const body = opts.message;
@@ -598,7 +533,7 @@ async function agentViaGatewayCommand(
     !explicitSessionKey &&
     !hasImplicitGlobalTarget
   ) {
-    throw new Error(
+    throwExpectedCliError(
       `No target session selected. Use --agent <id>, --session-key <key>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
     );
   }
@@ -611,7 +546,7 @@ async function agentViaGatewayCommand(
     const knownAgents =
       opts.remoteGatewayRoster?.agentIds ?? (remoteGateway ? undefined : listAgentIds(cfg));
     if (knownAgents && !knownAgents.includes(agentId)) {
-      throw new Error(
+      throwExpectedCliError(
         `Unknown agent id "${agentIdRaw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
       );
     }
@@ -881,7 +816,7 @@ async function agentViaGatewayCommand(
 async function agentViaGatewayCommandWithTransientRetries(
   opts: AgentDispatchOpts,
   runtime: RuntimeEnv,
-  signalBridge: ReturnType<typeof createEmbeddedStateSignalBridge>,
+  signalBridge: ReturnType<typeof createProcessSignalBridge>,
 ) {
   // Retries reuse one idempotency key, so retain acceptance across connection attempts.
   const runContext: { accepted?: ReturnType<typeof readAcceptedRunContext> } = {};
@@ -922,7 +857,7 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
     ["--to", opts.to],
   ]) {
     if (value !== undefined && !value.trim()) {
-      throw new Error(`${flag} must not be blank`);
+      throwExpectedCliError(`${flag} must not be blank`);
     }
   }
   if (opts.json === true) {
@@ -931,23 +866,23 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const { messageFile: rawMessageFile, ...rest } = opts;
   const messageFile = readNonBlankString(rawMessageFile);
   if (opts.message !== undefined && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
+    throwExpectedCliError("Use either --message or --message-file, not both.");
   }
   if (rawMessageFile !== undefined && !messageFile) {
-    throw new Error("--message-file must not be empty.");
+    throwExpectedCliError("--message-file must not be empty.");
   }
   const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
-  if (!message.trim()) {
-    throw messageFile
-      ? new Error(`Message file is empty: ${messageFile}`)
-      : missingAgentMessageError();
+  if (!messageFile && !message.trim()) {
+    throwExpectedCliError(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
+    );
   }
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
   if (isCompactControlCommand(message)) {
-    throw new Error(
+    throwExpectedCliError(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }
@@ -956,31 +891,31 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
     : { ...dispatchOpts, runId: randomIdempotencyKey() };
-  const signalBridge = createEmbeddedStateSignalBridge();
+  const signalBridge = createProcessSignalBridge();
   try {
     if (dispatchOpts.local === true) {
-      const stateLock = await acquireEmbeddedStateLock({
-        signal: signalBridge.signal,
-        formatActiveGatewayRefusal: formatActiveGatewayLocalRefusal,
+      const { runWithLocalStateOwner } = await import("../cli/local-state-owner.js");
+      const result = await runWithLocalStateOwner({
+        method: "agent --local",
+        params: {},
+        target: "agent state",
+        onForeignOwner: "refuse",
+        onlineAlternative: "Omit --local to run it through the Gateway.",
+        runLocal: () =>
+          runEmbeddedAgentCommand(
+            {
+              ...gatewayDispatchOpts,
+              agentId:
+                gatewayDispatchOpts.agent ?? gatewayDispatchOpts.localGatewayCompatibilityAgentId,
+              replyAccountId: gatewayDispatchOpts.replyAccount,
+              cleanupBundleMcpOnRunEnd: true,
+              cleanupCliLiveSessionOnRunEnd: true,
+              oneShotCliRun: true,
+              abortSignal: signalBridge.signal,
+            },
+            runtime,
+          ),
       });
-      let result: Awaited<ReturnType<typeof runEmbeddedAgentCommand>>;
-      try {
-        result = await runEmbeddedAgentCommand(
-          {
-            ...gatewayDispatchOpts,
-            agentId:
-              gatewayDispatchOpts.agent ?? gatewayDispatchOpts.localGatewayCompatibilityAgentId,
-            replyAccountId: gatewayDispatchOpts.replyAccount,
-            cleanupBundleMcpOnRunEnd: true,
-            cleanupCliLiveSessionOnRunEnd: true,
-            oneShotCliRun: true,
-            abortSignal: signalBridge.signal,
-          },
-          runtime,
-        );
-      } finally {
-        await stateLock?.release();
-      }
       markAgentRunExitCode(readAgentRunTerminalOutcome(result));
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     }

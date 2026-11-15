@@ -10,6 +10,7 @@ import type {
   WorkerWorkspaceConflictReport,
   WorkspaceResultConflictLookup,
 } from "./workspace-conflicts.js";
+import { prepareWorkspaceReconciliation } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -151,6 +152,7 @@ export async function applyWorkspace(params: {
   const { applyStagedWorkerWorkspace } = await import("./workspace-reconcile-apply.js");
   return await applyStagedWorkerWorkspace({
     ...params,
+    reconciliation: prepareWorkspaceReconciliation(params.base, params.current),
     baseManifestRef: `sha256:${"a".repeat(64)}`,
     currentManifestRef: `sha256:${"b".repeat(64)}`,
     acceptance: { kind: "reconcile", publish: params.publishAcceptedManifest },

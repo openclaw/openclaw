@@ -4,16 +4,14 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { AgentDatabaseAdmissionError } from "../state/agent-database-admission.js";
+import type { AgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import { parseControlUiSessionReturnPath } from "./control-ui-session-entry-path.js";
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
-import {
-  checkGatewayHttpRequestAuth,
-  resolveSharedSecretHttpOperatorScopes,
-} from "./http-auth-utils.js";
-import { sendGatewayAuthFailure } from "./http-common.js";
+import { authorizeControlUiReadRequestOrReply } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
-import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
@@ -24,6 +22,7 @@ export async function serveControlUiSessionEntry(
     res: ServerResponse;
     basePath: string;
     projection?: SessionRowProjection;
+    agentDatabaseStartup?: AgentDatabasePreparation;
     serveApp: (path: string, isCurrent?: () => boolean) => Promise<boolean>;
   },
 ): Promise<true> {
@@ -46,20 +45,21 @@ export async function serveControlUiSessionEntry(
     res.end("Not found");
     return true;
   }
-  const auth = await checkGatewayHttpRequestAuth({ ...params, res: undefined }, true);
-  if (!auth.ok) {
+  const canShowLogin = !probe && (params.auth.mode === "token" || params.auth.mode === "password");
+  // The handoff is a same-origin Control UI read, including verified Serve identity.
+  const requestAuth = await authorizeControlUiReadRequestOrReply({
+    ...params,
+    requiredOperatorMethod: "chat.history",
+    replyOnFailure: !canShowLogin,
+  });
+  if (!requestAuth) {
     // Token/password credentials belong to the normal browser login gate. The
     // app shell grants no data access; its existing WS/bootstrap checks still apply.
-    if (!probe && (params.auth.mode === "token" || params.auth.mode === "password")) {
+    if (canShowLogin) {
       await params.serveApp(path);
-    } else {
-      sendGatewayAuthFailure(res, auth.authResult);
     }
     return true;
   }
-  const requestAuth = auth.requestAuth;
-  const scopes =
-    requestAuth.deviceOperatorScopes ?? resolveSharedSecretHttpOperatorScopes(req, requestAuth);
   const client: GatewayClient = {
     connect: {
       minProtocol: PROTOCOL_VERSION,
@@ -71,7 +71,7 @@ export async function serveControlUiSessionEntry(
         mode: GATEWAY_CLIENT_MODES.UI,
       },
       role: "operator",
-      scopes,
+      scopes: requestAuth.operatorScopes,
     },
     authenticatedUserProfile: requestAuth.authenticatedUserProfile,
     internal: {
@@ -84,20 +84,45 @@ export async function serveControlUiSessionEntry(
   if (projection) {
     prepareGatewayRecipientProfile(client);
   }
-  const selected =
-    projection && authorizeOperatorScopesForMethod("chat.history", scopes).allowed
-      ? await resolveControlUiSessionPath({
+  let selected: Awaited<ReturnType<typeof resolveControlUiSessionPath>> = null;
+  if (projection) {
+    for (;;) {
+      let preparation: Promise<void> | undefined;
+      try {
+        selected = await resolveControlUiSessionPath({
           target,
           projection,
           client,
           isCurrent: requestAuth.hasCurrentClientAuthority,
-        })
-      : null;
+        });
+        break;
+      } catch (error) {
+        if (
+          !(error instanceof AgentDatabaseAdmissionError) ||
+          error.refusal.code !== "agent-database-inspection-pending"
+        ) {
+          throw error;
+        }
+        // An old document can reach this handoff before its source is readable.
+        // Join that source's publication, not full writable integrity or other agents.
+        preparation = params.agentDatabaseStartup?.waitForAgentPreparation(error.refusal.agentId, {
+          forWrite: false,
+          signal: getAsyncWorkSignal(),
+        });
+        if (!preparation) {
+          throw error;
+        }
+      }
+      await preparation;
+      await requestAuth.revalidate();
+    }
+  }
   if (!selected || !projection || !requestAuth.hasCurrentClientAuthority()) {
     res.statusCode = 403;
     res.end(probe ? undefined : "Session unavailable. Reload the conversation or log in again.");
     return true;
   }
+  await requestAuth.revalidate();
   const isCurrent = () => requestAuth.hasCurrentClientAuthority() && selected.isCurrent();
   if (probe) {
     res.statusCode = isCurrent() ? 204 : 403;

@@ -14,7 +14,7 @@ import {
 import {
   computeFileLists,
   createFileOps,
-  extractFileOpsFromMessage,
+  extractFileOpsFromMessages,
   formatFileOperations,
   mergeSummaryFileOperations,
   serializeConversation,
@@ -26,15 +26,15 @@ function serializeToolResult(text: string): string {
 
 function fileLists(messages: AgentMessage[]) {
   const fileOps = createFileOps();
-  for (const message of messages) {
-    extractFileOpsFromMessage(message, fileOps);
-  }
+  extractFileOpsFromMessages(messages, fileOps);
   return computeFileLists(fileOps);
 }
-it("extracts namespaced tool names", () => {
-  const call = (name: string, path: string) => toolCall(name, { path });
-  const calls = [call("mcp__files__READ", "r.ts"), call("files__edit", "e.ts")];
-  expect(fileLists([assistant(calls)])).toEqual({ readFiles: ["r.ts"], modifiedFiles: ["e.ts"] });
+it.each([false, true, undefined])("extracts namespaced outcomes: %s", (changed) => {
+  const read = toolCall("mcp__files__READ", { path: "r.ts" }, "r.ts");
+  const edit = toolCall("files__edit", { path: "e.ts" }, "e.ts");
+  const result = toolResult("", { toolName: "edit", toolCallId: "e.ts", details: { changed } });
+  const expected = { readFiles: ["r.ts"], modifiedFiles: changed === false ? [] : ["e.ts"] };
+  expect(fileLists([assistant([read, edit]), result])).toEqual(expected);
 });
 it("extracts top-level and nested apply_patch result summaries", () => {
   const details = (added: string[], modified: string[], deleted: string[]) => ({
@@ -69,15 +69,16 @@ it("merges file identity forward across two compactions", () => {
 describe("serializeConversation", () => {
   it("serializes tool arguments once for the full call and sampled-result label", () => {
     const payload = { path: "src/example.ts", content: "synthetic content" };
+    const shortResult = `${"s".repeat(1_997)}\r\n!`;
     const stringify = vi.spyOn(JSON, "stringify");
     try {
       expect(
         serializeConversation([
           assistant([toolCall("write", { payload }, "call-1")]),
-          toolResult("saved", { toolCallId: "call-1", toolName: "write" }),
+          toolResult(shortResult, { toolCallId: "call-1", toolName: "write" }),
         ]),
       ).toBe(
-        '[Assistant tool calls]: write(payload={"path":"src/example.ts","content":"synthetic content"})\n\n[Tool result]: saved',
+        `[Assistant tool calls]: write(payload={"path":"src/example.ts","content":"synthetic content"})\n\n[Tool result]: ${shortResult}`,
       );
       expect(stringify.mock.calls.filter(([value]) => value === payload)).toHaveLength(1);
     } finally {
@@ -107,7 +108,7 @@ describe("serializeConversation", () => {
     const content = [textBlock("alpha"), textBlock("end")];
     const message = custom(content, { timestamp: 0 });
     const original = structuredClone(content);
-    expect(serializeConversation(convertToLlm([message]))).toBe("[User]: alpha\nend");
+    expect(serializeConversation(convertToLlm([message]))).toBe("[Synthetic input]: alpha\nend");
     expect(estimateTokens(message)).toBe(3);
     expect(message.content).toEqual(original);
   });
@@ -218,29 +219,30 @@ describe("serializeConversation", () => {
   });
 
   it("keeps truncated tool results UTF-16 safe and reports the exact omitted count", () => {
-    const prefix = "a".repeat(1_999);
-    const content = `${prefix}🚀tail`;
+    const prefix = "a".repeat(1_335);
+    const tail = "t".repeat(599);
+    const content = `${prefix}🚀${"m".repeat(2_000)}🚀${tail}`;
     const messages = [
       { role: "toolResult", content: [{ type: "toolResult", content }] },
     ] as unknown as Message[];
 
     expect(serializeConversation(messages)).toBe(
-      `[Tool result]: ${prefix}\n\n[... 6 more characters truncated]`,
+      `[Tool result]: ${prefix}\n\n[... 2004 more characters truncated]\n\n${tail}`,
     );
   });
 
-  it("keeps both diagnostic truncation boundaries UTF-16 safe", () => {
-    const output = `${"h".repeat(1399)}🚀${"m".repeat(1600)}🚀\nERROR: failed safely`;
-
-    const serialized = serializeToolResult(output);
-    expect(serialized).toContain("ERROR: failed safely");
-    expect(serialized.isWellFormed()).toBe(true);
-  });
-
-  it("does not let routine 'exit code 0' output evict an earlier failure", () => {
-    const output = `${"h".repeat(1500)}ERROR: deployment failed${"m".repeat(1500)}\nexit code 0`;
-    expect(serializeToolResult(output)).toContain("ERROR: deployment failed");
-  });
+  it.each([600, 1_500, 1_950])(
+    "keeps an earlier failure at offset %i over routine terminal output",
+    (offset) => {
+      const prefix = "exit code 0".padStart(offset - 630, "h").padEnd(offset, "h");
+      for (const footer of ["exit code 0", "RESULT_CODE=STUDY-01-OK"]) {
+        const output = `${prefix}ERROR: deployment failed${"m".repeat(3_000)}\n${footer}`;
+        const serialized = serializeToolResult(output);
+        expect(serialized.split("ERROR: deployment failed")).toHaveLength(2);
+        expect(serialized.length).toBeLessThanOrEqual(2_064 + "[Tool result]: ".length);
+      }
+    },
+  );
 
   it("retains terminal errors followed by more than 600 characters of stack frames", () => {
     const output = `${"progress ".repeat(300)}\nERROR: terminal failure\n${"  at applicationFrame()\n".repeat(45)}`;
@@ -250,14 +252,6 @@ describe("serializeConversation", () => {
     expect(serialized).toContain("applicationFrame()");
     expect(serialized).toContain("middle/trailing characters truncated");
     expect(serialized.length).toBeLessThan(2100);
-  });
-
-  it("does not duplicate early errors into an overlapping diagnostic window", () => {
-    const output = `${"h".repeat(600)}ERROR: early failure${"m".repeat(1900)}`;
-
-    const serialized = serializeToolResult(output);
-    expect(serialized.split("ERROR: early failure")).toHaveLength(2);
-    expect(serialized).toContain(`[... ${output.length - 2000} more characters truncated]`);
   });
 });
 

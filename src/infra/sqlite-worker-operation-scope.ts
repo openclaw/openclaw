@@ -11,6 +11,7 @@ import {
   type SqliteWorkerOperationContext,
   type WorkerAdmissionScope,
 } from "./sqlite-worker-operation-settlement.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-writer-admission-client.js";
 
 /** Install only the private port belonging to the broker's currently executing operation. */
 export function withSqliteWorkerOperationAdmission<T>(
@@ -43,7 +44,7 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
     { deadlineAtMs: scope.owner.databaseAdmissionDeadlineAtMs },
     () =>
       currentAdmission.run(scope, () =>
-        withSqliteDatabaseAdmissionExchange((admissions, location, create) => {
+        withSqliteDatabaseAdmissionExchange((admissions, location, create, observedLocation) => {
           if (!scope.active) {
             const upstream = getSqliteDatabaseAdmissionUpstream();
             if (create || !upstream || upstream.closed) {
@@ -53,10 +54,46 @@ function runSqliteWorkerAdmissionScope<T>(scope: WorkerAdmissionScope, operation
               );
             }
             // Retained cleanup may publish facts; creation still needs the live grant.
-            return exchangeDatabaseAdmissions(upstream.port, admissions, location);
+            return exchangeDatabaseAdmissions(
+              upstream.port,
+              admissions,
+              location,
+              undefined,
+              observedLocation,
+            );
           }
-          return exchangeSqliteDatabaseAdmissions(scope.port, admissions, location, create);
+          return exchangeSqliteDatabaseAdmissions(
+            scope.port,
+            admissions,
+            location,
+            create,
+            observedLocation,
+          );
         }, operation),
       ),
   );
+}
+
+/** Schema work borrows live host authority through the same retained job port. */
+export function requestSqliteWorkerSchemaMaintenance(databasePath: string): boolean {
+  if (!currentAdmission.getStore()) {
+    return false;
+  }
+  requestSqliteWorkerOperationAdmission({
+    stage: "prepare",
+    facts: { kind: "schema-maintenance", databasePath },
+  });
+  return true;
+}
+
+/** Require owner-prepared data carried by this operation's command envelope. */
+export function takeSqliteWorkerOperationAdmissionAttachment(): unknown {
+  const scope = currentAdmission.getStore();
+  if (!scope?.active) {
+    throw new SqliteWorkerError("SQLite operation requires its retained admission", "unavailable");
+  }
+  if (!scope.owner.attachment) {
+    throw new SqliteWorkerError("SQLite operation attachment is unavailable", "unavailable");
+  }
+  return scope.owner.attachment.value;
 }

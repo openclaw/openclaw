@@ -125,6 +125,7 @@ export async function prepareWorkerTurnPrompt(params: {
     capabilityToolNames,
     effectiveTools: projection.tools,
     toolSchemaDirectoryPrompt: () => projection.toolSchemaDirectoryPrompt,
+    runGrantedToolDirectory: () => projection.runGrantedToolDirectory,
     isRawModelRun,
     modelToolsEnabled: capabilityToolNames.size > 0,
     skillsPrompt: turn.skillsSnapshot?.prompt ?? "",
@@ -245,6 +246,7 @@ export async function prepareWorkerTurnPrompt(params: {
     sessionAgentId: agentId,
     systemPromptText,
     systemPromptReport: prompt.systemPromptReport,
+    systemPromptRuntimeContextFragments: prompt.runtimeContextFragments,
     toolResultPromptProjectionState: createToolResultPromptProjectionState(),
   });
   const history = context.hookMessagesForCurrentPrompt;

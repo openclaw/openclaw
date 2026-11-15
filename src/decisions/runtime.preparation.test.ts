@@ -14,8 +14,8 @@ import * as profileReader from "../state/user-profile-list.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decisionBatchV1ToV2 } from "./compatibility.js";
 import { waitForAbort } from "./contract.test-support.js";
+import type { DecisionProviderV1 } from "./provider-types.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
-import type { DecisionProviderV1 } from "./types.js";
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();

@@ -238,11 +238,12 @@ it("flushes a terminal CLI process failure without reporting completion", async 
 });
 
 it.each([
-  { abortKind: "manual" as const, timedOut: false },
-  { abortKind: "timeout" as const, timedOut: true },
+  { abortKind: "manual" as const, timedOut: false, rejection: "AbortError" },
+  // The run rethrows the caller's own abort reason.
+  { abortKind: "timeout" as const, timedOut: true, rejection: "TimeoutError" },
 ])("distinguishes $abortKind cancellation in the final trajectory event", async (testCase) => {
   const { context, events } = await fixture({ abortKind: testCase.abortKind });
-  await expect(runCliAgent(context.params)).rejects.toMatchObject({ name: "AbortError" });
+  await expect(runCliAgent(context.params)).rejects.toMatchObject({ name: testCase.rejection });
   expect((await events()).at(-1)).toMatchObject({
     type: "session.ended",
     data: {
@@ -253,21 +254,16 @@ it.each([
   });
 });
 
-it("leaves trajectory disabled while still executing the CLI", async () => {
-  const { context, events } = await fixture({ disabled: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
-  expect(await events()).toEqual([]);
-});
-
-it("honors the disableTrajectory opt-out while still executing the CLI", async () => {
-  const { context, events } = await fixture({ disableTrajectory: true });
-  await expect(runCliAgent(context.params)).resolves.toMatchObject({
-    payloads: [{ text: "fixture reply" }],
-  });
-  expect(await events()).toEqual([]);
-});
+it.each([{ disabled: true }, { disableTrajectory: true }])(
+  "leaves trajectory disabled for %j while still executing the CLI",
+  async (options) => {
+    const { context, events } = await fixture(options);
+    await expect(runCliAgent(context.params)).resolves.toMatchObject({
+      payloads: [{ text: "fixture reply" }],
+    });
+    expect(await events()).toEqual([]);
+  },
+);
 
 it("records both retry prompts but ends a recovered CLI turn only once", async () => {
   const { context, events } = await fixture({ recover: true });

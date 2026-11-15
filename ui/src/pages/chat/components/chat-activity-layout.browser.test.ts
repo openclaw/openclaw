@@ -66,8 +66,9 @@ function activityFixture(note = "") {
     content: [call("batch-" + index, "exec", { title: `Batch ${index + 1}`, code: "// Read" })],
     timestamp: 1000,
   }));
-  for (let index = 0; index < 40; index++) {
-    const message = child(index, "batch-" + Math.floor(index / 10));
+  // Keep one expanded batch tall enough to exercise scrolling with compact rows.
+  for (let index = 0; index < 48; index++) {
+    const message = child(index, "batch-" + Math.floor(index / 12));
     if (index === 0 && note) {
       message.content.push({ type: "text", text: note });
     }
@@ -138,7 +139,7 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
     const toggle = () => body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
     toggle();
     await settleToolBridges(container);
-    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(14);
+    expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(16);
     expect(body.getBoundingClientRect().height).toBeCloseTo(cappedHeight(), 0);
     expect(body.scrollHeight).toBeGreaterThan(body.clientHeight);
     body.scrollTop = body.scrollHeight;
@@ -178,7 +179,10 @@ describe.runIf("__vitest_browser__" in globalThis)("activity group sizing", () =
       getComputedStyle(body.querySelectorAll(".chat-tool-row__chevron")[row]!).opacity;
     expect(body.querySelectorAll(".chat-tool-row")).toHaveLength(1);
     expect(body.scrollHeight).toBe(body.clientHeight);
-    expect(chevronOpacity(0)).not.toBe("0");
+    const { userEvent } = await import("vitest/browser");
+    await userEvent.hover(body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!);
+    await expect.poll(() => chevronOpacity(0)).not.toBe("0");
+    await userEvent.hover(document.body);
 
     body.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")!.click();
     await settleToolBridges(container);

@@ -1,7 +1,7 @@
 /**
  * Stable stringify helper.
  * Serializes arbitrary values with deterministic key ordering and explicit
- * handling for errors, binary data, bigint, non-finite numbers, and cycles.
+ * handling for native values, binary data, bigint, non-finite numbers, and cycles.
  */
 
 type StableStringNormalizer = (value: string) => string;
@@ -53,24 +53,24 @@ function stringifyStableValue(
 
   stack.add(value);
   try {
-    if (value instanceof Error) {
-      return stringifyStableValue(
-        {
-          name: value.name,
-          message: value.message,
-          stack: value.stack,
-        },
-        stack,
-        normalizeString,
-        write,
-      );
+    // Non-JSON tags cannot collide with existing JSON strings, arrays or objects.
+    if (value instanceof Date) {
+      return `Date(${Number.isNaN(value.getTime()) ? "null" : JSON.stringify(normalizeString(value.toISOString()))})`;
     }
-    if (value instanceof Uint8Array) {
+    if (value instanceof RegExp) {
+      return `RegExp(${JSON.stringify(normalizeString(value.toString()))})`;
+    }
+    if (value instanceof Set || value instanceof Map) {
+      const entries = Array.from(value, (entry: unknown) =>
+        stringifyStableValue(entry, stack, normalizeString),
+      ).toSorted(compareStableStrings);
+      return `${value instanceof Set ? "Set" : "Map"}([${entries.join(",")}])`;
+    }
+    if (value instanceof Error || value instanceof Uint8Array) {
       return stringifyStableValue(
-        {
-          type: "Uint8Array",
-          data: encodeBase64(value),
-        },
+        value instanceof Error
+          ? { name: value.name, message: value.message, stack: value.stack }
+          : { type: "Uint8Array", data: encodeBase64(value) },
         stack,
         normalizeString,
         write,
@@ -88,11 +88,7 @@ function stringifyStableValue(
         write("]");
         return "";
       }
-      const serializedEntries: string[] = [];
-      for (const entry of value) {
-        serializedEntries.push(stringifyStableValue(entry, stack, normalizeString));
-      }
-      return `[${serializedEntries.join(",")}]`;
+      return `[${Array.from(value, (entry: unknown) => stringifyStableValue(entry, stack, normalizeString)).join(",")}]`;
     }
     const record = value as Record<string, unknown>;
     const keys = Object.keys(record);

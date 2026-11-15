@@ -3,6 +3,11 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createNpmTarget, writePackageRoot } from "../infra/package-update-steps.test-support.js";
+import type { PackageUpdateTransaction } from "../infra/package-update-swap-contract.js";
+import { swapStagedPackageInstall } from "../infra/package-update-swap.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../infra/update-npm-prefix.js";
+import { installDurableServiceCli } from "./durable-service-entrypoint.js";
 import { installScheduledTask, stageScheduledTask } from "./schtasks-install.js";
 import {
   buildTaskScript,
@@ -17,12 +22,22 @@ import {
 } from "./service-update-authority.js";
 
 const native = vi.hoisted(() => ({
+  durableUpdate: vi.fn(),
   exec: vi.fn<typeof import("./schtasks-exec.js").execSchtasks>(),
   run: vi.fn<typeof import("./schtasks-control.js").runScheduledTaskOrThrow>(),
   probe: vi.fn<typeof import("./schtasks-state-probe.js").probeScheduledTaskState>(),
   runtime: vi.fn<typeof import("./schtasks-runtime.js").resolveFallbackRuntime>(),
   running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
   stop: vi.fn<typeof import("./schtasks-control.js").stopRegisteredScheduledTask>(),
+}));
+// mock-isolation: npm staging is replaced by a prepared stage; the real package swap runs.
+vi.mock("../infra/package-update-steps.js", () => ({
+  runGlobalPackageUpdateSteps: native.durableUpdate,
+}));
+// mock-isolation: no npm prefix probe may spawn on the test host.
+vi.mock("../infra/update-global.js", async (original) => ({
+  ...(await original<typeof import("../infra/update-global.js")>()),
+  resolveGlobalInstallTarget: async () => ({ manager: "npm", command: "npm" }),
 }));
 // mock-isolation: Install recovery changes only the task registration modeled by this fixture.
 vi.mock("./schtasks-exec.js", () => ({
@@ -804,4 +819,118 @@ it.each([
   } else {
     expect(args.warn).not.toHaveBeenCalled();
   }
+});
+
+it("runs the caller's recovery hook once the replacement has stopped, before the previous task runs", async () => {
+  const { args } = await fixture(true);
+  let running = true;
+  let enabled = true;
+  native.probe.mockImplementation(() => ({
+    status: "found",
+    state: running ? 4 : enabled ? 3 : 1,
+    enabled,
+  }));
+  native.runtime.mockImplementation(async () => ({ status: running ? "running" : "stopped" }));
+  native.stop.mockImplementation(async (params) => {
+    params.onProcessStopped?.();
+    running = false;
+    params.onEndMutation?.();
+    return false;
+  });
+  const events: string[] = [];
+  const execute = native.exec.getMockImplementation()!;
+  native.exec.mockImplementation(async (command) => {
+    if (command[0] === "/End" || command[0] === "/Run") {
+      events.push(command[0]);
+      running = command[0] === "/Run";
+    }
+    if (command.includes("/DISABLE")) {
+      enabled = false;
+    }
+    if (command.includes("/ENABLE")) {
+      enabled = true;
+    }
+    return execute(command);
+  });
+  native.run.mockRejectedValueOnce(new Error("Synthetic activation failure"));
+
+  await expect(
+    installScheduledTask({
+      ...args,
+      beforeRecovery: async () => {
+        events.push(running || enabled ? "hook before settlement" : "hook");
+      },
+    }),
+  ).rejects.toThrow("Synthetic activation failure");
+  expect(events).toEqual(["/End", "hook", "/Run"]);
+});
+
+it("keeps the durable copy and its backup when task recovery cannot settle the replacement", async () => {
+  const { args } = await fixture();
+  const durable = resolveNpmGlobalPrefixLayoutFromPrefix(
+    path.join(args.env.OPENCLAW_STATE_DIR, "npm"),
+  );
+  const packageRoot = path.join(durable.globalRoot, "openclaw");
+  const liveVersion = async () =>
+    JSON.parse(await fs.readFile(path.join(packageRoot, "package.json"), "utf8")).version;
+  await writePackageRoot(packageRoot, "1.0.0");
+  native.durableUpdate.mockImplementation(
+    async (params: {
+      validateCandidate?: (root: string) => Promise<unknown>;
+      beforeActivate?: () => Promise<void>;
+      onTransaction?: (transaction: PackageUpdateTransaction) => void | Promise<void>;
+    }) => {
+      const prefix = path.join(args.env.OPENCLAW_STATE_DIR, "stage");
+      const layout = resolveNpmGlobalPrefixLayoutFromPrefix(prefix);
+      const stagedRoot = path.join(layout.globalRoot, "openclaw");
+      await writePackageRoot(stagedRoot, "2.0.0");
+      await fs.mkdir(layout.binDir, { recursive: true });
+      await fs.writeFile(path.join(layout.binDir, "openclaw"), "launcher 2.0.0\n");
+      await params.validateCandidate?.(stagedRoot);
+      await params.beforeActivate?.();
+      const result = await swapStagedPackageInstall({
+        installTarget: createNpmTarget(durable.globalRoot),
+        packageName: "openclaw",
+        stage: {
+          prefix,
+          layout,
+          packageRoot: stagedRoot,
+          installTarget: createNpmTarget(layout.globalRoot),
+        },
+        ...(params.onTransaction ? { onTransaction: params.onTransaction } : {}),
+      });
+      return { failedStep: result.status === "committed" ? null : result.step };
+    },
+  );
+  // Activation fails with the replacement task still queued, so task recovery refuses.
+  native.run.mockImplementation(async () => {
+    native.probe.mockReturnValue({ status: "found", state: 2, enabled: false });
+    throw new Error("Synthetic activation failure");
+  });
+  const warn = vi.fn();
+
+  await expect(
+    installDurableServiceCli({
+      env: args.env,
+      replacement: {
+        version: "2.0.0",
+        globalRoot: durable.globalRoot,
+        packageRoot,
+        entrypoint: path.join(packageRoot, "dist", "index.js"),
+      },
+      // The service guard runs beforeMutation and then the native install.
+      install: async (beforeMutation, beforeRecovery) => {
+        await beforeMutation?.();
+        await installScheduledTask({ ...args, beforeRecovery });
+      },
+      verify: async () => true,
+      warn,
+    }),
+  ).rejects.toThrow("previous service definition could not be restored");
+  expect(await liveVersion()).toBe("2.0.0");
+  expect(warn).toHaveBeenCalledWith(expect.stringContaining("without a settled service recovery"));
+  // The package transaction keeps the previous copy's backup rather than retiring it.
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("inspect the installation and backups"),
+  );
 });

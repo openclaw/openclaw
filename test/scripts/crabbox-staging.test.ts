@@ -19,7 +19,8 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { hasUnjoinedWork, runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
+import { resolveNodeCompilerArgs } from "../../scripts/lib/vitest-node-args.mts";
+import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -36,9 +37,13 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { createDeferred, withinTest } from "../helpers/promise.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
+import { preparedScriptWrapperEnv } from "./prepared-script-wrapper.test-support.js";
 import { toolingMtsEntrypoints } from "./tooling-mts-runtime.test-support.mts";
 
 const repository = fileURLToPath(new URL("../../", import.meta.url));
+const capsuleUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule);
+const wrapperSource = new URL("../../scripts/crabbox-wrapper.mts", import.meta.url);
+const wrapperUrl = resolveRuntimeWorkerUrl(scriptModuleEntrypoints.crabboxWrapper);
 let fixtureReceipts: FixtureReceiptChannel;
 beforeAll(async () => {
   fixtureReceipts = await openFixtureReceiptChannel();
@@ -101,7 +106,7 @@ async function withFixture(scenario: (context: ReturnType<typeof createFixture>)
 
 function createFixture(diagnostics?: FixtureDiagnostics) {
   const nodeExecutable = resolveTestNodeExecPath();
-  const nodeArgs = resolveVitestNodeArgs();
+  const nodeArgs = resolveNodeCompilerArgs();
   // openclaw-temp-dir: allow retain input ownership when a child cannot be joined
   const root = mkdtempSync(join(tmpdir(), "openclaw-crabbox-recovery-"));
   const source = join(root, "source"),
@@ -282,10 +287,7 @@ if (plan.gate) {
       nodeExecutable,
       [
         ...nodeArgs,
-        ...resolveRuntimeWorkerArgv(
-          resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule),
-          nodeExecutable,
-        ).slice(0, -1),
+        ...resolveRuntimeWorkerArgv(capsuleUrl, nodeExecutable).slice(0, -1),
         "--input-type=module",
         "-e",
         `import fs from 'node:fs';
@@ -301,7 +303,7 @@ function notifyFixturePhase(path) {
 }
 ${prelude}
 syncBuiltinESMExports();
-${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxSourceCapsule).href)});` : ""}
+${includeCapsule ? `const {prepareCrabboxSourceCapsule} = await import(${JSON.stringify(capsuleUrl.href)});` : ""}
 const {createStaging,createMirrorStaging,runStagingCommand} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStaging).href)});
 const {captureClaimNamespace} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingClaims).href)});
 const {preserveCrabboxArtifacts} = await import(${JSON.stringify(resolveRuntimeWorkerUrl(toolingMtsEntrypoints.crabboxStagingArtifacts).href)});
@@ -344,7 +346,7 @@ process.kill(process.pid,'SIGKILL');`,
     command(
       nodeExecutable,
       [...nodeArgs, resolve(repository, "scripts/crabbox-wrapper.mjs"), "staging", ...args],
-      override,
+      preparedScriptWrapperEnv([[wrapperSource, wrapperUrl]], { ...env, ...override }),
       undefined,
       "wrapper",
     );
@@ -376,8 +378,6 @@ process.kill(process.pid,'SIGKILL');`,
     root,
     source,
     staging,
-    env,
-    cli,
     calls,
     nodePolicies: () =>
       readFileSync(nodePolicy, "utf8")
@@ -393,7 +393,6 @@ process.kill(process.pid,'SIGKILL');`,
     initialize,
     commit,
     git: (...args: string[]) => gitAt(source, ...args),
-    gitAt,
     waitForPhase,
     stage: (value: string) => diagnostics?.stage(value),
     receipt: (stage: Stage) =>
@@ -1173,7 +1172,7 @@ describe.skipIf(process.platform === "win32")(
             new Set(["source-selection", "claims-cli"]),
           );
           for (const policy of policies) {
-            expect(policy.nodeArgs, policy.entry).toEqual(resolveVitestNodeArgs());
+            expect(policy.nodeArgs, policy.entry).toEqual(resolveNodeCompilerArgs());
           }
           expect(readdirSync(f.staging)).toEqual([]);
           expect(readFileSync(join(f.source, "source.txt"), "utf8")).toBe("retained source\n");

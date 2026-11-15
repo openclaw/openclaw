@@ -43,7 +43,7 @@ suite.define(() => {
           const choose = async () => {
             await page.getByRole("button", { name: "Add attachment", exact: true }).click();
             const mediaAction = page.getByRole("menuitem", {
-              name: "Media",
+              name: attachmentBrowser(browser).single ? "Add attachment…" : "Media",
               exact: true,
             });
             await mediaAction.waitFor({ state: "visible" });
@@ -54,12 +54,14 @@ suite.define(() => {
           };
           const chooser = await choose();
           expect(chooser.isMultiple()).toBe(true);
-          expect(await chooser.element().getAttribute("accept")).toBe("image/*,video/*");
+          expect(await chooser.element().getAttribute("accept")).toBe(
+            attachmentBrowser(browser).single ? null : "image/*,video/*",
+          );
           expect(await chooser.element().getAttribute("capture")).toBeNull();
           await chooser.setFiles([image, video]);
           const ready = page.locator('.chat-attachment-thumb[aria-busy="false"]');
           await expect.poll(() => ready.count()).toBe(2);
-          expect(await page.locator(".agent-chat__media-input").inputValue()).toBe("");
+          expect(await chooser.element().inputValue()).toBe("");
           await (await choose()).setFiles([]);
           expect(await ready.count()).toBe(2);
           expect(await editor.inputValue()).toBe("Keep this synthetic mixed-media draft.");

@@ -1,6 +1,9 @@
 import { expect, it } from "vitest";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
-import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
+import {
+  createPageOpener,
+  deferRecoveryScopeHydration,
+} from "./new-session-page.scenario.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   LOCAL_GIT_WORKSPACE_RESPONSES,
@@ -116,18 +119,7 @@ suite.define(() => {
       });
       if (late === "recovery scope") {
         // Resolve auth recovery after name discovery to exercise their independent lifetimes.
-        await page.addInitScript(() => {
-          const originalDigest = crypto.subtle.digest.bind(crypto.subtle);
-          const delayed = new Promise<void>((resolve) => {
-            window.addEventListener("test-release-recovery-scope", () => resolve(), { once: true });
-          });
-          crypto.subtle.digest = async (algorithm, data) => {
-            if (new TextDecoder().decode(data) === "e2e-device-token") {
-              await delayed;
-            }
-            return originalDigest(algorithm, data);
-          };
-        });
+        await page.addInitScript(deferRecoveryScopeHydration);
       }
       const systemInfo = {
         machineName: "QA-Gateway",
@@ -153,14 +145,14 @@ suite.define(() => {
       await gateway.waitForRequest("system.info");
       const trigger = page.locator("#new-session-where-trigger");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe(
-        late === "system info" ? "Local" : "QA-Gateway",
+        late === "system info" ? "This computer" : "QA-Gateway",
       );
       const place = page.locator(".oc-popover.new-session-page__where-popover");
       const local = place.locator('[data-value="gateway"]');
       await trigger.click();
       await local.waitFor();
       if (late === "recovery scope") {
-        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
         const catalogRequests = (await gateway.getRequests("environments.list")).length;
         await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
         await waitForGatewayRecoveryScope(page);
@@ -175,18 +167,18 @@ suite.define(() => {
       const pathInput = page.locator("input.new-session-page__browser-path");
       await pathInput.fill("");
       if (late === "system info") {
-        await pollAttribute(pathInput, "placeholder").toBe("Gateway · local");
+        await pollAttribute(pathInput, "placeholder").toBe("This computer");
         await gateway.resolveDeferred("system.info", systemInfo);
-        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
       }
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
-      await pollAttribute(pathInput, "placeholder").toBe("Gateway · QA-Gateway");
+      await pollAttribute(pathInput, "placeholder").toBe("This computer · QA-Gateway");
 
       await page.keyboard.press("Escape");
       await replaceGatewayClient(page);
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("QA-Gateway");
       await trigger.click();
-      await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on your gateway");
+      await expect.poll(() => tooltipTitleText(local)).toBe("QA-Gateway Runs on this computer");
     },
   );
 
@@ -275,7 +267,7 @@ suite.define(() => {
       .toEqual({ repoRoot: "/home", includeRepositoryStatus: true });
     await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
 
-    expect(await page.locator("#new-session-checkout-trigger").count()).toBe(0);
+    await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     await page.locator("#new-session-where-trigger").click();
     const where = page.locator(".oc-popover.new-session-page__where-popover");
     const cloud = where.getByRole("button", { name: "aws", exact: true });

@@ -147,6 +147,7 @@ export async function createReleasePublishInputs({ manifest, npmManifest }) {
             timeoutMs: 15_000,
             attempts: 2,
             redirect: "manual",
+            exactVersion: pkg.version,
           });
           const bootstrap = registry.status === 404;
           const core =

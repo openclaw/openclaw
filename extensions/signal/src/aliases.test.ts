@@ -36,29 +36,29 @@ it("resolves own prototype-shaped aliases without inheriting prototype keys", ()
 
 it("resolves aliases and raw targets through the same canonical parser", () => {
   const cfg = signalConfig({
-    me: "uuid:123E4567-E89B-12D3-A456-426614174000",
+    "cafe\u0301": "uuid:123E4567-E89B-12D3-A456-426614174000",
     "+15551230000": "+15559990000",
   });
-
   const uuid = "123e4567-e89b-12d3-a456-426614174000";
   expect(
-    ["signal:me", `uuid:${uuid.toUpperCase()}`, "+15551230000"].map((input) =>
+    ["signal:cafe\u0301", `uuid:${uuid.toUpperCase()}`, "+15551230000"].map((input) =>
       resolveSignalTarget({ cfg, input }),
     ),
   ).toEqual([
-    { kind: "user", to: uuid, source: "alias", alias: "me" },
+    { kind: "user", to: uuid, source: "alias", alias: "cafe\u0301" },
     { kind: "user", to: uuid, source: "raw" },
     { kind: "user", to: "+15551230000", source: "raw" },
   ]);
+  expect(resolveSignalTarget({ cfg, input: "signal:café" })).toBeNull();
 });
 
 describe("listSignalAliasDirectoryEntries", () => {
   it("lists alias-backed peers and groups with alias display names", () => {
-    const cfg = signalConfig({ me: "+15551234567", ops: group });
+    const cfg = signalConfig({ "cafe\u0301": "+15551234567", ops: group });
 
-    const user = [{ kind: "user", id: "+15551234567", name: "me" }];
+    const user = [{ kind: "user", id: "+15551234567", name: "cafe\u0301" }];
     expect([
-      listSignalAliasDirectoryEntries({ cfg, kind: "user" }),
+      listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "CAFÉ" }),
       listSignalAliasDirectoryEntries({ cfg, kind: "user", query: "1555" }),
       listSignalAliasDirectoryEntries({ cfg, kind: "group" }),
     ]).toEqual([user, user, [{ kind: "group", id: group, name: "ops" }]]);

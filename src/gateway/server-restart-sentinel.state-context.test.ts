@@ -99,15 +99,14 @@ vi.mock("../hooks/loader.js", () => ({
   prepareInternalHooks: async () => ({ loadedCount: 0, commit: () => true }),
 }));
 vi.mock("../hooks/internal-hooks.js", () => ({ hasInternalHookListeners: () => false }));
-vi.mock("../agents/main-session-recovery/main-session-restart-recovery-marking.js", () => ({
-  markStartupOrphanedMainSessionsForRecovery: async () => ({ marked: 0, skipped: 0 }),
-}));
 vi.mock("./server-startup-model-runtime.js", () => ({
   publishConfiguredModelRuntimeSnapshots: async () => {},
   hydrateConfiguredExternalCliAuth: async () => ({}),
 }));
-vi.mock("../auto-reply/reply/dispatch-from-config.runtime-loaders.js", () => ({
-  loadGetReplyFromConfigRuntime: async () => ({ prewarmConfigDrivenReplyRuntime: async () => {} }),
+// mock-isolation: Restart-sentinel setup prepares runtimes without executing agent turns.
+vi.mock("../auto-reply/reply/get-reply-run-helpers.js", () => ({
+  loadEmbeddedAgentRuntime: async () => {},
+  loadSessionUpdatesRuntime: async () => {},
 }));
 const { startGatewaySidecars } = await import("./server-startup-sidecars.js");
 const sessionWorker = await vi.importActual<typeof SessionWorker>(
@@ -469,7 +468,6 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
     await state.write(payload);
     const unrelated = await state.other.write(unrelatedPayload);
     let retained: Sentinel = null;
-    let terminalRevision = 0;
     let shouldRun = true;
     const readSnapshot = restartSentinel.readRestartSentinel;
     vi.spyOn(restartSentinel, "readRestartSentinel").mockImplementationOnce(async (readEnv) => {
@@ -491,7 +489,6 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
               },
             },
       );
-      terminalRevision = retained.revision;
       finishUpdateRun(run.runId, { status: "succeeded" }, { env: state.env });
       setTestEnvValue("OPENCLAW_STATE_DIR", state.other.root);
       shouldRun = replacement !== "stopped";
@@ -509,16 +506,9 @@ it.each(["continuation", "other-handoff", "other-run", "restart", "stopped"] as 
       replacement === "stopped" ? null : "completed",
     );
     if (replacement === "continuation") {
-      expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          ctxPayload: expect.objectContaining({
-            Body: "Continue after this update.",
-            MessageSid: `restart-sentinel:agent:main:main:agentTurn:${terminalRevision}`,
-          }),
-        }),
-      );
+      expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
       await wake({ context });
-      expect(mocks.dispatchAssembledChannelTurn).toHaveBeenCalledOnce();
+      expect(mocks.dispatchAssembledChannelTurn).not.toHaveBeenCalled();
     }
   },
 );

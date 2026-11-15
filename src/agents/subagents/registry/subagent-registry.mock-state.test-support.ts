@@ -84,7 +84,6 @@ export function createSubagentRegistryMockState() {
           lifecycleRevision: entry.lifecycleRevision,
           lifecycleRunId: entry.lifecycleRunId,
           activeWriterRunId: entry.activeWriterRunId,
-          subagentRecovery: entry.subagentRecovery,
         }
       );
     }),
@@ -198,6 +197,9 @@ export function createSubagentRegistryMockState() {
       assertCurrent();
       return Promise.resolve({
         assertCurrent,
+        assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), {
+          nativeSource: true,
+        }),
         readSessionSettings: () => {
           assertCurrent();
           const { permissionMode, toolOverrides } = mocks.entries[input.sessionKey] ?? {};

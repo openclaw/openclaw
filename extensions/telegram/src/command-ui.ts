@@ -1,4 +1,5 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import { fitsTelegramCallbackData } from "./approval-callback-data.js";
 import {
   buildBrowseProvidersButton,
   buildModelsKeyboard,
@@ -20,13 +21,14 @@ export function buildCommandsPaginationKeyboard(
   totalPages: number,
   agentId?: string,
 ): Array<Array<{ text: string; callback_data: string }>> {
-  const suffix = agentId ? `:${agentId}` : "";
   return [
-    buildPaginationRow(
-      currentPage,
-      totalPages,
-      (page) => `commands_page_${page ?? "noop"}${suffix}`,
-    ),
+    buildPaginationRow(currentPage, totalPages, (page) => {
+      const data = `commands_page_${page ?? "noop"}`;
+      const withAgent = `${data}:${agentId}`;
+      // Telegram rejects the whole message when one callback_data exceeds 64 bytes, and
+      // agent ids go up to 64 characters. Without the suffix, a tap uses the chat's agent.
+      return agentId && fitsTelegramCallbackData(withAgent) ? withAgent : data;
+    }),
   ];
 }
 

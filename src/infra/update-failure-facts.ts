@@ -16,6 +16,7 @@ import {
 import { StateLeaseLossSchema, type StateLeaseLoss } from "../shared/state-lease-loss.js";
 import { UPDATE_FOREIGN_DESTINATION_REASON } from "../shared/update-outcome.js";
 import { OpenClawStateLeaseError } from "../state/openclaw-state-lease-error.js";
+import { formatDiskSpaceBytes } from "./disk-space.js";
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
@@ -25,6 +26,7 @@ import {
 } from "./errors.js";
 import { npmFailurePackageName } from "./npm-error.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { findUpdateCaptureSpaceError } from "./update-capture-space.js";
 import { formatUpdateFailureFact, type UpdateFailureFact } from "./update-failure-facts-format.js";
 import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 import { UpdateDestinationFailureSchema, UpdateFailureFactSchema } from "./update-run-schema.js";
@@ -114,6 +116,18 @@ export function createUpdateErrorFact(
   error: unknown,
   env: NodeJS.ProcessEnv = process.env,
 ): UpdateFailureFact {
+  const space = findUpdateCaptureSpaceError(error);
+  if (space) {
+    const { requiredBytes, availableBytes, volume } = space.capacity;
+    return createUpdateFailureFact(
+      {
+        check,
+        code: "ENOSPC",
+        message: `Update database ${volume ?? "capture"} volume: needs ${formatDiskSpaceBytes(requiredBytes)}; available ${formatDiskSpaceBytes(availableBytes)}`,
+      },
+      env,
+    );
+  }
   let leaseLoss: StateLeaseLoss | undefined;
   // The formatter must never reach raw cause identities or stringify private object metadata.
   const errors = collectErrorGraphCandidates(error ?? String(error), (current) => [
@@ -186,6 +200,44 @@ export function createUpdateErrorFact(
     },
     env,
   );
+}
+
+/** Package exceptions keep OS metadata in existing bounded diagnostic text, including two causes. */
+export function createPackageUpdateErrorFacts(
+  check: string,
+  error: unknown,
+  env: NodeJS.ProcessEnv = process.env,
+): UpdateFailureFact[] {
+  const facts: UpdateFailureFact[] = [];
+  const seen = new Set<unknown>();
+  for (let current = error; current != null && facts.length < 3 && !seen.has(current);) {
+    seen.add(current);
+    const fact = createUpdateErrorFact(check, current, env);
+    const record = isRecord(current) ? current : {};
+    const metadata = (["errno", "syscall", "path"] as const).map((key) => {
+      const value = readErrorMetadata(
+        () => record[key] ?? (key === "path" ? record.dest : undefined),
+      );
+      const scalar =
+        typeof value === "string" || typeof value === "number" ? String(value) : "unknown";
+      const sanitized = createUpdateFailureFact(
+        { check, code: fact.code, message: scalar },
+        env,
+      ).message;
+      return `${key}=${truncateUtf16Safe(sanitized ?? "unknown", 32)}`;
+    });
+    facts.push(
+      createUpdateFailureFact(
+        {
+          ...fact,
+          message: [...metadata, truncateUtf16Safe(fact.message ?? "", 90)].join("; "),
+        },
+        env,
+      ),
+    );
+    current = readErrorMetadata(() => record.cause);
+  }
+  return facts;
 }
 
 /** Capture diagnostics before output is reduced to a command tail. */

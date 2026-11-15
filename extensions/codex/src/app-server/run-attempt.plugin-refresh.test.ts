@@ -74,8 +74,10 @@ describe("managed Codex plugin refresh", () => {
       const acceptedSteering = firstHandoff || withMedia;
       const steeringAccepted = createDeferred<void>();
       const steeringImage = { type: "image" as const, data: STEERING_PNG, mimeType: "image/png" };
-      const steeringImagePath = path.join(tempDir, "steering.png");
+      const params = createTestParams();
+      const steeringImagePath = path.join(params.workspaceDir, "steering.png");
       if (withMedia) {
+        await fs.mkdir(params.workspaceDir, { recursive: true });
         await fs.writeFile(steeringImagePath, Buffer.from(STEERING_PNG, "base64"));
       }
       const events: string[] = [];
@@ -102,7 +104,8 @@ describe("managed Codex plugin refresh", () => {
         return textToolResult("generation 2 committed");
       });
 
-      const params = createTestParams();
+      // Fake-time handoff barriers now include the conversation-context injection.
+      params.timeoutMs = 60_000;
       setCodexTestToolFactory(params, () => [slow, reload]);
       const originalTask = "Reload the plugin and verify the changed behavior.";
       const receipt = "already-committed-effect-42";

@@ -17,6 +17,7 @@ import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-byte
 import {
   buildOutboundMediaLoadOptions,
   resolveOutboundMediaAccess,
+  resolveOutboundMediaAccessForConfig,
   resolveOutboundMediaLocalRoots,
   type OutboundMediaAccess,
   type OutboundMediaReadFile,
@@ -390,7 +391,7 @@ export async function hydrateAttachmentParamsForAction(params: {
   extraParamKeys?: readonly string[];
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
-  if (params.action === "send") {
+  if (params.action === "send" || params.action === "thread-reply") {
     const { args, preserveSendBuffer } = params;
     if (hasExplicitSendMediaSource(args, params.extraParamKeys)) {
       const contentType = readAttachmentContentType(args);
@@ -537,7 +538,12 @@ export async function hydrateAttachmentParamsForAction(params: {
         optimizeImages,
       });
     }
-    const media = await loadWebMedia(mediaSource, mediaOptions);
+    // The sandbox branch builds its own options, so apply the configured deny list for both here.
+    const blockedHostnames = resolveOutboundMediaAccessForConfig(params.cfg)?.blockedHostnames;
+    const media = await loadWebMedia(mediaSource, {
+      ...mediaOptions,
+      ...(blockedHostnames ? { ssrfPolicy: { blockedHostnames: [...blockedHostnames] } } : {}),
+    });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;

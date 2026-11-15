@@ -3,6 +3,7 @@ import "./attempt-spawn-workspace.tools-mock.test-support.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { vi } from "vitest";
@@ -29,12 +30,13 @@ import {
   agentSessionQueuePromptContext,
   agentSessionSetPromptPreparation,
 } from "../../sessions/agent-session-prompting.js";
-import type { AgentSession, CreateAgentSessionOptions } from "../../sessions/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../../sessions/model-registry-runtime.js";
+import type { CreateAgentSessionOptions } from "../../sessions/sdk.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import type { WorkspaceBootstrapFile } from "../../workspace.js";
@@ -71,8 +73,6 @@ type CapturedTrajectoryEvent = {
   type: string;
   workspaceDir?: string;
 };
-
-const normalizeMockProviderId = normalizeLowercaseStringOrEmpty;
 
 const hoisted = vi.hoisted(() => {
   const mock = () => vi.fn<(...args: unknown[]) => unknown>();
@@ -239,25 +239,21 @@ vi.mock("../../sessions/resource-loader.js", () => ({
   },
 }));
 
-// mock-isolation: Keep session storage and provider runtime inside the in-memory attempt fixture.
-vi.mock("../../sessions/index.js", () => {
-  function AuthStorage() {}
-  function ModelRegistry() {}
-  const estimateTokens = (value: unknown) =>
-    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4));
+// mock-isolation: Keep session storage inside the in-memory attempt fixture.
+vi.mock("../../sessions/session-manager.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/session-manager.js")>()),
+  SessionManager: {
+    inMemory: hoisted.sessionManagerOpenMock,
+    openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
+  },
+}));
 
-  return {
-    AuthStorage,
-    createAgentSession: hoisted.createAgentSessionMock,
-    estimateTokens,
-    generateSummary: async () => "",
-    ModelRegistry,
-    SessionManager: {
-      inMemory: hoisted.sessionManagerOpenMock,
-      openAsync: async (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
-    },
-  };
-});
+vi.mock("../../sessions/compaction/compaction.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../sessions/compaction/compaction.js")>()),
+  estimateTokens: (value: unknown) =>
+    Math.max(1, Math.ceil(JSON.stringify(value ?? "").length / 4)),
+  generateSummary: async () => "",
+}));
 
 // mock-isolation: Keep session storage and provider runtime outside the attempt fixture.
 vi.mock("../../sessions/sdk.js", () => ({
@@ -310,10 +306,9 @@ vi.mock("../../../infra/net/undici-global-dispatcher.js", () => ({
     hoisted.ensureGlobalUndiciDispatcherStreamTimeoutsMock,
 }));
 
-vi.mock("../../../tts/tts-settings.js", () => ({
-  buildTtsSystemPromptHint: () => undefined,
-  resolveModelOverridePolicy: () => undefined,
-  setTtsMachinePrefsPathResolver: () => undefined,
+vi.mock("../../../tts/tts-settings.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../tts/tts-settings.js")>()),
+  buildTtsSystemPromptHintAsync: async () => undefined,
 }));
 
 vi.mock("../../bootstrap-files.js", async (importOriginal) => ({
@@ -392,13 +387,6 @@ vi.mock("./images.js", () => ({
   hydratePromptMediaMessages: async (messages: AgentMessage[]) => messages,
 }));
 
-// mock-isolation: Workspace tests supply runtime facts without host discovery.
-vi.mock("../../system-prompt-params.js", () => ({
-  buildSystemPromptParams: () => ({
-    runtimeInfo: {},
-  }),
-}));
-
 vi.mock("../../system-prompt-config.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../system-prompt-config.js")>()),
   buildConfiguredAgentSystemPrompt: (params: unknown) => {
@@ -447,9 +435,8 @@ vi.mock("../../cache-trace.js", () => ({
 }));
 
 // mock-isolation: Exercise attempt workspace routing without constructing unrelated tools.
-vi.mock("../../agent-tools.js", () => ({
+vi.mock("../../agent-tools.async.js", () => ({
   createOpenClawCodingToolsInternalAsync: hoisted.createOpenClawCodingToolsMock,
-  resolveToolLoopDetectionConfig: () => undefined,
 }));
 
 vi.mock("../../agent-bundle-mcp-tools.js", () => ({
@@ -471,7 +458,7 @@ vi.mock("../../../image-generation/runtime.js", () => ({
 // mock-isolation: Workspace attempts pin synthetic models without loading the provider registry.
 vi.mock("../../model-selection.js", () => ({
   findNormalizedProviderValue,
-  normalizeProviderId: normalizeMockProviderId,
+  normalizeProviderId: normalizeLowercaseStringOrEmpty,
   resolveDefaultModelForAgent: () => ({ provider: "openai", model: "gpt-test" }),
 }));
 
@@ -695,8 +682,7 @@ export function resetEmbeddedAttemptHarness(
     contextFiles: [],
   });
   hoisted.resolveBootstrapFilesForRunMock.mockReset().mockImplementation(async () => {
-    const context = await hoisted.resolveBootstrapContextForRunMock();
-    return context.bootstrapFiles;
+    return (await hoisted.resolveBootstrapContextForRunMock()).bootstrapFiles;
   });
   hoisted.isWorkspaceBootstrapPendingMock.mockReset().mockResolvedValue(false);
   hoisted.resolveContextInjectionModeMock.mockReset().mockReturnValue("always");
@@ -751,6 +737,10 @@ export function createDefaultEmbeddedSession(params?: {
     isStreaming: false,
     subscribe: () => () => {},
     agent: {
+      hasPendingSteeringMessage: () => false,
+      getToolInterruptionStatus: () => ({ interruptible: [], blocked: [] }),
+      interruptTools: () => ({ status: "idle", tools: [] }),
+      subscribeToolInterruptionStatus: () => () => {},
       convertToLlm,
       prompt: async (prompt, options) => {
         pendingPrompt = {
@@ -900,9 +890,6 @@ export async function createContextEngineAttemptRunner(params: {
   params.tempPaths.push(workspaceDir, agentDir);
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);
-  const infoId = params.contextEngine.info?.id ?? "test-context-engine";
-  const infoName = params.contextEngine.info?.name ?? "Test Context Engine";
-  const infoVersion = params.contextEngine.info?.version ?? "0.0.1";
   const maintain =
     typeof rawMaintain === "function"
       ? rawMaintain
@@ -986,12 +973,16 @@ export async function createContextEngineAttemptRunner(params: {
           ...(maintain ? { maintain } : {}),
           info: {
             ...params.contextEngine.info,
-            id: infoId,
-            name: infoName,
-            version: infoVersion,
+            id: params.contextEngine.info?.id ?? "test-context-engine",
+            name: params.contextEngine.info?.name ?? "Test Context Engine",
+            version: params.contextEngine.info?.version ?? "0.0.1",
           },
         },
         ...params.attemptOverrides,
+      };
+      // This runner owns a fresh store per call, even when its fixture session ID is reused.
+      using _ = {
+        [Symbol.dispose]: () => cleanupSessionResources(attempt.sessionId),
       };
       const admittedRunContext = params.attemptOverrides?.admittedRunContext;
       const runAttempt = async (context: NonNullable<typeof admittedRunContext>) => {

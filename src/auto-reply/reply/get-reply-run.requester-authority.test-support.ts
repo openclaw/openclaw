@@ -4,6 +4,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "../../agents/cron-creator-authority-context.js";
+import { readReplyInputChannel } from "../../agents/harness/host-private-capabilities.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   captureRequesterContinuationCaller,
@@ -33,6 +34,7 @@ import {
   createProviderSurface,
   type createPreparedReplyTurn,
 } from "./get-reply-run.test-support.js";
+import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 
 type ReplyParams = Parameters<typeof runPreparedReply>[0];
 export function registerPendingRequesterAuthorityCases({
@@ -63,26 +65,48 @@ export function registerPendingRequesterAuthorityCases({
     expect(run.run.requesterOrigin).toMatchObject({ delegatedCreatorProfileId: "linked-human" });
   });
 
-  it("persists admitted external-contact sender attribution on direct turns", async () => {
-    await runPrepared({
-      ...turn(
-        "hello",
-        { OriginatingChannel: "telegram", OriginatingTo: "chat-1", ChatType: "direct" },
-        { Provider: "telegram", SenderId: "user-42", SenderName: "Ada", SenderUsername: "ada" },
-        { InboundAccessAuthorized: true },
-      ),
-      sessionEntry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-        chatType: "direct",
-      },
-    });
+  it.each([false, true])(
+    "preserves sender attribution and human continuation eligibility (bot=%s)",
+    async (isBot) => {
+      const params = {
+        ...turn(
+          "hello",
+          {
+            ...createProviderSurface("telegram"),
+            OriginatingChannel: "telegram",
+            OriginatingTo: "chat-1",
+            ChatType: "direct",
+            SenderId: "user-42",
+            SenderName: "Ada",
+            SenderUsername: "ada",
+            SenderIsBot: isBot,
+          },
+          {},
+          { InboundAccessAuthorized: true },
+        ),
+        sessionEntry: {
+          sessionId: "session-1",
+          updatedAt: 1,
+          chatType: "direct" as const,
+        },
+      };
+      await runPrepared(params);
 
-    const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
-    expect(message).toMatchObject({
-      __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
-    });
-  });
+      const message = requireRunReplyAgentCall().followupRun.userTurnTranscriptRecorder?.message;
+      expect(message).toMatchObject({
+        __openclaw: { senderId: "user-42", senderName: "Ada", senderUsername: "ada" },
+      });
+      const overlay = resolveInboundReplyToolAuthorityOverlay({
+        ctx: params.ctx,
+        senderIsOwner: true,
+        disableTools: false,
+      });
+      expect([
+        readReplyInputChannel(requireRunReplyAgentCall().followupRun.run),
+        readReplyInputChannel(overlay),
+      ]).toEqual(isBot ? [undefined, undefined] : ["telegram", "telegram"]);
+    },
+  );
 
   type IdentityCase = [string, ReplyParams["ctx"], string?, string?];
   const direct = { ChatType: "direct", From: " discord:alice " };

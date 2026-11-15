@@ -191,12 +191,13 @@ it.each([
 });
 
 it.each([
-  { consumer: "openai-chat-tools", supported: false, authorized: false },
-  { consumer: "openai-chat-tools", supported: false, authorized: true },
-  { consumer: "openai-chat-tools", supported: true, authorized: true },
+  { consumer: "openai-chat-tools", supported: false, authorized: false, legacy: false },
+  { consumer: "openai-chat-tools", supported: false, authorized: true, legacy: false },
+  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: false },
+  { consumer: "openai-chat-tools", supported: true, authorized: true, legacy: true },
 ])(
-  "derives $consumer cold mode (supported=$supported, authorized=$authorized)",
-  ({ consumer, supported, authorized }) => {
+  "derives $consumer cold mode (supported=$supported, authorized=$authorized, legacy=$legacy)",
+  ({ consumer, supported, authorized, legacy }) => {
     const source = committedSourceFixture({
       "package.json": '{"type":"module","version":"2026.9.4"}',
       [runtimePath]:
@@ -204,10 +205,15 @@ it.each([
       "src/config/zod-schema.session.ts":
         "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
       "src/config/zod-schema.session-config.ts": supported ? "coldStorage: z.object({})" : null,
+      "src/config/sessions/session-cold-storage-worker.ts": supported
+        ? legacy
+          ? 'db.deleteFrom("transcript_events").where("session_id", "=", sessionId)'
+          : "retainSessionColdNavigationInTransaction(database, sessionId)"
+        : null,
     });
     const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });
     expect(result.status, result.stderr).toBe(0);
-    const mode = authorized && !supported ? "unsupported" : "required";
+    const mode = authorized && !supported ? "unsupported" : legacy ? "legacy" : "required";
     expect(args).toContain(`OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=${mode}`);
     const configPath = path.join(source.root, "config.json");
     const configResult = spawnSync(
@@ -230,7 +236,7 @@ it.each([
     expect(configResult.status, configResult.stderr).toBe(0);
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     expect(config.session).toEqual(
-      mode === "required"
+      mode !== "unsupported"
         ? {
             maintenance: {
               mode: "warn",
@@ -246,6 +252,17 @@ it.each([
     expect(config.tools).toEqual({ allow: ["get_weather"] });
   },
 );
+
+it("refuses an unrecognized frozen cold writer before Docker", () => {
+  const source = committedSourceFixture({
+    "src/config/zod-schema.session-config.ts": "coldStorage: z.object({})",
+    "src/config/sessions/session-cold-storage-worker.ts": "unknown archive writer",
+  });
+  const { result, args } = runConsumer(source, "openai-chat-tools", { dockerStatus: 0 });
+  expect(result.status, result.stderr).toBe(2);
+  expect(result.stderr).toContain("unable to resolve frozen cold transcript archival contract");
+  expect(args).toEqual([]);
+});
 
 it("rejects an unreadable typed companion before Docker", () => {
   const relative = typedFiles[0]!;

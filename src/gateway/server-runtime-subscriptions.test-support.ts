@@ -325,12 +325,7 @@ export function registerSubscriptionRegistrationTests(
       const failure = new Error("terminal write failed");
       prepareTerminalWrite(terminal.promise);
       const unsubs = start({ ...params, resolveGatewayContext });
-      const marker =
-        vi.fn<
-          NonNullable<
-            Parameters<typeof prepareGatewayRunShutdown>[0]["markMainSessionsAbortedForRestart"]
-          >
-        >();
+      const marker = vi.fn(async () => {});
       try {
         emitAgentEvent({
           ...identity,
@@ -342,16 +337,10 @@ export function registerSubscriptionRegistrationTests(
         registration.cleanup();
         expect(getRpcSource(runId)).toBe(registration.entry);
         const shutdown = prepareGatewayRunShutdown({
-          ...params,
           resolveGatewayContext,
-          removeChatRun: (chatSessionId, clientRunId, key) =>
-            params.chatRunState.registry.remove(chatSessionId, clientRunId, key),
-          getPendingReplyCount: () => 0,
-          timeoutMs: 0,
           warnings: [],
-          markMainSessionsAbortedForRestart: marker,
+          persistRunningSessionsForRestart: marker,
         });
-        expect(marker).not.toHaveBeenCalled();
         if (outcome === "fulfilled") {
           terminal.resolve();
         } else {
@@ -370,18 +359,6 @@ export function registerSubscriptionRegistrationTests(
           outcome === "fulfilled",
         );
         expect(marker).toHaveBeenCalledOnce();
-        const recovery = marker.mock.calls[0]?.[0];
-        expect(recovery?.activeRuns.filter(recovery.isActiveRun)).toEqual(
-          outcome === "fulfilled"
-            ? []
-            : [
-                expect.objectContaining({
-                  runId,
-                  sessionKey,
-                  sessionId,
-                }),
-              ],
-        );
         if (outcome === "rejected") {
           await expect(waitForChatAbortTerminalPersistence(registration.entry)).rejects.toBe(
             failure,

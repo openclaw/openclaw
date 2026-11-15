@@ -197,7 +197,7 @@ it.each(["before", "after"] as const)(
       });
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
       const completePrevious = () =>
-        patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
+        patchSessionEntryCore(f.scope, () => ({ status: "done", abortedLastRun: false }));
       const run = actorScope.runSessionActorCommand;
       const accept = input.actor.acceptInput;
       const competingWrite =

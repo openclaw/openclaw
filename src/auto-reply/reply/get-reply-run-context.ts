@@ -54,6 +54,7 @@ import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import { CURRENT_MESSAGE_MARKER } from "./history.js";
 import { markInboundContextLabel } from "./inbound-context-marker.js";
 import { hasInboundMedia } from "./inbound-media.js";
+import { projectTelegramCurrentMessageCarrier } from "./inbound-meta.current-message.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -218,11 +219,13 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const groupIntro = isGroupChat
     ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
     : "";
-  const terminalReplyExpectation = resolveSourceReplyExpectation({
-    ctx: promptSessionCtx,
-    cfg,
-    scheduledAutomation: opts?.scheduledAutomation !== undefined,
-  });
+  const terminalReplyExpectation =
+    opts?.replyExpectation ??
+    resolveSourceReplyExpectation({
+      ctx: promptSessionCtx,
+      cfg,
+      scheduledAutomation: opts?.scheduledAutomation !== undefined,
+    });
   const replyOperationRunState = resolveReplyOperationRunState(opts);
   const setReplyCompletion = (evidence: Parameters<typeof resolveReplyCompletion>[1]) => {
     if (replyOperationRunState) {
@@ -445,11 +448,14 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
       })
     : () => false;
   // Current human context reaches all harnesses without changing the stable system/tool prefix.
-  const attributionPrompt = () =>
-    `${markInboundContextLabel("PR attribution:")}
-${buildPrAttributionPrompt(
-  Boolean(requester?.isCurrent()) && attributionEnabled() && !inboundContextSessionEntry?.incognito,
-)}`;
+  const attributionPrompt = () => {
+    const prompt = buildPrAttributionPrompt(
+      Boolean(requester?.isCurrent()) &&
+        attributionEnabled() &&
+        !inboundContextSessionEntry?.incognito,
+    );
+    return prompt ? `${markInboundContextLabel("PR attribution:")}\n${prompt}` : "";
+  };
   // Synthetic turns retain routing facts without inventing user-role inbound context.
   const buildInboundContextState = () => ({
     activeGoalContext: formatActiveGoalContext(inboundContextSessionEntry),
@@ -519,22 +525,23 @@ ${buildPrAttributionPrompt(
     );
   }
 
-  function resolvePerTurnDeliveryDirective(): string | undefined {
-    if (inboundEventKind === "room_event") {
-      return sourceReplyDeliveryMode === "message_tool_only"
+  const deliveryDirective =
+    inboundEventKind === "room_event" ||
+    (inboundEventKind === "user_request" &&
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      promptSessionCtx.SenderIsBot === true &&
+      terminalReplyExpectation === "optional")
+      ? sourceReplyDeliveryMode === "message_tool_only"
         ? `${ROOM_EVENT_PARTICIPATION_RULE} To respond visibly, use message(action=send); your final text here stays private either way.`
-        : ROOM_EVENT_PARTICIPATION_RULE;
-    }
-    if (inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only") {
-      return MESSAGE_TOOL_ONLY_DELIVERY_HINT;
-    }
-    return undefined;
-  }
+        : ROOM_EVENT_PARTICIPATION_RULE
+      : inboundEventKind === "user_request" && sourceReplyDeliveryMode === "message_tool_only"
+        ? MESSAGE_TOOL_ONLY_DELIVERY_HINT
+        : undefined;
 
   // The current event itself is the user turn body; the context block carries
   // only the marker, the room backlog, and the reply-policy directive so no
   // fact is stated twice in one request.
-  function buildRoomEventContext(roomContext: string, deliveryDirective?: string): string {
+  function buildRoomEventContext(roomContext: string): string {
     const roomContextBlock = roomContext.trim() ? `Room context:\n${roomContext.trim()}` : "";
     return [ROOM_EVENT_PROMPT, roomContextBlock, deliveryDirective].filter(Boolean).join("\n\n");
   }
@@ -552,15 +559,11 @@ ${buildPrAttributionPrompt(
   const buildReplyPromptEnvelopeBase = () => {
     const isRoomEvent = inboundEventKind === "room_event";
     const normalizedInboundUserContext = inboundUserContext.trim();
-    const deliveryDirective = resolvePerTurnDeliveryDirective();
     const resumableRoomEventContext = isRoomEvent
-      ? buildRoomEventContext(
-          buildResumableRoomContext(normalizedInboundUserContext),
-          deliveryDirective,
-        )
+      ? buildRoomEventContext(buildResumableRoomContext(normalizedInboundUserContext))
       : undefined;
     const currentInboundContextText = isRoomEvent
-      ? buildRoomEventContext(normalizedInboundUserContext, deliveryDirective)
+      ? buildRoomEventContext(normalizedInboundUserContext)
       : (inboundUserContextPromptJoiner === " "
           ? [deliveryDirective, normalizedInboundUserContext]
           : [normalizedInboundUserContext, deliveryDirective]
@@ -591,7 +594,12 @@ ${buildPrAttributionPrompt(
     const fragments: RuntimeContextFragment[] = [
       ...(isRoomEvent ? [{ kind: "runtime-instruction" as const, text: ROOM_EVENT_PROMPT }] : []),
       ...(normalizedInboundUserContext
-        ? [{ kind: "conversation-data" as const, text: normalizedInboundUserContext }]
+        ? [
+            {
+              kind: "conversation-data" as const,
+              text: projectTelegramCurrentMessageCarrier(normalizedInboundUserContext, sessionCtx),
+            },
+          ]
         : []),
       ...(deliveryDirective
         ? [{ kind: "runtime-instruction" as const, text: deliveryDirective }]

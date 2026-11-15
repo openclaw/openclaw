@@ -2,8 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { isNotFoundPathError } from "../infra/path-guards.js";
 import {
   resolvePluginNpmGenerationProjectDir,
@@ -203,6 +202,7 @@ export async function resolveManagedNpmInstallPlan(params: {
   packageName: string;
   requestedMode: "install" | "update";
   npmResolution: NpmSpecResolution;
+  forceFreshGeneration?: boolean;
 }): Promise<{
   npmRoot: string;
   installRoot: string;
@@ -237,9 +237,11 @@ export async function resolveManagedNpmInstallPlan(params: {
     useGeneration: generationUse !== "none",
   });
   if (
+    params.forceFreshGeneration ||
     hasRetainedManagedNpmInstallMarker(resolveManagedNpmRootPackageDir(npmRoot, params.packageName))
   ) {
-    // Older processes may still hold lazy imports into the retained tree.
+    // Retained trees and updater rollback preimages cannot be displaced, including
+    // reinstalls whose artifact resolution key matches the current generation.
     npmRoot = resolvePluginNpmGenerationProjectDir({
       npmDir: params.npmBaseDir,
       packageName: params.packageName,
@@ -257,8 +259,11 @@ export async function resolveManagedNpmInstallPlan(params: {
         });
   // A new artifact directory can still update an installed plugin. Conversely,
   // reactivating a retained tree requires fresh-install policy, even for --update.
-  const policyMode =
-    generationUse === "update"
+  // An updater cohort marks its still-active preimages retained before Doctor;
+  // that protection does not change the operation's admitted install/update policy.
+  const policyMode = params.forceFreshGeneration
+    ? params.requestedMode
+    : generationUse === "update"
       ? "update"
       : generationUse === "retained-install"
         ? "install"

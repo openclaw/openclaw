@@ -2,6 +2,58 @@ import { describe, expect, it } from "vitest";
 import { AgentsSchema } from "./zod-schema.agents.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
+describe("workspace file modes", () => {
+  it.each(["0600", "0620", "0640", "0660"])("accepts %s at either scope", (mode) => {
+    expect(
+      AgentsSchema.safeParse({
+        defaults: { workspaceFileMode: mode },
+        entries: { main: { workspaceFileMode: mode } },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each(["600", "0400", "0644", "0700", "1660", "0666", 0o660])(
+    "rejects unsafe or non-octal-string mode %j with a useful error",
+    (mode) => {
+      for (const config of [
+        { defaults: { workspaceFileMode: mode }, entries: { main: {} } },
+        { entries: { main: { workspaceFileMode: mode } } },
+      ]) {
+        const result = AgentsSchema.safeParse(config);
+        expect(result.success).toBe(false);
+        if (!result.success) {
+          expect(result.error.issues[0]?.message).toContain("0600, 0620, 0640, or 0660");
+        }
+      }
+    },
+  );
+});
+
+describe("delegated persistent change approval", () => {
+  it.each([true, false, undefined])(
+    "preserves %s at global and agent scope",
+    (autoApproveChanges) => {
+      const openclaw = autoApproveChanges === undefined ? {} : { autoApproveChanges };
+      const config = {
+        tools: { openclaw },
+        agents: { entries: { main: { tools: { openclaw } } } },
+      };
+      const result = OpenClawSchema.safeParse(config);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.tools?.openclaw).toEqual(openclaw);
+        expect(result.data.agents?.entries?.main?.tools?.openclaw).toEqual(openclaw);
+      }
+    },
+  );
+
+  it.each(["true", 1, null])("rejects non-boolean authorization %j", (autoApproveChanges) => {
+    const tools = { openclaw: { autoApproveChanges } };
+    expect(OpenClawSchema.safeParse({ tools }).success).toBe(false);
+    expect(AgentsSchema.safeParse({ entries: { main: { tools } } }).success).toBe(false);
+  });
+});
+
 describe("agent roster ownership", () => {
   it("rejects an empty roster after load-time migration", () => {
     expect(AgentsSchema.safeParse({ entries: {} }).success).toBe(false);

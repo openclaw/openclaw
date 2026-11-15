@@ -1,4 +1,3 @@
-import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { type InternalHookSelection, resolveInternalHookSelection } from "../hooks/configured.js";
@@ -31,8 +30,6 @@ import {
 } from "./server-startup-sidecar-scheduler.js";
 import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
-type Awaitable<T> = T | Promise<T>;
-
 const loadAgentDefaultsModule = createLazyRuntimeModule(() => import("../agents/defaults.js"));
 
 const loadAgentModelSelectionModule = createLazyRuntimeModule(
@@ -63,11 +60,9 @@ export async function startGatewaySidecars(params: {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
   deps: CliDeps;
   startChannels: () => Promise<void>;
-  waitForMainSessionOrphans?: () => Promise<void>;
   trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
   shouldStartChannels?: () => boolean;
   refreshChatMetadata?: () => Promise<void>;
-  onChannelsStarted?: () => Awaitable<void>;
   onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
   shouldCreatePostReadySidecars?: () => boolean;
   logHooks: {
@@ -172,11 +167,6 @@ export async function startGatewaySidecars(params: {
         ),
       );
     })(),
-    // Readiness owns process-stable request imports so the first turn and connection do not.
-    measureStartup(params.startupTrace, "sidecars.reply-runtime", async () => {
-      const { prewarmConfigDrivenReplyRuntime } = await loadGetReplyFromConfigRuntime();
-      await prewarmConfigDrivenReplyRuntime();
-    }),
     measureStartup(
       params.startupTrace,
       "sidecars.connection-runtime",
@@ -190,8 +180,8 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
-  // Transports can connect while recovery runs; channel turns retain their per-agent
-  // database and saved-input admission gates. Shutdown still owns this producer.
+  // Accounts prepare independently; the startup owner releases their existing
+  // start gate after retained inputs acquire ordinary queue custody.
   void params
     .trackStartupWork(() =>
       measureStartup(params.startupTrace, "sidecars.channels", async () => {
@@ -205,11 +195,7 @@ export async function startGatewaySidecars(params: {
           : shouldStartChannels
             ? measureStartup(params.startupTrace, "sidecars.channel-start", params.startChannels)
             : Promise.resolve();
-        // Release the generation gate before any account's preparation settles.
-        const accountStartGateRelease = shouldStartChannels
-          ? params.onChannelsStarted?.()
-          : undefined;
-        await Promise.all([accountStartGateRelease, channelStart]);
+        await channelStart;
       }),
     )
     .catch((err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`));
@@ -256,7 +242,6 @@ export async function startGatewaySidecars(params: {
         origin: "hooks:gateway-startup",
         shouldRun: params.shouldCreatePostReadySidecars,
         run: async (isStopped) => {
-          await params.waitForMainSessionOrphans?.();
           const { createInternalHookEvent, triggerInternalHook } = await loadInternalHooksModule();
           if (isStopped()) {
             return;
@@ -300,7 +285,7 @@ export async function startGatewaySidecars(params: {
         const result = await getAcpSessionManager().reconcilePendingSessionIdentities({
           cfg: params.cfg,
         });
-        if (result.checked === 0) {
+        if (result.checked === 0 && result.failed === 0) {
           return;
         }
         params.log.warn(
@@ -311,6 +296,20 @@ export async function startGatewaySidecars(params: {
       params.log.warn(`acp startup identity reconcile failed: ${String(err)}`);
     });
   }
+
+  // Native catalogs are advisory, so readiness does not wait; a turn arriving first joins this
+  // acquisition instead of starting its own.
+  scheduleSidecar({
+    name: "sidecars.native-model-catalog",
+    run: async (isStopped) => {
+      const { prewarmDefaultNativeModelCatalog } =
+        await import("../agents/prepared-model-catalog.js");
+      if (isStopped()) {
+        return;
+      }
+      await prewarmDefaultNativeModelCatalog(getModelRuntimeConfig());
+    },
+  });
 
   let restartSentinelWake: GatewayPostReadySidecarHandle | undefined;
   scheduleSidecar({

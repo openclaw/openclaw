@@ -8,11 +8,6 @@ export function captureReplyMessageJoinObservation(params: {
 }) {
   return {
     executionSelection: captureReplyExecutionSelection(params),
-    // An empty captured tuple is different from unavailable historical capture.
-    recoveryDeliveryClaim: {
-      restartRecoveryDeliveryRunId: params.sessionEntry?.restartRecoveryDeliveryRunId,
-      restartRecoveryDeliverySourceRunId: params.sessionEntry?.restartRecoveryDeliverySourceRunId,
-    },
   };
 }
 

@@ -1,7 +1,9 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorktreeRecordNotFoundError } from "../agents/worktrees/errors.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
@@ -14,15 +16,12 @@ afterEach(() => {
   resetConfigRuntimeState();
 });
 
-function createProgram() {
+async function run(args: string[]) {
   const program = new Command().name("openclaw").exitOverride();
   program.configureOutput({ writeErr: () => undefined });
   registerWorktreesCli(program);
-  return program;
+  return program.parseAsync(["worktrees", ...args], { from: "user" });
 }
-
-const run = (args: string[]) =>
-  createProgram().parseAsync(["worktrees", ...args], { from: "user" });
 const admission = { signal: expect.any(AbortSignal), commitGuard: expect.any(Function) };
 const owner = ManagedWorktreeService.prototype;
 const muteOutput = (json = true) =>
@@ -75,25 +74,26 @@ describe("worktrees cli", () => {
     });
   });
   it.each([
-    ["--exact-state", "/missing-request", "--force"],
-    ["--exact-state", "/missing-request", "--if-lossless"],
-    ["--if-lossless", "--force"],
-  ])("rejects conflicting removal policies %j before reading or mutating", async (...flags) => {
-    const remove = vi.spyOn(owner, "remove");
-    const lossless = vi.spyOn(owner, "removeIfLossless");
-    await expect(run(["remove", "worktree-id", ...flags])).rejects.toThrow(
-      "cannot be used with option",
-    );
-    expect(remove).not.toHaveBeenCalled();
-    expect(lossless).not.toHaveBeenCalled();
+    ["remove", "--exact-state", "/missing-request", "--force"],
+    ["remove", "--exact-state", "/missing-request", "--if-lossless"],
+    ["remove", "--if-lossless", "--force"],
+    ["remove", "--exact-state", "."],
+    ["restore", "--recover-exact-state", "."],
+    ["create", "--source-profile"],
+  ])("rejects invalid %s requests before mutation", async (command, ...flags) => {
+    const methods = ["remove", "removeIfLossless", "restore", "create"] as const;
+    const mutations = methods.map((method) => vi.spyOn(owner, method));
+    for (const content of flags.includes(".") ? [undefined, "{", "{}"] : [undefined]) {
+      const file = path.join(tempDirs.make("openclaw-exact-state-"), "request.json");
+      if (content !== undefined) {
+        await fs.writeFile(file, content);
+      }
+      const args = flags.map((flag) => (flag === "." && content !== undefined ? file : flag));
+      const error = flags.includes(".") ? /regular.*file/ : /with option|argument missing/;
+      await expect(run([command, "worktree-id", ...args])).rejects.toThrow(error);
+    }
+    expect(mutations.some((spy) => spy.mock.calls.length)).toBe(false);
   });
-
-  it("leaves missing source profile values to Commander and performs no creation", async () => {
-    const create = vi.spyOn(owner, "create");
-    await expect(run(["create", "/repo", "--source-profile"])).rejects.toThrow(/argument missing/);
-    expect(create).not.toHaveBeenCalled();
-  });
-
   it("requires an exact pending commit and returns recovery's actual outcome", async () => {
     const snapshot = "a".repeat(40);
     const result: Awaited<ReturnType<ManagedWorktreeService["recoverRemoval"]>> = {
@@ -110,29 +110,22 @@ describe("worktrees cli", () => {
     expect(output).toHaveBeenCalledWith(result);
   });
 
-  const retireSnapshotArgs = (removedAt: string) => [
-    "retire-snapshot",
-    "worktree-id",
-    "--expected-ref",
-    "refs/openclaw/snapshots/worktree-id",
-    "--expected-oid",
-    "a".repeat(40),
-    "--removed-at",
-    removedAt,
-    "--retained-ref",
-    "refs/heads/main",
-    "--retained-oid",
-    "b".repeat(40),
-  ];
-
   it.each(["1700000000100ms", "-1", "", "9007199254740993"])(
     "rejects the malformed --removed-at value %j before retiring a snapshot",
     async (removedAt) => {
       setRuntimeConfigSnapshot({}, {});
-      const retire = vi
-        .spyOn(owner, "retireSnapshot")
-        .mockRejectedValue(new Error("Unexpected snapshot retirement"));
-      const pending = run(retireSnapshotArgs(removedAt));
+      const retire = vi.spyOn(owner, "retireSnapshot");
+      const pending = run([
+        "retire-snapshot",
+        "worktree-id",
+        ...Object.entries({
+          "--expected-ref": "refs/openclaw/snapshots/worktree-id",
+          "--expected-oid": "a".repeat(40),
+          "--removed-at": removedAt,
+          "--retained-ref": "refs/heads/main",
+          "--retained-oid": "b".repeat(40),
+        }).flatMap(([flag, value]) => [flag, value]),
+      ]);
       await expect(pending).rejects.toThrow(
         "--removed-at must be a non-negative integer (epoch milliseconds).",
       );
@@ -150,10 +143,16 @@ describe("worktrees cli", () => {
     },
   );
 
-  it("rejects an empty cleanup job selector before cleanup", async () => {
+  it.each([
+    [["gc", "--job", "", "--json"], "--job must not be empty."],
+    [["remove", "nope"], "unknown active worktree: nope"],
+    [["restore", "nope"], "worktree nope is not restorable"],
+  ])("reports %j as %j", async (args, message) => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(owner, "gc").mockRejectedValue(new Error("Unexpected cleanup execution"));
-    await expect(run(["gc", "--job", "", "--json"])).rejects.toThrow("--job must not be empty");
+    vi.spyOn(owner, "remove").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    vi.spyOn(owner, "restore").mockRejectedValue(new WorktreeRecordNotFoundError(message));
+    await expect(run(args)).rejects.toMatchObject({ humanOutput: message, machineOutput: message });
     expect(gc).not.toHaveBeenCalled();
   });
 

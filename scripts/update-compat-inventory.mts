@@ -13,12 +13,57 @@ import {
   parseUpdateCompatibilityInventory,
   recordUpdateCompatibilityRelease,
   readUpdateCompatibilityInventory,
+  writeUpdateCompatibilityChunks,
   type UpdateCompatibilityInventory,
 } from "./lib/update-compat-chunks.mts";
 import { supportsUpdateSchemas } from "./lib/update-compat-contract.mjs";
 
 const DEFAULT_OUTPUT = "scripts/lib/update-compat-inventory.json";
 const INTEGRITY = /^sha512-[A-Za-z0-9+/]{86}==$/;
+const REGISTRY_DOWNLOAD_ATTEMPTS = 3;
+const REGISTRY_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
+
+async function downloadRegistryTarball(url: URL, version: string): Promise<Buffer> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= REGISTRY_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    let idleTimer: NodeJS.Timeout | undefined;
+    const armIdleTimeout = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => controller.abort(), REGISTRY_DOWNLOAD_IDLE_TIMEOUT_MS);
+    };
+    try {
+      armIdleTimeout();
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      if (!response.body) {
+        throw new Error("response body is missing");
+      }
+      const chunks: Uint8Array[] = [];
+      for await (const chunk of response.body) {
+        chunks.push(chunk);
+        armIdleTimeout();
+      }
+      return Buffer.concat(chunks);
+    } catch (error) {
+      lastError = error;
+      if (attempt === REGISTRY_DOWNLOAD_ATTEMPTS) {
+        break;
+      }
+      console.warn(
+        `Retrying openclaw@${version} registry tarball download after attempt ${attempt}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      clearTimeout(idleTimer);
+    }
+  }
+  throw new Error(
+    `Failed to download openclaw@${version} tarball after ${REGISTRY_DOWNLOAD_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
+    { cause: lastError },
+  );
+}
 
 function npmView(packageName: string, field: string): unknown {
   return JSON.parse(
@@ -54,13 +99,7 @@ async function recordRegistryRelease(version: string) {
   if (url.protocol !== "https:" && url.protocol !== "http:") {
     throw new Error(`npm returned unsupported tarball URL for openclaw@${version}`);
   }
-  const response = await fetch(url, { signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download openclaw@${version} tarball: HTTP ${response.status} ${response.statusText}`,
-    );
-  }
-  const archive = Buffer.from(await response.arrayBuffer());
+  const archive = await downloadRegistryTarball(url, version);
   const actualIntegrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
   if (actualIntegrity !== integrity) {
     throw new Error(`Registry tarball integrity mismatch for openclaw@${version}`);
@@ -186,11 +225,25 @@ async function runUpdateCompatibilityInventory(
     }
   } else if (values.check) {
     inventory = readUpdateCompatibilityInventory(output);
-    checkRegistryCoverage(inventory, values.output);
   } else {
     throw new Error(
       "Usage: pnpm update:compat:gen (--release <unpacked-dir>=<npm-dist.integrity> | --registry-release <version>) [...] [--output <file>] or pnpm update:compat:check",
     );
+  }
+  if (values.check) {
+    const distDir = path.resolve("dist");
+    if (!fs.existsSync(distDir) || !fs.statSync(distDir).isDirectory()) {
+      throw new Error("Run pnpm build before checking update compatibility: dist is missing");
+    }
+    writeUpdateCompatibilityChunks({
+      distDir,
+      sourceDir: process.cwd(),
+      inventory,
+      dryRun: true,
+    });
+    if (!values.release?.length && !values["registry-release"]?.length) {
+      checkRegistryCoverage(inventory, values.output);
+    }
   }
   console.log(
     `${values.check ? "Verified" : "Recorded"} update compatibility inventory: ${inventory.releases.map((release) => `${release.version} (${release.chunks.length} chunks)`).join(", ")}`,

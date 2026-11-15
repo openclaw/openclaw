@@ -269,18 +269,12 @@ describe("standing intents", () => {
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {
+    const source = { provider: "qa-channel", channel: "qa-dm-5", senderId: "owner-1" };
+    const matchOwner = (prompt: string) => matchIds({ ...source, prompt, nowMs: Date.now() });
     const execute = executor({ conversationId: "qa-dm-5" });
     const { intent } = await createViaTool(execute, { triggerKeywords: ["owner signal"] });
     const created = intent as { id: string };
-    expect(
-      await matchIds({
-        prompt: "owner signal",
-        channel: "qa-dm-5",
-        provider: "qa-channel",
-        senderId: "owner-1",
-        nowMs: Date.now(),
-      }),
-    ).toEqual([created.id]);
+    expect(await matchOwner("owner signal")).toEqual([created.id]);
 
     for (const [kind, creator] of [
       ["missing", null],
@@ -292,12 +286,7 @@ describe("standing intents", () => {
         .run(creator, untrusted.id);
     }
 
-    expect(
-      await matchIntent({
-        prompt: "missing creator signal and unknown creator signal",
-        nowMs: Date.now(),
-      }),
-    ).toEqual([]);
+    expect(await matchOwner("missing creator signal and unknown creator signal")).toEqual([]);
   });
 
   it("derives typed conversation, channel, anywhere, sender, and anyone scopes", async () => {
@@ -337,9 +326,8 @@ describe("standing intents", () => {
   it("refuses senderless creation instead of exposing it to unrelated channel users", async () => {
     const execute = createStandingIntentExecutor({ agentId: "main" });
 
-    expect(parseToolJson(await execute("list-empty", { action: "list" }))).toEqual({
-      intents: [],
-    });
+    const empty = parseToolJson(await execute("list-empty", { action: "list" }));
+    expect(empty).toEqual({ intents: [] });
     await expect(createViaTool(execute, { triggerKeywords: ["identity free"] })).rejects.toThrow(
       "authenticated channel and sender identity is unavailable",
     );
@@ -357,12 +345,9 @@ describe("standing intents", () => {
 
   it("keeps provider, conversation, sender, and account identities namespaced", async () => {
     const identity = { provider: "slack", accountId: "work", senderId: "alice" };
+    const conversation = { ...identity, scope: "conversation" as const, conversationId: "slack" };
     await createKeywordIntent("account reminder", {
-      channelScope: encodeStandingIntentChannelScope({
-        ...identity,
-        scope: "conversation",
-        conversationId: "slack",
-      }),
+      channelScope: encodeStandingIntentChannelScope(conversation),
       senderScope: encodeStandingIntentSenderScope(identity),
       maxFires: 1,
       nowMs: 1_000,
@@ -409,6 +394,21 @@ describe("standing intents", () => {
       fireCount: 1,
       lastFiredAt: 1_000,
     });
+  });
+
+  // Unspaced scripts match literally; a row reachable through both candidate lanes fires once.
+  it.each([
+    ["会议", "明天上午的会议改到下午三点", 1],
+    ["版本 release", "新版本 release 已发布", 1],
+    ["release", "prerelease notes", 0],
+    ["café", "caféine booster", 0],
+    ["café", "un café serré", 1],
+    ["か\u3099", "明日が始まる", 1],
+    ["が", "明日か\u3099始まる", 1],
+  ] as const)("matches %j only on turns containing its terms", async (keyword, prompt, fires) => {
+    const intent = await createKeywordIntent(keyword, { nowMs: 100 });
+    expect(await matchIds({ prompt, nowMs: 1_000 })).toEqual(fires ? [intent.id] : []);
+    expect((await list(1_000)).find((row) => row.id === intent.id)?.fireCount).toBe(fires);
   });
 
   it("does not consume fire budgets for intents that do not fit hidden context", async () => {

@@ -43,6 +43,7 @@ export function htmlTagAttributeValues(
   html: string,
   tag: "img" | "attachment",
   attr: "src" | "id",
+  visit?: (value: string, start: number, end: number) => void,
 ): string[] {
   const length = html.length;
   const nextGt = new Int32Array(length + 1).fill(length);
@@ -79,13 +80,51 @@ export function htmlTagAttributeValues(
     }
     const candidate = candidates[pastWindow - 1];
     if (candidate && candidate.start > nameEnd) {
-      values.push(html.slice(candidate.valueStart, candidate.valueEnd));
+      const value = html.slice(candidate.valueStart, candidate.valueEnd);
+      if (visit) {
+        visit(value, open.index, candidate.end);
+      } else {
+        values.push(value);
+      }
       resumeAt = candidate.end;
     }
   }
   return values;
 }
 const GRAPH_HOSTED_CONTENT_SRC_RE = /\/hostedContents\/([^/?#]+)/i;
+
+// Teams emoji sprites are text; require the CDN host plus an emoji path or alt
+// marker so genuine images on the same CDN remain media.
+const TEAMS_EMOJI_CDN_HOST = "statics.teams.cdn.office.net";
+const TEAMS_EMOJI_ASSET_PATH_RE = /\/emoji([/?#]|$)/i;
+const IMG_ALT_ATTR_RE = /\balt=["']([^"']*)["']/i;
+const EMOJI_PICTOGRAPHIC_RE = /\p{Extended_Pictographic}/u;
+
+function isTeamsEmojiSpriteImage(src: string, imgTag: string): boolean {
+  const url = URL.parse(src);
+  const host = url?.hostname.toLowerCase() ?? "";
+  if (host !== TEAMS_EMOJI_CDN_HOST && !host.endsWith(`.${TEAMS_EMOJI_CDN_HOST}`)) {
+    return false;
+  }
+  return (
+    TEAMS_EMOJI_ASSET_PATH_RE.test(url?.pathname ?? "") ||
+    EMOJI_PICTOGRAPHIC_RE.test(IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "")
+  );
+}
+
+// Preserve sprite text before HTML stripping, including HTML-only emoji messages.
+export function replaceTeamsEmojiSpriteImagesWithAltText(html: string): string {
+  const parts: string[] = [];
+  let cursor = 0;
+  htmlTagAttributeValues(html, "img", "src", (src, start, end) => {
+    const imgTag = html.slice(start, end);
+    if (isTeamsEmojiSpriteImage(src.trim(), imgTag)) {
+      parts.push(html.slice(cursor, start), IMG_ALT_ATTR_RE.exec(imgTag)?.[1] ?? "");
+      cursor = end;
+    }
+  });
+  return parts.join("") + html.slice(cursor);
+}
 
 function resolveInlineImageSourceId(src: string): string {
   // Graph fallback names hosted content by item ID, while activity HTML carries its `$value` URL.
@@ -307,7 +346,11 @@ export function extractInlineImageReferences(
     if (!html) {
       continue;
     }
-    for (const value of htmlTagAttributeValues(html, "img", "src")) {
+    for (const value of htmlTagAttributeValues(
+      replaceTeamsEmojiSpriteImagesWithAltText(html),
+      "img",
+      "src",
+    )) {
       const src = value.trim();
       if (src) {
         if (src.startsWith("data:")) {

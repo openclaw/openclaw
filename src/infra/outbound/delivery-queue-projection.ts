@@ -23,6 +23,7 @@ export function projectQueuedDeliveryOptions(params: QueuedDeliveryPayload) {
     forceDocument: params.forceDocument,
     silent: params.silent,
     session: params.session,
+    transcriptProvenance: params.transcriptProvenance,
     gatewayClientScopes: params.gatewayClientScopes,
     preparedMessageId: params.preparedMessageId,
   };

@@ -25,6 +25,9 @@ export async function sweepLocalWorkspaceManifests(params: {
     { assertCurrent },
   );
   assertCurrent();
+  if (epoch === null) {
+    return;
+  }
   const reply = await executeExistingOpenClawStateRead(
     { path: context.admission.databasePath, env: context.environment },
     { type: "localWorkspace.sweepCandidates", input: { epoch } },
@@ -57,4 +60,9 @@ export async function sweepLocalWorkspaceManifests(params: {
     );
     assertCurrent();
   }
+  await runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "localWorkspace.finishSweep", input: { epoch } }),
+    { assertCurrent },
+  );
 }

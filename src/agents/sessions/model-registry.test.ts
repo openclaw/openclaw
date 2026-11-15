@@ -59,6 +59,26 @@ const capturedRegistry = (
   });
 
 describe("ModelRegistry", () => {
+  it("retains command-auth models without borrowing a bearer credential", async () => {
+    const registry = capturedRegistry(
+      {
+        custom: providerConfig([{ id: "native" }], {
+          auth: "native-command",
+          api: "openai-responses",
+        }),
+      },
+      apiKeyAuth("custom", "synthetic-ambient-key"),
+    );
+    const model = registry.find("custom", "native")!;
+    expect(model).toBeDefined();
+    expect(registry.hasConfiguredAuth(model)).toBe(false);
+    expect(await registry.getApiKeyForProvider("custom")).toBeUndefined();
+    expect(await registry.getApiKeyAndHeaders(model)).toEqual({
+      ok: false,
+      error: "Native command auth requires the Codex runtime.",
+    });
+  });
+
   const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
 
   const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =

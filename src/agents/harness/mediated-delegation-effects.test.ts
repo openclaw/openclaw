@@ -32,6 +32,7 @@ import { buildCliMcpGrantContext, finalizeCliMcpGrant } from "../cli-runner/mcp-
 import { resolveCliRuntimeToolPolicy } from "../cli-runner/prepare-tool-policy.js";
 import type { RunCliAgentParams } from "../cli-runner/types.js";
 import * as shellSnapshot from "../shell-snapshot.js";
+import { isVisibleSpawnedSession } from "../subagents/spawn/subagent-capabilities.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { createAgentHarnessToolExecutionBoundaryRegistry } from "./tool-execution.js";
 import { runAgentHarnessToolInvocation } from "./tool-invocation.js";
@@ -40,6 +41,9 @@ import { createAgentToolResultMiddlewareRunner } from "./tool-result-middleware.
 const requester = "agent:intake:main";
 const denied = ["exec", "write"];
 type Route = "cli-loopback" | "plugin-harness";
+// A stamped visible spawn (createdVia: "spawn") skips built-in subagent denies; its
+// delegated authority must still be enforced at the final effect.
+let stamped = false;
 type Receipt = { isError: boolean; text: string };
 let state: OpenClawTestState;
 let config: OpenClawConfig;
@@ -116,6 +120,7 @@ async function createCaller(
       spawnedBy: requester,
       spawnDepth: 1,
       inheritedToolPolicyVersion: 1,
+      ...(stamped ? { createdVia: "spawn" as const } : {}),
       ...(senderRestricted ? { inheritedToolPolicySource: "sender" as const } : {}),
       inheritedToolDeny: denied,
       delegatedToolPolicy: {
@@ -127,6 +132,10 @@ async function createCaller(
     });
     sessionEntry = await readResolvedSessionEntryInWorker(scope);
   }
+  // The fixture must select the classification branch under test.
+  expect(isVisibleSpawnedSession(sessionKey, { cfg: currentConfig, entry: sessionEntry })).toBe(
+    stamped,
+  );
   const admission = prepareSystemAgentRunAdmission(
     currentConfig,
     runId,
@@ -258,7 +267,7 @@ function observeLaunches() {
 
 async function prepareEffect(route: Route, suffix: string, senderRestricted = false) {
   const caller = await createCaller(route, config, "", senderRestricted);
-  const basename = route + suffix;
+  const basename = route + (stamped ? "-stamped" : "") + suffix;
   const target = path.join(state.workspaceDir, basename);
   await fs.writeFile(target, "original");
   return { caller, basename, target };
@@ -285,13 +294,21 @@ async function revokeAtGate(
 
 // Promise gates delay real preparation/I/O only. All authority, tool construction,
 // approval policy, command launch, mutation, and caller receipts remain production-owned.
-describe.each(["cli-loopback", "plugin-harness"] as const)(
-  "%s delegated final effects",
-  (route) => {
+describe.each([
+  { route: "cli-loopback", visibleSpawn: false },
+  { route: "plugin-harness", visibleSpawn: false },
+  { route: "cli-loopback", visibleSpawn: true },
+  { route: "plugin-harness", visibleSpawn: true },
+] as const)(
+  "$route delegated final effects (stamped visible spawn: $visibleSpawn)",
+  ({ route, visibleSpawn }) => {
+    beforeEach(() => {
+      stamped = visibleSpawn;
+    });
     it("executes the persisted exception, then restores the deny fallback on resume", async () => {
       const caller = await createCaller(route);
       const launches = observeLaunches();
-      const basename = route + "-allowed.txt";
+      const basename = route + (stamped ? "-stamped" : "") + "-allowed.txt";
       const target = path.join(state.workspaceDir, basename);
       const exec = await caller.call("exec", {
         command: "printf command-effect > " + basename + "; printf launched",

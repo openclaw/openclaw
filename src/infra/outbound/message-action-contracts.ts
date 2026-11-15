@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { AgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
+import type { ResponsePrefixContext } from "../../auto-reply/reply/response-prefix-template.js";
 import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import type { DurableMessageSendIntent, OutboundReplyFacts } from "../../channels/message/types.js";
 import {
@@ -39,7 +40,6 @@ export type MessageActionGateway = Omit<
   resolveAgentRuntimeIdentityToken?: (
     context?: OutboundGatewayRequestContext,
   ) => Promise<string | undefined>;
-  terminalSourceReplyReceiptOwner?: "caller";
   clientName: GatewayClientName;
   clientDisplayName?: string;
   mode: GatewayClientMode;
@@ -69,6 +69,8 @@ export type MessageActionInput = Pick<
   progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   /** @internal Identifies model-authored calls for lossy input normalization. */
   actionOrigin?: "message-tool";
+  /** @internal Selected model of the calling run, for model tokens in responsePrefix. */
+  responsePrefixContext?: ResponsePrefixContext;
   defaultAccountId?: string;
   requesterAccountId?: string | null;
   requesterSenderId?: string | null;
@@ -93,7 +95,7 @@ export type MessageActionInput = Pick<
   workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   sessionKey?: string;
-  /** @internal Durable session key for source-reply transcript and receipt state. */
+  /** @internal Durable session key for source-reply transcript mirrors. */
   sourceReplySessionKey?: string;
   agentId?: string;
   /** @internal The Gateway owns this call and may use its active gateway-mode adapter directly. */
@@ -289,6 +291,9 @@ export function createChannelActionContext(params: {
     cfg: params.ctx.cfg,
     params: params.ctx.params,
     ...(params.reply ? { reply: params.reply } : {}),
+    // The message tool owns the turn's cancellation; hand it to channel actions so
+    // their transports can drop queued work instead of waiting out a rate limit.
+    ...(params.ctx.abortSignal ? { abortSignal: params.ctx.abortSignal } : {}),
     ...(mediaAccess ? { mediaAccess } : {}),
     mediaLocalRoots: mediaAccess?.localRoots,
     mediaReadFile: mediaAccess?.readFile,

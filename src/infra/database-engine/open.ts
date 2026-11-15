@@ -110,7 +110,10 @@ export function openEngineStore(ref: {
       `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
     );
   }
-  ref.prepareAnchor();
+  const readOnly = ref.input?.readOnly === true;
+  if (!readOnly) {
+    ref.prepareAnchor();
+  }
   const readOrCreateAnchor = () => {
     const inspection = ref.inspectSqlite();
     if (inspection.hasExistingData) {
@@ -118,7 +121,7 @@ export function openEngineStore(ref: {
         `Existing SQLite ${schema.id} data cannot switch engines; stop the Gateway and use openclaw database port for a supported store family before changing ${familySetting(schema)}.`,
       );
     }
-    if (!inspection.hasEngineAnchor && ref.existingOnly) {
+    if (!inspection.hasEngineAnchor && (ref.existingOnly || readOnly)) {
       throw new Error(
         "Missing PostgreSQL anchor; restore the matching PostgreSQL schema and anchor.",
       );
@@ -158,7 +161,7 @@ export function openEngineStore(ref: {
   const identity =
     known?.engine === "postgres"
       ? known
-      : ref.existingOnly
+      : ref.existingOnly || readOnly
         ? readOrCreateAnchor()
         : runSqliteImmediateTransactionSync(anchor, readOrCreateAnchor);
   const store: AdmittedStore = { ...ref, input: ref.input, ...identity };
@@ -174,6 +177,7 @@ export function openEngineStore(ref: {
       schema,
       recordSchema: fresh,
       preserveSchemaSeal: ref.existingVersion,
+      requireSealedSchema: readOnly,
     });
     ref.admitPostgres?.(db, fresh);
   };
@@ -186,7 +190,10 @@ export function openEngineStore(ref: {
           ref.existingVersion ? 1 : schema.postgresVectorSearchVersion,
         )
       : undefined;
-    if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
+    if (readOnly) {
+      // Standby reads verify the current schema without creating or migrating either store.
+      db.runTransaction(() => admit(false), undefined, true);
+    } else if (!known || (known.engine === "postgres" && known.version !== schema.version)) {
       admitPostgresCapabilities(db);
       // Bootstrap borrows opening custody; ordinary writes still require domain admission.
       // Existing-only forbids creation; an unsealed port still needs writable schema admission.
@@ -238,6 +245,7 @@ export function openEngineStore(ref: {
                   ...source,
                   postgresVectorDecoderVersion: source.postgresVectorDecoderVersion,
                   postgresVectorSearchVersion: source.postgresVectorSearchVersion,
+                  postgresTextSearchVersion: source.postgresTextSearchVersion,
                   version: Number(meta.version),
                 };
               } else {

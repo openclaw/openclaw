@@ -2,7 +2,7 @@ import type { ControlUiHost, ControlUiPanel } from "openclaw/plugin-sdk/control-
 import { createFeatureClient } from "openclaw/plugin-sdk/feature-contract";
 import { browserContract } from "./browser-contract.js";
 import { coalesceChanges } from "./change-refresh.js";
-import type { contract } from "./contract.js";
+import type { FullOutputContract } from "./contract.js";
 import { markdownView } from "./markdown-view.js";
 import type { ActivityOutput } from "./session-activity.js";
 import { viewingClient } from "./store-view-client.js";
@@ -130,7 +130,7 @@ export function registerSessionPanel(host: ControlUiHost) {
         busy = false,
         selected = "";
       const client = viewingClient(
-        createFeatureClient<typeof contract>(browserContract, host),
+        createFeatureClient<FullOutputContract>(browserContract, host),
         () => ({
           agent,
         }),
@@ -171,7 +171,7 @@ export function registerSessionPanel(host: ControlUiHost) {
       }
       const pageTarget = (id: string) => ({ id: "overview", params: { agent, vault, record: id } });
       function render() {
-        const display = oldestFirst ? [...rows].toReversed() : rows;
+        const display = oldestFirst ? rows.toReversed() : rows;
         list.replaceChildren();
         for (const row of display) {
           const item = el(
@@ -229,7 +229,7 @@ export function registerSessionPanel(host: ControlUiHost) {
         detail.hidden = false;
         detail.replaceChildren(el("p", "Loading record…"));
         try {
-          const result = await client.invoke("record", {
+          const result = await client.invoke("record_detail", {
             id,
             maxChars: 5000,
             includeMetadata: false,

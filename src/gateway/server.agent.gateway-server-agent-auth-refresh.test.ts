@@ -105,10 +105,10 @@ async function expectCompleted(rpc: ReturnType<typeof sendAgentRpc>) {
 }
 
 async function mockPublication(agentDir: string, result: () => Promise<void>) {
-  const models = await import("../agents/models-config.js");
-  const ensure = models.ensureOpenClawModelsJson;
+  const models = await import("../agents/models-config.core.js");
+  const ensure = models.ensureOpenClawModelsJsonWithInput;
   return vi
-    .spyOn(models, "ensureOpenClawModelsJson")
+    .spyOn(models, "ensureOpenClawModelsJsonWithInput")
     .mockImplementation(async (config, dir, options) => {
       if (dir !== agentDir) {
         return await ensure(config, dir, options);
@@ -122,7 +122,7 @@ function expectRuntime(
   runId: string,
   runtime: Awaited<ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime>>,
 ) {
-  expect(agentCommandCallsFor(runId)[0]?.[4]).toMatchObject({
+  expect(agentCommandCallsFor(runId)[0]?.[3]).toMatchObject({
     config: runtime?.config,
     pluginGeneration: runtime?.pluginGeneration,
   });

@@ -288,8 +288,8 @@ export async function verifyUpdatedGateway(
     failureFacts?: UpdateFailureFact[],
     detail?: string,
     warning?: string,
+    endedAtMs = Date.now(),
   ) => {
-    const endedAtMs = Date.now();
     const step: UpdateStepResult = {
       name:
         params.purpose === "recovery"
@@ -324,6 +324,9 @@ export async function verifyUpdatedGateway(
     const run = proofOptions.run;
     if (run && params.purpose !== "recovery") {
       for (const row of updateRunStepsFromResultStep(step)) {
+        if (row.step === step.name) {
+          row.startedAtMs = startedAtMs;
+        }
         // A recheck must clear failure facts from the previous observation.
         assertCurrent();
         recordUpdateRunStep(
@@ -349,7 +352,7 @@ export async function verifyUpdatedGateway(
     const verifiedAtMs = Date.now();
     params.onVerified?.(verifiedAtMs);
     assertCurrent();
-    recordVerificationStep();
+    recordVerificationStep(undefined, undefined, undefined, verifiedAtMs);
 
     if (!params.opts.json) {
       defaultRuntime.log(
@@ -442,13 +445,11 @@ export async function verifyUpdatedGateway(
     ? "version-mismatch"
     : health.buildIdMismatch
       ? "build-id-mismatch"
-      : health.activatedPluginErrors?.length
-        ? "plugin-errors"
-        : httpFailed
-          ? "readyz-unhealthy"
-          : !serviceRunning
-            ? "service-not-running"
-            : (health.waitOutcome ?? "restart-unhealthy");
+      : httpFailed
+        ? "readyz-unhealthy"
+        : !serviceRunning
+          ? "service-not-running"
+          : (health.waitOutcome ?? "restart-unhealthy");
   const facts: UpdateFailureFact[] = [];
   for (const [mismatch, label, code] of [
     [health.versionMismatch, "version", "version-mismatch"],
@@ -475,9 +476,6 @@ export async function verifyUpdatedGateway(
       code: "service-not-running",
       message: `Managed Gateway service status: ${health.runtime.status ?? "unknown"}.`,
     });
-  }
-  for (const { id: pluginId, error: message } of health.activatedPluginErrors ?? []) {
-    facts.push({ check: "pluginErrors", code: "plugin-errors", pluginId, message });
   }
   if (!facts.length || health.waitOutcome === "timeout") {
     facts.push({

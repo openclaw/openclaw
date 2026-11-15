@@ -1,16 +1,14 @@
 #!/usr/bin/env node
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
 import process from "node:process";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 
 type ReleasePrepushCommand = {
   name: string;
-  bin: "node" | "pnpm";
+  bin: "git" | "node";
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
@@ -19,13 +17,12 @@ type ReleasePrepushCommand = {
 type ReleasePrepushDependencies = {
   assertCleanWorktree: () => void;
   assertAuditBounds: (baseSha: string, headSha: string) => string;
-  createValidationCheckout: (headSha: string) => string;
   currentBranch: () => string;
   pushValidatedHead: (headSha: string, branch: string) => void;
   refreshMain: () => void;
   refreshReleaseBranch: (branch: string) => string | undefined;
-  removeValidationCheckout: (checkout: string) => void;
   resolveCommit: (ref: string) => string;
+  resolveInitialReleaseBase: (headSha: string, auditMergeBase: string) => string | undefined;
   runCommand: (command: ReleasePrepushCommand) => Promise<number>;
 };
 
@@ -79,6 +76,37 @@ export function selectChangedGateBase(
   return canonicalReleaseSha;
 }
 
+function resolveInitialReleaseBase(headSha: string, auditMergeBase: string): string | undefined {
+  // A new release can descend from shipped bytes no longer on main's ancestry.
+  // Only remote-published stable tags can exempt shipped bytes from this check.
+  const publishedTags = new Map(
+    git(["ls-remote", "--tags", "--refs", "origin", "refs/tags/v*"])
+      .split("\n")
+      .map((line) => {
+        const [sha, ref] = line.split("\t");
+        return [ref, sha];
+      }),
+  );
+  const tag = git([
+    "for-each-ref",
+    "--merged=" + headSha,
+    "--contains=" + auditMergeBase,
+    "--sort=-version:refname",
+    "--format=%(objectname) %(refname)",
+    "refs/tags/v*",
+  ])
+    .split("\n")
+    .map((line) => line.split(" "))
+    .find(
+      ([sha, ref]) =>
+        ref &&
+        publishedTags.get(ref) === sha &&
+        parseReleaseVersion(ref.slice("refs/tags/v".length))?.channel === "stable",
+    );
+  const ref = tag?.[1];
+  return ref ? resolveCommit(ref) : undefined;
+}
+
 export function currentBranch(): string {
   const branch = git(["symbolic-ref", "--quiet", "--short", "HEAD"]);
   return canonicalReleaseBranch(branch);
@@ -92,11 +120,9 @@ export function canonicalReleaseBranch(branch: string): string {
 }
 
 export function refreshMain(): void {
-  execFileSync(
-    "git",
-    ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"],
-    { stdio: "inherit" },
-  );
+  execFileSync("git", ["fetch", "--tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
+    stdio: "inherit",
+  });
 }
 
 export function refreshReleaseBranch(branch: string): string | undefined {
@@ -124,69 +150,24 @@ export function pushValidatedHead(headSha: string, branch: string): void {
   });
 }
 
-export function createValidationCheckout(headSha: string): string {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-release-prepush-"));
-  const checkout = join(root, "checkout");
-  try {
-    execFileSync("git", ["worktree", "add", "--detach", checkout, headSha], {
-      stdio: "inherit",
-    });
-    return checkout;
-  } catch (error) {
-    rmSync(root, { force: true, recursive: true });
-    throw error;
-  }
-}
-
-export function removeValidationCheckout(checkout: string): void {
-  try {
-    execFileSync("git", ["worktree", "remove", "--force", checkout], {
-      stdio: "inherit",
-    });
-  } finally {
-    rmSync(dirname(checkout), { force: true, recursive: true });
-  }
-}
-
 export function buildReleasePrepushPlan(
   baseSha: string,
   headSha: string,
   cwd: string,
   env: NodeJS.ProcessEnv = process.env,
-  trustedPolicyRef: string = baseSha,
 ): ReleasePrepushCommand[] {
   return [
     {
-      name: "frozen dependency install",
-      bin: "pnpm",
-      args: ["install", "--frozen-lockfile"],
+      name: "whitespace and conflict-marker check",
+      bin: "git",
+      args: ["diff", "--check", baseSha, headSha],
       cwd,
       env,
     },
     {
-      name: "changed static and type gates",
-      bin: "pnpm",
-      args: ["check:changed", "--base", baseSha, "--head", headSha],
-      cwd,
-      env: {
-        ...env,
-        CHECKOUT_BASE_SHA: baseSha,
-        CI: "1",
-        OPENCLAW_LOCAL_CHECK: "0",
-        OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
-      },
-    },
-    {
-      name: "production dead-code gate",
-      bin: "pnpm",
-      args: ["deadcode:knip"],
-      cwd,
-      env,
-    },
-    {
-      name: "changed tests",
+      name: "release changelog layout",
       bin: "node",
-      args: ["scripts/test-projects.mts", "--changed", baseSha],
+      args: ["scripts/release-changelog.mjs", "check", "--ref", headSha],
       cwd,
       env,
     },
@@ -206,13 +187,12 @@ async function defaultRunCommand(command: ReleasePrepushCommand): Promise<number
 const defaultDependencies: ReleasePrepushDependencies = {
   assertCleanWorktree,
   assertAuditBounds,
-  createValidationCheckout,
   currentBranch,
   pushValidatedHead,
   refreshMain,
   refreshReleaseBranch,
-  removeValidationCheckout,
   resolveCommit,
+  resolveInitialReleaseBase,
   runCommand: defaultRunCommand,
 };
 
@@ -239,12 +219,16 @@ export async function runReleasePrepush(
   const baseSha = dependencies.resolveCommit(options.base);
   const headSha = dependencies.resolveCommit(headRef);
   const canonicalReleaseSha = branch ? dependencies.refreshReleaseBranch(branch) : undefined;
-  const comparisonBaseSha = selectChangedGateBase(
+  let comparisonBaseSha = selectChangedGateBase(
     baseSha,
     headSha,
     canonicalReleaseSha,
     dependencies.assertAuditBounds,
   );
+  if (branch && canonicalReleaseSha === undefined) {
+    comparisonBaseSha =
+      dependencies.resolveInitialReleaseBase(headSha, comparisonBaseSha) ?? comparisonBaseSha;
+  }
 
   if (comparisonBaseSha !== baseSha) {
     console.error(
@@ -253,33 +237,21 @@ export async function runReleasePrepush(
   }
 
   if (options.dryRun) {
-    for (const command of buildReleasePrepushPlan(
-      comparisonBaseSha,
-      headSha,
-      "<detached-checkout>",
-    )) {
+    for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, process.cwd())) {
       console.log([command.bin, ...command.args].join(" "));
     }
     return 0;
   }
 
-  const validationCheckout = dependencies.createValidationCheckout(headSha);
-  try {
-    for (const command of buildReleasePrepushPlan(
-      comparisonBaseSha,
-      headSha,
-      validationCheckout,
-      process.env,
-      baseSha,
-    )) {
-      const status = await dependencies.runCommand(command);
-      if (status !== 0) {
-        console.error(`[release:prepush] failed: ${command.name}`);
-        return status;
-      }
+  for (const command of buildReleasePrepushPlan(comparisonBaseSha, headSha, process.cwd(), {
+    ...process.env,
+    OPENCLAW_RELEASE_CONTEXT_REF: branch,
+  })) {
+    const status = await dependencies.runCommand(command);
+    if (status !== 0) {
+      console.error(`[release:prepush] failed: ${command.name}`);
+      return status;
     }
-  } finally {
-    dependencies.removeValidationCheckout(validationCheckout);
   }
 
   dependencies.assertCleanWorktree();
@@ -336,9 +308,9 @@ function usage(): string {
     "Usage: pnpm release:prepush -- [--base <ref>] [--dry-run]",
     "       pnpm release:push [-- --head <sha> --branch <release/YYYY.M.PATCH>]",
     "",
-    "Runs exact-HEAD changed static/type gates, production dead-code analysis, and changed tests.",
+    "Runs fast exact-HEAD whitespace/conflict-marker and release-changelog checks.",
     "The default comparison base is origin/main.",
-    "release:push refreshes origin/main, validates, and pushes the captured exact SHA to its canonical release branch.",
+    "release:push refreshes origin/main, runs the short preflight, and pushes the captured exact SHA to its canonical release branch.",
   ].join("\n");
 }
 

@@ -36,6 +36,9 @@ names and flags wrap without being truncated, and Unicode keys stay aligned.
 Long keys show their beginning and end; use `openclaw sessions --json` for complete
 session keys.
 
+Relative ages round each displayed unit directly from elapsed milliseconds:
+89.5 seconds displays as `1m ago`, and 2.49 days displays as `2d ago`.
+
 Token counts below 1,000 appear as whole numbers; larger counts use compact `k`
 or `m` labels. JSON output retains exact numeric counts.
 

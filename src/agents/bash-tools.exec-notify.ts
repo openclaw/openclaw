@@ -1,271 +1,30 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
-import {
-  captureSessionEventTargetForHost as captureSessionEventTarget,
-  enqueueSessionEventForHost as enqueueSessionEvent,
-} from "../auto-reply/reply/session-event-handoff.js";
-import { intersectSessionEventToolsAllow } from "../auto-reply/reply/session-event-target.js";
-import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
-import {
-  hasRestartRecoverySourceClaim,
-  hasRestartRecoveryTerminalRun,
-} from "../config/sessions/restart-recovery-state.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
-import {
-  hasAgentRunContextExecutionOwner,
-  listAgentRunsForSession,
-} from "../infra/agent-run-registry.js";
+import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveEventSessionKeyForPolicy } from "../infra/event-session-routing.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../infra/exec-request-context.js";
+import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
-import { enqueueSystemEventWithReceipt } from "../infra/system-events.js";
+import {
+  enqueueSystemEventWithReceipt,
+  SystemEventQueueFullError,
+} from "../infra/system-events.js";
 import { logWarn } from "../logger.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { isCronRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
-import { recoverAfterAgentDatabasePreparation } from "../state/agent-database-preparation-recovery.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { isOneShotRunSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import {
+  listRunningSessions,
   processSessionInstanceId,
   recordNotifyOnExitRemoval,
-  tail,
   type ProcessSession,
 } from "./bash-process-registry.js";
 import {
   appendExecTimeoutRetryGuidance,
-  compactNotifyOutput,
+  hasExitWake,
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
-import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-
-const DEFAULT_NOTIFY_TAIL_CHARS = 400;
-const recovering = new Set<string>();
-
-function notificationsEnabled(cfg: OpenClawConfig, agentId: string) {
-  return (
-    (resolveAgentConfig(cfg, agentId)?.tools?.exec?.notifyOnExit ??
-      cfg.tools?.exec?.notifyOnExit) !== false
-  );
-}
-
-function installExecNotificationPersistence(session: ProcessSession) {
-  const target = session.notifySessionTarget!;
-  if (isCronRunSessionKey(target.sessionKey!)) {
-    return;
-  }
-  const executionId = processSessionInstanceId(session);
-  const scope = {
-    agentId: target.agentId!,
-    sessionKey: target.sessionKey!,
-    storePath: target.storePath,
-  };
-  const clear = async () => {
-    if (!session.exitNotificationPersistence) {
-      return;
-    }
-    await session.exitNotificationPersistence;
-    const { patchSessionEntryCore } =
-      await import("../config/sessions/session-accessor.sqlite-entry.js");
-    await patchSessionEntryCore(
-      scope,
-      (entry) => {
-        if (
-          entry.sessionId !== target.sessionId ||
-          !entry.pendingExecNotifications?.[executionId]
-        ) {
-          return null;
-        }
-        const pending = { ...entry.pendingExecNotifications };
-        delete pending[executionId];
-        return { pendingExecNotifications: Object.keys(pending).length ? pending : undefined };
-      },
-      { preserveActivity: true },
-    );
-  };
-  session.clearExitNotification = () =>
-    clear().catch((error: unknown) => {
-      logWarn(`exec: could not clear completion obligation (${formatErrorMessage(error)})`);
-    });
-  session.persistExitNotification = async () => {
-    const { patchSessionEntryCore } =
-      await import("../config/sessions/session-accessor.sqlite-entry.js");
-    await patchSessionEntryCore(
-      scope,
-      (entry) => {
-        if (
-          entry.incognito ||
-          entry.archivedAt ||
-          entry.sessionId !== target.sessionId ||
-          entry.lifecycleRevision !== target.lifecycleRevision
-        ) {
-          return null;
-        }
-        const { toolsAllow, settings, deliver, deliveryContext, chatType } = target;
-        return {
-          pendingExecNotifications: {
-            ...entry.pendingExecNotifications,
-            [executionId]: {
-              processSessionId: session.id,
-              sessionId: target.sessionId,
-              lifecycleRevision: target.lifecycleRevision,
-              incarnation: target.generation,
-              startedAt: session.startedAt,
-              // Arguments, shell text, environment and output may contain secrets.
-              label: "background exec",
-              policy: {
-                toolsAllow:
-                  toolsAllow === undefined
-                    ? undefined
-                    : (readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow]),
-                settings,
-                deliver,
-                deliveryContext,
-                chatType,
-              },
-            },
-          },
-        };
-      },
-      { preserveActivity: true },
-    );
-  };
-}
-
-/** Replay only the notification obligation, through the ordinary exit owner. */
-export function recoverExecExitNotifications(cfg: OpenClawConfig, signal: AbortSignal) {
-  return recoverAfterAgentDatabasePreparation(signal, (agentIds) =>
-    recoverExecExitNotificationsForAgents(cfg, signal, agentIds),
-  );
-}
-
-async function recoverExecExitNotificationsForAgents(
-  cfg: OpenClawConfig,
-  signal: AbortSignal,
-  agentIds?: ReadonlySet<string>,
-) {
-  const [
-    { discoverRestartRecoveryStoreTargets },
-    { iteratePendingExecNotificationEntriesInWorker },
-    { patchSessionEntryCore },
-  ] = await Promise.all([
-    import("./main-session-recovery/main-session-restart-recovery-shared.js"),
-    import("../config/sessions/session-entry-read-maintenance.js"),
-    import("../config/sessions/session-accessor.sqlite-entry.js"),
-  ]);
-  const targets = await discoverRestartRecoveryStoreTargets({
-    cfg,
-    agentIds,
-    shouldContinue: () => !signal.aborted,
-  });
-  for (const scope of targets) {
-    signal.throwIfAborted();
-    for await (const { sessionKey, entry } of iteratePendingExecNotificationEntriesInWorker(
-      scope,
-    )) {
-      // Shared stores have one physical owner; routing and policy follow the row's agent.
-      const agentId = parseAgentSessionKey(sessionKey)?.agentId ?? scope.agentId;
-      for (const [id, fact] of Object.entries(entry.pendingExecNotifications ?? {})) {
-        if (fact.incarnation === getAgentEventLifecycleGeneration()) {
-          continue;
-        }
-        const key = `${getAgentEventLifecycleGeneration()}:${entry.sessionId}:${id}`;
-        if (recovering.has(key)) {
-          continue;
-        }
-        const clear = () =>
-          patchSessionEntryCore(
-            { ...scope, agentId, sessionKey },
-            (current) => {
-              if (current.pendingExecNotifications?.[id]?.incarnation !== fact.incarnation) {
-                return null;
-              }
-              const pending = { ...current.pendingExecNotifications };
-              delete pending[id];
-              return {
-                pendingExecNotifications: Object.keys(pending).length ? pending : undefined,
-              };
-            },
-            { preserveActivity: true },
-          );
-        signal.throwIfAborted();
-        if (
-          entry.incognito ||
-          entry.archivedAt ||
-          entry.sessionId !== fact.sessionId ||
-          entry.lifecycleRevision !== fact.lifecycleRevision ||
-          !notificationsEnabled(cfg, agentId) ||
-          hasRestartRecoverySourceClaim(entry, `exec:${id}`) ||
-          hasRestartRecoveryTerminalRun(entry, `exec:${id}`)
-        ) {
-          await clear();
-          continue;
-        }
-        recovering.add(key);
-        try {
-          const target = await captureSessionEventTarget(agentId, sessionKey, {
-            producerPolicy: {
-              settings: fact.policy.settings,
-              toolsAllow: intersectSessionEventToolsAllow(...(fact.policy.toolsAllow ?? [])),
-            },
-          });
-          if (
-            target.sessionId !== fact.sessionId ||
-            target.lifecycleRevision !== fact.lifecycleRevision
-          ) {
-            await clear();
-            recovering.delete(key);
-            continue;
-          }
-          target.deliveryContext = fact.policy.deliveryContext;
-          target.deliver = fact.policy.deliver;
-          target.chatType = fact.policy.chatType;
-          const receipt = enqueueExecExitNotification(
-            `Exec lost (${fact.processSessionId.slice(0, 8)}, ${fact.label}): the process was lost when the Gateway restarted; its outcome is unknown. Check the process's side effects/state before re-running it.`,
-            target,
-            id,
-            {
-              // The pending-input store binds a source turn to one request and run. A
-              // completion or earlier notice interrupted before adoption keeps its key.
-              sourceTurnId: `exec:${id}:restart:${getAgentEventLifecycleGeneration()}`,
-              abortSignal: signal,
-              assertCurrent: () => {
-                signal.throwIfAborted();
-                if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, agentId)) {
-                  throw new Error("Exec completion notifications are disabled");
-                }
-              },
-              onAdopted: async () => {
-                await clear();
-              },
-            },
-          );
-          // Startup waits for handoff, never for the model's completion.
-          void receipt.settled
-            .then(async (outcome) => {
-              if (outcome.status === "failed" && outcome.retryable === false) {
-                await clear();
-              }
-            })
-            .catch((error: unknown) => {
-              logWarn(`exec: restart notice failed (${formatErrorMessage(error)})`);
-            })
-            .finally(() => recovering.delete(key));
-        } catch (error) {
-          recovering.delete(key);
-          if (signal.aborted) {
-            return;
-          }
-          if (!notificationsEnabled(getRuntimeConfigSnapshot() ?? cfg, agentId)) {
-            await clear();
-          } else {
-            logWarn(`exec: restart notice was not admitted (${formatErrorMessage(error)})`);
-          }
-        }
-      }
-    }
-  }
-}
 
 function enqueueExecExitNotification(
   text: string,
@@ -282,7 +41,7 @@ function enqueueExecExitNotification(
     sessionKey: target.sessionKey!,
     source: "exec",
     contextKey: options.contextKey ?? `exec:${id}`,
-    sourceTurnId: options.sourceTurnId ?? `exec:${id}`,
+    sourceTurnId: `exec:${id}`,
     expectedTarget: target,
   });
 }
@@ -291,17 +50,20 @@ function enqueueExecExitNotification(
 export function prepareExecExitNotification(
   session: ProcessSession,
   subagentSession: boolean,
+  sessionsYieldAvailable: boolean,
 ): Promise<void> | undefined {
-  if (
-    !session.notifyOnExit ||
-    !session.sessionKey ||
-    subagentSession ||
-    isSubagentSessionKey(session.sessionKey)
-  ) {
+  if (!session.notifyOnExit || !session.sessionKey) {
     return undefined;
   }
+  const hiddenSubagent = subagentSession || isSubagentSessionKey(session.sessionKey);
+  // A one-shot run ends with its final reply; only a yield awaiting the command resumes it.
+  // Without sessions_yield (collectors, filtered tools) a hidden subagent keeps its passive notice.
+  if (hiddenSubagent && !sessionsYieldAvailable) {
+    return undefined;
+  }
+  const oneShot = subagentSession || isOneShotRunSessionKey(session.sessionKey);
   // Ordinary event admission can address the cron run directly, unlike heartbeat drains.
-  const targetKey = isCronRunSessionKey(session.sessionKey)
+  const targetKey = oneShot
     ? session.sessionKey
     : resolveEventSessionKeyForPolicy(session.sessionKey, session.eventRouting ?? {});
   const owner = session.agentId ?? parseAgentSessionKey(targetKey)?.agentId;
@@ -310,25 +72,20 @@ export function prepareExecExitNotification(
   }
   return captureSessionEventTarget(owner, targetKey, {
     operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+    // The completion continues the requester's own command, not a new sender's request.
+    retainRequesterOwner: true,
   }).then(
     (target) => {
-      if (isCronRunSessionKey(targetKey)) {
-        const runs = listAgentRunsForSession({
-          sessionKey: targetKey,
-          sessionId: target.sessionId,
-        });
-        // The originating run must survive queue acceptance, not the queued follow-up.
-        session.assertExitNotificationAcceptanceCurrent = () => {
-          if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
-            throw new Error("Originating cron run ended; inspect the result with process log");
-          }
-        };
+      if (oneShot && sessionsYieldAvailable) {
+        session.exitWakeAfterYield = true;
       }
       session.notifySessionTarget = target;
-      installExecNotificationPersistence(session);
     },
     (error: unknown) => {
-      session.notifyOnExit = false;
+      // A hidden subagent keeps its passive completion notice without a wake destination.
+      if (!hiddenSubagent) {
+        session.notifyOnExit = false;
+      }
       logWarn(
         `exec: automatic completion has no destination (${formatErrorMessage(error)}); use process poll.`,
       );
@@ -336,52 +93,141 @@ export function prepareExecExitNotification(
   );
 }
 
+/** A cron run executor resumes its yielded turn in place, keyed by the run that yielded. */
+type ExecYieldResume = { awaited: Set<ProcessSession>; exits: string[]; changed?: () => void };
+const execYieldResumes = new Map<string, ExecYieldResume>();
+
+/** Wake-armed running commands this run started; each one's deadline bounds a yield on it. */
+export function listYieldAwaitableExecs(runId: string | undefined): ProcessSession[] {
+  if (!runId) {
+    return [];
+  }
+  return listRunningSessions().filter(
+    (session) =>
+      session.originRunId === runId && !session.cancellationRequested && hasExitWake(session),
+  );
+}
+
+/** An accepted sessions_yield awaits these commands: each exit resumes the yielded run. */
+export function awaitExecsForYield(sessions: readonly ProcessSession[]): void {
+  for (const session of sessions) {
+    session.resumesYieldedRun = true;
+    if (session.originRunId) {
+      execYieldResumes.get(session.originRunId)?.awaited.add(session);
+    }
+  }
+}
+
+/**
+ * Cron run executor: own resumption of this run's yielded turns until disposed. `next` resolves the
+ * wake text of every awaited exit so far, or undefined once nothing awaited remains.
+ */
+export function openExecYieldResume(runId: string) {
+  const state: ExecYieldResume = { awaited: new Set(), exits: [] };
+  execYieldResumes.set(runId, state);
+  return {
+    async next(signal?: AbortSignal): Promise<string | undefined> {
+      for (;;) {
+        if (state.exits.length > 0) {
+          return state.exits.splice(0).join("\n\n");
+        }
+        if (state.awaited.size === 0 || signal?.aborted) {
+          return undefined;
+        }
+        await new Promise<void>((resolve) => {
+          state.changed = resolve;
+          signal?.addEventListener("abort", () => resolve(), { once: true });
+        });
+      }
+    },
+    [Symbol.dispose]() {
+      if (execYieldResumes.get(runId) === state) {
+        execYieldResumes.delete(runId);
+      }
+    },
+  };
+}
+
 export async function maybeNotifyOnExit(
   session: ProcessSession,
   status: "completed" | "failed",
   subagentSession: boolean,
 ) {
-  if (session.exitNotified) {
-    return;
+  const resume = session.originRunId ? execYieldResumes.get(session.originRunId) : undefined;
+  if (!resume?.awaited.has(session)) {
+    return notifyOnExit(session, status, subagentSession);
   }
-  await session.exitNotificationPersistence;
+  try {
+    const eventText = prepareExecExitWake(session, status);
+    if (eventText) {
+      resume.exits.push(eventText);
+    }
+  } finally {
+    // A suppressed exit (Stop, kill) still releases the yielded run.
+    resume.awaited.delete(session);
+    resume.changed?.();
+  }
+}
+
+/** Claims the exit once and renders its wake text, or undefined when the exit starts no turn. */
+function prepareExecExitWake(
+  session: ProcessSession,
+  status: "completed" | "failed",
+): string | undefined {
+  if (session.exitNotified) {
+    return undefined;
+  }
   if (
     !session.backgrounded ||
     !session.notifyOnExit ||
     session.requestCancelled ||
     readExecRequestOwners(session)?.some((owner) => owner.signal.aborted) ||
-    session.terminalPollObserved
+    session.terminalPollObserved ||
+    !session.sessionKey?.trim()
   ) {
-    await session.clearExitNotification?.();
-    return;
-  }
-  const sessionKey = session.sessionKey?.trim();
-  if (!sessionKey) {
-    return;
+    return undefined;
   }
   session.exitNotified = true;
   // Requested stops must not wake another turn to relay leftover output.
   if (session.exitReason === "manual-cancel" && session.finalizationFailed !== true) {
-    await session.clearExitNotification?.();
-    return;
+    return undefined;
   }
-  const exitLabel = renderExecExitLabel(session);
-  const output = compactNotifyOutput(
-    tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
-  );
+  // The retained tail (last 2,000 chars) lets the woken turn act without process log.
+  const tail = session.tail;
+  const output = tail.trim();
   if (
     status === "completed" &&
     session.exitCode === 0 &&
     !output &&
     session.notifyOnExitEmptySuccess !== true
   ) {
-    await session.clearExitNotification?.();
+    return undefined;
+  }
+  const header = `Exec ${status} (${session.id.slice(0, 8)}, ${renderExecExitLabel(session)}, ${
+    formatDurationCompact((session.endedAt ?? Date.now()) - session.startedAt) ?? "0s"
+  })`;
+  const summary = !output
+    ? `${header} with no output.`
+    : session.totalOutputChars > tail.length
+      ? `${header}, last ${tail.length} of ${session.totalOutputChars} output chars (${
+          session.totalOutputChars > session.aggregated.length
+            ? `process log keeps the last ${session.aggregated.length}; earlier output was discarded`
+            : "process log has the rest"
+        }):\n${output}`
+      : `${header}:\n${output}`;
+  return appendExecTimeoutRetryGuidance(summary, session.exitReason);
+}
+
+async function notifyOnExit(
+  session: ProcessSession,
+  status: "completed" | "failed",
+  subagentSession: boolean,
+) {
+  const eventText = prepareExecExitWake(session, status);
+  const sessionKey = session.sessionKey?.trim();
+  if (!eventText || !sessionKey) {
     return;
   }
-  const summary = output
-    ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
-    : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
-  const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventSessionKey =
     session.notifySessionTarget?.sessionKey ??
     resolveEventSessionKeyForPolicy(sessionKey, session.eventRouting);
@@ -393,7 +239,8 @@ export async function maybeNotifyOnExit(
     },
     readExecRequestOwners(session),
   );
-  if (!subagentSession && !isSubagentSessionKey(sessionKey)) {
+  // A yielded hidden subagent resumes through an ordinary wake turn; otherwise it gets a passive notice.
+  if (session.resumesYieldedRun || (!subagentSession && !isSubagentSessionKey(sessionKey))) {
     const agentId = session.agentId ?? parseAgentSessionKey(eventSessionKey)?.agentId;
     if (!agentId || !session.notifySessionTarget) {
       logWarn(
@@ -409,16 +256,11 @@ export async function maybeNotifyOnExit(
         {
           ...eventOptions,
           sourceRunId: session.originRunId,
-          assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
-          onAdopted: session.clearExitNotification,
         },
       );
       recordNotifyOnExitRemoval(session, receipt.cancel);
       void receipt.settled.then(async (outcome) => {
         if (outcome.status === "failed") {
-          if (outcome.retryable === false) {
-            await session.clearExitNotification?.();
-          }
           logWarn(
             `exec: completion delivery failed (${outcome.error}); inspect the process result.`,
           );
@@ -426,18 +268,25 @@ export async function maybeNotifyOnExit(
       });
     } catch (error) {
       logWarn(
-        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the process result.`,
+        `exec: completion was not admitted (${formatErrorMessage(error)}); inspect the result with process log.`,
       );
     }
     return;
   }
   // Subagent results remain available to process poll and the announce owner.
-  const remove = enqueueSystemEventWithReceipt(
-    eventText,
-    session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
-    { allowDuplicate: true },
-  );
-  if (remove) {
-    recordNotifyOnExitRemoval(session, remove);
+  try {
+    const remove = enqueueSystemEventWithReceipt(
+      eventText,
+      session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,
+      { allowDuplicate: true },
+    );
+    if (remove) {
+      recordNotifyOnExitRemoval(session, remove);
+    }
+  } catch (error) {
+    if (!(error instanceof SystemEventQueueFullError)) {
+      throw error;
+    }
+    logWarn(`exec: completion ${session.id} was not queued (${error.message}); use process poll.`);
   }
 }

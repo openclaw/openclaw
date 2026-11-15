@@ -9,6 +9,7 @@ import { renderNode } from "../components/config-form.node.tsx";
 import { ConfigForm } from "../components/config-form.render.tsx";
 import type { ConfigFormProps } from "../components/config-form.shared.ts";
 import { mountSolid } from "./solid-render.tsx";
+import { flush } from "./solid-settle.ts";
 
 export const connectionSchemaFixture = (): ConfigNodeRenderParams["schema"] => ({
   type: "object",
@@ -101,4 +102,21 @@ export function expectElement<T extends Element>(element: T | null | undefined, 
     throw new Error(`missing ${label}`);
   }
   return element;
+}
+
+export async function expandConfigObjects(container: ParentNode) {
+  for (;;) {
+    const details = container.querySelector<HTMLDetailsElement>("details.cfg-object:not([open])");
+    if (!details) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      details.addEventListener("toggle", () => resolve(), { once: true });
+      expectElement(
+        details.querySelector<HTMLElement>(":scope > summary"),
+        "object summary",
+      ).click();
+    });
+    flush();
+  }
 }

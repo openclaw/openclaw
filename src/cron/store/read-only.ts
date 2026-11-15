@@ -1,23 +1,28 @@
 import fs from "node:fs";
 import { ensureSqliteLibrarySelected } from "../../infra/bun-sqlite-library.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
-import { throwSqliteLifecycleErrors } from "../../infra/sqlite-lifecycle-errors.js";
+import {
+  throwSqliteLifecycleErrors,
+  SqliteSnapshotCleanupError,
+} from "../../infra/sqlite-lifecycle-errors.js";
 import {
   removeTempDirectoryAsync,
-  SqliteSnapshotCleanupError,
   retainSnapshotTempDirectory,
   retainSnapshotWork,
 } from "../../infra/sqlite-readonly-location-cleanup.js";
+import { resolveSqliteInspectionSignal } from "../../infra/sqlite-readonly-worker.js";
 import { createSqliteSnapshotStagingDirectory } from "../../infra/sqlite-snapshot-staging.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { getChildLogger } from "../../logging/logger.js";
 import type { PluginDoctorCronJob } from "../../plugins/doctor-contract-module.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { resolveGlobalMap } from "../../shared/global-singleton.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseAsyncResource,
+  registerOpenClawStatePathAsyncResource,
 } from "../../state/openclaw-state-db-cache.js";
 import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
 import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-readonly.js";
@@ -35,6 +40,44 @@ import type {
 } from "./read-only.types.js";
 import type { CronRunRecord } from "./run-history.types.js";
 import type { LoadedCronStore } from "./types.js";
+
+type CronReadPool = WorkerTaskPool<CronReadOnlyRequest, Extract<CronReadOnlyResult, { ok: true }>>;
+const readPools = resolveGlobalMap<string, CronReadPool>(Symbol.for("openclaw.cronReadPools"));
+
+function createReadPool(): CronReadPool {
+  ensureSqliteLibrarySelected();
+  return new WorkerTaskPool<CronReadOnlyRequest, Extract<CronReadOnlyResult, { ok: true }>>({
+    workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
+    workerClass: "singleton",
+    sharedCompute: true,
+    // Reuse across minute-long polls; the pool extends a recreated worker to five minutes.
+    idleTimeoutMs: 120_000,
+    // Retire a failed reader before dispatching another request on its isolate.
+    validateResult(result: CronReadOnlyResult) {
+      if (!result.ok) {
+        throw restoreCronLoadError(result.error);
+      }
+    },
+  });
+}
+
+function retainedReadPool(
+  admission: ReturnType<typeof captureOpenClawStateDatabaseReadAdmission>,
+): CronReadPool {
+  const key = admission.coordinationKey;
+  let pool = readPools.get(key);
+  if (!pool) {
+    pool = createReadPool();
+    readPools.set(key, pool);
+    const retained = pool;
+    const unregister = registerOpenClawStatePathAsyncResource(admission, async () => {
+      await retained.close();
+      readPools.delete(key);
+      unregister();
+    });
+  }
+  return pool;
+}
 
 function emptyLoadedCronStore(): LoadedCronStore {
   return {
@@ -109,19 +152,12 @@ async function readCronState({
   const identity = admission.identity;
   const canonicalPath = identity.canonicalPath;
   const maintenance = getOpenClawDatabaseMaintenanceScope();
-  ensureSqliteLibrarySelected();
-  const environment = { ...process.env };
-  const environmentBytes = Object.entries(environment).reduce(
-    (bytes, [key, value]) => bytes + Buffer.byteLength(key) + Buffer.byteLength(value ?? ""),
-    0,
-  );
-  const pool = new WorkerTaskPool<CronReadOnlyRequest, CronReadOnlyResult>({
-    workerUrl: resolveRuntimeProcessEntrypointUrl("cronReadOnly"),
-    workerOptions: { env: environment },
-    workerClass: "singleton",
-    sharedCompute: true,
-  });
+  // Snapshot files and maintenance custody need confirmed retirement before cleanup.
+  // Ordinary reads close their connection in the worker and reuse only its isolate.
+  const dedicated = preserveArtifacts || maintenance !== undefined;
+  const pool = dedicated ? createReadPool() : retainedReadPool(admission);
   const controller = new AbortController();
+  const signal = resolveSqliteInspectionSignal(controller.signal) ?? controller.signal;
   const producerSettled = createDeferredCore();
   let stagingRoot: string | undefined;
   let releaseSnapshot: (() => void) | undefined;
@@ -135,7 +171,7 @@ async function readCronState({
     }
     return (cleanupPending ??= (async () => {
       // A failed retirement keeps this exact pool and its pins available for canonical retry.
-      if (!workerStopped) {
+      if (dedicated && !workerStopped) {
         await pool.close();
         workerStopped = true;
       }
@@ -186,16 +222,11 @@ async function readCronState({
     try {
       maintenance?.own(resource, "shared-resources", () => resource.close());
       if (preserveArtifacts) {
-        stagingRoot = await createSqliteSnapshotStagingDirectory(
-          undefined,
-          false,
-          controller.signal,
-          true,
-        );
+        stagingRoot = await createSqliteSnapshotStagingDirectory(undefined, false, signal, true);
         releaseSnapshot = retainSnapshotTempDirectory(stagingRoot);
       }
       const location = statePath;
-      controller.signal.throwIfAborted();
+      signal.throwIfAborted();
       admission.assertCurrent();
       const result = await pool.run(
         {
@@ -206,7 +237,7 @@ async function readCronState({
           inspect,
         },
         {
-          signal: controller.signal,
+          signal,
           inputBytes:
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
@@ -217,13 +248,9 @@ async function readCronState({
             Buffer.byteLength(history?.transcript?.runId ?? "") +
             (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
-            Buffer.byteLength(inspect ?? "") +
-            environmentBytes,
+            Buffer.byteLength(inspect ?? ""),
         },
       );
-      if (!result.ok) {
-        throw restoreCronLoadError(result.error);
-      }
       loaded = result;
       readSucceeded = true;
     } catch (error) {
@@ -237,7 +264,7 @@ async function readCronState({
       }
     }
     throwSqliteLifecycleErrors(failures, "Cron read-only state inspection and cleanup failed.");
-    controller.signal.throwIfAborted();
+    signal.throwIfAborted();
     admission.assertCurrent();
     return loaded;
   };

@@ -3,11 +3,13 @@ import type {
   AdmittedRunContext,
   AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
+import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import type {
   EmbeddedAgentRunMeta,
   EmbeddedAgentRunPayload,
 } from "../../agents/embedded-agent-runner/result.types.js";
+import type { FailoverReason } from "../../agents/failover/signal.js";
 import type { ResolvedToolPromptFinalizer } from "../../agents/resolved-tool-prompt.types.js";
 import type { SessionEntryCreationOperation } from "../../config/sessions/session-accessor.sqlite-entry-cache.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
@@ -18,6 +20,7 @@ import type {
   CronRunTelemetry,
   CronStoredJob,
 } from "../../cron/types.js";
+import type { AgentEventPayload } from "../../infra/agent-events.js";
 import type { ExecRequestOwner } from "../../infra/exec-request-context.js";
 import type {
   SourceDeliveryOutcome,
@@ -33,14 +36,20 @@ export type SessionEventOutcome = {
   status: "completed" | "failed" | "cancelled";
   executionStarted: boolean;
   delivered: boolean;
+  /** The settled answer was committed by the existing conversation-result writer. */
+  conversationResultCommitted?: true;
   summary?: string;
   nextCheckMs?: number;
   sourceDeliveryOutcome?: SourceDeliveryOutcome;
   automationResult?: CronRunTelemetry &
     Pick<CronRunOutcome, "replyDisposition" | "diagnostics" | "result">;
+  /** Recorded by the turn owner before delivery/cleanup can flatten its cause. */
+  terminalOutcome?: AgentRunTerminalOutcome;
   /** Recorded controller restart outcome, before the error is flattened. */
   interruptedByRestart?: boolean;
   error?: string;
+  /** Structured provider cause from the selected, settled runtime attempt. */
+  errorReason?: FailoverReason;
   /** Admission policy decides whether a durable producer may retry this refusal. */
   retryable?: boolean;
   deliveryAttempted?: boolean;
@@ -54,7 +63,7 @@ export type SessionEventReceipt = {
   id: string;
   cancel: () => boolean;
   /** Resolves after ordinary turn adoption or committed follow-up queue admission. */
-  accepted: Promise<{ ok: true } | { ok: false; error: string }>;
+  accepted: Promise<{ ok: true } | { ok: false; error: string; cause?: Error }>;
   settled: Promise<SessionEventOutcome>;
 };
 
@@ -89,7 +98,9 @@ export type SessionEventOptions = {
     | "plugin"
     // A yielded tool's result resuming its own conversation; hidden from chat display.
     | "tool_handoff"
-    | "cron";
+    | "cron"
+    // The scheduler's repair request for a failing job; hidden from chat display.
+    | "cron_failure_repair";
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
@@ -109,10 +120,12 @@ export type SessionEventOptions = {
   scheduledAutomation?: ScheduledSessionAutomation;
   /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
   preserveOccurrenceOnRejection?: true;
-  /** Internal: policy-change re-admission depth, bounded to stop publication storms. */
-  readmissionAttempt?: number;
   /** An explicitly silent source records its result without transport delivery. */
   deliver?: boolean;
+  /** Host-owned: runtime error payloads stay in the transcript, out of chat delivery. */
+  suppressErrorDelivery?: true;
+  /** Host-owned: the producer's prompt permits NO_REPLY; input provenance never selects it. */
+  replyExpectation?: "optional";
   /** Host producer remains live through admission, execution and delivery. */
   assertCurrent?: () => void;
 };
@@ -190,6 +203,8 @@ export type SessionEventExecution = {
     reason: "send-policy" | "room-event" | "silent" | "message-tool-only" | "aborted",
   ) => void;
   onStarted: (runId: string) => void;
+  /** Final runtime event, after fallback selection and terminal overrides. */
+  onTerminalEvent?: (event: Omit<AgentEventPayload, "seq" | "ts">) => void;
   onTerminal: (
     runId: string,
     outcome: "completed" | "failed" | "aborted",

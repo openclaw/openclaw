@@ -10,6 +10,7 @@ export {
 export const hashText: (value: string) => string = sha256Hex;
 export { encodeMemoryEmbedding } from "../../packages/memory-host-sdk/src/host/embedding-vector.js";
 export { enforceEmbeddingMaxInputTokens } from "../../packages/memory-host-sdk/src/host/embedding-chunk-limits.js";
+export { resolveEmbeddingInputFormatVersion } from "../../packages/memory-host-sdk/src/host/embedding-inputs.js";
 export {
   extractCuratedEntryRecallMetadata,
   stripMemoryAnnotationCarriers,

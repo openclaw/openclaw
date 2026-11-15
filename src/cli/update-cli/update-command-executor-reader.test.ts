@@ -42,41 +42,30 @@ beforeEach(() => {
   leasePreparations = [];
   vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((location, options) => {
     const database = openDatabase(location, options);
-    try {
-      if (location.includes("managed-update-handoffs.sqlite")) {
-        opened.push(database);
-        // SQLite reports namespaced Windows paths; compare their native targets.
-        expect(fs.realpathSync.native(database.location()!)).toBe(
-          fs.realpathSync.native(databasePath),
-        );
-        const prepare = database.prepare.bind(database);
-        database.prepare = (sql) => {
-          if (options?.readOnly && sql.startsWith('select "owner", "payload_json", "updated_at"')) {
-            leasePreparations.push(database);
-          }
-          return prepare(sql);
-        };
-      }
-      return database;
-    } catch (error) {
-      database.close();
-      throw error;
+    if (location.includes("managed-update-handoffs.sqlite")) {
+      opened.push(database);
+      // SQLite reports namespaced Windows paths; compare their native targets.
+      expect(fs.realpathSync.native(database.location()!)).toBe(
+        fs.realpathSync.native(databasePath),
+      );
+      const prepare = database.prepare.bind(database);
+      database.prepare = (sql) => {
+        if (options?.readOnly && sql.startsWith('select "owner", "payload_json", "updated_at"')) {
+          leasePreparations.push(database);
+        }
+        return prepare(sql);
+      };
     }
+    return database;
   });
 });
 
 afterEach(() => {
-  try {
-    expect(opened.every((database) => !database.isOpen)).toBe(true);
-  } finally {
-    for (const database of opened) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
+  const leaked = opened.filter((database) => database.isOpen);
+  leaked.forEach((database) => database.close());
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  expect(leaked).toHaveLength(0);
 });
 
 function write(operation: (database: DatabaseSync) => void) {
@@ -92,24 +81,20 @@ function expectLeaseReleased() {
 }
 
 function snapshot() {
-  return listDirectoryTreeStrictSync(root)
-    .map((walkEntry) => walkEntry.relativePath)
-    .toSorted((left, right) => left.localeCompare(right))
-    .map((relative) => {
-      const name = relative;
-      const file = path.join(root, name);
-      const stat = fs.lstatSync(file);
-      return {
-        name,
-        mode: stat.mode,
-        identity: `${stat.dev}:${stat.ino}`,
-        content: stat.isSymbolicLink()
-          ? fs.readlinkSync(file)
-          : stat.isFile()
-            ? fs.readFileSync(file)
-            : null,
-      };
-    });
+  return listDirectoryTreeStrictSync(root).map(({ relativePath: name }) => {
+    const file = path.join(root, name);
+    const stat = fs.lstatSync(file);
+    return {
+      name,
+      mode: stat.mode,
+      identity: `${stat.dev}:${stat.ino}`,
+      content: stat.isSymbolicLink()
+        ? fs.readlinkSync(file)
+        : stat.isFile()
+          ? fs.readFileSync(file)
+          : null,
+    };
+  });
 }
 
 function captureFailure(operation: () => void): unknown {
@@ -170,7 +155,6 @@ async function expectRevocationWithoutWrites(
   }
   expect(failure).toBeInstanceOf(Error);
   expect(refusal).toBeInstanceOf(UpdateCommandRecoveryPendingError);
-  expect(before).toBeDefined();
   expect(snapshot()).toEqual(before);
 }
 
@@ -215,32 +199,53 @@ describe("invocation-scoped update ownership reader", () => {
         const sqlite = createRequire(import.meta.url)("node:sqlite");
         const NativeDatabase = sqlite.DatabaseSync;
         const databases = [];
+        let statements;
         sqlite.DatabaseSync = class extends NativeDatabase {
           constructor(...args) {
             super(...args);
             if (String(args[0]).includes("managed-update-handoffs.sqlite")) databases.push(this);
           }
+          // The native observer deliberately invokes DatabaseSync.prototype.
+          exec(sql) {
+            if (databases.includes(this)) statements?.push(sql);
+            return super.exec(sql);
+          }
+          prepare(sql) {
+            const statement = super.prepare(sql);
+            if (!databases.includes(this)) return statement;
+            for (const method of ["get", "all", "run", "iterate"]) {
+              const execute = statement[method].bind(statement);
+              statement[method] = (...bindings) => {
+                statements?.push(sql);
+                return execute(...bindings);
+              };
+            }
+            return statement;
+          }
         };
         const {withDelegatedUpdateCommandExecutor} = await import(${JSON.stringify(moduleUrl)});
-        let observed = false;
-        let failed = false;
-        try {
-          await withDelegatedUpdateCommandExecutor(input.grant, input.grant.runId, input.root, async (fence) => {
-            for (let index = 0; index < 8; index++) fence.assertCurrent();
+        const result = await withDelegatedUpdateCommandExecutor(input.grant, input.grant.runId, input.root, async (fence) => {
+            for (let index = 0; index < 8; index++) {
+              statements = [];
+              fence.assertCurrent();
+              const queries = statements.filter(sql => /^select /i.test(sql));
+              const envelope = statements.filter(sql => !/^select /i.test(sql));
+              statements = undefined;
+              assert.equal(queries.length, 5, "all parent, receiver and lineage queries remain");
+              assert.deepEqual(envelope, [
+                "PRAGMA locking_mode = EXCLUSIVE", "BEGIN", "PRAGMA journal_mode",
+                "PRAGMA locking_mode = NORMAL", "ROLLBACK", "PRAGMA page_count",
+              ], "one rollback-reader snapshot per assertion");
+            }
             assert.equal(databases.filter(database => database.isOpen).length, 1);
-            observed = true;
             if (input.rejects) throw new Error("delegated callback rejected");
+            return true;
+          }).catch(error => {
+            assert.equal(error.message, "delegated callback rejected");
+            return false;
           });
-        } catch(error) {
-          assert.equal(error.message, "delegated callback rejected");
-          failed = true;
-        } finally {
-          sqlite.DatabaseSync = NativeDatabase;
-        }
-        assert.equal(observed, true);
-        assert.equal(failed, input.rejects);
+        assert.equal(result, !input.rejects);
         assert.equal(databases.every(database => !database.isOpen), true);
-        process.stdout.write(JSON.stringify({closed: true, failed}));
       `;
       await withFence(async (fence) => {
         const result = await withChild(fence, root, (grant, beforeInput) =>
@@ -264,7 +269,6 @@ describe("invocation-scoped update ownership reader", () => {
           ),
         );
         expect(result.code, result.stderr).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual({ closed: true, failed: rejects });
         fence.assertCurrent();
       });
     },
@@ -313,7 +317,6 @@ describe("invocation-scoped update ownership reader", () => {
       }),
     ).rejects.toThrow();
     expect(entered).toBe(false);
-    expect(before).toBeDefined();
     expect(snapshot()).toEqual(before);
   });
 

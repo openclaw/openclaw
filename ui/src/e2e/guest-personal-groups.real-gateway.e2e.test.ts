@@ -147,6 +147,7 @@ suite.define(() => {
           });
         };
         const setupContext = await suite.newBrowserContext({
+          reducedMotion: "reduce",
           viewport: { width: 1280, height: 900 },
         });
         const editor = await setupContext.newPage();
@@ -171,6 +172,7 @@ suite.define(() => {
           : undefined;
         await suite.withPage(
           {
+            reducedMotion: "reduce",
             viewport: { width: 1280, height: 900 },
             storageState: initialStorage,
             ...(artifactDir
@@ -195,11 +197,14 @@ suite.define(() => {
                 .locator("[data-personal-session-group]")
                 .filter({ has: page.getByRole("list", { name: label, exact: true }) });
             const create = async (label: string, member?: string) => {
-              await sidebar
-                .getByRole("button", { name: "New personal group", exact: true })
+              await sidebar.getByRole("button", { name: /^Filter & sort/ }).click();
+              await page
+                .locator(".sidebar-session-sort-menu")
+                .getByRole("button", { name: "New section", exact: true })
                 .click();
-              const dialog = page.getByRole("dialog", { name: "New personal group", exact: true });
-              await dialog.getByLabel("Group name", { exact: true }).fill(label);
+              const dialog = page.getByRole("dialog", { name: "New section", exact: true });
+              await dialog.getByLabel("Section name", { exact: true }).fill(label);
+              await dialog.getByRole("button", { name: "Choose sessions", exact: true }).click();
               if (member) {
                 await dialog.getByRole("checkbox", { name: member, exact: true }).check();
               }
@@ -208,7 +213,15 @@ suite.define(() => {
             };
             const menu = async (label: string, action: string) => {
               await sidebar
-                .getByRole("button", { name: `Options for personal group ${label}`, exact: true })
+                .locator(".personal-session-groups__header", {
+                  has: page.getByRole("button", {
+                    name: `Options for section ${label}`,
+                    exact: true,
+                  }),
+                })
+                .hover();
+              await sidebar
+                .getByRole("button", { name: `Options for section ${label}`, exact: true })
                 .click();
               await page.getByRole("menuitem", { name: action, exact: true }).click();
             };
@@ -247,9 +260,12 @@ suite.define(() => {
                 .locator("[data-personal-session-group] .sidebar-session-group-toggle")
                 .allTextContents();
             await expect.poll(order).toEqual(["Later", "Focus"]);
-            await menu("Focus", "Edit group");
-            const dialog = page.getByRole("dialog", { name: "Edit personal group", exact: true });
-            await dialog.getByLabel("Group name", { exact: true }).fill("This week");
+            await menu("Focus", "Edit section");
+            const dialog = page.getByRole("dialog", { name: "Edit section", exact: true });
+            // Edits open on session choice; Back returns to the name.
+            await dialog.getByRole("button", { name: "Back", exact: true }).click();
+            await dialog.getByLabel("Section name", { exact: true }).fill("This week");
+            await dialog.getByRole("button", { name: "Choose sessions", exact: true }).click();
             await dialog.getByRole("button", { name: "Save", exact: true }).click();
             await dialog.waitFor({ state: "hidden" });
             await page.reload();
@@ -258,13 +274,16 @@ suite.define(() => {
             expect(
               await rpc(page, "users.prefs.get", { keys: ["ui.personalSessionGroups"] }),
             ).toMatchObject({ status: "ok", entries: {} });
-            const freshContext = await suite.newBrowserContext({ storageState: initialStorage });
+            const freshContext = await suite.newBrowserContext({
+              reducedMotion: "reduce",
+              storageState: initialStorage,
+            });
             const fresh = await freshContext.newPage();
             await fresh.goto(controlUiSessionUrl(suite.server.baseUrl, parentKey));
             await waitForControlUiGatewayReady(fresh);
             expect(await fresh.locator("[data-personal-session-group]").count()).toBe(0);
             await suite.closeBrowserContext(freshContext);
-            await menu("This week", "Remove personal group");
+            await menu("This week", "Remove section");
             await expect.poll(order).toEqual(["Later"]);
             expect(await sidebar.locator(`[data-session-key="${parentKey}"]`).count()).toBe(1);
             const forbidden = new Set([
@@ -297,7 +316,7 @@ suite.define(() => {
             }
           },
         );
-        const otherContext = await suite.newBrowserContext({});
+        const otherContext = await suite.newBrowserContext({ reducedMotion: "reduce" });
         const other = await otherContext.newPage();
         await connect(other, 1);
         await expect(rpc(other, "sessions.describe", { key: parentKey })).rejects.toThrow(

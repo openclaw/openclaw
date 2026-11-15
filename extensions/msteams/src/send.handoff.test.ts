@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 import { sendMSTeamsMessages } from "./messenger.js";
 import { createMSTeamsReplayContext } from "./replay-context.js";
+import { createMSTeamsPersonalConversation } from "./sdk-proactive.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { sendPollMSTeams } from "./send.js";
 
@@ -458,6 +459,40 @@ describe("registered Teams delivery handoff", () => {
       releaseFirst.resolve();
     }
   });
+
+  it.each([true, false])(
+    "opens a personal chat only while authority holds through the token wait (held=%s)",
+    async (held) => {
+      const { state, handoff } = createAuthority();
+      const { tokenStarted, releaseToken } = pauseToken();
+      const opening = createMSTeamsPersonalConversation(
+        fixture.app,
+        { serviceUrl, userId: "user-aad", tenantId: "fixture-tenant" },
+        handoff,
+      );
+      await awaitGateBeforeSettlement(tokenStarted.promise, opening, "SDK skipped token wait");
+      state.active = held;
+      releaseToken.resolve();
+      if (!held) {
+        await expect(opening).rejects.toThrow("delivery authority closed");
+        expect(fixture.requests).toEqual([]);
+        return;
+      }
+      await expect(opening).resolves.toMatchObject({ id: "accepted-1" });
+      expect(fixture.requests).toEqual([
+        {
+          method: "POST",
+          path: "/amer/v3/conversations",
+          activity: {
+            isGroup: false,
+            members: [{ id: "user-aad" }],
+            tenantId: "fixture-tenant",
+            channelData: { tenant: { id: "fixture-tenant" } },
+          },
+        },
+      ]);
+    },
+  );
 
   it("rejects a rate-limit retry after authority closes", async () => {
     const { state, handoff } = createAuthority();

@@ -8,7 +8,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
 import { realpathOrResolve } from "../infra/path-existence.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { isBunRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
+import { isBunRuntime, isNodeRuntime, resolveRuntimeScriptPosition } from "./runtime-binary.js";
 import {
   hasGatewayServiceLauncherOverride,
   resolveManagedGatewayServiceProcessEnv,
@@ -73,6 +73,19 @@ export function resolveManagedServiceNodeRunner(
   const runner = args.indexOf("gateway") > 1 ? args[0] : undefined;
   const executable = normalizeOptionalString(runner ? path.basename(runner) : undefined);
   return ["node", "node.exe"].includes(executable?.toLowerCase() ?? "") ? runner : undefined;
+}
+
+/** Candidate startup uses the observed external runtime, not updater-version support policy. */
+export function resolveManagedServiceStartupRuntime(
+  state: GatewayServiceState,
+): string | undefined {
+  const executable = state.effectiveExecutable;
+  return executable &&
+    (path.isAbsolute(executable) || path.win32.isAbsolute(executable)) &&
+    !isStandaloneRuntimeExecutable(executable) &&
+    (isNodeRuntime(executable) || isBunRuntime(executable))
+    ? executable
+    : undefined;
 }
 
 async function haveSameDirectoryIdentity(leftPath: string, rightPath: string): Promise<boolean> {

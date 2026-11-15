@@ -194,3 +194,38 @@ it.each(["close", "dispose", "replace", "remain open"] as const)(
     expect(removeEventListener.mock.calls).toEqual(addEventListener.mock.calls);
   },
 );
+
+it("loads only session-scoped dictation readiness for a guest", async () => {
+  const request = vi.fn().mockResolvedValue(catalog(true));
+  const client = {
+    request,
+    auth: { role: "operator", scopes: ["operator.sessions.write"] },
+  } as unknown as GatewayBrowserClient;
+  picker = new ComposerMicrophoneOwner();
+  picker.syncCatalog(client, true, "agent:roboclaw:guest-chat");
+  await vi.waitFor(() => expect(picker.dictationStatus).toBe("ready"));
+  expect(request.mock.calls).toEqual([
+    ["talk.catalog", { sessionKey: "agent:roboclaw:guest-chat" }],
+  ]);
+  expect(picker.realtimeStatus).toBe("unavailable");
+  expect(picker.canConfigure).toBe(false);
+});
+
+it.each([undefined, "agent:roboclaw:guest-chat"])(
+  "does not discover dictation without writable session authority (%s)",
+  async (sessionKey) => {
+    const request = vi.fn();
+    const client = {
+      request,
+      auth: {
+        role: "operator",
+        scopes: sessionKey ? ["operator.sessions.read"] : ["operator.sessions.write"],
+      },
+    } as unknown as GatewayBrowserClient;
+    picker = new ComposerMicrophoneOwner();
+    picker.syncCatalog(client, true, sessionKey);
+    expect(request).not.toHaveBeenCalled();
+    expectStatus("unavailable");
+    expect(picker.canConfigure).toBe(false);
+  },
+);

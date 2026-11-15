@@ -24,6 +24,7 @@ import { loadDeviceAuthToken as readDeviceAuthTokenForTest } from "../../../infr
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
+import * as pairingWorker from "../../../infra/device-pairing-worker.js";
 import * as devicePairing from "../../../infra/device-pairing.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
 import { setLoggerOverride } from "../../../logging.js";
@@ -401,7 +402,7 @@ describe("gateway connect pairing exemptions", () => {
           ok: false,
           error: {
             code: "FORBIDDEN",
-            message: "My GitHub requires a current authenticated human Gateway connection.",
+            message: "Personal profile requires a current authenticated human Gateway connection.",
           },
         });
       }
@@ -783,6 +784,13 @@ describe("gateway connect pairing exemptions", () => {
 
   test.each([
     {
+      name: "backend operator client",
+      client: BACKEND_CLIENT,
+      approvedScopes: ["operator.read"],
+      pairingClientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      pairingClientMode: GATEWAY_CLIENT_MODES.BACKEND,
+    },
+    {
       name: "TUI operator client",
       client: TUI_CLIENT,
       approvedScopes: ["operator.read"],
@@ -805,6 +813,7 @@ describe("gateway connect pairing exemptions", () => {
         );
 
       try {
+        using mutations = vi.spyOn(pairingWorker, "executeDevicePairingMutation");
         const unpaired = await connectReq(started.ws, {
           client,
           role: "operator",
@@ -814,6 +823,10 @@ describe("gateway connect pairing exemptions", () => {
           prePairDevice: false,
         });
         expect(unpaired.ok, JSON.stringify(unpaired)).toBe(true);
+        expect(unpaired.payload).not.toHaveProperty("auth.deviceToken");
+        expect(mutations.mock.calls.map(([command]) => command.type)).not.toContain(
+          "devicePairing.ensureToken",
+        );
         started.ws.close();
 
         await pairDeviceIdentity({

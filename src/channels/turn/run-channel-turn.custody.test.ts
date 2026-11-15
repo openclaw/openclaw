@@ -1,6 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { setReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { DispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
+import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { PlatformMessageNotDispatchedError as SendRejected } from "../../infra/outbound/deliver-types.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { createDirectPendingFinalCustody } from "./direct-delivery-custody.js";
@@ -175,4 +176,31 @@ it.each([
     [identity, "unknown", ["prepared", "queued"]],
     [identity, state, expected],
   ]);
+});
+
+it("preserves block source positions through core-managed channel delivery", async () => {
+  const source = "First paragraph describes the completed build.\n\n";
+  const payload = setReplyPayloadMetadata(
+    { text: source.trim() },
+    { assistantMessageIndex: 1, blockSourceText: source, blockSourceRange: [0, source.length] },
+  );
+  dispatchCore.mockImplementationOnce(async (params) => {
+    const dispatcher = createReplyDispatcher(params.dispatcherOptions);
+    dispatcher.sendBlockReply(payload);
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    return { queuedFinal: false, counts: { tool: 0, block: 1, final: 0 } };
+  });
+  let deliveredInfo: unknown;
+  await dispatch({
+    deliver: async (_payload, info) => {
+      deliveredInfo = info;
+      return { visibleReplySent: true };
+    },
+  });
+  expect(deliveredInfo).toMatchObject({
+    kind: "block",
+    assistantMessageIndex: 1,
+    blockSourceRange: [0, source.length],
+  });
 });

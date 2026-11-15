@@ -1,6 +1,7 @@
 import type { FeatureInvocationContext } from "openclaw/plugin-sdk/feature-plugin";
 import type { MemoryCallerContext } from "./memory-provider-types.js";
 import type { Scope } from "./model.js";
+import type { GrantAccess } from "./stores-contract.js";
 
 const denied = () =>
   new Error("Knowledge access unavailable: trusted agent/session authority is required.");
@@ -10,6 +11,13 @@ const denied = () =>
 const noAudience = () =>
   new Error(
     'Knowledge access unavailable: the host granted this session no memory audience. The Gateway log entry "memory_audience_denied" for this session names the reason and its repair.',
+  );
+// A read-only grant lets the conversation read the private partition but never
+// save; falling back to its own conversation partition would be a silent save
+// the owner did not grant.
+const readOnly = () =>
+  new Error(
+    "Knowledge is read-only in this conversation: its owner granted it read access to the agent's private knowledge, not saves. Nothing was saved.",
   );
 /** A store partition: the store's private knowledge or one trusted conversation. */
 export type Partition = Exclude<Scope, { visibility: "sample" }>;
@@ -24,21 +32,26 @@ export type VaultAccess = Principal & {
 type MemoryAudience = NonNullable<
   Extract<MemoryCallerContext["authority"], { kind: "session" }>["audience"]
 >;
+/** Owner grant covering a conversation session key, read live from configuration. */
+export type GrantLookup = (sessionKey: string) => GrantAccess | undefined;
 /** Provider principals also say whether the lease may release content at all
- * (host readiness checks may not) and whether it is the owner's private audience. */
-export type MemoryPrincipal = Principal & { healthOnly: boolean; ownerPrivate: boolean };
+ * (host readiness checks may not) and whether a session reads the private
+ * partition: the owner's own audience, or a conversation the owner granted it to. */
+export type MemoryPrincipal = Principal & { healthOnly: boolean; sessionPrivate: boolean };
 const OPERATOR_READ = new Set(["operator.read", "operator.write", "operator.admin"]),
   OPERATOR_WRITE = new Set(["operator.write", "operator.admin"]);
 
 /** Resolve a feature invocation to a principal. No payload field participates:
- * tools use the host-minted memory audience; operators use `operatorAgent`,
- * which the service chooses (the default agent or an operator-only selector).
- * The returned function re-evaluates live authority on every call. */
+ * tools use the host-minted memory audience and the owner's grants;
+ * operators use `operatorAgent`, which the service chooses (the default agent or
+ * an operator-only selector). The returned function re-evaluates live authority,
+ * grants included, on every call. */
 export function featurePrincipal(
   context: FeatureInvocationContext,
   operatorRead: boolean,
   write: boolean,
   operatorAgent: string | undefined,
+  grants: GrantLookup,
 ): () => Principal {
   return () => {
     if (context.source === "session-action") {
@@ -84,15 +97,42 @@ export function featurePrincipal(
     }
     tool.assertInvocationCurrent();
     tool.assertMemoryAudienceCurrent?.();
-    return audiencePrincipal(tool.memoryAudience);
+    return audiencePrincipal(tool.memoryAudience, grants, write);
   };
 }
 
-function audiencePrincipal(audience: MemoryAudience | undefined): Principal {
+/** The owner's grant for a tool invocation's conversation, if any. */
+export function toolGrant(
+  context: FeatureInvocationContext,
+  grants: GrantLookup,
+): GrantAccess | undefined {
+  const audience = context.source === "tool" ? context.tool.memoryAudience : undefined;
+  return audience?.kind === "conversation" ? grants(audience.sessionKey) : undefined;
+}
+
+// A conversation reads, or writes, the private partition only when the owner
+// granted it that access; otherwise it keeps its own conversation partition.
+// Revoking or narrowing a grant changes this result, so pinned principals
+// (pinPrincipal) fence work already in flight.
+function audiencePrincipal(
+  audience: MemoryAudience | undefined,
+  grants: GrantLookup,
+  write: boolean,
+): Principal {
   if (!audience) {
     throw noAudience();
   }
   if (audience.kind === "owner-private") {
+    return { agentId: audience.agentId, scope: { visibility: "private" } };
+  }
+  // Every grant reads the private partition; only read-write also saves there.
+  // There is no write-only grant: saves run against the private partition, so
+  // their results would reveal private records to a conversation that cannot read.
+  const grant = grants(audience.sessionKey);
+  if (grant && write && grant !== "read-write") {
+    throw readOnly();
+  }
+  if (grant) {
     return { agentId: audience.agentId, scope: { visibility: "private" } };
   }
   return {
@@ -106,7 +146,8 @@ export function memoryPrincipal(
   context: MemoryCallerContext,
   requestedAgent: string,
   operatorRead: boolean,
-  purpose?: "default" | "status" | "cli",
+  purpose: "default" | "status" | "cli" | undefined,
+  grants: GrantLookup,
 ): () => MemoryPrincipal {
   return () => {
     if (typeof context.assertCurrent !== "function") {
@@ -124,7 +165,7 @@ export function memoryPrincipal(
         agentId: requestedAgent,
         scope: { visibility: "private" },
         healthOnly: true,
-        ownerPrivate: false,
+        sessionPrivate: false,
       };
     }
     if (caller.kind === "operator") {
@@ -135,7 +176,7 @@ export function memoryPrincipal(
         agentId: requestedAgent,
         scope: { visibility: "private" },
         healthOnly: false,
-        ownerPrivate: false,
+        sessionPrivate: false,
       };
     }
     // Background host calls are not session delegation. Session identity is a
@@ -143,14 +184,15 @@ export function memoryPrincipal(
     if (caller.kind !== "session" || caller.sandboxed) {
       throw denied();
     }
-    const principal = audiencePrincipal(caller.audience);
+    // Provider calls only read.
+    const principal = audiencePrincipal(caller.audience, grants, false);
     if (principal.agentId !== requestedAgent) {
       throw denied();
     }
     return {
       ...principal,
       healthOnly: false,
-      ownerPrivate: caller.audience?.kind === "owner-private",
+      sessionPrivate: principal.scope.visibility === "private",
     };
   };
 }

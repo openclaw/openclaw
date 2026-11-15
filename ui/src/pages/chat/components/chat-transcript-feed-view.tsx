@@ -2,8 +2,8 @@ import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdow
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createMemo, For } from "solid-js";
-import "../../../styles/chat/transcript-feed.css";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import "../../../styles/chat/transcript-feed.css";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -25,6 +25,7 @@ import {
   resolveToolCardDisplay,
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
+import { formatTimeMs } from "../../../lib/reactive/format.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { stripThinkingTags } from "../../../lib/strip-thinking-tags.ts";
 import { resolveCappedMessageId } from "../chat-message-recovery.ts";
@@ -305,7 +306,7 @@ function FeedEntry(props: { entry: Entry }) {
       </div>
       {props.entry.timestamp !== null && (
         <time class="chat-task-feed__time" datetime={new Date(props.entry.timestamp).toISOString()}>
-          {new Date(props.entry.timestamp).toLocaleTimeString([], {
+          {formatTimeMs(props.entry.timestamp, {
             hour: "2-digit",
             minute: "2-digit",
             hour12: false,

@@ -179,10 +179,12 @@ describe("owned completed update publication", () => {
     const before = fs.readFileSync(f.databasePath);
     f.release();
     const snapshotOwners: Array<string | undefined> = [];
-    vi.spyOn(snapshot, "prepareSqliteReadOnlyLocationSync").mockImplementation(() => {
-      snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
-      throw new Error("live database is changing");
-    });
+    const snapshotRead = vi
+      .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+      .mockImplementation(() => {
+        snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+        throw new Error("live database is changing");
+      });
     const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
     let savedAtPublication: string | undefined;
     const captureReport = () => {
@@ -211,9 +213,16 @@ describe("owned completed update publication", () => {
     );
     expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
     // A historical report is not permission for the next update to skip admission.
-    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toThrow(
-      "live database is changing",
+    snapshotRead.mockRestore();
+    f.write(
+      "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
+      `update.recovery.${f.run.runId}`,
+      "{}",
+      Date.now(),
     );
+    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toMatchObject({
+      name: "ZodError",
+    });
   });
 
   it.each([

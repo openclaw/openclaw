@@ -24,7 +24,12 @@ it("fills an initially short transcript when its first geometry settles without 
   pane.presentationId = pane.paneId;
   pane.sessionKey = state.sessionKey;
   state.chatMessages = [nativeHistoryMessage(3), nativeHistoryMessage(4)];
-  state.chatHistoryPagination = { hasMore: true, nextOffset: 2, totalMessages: 4 };
+  state.chatHistoryPagination = {
+    hasMore: true,
+    olderCursor: "older-settlement",
+    nextOffset: 2,
+    totalMessages: 4,
+  };
   state.chatLoading = false;
   pane.style.cssText = "display: none; width: 800px; height: 600px";
   const style = document.head.appendChild(document.createElement("style"));

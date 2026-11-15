@@ -6,6 +6,7 @@ import {
   withOwnedSessionTranscriptWrites,
 } from "../config/sessions/transcript-write-context.js";
 import {
+  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
@@ -140,13 +141,15 @@ describe("independent placement caller scope", () => {
     "registers a worker proxy without consuming authority from a %s",
     async (scenario) => {
       await seedActivePlacement();
-      const input = turn(scenario === "reused run id" ? "parent-run" : "child-worker-run");
       const reachedWorkerExecution = new Error("test worker execution reached");
-      const get = vi.fn(() => {
-        expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
-        throw reachedWorkerExecution;
-      });
-      installWorkerProvider({ ...unusedEnvironments(), get });
+      const input = {
+        ...turn(scenario === "reused run id" ? "parent-run" : "child-worker-run"),
+        onExecutionStarted: () => {
+          expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.runId).toBe(input.runId);
+          throw reachedWorkerExecution;
+        },
+      };
+      installWorkerProvider({ ...unusedEnvironments(), get: attachedEnvironment });
       try {
         let queued: Promise<void> | undefined;
         const { promise: ready, resolve: release } = createDeferred();

@@ -13,7 +13,7 @@ import { i18n } from "./translate.ts";
 
 vi.hoisted(() => vi.resetModules());
 
-it("registers every session catalog key while preserving shared labels and namespace identities", async () => {
+it("registers shared session copy before optional copy while preserving namespace identities", async () => {
   const restoreI18n = captureI18nStateForTesting();
   const details = en.chat.sessionDetails;
   const diff = en.chat.sessionDiff;
@@ -27,9 +27,15 @@ it("registers every session catalog key while preserving shared labels and names
 
     registerEnglishCatalog(registerChatSessionEnglish);
     expect(t("chat.savedConversation", { status: "Reconnecting…" })).toBe(
-      "Saved conversation · Reconnecting…",
+      "Reconnecting… · Saved conversation",
     );
     expect(en).toMatchObject(registerChatSessionEnglish.catalog);
+    expect(t("chat.activityPills.label")).toBe("chat.activityPills.label");
+    expect(t("chat.sessionDiff.modeUnified")).toBe("chat.sessionDiff.modeUnified");
+    expect(t("chat.workspaceFiles.showFiles")).toBe("Show session files");
+    const { registerChatSessionOptionalEnglish } =
+      await import("../locales/en-chat-session-optional.ts");
+    registerEnglishCatalog(registerChatSessionOptionalEnglish);
     expect(t("chat.activityPills.label")).toBe("Session activity");
     expect(t("chat.sessionDiff.modeUnified")).toBe("Unified");
     expect(en.chat.sessionDetails).toBe(details);
@@ -54,7 +60,7 @@ it.each([
     activeKey: "websiteOpen",
     activeText: "Webseite öffnen",
     fallbackKey: "websiteEmbedHint",
-    fallbackText: "If this site does not load here, open it in a new tab.",
+    fallbackText: "If this site doesn’t load here, open it in a new tab.",
   },
   {
     register: registerBoardEnglish,

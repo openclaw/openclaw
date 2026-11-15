@@ -210,6 +210,7 @@ describe("worker allocation cleanup", () => {
     expect(destroy).toHaveBeenCalledExactlyOnceWith({
       leaseId: "operation-cleanup",
       profile: { region: "test" },
+      assertCurrent: expect.any(Function),
       signal: expect.any(AbortSignal),
     });
     expect(testState.prepareInstallation).not.toHaveBeenCalled();

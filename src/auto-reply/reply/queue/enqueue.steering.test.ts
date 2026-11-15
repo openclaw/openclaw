@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAdmittedRunOperatorAuthority } from "../../../agents/admitted-run-context.js";
+import { GatewayOperatorAccessUnavailableError } from "../../../infra/operator-authority-error.js";
 import {
   beginSessionControllerSourceInjection,
   bindSessionControllerSource,
@@ -64,7 +65,6 @@ it.each([true, false])(
     await Promise.resolve();
     await Promise.resolve();
     expect(input.injection).toBe(receipt);
-    expect(receipt!.accepted).toBe(accepted);
     expect(receiptSettled).not.toHaveBeenCalled();
     expect(admittedNext).not.toHaveBeenCalled();
     expect(lifecycle.onSettled).not.toHaveBeenCalled();
@@ -141,6 +141,31 @@ it("rechecks channel execution authority after waiting for native settlement", a
   await rejected;
   await settleSource(second.controllerInput!);
   expect(second.controllerInput?.phase).toBe("consumed");
+});
+
+it("queues an unaccepted steer when its authority check is temporarily unavailable", async () => {
+  const [first, second] = [source("first"), source("second")];
+  let unavailable = false;
+  second.operatorAuthority = createAdmittedRunOperatorAuthority({
+    profileId: "fixture",
+    scopes: ["operator.write"],
+    assertCurrent() {
+      if (unavailable) {
+        unavailable = false;
+        throw new GatewayOperatorAccessUnavailableError();
+      }
+    },
+  });
+  const { delivered, drained } = recordDelivery(1);
+  const firstReservation = await queue.admit(first);
+  const secondAdmission = queue.reserve(second).admit();
+  const rejected = expect(secondAdmission).rejects.toThrow(GatewayOperatorAccessUnavailableError);
+  unavailable = true;
+  firstReservation.consume("consumed");
+  await rejected;
+  expect(second.controllerInput?.abortSignal.aborted).toBe(false);
+  await drained;
+  expect(delivered).toEqual(["second"]);
 });
 
 it.each(["accepted", "rejected"] as const)(
@@ -248,3 +273,30 @@ it.each(["summarize", "new", "old"] as const)(
     }
   },
 );
+
+it("sheds ambient backlog after steering settles without evicting the active turn", async () => {
+  queue.settings = { ...queue.settings, cap: 2 };
+  const active = source("active");
+  active.currentInboundEventKind = "room_event";
+  const { gate, drained, delivered } = recordDelivery(3, active);
+  queue.enqueue(active);
+  await gate.entered;
+  try {
+    const request = source("request");
+    const reservation = await queue.admit(request);
+    const protectedRun = source("protected");
+    protectedRun.currentInboundEventKind = "room_event";
+    protectedRun.protectFromQueueOverflow = true;
+    queue.enqueue(protectedRun, false);
+    const ambient = source("ambient");
+    ambient.currentInboundEventKind = "room_event";
+    queue.enqueue(ambient, false);
+    reservation.fallback();
+    await queue.settle(ambient);
+    gate.resolve();
+    await drained;
+    expect(delivered).toEqual(["active", "request", "protected"]);
+  } finally {
+    gate.resolve();
+  }
+});

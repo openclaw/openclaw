@@ -26,6 +26,17 @@ describe("catalog-owned model compat", () => {
     ).toEqual(catalogCompat);
   });
 
+  it("keeps thinking-profile settings config states on the catalog route", () => {
+    expect(
+      resolveCatalogOwnedModelCompat({
+        catalogRoute,
+        catalogCompat: { ...catalogCompat, defaultThinkingLevel: "high", adaptiveThinking: true },
+        configuredRoute: catalogRoute,
+        configuredCompat: { defaultThinkingLevel: "low" },
+      }),
+    ).toEqual({ ...catalogCompat, defaultThinkingLevel: "low", adaptiveThinking: true });
+  });
+
   it("uses configured capabilities only when config selects a custom route", () => {
     const configuredCompat = { supportsTools: false };
 

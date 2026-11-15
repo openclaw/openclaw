@@ -334,7 +334,7 @@ export function registerChatSteeringCommitCases(
           ).toMatchObject([{ runId, state: "error", errorMessage: sourceError }]);
           expect(await listSessionPendingInputs(scope)).toMatchObject({
             total: 1,
-            items: [{ ...pending.items[0], state: "interrupted" }],
+            items: [{ ...pending.items[0], state: "cancelled" }],
           });
         } else {
           expect(terminals.filter((event) => event.type === "agent_end")).toHaveLength(1);

@@ -3,12 +3,10 @@ import path from "node:path";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { zstdCompressSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
+import { readSessionArchiveText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
-import {
-  readSessionArchiveContentSync,
-  SESSION_ARCHIVE_ZSTD_SUFFIX,
-} from "../config/sessions/archive-compression.js";
+import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "../config/sessions/archive-compression.js";
 import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import * as maintenanceLease from "../state/openclaw-agent-db-maintenance-lease.js";
 import {
@@ -35,6 +33,10 @@ import {
   writeArchive,
   type FixtureEvent,
 } from "./state-migrations.media-persistence.test-support.js";
+import {
+  createLegacyStateMigrationStepReceipt,
+  DoctorStateMigrationRefusalError,
+} from "./state-migrations.messages.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 
 const tempDirs: string[] = [];
@@ -236,6 +238,24 @@ it("repairs the next agent after another agent loses maintenance ownership", asy
   expect(result.warnings[0]).toContain("Skipped agent database migration");
   expect(result.warnings[0]).toContain(`Database: ${first}`);
   expect(result.warnings[0]).toContain("lease");
+  const receipt = createLegacyStateMigrationStepReceipt(
+    {
+      id: "media-persistence",
+      phase: "shared",
+      source: [],
+      target: [],
+      requiredness: "required",
+      reversibility: "checkpoint-required",
+    },
+    result,
+  );
+  expect(new DoctorStateMigrationRefusalError([receipt]).failureFacts).toContainEqual(
+    expect.objectContaining({
+      check: "media-persistence",
+      code: "step-refused",
+      leaseLoss: { reason: "missing" },
+    }),
+  );
   expect(preparedPaths).toEqual([second]);
   expect(readDatabaseSnapshot(first)).toEqual(before);
   expect(result.changes).toContainEqual(
@@ -514,8 +534,8 @@ it("rewrites every active shape and trajectory snapshot, migrates mixed archives
   for (const message of messages) {
     expect(JSON.stringify(message)).not.toMatch(/"Media(?:Path|Paths|Type|Types|Url|Urls)/u);
   }
-  expect(readSessionArchiveContentSync(plainArchive)).toContain('"__openclaw"');
-  expect(readSessionArchiveContentSync(compressedArchive)).toContain('"__openclaw"');
+  expect(readSessionArchiveText(plainArchive)).toContain('"__openclaw"');
+  expect(readSessionArchiveText(compressedArchive)).toContain('"__openclaw"');
 
   await appendTranscriptMessage(
     { agentId: "main", env, sessionId: "session-a", sessionKey: "agent:main:session-a" },
@@ -806,5 +826,5 @@ it("rejects ambiguous sparse arrays and ignores stale interrupted temp files", a
   expect((await migrate({ env })).changes.join("\n")).toContain(
     "Migrated archived transcript media",
   );
-  expect(readSessionArchiveContentSync(archivePath)).toContain('"__openclaw"');
+  expect(readSessionArchiveText(archivePath)).toContain('"__openclaw"');
 });

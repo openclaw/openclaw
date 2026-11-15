@@ -16,7 +16,7 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
-  it("keeps C1 tab-separated descriptions in their table cell", async () => {
+  it("escapes descriptor controls before laying out table cells", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -36,15 +36,19 @@ describe("skills descriptor formatting", () => {
     const row = stripAnsi(formatSkillsList(report, {}))
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
-    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left\\tright");
   });
 
-  it("preserves description and path whitespace in skills JSON output", async () => {
+  it.each([
+    "{openclaw: {emoji: lobster, homepage: https://example.test/skill}}",
+    "{openclaw:{emoji:'lobster',homepage:'https://example.test/skill'}}",
+    "\n  openclaw:\n    emoji: lobster\n    homepage: https://example.test/skill",
+  ])("preserves whitespace and metadata in skills JSON output: %s", async (metadata) => {
     const workspaceDir = tempDirs.make("json-whitespace-");
     const managedSkillsDir = path.join(workspaceDir, "managed\tlocal");
     const description = "First paragraph.\nSecond\tcolumn.\r\nThird paragraph.";
     await writeWorkspaceSkills(workspaceDir, [
-      { name: "json-whitespace", description: JSON.stringify(description) },
+      { name: "json-whitespace", description: JSON.stringify(description), metadata },
     ]);
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       managedSkillsDir,
@@ -55,6 +59,12 @@ describe("skills descriptor formatting", () => {
     const list = JSON.parse(formatSkillsList(report, { json: true }));
     const info = JSON.parse(formatSkillInfo(report, "json-whitespace", { json: true }));
     const check = JSON.parse(formatSkillsCheck(report, { json: true }));
+    for (const skill of [list.skills[0], info]) {
+      expect(skill).toMatchObject({
+        emoji: "lobster",
+        homepage: "https://example.test/skill",
+      });
+    }
     expect(list.skills[0].description).toBe(description);
     expect(info.description).toBe(description);
     expect(list.managedSkillsDir).toBe(managedSkillsDir);

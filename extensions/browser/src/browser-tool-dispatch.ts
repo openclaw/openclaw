@@ -6,6 +6,7 @@ import {
   readPositiveIntegerParam,
   readStringParam,
 } from "openclaw/plugin-sdk/channel-actions";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { DecisionRuntimeV2 } from "openclaw/plugin-sdk/decisions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import {
@@ -171,6 +172,7 @@ function readTargetUrlParam(params: Record<string, unknown>) {
 }
 
 export async function executeBrowserTabAction(context: {
+  getConfig?: () => OpenClawConfig;
   action: string;
   actRequest?: Parameters<typeof browserAct>[1];
   params: Record<string, unknown>;
@@ -190,6 +192,7 @@ export async function executeBrowserTabAction(context: {
   onTabActivity: (targetId: string | undefined, openedProfile?: string) => void | Promise<void>;
 }): Promise<AgentToolResult<unknown>> {
   const {
+    getConfig,
     action,
     params,
     baseUrl,
@@ -216,7 +219,7 @@ export async function executeBrowserTabAction(context: {
     return jsonResult(result);
   };
   const target = proxyRequest ?? baseUrl;
-  const actionOptions = { input: params, target, profile, signal };
+  const actionOptions = { input: params, target, profile, signal, getConfig };
   const clientOptions = { profile, timeoutMs: toolTimeoutMs, signal };
   async function executeTabsAction(): Promise<AgentToolResult<unknown>> {
     const result = await browserTabs(target, {
@@ -415,6 +418,7 @@ export async function executeBrowserTabAction(context: {
       // Batch aborts snapshot at navigation commit, so a slow page can still be
       // loading; the model may need one follow-up snapshot for late content.
       return await appendNavigatedPageState({
+        getConfig,
         result: formatted,
         targetId: resolvedTargetId,
         target: proxyRequest ?? baseUrl,
@@ -574,6 +578,7 @@ export async function executeBrowserTabAction(context: {
         return formatted;
       }
       return await appendNavigatedPageState({
+        getConfig,
         result: formatted,
         targetId: navigatedTargetId,
         target,

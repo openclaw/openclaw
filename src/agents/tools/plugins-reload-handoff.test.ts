@@ -3,13 +3,15 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { withinTest } from "../../../test/helpers/promise.js";
-import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
 import {
   configureEventState,
+  openEventToolHost,
   runEventFixture,
   startEmbeddedTurn,
 } from "../../auto-reply/reply/session-event.test-support.js";
+import type { ChannelOutboundAdapter } from "../../channels/plugins/outbound.types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
@@ -28,13 +30,22 @@ import * as exec from "../../infra/exec-request-context.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveMemoryAudienceFromEntry } from "../../plugins/memory-audience.js";
 import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  setActivePluginRegistry,
+} from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
-import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   prepareSystemAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
@@ -45,10 +56,21 @@ import { buildEmbeddedAttemptToolRunContext } from "../embedded-agent-runner/run
 import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../harness/host-capability.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
+import { createSubagentRunRecord } from "../subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
+import { mutateSubagentRuns } from "../subagents/registry/subagent-registry-persistence.js";
+import { markSubagentRunPausedAfterYield } from "../subagents/registry/subagent-registry-run-pause.js";
+import { resetSubagentRegistryForTests } from "../subagents/registry/subagent-registry.test-helpers.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
+import {
+  queueReloadSuccessor,
+  reloadOrder,
+  runAdversarialReloadHandoff,
+  runningOperation,
+} from "./plugins-reload-handoff.test-support.js";
 import { createPluginsTool } from "./plugins-tool.js";
 
 // mock-isolation: Real reply admission and plugin tools, with deterministic model execution.
@@ -63,20 +85,13 @@ await Promise.all([
 
 const request = { action: "reloadAndResume", pluginId: "reload-fixture" };
 const callerRequired = "active Gateway conversation";
-function runningOperation(sessionKey: string, sessionId: string, storeScope: string) {
-  const operation = createTestReplyOperation({
-    sessionKey,
-    sessionId,
-    target: captureSessionTarget({ storeScope, sessionKey, incarnation: sessionId }),
-  });
-  operation.setPhase("running");
-  return operation;
-}
 afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
 });
 it.each([
+  ["adversarial native", '"generation":2'],
+  ["code mode", '"generation":2'],
   ["host system", '"generation":2'],
   ["same-ID without run ID", ""],
   ["same-ID callback", '"generation":2'],
@@ -111,7 +126,12 @@ it.each([
     const cleanup = createDeferredCore();
     const resumed = createDeferredCore<string>();
     const order: string[] = [];
+    let successorAdmitted = false;
     const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(successorAdmitted).toBe(false);
       order.push("reload");
       respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
     });
@@ -143,14 +163,18 @@ it.each([
       expect(endpoint).not.toHaveBeenCalled();
       expect(enqueue).not.toHaveBeenCalled();
     };
+    const adversarial = outcome === "code mode" || outcome === "adversarial native";
     const run = async () => {
       const createTool = () =>
         createPluginsTool({
           sessionId,
           ...(withoutRunId ? {} : { runId }),
-          onYield: () => {
+          onYield: (_message, _acknowledgment, _registered, options) => {
             order.push("yield");
-            runAbort.abort(SESSIONS_YIELD_ABORT_REASON);
+            if (!adversarial || options?.terminal) {
+              const reason = options?.terminal ?? SESSIONS_YIELD_ABORT_REASON;
+              runAbort.abort(reason);
+            }
             operation.completeWithAfterClearBarrier(
               cleanup.promise.then(() => {
                 order.push("cleanup");
@@ -164,10 +188,21 @@ it.each([
             ? withSessionControllerOwner(other, createTool)
             : withSessionControllerOwner(operation, createTool);
         const tool = wrapToolWithAbortSignal(sourceTool, runAbort.signal);
-        const execute = () =>
-          other
+        const execute = async () => {
+          if (outcome === "code mode" || outcome === "adversarial native") {
+            return await runAdversarialReloadHandoff({
+              tool,
+              runAbort,
+              outcome,
+              order,
+              request,
+              effectPath: state.path("append-once.txt"),
+            });
+          }
+          return other
             ? withSessionControllerOwner(other, () => tool.execute("handoff", request))
             : tool.execute("handoff", request);
+        };
         if (refusesHandoff) {
           await expect(execute()).rejects.toThrow(
             outcome.includes("permission denied") ? "operator.admin" : callerRequired,
@@ -182,7 +217,7 @@ it.each([
         }
         const result = await execute();
         expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
-        expect(order).toEqual(["yield"]);
+        expect(order).toEqual(adversarial ? ["yield", "physical-cleanup"] : ["yield"]);
         expectNoHandoff();
         await expect(sourceTool.execute("duplicate", request)).rejects.toThrow(
           outcome === "same-ID prepublication"
@@ -234,9 +269,15 @@ it.each([
       if (refusesHandoff) {
         return;
       }
+      // A queued turn arriving during cleanup must not enter the retiring generation.
+      const queued = queueReloadSuccessor(sessionKey, sessionId, storePath, () => {
+        successorAdmitted = true;
+      });
+      expect(successorAdmitted).toBe(false);
       cleanup.resolve();
       const text = await resumed.promise;
-      expect(order).toEqual(["yield", "cleanup", "reload", "resume"]);
+      expect((await queued).settled).toBe(true);
+      expect(order).toEqual(reloadOrder(adversarial));
       expect(text).toContain(expectedText);
       expect(enqueue).toHaveBeenCalledOnce();
       if (other) {
@@ -300,6 +341,7 @@ it.for([
   "replaced",
   "system",
   "non-owner",
+  "operator-owner",
 ] as const)(
   "preserves authenticated plugin execution across reload handoff: %s",
   async (scenario, { signal, onTestFinished }) => {
@@ -403,15 +445,15 @@ it.for([
           scenario === "system"
             ? undefined
             : createOperatorClient(
-                scenario === "non-owner"
-                  ? { profileName: "reload-guest", scopes: ["operator.admin"] }
+                scenario === "non-owner" || scenario === "operator-owner"
+                  ? { profileName: `reload-${scenario}`, scopes: ["operator.admin"] }
                   : { profileId: GATEWAY_OWNER_PROFILE_ID, scopes: ["operator.admin"] },
               );
         if (client) {
           client.internal = {
             authenticatedOperator: true,
             operatorRoleActor:
-              scenario === "non-owner"
+              scenario === "non-owner" || scenario === "operator-owner"
                 ? { kind: "operator", profileId: client.authenticatedUserProfile!.profileId }
                 : { kind: "system" },
             operatorAccessAuthority: {
@@ -534,9 +576,11 @@ it.for([
             expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority?.profileId).toBe(
               client?.authenticatedUserProfile?.profileId,
             );
+            // Only the yielding turn's owner decision plus a live operator source grants owner tools.
             const tool = createPluginsTool({
               sessionId,
               runId: "reload-source",
+              senderIsOwner: isOwner || scenario === "system",
               onYield: () => {
                 operation.completeWithAfterClearBarrier(cleanup.promise);
               },
@@ -617,6 +661,353 @@ it.for([
           resetSystemEventsForTest();
         }
       });
+    });
+  },
+);
+
+it.for([
+  // The yielding turn is the task's execution: its resumed result continues that task.
+  { scenario: "task", adopts: true },
+  // A kill between yield and resume leaves the stopped task alone.
+  { scenario: "killed", adopts: false },
+  // An independent turn in the same child session never takes over an earlier paused task.
+  { scenario: "follow-up", adopts: false },
+] as const)(
+  "resumes a yielded subagent task through its reload handoff: $scenario",
+  async ({ scenario, adopts }, { signal, onTestFinished }) => {
+    onTestFinished(() => resetSubagentRegistryForTests({ persist: false }));
+    await runEventFixture("reload-subagent-task", onTestFinished, async (state) => {
+      const sessionKey = "agent:main:subagent:reload-child";
+      const sessionId = "33333333-3333-4333-8333-333333333333";
+      const scope = { agentId: "main", sessionKey };
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const taskRunId = "reload-task-run";
+      const yieldingRunId = scenario === "follow-up" ? "reload-follow-up-run" : taskRunId;
+      const config = await configureEventState(state);
+      await replaceSessionEntry(scope, {
+        sessionId,
+        chatType: "direct",
+        updatedAt: 1,
+        spawnedBy: "agent:main:main",
+        spawnDepth: 1,
+      });
+      const task = createSubagentRunRecord({
+        runId: taskRunId,
+        childSessionKey: sessionKey,
+        childAgentId: "main",
+        childSessionIdentity: { sessionId },
+        requesterSessionKey: "agent:main:main",
+        requesterAgentId: "main",
+        expectsCompletionMessage: true,
+        task: "Reload the fixture plugin and report.",
+        startedAt: 1,
+      });
+      await mutateSubagentRuns([taskRunId], () => ({
+        value: undefined,
+        postimages: new Map([[taskRunId, task]]),
+      }));
+      // Stands in for the registry's yielded-terminal observation of the task run.
+      const pauseTask = () =>
+        mutateSubagentRuns([taskRunId], (rows) => {
+          const draft = structuredClone(expectDefined(rows.get(taskRunId), "task row"));
+          markSubagentRunPausedAfterYield({ entry: draft, endedAt: 2 });
+          if (scenario === "killed") {
+            draft.killIntent = { requestedAt: 3, reason: "test kill" };
+          }
+          return { value: undefined, postimages: new Map([[taskRunId, draft]]) };
+        });
+      if (scenario === "follow-up") {
+        await pauseTask();
+      }
+      const operation = runningOperation(sessionKey, sessionId, storePath);
+      operation.attachBackend({ kind: "embedded", runId: yieldingRunId, cancel: () => {} });
+      const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
+      });
+      const context = createContext(
+        [["plugins.reload", "operator.admin", "plugins", endpoint]],
+        () => config,
+      );
+      context.resolveGatewayContext = () => context;
+      const cleanup = createDeferredCore();
+      const enqueued = createDeferredCore<EventReceipt>();
+      const enqueue = events.enqueueSessionEventForHost;
+      vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+        const receipt = enqueue(text, options);
+        enqueued.resolve(receipt);
+        return receipt;
+      });
+      let observed: unknown;
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        await startEmbeddedTurn(params, "resumed reload turn");
+        observed = [...subagentRuns.values()]
+          .filter((row) => row.childSessionKey === sessionKey)
+          .map((row) => ({
+            runId: row.runId === params.runId ? "resumed" : row.runId,
+            taskRunId: row.taskRunId,
+            task: row.task,
+            pauseReason: row.pauseReason,
+            requesterSessionKey: row.requesterSessionKey,
+            status: row.execution.status,
+          }));
+        return { payloads: [{ text: "Reload reported." }], meta: { durationMs: 1 } };
+      });
+      let receipt: EventReceipt | undefined;
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+              () =>
+                exec.withExecRequestTurn(
+                  { identity: { ...scope, sessionId, runId: yieldingRunId } },
+                  () =>
+                    withGatewayToolCallerIdentity(scope, () =>
+                      withSessionControllerOwner(operation, async () => {
+                        const tool = createPluginsTool({
+                          sessionId,
+                          runId: yieldingRunId,
+                          onYield: async () => {
+                            if (scenario !== "follow-up") {
+                              await pauseTask();
+                            }
+                            operation.completeWithAfterClearBarrier(cleanup.promise);
+                          },
+                        });
+                        const result = await tool.execute("reload", request);
+                        expect(result.details).toMatchObject({ status: "started" });
+                      }),
+                    ),
+                ),
+            ),
+        );
+        cleanup.resolve();
+        receipt = await withinTest(enqueued.promise, signal);
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(outcome, outcome.error).toMatchObject({
+          status: "completed",
+          executionStarted: true,
+        });
+        expect(endpoint).toHaveBeenCalledOnce();
+        expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+        const row = {
+          requesterSessionKey: "agent:main:main",
+          task: "Reload the fixture plugin and report.",
+        };
+        expect(observed).toEqual([
+          adopts
+            ? { ...row, runId: "resumed", taskRunId, pauseReason: undefined, status: "running" }
+            : {
+                ...row,
+                runId: taskRunId,
+                taskRunId: undefined,
+                pauseReason: "sessions_yield",
+                status: "terminal",
+              },
+        ]);
+      } finally {
+        cleanup.resolve();
+        operation.complete();
+        await Promise.allSettled([receipt?.settled]);
+        resetSystemEventsForTest();
+      }
+    });
+  },
+);
+
+it.for([
+  { id: "idle", busy: false },
+  { id: "queued behind another run", busy: true },
+] as const)(
+  "keeps a Control UI reload resume internal: $id",
+  async ({ busy }, { signal, onTestFinished }) => {
+    await runEventFixture("reload-resume-route", onTestFinished, async (state) => {
+      const registry = captureActivePluginRegistrySnapshot();
+      const sessionKey = "agent:main:reload-route-composed";
+      const sessionId = "reload-route-composed-session";
+      const scope = { agentId: "main", sessionKey };
+      const storeScope = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      const config = await configureEventState(state);
+      const current = expectDefined(registry.activeRegistry, "active plugin registry");
+      const sendText = vi
+        .fn<NonNullable<ChannelOutboundAdapter["sendText"]>>()
+        .mockResolvedValue({ channel: "telegram", messageId: "resume-route-message" });
+      const channels = createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "telegram" }),
+            messaging: {
+              normalizeTarget: (raw) => raw,
+              targetResolver: { looksLikeId: (raw) => raw === "999" },
+            },
+            outbound: { deliveryMode: "direct", sendText },
+          } satisfies ChannelPlugin,
+        },
+      ]);
+      setActivePluginRegistry({
+        ...current,
+        channels: [
+          ...current.channels.filter((entry) => entry.plugin.id !== "telegram"),
+          ...channels.channels,
+        ],
+        channelSetups: [
+          ...current.channelSetups.filter((entry) => entry.plugin.id !== "telegram"),
+          ...channels.channelSetups,
+        ],
+      });
+      await replaceSessionEntry(scope, {
+        sessionId,
+        chatType: "direct",
+        permissionMode: "full",
+        queueDebounceMs: 0,
+        updatedAt: 1,
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "telegram", to: "999" },
+        }),
+      });
+      const cleanup = createDeferredCore();
+      const enqueued = createDeferredCore<EventReceipt>();
+      const dispatched = createDeferredCore<unknown>();
+      const enqueue = events.enqueueSessionEventForHost;
+      let blocker: ReturnType<typeof runningOperation> | undefined;
+      vi.spyOn(events, "enqueueSessionEventForHost").mockImplementation((text, options) => {
+        if (busy && !blocker) {
+          try {
+            blocker = runningOperation(sessionKey, sessionId, storeScope);
+            blocker.attachBackend({
+              kind: "embedded",
+              runId: "reload-route-busy",
+              cancel: () => {},
+            });
+          } catch (error) {
+            enqueued.reject(error);
+            throw error;
+          }
+        }
+        const receipt = enqueue(text, options);
+        enqueued.resolve(receipt);
+        return receipt;
+      });
+      let messageProvider: unknown;
+      let messageTo: unknown;
+      let originatingChannel: unknown;
+      let chatType: unknown;
+      let implicitSendResult: unknown;
+      const dispatchRuntime = await import("../../auto-reply/dispatch.js");
+      const dispatch = dispatchRuntime.dispatchInboundMessageWithRoutedChannelDispatcher;
+      vi.spyOn(
+        dispatchRuntime,
+        "dispatchInboundMessageWithRoutedChannelDispatcher",
+      ).mockImplementation((input) => {
+        originatingChannel = input.ctx.OriginatingChannel;
+        chatType = input.ctx.ChatType;
+        const result = dispatch(input);
+        void result.then(
+          ({ deferredToActiveRun }) => dispatched.resolve(deferredToActiveRun),
+          (error: unknown) => dispatched.reject(error),
+        );
+        return result;
+      });
+      runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+        messageProvider = params.messageProvider;
+        messageTo = params.messageTo;
+        const { tools, close } = await openEventToolHost(params, "reload resume", {
+          includeOpenClawTools: true,
+        });
+        try {
+          const message = expectDefined(
+            tools.find((tool) => tool.name === "message"),
+            "message tool",
+          );
+          try {
+            implicitSendResult = await message.execute("implicit-send", {
+              action: "send",
+              message: "This must stay in the session.",
+            });
+          } catch (error) {
+            implicitSendResult = error instanceof Error ? error.message : String(error);
+          }
+          return {
+            payloads: [{ text: "Reload resume stayed in the session." }],
+            meta: { durationMs: 1 },
+          };
+        } finally {
+          close();
+        }
+      });
+      const operation = runningOperation(sessionKey, sessionId, storeScope);
+      operation.attachBackend({ kind: "embedded", runId: "reload-route-source", cancel: () => {} });
+      const endpoint = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+        respond(true, { ok: true, runtime: { generation: 2, pluginIds: ["reload-fixture"] } });
+      });
+      const context = createContext(
+        [["plugins.reload", "operator.admin", "plugins", endpoint]],
+        () => config,
+      );
+      context.resolveGatewayContext = () => context;
+      let receipt: EventReceipt | undefined;
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+              () =>
+                exec.withExecRequestTurn(
+                  { identity: { ...scope, sessionId, runId: "reload-route-source" } },
+                  () =>
+                    withGatewayToolCallerIdentity(
+                      { ...scope, turnSourceChannel: "webchat", turnSourceTo: sessionKey },
+                      () =>
+                        withSessionControllerOwner(operation, async () => {
+                          const result = await createPluginsTool({
+                            sessionId,
+                            runId: "reload-route-source",
+                            onYield: () => operation.completeWithAfterClearBarrier(cleanup.promise),
+                          }).execute("reload-route-composed", request);
+                          expect(result.details).toMatchObject({ status: "started" });
+                        }),
+                    ),
+                ),
+            ),
+        );
+        cleanup.resolve();
+        receipt = await withinTest(enqueued.promise, signal);
+        if (busy) {
+          await expect(withinTest(receipt.accepted, signal)).resolves.toEqual({ ok: true });
+          expect(await withinTest(dispatched.promise, signal)).toBe("followup");
+          expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+          expect(sendText).not.toHaveBeenCalled();
+          expectDefined(blocker, "active run").complete();
+        }
+        const outcome = await withinTest(receipt.settled, signal);
+        expect(sendText.mock.calls).toEqual([]);
+        expect(outcome).toMatchObject({
+          status: "completed",
+          delivered: false,
+        });
+        expect(implicitSendResult).toContain(
+          "Action send requires a target. This turn has no current conversation",
+        );
+        expect(messageProvider).toBe("webchat");
+        if (busy) {
+          expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+          expect(outcome).toMatchObject({ executionStarted: true });
+          expect(messageTo).toBeUndefined();
+        }
+        expect(originatingChannel).toBe("webchat");
+        expect(chatType).toBeUndefined();
+      } finally {
+        cleanup.resolve();
+        blocker?.complete();
+        operation.complete();
+        await Promise.allSettled([receipt?.settled]);
+        resetSystemEventsForTest();
+        restoreActivePluginRegistrySnapshot(registry);
+      }
     });
   },
 );

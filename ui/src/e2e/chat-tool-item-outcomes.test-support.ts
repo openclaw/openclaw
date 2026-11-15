@@ -201,7 +201,7 @@ export function registerItemOnlyOutcomeTest(
           const summary = page.locator(".chat-activity-group__summary").first();
           await summary.waitFor();
           await captureToolActivityProof(page, `item-outcomes-${stage}-collapsed`);
-          expect.soft(await summary.textContent()).toContain("1 failed");
+          expect.soft(await summary.textContent()).not.toContain("failed");
           await summary.click();
           const rows = page.locator(".chat-activity-group__body .chat-tool-msg-summary");
           await expect.poll(() => rows.count()).toBe(3);

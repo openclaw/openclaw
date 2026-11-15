@@ -45,7 +45,7 @@ export type ConfirmedVisibleMessageParams = {
   deliveryId: string;
   payloadIndex: number;
   signal?: AbortSignal;
-  expectedGeneration?: { sessionKey?: string; sessionId: string; lifecycleRevision?: string };
+  expectedGeneration?: { sessionKey?: string; lifecycleRevision?: string };
   /** Background producer recorded on the history row, when there is one. */
   provenance?: BackgroundSessionResultProvenance;
   assertCurrent?: () => void;
@@ -120,6 +120,7 @@ export async function commitConfirmedVisibleMessage(
     });
   }
   const entry = await readSessionEntryInWorker({
+    agentId,
     sessionKey: destinationKey,
     storePath,
     readConsistency: "latest",
@@ -138,10 +139,7 @@ export async function commitConfirmedVisibleMessage(
     commitBackgroundPayloadsToSession({
       agentId,
       sessionKey: destinationKey,
-      expectedGeneration: {
-        sessionId: generation.sessionId,
-        lifecycleRevision: generation.lifecycleRevision,
-      },
+      expectedLifecycleRevision: generation.lifecycleRevision,
       payloads: [params.payload],
       idempotencyKey: `outbound-delivery:${params.deliveryId}:${params.payloadIndex}`,
       provenance: params.provenance,

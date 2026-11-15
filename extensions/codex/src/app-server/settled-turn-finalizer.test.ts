@@ -438,3 +438,10 @@ it("rejects a stale idempotency hit instead of delivering an unpersisted answer"
 
   await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
 });
+
+it("does not borrow host credentials to finalize a command-auth turn", async () => {
+  const attempt = createAttempt("api-key");
+  attempt.runtimePlan!.auth.selectedAuthMode = "native-command";
+  await expect(finalize(attempt)).rejects.toThrow("settled-tool fallback");
+  expect(mocks.runBounded).not.toHaveBeenCalled();
+});

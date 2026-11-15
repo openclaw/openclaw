@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, onTestFinished, vi, type Mock } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -32,12 +34,15 @@ import { readGitHubPublicationRequest } from "./github-publication-store.worker.
 import {
   createRealPublicationWorkspace,
   createTestGitHubPublicationCoordinator,
-  githubPublicationTestMocks,
+  overrideCommands,
   persistPublicationTestSession,
   root,
+  SESSION_ID,
+  SESSION_KEY,
 } from "./github-publication.test-support.js";
 import { repositoryGitHubPublicationDigest } from "./github-repository-publication-store.js";
 import { createRepositoryPublicationFixture } from "./github-repository-publication.test-support.js";
+import type { OpenClawIdTunnelPrincipal } from "./openclaw-id/tunnel-principal.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { SESSION_READ_SCOPE, SESSION_WRITE_SCOPE } from "./operator-scopes.js";
 import {
@@ -46,8 +51,6 @@ import {
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { seedAttachedPlacementEnvironment } from "./worker-environments/placement-test-fixtures.js";
-
-const mocks = githubPublicationTestMocks();
 
 type Backend = "local" | "repository";
 type Coordinator = ReturnType<typeof createTestGitHubPublicationCoordinator>;
@@ -141,6 +144,7 @@ export async function createGitHubPublicationRequesterFixture(params: {
   sessionKey: string;
   agentId: string;
   getCommittedRuntimeConfig?: () => OpenClawConfig;
+  openclawIdPrincipal?: OpenClawIdTunnelPrincipal;
 }) {
   const [{ createOperatorWsClient }, { prepareGatewayConnectOperatorAccess }] = await Promise.all([
     import("./server/ws-connection/authenticated-request-dispatch.test-support.js"),
@@ -157,6 +161,9 @@ export async function createGitHubPublicationRequesterFixture(params: {
     hasAvatar: false,
     updatedAt: 1,
   };
+  if (params.openclawIdPrincipal) {
+    client.internal = { ...client.internal, openclawIdPrincipal: params.openclawIdPrincipal };
+  }
   prepareGatewayConnectOperatorAccess(client);
   const context = {
     getRuntimeConfig: currentGitHubPublicationConfig,
@@ -210,15 +217,13 @@ async function createRequesterPolicySources(
   const database = openOpenClawStateDatabase();
   const publishedTitles: string[] = [];
   const externalWrites: string[] = [];
-  const transport = mocks.runCommand.getMockImplementation()!;
-  mocks.runCommand.mockImplementation(async (argv: string[], options?: { input?: string }) => {
+  overrideCommands((argv, input) => {
     if (argv.includes("push") || argv.includes("POST") || argv.includes("graphql")) {
       externalWrites.push(argv.join(" "));
     }
     if (argv.includes("POST") && argv.some((arg) => arg.endsWith("/pulls"))) {
-      publishedTitles.push(JSON.parse(options!.input!).title);
+      publishedTitles.push(JSON.parse(input!).title);
     }
-    return await transport(argv, options);
   });
   return {
     config,
@@ -246,6 +251,33 @@ export async function createRequesterPolicyFixture(
   return await createRequesterPolicySources(session, "/repo/worktree");
 }
 
+export const createLocalPublicationFixture = () =>
+  createRequesterPublicationFixture(vi.fn(), "local", {
+    sessionId: SESSION_ID,
+    sessionKey: SESSION_KEY,
+  });
+
+export async function useRealSessionReads() {
+  const actual = await vi.importActual<typeof import("./session-utils-store-worker.js")>(
+    "./session-utils-store-worker.js",
+  );
+  const store = await import("./session-utils-store-worker.js");
+  const read = vi
+    .spyOn(store, "loadGatewaySessionEntryReadOnlyInWorker")
+    .mockImplementation(actual.loadGatewaySessionEntryReadOnlyInWorker);
+  onTestFinished(() => read.mockRestore());
+}
+
+export async function readPublicationWorktreeState(
+  workspace: Awaited<ReturnType<typeof createRealPublicationWorkspace>>,
+) {
+  return {
+    head: await workspace.git("rev-parse", "HEAD"),
+    index: await fs.readFile(path.join(workspace.cwd, ".git/index")),
+    diff: await workspace.git("diff", "HEAD"),
+  };
+}
+
 export async function createRequesterPublicationFixture(
   checkpoint: Mock,
   backend: Backend,
@@ -253,6 +285,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    sourceHistory?: Parameters<typeof createRepositoryPublicationFixture>[5];
     initialCheckpoint?: boolean;
   } = {},
 ) {
@@ -264,6 +297,7 @@ export async function createRequesterPublicationFixture(
           session,
           repositoryOptions.baseFiles,
           repositoryOptions.initialCheckpoint,
+          repositoryOptions.sourceHistory,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);
@@ -479,6 +513,7 @@ export async function prepareVisitorPublicationFixture(f: {
         subagent: {
           complete: unexpected,
           forkSession: unexpected,
+          runForkedTurn: unexpected,
           run: unexpected,
           waitForRun: unexpected,
           getSessionMessages: unexpected,

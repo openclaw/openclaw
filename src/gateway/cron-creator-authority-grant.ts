@@ -231,6 +231,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
 ):
   | {
       capturesRuntimeAuthority: boolean;
+      callerScopedCreation?: true;
       /** Host-captured causal human; never permission or model input. */
       creatorProfileId?: string;
       callerOrigin?: CronScheduledToolCallerOrigin;
@@ -258,6 +259,7 @@ export function resolveCronCreatorAuthorityGrantProvenance(
   const channelRequester = channelRequestersByScope.get(scope);
   return {
     capturesRuntimeAuthority: entry.capturesRuntimeAuthority,
+    ...(scope.callerScopedCreation ? { callerScopedCreation: true as const } : {}),
     ...(entry.creatorProfileId ? { creatorProfileId: entry.creatorProfileId } : {}),
     ...(scope.callerOrigin.kind === "local" ? { callerOrigin: { kind: "local" as const } } : {}),
     ...(channelRequester ? { channelRequester: { ...channelRequester } } : {}),
@@ -282,7 +284,9 @@ export function hasCronCreatorGrantProvenance(
     input.cronCreatorAuthorityGrant,
     runId,
   );
-  return Boolean(provenance?.callerOrigin || provenance?.channelRequester);
+  return Boolean(
+    provenance?.callerOrigin || provenance?.channelRequester || provenance?.callerScopedCreation,
+  );
 }
 
 function revokeCronCreatorAuthorityGrant(token: string): void {
@@ -482,8 +486,10 @@ export async function withCronManagementGrant<T>(
     {
       identity,
       assertActive,
-      ...(entry.scope.callerOrigin.kind === "local"
-        ? { callerOrigin: { kind: "local" as const } }
+      // The admitted turn's server-authenticated origin. An owner's edit from a
+      // channel chat must keep that channel, or account-scoped runs lose their account.
+      ...(entry.scope.callerOrigin.kind !== "unknown"
+        ? { callerOrigin: { ...entry.scope.callerOrigin } }
         : {}),
       channelRequester: channelRequestersByScope.get(entry.scope),
       execPolicy: entry.execPolicy,

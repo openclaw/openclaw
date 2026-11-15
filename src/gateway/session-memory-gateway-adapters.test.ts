@@ -255,9 +255,12 @@ it("projects unbound memory watches from current facts with the existing recipie
     sharingTargetState: () => {
       throw new Error("Memory watch used a durable target");
     },
+    hasMembership: () => {
+      throw new Error("Memory watch used durable membership");
+    },
   } satisfies Pick<
     SessionRowProjection,
-    "getPolicyConfig" | "sharingRevision" | "sharingTargetState"
+    "getPolicyConfig" | "sharingRevision" | "sharingTargetState" | "hasMembership"
   >;
   const project = createPresenceRecipientProjection({
     cfg,

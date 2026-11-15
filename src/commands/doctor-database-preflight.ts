@@ -6,6 +6,7 @@ import {
   extractErrorCode,
 } from "@openclaw/normalization-core/error-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
@@ -79,6 +80,8 @@ export async function prepareDoctorDatabasePreflight(
   options: {
     scope?: "state";
     cfg?: OpenClawConfig;
+    /** Final update verification also admits the schema shape of discovered live stores. */
+    verifyCurrentSchemaShape?: boolean;
     /**
      * Update Doctor compares database generations recorded at snapshot capture. A native
      * open of an idle WAL family rebuilds its WAL index and changes that generation, so
@@ -87,6 +90,11 @@ export async function prepareDoctorDatabasePreflight(
     preserveSourceArtifacts?: true;
   } = {},
 ): Promise<DoctorDatabasePreflight> {
+  // Delegated update Doctor enters without CLI boot's process-wide engine selection.
+  if (!getDatabaseEngineSelection()) {
+    const { readConfigSnapshotForEngineSelection } = await import("./config-preflight-snapshot.js");
+    await readConfigSnapshotForEngineSelection();
+  }
   const { scope, preserveSourceArtifacts } = options;
   const databasePreflight = await import("../state/openclaw-database-preflight.js");
   const [
@@ -116,6 +124,7 @@ export async function prepareDoctorDatabasePreflight(
     scope,
     openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
     preserveSourceArtifacts,
+    verifyCurrentSchemaShape: options.verifyCurrentSchemaShape,
     ...(cfg
       ? {
           // Custom stores go through the artifact-preserving header reader; discovery

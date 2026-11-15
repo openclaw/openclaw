@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "./errors.js";
+import { isNeverActivatedFailedUpdate } from "./update-run-activation.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunStepAsync } from "./update-run-write.async.js";
@@ -9,12 +10,14 @@ export const AUTOMATIC_RECOVERY_CLEANUP_STEP = "recovery-artifact-cleanup";
 export function canAutomaticallyCleanUpdateRecovery(run: UpdateRunRecord): boolean {
   return (
     run.finishedAtMs !== null &&
-    (run.status === "succeeded" || (run.status === "skipped" && run.reason === "already-current"))
+    (run.status === "succeeded" ||
+      (run.status === "skipped" && run.reason === "already-current") ||
+      isNeverActivatedFailedUpdate(run))
   );
 }
 
 export function automaticRecoveryCleanupWarning(error: unknown): UpdateStepResult {
-  const message = `Automatic recovery cleanup did not finish: ${formatErrorMessage(error)}. The update remains successful; retained artifacts can be inspected with openclaw update cleanup --dry-run.`;
+  const message = `Automatic recovery cleanup did not finish: ${formatErrorMessage(error)}. The update outcome is unchanged; retained artifacts can be inspected with openclaw update cleanup --dry-run.`;
   return {
     name: AUTOMATIC_RECOVERY_CLEANUP_STEP,
     command: "openclaw update cleanup",

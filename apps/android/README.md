@@ -13,6 +13,7 @@ OpenClaw Android is the officially released Google Play app. It connects to an O
 - Choose a theme family, color mode, accent, and app language in **Settings → Appearance**. Theme and accent edits sync with a connected writable profile. Read-only or unknown-profile edits, including new edits after restarting offline, stay on the device; choose them again after connecting to sync. Already profile-bound edits wait for that profile to reconnect, without discarding or replacing newer device-local choices.
 - Choose **Text size** in **Settings → Appearance**: 90%, 100% (default), 110%, 125%, or 140%. This device-local choice survives restarting the app and does not sync to your profile. It combines with Android system font scaling, including nonlinear scaling, without changing spacing or typefaces.
 - Configure foreground on-device Voice Wake and Gateway-synced wake words in **Settings → Voice**.
+- During Talk, use the separate microphone button to mute or unmute your input without ending the call, canceling submitted work, or stopping reply audio. The muted state is visible and announced to accessibility services. Realtime mute sends silence while keeping the recording session open, so Android's microphone indicator may remain visible. Native Talk finishes already-recognized words before pausing recognition. Mute is retained across Talk restarts within the app process until you unmute; standalone push-to-talk remains available after ending Talk.
 - Talk setup and startup failures stay visible in a dismissible Chat dialog. If the message reports a missing provider or invalid credentials, configure the Talk provider on the Gateway before trying again.
 - Use **Settings → OpenClaw** for guided Gateway setup and repair. New replies stay visible at the end of the conversation; scrolling back preserves your reading position until you return or tap **Jump to latest**.
 - Setup offers optional notifications, microphone, camera, and location access; other permissions are under **Additional features**. **Request all** asks for the available runtime permissions without enabling the camera or location features; Android handles consent through its system prompts. Notification access stays separate under **Special access**. Continue without granting access, or enable phone capabilities individually or later in Settings. Blocked individual setup requests offer Android Settings. Biometric locking, Gateway/chat notifications, and authenticated background presence are supported.
@@ -346,6 +347,26 @@ animations, captures the screenshots, then shuts down the emulator it started.
 Install the API 36 Google APIs and API 34 Wear OS system images in the local
 Android SDK. Use `--form-factor phone|wear` with `--avd` or `--device` to
 explicitly capture one form factor from another emulator.
+
+Each form factor's debug APK is built before starting its screenshot emulator,
+so compilation does not compete with emulator boot or rendering.
+
+**Android Store Release** enables bounded screenshot diagnostics. If capture
+fails, the existing emulator diagnostic artifact retains phase timings, host
+resource samples, image identity, and system/ANR evidence for 30 days. App debug
+logs and signing files are excluded. Local Linux runs can opt in with
+`ANDROID_SCREENSHOT_DIAGNOSTICS=1`.
+
+For a nonpublishing hosted replay, select `screenshots` in **Android Emulator
+Diagnostic**, choose the candidate branch in **Use workflow from**, and supply
+that branch's exact commit SHA. Screenshot execution is pinned to the selected
+workflow revision; a different target SHA fails before candidate code runs.
+It runs the same phone
+and Wear capture script with `ANDROID_SCREENSHOT_DIAGNOSTICS=1`, recording phase
+timings, host resource samples, emulator/image identity, and bounded system/ANR
+diagnostics on failure before emulator cleanup. Diagnostic artifacts expire after
+seven days. This operation uses debug apps and does not access signing or store
+credentials.
 
 For local branch-switching proof, launch a debug build with the intent extras
 `openclaw.screenshotMode=true` and `openclaw.screenshotScene=branches`. This Chat

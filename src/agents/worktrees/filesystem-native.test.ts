@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { requirePinnedBun } from "../../../scripts/lib/pinned-bun.mjs";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -11,11 +13,112 @@ import { withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as runner from "../../process/exec-runner.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  captureWorkspaceFilesystemEvidence,
+  createWorkspaceFilesystemSource,
+} from "../workspace-state-guard.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
 import { nativeWorktreeFilesystem } from "./filesystem-native.js";
+import { cloneRefsTreeInWorker } from "./provisioned-copy-host.js";
 
 const run = runner.runCommandBuffersWithTimeout;
+
+const removalDirs = useAutoCleanupTempDirTracker(afterEach);
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "removes owned captures with read-only directories without changing linked live workspaces",
+  async () => {
+    const root = removalDirs.make("openclaw-native-removal-");
+    const capture = path.join(root, "capture");
+    const readonly = path.join(capture, "readonly");
+    const ignored = path.join(capture, ".openclaw", "tmp", "ignored");
+    const live = path.join(root, "live-workspace");
+    for (const directory of [readonly, ignored, live]) {
+      await fs.mkdir(directory, { recursive: true });
+      await fs.writeFile(path.join(directory, "payload"), "retained", { mode: 0o400 });
+    }
+    await fs.symlink(live, path.join(ignored, "live-link"), "dir");
+    await fs.chmod(readonly, 0o555);
+    await fs.chmod(ignored, 0);
+    await fs.chmod(live, 0o555);
+    try {
+      await nativeWorktreeFilesystem.remove(capture, { commitGuard: () => {} });
+      await expect(fs.lstat(capture)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await fs.stat(live)).mode & 0o777).toBe(0o555);
+      expect((await fs.stat(path.join(live, "payload"))).mode & 0o777).toBe(0o400);
+      expect(await fs.readFile(path.join(live, "payload"), "utf8")).toBe("retained");
+    } finally {
+      // Restore only fixture-owned permissions if the removal regression fails.
+      for (const directory of [readonly, ignored, live]) {
+        await fs.chmod(directory, 0o700).catch((error: unknown) => {
+          if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) {
+            throw error;
+          }
+        });
+      }
+    }
+  },
+);
+
+it.skipIf(process.platform === "win32")(
+  "preserves native mode across ReFS copies on a reused worker",
+  () => {
+    const root = removalDirs.make("refs-native-policy-");
+    const modules = {
+      copy: new URL("./provisioned-copy-host.ts", import.meta.url).href,
+      diagnostics: new URL("../../infra/worker-request-diagnostics.ts", import.meta.url).href,
+      lifecycle: new URL("../../shared/global-singleton.ts", import.meta.url).href,
+    };
+    const result = spawnSync(
+      requirePinnedBun(),
+      [
+        "--no-addons",
+        "--no-install",
+        "--eval",
+        `
+    import fs from "node:fs/promises";
+    import path from "node:path";
+    import { configureFsSafeNative } from "@openclaw/fs-safe/config";
+    const { cloneRefsTreeInWorker } = await import(${JSON.stringify(modules.copy)});
+    const { runWithWorkerStartObserver } = await import(${JSON.stringify(modules.diagnostics)});
+    const { drainGlobalSingletonLifecycleState } = await import(${JSON.stringify(modules.lifecycle)});
+    const root = ${JSON.stringify(root)};
+    const source = path.join(root, "source");
+    await fs.mkdir(source);
+    const started = [], outcomes = [];
+    try {
+      await runWithWorkerStartObserver(script => started.push(script), async () => {
+        for (const [index, mode] of ["require", "off", "require"].entries()) {
+          configureFsSafeNative({ mode });
+          try {
+            await cloneRefsTreeInWorker(source, path.join(root, "copy-" + index), { commitGuard() {} });
+            outcomes.push("success");
+          } catch (error) {
+            outcomes.push(error.code);
+          }
+        }
+      });
+      console.log(JSON.stringify({ started, outcomes }));
+    } finally {
+      await drainGlobalSingletonLifecycleState();
+    }
+  `,
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 60_000,
+        env: { ...process.env, FS_SAFE_NATIVE_MODE: "off" },
+      },
+    );
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      started: ["fs-safe-copy.worker.js"],
+      outcomes: ["helper-unavailable", "success", "helper-unavailable"],
+    });
+  },
+);
 
 describe.skipIf(process.platform !== "darwin")("isolated native worktree operations", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -65,6 +168,91 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     expect(getFsSafeNativeConfig().mode).toBe("off");
   });
 
+  it.each(["native", "refs-worker"] as const)(
+    "refuses retargeted workspace authority at the %s copy owner",
+    async (owner) => {
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "payload"), "original");
+      const other = path.join(root, "other");
+      const alias = path.join(root, "alias");
+      await fs.mkdir(other);
+      await fs.symlink(source, alias, "dir");
+      const commitGuard = createWorkspaceFilesystemSource(
+        await captureWorkspaceFilesystemEvidence(alias),
+        () => {},
+      );
+      const authority = {
+        commitGuard,
+        workerAuthority: {
+          assertCurrent: () => {},
+          workspaceEvidence: [await captureWorkspaceFilesystemEvidence(other)],
+        },
+      };
+      if (owner === "refs-worker") {
+        configureFsSafeNative({ mode: "auto" });
+        await cloneRefsTreeInWorker(source, destination, authority);
+        expect(await fs.readFile(path.join(destination, "payload"), "utf8")).toBe("original");
+        await fs.unlink(alias);
+        await fs.symlink(other, alias, "dir");
+        await expect(
+          cloneRefsTreeInWorker(source, `${destination}-refused`, authority),
+        ).rejects.toThrow(/alias points to a different/);
+        await expect(fs.access(`${destination}-refused`)).rejects.toMatchObject({ code: "ENOENT" });
+      } else {
+        vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation(
+          (argv, inputOptions) => {
+            assert(typeof inputOptions !== "number");
+            return run(argv, {
+              ...inputOptions,
+              prepareInput: async (pid, args) => {
+                await fs.unlink(alias);
+                await fs.symlink(other, alias, "dir");
+                await inputOptions.prepareInput?.(pid, args);
+              },
+            });
+          },
+        );
+        await expect(copy(authority)).rejects.toThrow(/alias points to a different/);
+        await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      expect(await fs.readFile(path.join(source, "payload"), "utf8")).toBe("original");
+    },
+  );
+
+  it("retains prepared authority until the native copy settles", async () => {
+    await fs.mkdir(source);
+    await fs.writeFile(path.join(source, "payload"), "original");
+    let released = false;
+    let prepared = false;
+    const commitGuard = Object.assign(
+      () => {
+        if (prepared) {
+          throw new Error("Raw callback used outside its prepared source scope");
+        }
+      },
+      {
+        prepareSessionSourceEffect: async () => {
+          prepared = true;
+          return {
+            assertCurrent: () => {
+              if (released) {
+                throw new Error("effect authority released");
+              }
+            },
+            release: async () => {
+              await Promise.resolve();
+              expect(await fs.readFile(path.join(destination, "payload"), "utf8")).toBe("original");
+              released = true;
+              prepared = false;
+            },
+          };
+        },
+      },
+    );
+    await copy({ commitGuard });
+    expect(released).toBe(true);
+  });
+
   it.each([
     "FS_SAFE_NATIVE_MODE",
     "OPENCLAW_FS_SAFE_NATIVE_MODE",
@@ -79,31 +267,39 @@ describe.skipIf(process.platform !== "darwin")("isolated native worktree operati
     await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it.each(["copy", "createSource"])("revalidates %s authority before input", async (operation) => {
-    await fs.mkdir(source);
-    await fs.writeFile(path.join(source, "payload"), "source");
-    const authority = new AbortController();
-    let childPid: number | undefined;
-    vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation((argv, commandOptions) => {
-      assert(typeof commandOptions !== "number", "Native writes need guarded input");
-      return run(argv, {
-        ...commandOptions,
-        beforeInput(pid) {
-          childPid = pid;
-          authority.abort(new Error("allocation lease lost"));
-          commandOptions.beforeInput?.(pid);
+  it.each(["copy", "createSource", "remove"])(
+    "revalidates %s authority before input",
+    async (operation) => {
+      await fs.mkdir(source);
+      await fs.writeFile(path.join(source, "payload"), "source");
+      const authority = new AbortController();
+      let childPid: number | undefined;
+      vi.spyOn(runner, "runCommandBuffersWithTimeout").mockImplementation(
+        (argv, commandOptions) => {
+          assert(typeof commandOptions !== "number", "Native writes need guarded input");
+          return run(argv, {
+            ...commandOptions,
+            beforeInput(pid) {
+              childPid = pid;
+              authority.abort(new Error("allocation lease lost"));
+              commandOptions.beforeInput?.(pid);
+            },
+          });
         },
-      });
-    });
-    const writeOptions = { commitGuard: () => authority.signal.throwIfAborted() };
-    await expect(
-      operation === "copy"
-        ? copy(writeOptions)
-        : nativeWorktreeFilesystem.createSource(destination, writeOptions),
-    ).rejects.toThrow("allocation lease lost");
-    expect(childPid).toBeGreaterThan(0);
-    await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
-  });
+      );
+      const writeOptions = { commitGuard: () => authority.signal.throwIfAborted() };
+      await expect(
+        operation === "copy"
+          ? copy(writeOptions)
+          : operation === "remove"
+            ? nativeWorktreeFilesystem.remove(source, writeOptions)
+            : nativeWorktreeFilesystem.createSource(destination, writeOptions),
+      ).rejects.toThrow("allocation lease lost");
+      expect(childPid).toBeGreaterThan(0);
+      await expect(fs.access(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(await fs.readFile(path.join(source, "payload"), "utf8")).toBe("source");
+    },
+  );
 
   it("joins a canceled write child before cleanup", async ({ signal }) => {
     const receipts = await openFixtureReceiptChannel();

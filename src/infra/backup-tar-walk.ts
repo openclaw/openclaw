@@ -17,6 +17,7 @@ export async function* walkBackupTar(params: {
   onProgress: (sourcePath: string, bytes?: number) => void;
 }): AsyncGenerator<Buffer> {
   const noFollow = process.platform === "win32" ? 0 : constants.O_NOFOLLOW;
+  const nonBlocking = process.platform === "win32" ? 0 : constants.O_NONBLOCK;
   type Directory = { sourcePath: string; identity: BigIntStats };
   const assertDirectory = async ({ sourcePath, identity }: Directory) => {
     const current = await fs.lstat(sourcePath, { bigint: true });
@@ -55,7 +56,9 @@ export async function* walkBackupTar(params: {
             linkpath = linkpath.replaceAll("\\", "/");
           }
         } else if (stat.isFile()) {
-          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow);
+          // A regular source can become a FIFO after lstat. Open without waiting
+          // for a writer so the descriptor check below can reject that change.
+          handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow | nonBlocking);
           const openedIdentity = await handle.stat({ bigint: true });
           const opened = await handle.stat();
           if (!opened.isFile()) {

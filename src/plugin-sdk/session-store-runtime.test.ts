@@ -33,14 +33,14 @@ import {
 type InternalSessionEntry = ConfigSessionTypes.InternalSessionEntry;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const sessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof SessionEntry
+const sessionEntryKeepsResumeMarkerPrivate: "resumeAfterRestart" extends keyof SessionEntry
   ? false
   : true = true;
-const configSessionEntryKeepsRecoveryPrivate: "mainRestartRecovery" extends keyof ConfigSessionTypes.SessionEntry
+const configSessionEntryKeepsResumeMarkerPrivate: "resumeAfterRestart" extends keyof ConfigSessionTypes.SessionEntry
   ? false
   : true = true;
-void sessionEntryKeepsRecoveryPrivate;
-void configSessionEntryKeepsRecoveryPrivate;
+void sessionEntryKeepsResumeMarkerPrivate;
+void configSessionEntryKeepsResumeMarkerPrivate;
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-session-store-");
 
@@ -61,15 +61,12 @@ describe("session-store-runtime", () => {
     });
   }
 
-  async function seedRecoveringSession(
+  async function seedMarkedSession(
     sessionKey: string,
     sessionId: string,
     targetStorePath = storePath,
   ) {
     const entry: InternalSessionEntry = {
-      abortedLastRun: true,
-      mainRestartRecovery: { chargedAttempts: 1, cycleId: "rotation-cycle", revision: 1 },
-      restartRecoveryRuns: [{ lifecycleGeneration: "rotation-generation", runId: "rotation-run" }],
       sessionId,
       updatedAt: 10,
     };
@@ -77,6 +74,14 @@ describe("session-store-runtime", () => {
       { agentId: "main", sessionKey, storePath: targetStorePath },
       entry,
     );
+    await patchInternalSessionEntry(
+      { agentId: "main", sessionKey, storePath: targetStorePath },
+      () => ({ resumeAfterRestart: { queuedInputIds: [] } }),
+      { skipMaintenance: true },
+    );
+    expect(
+      loadInternalSessionEntry({ sessionKey, storePath: targetStorePath })?.resumeAfterRestart,
+    ).toEqual({ queuedInputIds: [] });
   }
 
   function assignOwner(sessionKey: string): void {
@@ -84,7 +89,7 @@ describe("session-store-runtime", () => {
     assignSessionOwner({ sessionKey, storePath }, { assignedBy: actor, owner: actor });
   }
 
-  function expectRecoveryCleared(params: {
+  function expectResumeMarkerCleared(params: {
     sessionId: string;
     sessionKey: string;
     storePath: string;
@@ -94,9 +99,7 @@ describe("session-store-runtime", () => {
       storePath: params.storePath,
     });
     expect(entry).toMatchObject({ sessionId: params.sessionId });
-    expect(entry?.abortedLastRun).not.toBe(true);
-    expect(entry?.restartRecoveryRuns).toBeUndefined();
-    expect(entry).not.toHaveProperty("mainRestartRecovery");
+    expect(entry?.resumeAfterRestart).toBeUndefined();
   }
 
   it("keeps the public session read shape while using accessor-backed exports", async () => {
@@ -193,85 +196,41 @@ describe("session-store-runtime", () => {
     });
   });
 
-  it("hides core recovery state and preserves it across public mutations", async () => {
-    const sessionKey = "agent:main:recovery-owned";
-    const mainRestartRecovery = {
-      chargedAttempts: 1,
-      cycleId: "cycle-1",
-      reservation: {
-        attempt: 1,
-        lifecycleGeneration: "generation-1",
-        runId: "run-1",
-      },
-      revision: 1,
-    };
-    await replaceInternalSessionEntry({ sessionKey, storePath }, {
-      abortedLastRun: true,
-      mainRestartRecovery,
-      model: "gpt-5.5",
-      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
-      sessionId: "session-recovery",
-      updatedAt: 10,
-    } as InternalSessionEntry);
+  it("hides the shutdown resume marker and preserves it across public mutations", async () => {
+    const sessionKey = "agent:main:resume-owned";
+    await seedMarkedSession(sessionKey, "session-resume");
 
-    expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("mainRestartRecovery");
-    expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("mainRestartRecovery");
+    expect(getSessionEntry({ sessionKey, storePath })).not.toHaveProperty("resumeAfterRestart");
+    expect(listSessionEntries({ storePath })[0]?.entry).not.toHaveProperty("resumeAfterRestart");
 
-    await patchSessionEntry({
-      sessionKey,
-      storePath,
-      update: (entry) => {
-        entry.restartRecoveryRuns?.splice(0);
-        return {
-          abortedLastRun: false,
-          mainRestartRecovery: undefined,
-          model: "gpt-5.6",
-          restartRecoveryRuns: undefined,
-        } as unknown as Partial<SessionEntry>;
-      },
-    });
-    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
-      abortedLastRun: true,
-      mainRestartRecovery,
-      model: "gpt-5.6",
-      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
-    });
-
-    await updateSessionStoreEntry({
-      sessionKey,
-      storePath,
-      update: () => ({ abortedLastRun: false, restartRecoveryRuns: undefined }),
-    });
-    expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
-      abortedLastRun: true,
-      mainRestartRecovery,
-      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
-    });
+    const attemptedMarkerClear = { model: "gpt-5.6", resumeAfterRestart: undefined };
+    for (const mutate of [patchSessionEntry, updateSessionStoreEntry]) {
+      await mutate({ sessionKey, storePath, update: () => attemptedMarkerClear });
+      expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
+        resumeAfterRestart: { queuedInputIds: [] },
+        model: "gpt-5.6",
+      });
+    }
 
     await upsertSessionEntry({
       sessionKey,
       storePath,
-      entry: {
-        sessionId: "session-recovery",
-        updatedAt: 20,
-      },
+      entry: { sessionId: "session-resume", updatedAt: 20 },
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })).toMatchObject({
-      abortedLastRun: true,
-      mainRestartRecovery,
-      restartRecoveryRuns: [{ lifecycleGeneration: "generation-1", runId: "run-1" }],
-      sessionId: "session-recovery",
+      resumeAfterRestart: { queuedInputIds: [] },
+      sessionId: "session-resume",
       updatedAt: 20,
     });
     expect(loadInternalSessionEntry({ sessionKey, storePath })?.model).toBeUndefined();
   });
 
-  it("clears core recovery state when public replacements change session identity", async () => {
+  it("clears the shutdown resume marker when public replacements change session identity", async () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const upsertKey = "agent:main:telegram:direct:upsert-rotation";
     const upsertStorePath = path.join(tempDir, "upsert-sessions.json");
-    await seedRecoveringSession(patchKey, "patch-before");
-    await seedRecoveringSession(upsertKey, "upsert-before", upsertStorePath);
+    await seedMarkedSession(patchKey, "patch-before");
+    await seedMarkedSession(upsertKey, "upsert-before", upsertStorePath);
 
     await patchSessionEntry({
       replaceEntry: true,
@@ -281,8 +240,6 @@ describe("session-store-runtime", () => {
     });
     await upsertSessionEntry({
       entry: {
-        abortedLastRun: true,
-        restartRecoveryRuns: [{ lifecycleGeneration: "upsert-generation", runId: "upsert-run" }],
         sessionId: "upsert-after",
         updatedAt: 20,
       },
@@ -290,20 +247,20 @@ describe("session-store-runtime", () => {
       storePath: upsertStorePath,
     });
 
-    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
-    expectRecoveryCleared({
+    expectResumeMarkerCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectResumeMarkerCleared({
       sessionId: "upsert-after",
       sessionKey: upsertKey,
       storePath: upsertStorePath,
     });
   });
 
-  it("clears core recovery state when public patches change session identity", async () => {
+  it("clears the shutdown resume marker when public patches change session identity", async () => {
     const patchKey = "agent:main:telegram:direct:patch-rotation";
     const updateKey = "agent:main:telegram:direct:update-rotation";
     const updateStorePath = path.join(tempDir, "update-patch-sessions.json");
-    await seedRecoveringSession(patchKey, "patch-before");
-    await seedRecoveringSession(updateKey, "update-before", updateStorePath);
+    await seedMarkedSession(patchKey, "patch-before");
+    await seedMarkedSession(updateKey, "update-before", updateStorePath);
 
     await patchSessionEntry({
       sessionKey: patchKey,
@@ -318,8 +275,8 @@ describe("session-store-runtime", () => {
       update: () => ({ sessionId: "update-after", updatedAt: 20 }),
     });
 
-    expectRecoveryCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
-    expectRecoveryCleared({
+    expectResumeMarkerCleared({ sessionId: "patch-after", sessionKey: patchKey, storePath });
+    expectResumeMarkerCleared({
       sessionId: "update-after",
       sessionKey: updateKey,
       storePath: updateStorePath,

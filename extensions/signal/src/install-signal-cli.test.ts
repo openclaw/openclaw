@@ -290,3 +290,25 @@ it.each([
   );
   expect(fetchMock).not.toHaveBeenCalled();
 });
+
+it("keeps the Homebrew error after long warnings", async () => {
+  brewMock.mockReturnValue("/opt/homebrew/bin/brew");
+  const stderr = `Warning: ${"w".repeat(300)}\nError: signal-cli: no bottle available!`;
+  runMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr });
+  expect(await install("darwin", "arm64")).toEqual({
+    ok: false,
+    error: `brew install signal-cli failed (exit 1): ...${"w".repeat(160)}\nError: signal-cli: no bottle available!`,
+  });
+});
+
+it("redacts credentials before selecting the Homebrew error tail", async () => {
+  brewMock.mockReturnValue("/opt/homebrew/bin/brew");
+  const secret = "synthetic-brew-credential-".repeat(20);
+  const stderr = `Warning: ${"w".repeat(300)}\ntoken=${secret}\nError: signal-cli: unavailable!`;
+  runMock.mockResolvedValueOnce({ code: 1, stdout: "", stderr });
+  const result = await install("darwin", "arm64");
+  expect(result.ok).toBe(false);
+  expect(result.error).toContain("Error: signal-cli: unavailable!");
+  expect(result.error).toContain("token=synthe…ial-");
+  expect(result.error).not.toContain(secret.slice(-100));
+});

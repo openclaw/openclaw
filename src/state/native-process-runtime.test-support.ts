@@ -9,6 +9,7 @@ export const stateNativeProcessEntrypoints = {
   canonicalReceipt: entrypoint("openclaw-agent-canonical-validation-receipt.test-support"),
   agentDatabase: entrypoint("openclaw-agent-db"),
   stateDatabase: entrypoint("openclaw-state-db"),
+  maintenanceScope: entrypoint("openclaw-state-db-async-lifecycle"),
   stateDatabaseCache: entrypoint("openclaw-state-db-cache"),
   stateLease: entrypoint("openclaw-state-lease"),
   loggingState: entrypoint("../logging/state", "logging/state.js"),

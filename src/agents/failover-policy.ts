@@ -29,6 +29,7 @@ export function shouldPreserveTransientCooldownProbeSlot(
 ): boolean {
   return (
     reason === "model_not_found" ||
+    reason === "route_unavailable" ||
     reason === "format" ||
     reason === "auth" ||
     reason === "auth_permanent" ||

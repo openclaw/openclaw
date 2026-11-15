@@ -13,7 +13,7 @@
  */
 import assert from "node:assert/strict";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
-import { Session, type HeapProfiler } from "node:inspector/promises";
+import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -26,6 +26,7 @@ import {
 import { onWorkerRequestMetrics } from "../../src/infra/worker-request-diagnostics.js";
 import { createPluginStateKeyedStoreV2 } from "../../src/plugin-state/plugin-state-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../../src/state/openclaw-state-db.js";
+import { sumSampledHeapBytes } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -69,9 +70,6 @@ const unsubscribe = onWorkerRequestMetrics((kind, requestClass, phase) => {
     counts[requestClass] = (counts[requestClass] ?? 0) + 1;
   }
 });
-function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
-  return node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
-}
 try {
   for (const account of accounts) {
     await seedDatabase({
@@ -114,7 +112,7 @@ try {
       mode: values.allocation ? "allocation" : "timing",
       elapsedMs,
       mainThreadCpuUsPerTick: (used.user + used.system) / iterations,
-      allocatedBytesPerTick: profile ? allocated(profile.head) / iterations : undefined,
+      allocatedBytesPerTick: profile ? sumSampledHeapBytes(profile.head) / iterations : undefined,
       writerRequests: counts,
       writerRequestsPerSimulatedMinute: Object.fromEntries(
         Object.entries(counts).map(([key, count]) => [key, (count * accounts.length) / iterations]),

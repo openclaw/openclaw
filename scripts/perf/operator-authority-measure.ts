@@ -2,12 +2,19 @@
 // node --expose-gc --import ./scripts/tsx.mjs scripts/perf/operator-authority-measure.ts \
 //   --scenario attempt-transcript-guard --plugins 40 --samples 5 --iterations 5000 --warmup 1000 \
 //   --timing-only --revision <sha> --output <timing.json>
+// For recovery-source policy checks, use --plugins 40 --access-policies 1 to keep
+// ordinary plugins in the inventory without inventing 40 authorization callbacks.
 // Repeat without --timing-only and with --sampling-interval 1024 for sampled bytes.
 // Compare identical arguments across revisions; allocation/CPU passes are separate.
 // Calls the prepared lifecycle's actual assertCommitAllowed; setup and cleanup are
 // excluded. Detached persistence avoids unrelated storage IO, not authority checks.
 // Acceptance: fewer applicable policy assertions and allocated bytes per check,
 // with no repeatable thread CPU regression. This is not whole-Gateway evidence.
+// --scenario watchdog-progress measures the actual attempt-bound model-progress
+// callback with --plugins 40 --access-policies 1 --iterations 5000 --samples 5.
+// Set OPENCLAW_STATE_DIR to an isolated synthetic scratch directory for this scenario.
+// Admission and effects still check the plugin; progress only owns run liveness.
+// --root reuses an offline synthetic state fixture for recovery-source; it is never removed.
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
@@ -52,6 +59,7 @@ import { createPluginRecord } from "../../src/plugins/loader-records.js";
 import { getPluginInstance } from "../../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../../src/plugins/registry.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../src/plugins/runtime.js";
+import type { SessionControllerWatchdogAttempt } from "../../src/sessions/session-controller.watchdog.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../src/state/openclaw-state-db.js";
 import { profileCatalogPath } from "../../src/state/user-profile-identity.read.js";
 import { prepareUserProfileIdentity } from "../../src/state/user-profile-list.js";
@@ -63,6 +71,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "20000" },
     warmup: { type: "string", default: "5000" },
     plugins: { type: "string", default: "1" },
+    "access-policies": { type: "string" },
     samples: { type: "string", default: "1" },
     scenario: { type: "string", default: "all" },
     "counts-only": { type: "boolean", default: false },
@@ -71,6 +80,7 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     output: { type: "string" },
     revision: { type: "string", default: "unspecified" },
+    root: { type: "string" },
   },
 });
 function positiveInteger(value: string, label: string): number {
@@ -82,6 +92,8 @@ assert(!(values["counts-only"] && values["timing-only"]), "Select one measuremen
 const iterations = positiveInteger(values.iterations, "iterations");
 const warmup = positiveInteger(values.warmup, "warmup");
 const pluginCount = positiveInteger(values.plugins, "plugins");
+const policyCount = positiveInteger(values["access-policies"] ?? values.plugins, "access-policies");
+assert(policyCount <= pluginCount, "access-policies must not exceed plugins");
 const sampleCount = positiveInteger(values.samples, "samples");
 const samplingInterval = positiveInteger(values["sampling-interval"], "sampling-interval");
 assert(values["counts-only"] || globalThis.gc, "Run Node with --expose-gc");
@@ -172,6 +184,9 @@ for (let index = 0; index < pluginCount; index++) {
   }
   config.plugins!.entries![id] = { enabled: true };
   builder.registry.plugins.push(record);
+  if (index >= policyCount) {
+    continue;
+  }
   const policy: PluginGatewayAccessPolicy = {
     authorize(context) {
       counts.authorize++;
@@ -191,7 +206,7 @@ for (let index = 0; index < pluginCount; index++) {
   builder.createApi(record, { config }).registerGatewayAccessPolicy(policy);
   assert(getPluginInstance(record), "Registration must install the real plugin invocation owner");
 }
-assert.equal(builder.registry.gatewayAccessPolicies.length, pluginCount);
+assert.equal(builder.registry.gatewayAccessPolicies.length, policyCount);
 setActivePluginRegistry(builder.registry);
 
 const access = resolvePreparedGatewayOperatorAccessAuthority(
@@ -219,7 +234,7 @@ function checkAuth() {
 }
 function checkGrant() {
   counts.resumeOwner++;
-  resumeGatewayOperatorAccessGrant(profile, config, grant, retained);
+  resumeGatewayOperatorAccessGrant(profile, config, grant, { retained });
 }
 function checkSource() {
   checkAuth();
@@ -232,7 +247,7 @@ const operator = createAdmittedRunOperatorAuthority({
   gatewayAccessGrant: grant,
   signal: retained.signal,
   assertCurrent:
-    values.scenario === "attempt-transcript-guard"
+    values.scenario === "attempt-transcript-guard" || values.scenario === "watchdog-progress"
       ? composeSessionSourceAssertion([access.assertCurrent])
       : checkSource,
   modelPolicy: {
@@ -316,7 +331,9 @@ let recovery: Awaited<ReturnType<typeof restoreGatewayOperatorSource>> | undefin
 let recoveryStateDir: string | undefined;
 let recoveryConfig = config;
 if (values.scenario === "all" || values.scenario === "recovery-source") {
-  recoveryStateDir = await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
+  recoveryStateDir = values.root
+    ? path.resolve(values.root)
+    : await mkdtemp(path.join(os.tmpdir(), "operator-authority-measure-"));
   process.env.OPENCLAW_STATE_DIR = recoveryStateDir;
   const person = ensureProfileForEmail("recovery@authority.example.test");
   allowedProfiles.add(person.id);
@@ -329,8 +346,8 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
       { requireLivePolicySet: true },
     );
     assert(recoveredAccess?.gatewayAccessGrant);
-    // Decode the persisted shape so this is never an already-issued policy identity.
-    const source = decodeQueuedOperatorRecoverySource({
+    // Decode persisted bytes, including JSON omission of undefined fields.
+    const persistedSource = JSON.stringify({
       kind: "gateway",
       snapshot: {
         profileId: person.id,
@@ -354,6 +371,7 @@ if (values.scenario === "all" || values.scenario === "recovery-source") {
         sourceIngress: "control-ui",
       },
     });
+    const source = decodeQueuedOperatorRecoverySource(JSON.parse(persistedSource));
     assert(source.kind === "gateway");
     // Recovery only consumes the config reader and optional owner identities.
     const context = { getRuntimeConfig: () => recoveryConfig } as GatewayRequestContext;
@@ -378,6 +396,49 @@ const scenarios = [
   { name: "admitted-run", check: admitted },
   { name: "transcript-guard", check: transcript },
 ];
+let watchdogLifetime: Promise<void> | undefined;
+const finishWatchdog = Promise.withResolvers<void>();
+if (values.scenario === "watchdog-progress") {
+  const { withPreparedEmbeddedRunToolAuthority } =
+    await import("../../src/agents/harness/tool-authority.runtime.js");
+  const { createReplyOperation } = await import("../../src/sessions/session-controller.js");
+  const operation = createReplyOperation({
+    sessionId: transcriptTarget.sessionId,
+    sessionKey: transcriptTarget.sessionKey,
+    resetTriggered: false,
+    turnKind: "direct",
+  });
+  const ready = Promise.withResolvers<SessionControllerWatchdogAttempt>();
+  watchdogLifetime = withPreparedEmbeddedRunToolAuthority(
+    { admittedRunContext, replyOperation: operation },
+    {
+      ...transcriptTarget,
+      config,
+      runId: "synthetic-authority-run",
+      sessionFile: "synthetic-authority-session.jsonl",
+      workspaceDir: process.cwd(),
+      provider: model.provider,
+      modelId: model.model,
+    },
+    undefined,
+    async () => {
+      const { getGatewayToolCallerIdentity } =
+        await import("../../src/agents/tools/gateway-caller-context.js");
+      const watchdog = getGatewayToolCallerIdentity()?.watchdogAttempt;
+      assert(watchdog);
+      ready.resolve(watchdog);
+      await finishWatchdog.promise;
+    },
+  ).finally(() => operation.complete());
+  void watchdogLifetime.catch(ready.reject);
+  const watchdog = await ready.promise;
+  scenarios.push({
+    name: "watchdog-progress",
+    check() {
+      assert(watchdog.progressModel("model:delta"));
+    },
+  });
+}
 if (attemptTranscript) {
   const check = attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed;
   assert(check);
@@ -594,6 +655,9 @@ try {
   // Positive control outside capture: retained plugin answers remain live on the next check.
   grantLive = false;
   assert.throws(checkGrant);
+  if (watchdogLifetime) {
+    assert.throws(admitted);
+  }
   if (attemptTranscript) {
     assert.throws(attemptTranscript.ownedTranscriptWriteContext.assertCommitAllowed!);
   }
@@ -609,6 +673,7 @@ try {
     countsOnly: values["counts-only"],
     warmup,
     pluginCount,
+    policyCount,
     sampleCount,
     setupCountsExcluded: true,
     nextCheckRevocationDenied: true,
@@ -622,6 +687,8 @@ try {
   console.log(json);
 } finally {
   inspector.disconnect();
+  finishWatchdog.resolve();
+  await watchdogLifetime;
   await attemptTranscript?.transcriptLifecycle.dispose();
   execution.release();
   admission.close();
@@ -630,6 +697,8 @@ try {
   recovery?.release();
   if (recoveryStateDir) {
     await closeOpenClawStateDatabaseByPathAsync(profileCatalogPath({}));
-    await rm(recoveryStateDir, { recursive: true, force: true });
+    if (!values.root) {
+      await rm(recoveryStateDir, { recursive: true, force: true });
+    }
   }
 }

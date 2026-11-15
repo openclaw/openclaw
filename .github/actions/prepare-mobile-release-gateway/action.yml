@@ -1,0 +1,99 @@
+name: Prepare mobile release Gateway
+description: Restore or create this run's platform-bound Gateway selection.
+inputs:
+  artifact-name:
+    description: Platform-specific selection artifact for this workflow run.
+    required: true
+  record-install-clock:
+    description: Record the shared toolchain installation start after artifact restore.
+    default: "false"
+outputs:
+  install-start-epoch:
+    description: Shared toolchain installation start, when requested.
+    value: ${{ steps.install-start.outputs.epoch }}
+runs:
+  using: composite
+  steps:
+    - name: Find this run's stable Gateway selection
+      id: gateway-selection
+      env:
+        SELECTION_ARTIFACT_NAME: ${{ inputs.artifact-name }}
+      uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+      with:
+        script: |
+          const name = process.env.SELECTION_ARTIFACT_NAME;
+          const artifacts = await github.paginate(github.rest.actions.listWorkflowRunArtifacts, {
+            ...context.repo,
+            run_id: context.runId,
+            name,
+            per_page: 100,
+          });
+          const matches = artifacts.filter((artifact) => artifact.name === name);
+          if (matches.length > 1) {
+            throw new Error('Multiple stable Gateway selections exist for this run.');
+          }
+          if (matches.length === 0) {
+            if (Number(process.env.GITHUB_RUN_ATTEMPT) !== 1) {
+              throw new Error('This rerun has no saved stable Gateway selection. Start a new workflow run.');
+            }
+            core.setOutput('create', 'true');
+            core.setOutput('artifact-id', '');
+            return;
+          }
+          const artifact = matches[0];
+          if (artifact.expired || artifact.workflow_run?.id !== context.runId ||
+              artifact.workflow_run?.head_sha !== process.env.TARGET_SHA) {
+            throw new Error('The saved stable Gateway selection is expired or belongs to another source/run. Start a new workflow run.');
+          }
+          core.setOutput('create', 'false');
+          core.setOutput('artifact-id', String(artifact.id));
+
+    - name: Restore this run's stable Gateway selection
+      if: steps.gateway-selection.outputs.artifact-id != ''
+      uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      with:
+        artifact-ids: ${{ steps.gateway-selection.outputs.artifact-id }}
+        github-token: ${{ github.token }}
+        run-id: ${{ github.run_id }}
+        path: ${{ env.GATEWAY_SELECTION_DIR }}
+        digest-mismatch: error
+
+    - name: Start shared toolchain installation clock
+      id: install-start
+      if: inputs.record-install-clock == 'true'
+      shell: bash
+      run: echo "epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Node environment
+      uses: ./.github/actions/setup-node-env
+      with:
+        node-version: "24.22.1"
+        install-bun: "false"
+        cache-mode: "off"
+
+    - name: Prepare stable Gateway selection
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RESTORED_SELECTION: ${{ steps.gateway-selection.outputs.artifact-id != '' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "$RESTORED_SELECTION" == true ]]; then
+          test -f "$GATEWAY_SELECTION_DIR/selection.json"
+          test -f "$GATEWAY_SELECTION_DIR/package.json"
+          test -f "$GATEWAY_SELECTION_DIR/package-lock.json"
+        fi
+        node --import ./scripts/tsx.mjs scripts/ios-release-gateway.ts \
+          --target-sha "$TARGET_SHA" --selection-dir "$GATEWAY_SELECTION_DIR"
+
+    - name: Save this run's stable Gateway selection
+      if: steps.gateway-selection.outputs.create == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: |
+          ${{ env.GATEWAY_SELECTION_DIR }}/selection.json
+          ${{ env.GATEWAY_SELECTION_DIR }}/package.json
+          ${{ env.GATEWAY_SELECTION_DIR }}/package-lock.json
+        if-no-files-found: error
+        retention-days: 30

@@ -19,7 +19,7 @@ export const getMaxChatHistoryMessagesBytes = () => DEFAULT_MAX_CHAT_HISTORY_MES
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 const CHAT_HISTORY_UNAVAILABLE_SENTINEL =
-  "[chat.history unavailable: transcript too large to display; the full history is preserved on disk]";
+  "[chat.history unavailable: chat history too large to display; the full history is preserved on disk]";
 let chatHistoryOmittedEmitCount = 0;
 
 export function createChatHistoryActivityProjection(
@@ -52,6 +52,7 @@ export function createChatHistoryActivityProjection(
 
 export function createChatHistoryByteCounter(
   activity?: ReadonlyMap<unknown, AgentHistoryActivity>,
+  measureJsonBytes = jsonUtf8Bytes,
 ) {
   const sizes = new Map<unknown, number>();
   const messageBytes = (message: unknown): number => {
@@ -60,7 +61,7 @@ export function createChatHistoryByteCounter(
       return cached;
     }
     const descriptor = activity?.get(message);
-    const bytes = jsonUtf8Bytes(message) + (descriptor ? jsonUtf8Bytes(descriptor) + 1 : 0);
+    const bytes = measureJsonBytes(message) + (descriptor ? measureJsonBytes(descriptor) + 1 : 0);
     sizes.set(message, bytes);
     return bytes;
   };

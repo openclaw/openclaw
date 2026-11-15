@@ -14,6 +14,7 @@ import {
   attachPromptCompactionRequestBudget,
   type CompactionRequestBudget,
 } from "../../sessions/compaction/request-budget.js";
+import type { FixedRequestTokenPressure } from "../../sessions/context-token-pressure.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import {
@@ -73,6 +74,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "skipPreparedUserTurnMessage"
     | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
+    | "inputAlreadyDelivered"
+    | "abortSignal"
   >;
   registration?: ActiveEmbeddedRunAttachment;
   activeSession: PromptSubmissionSession;
@@ -83,14 +86,17 @@ export async function submitEmbeddedAttemptPrompt(input: {
   compactBeforeRequest?: ReturnType<typeof createChatGPTV2CompactionBoundary>;
   images: ImageContent[];
   modelPrompt: string;
+  normalizeToolCallIds?: Parameters<typeof wrapStreamFnWithMessageTransform>[1];
   onFinalPromptText: (prompt: string) => void;
   assertHostActive?: SessionSourceAssertion;
   getUserTranscriptContexts?: () => readonly UserTranscriptContext[] | undefined;
   withTranscriptWrite?: <T>(write: () => Promise<T>) => Promise<T>;
+  prepareRequestTokenPressure?: (context: Parameters<StreamFn>[1]) => FixedRequestTokenPressure;
   onModelRequest?: (
     model: Parameters<StreamFn>[0],
     context: Parameters<StreamFn>[1],
     signal?: AbortSignal,
+    fixedTokenPressure?: FixedRequestTokenPressure,
   ) => MeasuredRequestContext | undefined | Promise<MeasuredRequestContext | undefined>;
   persistToolResultProjections: () => Promise<void>;
   prependContext?: string;
@@ -107,6 +113,11 @@ export async function submitEmbeddedAttemptPrompt(input: {
   transcriptPrompt: string;
 }): Promise<void> {
   const { activeSession, attempt } = input;
+  if (attempt.inputAlreadyDelivered) {
+    attempt.abortSignal?.throwIfAborted();
+    input.assertHostActive?.();
+    return;
+  }
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
   const projectionRecorder =
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
@@ -177,8 +188,16 @@ export async function submitEmbeddedAttemptPrompt(input: {
           const foregroundRequest = captureCurrentPromptForModel && !activeSession.isCompacting;
           // Observe before V2 decides: only this observation can anchor the request's
           // measured prefix. A checkpoint request is observed again as its own request.
+          const fixedTokenPressure = foregroundRequest
+            ? input.prepareRequestTokenPressure?.(requestContext)
+            : undefined;
           const requestAnchor = foregroundRequest
-            ? await input.onModelRequest?.(model, requestContext, options?.signal)
+            ? await input.onModelRequest?.(
+                model,
+                requestContext,
+                options?.signal,
+                fixedTokenPressure,
+              )
             : undefined;
           assertRequestCurrent();
           if (foregroundRequest && input.compactBeforeRequest) {
@@ -188,6 +207,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
                   compactionModel,
                   compactionContext,
                   compactionOptions?.signal,
+                  input.prepareRequestTokenPressure?.(compactionContext),
                 );
                 assertRequestCurrent();
                 return baseStreamFn(compactionModel, compactionContext, compactionOptions);
@@ -196,6 +216,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
               requestContext,
               options,
               requestAnchor,
+              fixedTokenPressure,
             );
             assertRequestCurrent();
             if (checkpoint) {
@@ -206,7 +227,12 @@ export async function submitEmbeddedAttemptPrompt(input: {
                 ...requestContext,
                 messages: [...requestContext.messages, checkpoint],
               };
-              await input.onModelRequest?.(model, requestContext, options?.signal);
+              await input.onModelRequest?.(
+                model,
+                requestContext,
+                options?.signal,
+                input.prepareRequestTokenPressure?.(requestContext),
+              );
             }
           }
           assertRequestCurrent();
@@ -221,7 +247,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
       );
     const providerPromptStreamFn = wrapStreamFnWithMessageTransform(
       persistThenStream,
-      (messages) => {
+      (messages, model) => {
         const providerPromptHistoryTruncation = truncateOversizedToolResultsInMessages(
           messages,
           input.contextTokenBudget,
@@ -236,7 +262,8 @@ export async function submitEmbeddedAttemptPrompt(input: {
         if (providerPromptHistoryTruncation.aggregateTruncatedCount > 0) {
           recordAggregateTruncation(attempt);
         }
-        return providerMessages;
+        // Bind measured pressure to the final ID-normalized provider context.
+        return input.normalizeToolCallIds?.(providerMessages, model) ?? providerMessages;
       },
     );
     activeSession.agent.streamFn = providerPromptStreamFn;

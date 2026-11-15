@@ -3,11 +3,12 @@ import {
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
+  pageTitleForRoute,
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import type { NativeDeviceSettingsCapability as Device } from "./app/native-device-settings.ts";
 import { getStaticCommandPaletteCatalogItems } from "./components/command-palette-catalog-search.ts";
-import { settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
+import { settingsParentTarget, settingsNavigationOwnerRoute } from "./lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "./pages/config/settings-search.ts";
 import { createChromeExtensionSetupResult } from "./test-helpers/chrome-extension-setup.ts";
 import {
@@ -15,6 +16,15 @@ import {
   createNativeDeviceSettingsSnapshot,
   createTauriDeviceSettingsSnapshot,
 } from "./test-helpers/native-device-settings.ts";
+
+it("titles the device route after the actual device, as its page does", () => {
+  expect(pageTitleForRoute("device")).toBe("This device");
+  expect(pageTitleForRoute("device", createNativeDeviceSettingsSnapshot())).toBe("This Mac");
+  expect(pageTitleForRoute("device", createTauriDeviceSettingsSnapshot("windows"))).toBe(
+    "This computer",
+  );
+  expect(pageTitleForRoute("about")).toBe("About");
+});
 
 it.each([true, false])("shows device settings only with the capability, admin=%s", (canAdmin) => {
   const capability: Device = {
@@ -114,9 +124,29 @@ it("treats worktrees as a sessions hub tab", () => {
 });
 
 it("keeps model setup as a settings subpage without a sidebar entry", () => {
-  expect(isSettingsNavigationRoute("claws")).toBe(false);
+  expect(isSettingsNavigationRoute("templates")).toBe(false);
   expect(isSettingsNavigationRoute("model-setup")).toBe(true);
   expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
+});
+
+const pluginPath = "/settings/plugins/fixture";
+const prefixed = `/ui${pluginPath}`;
+it.each([
+  ["appearance", "/settings/appearance", "", "", null, ""],
+  ["plugin-settings", "/settings/plugins", "", "", null, ""],
+  ["ai-agents", "/settings/ai-agents", "", "", "agents", "/settings/agents"],
+  ["lobsterdex", "/ui/settings/lobsterdex", "", "/ui", "appearance", "/ui/settings/appearance"],
+  ["plugin-settings", pluginPath, "", "", "plugin-settings", "/settings/plugins"],
+  ["plugin-settings", pluginPath, "?from=plugins", "", "plugins", "/plugins"],
+  ["plugin-settings", prefixed, "?view=settings&from=plugins", "/ui", "plugin-settings", prefixed],
+] as const)("resolves the parent of %s at %s%s", (route, pathname, search, base, parent, path) => {
+  const expected = parent && {
+    routeId: parent,
+    pathname: path,
+    search: search.includes("view=settings") ? "?from=plugins" : "",
+    hash: "",
+  };
+  expect(settingsParentTarget(route, { pathname, search }, base)).toEqual(expected);
 });
 
 const opaqueIds = ["plugin:reports/daily/team:summary", "plugin:reports/日报 summary"];

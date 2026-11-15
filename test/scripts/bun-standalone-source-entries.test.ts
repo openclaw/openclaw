@@ -1,7 +1,7 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { UserConfig } from "tsdown";
@@ -11,17 +11,13 @@ import {
   createPluginNpmRuntimeBuildOptions,
   resolvePluginNpmRuntimeBuildPlan,
 } from "../../scripts/lib/plugin-npm-runtime-build.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function fixture() {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-source-entries-"));
-  roots.push(root);
+  const root = tempDirs.make("openclaw-source-entries-");
   fs.mkdirSync(path.join(root, "src"));
   fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
   const contents = "export const value: number = 42;\n";
@@ -204,23 +200,18 @@ console.log(JSON.stringify(entries.unmappedWorkers(["openclaw.mjs", "node-compil
   it("uses isolated plugin plan outputs without imposing a root-bundle format", () => {
     const { root } = fixture();
     const packageDir = path.join(root, "extensions/plugin");
-    fs.mkdirSync(packageDir, { recursive: true });
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/plugin",
+      version: "1.0.0",
+      type: "module",
+      dependencies: { dependency: "1.0.0" },
+      openclaw: { extensions: ["./index.ts"], build: { runtimeFormat: "cjs" } },
+    });
     fs.writeFileSync(path.join(packageDir, "index.ts"), "export const value: number = 42;\n");
-    fs.writeFileSync(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        version: "1.0.0",
-        type: "module",
-        dependencies: { dependency: "1.0.0" },
-        openclaw: { extensions: ["./index.ts"], build: { runtimeFormat: "cjs" } },
-      }),
-    );
     const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: root, packageDir });
-    if (!plan) {
-      throw new Error("Missing fixture runtime plan");
-    }
-    const config = createPluginNpmRuntimeBuildOptions(plan);
+    assert(plan, "Missing fixture runtime plan");
+    const [config] = createPluginNpmRuntimeBuildOptions(plan);
+    assert(config, "Missing fixture runtime build");
     const index = createStandaloneSourceEntries({
       sourceRoot: root,
       configs: [],
@@ -231,7 +222,7 @@ console.log(JSON.stringify(entries.unmappedWorkers(["openclaw.mjs", "node-compil
           sourceEntries: plan.sourceEntries,
           runtimeExtension: ".cjs",
           runtimeBuildPlan: plan,
-          runtimeBuildConfig: config,
+          runtimeBuildConfigs: [config],
         },
       ],
     });

@@ -159,7 +159,7 @@ describe("AppSidebar session catalog request errors", () => {
       expect(error).toBeNull();
     } else {
       expect(error?.textContent).toContain(message);
-      expect(error?.textContent).toContain("Showing stale data");
+      expect(error?.textContent).toContain("Showing last known data");
       expect(error?.querySelector("button")).toBeNull();
       gateway.publish({ suspensionPhase: "draining" });
     }

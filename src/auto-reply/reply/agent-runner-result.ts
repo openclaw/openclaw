@@ -3,6 +3,7 @@ import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { createMissingReplyNotice } from "../../agents/reply-completion.js";
 import {
   createSessionMaintenanceFollowup,
+  prepareSessionMaintenanceRequest,
   scheduleSessionMaintenance,
 } from "../../agents/session-maintenance/run.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
@@ -24,6 +25,7 @@ import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.
 import { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
 import type { FinalizeReplyAgentRunInput } from "./agent-runner-result.types.js";
 import { appendUsageLine } from "./agent-runner-usage-line.js";
+import { readCreatedGoalContinuationId } from "./goal-continuation-return.js";
 import { enqueueGoalContinuation } from "./goal-continuation.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
@@ -39,7 +41,11 @@ import { resolveStrandedReplyRecovery } from "./stranded-reply-recovery.js";
 export async function finalizeReplyAgentRun(
   context: FinalizeReplyAgentRunInput,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
-  const initialGoalId = context.activeSessionEntry?.goal?.id;
+  const initialGoal = context.activeSessionEntry?.goal;
+  // A completed predecessor must not fence a new goal created by this user turn.
+  const initialGoalId =
+    readCreatedGoalContinuationId(context.runId, context.replyOperation) ??
+    (initialGoal?.status === "complete" ? undefined : initialGoal?.id);
   const { result, accounting: completedAccounting } = await withAgentTurnCompletion(
     {
       agentId: context.followupRun.run.agentId,
@@ -49,7 +55,6 @@ export async function finalizeReplyAgentRun(
       writer: context.execution.sessionWriter,
       operation: context.replyOperation,
       activitySummaryCompletion: context.activitySummaryCompletion,
-      prepareRestartClaimCleanup: context.prepareRestartClaimCleanup,
       publish(entry) {
         context.activeSessionEntry = entry;
         if (context.activeSessionStore && context.sessionKey) {
@@ -304,9 +309,6 @@ export async function finalizeReplyAgentRun(
                 agentId: followupRun.run.agentId,
                 deliveryId,
                 intentId: pendingFinalDeliveryIntentId,
-                ...(activeSessionEntry?.restartRecoveryDeliveryRunId
-                  ? { recoveryRunId: activeSessionEntry.restartRecoveryDeliveryRunId }
-                  : {}),
                 sessionId: expectedSessionId,
                 sessionKey,
                 storePath,
@@ -380,31 +382,35 @@ export async function finalizeReplyAgentRun(
         runtimePolicySessionKey,
       };
       // The descriptor has no foreground authority; delivery settlement gates its new owner.
-      scheduleSessionMaintenance(
-        {
-          prepared: maintenancePrepared,
-          followupRun: createSessionMaintenanceFollowup({
-            run: followupRun.run,
-            sessionEntry: activeSessionEntry,
-            cfg,
-            sessionKey,
-            runtimePolicySessionKey:
-              runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
-            provider: accounting.providerUsed,
-            model: accounting.modelUsed,
-            auth,
-          }),
-          sessionId: activeSessionEntry.sessionId,
-          lifecycleRevision: activeSessionEntry.lifecycleRevision,
-          lifecycleGeneration: replyOperation.lifecycleGeneration,
-          startedAt: replyOperation.startedAtMs,
-          agentHarnessId: meta.agentMeta.agentHarnessId,
-          compactionRequestBudget: current.execution.compactionRequestBudget,
-        },
-        replyOperation.ownerSettlement.then(
-          () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
-        ),
-      );
+      const maintenanceRequest = await prepareSessionMaintenanceRequest({
+        prepared: maintenancePrepared,
+        followupRun: createSessionMaintenanceFollowup({
+          run: followupRun.run,
+          sessionEntry: activeSessionEntry,
+          cfg,
+          sessionKey,
+          runtimePolicySessionKey:
+            runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
+          provider: accounting.providerUsed,
+          model: accounting.modelUsed,
+          auth,
+        }),
+        sessionId: activeSessionEntry.sessionId,
+        lifecycleRevision: activeSessionEntry.lifecycleRevision,
+        lifecycleGeneration: replyOperation.lifecycleGeneration,
+        startedAt: replyOperation.startedAtMs,
+        agentHarnessId: meta.agentMeta.agentHarnessId,
+        compactionRequestBudget: current.execution.compactionRequestBudget,
+      });
+      if (maintenanceRequest) {
+        scheduleSessionMaintenance(
+          maintenanceRequest,
+          replyOperation.ownerSettlement.then(
+            () =>
+              replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
+          ),
+        );
+      }
       return { result: reply, accounting };
     },
   );

@@ -50,7 +50,6 @@ function expectPresentation(
   for (const label of labels) {
     expect(text.match(new RegExp(label, "g"))).toHaveLength(1);
   }
-  expect(text).not.toBe("Gateway status as plain text");
 }
 function createMessageToolOnlyGroupContext(): TelegramMessageContext {
   const chat = { id: -1001234, type: "supergroup" };

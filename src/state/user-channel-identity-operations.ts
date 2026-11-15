@@ -2,6 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import {
   executeExistingOpenClawStateRead,
+  isArtifactPreservingStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "./openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
@@ -58,6 +59,18 @@ function unwrapIdentityResult<T>(result: UserChannelIdentityResult<T>, profileId
   }
   result satisfies never;
   throw new Error("Unsupported channel identity result");
+}
+
+/** A presentation lookup: the returned profile ID is not an authority lease. */
+export async function readCanonicalUserChannelIdentityProfileId(
+  identity: UserChannelIdentity,
+  options: IdentityOptions = {},
+): Promise<string | undefined> {
+  const reply = await executeExistingOpenClawStateRead(options, {
+    type: "userProfiles.channelIdentity.resolve",
+    identity,
+  });
+  return reply?.linked?.profileId;
 }
 
 export async function listCanonicalUserChannelIdentities(
@@ -284,6 +297,21 @@ export async function prepareUserProfileRolePolicyAuthority(
           githubLogin: profile.githubLogin ?? null,
         }
       );
+    }
+    if (isArtifactPreservingStateRead("shared", source.path)) {
+      const catalog = await prepareUserProfileCatalog({ ...options, path: source.path });
+      try {
+        const profile = catalog.readCurrentAuthority(profileId);
+        return (
+          profile && {
+            profileId: profile.profileId,
+            role: profile.role,
+            githubLogin: profile.githubLogin ?? null,
+          }
+        );
+      } finally {
+        catalog.release();
+      }
     }
     return runOpenClawStateWorkerOperation(
       context,

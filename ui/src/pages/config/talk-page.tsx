@@ -5,8 +5,10 @@ import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 import type { JSX } from "@solidjs/web";
 import { action, createMemo, createOptimistic, createSignal, onSettled } from "solid-js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { UserFacingError } from "../../lib/format-error.ts";
 import { projectNativeDeviceSettings } from "../../lib/reactive/application-native.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
@@ -19,6 +21,7 @@ import {
   resolveTalkRealtimeSelection,
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
+import { TalkTranscriptionSection } from "./talk-transcription.tsx";
 import {
   effectiveTalkValues,
   Talk,
@@ -29,6 +32,11 @@ import {
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
 type ConfigSnapshot = ApplicationContext["runtimeConfig"]["state"]["configSnapshot"];
+
+/** Gateway messages explain the failure; anything else is not for the reader. */
+function gatewayFailureReason(error: unknown): string | null {
+  return error instanceof GatewayRequestError && error.message ? error.message : null;
+}
 
 function configRevisionToken(snapshot: ConfigSnapshot): string | null {
   return snapshot?.configRevisionHash ?? snapshot?.hash ?? null;
@@ -235,9 +243,13 @@ class VoiceWakeSettingsOwner {
       if (this.connection !== connection) {
         return;
       }
-      throw new Error(t("configPage.deviceTalk.triggerWordsLoadError", { error: String(error) }), {
-        cause: error,
-      });
+      const reason = gatewayFailureReason(error);
+      throw new UserFacingError(
+        reason
+          ? t("configPage.deviceTalk.triggerWordsLoadError", { error: reason })
+          : t("configPage.deviceTalk.triggerWordsLoadFailed"),
+        { cause: error },
+      );
     }
   }
 
@@ -306,8 +318,11 @@ class VoiceWakeSettingsOwner {
           });
         }
       } catch (error) {
-        writeError = new Error(
-          t("configPage.deviceTalk.triggerWordsError", { error: String(error) }),
+        const reason = gatewayFailureReason(error);
+        writeError = new UserFacingError(
+          reason
+            ? t("configPage.deviceTalk.triggerWordsError", { error: reason })
+            : t("configPage.deviceTalk.triggerWordsSaveFailed"),
           { cause: error },
         );
         if (this.connection === connection && this.state.kind === "ready") {
@@ -402,6 +417,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
         providers: result.realtime.providers,
+        transcription: result.transcription,
       };
     })();
     catalogState.read = read;
@@ -634,10 +650,23 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
   };
 }
 
+function transcriptionCatalog(catalog: TalkCatalogState) {
+  return catalog.kind === "ready"
+    ? (catalog.transcription ?? "unavailable")
+    : catalog.kind === "failed"
+      ? { failed: catalog.error }
+      : catalog.kind;
+}
+
 export function TalkSettingsPage(props: TalkSettingsPageProps) {
   const context = useApplication();
   const settings = createTalkSettings(context, props);
   const runtime = projectRuntimeConfig(context.runtimeConfig);
+  const configBusy = () =>
+    props.mutationDisabled ||
+    runtime.read().state.configLoading ||
+    runtime.read().state.configSaving ||
+    runtime.read().state.configApplying;
   const voiceWake = voiceWakeOwner(context.gateway);
   const voiceWakeState = projectOwner(voiceWake, (owner) => owner);
   // Only a new read receipt starts async work; draft and write updates stay synchronous.
@@ -692,15 +721,17 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
         catalog={settings.catalog()}
         catalogScope={settings.catalogScope()}
         modelDefaultPending={settings.modelDefaultResetIntent() !== null}
-        configBusy={
-          props.mutationDisabled ||
-          runtime.read().state.configLoading ||
-          runtime.read().state.configSaving ||
-          runtime.read().state.configApplying
-        }
+        configBusy={configBusy()}
         onProviderChange={(providerId) => settings.changeProvider(providerId)}
         onModelChange={(model) => settings.changeModel(model)}
         onVoiceChange={(voice) => settings.changeVoice(voice)}
+        transcription={(catalog) => (
+          <TalkTranscriptionSection
+            configObject={props.configObject ?? {}}
+            catalog={transcriptionCatalog(catalog())}
+            configBusy={configBusy()}
+          />
+        )}
         editor={props.buildEditor?.()}
       />
     </openclaw-talk-settings>

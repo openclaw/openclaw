@@ -48,7 +48,8 @@ struct ChatAssistantRunGroup: Identifiable {
 
     var answerID: UUID? {
         self.parts.reversed().compactMap { part -> UUID? in
-            if case let .row(.message(message)) = part, message.isCompletedReply { return message.id }
+            if case let .row(.message(message)) = part, message.presentationOwnsFooter,
+               message.isCompletedReply { return message.presentationID }
             return nil
         }.first
     }
@@ -136,6 +137,11 @@ struct ChatAssistantRunGroup: Identifiable {
         }
         return groups
     }
+
+    /// Index of the group that starts the latest turn, or the end when no group starts one.
+    static func latestTurnStart(in groups: [Self]) -> Int {
+        groups.lastIndex { $0.parts.first?.boundaryID != nil } ?? groups.endIndex
+    }
 }
 
 extension ChatTranscriptRow {
@@ -162,9 +168,48 @@ struct ChatAssistantRunFrame<Content: View>: View {
     let assistantAvatarTint: Color?
     let showsAssistantAvatar: Bool
     let isClean: Bool
+    var joinsAbove = false
+    var joinsBelow = false
     @ViewBuilder let content: () -> Content
 
     var body: some View {
+        #if os(iOS)
+        HStack(alignment: .top, spacing: 8) {
+            if self.showsAssistantAvatar {
+                if self.joinsAbove {
+                    ChatAgentAvatar(
+                        text: self.assistantAvatarText,
+                        name: self.assistantName,
+                        tint: self.assistantAvatarTint)
+                        .hidden()
+                        .frame(height: 0)
+                        .clipped()
+                        .accessibilityHidden(true)
+                } else {
+                    ChatAgentAvatar(
+                        text: self.assistantAvatarText,
+                        name: self.assistantName,
+                        tint: self.assistantAvatarTint)
+                        .padding(.top, 5)
+                }
+            }
+            VStack(alignment: .leading, spacing: 8, content: self.content)
+                .environment(\.openClawAssistantRunContent, true)
+                .padding(.horizontal, self.isClean ? 4 : 12)
+                .padding(.top, self.joinsAbove ? 4 : (self.isClean ? 4 : 12))
+                .padding(.bottom, self.joinsBelow ? 4 : (self.isClean ? 4 : 12))
+                .assistantBubbleContainerStyle(
+                    isClean: self.isClean,
+                    joinsAbove: self.joinsAbove,
+                    joinsBelow: self.joinsBelow)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        // Include disclosure and action rows in the container's accessibility bounds.
+        .contentShape(.accessibility, Rectangle())
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("chat-assistant-run")
+        .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        #else
         HStack(alignment: .top, spacing: 8) {
             if self.showsAssistantAvatar {
                 ChatAgentAvatar(
@@ -184,6 +229,7 @@ struct ChatAssistantRunFrame<Content: View>: View {
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat-assistant-run")
         .assistantSpeakerLabel(self.assistantName, avatarHidden: !self.showsAssistantAvatar)
+        #endif
     }
 }
 

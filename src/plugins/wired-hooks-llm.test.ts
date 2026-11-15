@@ -59,9 +59,12 @@ it.each([
       },
       success: false,
       durationMs: 42,
+      modelIterations: 2,
+      skillsUsed: [{ name: "private-skill", source: "workspace", activation: "read" }],
     },
     context,
   );
+  // Skill names are conversation evidence, so private sessions withhold them with the messages.
   expect(agentEnd).toHaveBeenCalledExactlyOnceWith(
     { runId: "run-1", messages: [], success: false, durationMs: 42 },
     context,

@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -25,6 +26,7 @@ function runBackupCli(
   state: OpenClawTestState,
   includeWorkspace = false,
   env: NodeJS.ProcessEnv = {},
+  extraArgs: string[] = [],
 ) {
   return runCliProcessChild({
     nodeArgs: [
@@ -36,6 +38,7 @@ function runBackupCli(
       ...(includeWorkspace ? [] : ["--no-include-workspace"]),
       "--verify",
       "--json",
+      ...extraArgs,
     ],
     env: { ...process.env, ...state.env, ...env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
@@ -190,4 +193,120 @@ it("completes when the SQLite snapshot outlives the audit lease", async () => {
       expect((await fs.stat(state.path("backup.tar.gz"))).size).toBeGreaterThan(0);
     },
   );
+});
+
+it("excludes only registered templates while preserving checkout edits and nested durable owners", async () => {
+  await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    const templates = state.statePath("worktrees/repository/.templates");
+    const template = path.join(templates, "generation");
+    const checkout = state.statePath("worktrees/repository/live");
+    const agentDir = path.join(template, "durable-agent");
+    const credentials = path.join(template, "credentials");
+    const include = path.join(template, "settings.json");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(credentials);
+    await fs.mkdir(path.join(checkout, ".git"), { recursive: true });
+    await fs.writeFile(include, JSON.stringify({ identity: { name: "Kept" } }));
+    await state.writeConfig({
+      agents: { ownership: "explicit", entries: { main: { agentDir, $include: include } } },
+      plugins: { allow: ["codex"], entries: { codex: { enabled: true } } },
+    });
+    const diagnostic = path.join(agentDir, "codex-home/logs_2.sqlite");
+    await fs.mkdir(path.dirname(diagnostic));
+    const kept: Array<[string, string]> = [
+      [path.join(agentDir, "durable.txt"), "agent state"],
+      [diagnostic, "synthetic diagnostic bytes"],
+      [path.join(credentials, "auth.json"), "synthetic credential"],
+      [path.join(checkout, "edited.txt"), "uncommitted edits"],
+      [path.join(checkout, ".git/HEAD"), "ref: refs/heads/work"],
+      [path.join(templates, "operator-note.txt"), "unregistered neighbor"],
+    ];
+    for (const [file, content] of kept) {
+      await fs.writeFile(file, content);
+    }
+    const cache = path.join(template, "build-output.bin");
+    await fs.writeFile(cache, "regenerable cache");
+    const { reserveTemplateAsync } =
+      await import("../../agents/worktrees/template-registry-async.js");
+    await reserveTemplateAsync(
+      state.env,
+      {
+        cacheKey: "backup-template",
+        id: "generation",
+        repoRoot: checkout,
+        commonDir: path.join(checkout, ".git"),
+        worktreeRoot: path.dirname(templates),
+        path: template,
+        backend: "copy",
+        sourceCommit: "synthetic",
+        contentKey: "synthetic",
+        status: "preparing",
+        createdAt: 1,
+        lastUsedAt: 1,
+      },
+      () => {},
+    );
+    await (await import("../../test-utils/database-cleanup.js")).closeStateDatabaseForTest();
+    const env = {
+      OPENCLAW_INCLUDE_ROOTS: template,
+      OPENCLAW_OAUTH_DIR: credentials,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
+    };
+    const { resolveBackupPlanFromDisk } = await import("../../commands/backup-shared.js");
+    await withEnvAsync(env, async () => {
+      const plan = await resolveBackupPlanFromDisk({
+        excludeWorktreeTemplates: true,
+        localCompanion: true,
+      });
+      expect(plan.resources.isIncluded(cache)).toBe(false);
+      expect(plan.resources.isIncluded(diagnostic)).toBe(false);
+      expect(plan.resources.isIncluded(path.join(agentDir, "durable.txt"))).toBe(true);
+      expect(plan.resources.isIncluded(path.join(credentials, "auth.json"))).toBe(true);
+    });
+    // Default remains a full backup; the flag changes only the template owner.
+    const full = await runBackupCli(state, true, env);
+    expect(full.code, full.stderr).toBe(0);
+    expect(
+      (await listArchiveEntries(state.path("backup.tar.gz"))).some((entry) =>
+        entry.endsWith("/generation/build-output.bin"),
+      ),
+    ).toBe(true);
+    const result = await runBackupCli(state, true, env, [
+      "--exclude-worktree-templates",
+      "--output",
+      state.path("lean.tar.gz"),
+    ]);
+    expect(result.code, result.stderr).toBe(0);
+    const archive = JSON.parse(result.stdout);
+    expect(archive).toMatchObject({ excludeWorktreeTemplates: true, verified: true });
+    expect(archive.skipped).toContainEqual(
+      expect.objectContaining({
+        kind: "worktree template",
+        sourcePath: template,
+        reason: "regenerable",
+      }),
+    );
+    const target = state.path("restored");
+    await (
+      await import("../../commands/backup-restore.js")
+    ).backupRestoreCommand(
+      (await import("../../commands/test-runtime-config-helpers.js")).createTestRuntime(),
+      { archive: state.path("lean.tar.gz"), target },
+    );
+    const { buildBackupArchivePath } = await import("../../infra/backup-archive-path-policy.js");
+    const restored = (file: string) =>
+      path.join(target, buildBackupArchivePath(archive.archiveRoot, file));
+    await expect(fs.stat(restored(cache))).rejects.toMatchObject({ code: "ENOENT" });
+    kept.push([include, await fs.readFile(include, "utf8")]);
+    for (const [file, content] of kept) {
+      expect(await fs.readFile(restored(file), "utf8")).toBe(content);
+      expect(await fs.readFile(file, "utf8")).toBe(content);
+    }
+    expect(await fs.readFile(cache, "utf8")).toBe("regenerable cache");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(target, archive.archiveRoot, "manifest.json"), "utf8"),
+    );
+    expect(manifest.options.excludeWorktreeTemplates).toBe(true);
+  });
 });

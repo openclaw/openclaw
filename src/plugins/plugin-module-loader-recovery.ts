@@ -1,3 +1,4 @@
+import type { BundledPluginReloadSource } from "./plugin-bundled-reload.js";
 import type { InspectionNativeEsmRetention, PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import type {
   capturePluginGenerationArtifact,
@@ -19,6 +20,9 @@ export type PluginInstanceModuleLoaderParams = {
   rootDir: string;
   devSourceRoot?: string | null;
   standalone?: boolean;
+  /** Opted-in development reload recaptures this bundled plugin instead of sharing host code. */
+  reloadBundledCode?: boolean;
+  bundledReloadSource?: BundledPluginReloadSource;
   pluginSdkResolution?: PluginSdkResolutionPreference;
   expectedSourceDigest?: string;
   createHostModuleLoader?: () => PluginModuleLoader;
@@ -30,6 +34,11 @@ export type PluginInstanceModuleLoaderParams = {
    */
   inspectionSourceIdentity?: string;
   inspectionRetention?: InspectionNativeEsmRetention;
+  /**
+   * False when no caller can run plugin state operations through this instance, so bundled
+   * operation modules are never captured for it.
+   */
+  stateOperations?: false;
   preparedArtifact?: {
     artifact: PluginGenerationArtifact;
     attachModuleSource: (resolve: (filename: string) => string) => void;
@@ -39,7 +48,7 @@ export type PluginInstanceModuleLoaderParams = {
 type RecoveryLoadFacts = Pick<
   PluginInstanceModuleLoaderParams,
   "origin" | "source" | "devSourceRoot" | "standalone" | "pluginSdkResolution" | "recoverySourceMap"
-> & { sourceDigest?: string };
+> & { sourceDigest?: string; bundledReloadSource?: BundledPluginReloadSource };
 
 function createRecoverySourceMap(
   resolve: PluginRecoverySource["resolve"],
@@ -74,6 +83,8 @@ function createSourceModuleRecovery(
         pluginSdkResolution: facts.pluginSdkResolution,
         recoverySourceMap: createRecoverySourceMap(recovery.resolve, facts.recoverySourceMap),
         nativeRecovery: recovery.native,
+        reloadBundledCode: Boolean(facts.bundledReloadSource),
+        bundledReloadSource: facts.bundledReloadSource,
       });
       instance.sourceDigest = facts.sourceDigest;
     },
@@ -100,6 +111,7 @@ export function preparePluginModuleLoaderRecovery(
     standalone: params.standalone,
     pluginSdkResolution: params.pluginSdkResolution,
     recoverySourceMap: params.recoverySourceMap,
+    bundledReloadSource: params.bundledReloadSource,
   };
   params.instance.bindModuleLoaderRecovery(() =>
     createSourceModuleRecovery(

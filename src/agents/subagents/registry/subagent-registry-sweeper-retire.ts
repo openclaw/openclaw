@@ -4,7 +4,6 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
-import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
 import {
   safeRemoveAttachmentsDir,
   shouldRemoveSubagentAttachments,
@@ -16,6 +15,7 @@ import {
   isSameSubagentRun,
   isSameSubagentRunOwner,
 } from "./subagent-run-generation.js";
+import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
 
 export async function retireSupersededSubagentRun(params: {
   runId: string;
@@ -76,7 +76,7 @@ export async function retireSupersededSubagentRun(params: {
     cleanupEntry &&
     transcriptTarget &&
     !transcriptStillOwned &&
-    !shouldSuppressSubagentRecoverySessionEffects(cleanupEntry)
+    !shouldSuppressSubagentSessionEffects(cleanupEntry)
   ) {
     await removeInternalSessionEffectsSession(transcriptTarget);
     if (!isCurrent()) {

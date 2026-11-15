@@ -381,9 +381,9 @@ describe("built-in session tool role authority", () => {
       });
       try {
         expect(custody?.isCurrent()).toBe(true);
-        // The closed recovery principal owns accepted cross-session delivery independently.
+        // The closed lifecycle principal owns accepted cross-session delivery independently.
         await expect(
-          runtime.recovery.dispatchSessionMethod("chat.history", {
+          runtime.lifecycle.dispatchSessionMethod("chat.history", {
             sessionKey: PARTICIPANT_DRAFT,
           }),
         ).resolves.toMatchObject(draftMessages);

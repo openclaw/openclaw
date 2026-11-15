@@ -4,10 +4,6 @@ import {
   summarizeToolDescriptionText,
 } from "./tool-description-summary.js";
 
-function hasDanglingSurrogate(value: string): boolean {
-  return /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u.test(value);
-}
-
 describe("tool description summaries", () => {
   it.each<[string | Parameters<typeof summarizeToolDescriptionText>[0], string]>([
     ["Search project docs.\nFurther details.", "Search project docs."],
@@ -71,7 +67,6 @@ describe("tool description summaries", () => {
     });
 
     expect(summary).toBe("abcd...");
-    expect(hasDanglingSurrogate(summary)).toBe(false);
   });
 
   it("keeps verbose descriptions UTF-16 safe at truncation boundaries", () => {
@@ -81,7 +76,6 @@ describe("tool description summaries", () => {
     });
 
     expect(description).toBe(`${"a".repeat(316)}...`);
-    expect(hasDanglingSurrogate(description)).toBe(false);
   });
 
   it.each<[string, string]>([

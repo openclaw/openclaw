@@ -97,7 +97,7 @@ describe("statusAllCommand report data", () => {
     ${"different-run"}    | ${"finished"} | ${"ok"}      | ${"1e36e13e-8cbf-4c33-bd2b-03adbd8f7a64"} | ${[runLine, restartLine]}
     ${"same-prose"}       | ${"finished"} | ${"ok"}      | ${null}                                   | ${[runLine, restartLine]}
     ${"generic-sentinel"} | ${"finished"} | ${"restart"} | ${null}                                   | ${[runLine]}
-    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: Last update run failed (post-update-failed) — Gateway is serving 2026.9.2; run `openclaw update` to clear the record."]}
+    ${"failed-healthy"}   | ${"failed"}   | ${null}      | ${null}                                   | ${["Update run: ⚠️ OpenClaw update failed: post-update-failed."]}
   `(
     "keeps current availability alongside $history history without observing config",
     async ({ phase, sentinel, reference, expected }) => {

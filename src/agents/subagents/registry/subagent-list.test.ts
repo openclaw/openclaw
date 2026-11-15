@@ -7,7 +7,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
-import type { SessionEntry } from "../../../config/sessions/types.js";
+import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
@@ -332,7 +332,7 @@ describe("buildSubagentList", () => {
             outputTokens: 1000,
             totalTokens: 197000,
             totalTokensFresh: true,
-            totalTokensVersion: 1,
+            totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
             model: "demo/runtime-model",
           },
         );
@@ -364,7 +364,7 @@ describe("buildSubagentList", () => {
             status: "queued",
             totalTokens: 197000,
           });
-          expect(list.active[0]?.line).toContain("prompt/cache 197k");
+          expect(list.active[0]?.line).toContain("context 197k");
           expect(list.active[0]?.line).toMatch(/tokens 1(\.0)?k \(in 12 \/ out 1(\.0)?k\)/);
           expect(list.active[0]?.line).not.toContain("1k io");
           const unrelatedParses = parse.mock.calls.filter(

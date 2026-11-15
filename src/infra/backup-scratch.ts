@@ -46,7 +46,13 @@ export async function createBackupScratchDirectory(root: string): Promise<Backup
     ) {
       throw new Error("Backup scratch directory identity changed");
     }
-    return { directory, boundary, release: acquireSqliteStagingToken(directory, "create") };
+    // Backup roots have one owner; nested snapshots have their own reader-sharing
+    // tokens. Exclusive creation keeps reclamation out of the retirement handoff.
+    return {
+      directory,
+      boundary,
+      release: acquireSqliteStagingToken(directory, "create", { exclusiveCreate: true }),
+    };
   } catch (error) {
     // Busy or retired tokens belong to reclamation; leave that owner's cleanup intact.
     if (isSqliteLockError(error) || error instanceof SqliteStagingRetiredError) {
@@ -88,13 +94,24 @@ async function wasScratchReclaimed(directory: string): Promise<boolean> {
 
 async function inspectScratchPayload(
   directory: string,
-  layout: "root" | "snapshot" | "verification" | "sqlite" = "root",
+  layout: "root" | "snapshot" | "verification" | "sqlite" | "payload" = "root",
 ): Promise<void> {
   for (const name of await fs.readdir(directory)) {
     const location = path.join(directory, name);
     const item = await fs.lstat(location);
     if (process.getuid && item.uid !== process.getuid()) {
       throw new Error(`Scratch file ownership is unknown: ${location}`);
+    }
+    // The verifier materializes normalized archive paths beneath payload, but
+    // only regular owned files and directories belong to its reclaimable spool.
+    if (layout === "payload" || (layout === "root" && name === "payload")) {
+      if (item.isDirectory()) {
+        await inspectScratchPayload(location, "payload");
+        continue;
+      }
+      if (layout === "payload" && item.isFile()) {
+        continue;
+      }
     }
     if (item.isDirectory()) {
       const nested =
@@ -117,6 +134,7 @@ async function inspectScratchPayload(
       ((layout === "root" &&
         (SQLITE_STAGING_TOKEN_FILES.some((control) => control === name) ||
           /^config-\d+$/u.test(name) ||
+          /^candidate-\d+$/u.test(name) ||
           name === "archive.tar.gz")) ||
         (layout === "sqlite"
           ? /^database\.sqlite(?:-wal|-shm|-journal)?$/u.test(name)

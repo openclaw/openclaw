@@ -173,20 +173,19 @@ describe("resolveMediaToolReferenceAccess", () => {
     }
   });
 
-  it.each(["image_generate", "music_generate"] as const)(
-    "loads a producer-staged bare handle for %s references",
+  it.each(["image_generate", "video_generate", "music_generate"] as const)(
+    "loads staged handles and parameterized inline images for %s references",
     async (toolName) => {
       const root = tempDirs.make("openclaw-media-tool-staged-");
       const stagedPath = "media/inbound/openclaw-staged-proof/input-file_upload.png";
       const fullPath = path.join(root, stagedPath);
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
-      await fs.writeFile(
-        fullPath,
-        Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
-          "base64",
-        ),
+      const imageBytes = Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
+        "base64",
       );
+      await fs.writeFile(fullPath, imageBytes);
+      const dataUrl = `data:image/png;charset=utf-8;base64,${imageBytes.toString("base64")}`;
       const sandbox = resolveMediaToolSandboxConfig(
         {
           root,
@@ -197,7 +196,7 @@ describe("resolveMediaToolReferenceAccess", () => {
       );
 
       const loaded = await loadMediaToolReferences({
-        inputs: ["file_upload"],
+        inputs: ["file_upload", dataUrl],
         toolName,
         expectedKind: "image",
         sandbox,
@@ -208,6 +207,7 @@ describe("resolveMediaToolReferenceAccess", () => {
 
       expect(loaded).toMatchObject([
         { resolvedInput: "file_upload", rewrittenFrom: "file_upload" },
+        { resolvedInput: dataUrl, source: imageBytes },
       ]);
     },
   );

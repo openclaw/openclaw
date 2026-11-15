@@ -47,20 +47,29 @@ describe("Nostr durable cursor", () => {
     expect(write.mock.calls.map(([cursor]) => cursor)).toEqual([1_020]);
   });
 
-  it("keeps retrying a failed safety write until it is durable", async () => {
-    vi.useFakeTimers();
-    const write = vi
-      .fn<(cursor: number) => Promise<void>>()
-      .mockRejectedValueOnce(new Error("state unavailable"))
-      .mockRejectedValueOnce(new Error("state unavailable"))
-      .mockRejectedValueOnce(new Error("state unavailable"))
-      .mockResolvedValue(undefined);
-    const writer = createWriter(write);
-    writer.schedule(1_020);
-    const recovered = expect(writer.flushUntilSuccess()).resolves.toBeUndefined();
-    await vi.runAllTimersAsync();
-    await recovered;
-    expect(write).toHaveBeenCalledTimes(4);
-    expect(write).toHaveBeenLastCalledWith(1_020);
-  });
+  it.for([false, true])(
+    "retries safety writes unless admission is closed (%s)",
+    async (terminal) => {
+      vi.useFakeTimers();
+      const error = new Error("state unavailable", {
+        cause: { code: terminal ? "STATE_DATABASE_READ_ADMISSION_INVALIDATED" : "temporary" },
+      });
+      let failures = 3;
+      const write = vi.fn(async () => {
+        if (failures-- > 0) {
+          throw error;
+        }
+      });
+      const writer = createWriter(write);
+      writer.schedule(1_020);
+      const recovered = writer.flushUntilSuccess().then(
+        () => true,
+        () => false,
+      );
+      await vi.runAllTimersAsync();
+      expect(await recovered).toBe(!terminal);
+      expect(write).toHaveBeenCalledTimes(terminal ? 1 : 4);
+      expect(write).toHaveBeenLastCalledWith(1_020);
+    },
+  );
 });

@@ -12,7 +12,7 @@ const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
 const ACTIVE_MEMORY_OPEN_TAG = "<active_memory_plugin>";
 const ACTIVE_MEMORY_CLOSE_TAG = "</active_memory_plugin>";
 // Historical producer bytes: this companion preceded the marked JSON hint field.
-export const LEGACY_REQUESTER_PROFILE_HINT =
+const LEGACY_REQUESTER_PROFILE_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const INBOUND_METADATA_SENTINELS = [INBOUND_CONTEXT_MARKER, ...MESSAGE_TOOL_DELIVERY_HINTS];
 const METADATA_TOKENS_RE = new RegExp(INBOUND_METADATA_SENTINELS.map(escapeRegExp).join("|"), "g");
@@ -247,7 +247,7 @@ export function stripInboundMetadata(text: string): string {
 }
 
 /** Returns the leading metadata boundary without rewriting any later content. */
-export function readLeadingInboundMetadataEnd(text: string): number {
+function readLeadingInboundMetadataEnd(text: string): number {
   let start = skipEmptyLines(text, 0, false);
   let line = readTextLine(text, start);
   const strippedDeliveryHint = Boolean(line && isMessageToolDeliveryHintLine(line.trimmed));

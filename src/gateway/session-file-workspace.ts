@@ -1,13 +1,26 @@
 import { isDeepStrictEqual } from "node:util";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
+import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "../agents/sandbox/constants.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { resolveSandboxSession } from "../agents/sandbox/session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { readSessionTranscriptAnchorsAsync } from "../config/sessions/session-transcript-anchor-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sessionMutationForbiddenError } from "./session-mutation-authorization-error.js";
-import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
+import {
+  SessionFileWorkspaceChangedError,
+  sessionMutationForbiddenError,
+} from "./session-mutation-authorization-error.js";
+import {
+  isUnscopedSessionHostWorkspace,
+  resolveSessionWorkspaceRoots,
+} from "./session-workspace-roots.js";
+
+export type SessionFileSandboxWorkspace = {
+  hostRoot: string;
+  containerRoot: string;
+  runtimeWorkspaceDir: string;
+};
 
 /** File readers consume sandbox selection without preparing or provisioning its workspace. */
 export async function prepareSessionFileWorkspace(
@@ -40,6 +53,9 @@ export async function prepareSessionFileWorkspace(
     scope: value.sandbox.scope,
     workspaceAccess: value.sandbox.workspaceAccess,
     workspaceRoot: value.sandbox.workspaceRoot,
+    workdir: value.sandbox.docker.workdir,
+    binds: value.sandbox.docker.binds,
+    tmpfs: value.sandbox.docker.tmpfs,
     librarySelections: value.librarySelections,
     worktreeId: value.worktreeId,
   });
@@ -94,6 +110,32 @@ export async function prepareSessionFileWorkspace(
   const expected = structuredClone(selection(selected));
   const expectedCurrent = historical ? structuredClone(selection(policy(cfg, entry))) : expected;
   let roots = selected.roots;
+  const localSandbox = Boolean(
+    roots.root &&
+    !selectedEntry.repositoryWorkspaceId &&
+    !selectedEntry.execNode &&
+    selected.runtime.sandboxed &&
+    (selected.sandbox.backend === "docker" || selected.sandbox.backend === "podman"),
+  );
+  const sandbox =
+    localSandbox && !selectedEntry.worktree?.id
+      ? await resolveSandboxSession({
+          config: cfg,
+          agentId,
+          sessionKey,
+          skillsSnapshot: selectedEntry.skillsSnapshot,
+          preparedRuntimeStatus: selected.runtime,
+        })
+      : null;
+  const layout = sandbox
+    ? resolveSandboxWorkspaceLayoutPaths({
+        cfg: sandbox.cfg,
+        rawSessionKey: sandbox.rawSessionKey,
+        agentId: sandbox.runtime.agentId,
+        isolationSubject: sandbox.runtime.isolationSubject,
+        workspaceDir: roots.diffCwd,
+      })
+    : undefined;
   // Managed projects retain their established checkpoint/publication owner.
   // Explicit ro/rw already admits the selected agent workspace to the sandbox.
   if (
@@ -106,25 +148,7 @@ export async function prepareSessionFileWorkspace(
       ? selected.runtime.workspaceAccess
       : selected.sandbox.workspaceAccess) === "none"
   ) {
-    const local = selected.sandbox.backend === "docker" || selected.sandbox.backend === "podman";
-    const sandbox = local
-      ? await resolveSandboxSession({
-          config: cfg,
-          agentId,
-          sessionKey,
-          skillsSnapshot: entry.skillsSnapshot,
-          preparedRuntimeStatus: selected.runtime,
-        })
-      : null;
-    const root = sandbox
-      ? resolveSandboxWorkspaceLayoutPaths({
-          cfg: sandbox.cfg,
-          rawSessionKey: sandbox.rawSessionKey,
-          agentId: sandbox.runtime.agentId,
-          isolationSubject: sandbox.runtime.isolationSubject,
-          workspaceDir: roots.diffCwd,
-        }).workspaceDir
-      : undefined;
+    const root = layout?.workspaceDir;
     // Private files are admitted, but their Git metadata is not a host checkout grant.
     roots = { ...roots, root, spawnedCwd: undefined, diffCwd: undefined, readScope: "root" };
   }
@@ -133,14 +157,31 @@ export async function prepareSessionFileWorkspace(
       "The original file source is no longer admitted by this conversation's policy.",
     );
   }
+  let sandboxWorkspace: SessionFileSandboxWorkspace | undefined;
+  if (localSandbox && roots.root) {
+    if (selectedEntry.worktree?.id) {
+      // Settlement supplies the private projection backing this canonical root.
+      sandboxWorkspace = {
+        hostRoot: roots.root,
+        containerRoot: selected.sandbox.docker.workdir,
+        runtimeWorkspaceDir: roots.root,
+      };
+    } else if (sandbox && layout) {
+      const readOnlyAgent = sandbox.cfg.workspaceAccess === "ro";
+      sandboxWorkspace = {
+        hostRoot: readOnlyAgent ? layout.agentWorkspaceDir : layout.workspaceDir,
+        containerRoot: readOnlyAgent ? SANDBOX_AGENT_WORKSPACE_MOUNT : sandbox.cfg.docker.workdir,
+        runtimeWorkspaceDir: layout.workspaceDir,
+      };
+    }
+  }
   return {
     ...roots,
+    sandboxWorkspace,
     historical,
-    unscopedHostRoot: Boolean(
-      roots.root &&
-      !selectedEntry.repositoryWorkspaceId &&
-      !selectedEntry.execNode &&
-      (!selected.runtime.sandboxed || Boolean(selectedEntry.worktree?.id)),
+    unscopedHostRoot: isUnscopedSessionHostWorkspace(
+      { cfg, agentId, sessionKey, entry: selectedEntry },
+      { root: roots.root, sandboxed: selected.runtime.sandboxed },
     ),
     assertCurrent(config: OpenClawConfig, current: Partial<InternalSessionEntry>) {
       if (
@@ -149,7 +190,7 @@ export async function prepareSessionFileWorkspace(
         (historical &&
           !isDeepStrictEqual(expected, selection(policy(config, sourceEntry(current)))))
       ) {
-        throw sessionMutationForbiddenError("Session workspace changed during file access");
+        throw new SessionFileWorkspaceChangedError();
       }
     },
   };

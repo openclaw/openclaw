@@ -3,13 +3,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import {
   runInstallPolicy,
-  type InstallPolicyFinding,
   type InstallPolicyOrigin,
   type InstallPolicyRequestKind,
   type InstallPolicySource,
@@ -18,6 +17,7 @@ import { isPathInside } from "../security/scan-paths.js";
 import { getGlobalHookRunner } from "./hook-runner-global.js";
 import type { PluginHookBeforeInstallPlugin, PluginHookBeforeInstallSkill } from "./hook-types.js";
 import { createBeforeInstallHookPayload } from "./install-policy-context.js";
+import { formatInstallPolicyFinding, formatInstallPolicyNotice } from "./install-policy-notice.js";
 import type {
   InstallSecurityScanResult,
   SkillInstallSpecMetadata,
@@ -50,41 +50,6 @@ const INSTALL_POLICY_REVIEW_GUIDANCE = [
 ];
 
 type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
-
-function formatInstallPolicyFinding(finding: InstallPolicyFinding): string {
-  const location = finding.file
-    ? ` (${sanitizeTerminalText(finding.file)}${finding.line ? `:${finding.line}` : ""})`
-    : "";
-  const evidence = finding.evidence ? ` Evidence: ${sanitizeTerminalText(finding.evidence)}` : "";
-  return `[${finding.severity.toUpperCase()}] ${sanitizeTerminalText(finding.ruleId)}: ${sanitizeTerminalText(finding.message)}${location}${evidence}`;
-}
-
-function formatInstallPolicyNotice(params: {
-  decision: "warn" | "block";
-  findings?: InstallPolicyFinding[];
-  guidance?: string[];
-  reason: string;
-  targetName: string;
-  targetType: "skill" | "plugin";
-}): string {
-  const targetLabel = params.targetType === "skill" ? "Skill" : "Plugin";
-  const lines = [
-    params.decision === "warn" ? "Install requires approval" : "Install blocked by policy",
-    "",
-    `  ${targetLabel}: ${sanitizeTerminalText(params.targetName)}`,
-    `  Reason: ${sanitizeTerminalText(params.reason)}`,
-  ];
-  if (params.findings?.length) {
-    lines.push("  Findings:");
-    for (const finding of params.findings) {
-      lines.push(`    • ${formatInstallPolicyFinding(finding)}`);
-    }
-  }
-  if (params.guidance?.length) {
-    lines.push("", ...params.guidance);
-  }
-  return lines.join("\n");
-}
 
 type PackageTraversalLimits = {
   maxDepth: number;
@@ -736,7 +701,7 @@ async function warnPluginRuntimeCompatibility(
     }
   } catch (error) {
     logger.warn?.(
-      `Plugin runtime compatibility inspection incomplete: ${sanitizeTerminalText(formatErrorMessage(error))}. Run openclaw plugins lint --root <plugin-directory> for details.`,
+      terminalText`Plugin runtime compatibility inspection incomplete: ${formatErrorMessage(error)}. Run openclaw plugins lint --root <plugin-directory> for details.`,
     );
   }
 }

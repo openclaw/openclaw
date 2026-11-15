@@ -297,6 +297,19 @@ describe("personal navigation rail", () => {
     expect(artwork.present("svg", ".session-owner-chip")).toEqual([false, false]);
   });
 
+  it("keeps persistent child background work off a shortcut's leading ring", async () => {
+    const { sidebar, append } = await fixture({ sidebarEntries: ["session-rail:agent:main:mine"] });
+    append({
+      key: "agent:main:check",
+      parentSessionKey: "agent:main:mine",
+      backgroundProcessCount: 1,
+    });
+    await sidebar.updateComplete;
+    expect(
+      rail(sidebar, "session-rail:agent:main:mine")!.querySelector(".session-glyph__ring"),
+    ).toBeNull();
+  });
+
   it("keeps a session shortcut's identity with only running and unread decorations", async () => {
     const { sidebar, sessions, publish, dom } = await fixture();
     const key = "agent:main:mine";

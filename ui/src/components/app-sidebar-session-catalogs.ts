@@ -15,31 +15,28 @@ import type {
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey, parseCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
-
-export function catalogSessionRowsByKey(rows: readonly GatewaySessionRow[]) {
-  const byKey = new Map<string, GatewaySessionRow>();
-  for (const row of rows) {
-    if (!byKey.has(row.key)) {
-      byKey.set(row.key, row);
-    }
-  }
-  return byKey;
-}
+import type {
+  SidebarRecentSession,
+  SidebarSessionHovercardRow,
+} from "./app-sidebar-session-types.ts";
 
 export function catalogSessionActivity(
   sessions: readonly SessionCatalogSession[],
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  isRunVisuallyActive: (row: GatewaySessionRow) => boolean,
+  liveRowsByKey: ReadonlyMap<
+    string,
+    Pick<SidebarRecentSession, "unread" | "backgroundProcessCount" | "isRunVisuallyActive">
+  >,
 ) {
-  const rows = sessions.flatMap((session) => {
+  let running = false;
+  let unread = false;
+  for (const session of sessions) {
     const row = session.sessionKey ? liveRowsByKey.get(session.sessionKey) : undefined;
-    return row ? [row] : [];
-  });
-  return {
-    running: rows.some(isRunVisuallyActive),
-    unread: rows.some((row) => row.unread === true),
-  };
+    running ||= row
+      ? row.isRunVisuallyActive === true || (row.backgroundProcessCount ?? 0) > 0
+      : session.status === "active" || session.status === "running";
+    unread ||= row?.unread === true;
+  }
+  return { running, unread };
 }
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
@@ -208,7 +205,6 @@ export type CatalogRowControls = Partial<
 
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
-  catalogMenu: CatalogSessionMenuRequest;
   rowRef?: (
     element: HTMLElement,
     controls: CatalogRowControls,

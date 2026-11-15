@@ -238,7 +238,13 @@ async function execSystemdUserCommand(
             DBUS_SESSION_BUS_ADDRESS: transport.address,
           };
     runServiceInspectionGuard(assertCurrent);
-    const remaining = deadline === undefined ? undefined : Math.ceil(deadline - now());
+    // Stop routing has its own bounded inspection; preserve the unit's full
+    // shutdown allowance for the command after routing and custody checks.
+    const remaining = stopInspection
+      ? timeoutMs
+      : deadline === undefined
+        ? undefined
+        : Math.ceil(deadline - now());
     if (remaining !== undefined && remaining <= 0) {
       return {
         code: 1,

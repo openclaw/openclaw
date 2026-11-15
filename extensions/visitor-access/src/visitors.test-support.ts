@@ -252,11 +252,45 @@ export function visitorFixture(
     loseWriteResponse: false,
     beforeWrite: async () => {},
     afterWrite: () => {},
+    entitlements: [] as unknown[],
+    accountUsers: [] as unknown[],
+    entitlementStatus: 403,
+    usersStatus: 403,
+    failedUsersPage: 0,
   };
   const response = (result: unknown) => Response.json({ success: true, result });
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
     const method = init?.method ?? "GET";
+    const accountPath = "/client/v4/accounts/test-account";
+    if (
+      url.pathname === accountPath + "/entitlements" ||
+      url.pathname === accountPath + "/access/users"
+    ) {
+      assert.equal(method, "GET");
+      const users = url.pathname.endsWith("/users");
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const status = users
+        ? page === cloudflare.failedUsersPage
+          ? 503
+          : cloudflare.usersStatus
+        : cloudflare.entitlementStatus;
+      if (status !== 200) {
+        return new Response("Unavailable", { status });
+      }
+      return users
+        ? Response.json({
+            success: true,
+            result: cloudflare.accountUsers.slice((page - 1) * 100, page * 100),
+            result_info: {
+              page,
+              per_page: 100,
+              total_pages: Math.ceil(cloudflare.accountUsers.length / 100),
+              total_count: cloudflare.accountUsers.length,
+            },
+          })
+        : response(cloudflare.entitlements);
+    }
     const collection = url.pathname === policiesPath;
     const detail = url.pathname === `${policiesPath}/visitors`;
     assert(url.origin === "https://api.cloudflare.com" && url.pathname.startsWith(policiesPath));
@@ -308,7 +342,7 @@ export function visitorFixture(
   const assertCurrent = vi.fn<() => void>();
   const policy = new VisitorPolicyClient(resolved, fetcher, undefined, () => oidcProvider);
   const service = new VisitorAccessService(
-    resolved,
+    () => resolved,
     options.store ?? store,
     policy,
     logger,

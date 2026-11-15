@@ -786,7 +786,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("does not submit when filling completes after the body deadline before its timer runs", async () => {
     fill.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 60_001);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 60_001);
     });
     const request = await startClientAction(typeAndSubmit);
 
@@ -873,7 +873,7 @@ describe("existing-session interaction navigation guard", () => {
 
   it("rejects a condition that finishes after its deadline before the timer runs", async () => {
     withDocument.mockImplementationOnce(async () => {
-      vi.setSystemTime(Date.now() + 251);
+      vi.spyOn(performance, "now").mockReturnValue(performance.now() + 251);
       return true;
     });
     const request = await startClientAction({ kind: "wait", selector: "#ready", timeoutMs: 250 });

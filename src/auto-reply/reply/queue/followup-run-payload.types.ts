@@ -19,10 +19,10 @@ import type { GatewayLocalUserIngress } from "../../../gateway/local-user-ingres
 import type { MediaFact } from "../../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
 import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
-import type { ReplyPayload } from "../../../shared/reply-payload.types.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
 import type {
   GetReplyOptions,
+  QueuedFollowupReplyDelivery,
   QueuedReplyDeliveryCorrelation,
   TurnAdoptionLifecycle,
 } from "../../get-reply-options.types.js";
@@ -44,24 +44,10 @@ type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
 >[0];
 
-export type QueuedFollowupReplyBatch = {
-  kind: "queued-followup";
-  runId: string;
-  originatingChannel: string | undefined;
-  payloads: ReplyPayload[];
-  completion:
-    | { kind: "progress" }
-    | { kind: "completed"; stopReason?: string; allowCanvasOnly?: true }
-    | { kind: "failed"; error: string; stopReason?: string; errorKind?: "timeout" }
-    | { kind: "aborted"; stopReason?: string };
-};
-
-export type QueuedFollowupReplyDelivery = ((
-  batch: QueuedFollowupReplyBatch,
-) => Promise<void> | void) & {
-  ownsCompletion?: (originatingChannel: string | undefined) => boolean;
-  createSourceRetry?: () => QueuedFollowupReplyDelivery;
-};
+export type {
+  QueuedFollowupReplyBatch,
+  QueuedFollowupReplyDelivery,
+} from "../../get-reply-options.types.js";
 
 // Leaf contracts only: get-reply.types.ts imports this module.
 export type FollowupRunPayload = {
@@ -131,8 +117,6 @@ export type FollowupRunPayload = {
   /** Turn-owned tool authority captured before queue ownership transfers. */
   toolsAllow?: string[];
   disableTools?: boolean;
-  forceRestartSafeTools?: boolean;
-  forceCodeModeTools?: boolean;
   /** Force individual drain; never merge this run into a collect batch. */
   disableCollectBatching?: boolean;
   /** Internal Goal nudge; admission must still observe this exact active Goal. */
@@ -175,6 +159,8 @@ export type FollowupRunPayload = {
     scheduledAutomation?: ScheduledSessionAutomation;
     bootstrapContextMode?: GetReplyOptions["bootstrapContextMode"];
     internalEventExecution?: SessionEventExecution;
+    /** Event origin retained after detaching from its occurrence: no channel-turn authority. */
+    sessionEventOrigin?: { deliver?: false };
     agentId: string;
     agentDir: string;
     runtimePolicySessionKey?: string;

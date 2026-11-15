@@ -115,7 +115,7 @@ afterEach(() => {
 });
 
 const unknownAvailability =
-  "GitHub publication account verification is unavailable. Reload and retry, or check gh auth status on the Gateway runtime host. Settings connections are optional; My GitHub is separate.";
+  "Couldn’t verify the publishing account. Reload and try again, or check gh auth status on the computer running OpenClaw. Accounts in Settings are optional; My GitHub is separate.";
 function availability(
   reason: GitHubPublicationOptions["sharedUnavailableReason"],
   message: string | undefined,
@@ -127,19 +127,19 @@ function availability(
 it.each([
   availability(
     "unavailable",
-    "No usable GitHub credential is available in the Gateway environment. Sign in with gh auth login on the Gateway runtime host, or optionally add a connection in Settings → Profile → GitHub connections. My GitHub is separate and optional.",
+    "No GitHub account is available on the computer running OpenClaw. Sign in with gh auth login on the computer running OpenClaw, or add an account in Settings → Profile → GitHub accounts. My GitHub is separate and optional.",
   ),
   availability(
     "rate_limited",
-    "GitHub rate-limited account verification. Wait and retry publication; reconnecting is not needed.",
+    "Couldn’t verify the GitHub account because of a rate limit. Wait and try publishing again; you don’t need to reconnect.",
   ),
   availability(
     "unverified",
-    "GitHub account verification is unavailable. Retry publication or check gh auth status on the Gateway runtime host.",
+    "Couldn’t verify the GitHub account. Try publishing again or check gh auth status on the computer running OpenClaw.",
   ),
   availability(
     "unsupported_workspace",
-    "Publish PR needs a session-owned worktree or repository workspace. Normal agent gh commands still work; reconnecting GitHub will not help.",
+    "Publishing a PR needs a repository workspace owned by this session. Agent gh commands still work; reconnecting GitHub won’t help.",
   ),
   availability(undefined, unknownAvailability),
   availability(undefined, unknownAvailability, {
@@ -239,10 +239,14 @@ it.each(["system-configured", "agent-override", null] as const)(
   },
 );
 
-it.each([false, true])(
-  "offers radio account choices, disambiguating matching logins only: %s",
-  async (sameLogin) => {
-    const shared = { source: "agent-override" as const, accountId: 1, login: "agent-bot" };
+it.each([
+  [false, "agent-override", "Own account"],
+  [true, "agent-override", "Own account"],
+  [true, "system-configured", "Shared agent account"],
+] as const)(
+  "offers radio account choices, disambiguating matching logins only: %s (%s)",
+  async (sameLogin, sharedSource, sourceLabel) => {
+    const shared = { source: sharedSource, accountId: 1, login: "agent-bot" };
     const personal = personalAccount(sameLogin ? shared.login : "alice-tools");
     const onSelect = vi.fn();
     const options = { shared, personal, pendingPersonal: null, latestShared: null };
@@ -266,7 +270,8 @@ it.each([false, true])(
     ]);
     expect(choices[0]?.textContent).toContain("@agent-bot");
     expect(choices[1]?.textContent).toContain(sameLogin ? "@agent-bot" : "@alice-tools");
-    expect(menu?.textContent?.includes("Agent override")).toBe(sameLogin);
+    expect(menu?.textContent?.includes(sourceLabel)).toBe(sameLogin);
+    expect(menu?.textContent).not.toMatch(/System GitHub|Agent override/);
     expect(menu?.textContent?.includes("My GitHub")).toBe(sameLogin);
     expect(menu?.textContent).not.toContain("applies only to this explicit Publish PR action");
     expect(choices[0]?.querySelector(".oc-menu-item__details svg")).not.toBeNull();
@@ -295,21 +300,23 @@ it("warns about the workspace only for a selected or sole personal account", () 
     paint({ options, onSelect, personalReady: false, ...overrides });
   paintPublication({});
   expect(publish()?.disabled).toBe(false);
-  expect(container.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).not.toContain("bring it back to the computer running OpenClaw");
   paintPublication({
     selection: { source: "personal", generation: personal.generation, account: personal.account },
   });
   expect(publish()?.disabled).toBe(true);
-  expect(container.textContent).toContain("reclaim the workspace");
-  expect(query('[role="menu"]')?.textContent).not.toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
+  expect(query('[role="menu"]')?.textContent).not.toContain(
+    "bring it back to the computer running OpenClaw",
+  );
   expect(query(".chat-pr__publication-outcome")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
-    "Wait for work to finish and reclaim the workspace to publish with My GitHub.",
+    "Wait for work to finish and bring it back to the computer running OpenClaw to publish with My GitHub.",
   );
   paintPublication({ options: { ...options, shared: null }, selection: null });
   expect(publish()?.disabled).toBe(true);
   expect(publish()?.textContent?.trim()).toBe("Publish as @alice-tools");
   expect(query('[aria-label="Publication account"]')).toBeNull();
-  expect(container.textContent).toContain("reclaim the workspace");
+  expect(container.textContent).toContain("bring it back to the computer running OpenClaw");
   expect(onSelect).not.toHaveBeenCalled();
 });
 

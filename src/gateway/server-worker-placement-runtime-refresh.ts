@@ -12,6 +12,7 @@ type NodeAvailabilityWait = (
 export function createWorkerRuntimeRefreshWaiter(params: {
   environments: WorkerEnvironmentService;
   isStopping: () => boolean;
+  hasCurrentRunner: (deviceId: string) => boolean;
 }) {
   let waitForNode: NodeAvailabilityWait | undefined;
   const wait: Parameters<
@@ -44,6 +45,13 @@ export function createWorkerRuntimeRefreshWaiter(params: {
       }
     };
     assertWaitingCurrent();
+    if (!params.hasCurrentRunner(environment.nodeDeviceId)) {
+      await params.environments.resumeNode(environment.environmentId, {
+        signal: waitingSignal,
+        assertCurrent: assertWaitingCurrent,
+      });
+      assertWaitingCurrent();
+    }
     await waitForNode(environment.nodeDeviceId, {
       signal: waitingSignal,
       assertCurrent: assertWaitingCurrent,

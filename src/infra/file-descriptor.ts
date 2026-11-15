@@ -3,11 +3,7 @@ import path from "node:path";
 import { openRootFileSync } from "@openclaw/fs-safe/advanced";
 import { sha256FileSync } from "@openclaw/fs-safe/durability";
 
-export {
-  copyFileHandle,
-  overwriteFileHandle,
-  writeFileWindowFully,
-} from "@openclaw/fs-safe/advanced";
+export { copyFileHandle, writeFileWindowFully } from "@openclaw/fs-safe/advanced";
 
 export type FileMutationFingerprint = Pick<
   BigIntStats,

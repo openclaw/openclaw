@@ -83,6 +83,30 @@ const cloudProfile: DraftCloudProfile = {
   machines: [{ id: "fast", label: "Fast" }],
 };
 
+describe("DraftPlaceState agent selection", () => {
+  it("resolves the normalized selected workspace from the current non-system roster", () => {
+    const { state, context } = createRepositoryFixture();
+    const system: GatewayAgentRow = { id: "research", kind: "system", workspace: "/system" };
+    const original: GatewayAgentRow = { id: "Research", workspace: "/research" };
+    const roster = context.agents.state.agentsList!;
+    roster.agents = [system, original];
+    state.applyPendingPlacement({ agentId: " RESEARCH ", profileId: "" });
+
+    expect(state.selectedAgent()).toBe(original);
+    expect(state.workspacePath()).toBe("/research");
+    expect(state.agents()).toEqual([original]);
+
+    const replacement: GatewayAgentRow = { id: "research", workspace: "/new-research" };
+    context.agents.state.agentsList = { ...roster, agents: [system, replacement] };
+    expect(state.selectedAgent()).toBe(replacement);
+    expect(state.workspacePath()).toBe("/new-research");
+
+    context.agents.state.agentsList = { ...roster, agents: [system] };
+    expect(state.selectedAgent()).toBeUndefined();
+    expect(state.workspacePath()).toBe("");
+  });
+});
+
 describe("DraftPlaceState repository selection", () => {
   it.each([
     { source: "registered", redacted: false, current: false, savedWorktree: false },

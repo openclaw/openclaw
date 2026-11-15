@@ -1,6 +1,10 @@
-import { resolveAgentRunAbortLifecycleFields } from "../agents/run-termination.js";
+import {
+  isUserInitiatedAgentRunAbortReason,
+  resolveAgentRunAbortLifecycleFields,
+} from "../agents/run-termination.js";
 
 export type ChatAbortDiagnosticReason =
+  | "user-stop"
   | "rpc"
   | "stop"
   | "timeout"
@@ -16,6 +20,9 @@ export function resolveChatAbortDiagnosticReason(
   signal: AbortSignal,
   entry?: { abortDiagnosticReason?: ChatAbortDiagnosticReason; abortStopReason?: string },
 ): ChatAbortDiagnosticReason {
+  if (isUserInitiatedAgentRunAbortReason(signal.reason)) {
+    return "user-stop";
+  }
   if (entry?.abortDiagnosticReason) {
     return entry.abortDiagnosticReason;
   }

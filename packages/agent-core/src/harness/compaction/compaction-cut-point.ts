@@ -11,7 +11,7 @@ import {
 } from "../session/tool-result-pairing.js";
 import type { SessionTreeEntry } from "../types.js";
 import {
-  formatPersistedSenderSuffix,
+  formatCompactionUserLabel,
   getCompactionContent,
   stringifyCompactionValue,
 } from "./utils.js";
@@ -64,8 +64,8 @@ export function estimateTokens(message: AgentMessage): number {
     }
     case "user": {
       chars = countContentChars(message.content);
-      // serializeConversation projects this exact persisted-sender suffix.
-      chars += estimateStringChars(formatPersistedSenderSuffix(message));
+      // User text is the baseline; charge the exact added source and sender label.
+      chars += estimateStringChars(formatCompactionUserLabel(message)) - "User".length;
       break;
     }
     case "custom":
@@ -121,8 +121,11 @@ export function findTurnStartIndex(
 }
 
 export interface CompactionRetentionConstraints {
-  /** An admitted, unprocessed user remains intact even before its budget is prepared. */
-  preserveFromEntryId?: string;
+  /** Identifies the active request and whether its unprocessed entry must remain verbatim. */
+  requestBoundary?: {
+    entryId: string;
+    preserve: boolean;
+  };
   /** Automatic callers supply the remaining foreground budget and its message estimator. */
   budget?: {
     maxTokens: number;
@@ -206,7 +209,11 @@ export function findCutPoint(
   for (let i = startIndex; i < endIndex; i++) {
     const entry = entries[i];
     const message = entry ? getMessageFromEntryForCompaction(entry) : undefined;
-    if (entry && entry.id === constraints?.preserveFromEntryId) {
+    if (
+      entry &&
+      constraints?.requestBoundary?.preserve &&
+      entry.id === constraints.requestBoundary.entryId
+    ) {
       lastAllowedCut = i;
     }
     if (message && isCutPointMessage(message)) {
@@ -278,6 +285,13 @@ export function findCutPoint(
     }
     cutIndex = fittingCut;
   }
+  // Decide the split from the selected message, before retaining the metadata in front of it:
+  // a bootstrap marker before a user message must not make the previous turn a split-turn prefix.
+  const cutEntry = entries[cutIndex];
+  if (!cutEntry) {
+    throw new Error("compaction cut point does not reference a session entry");
+  }
+  const startsTurn = isTurnStartEntry(cutEntry);
   while (cutIndex > startIndex) {
     const prevEntry = entries[cutIndex - 1];
     if (!prevEntry) {
@@ -292,11 +306,6 @@ export function findCutPoint(
     }
     cutIndex--;
   }
-  const cutEntry = entries[cutIndex];
-  if (!cutEntry) {
-    throw new Error("compaction cut point does not reference a session entry");
-  }
-  const startsTurn = isTurnStartEntry(cutEntry);
   const turnStartIndex = startsTurn ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
 
   return {

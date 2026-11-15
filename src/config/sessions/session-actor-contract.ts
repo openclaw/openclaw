@@ -1,7 +1,5 @@
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActivitySummary } from "./activity-summary.js";
-import type { RestartRecoveryTerminalDeliveryClaim } from "./restart-recovery-receipt-state.js";
-import type { HarnessCompletionRecovery } from "./restart-recovery-types.js";
 import type { ConversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import type { SessionActorDeliveryEvidence } from "./session-actor-delivery-evidence.types.js";
@@ -20,10 +18,7 @@ import type {
   SessionActorStorageWrites,
 } from "./session-actor-storage-contract.js";
 import type { SessionEntryMetadataReceipt } from "./session-entry-metadata-receipt.js";
-import type {
-  SessionEntryBookkeepingReducer,
-  SessionEntryPatchOperation,
-} from "./session-entry-patch-operation.js";
+import type { SessionEntryBookkeepingReducer } from "./session-entry-patch-operation.js";
 import type {
   InitialSessionEntryCommit,
   SessionMetadataOperations,
@@ -44,6 +39,7 @@ import type {
   SessionTranscriptTurnLifecyclePatch,
 } from "./session-transcript-turn-lifecycle.types.js";
 import type { SessionTurnCommitted, SessionTurnPlan } from "./session-turn.types.js";
+import type { AgentToolUsageAppend } from "./tool-usage.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -87,6 +83,8 @@ export type SessionActorAppend = (
   header?: SessionMetadataOperations["session.metadata.append"]["input"];
   /** Final prompt text joins its runtime-context carrier at the same durable point. */
   modelPromptProjection?: { anchor: TranscriptEntryAnchor; text: string };
+  /** Tool-only mutations share this append's transaction and final authority grant. */
+  toolUsage?: AgentToolUsageAppend;
 };
 
 /** The original snapshot preserves canonical adopted IDs, parents, bytes, and versions. */
@@ -101,6 +99,7 @@ export type SessionActorAppendCommitted = (
     }
 ) & {
   initialEntry?: InitialSessionEntryCommit;
+  toolUsageGeneration?: number;
   header?: SessionMetadataOperations["session.metadata.append"]["output"];
   modelPromptProjection?: {
     result: NonNullable<SessionMessageRewriteCommitted["result"]> & {
@@ -112,13 +111,6 @@ export type SessionActorAppendCommitted = (
   };
 };
 
-export type SessionActorInputRecovery = {
-  /** Compare source fields and membership against this transaction's current state. */
-  sources: SessionSourcePredicate[];
-  expectedRunId: string;
-  harnessCompletion?: HarnessCompletionRecovery;
-};
-
 export type SessionActorPendingFinalDelivery = NonNullable<SessionEntry["pendingFinalDelivery"]> & {
   intentId: string;
   deliveries: NonNullable<NonNullable<SessionEntry["pendingFinalDelivery"]>["deliveries"]>;
@@ -128,7 +120,6 @@ export type SessionActorPhaseInputs = {
   acceptInput: {
     expectedState: SessionTranscriptTurnExpectedState;
     lifecycle: SessionTranscriptTurnLifecyclePatch;
-    recovery?: SessionActorInputRecovery;
   } & (
     | {
         pending: Extract<PendingInputMutation, { kind: "stage" }>;
@@ -183,33 +174,12 @@ export type SessionActorPhaseInputs = {
     completion?: Extract<PendingInputMutation, { kind: "complete" }>;
     /** Exact delivery intent and payload IDs join terminal accounting in this commit. */
     pendingFinalDelivery?: SessionActorPendingFinalDelivery;
-    restartClaimCleanup?: Extract<SessionEntryPatchOperation, { kind: "restart-claim-clear" }>;
     activitySummary?: SessionActivitySummary;
   };
-  deliveryPending:
-    | {
-        sessionId: string;
-        expectedState: SessionTranscriptTurnExpectedState;
-        lifecycle: SessionTranscriptTurnLifecyclePatch & {
-          restartRecoveryDeliveryReceiptState: "terminal-pending";
-        };
-        claim?: never;
-      }
-    | { claim: RestartRecoveryTerminalDeliveryClaim; updatedAt: number };
-  deliverySettled:
-    | {
-        settlement: PendingFinalDeliverySettlementInput;
-        evidence?: SessionActorDeliveryEvidence;
-        restart?: never;
-      }
-    | {
-        settlement?: never;
-        restart: {
-          claim: RestartRecoveryTerminalDeliveryClaim;
-          outcome: "confirmed" | "not-sent";
-          updatedAt: number;
-        };
-      };
+  deliverySettled: {
+    settlement: PendingFinalDeliverySettlementInput;
+    evidence?: SessionActorDeliveryEvidence;
+  };
   patch: { reducers: readonly SessionActorReducer[] };
 };
 
@@ -229,19 +199,7 @@ export type SessionActorPhaseResults = {
     | { anchor?: TranscriptEntryAnchor; projectionNeedsReconcile?: boolean }
     | SessionActorAppendCommitted;
   completeTurn: SessionTurnCommitted | { kind: "bookkeeping" };
-  deliveryPending:
-    | undefined
-    | {
-        disposition:
-          | "started"
-          | "already-delivered"
-          | "delivery-ambiguous"
-          | "stale"
-          | "not-applicable";
-      };
-  deliverySettled:
-    | { state: PendingFinalDeliverySettlementInput["state"] | "stale"; wakeRecovery: boolean }
-    | { disposition: "recorded" | "cleared" | "stale" };
+  deliverySettled: { state: PendingFinalDeliverySettlementInput["state"] | "stale" };
   patch: undefined;
 };
 

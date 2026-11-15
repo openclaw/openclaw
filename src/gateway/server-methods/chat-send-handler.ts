@@ -73,10 +73,10 @@ export async function handleTrustedInternalChatSend(
     ChatSendInternalOptions,
     | "transcript"
     | "toolsAllow"
+    | "deferWorkspaceBootstrap"
     | "prepareAssistantTranscriptMessage"
     | "beforeDispatch"
     | "stageCreatedInput"
-    | "restartResume"
   >,
 ): Promise<void> {
   await handleChatSendWithOptions(options, onAdmissionOwned, undefined, {

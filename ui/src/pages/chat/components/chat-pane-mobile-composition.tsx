@@ -29,7 +29,7 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { companionClearAction } from "../chat-panel-header-actions.tsx";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
-import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
+import { ChatHeaderSessionMenu, type HeaderMenuVersions } from "./chat-header-session-menu.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileChrome } from "./chat-pane-mobile-chrome.runtime.tsx";
 import {
@@ -47,7 +47,6 @@ export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
   project?: Element;
   details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
-  notice: Element;
   fallback: (
     sessionMenu: Element,
     machineName: () => string | undefined,
@@ -386,8 +385,10 @@ export function ChatPaneMobileComposition(props: {
   // Desktop View keeps only session-pane closure; panel controls belong to their frames.
   const desktopViewActions = () =>
     layoutModel().actions.filter((action) => action.id === "close-pane");
-  const desktopSessionActions = (): HeaderMenuSessionAction[] => [
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+  const desktopSessionActions = (
+    native = props.header.sessionMenuAction?.sessionActions ?? [],
+  ): HeaderMenuSessionAction[] => [
+    ...native,
     ...(!props.header.mergedChrome
       ? layoutModel().actions.flatMap((action) =>
           action.id === "open-split-view" && action.kind !== "status" ? [action] : [],
@@ -428,7 +429,7 @@ export function ChatPaneMobileComposition(props: {
         ]
       : [],
   );
-  const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
+  const nativeActions = (native: HeaderMenuSessionAction[]): HeaderMenuSessionAction[] => [
     ...compactHeaderActions(),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
@@ -441,7 +442,7 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-    ...(props.header.sessionMenuAction?.sessionActions ?? []),
+    ...native,
     ...(machine()?.showPlacementMenu
       ? [
           {
@@ -478,7 +479,7 @@ export function ChatPaneMobileComposition(props: {
           },
         ]
       : []),
-  ]);
+  ];
   const adaptMenuPage = (page: HeaderSessionMenuPage): MobileHostDestination => ({
     area: "details",
     transient: true,
@@ -506,21 +507,31 @@ export function ChatPaneMobileComposition(props: {
   // One native menu also serves desktop/native-command callers. Its page roots
   // outlive the placement of the trigger in either header.
   const sessionCommandsAvailable = () =>
-    mobile()
-      ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
-      : props.header.gatewayStatus?.kind !== "offline" &&
-        props.header.gatewayStatus?.kind !== "reconnecting";
+    !mobile() ||
+    !props.header.gatewayStatus?.kind ||
+    props.header.gatewayStatus.kind === "connected";
   // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
   const sessionMenuAction = () =>
     sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
+  // Desktop versions live in the session menu; mobile lists them in Details.
+  const versions = createMemo((): HeaderMenuVersions | undefined =>
+    mobile() ||
+    props.header.catalog ||
+    !(props.header.hasVersions ?? props.header.branches.length > 1)
+      ? undefined
+      : {
+          branches: props.header.branches,
+          disabledReason: props.header.branchSwitchDisabledReason,
+          onSelect: props.header.onBranchSelect,
+        },
+  );
   const sessionMenu = (
     <Show
       when={
         mobile() ||
-        (sessionCommandsAvailable() &&
-          (props.header.sessionMenuAction ||
-            (!props.header.actionsDisabled &&
-              (desktopSessionActions().length > 0 || desktopViewActions().length > 0))))
+        props.header.sessionMenuAction ||
+        (!props.header.actionsDisabled &&
+          (desktopSessionActions().length > 0 || desktopViewActions().length > 0))
       }
     >
       <span>
@@ -528,14 +539,15 @@ export function ChatPaneMobileComposition(props: {
           ref={elementRef(registerActionsMenu)}
           {...sessionMenuAction()}
           paneTitle={sessionMenuAction() ? undefined : props.header.title}
-          sessionActions={
+          composeSessionActions={(native) =>
             mobile()
               ? sessionCommandsAvailable()
-                ? nativeActions()
+                ? nativeActions(native)
                 : compactHeaderActions()
-              : desktopSessionActions()
+              : desktopSessionActions(native)
           }
           viewActions={mobile() ? layoutActions() : desktopViewActions()}
+          versions={versions()}
           viewContent={
             mobile() ? (
               <ChatPaneLayoutHeaderActions
@@ -554,7 +566,8 @@ export function ChatPaneMobileComposition(props: {
             } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
               props.header.onSplitDown(props.header.paneId);
             } else {
-              sessionMenuAction()?.onAction(action);
+              const handler = sessionMenuAction()?.onAction;
+              return handler ? handler(action) : false;
             }
           }}
           mobile={mobile() || sessionMenuAction()?.mobile}
@@ -572,7 +585,6 @@ export function ChatPaneMobileComposition(props: {
       header={props.header}
       project={props.project}
       details={details}
-      notice={props.notice}
       sessionMenu={sessionMenu}
       mobile={mobile()}
       presented={presented()}

@@ -29,16 +29,11 @@ const fixture = vi.hoisted(() => ({
 vi.mock("./git.js", () => ({
   requireGit: async (_cwd: string, args: string[]) =>
     args.includes("--git-common-dir") ? fixture.common : "sha1",
+  requireGitPath: async () => fixture.common,
   runGit: fixture.run,
   runGitBytes: fixture.run,
   runGitBuffered: fixture.run,
   commandError: () => new Error("Git failed"),
-}));
-// mock-isolation: path conversion/spawning are separate from the real junction/copy proof.
-vi.mock("../../infra/git-exec.js", () => ({
-  normalizeGitPathForFilesystem: (value: string) => value,
-  gitNullConfigPath: () => "NUL",
-  requireGitCommandOutput: () => "",
 }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 

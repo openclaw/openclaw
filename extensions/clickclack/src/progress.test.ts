@@ -1,3 +1,4 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createClickClackAgentProgressPublisher,
@@ -49,6 +50,20 @@ function blockedTransport() {
 describe("ClickClack native agent progress", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("publishes prepared tool context from the activity producer", async () => {
+    const { publisher, frames } = createPublisher();
+    publisher.onItemEvent(
+      projectAgentToolActivity({
+        toolCallId: "read-report",
+        name: "read",
+        phase: "start",
+        args: { path: "/tmp/report.txt" },
+      }),
+    );
+    await publisher.finalize();
+    expect(frames()[1]).toMatchObject({ line: { text: "Read: from /tmp/report.txt" } });
+  });
+
   it("uses the formatter's prepared text without trimming it again", async () => {
     const { publisher, frames } = createPublisher();
     const renderedText = "Read: prepared-progress-sentinel";
@@ -77,6 +92,7 @@ describe("ClickClack native agent progress", () => {
       kind: "tool",
       name: "server.exec",
       meta: "echo private-sentinel",
+      title: "echo private-sentinel",
       commandBearing: true,
     };
     publisher.onItemEvent({ ...tool, progressText: "Searching", status: "running" });

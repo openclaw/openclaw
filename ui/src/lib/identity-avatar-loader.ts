@@ -1,5 +1,9 @@
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
-import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import {
+  AVATAR_MAX_BYTES,
+  isAvatarImageMimeType,
+  isRenderableAvatarImageDataUrl,
+} from "../../../src/shared/avatar-limits.js";
 import { getSafeLocalStorage } from "../local-storage.ts";
 import {
   fetchGatewayContextResource,
@@ -26,6 +30,16 @@ type CachedIdentityAvatar = {
 const identityAvatarCache = new Map<string, CachedIdentityAvatar>();
 let identityAvatarGeneration = 0;
 let knownAvatarUrls: Set<string> | undefined;
+let pendingAvatarTurn: Promise<void> | undefined;
+
+function nextAvatarTurn(): Promise<void> {
+  return (pendingAvatarTurn ??= new Promise<void>((resolve) => {
+    setTimeout(() => {
+      pendingAvatarTurn = undefined;
+      resolve();
+    }, 0);
+  }));
+}
 
 function knownAvatarStorageKey(): string | null {
   const { origin, resourceBasePath, storageScope } = readAvatarGatewayContext();
@@ -149,9 +163,7 @@ function loadIdentityAvatar(
     try {
       // Cold images must not start all authenticated fetches inside the row
       // construction task. Cached images still resolve synchronously above.
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await nextAvatarTurn();
       if (identityAvatarCache.get(url) !== entry) {
         return null;
       }
@@ -215,6 +227,37 @@ export function resolveAvatarImageUrl(
     trusted,
     !authTokens.length && origin !== null && origin === globalThis.location?.origin,
   );
+}
+
+/** Resolve known display sources without admitting a new authenticated fetch. */
+export function readCachedAvatarImageUrl(value: string): string | null {
+  if (isRenderableAvatarImageDataUrl(value)) {
+    return value;
+  }
+  if (value.startsWith("blob:")) {
+    for (const entry of identityAvatarCache.values()) {
+      if (entry.blobUrl === value) {
+        return value;
+      }
+    }
+    return null;
+  }
+  const { authTokens, origin, resourceBasePath, storageScope } = readAvatarGatewayContext();
+  const trusted = resolveTrustedAvatarUrl(value, origin, resourceBasePath);
+  if (!trusted) {
+    return null;
+  }
+  const cached = identityAvatarCache.get(trusted);
+  if (cached) {
+    return cached.retryAt === undefined ? cached.blobUrl : null;
+  }
+  return !authTokens.length &&
+    origin !== null &&
+    origin === globalThis.location?.origin &&
+    storageScope &&
+    readKnownAvatarUrls().has(trusted)
+    ? trusted
+    : null;
 }
 
 /** A previously good direct image can disappear; share that miss with later views. */

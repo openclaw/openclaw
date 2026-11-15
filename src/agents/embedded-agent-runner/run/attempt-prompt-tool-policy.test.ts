@@ -57,13 +57,14 @@ function createPolicyFixture(
 function expectSurface(
   result: ReturnType<typeof createPromptBuildToolPolicy>["current"],
   names: string[],
+  callableNames: string[],
 ) {
-  const tools = named(...names);
   expect(result).toMatchObject({
     activeToolNames: names,
-    effectiveTools: tools,
-    uncompactedEffectiveTools: tools,
-    tools,
+    effectiveTools: named(...names),
+    callableToolNames: callableNames,
+    uncompactedEffectiveTools: named(...callableNames),
+    tools: named(...callableNames),
   });
 }
 
@@ -118,10 +119,10 @@ it.each([
     const catalogRef = catalog(tools);
     const { session, policy } = createPolicyFixture(active, tools, catalogRef, force);
     const result = policy.apply(allow);
-    expectSurface(result, expected);
+    expectSurface(result, active, expected);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(expected);
-    expect(session.getActiveToolNames()).toEqual(expected);
-    expect(finalize(result.activeToolNames)).toBe(
+    expect(session.getActiveToolNames()).toEqual(active);
+    expect(finalize(result.callableToolNames)).toBe(
       `cron:${expected.some((name) => name === "message")}`,
     );
   },

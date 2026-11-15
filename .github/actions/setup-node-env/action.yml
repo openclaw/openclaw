@@ -11,6 +11,10 @@ inputs:
     description: Prepare Linux kernel memory containment for lint, compiler and tooling tests.
     required: false
     default: "false"
+  native-secret-service:
+    description: Install Linux binaries for the selected task-private native OAuth fixture.
+    required: false
+    default: "false"
   install-bun:
     description: Whether to install Bun alongside Node.
     required: false
@@ -39,6 +43,10 @@ inputs:
     description: Whether to restore content-validated compiled Vitest workers on Linux.
     required: false
     default: "false"
+  vitest-worker-preset:
+    description: Compiled worker archive hint (full, runtime, or tooling); runtime validation remains authoritative.
+    required: false
+    default: full
   restore-test-caches:
     description: Whether to restore the Vitest transform and test-scope Node compile caches together.
     required: false
@@ -90,6 +98,9 @@ outputs:
   vitest-worker-cache-key:
     description: Immutable compiled Vitest worker cache key for the protected warmer.
     value: ${{ steps.vitest-worker-cache.outputs.cache-primary-key }}
+  vitest-worker-cache-prefix:
+    description: Protected worker archive namespace shared by the preset publishers.
+    value: ${{ steps.vitest-worker-cache-meta.outputs.prefix }}
   node-compile-cache-key:
     description: Exact Node compile cache key.
     value: ${{ steps.node-compile-cache.outputs.cache-primary-key }}
@@ -111,6 +122,11 @@ runs:
             exit 2
             ;;
         esac
+
+    - name: Prepare Git capabilities
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_ACTION_PATH/ensure-git.sh"
 
     - name: Prepare semantic check containment
       if: runner.os == 'Linux' && inputs.semantic-checks == 'true'
@@ -157,6 +173,21 @@ runs:
             test "$(cat "/sys/fs/cgroup$group/memory.swap.max")" = 0
             test "$(cat "/sys/fs/cgroup$group/memory.oom.group")" = 1
           '
+
+    - name: Prepare native Secret Service fixture binaries
+      if: runner.os == 'Linux' && inputs.native-secret-service == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v dbus-daemon >/dev/null && command -v gnome-keyring-daemon >/dev/null && command -v gdbus >/dev/null; then
+          exit 0
+        fi
+        sudo -n apt-get update
+        sudo -n apt-get install -y --no-install-recommends dbus gnome-keyring libglib2.0-bin
+        # Fixtures start their own bus and keyring; setup never opens a user credential store.
+        command -v dbus-daemon
+        command -v gnome-keyring-daemon
+        command -v gdbus
 
     - name: Normalize container toolcache
       shell: bash
@@ -264,7 +295,9 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
-        echo "value=${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '**/package.json', '**/tsconfig*.json', '**/vitest*.config.*', 'test/vitest/**', 'src/state/*.sql', '!test/vitest/vitest.database-worker-core-paths.mjs', '!test/vitest/vitest.extension-database-workers-paths.mjs', '!test/vitest/vitest.ui-e2e.config.ts', '!test/vitest/vitest.unit-fast-paths.mjs', '!**/node_modules/**', '!.ci-harness/**') }}" >> "$GITHUB_OUTPUT"
+        set -euo pipefail
+        generation="$(node "$GITHUB_ACTION_PATH/transform-fingerprint.mjs")"
+        echo "value=$generation" >> "$GITHUB_OUTPUT"
 
     - name: Restore exact dependency cache
       id: dependency-cache
@@ -311,11 +344,11 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-vitest-fs-cache
-        # v4 seeds config-owned leaves shared by single and mixed-config jobs.
-        key: ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: .cache/openclaw-vitest-fs-cache
+        # v5 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-fs-v4-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
+          ${{ github.repository }}-vitest-fs-v5-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ steps.vitest-cache-generation.outputs.value }}-
 
     - name: Configure Vitest transform cache
       if: inputs.cache-mode != 'off' && (inputs.vitest-fs-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
@@ -329,7 +362,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-vitest-fs-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-vitest-fs-cache"
         generation_file="$cache_root/.openclaw-transform-generation"
         mkdir -p "$cache_root"
         cache_generation=""
@@ -362,19 +395,19 @@ runs:
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: /var/tmp/openclaw-node-compile-cache
+        path: .cache/openclaw-node-compile-cache
         # The warmer compiles build tools and test orchestration into one seed.
-        # Retain its existing namespace so readers can reuse published archives.
-        key: ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        # v4 uses workspace-relative archive members across runner layouts.
+        key: ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-node-compile-v3-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
+          ${{ github.repository }}-node-compile-v4-test-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ inputs.node-version }}-
 
     - name: Configure Node compile cache
       if: inputs.cache-mode != 'off' && (inputs.node-compile-cache == 'true' || inputs.restore-test-caches == 'true') && runner.os != 'Windows'
       shell: bash
       run: |
         set -euo pipefail
-        cache_root=/var/tmp/openclaw-node-compile-cache
+        cache_root="$GITHUB_WORKSPACE/.cache/openclaw-node-compile-cache"
         mkdir -p "$cache_root"
         echo "NODE_COMPILE_CACHE=$cache_root" >> "$GITHUB_ENV"
         echo "NODE_COMPILE_CACHE_PORTABLE=1" >> "$GITHUB_ENV"
@@ -422,16 +455,32 @@ runs:
         FROZEN_LOCKFILE: ${{ inputs.frozen-lockfile }}
       run: bash "$GITHUB_ACTION_PATH/install-dependencies.sh"
 
+    - name: Resolve compiled worker archive
+      id: vitest-worker-cache-meta
+      if: inputs.cache-mode != 'off' && inputs.vitest-worker-cache == 'true' && runner.os == 'Linux'
+      shell: bash
+      env:
+        PRESET: ${{ inputs.vitest-worker-preset }}
+        PREFIX: ${{ github.repository }}-vitest-workers-v2-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}
+      run: |
+        case "$PRESET" in
+          runtime|tooling) slot="run-cache-$PRESET-0" ;;
+          *) PRESET=full; slot=run-cache-0 ;;
+        esac
+        echo "prefix=$PREFIX" >> "$GITHUB_OUTPUT"
+        echo "preset=$PRESET" >> "$GITHUB_OUTPUT"
+        echo "path=.artifacts/vitest-worker-cache/$slot" >> "$GITHUB_OUTPUT"
+
     - name: Restore compiled Vitest workers
       id: vitest-worker-cache
       if: inputs.cache-mode != 'off' && inputs.vitest-worker-cache == 'true' && runner.os == 'Linux'
       continue-on-error: true
       uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        path: .artifacts/vitest-worker-cache
-        key: ${{ github.repository }}-vitest-workers-v1-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ steps.vitest-worker-cache-meta.outputs.path }}
+        key: ${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-${{ github.run_id }}-${{ github.run_attempt }}
         restore-keys: |
-          ${{ github.repository }}-vitest-workers-v1-protected-${{ runner.os }}-${{ runner.arch }}-node-${{ steps.setup-node.outputs.resolved-version }}-
+          ${{ steps.vitest-worker-cache-meta.outputs.prefix }}-${{ steps.vitest-worker-cache-meta.outputs.preset }}-
 
     - name: Enable restored Vitest workers
       if: inputs.cache-mode != 'off' && inputs.vitest-worker-cache == 'true' && runner.os == 'Linux' && steps.vitest-worker-cache.outputs.cache-matched-key != ''

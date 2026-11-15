@@ -84,10 +84,13 @@ suite.define(() => {
         await page.goto(url.href);
         await waitForControlUiGatewayReady(page);
         const card = await expandProvider(page, "fixture");
-        await card.getByRole("button", { name: "Set API key" }).click();
+        await card.getByRole("button", { name: "Replace API key: Fixture", exact: true }).click();
         await card.getByLabel("API key", { exact: true }).fill(key);
         await card.getByRole("button", { name: "Save", exact: true }).click();
-        await expect.poll(() => card.textContent()).toContain("Secret saved.");
+        // The fixture provider is unreachable, so the save-time check can't finish.
+        await expect
+          .poll(() => card.textContent(), { timeout: 45_000 })
+          .toContain("API key saved, but the check didn’t finish.");
         const saved = await persistedAuth();
         expect(saved.profiles["fixture:manual"]).toMatchObject({
           type: "api_key",

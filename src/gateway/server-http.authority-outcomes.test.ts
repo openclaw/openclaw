@@ -19,7 +19,10 @@ import {
   captureHttpRequestAuthority,
   runGatewayHttpRequest,
 } from "./http-request-authority.js";
-import { GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE } from "./operator-access-policy.js";
+import {
+  GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE,
+  GatewayOperatorAccessUnavailableError,
+} from "./operator-access-policy.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -284,10 +287,13 @@ it.each([
   ["core", "role boundary enabled"],
   ["core", "role scope revoked"],
   ["core", "operator revoked"],
+  ["core", "operator unavailable"],
   ["core", "unexpected"],
   ["core", "unexpected abort"],
   ["plugin", "stream client expired"],
   ["plugin", "stream operator revoked"],
+  ["plugin", "operator unavailable"],
+  ["plugin", "stream operator unavailable"],
   ["plugin", "unexpected"],
   ["plugin", "unexpected abort"],
 ])("Gateway HTTP %s owns %s after awaited request work", async (surface, outcome) => {
@@ -295,6 +301,7 @@ it.each([
   const release = createRelease();
   const streaming = createDeferred();
   const operator = new AbortController();
+  let unavailable = false;
   let auth: ResolvedGatewayAuth = { mode: "token", token: "before", allowTailscale: false };
   const roleConfig = (writable: boolean): OpenClawConfig => ({
     gateway: {
@@ -320,7 +327,13 @@ it.each([
       ? [401, "Unauthorized", "unauthorized"]
       : outcome === "operator revoked"
         ? [403, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, "forbidden"]
-        : [500, "Internal Server Error", ""];
+        : outcome.endsWith("operator unavailable")
+          ? [
+              503,
+              "Gateway access policy is unavailable. The operation may have completed; check its status before retrying.",
+              "service_unavailable",
+            ]
+          : [500, "Internal Server Error", ""];
   const unexpectedError =
     outcome === "unexpected abort"
       ? new DOMException("Unrelated upstream cancellation", "AbortError")
@@ -330,7 +343,12 @@ it.each([
       {
         operatorAccessAuthority: {
           signal: operator.signal,
-          assertCurrent: () => operator.signal.throwIfAborted(),
+          assertCurrent: () => {
+            operator.signal.throwIfAborted();
+            if (unavailable) {
+              throw new GatewayOperatorAccessUnavailableError();
+            }
+          },
         },
       },
       res,
@@ -412,6 +430,8 @@ it.each([
     auth = { ...auth, token: "after" };
   } else if (outcome.endsWith("operator revoked")) {
     operator.abort();
+  } else if (outcome.endsWith("operator unavailable")) {
+    unavailable = true;
   } else if (outcome.startsWith("role ")) {
     config = roleConfig(false);
   }
@@ -423,9 +443,15 @@ it.each([
   } else if (!closed) {
     expect(received).toEqual({
       status,
-      body: unexpected ? message : JSON.stringify({ error: { message, type } }),
+      body: unexpected
+        ? message
+        : JSON.stringify({
+            error: { message, type, ...(unavailable ? { retryable: false } : {}) },
+          }),
     });
-    expect(statusMessage).toBe(type === "forbidden" ? "Forbidden" : message);
+    expect(statusMessage).toBe(
+      unavailable ? "Service Unavailable" : type === "forbidden" ? "Forbidden" : message,
+    );
     expect(responseHeaders?.["content-type"]).toBe(
       unexpected ? "text/plain; charset=utf-8" : "application/json; charset=utf-8",
     );
@@ -439,5 +465,8 @@ it.each([
     expect(responseHeaders?.["cache-control"]).toBe("no-store");
     expect(responseHeaders?.["access-control-allow-origin"]).toBe("https://example.test");
     expect(responseHeaders?.["x-content-type-options"]).toBe("nosniff");
+  }
+  if (unavailable) {
+    expect(operator.signal.aborted).toBe(false);
   }
 });

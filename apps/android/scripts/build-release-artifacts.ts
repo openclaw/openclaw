@@ -22,7 +22,6 @@ import {
   syncAndroidVersioning,
   resolveAndroidBuildVersion,
 } from "../../../scripts/lib/android-version.ts";
-import { renderMobileReleaseNotes } from "../../../scripts/lib/mobile-release-notes.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -32,7 +31,7 @@ type ReleaseArtifact = {
 };
 
 type CliOptions = {
-  artifact: "all" | ReleaseArtifact["flavorName"];
+  artifact: "all" | "store" | ReleaseArtifact["flavorName"];
   dryRun: boolean;
   verifyApk?: string;
 };
@@ -161,8 +160,14 @@ function parseArgs(argv: string[]): CliOptions {
     switch (arg) {
       case "--artifact": {
         const value = argv[index + 1];
-        if (value !== "all" && value !== "play" && value !== "wear" && value !== "third-party") {
-          throw new Error("--artifact must be one of: all, play, wear, third-party");
+        if (
+          value !== "all" &&
+          value !== "store" &&
+          value !== "play" &&
+          value !== "wear" &&
+          value !== "third-party"
+        ) {
+          throw new Error("--artifact must be one of: all, store, play, wear, third-party");
         }
         artifact = value;
         index += 1;
@@ -185,9 +190,10 @@ function parseArgs(argv: string[]): CliOptions {
       case "--help": {
         console.log(
           [
-            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|play|wear|third-party] [--dry-run] [--verify-apk PATH]",
+            "Usage: bun apps/android/scripts/build-release-artifacts.ts [--artifact all|store|play|wear|third-party] [--dry-run] [--verify-apk PATH]",
             "",
             "Builds the signed phone, Wear, and third-party Android artifacts.",
+            "--artifact store builds the phone and Wear AABs together.",
           ].join("\n"),
         );
         process.exit(0);
@@ -369,22 +375,15 @@ function main() {
   }
 
   const version = resolveAndroidBuildVersion(rootDir);
-  if (process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
-    for (const audience of ["phone", "wear"] as const) {
-      renderMobileReleaseNotes({
-        rootDir,
-        platform: "android",
-        version: version.canonicalVersion,
-        build: String(version.versionCode),
-        audience,
-      });
-    }
-  } else {
+  if (!process.env.OPENCLAW_ANDROID_RELEASE_PLAN) {
     syncAndroidVersioning({ mode: "check", rootDir });
   }
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(
-    (artifact) => options.artifact === "all" || artifact.flavorName === options.artifact,
+    (artifact) =>
+      options.artifact === "all" ||
+      (options.artifact === "store" && artifact.kind === "aab") ||
+      artifact.flavorName === options.artifact,
   );
 
   console.log(`Android versionName: ${version.canonicalVersion}`);

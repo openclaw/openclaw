@@ -32,6 +32,9 @@ spend limits, and backend failover without changing OpenClaw config.
       --litellm-api-key "$LITELLM_API_KEY" --custom-base-url "https://litellm.example/v1"
     ```
 
+    The URL must be a full `http://` or `https://` URL. Non-interactive setup reports an invalid
+    proxy URL and exits with status 1 without saving credentials or configuration.
+
   </Tab>
 
   <Tab title="Manual setup">
@@ -111,6 +114,11 @@ Interactive setup records the selected model in both merge and replace modes whi
 authored provider models. Non-interactive setup with an explicit proxy URL leaves the model list
 available for discovery in merge mode; replace mode keeps its documented default. Run
 `openclaw models list --provider litellm --refresh --json` to refresh the proxy's model list.
+
+Chat model choices include the models the proxy lists with `mode: "chat"`, which LiteLLM sets
+from its model map or from `model_info.mode` in the proxy config, and `claude-opus-4-6`. Models
+listed with another mode or without one stay out of chat choices; set `model_info.mode: chat` on
+a chat deployment the proxy lists without a mode.
 
 Re-running authentication also combines case-variant provider keys, such as `LiteLLM` and `litellm`,
 into one canonical row while preserving authored provider options and model settings, including when

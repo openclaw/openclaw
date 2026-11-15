@@ -57,7 +57,19 @@ export function createPriorCiFixtureState(head: string) {
     event: "workflow_dispatch",
     branch: "topic",
     workflowPath: ".github/workflows/ci.yml",
+    artifactBuild: false,
+    artifactFault: "",
     missingCheck: "",
+    currentGateChecks: [] as Array<{
+      id: number;
+      suiteId?: number;
+      event: string;
+      conclusion: string | null;
+      status?: string;
+      publisherId?: number;
+      name?: string;
+      startedAt?: string;
+    }>,
     reviewDecision: "APPROVED" as string | null | undefined,
     reviewCount: 1,
     requireCodeOwners: false,
@@ -65,9 +77,12 @@ export function createPriorCiFixtureState(head: string) {
     requireThreads: false,
     resolved: true,
     membership: "admin",
+    membershipReads: 0,
+    revokeMembershipAfterReads: 0,
     rulesetBypass: undefined as string | undefined,
     rulesetReads: 0,
     revokeRulesetAfterRead: false,
+    revokeRulesetAfterReads: 1,
     revokeAdminOnMainFetch: false,
     unsupportedNoLazy: false,
     localOnlyFailureOid: "",
@@ -150,7 +165,7 @@ const securityResponse=()=>{
     path:config.fault==="foreign-workflow"?".github/workflows/unrelated.yml":".github/workflows/security-review.yml"};
   const reply=(value)=>out(args.includes("--include")?"HTTP/2.0 200 OK\n\n"+JSON.stringify(value):args.includes("--slurp")?[value]:value);
   if(endpoint.includes("/statuses?")) {
-    config.statusReads++;save();
+    config.statusReads++;
     const statuses=securityStatuses();
     const earlier={...statuses.find(status=>status.context==="openclaw/security-sensitive-review"),id:701,context:"openclaw/security-sensitive-review",state:"failure",created_at:"2026-09-19T00:00:00Z",updated_at:"2026-09-19T00:00:00Z"};
     reply(config.fault==="missing-guard"?statuses:[...statuses,earlier]);
@@ -160,7 +175,7 @@ const securityResponse=()=>{
     reply({total_count:statuses.length,sha:s.pr.headRefOid,state,statuses});
   } else if(endpoint.startsWith("repos/fixture/repo/actions/runs/901")&&endpoint.includes("/jobs?")) {
     const headName="review (123, "+s.pr.headRefOid+")";
-    const attemptName="review (123, "+s.pr.headRefOid+", "+(config.fault==="wrong-ci-run"?502:501)+", "+(config.fault==="wrong-ci-attempt"?3:2)+")";
+    const attemptName="review (123, "+s.pr.headRefOid+", "+(config.fault==="wrong-ci-run"?503:s.priorCi.artifactBuild?502:501)+", "+(config.fault==="wrong-ci-attempt"?3:2)+")";
     const jobs=[{id:902,run_id:901,head_sha:source,name:config.fault==="head-only-enforcement"?headName:attemptName,status:"completed",conclusion:"success",
       steps:config.fault==="missing-enforcement"?[]:[{name:"Enforce security review",status:"completed",conclusion:"success",started_at:"2026-09-20T00:00:00Z",completed_at:"2026-09-20T00:01:00Z"}]}];
     if(config.fault==="duplicate-enforcement") jobs.push({...jobs[0],id:903,name:headName});
@@ -333,5 +348,39 @@ export function createPriorCiCandidateFactory(
     return { ...f, base: main, evidence, artifact };
   }
 
-  return { candidate, preExistingCandidate };
+  function artifactBuildCandidate() {
+    const f = preExistingCandidate();
+    const state = f.state();
+    Object.assign(state.priorCi, {
+      artifactBuild: true,
+      runConclusion: "failure",
+      workflowPath: ".github/workflows/ci-build-artifacts-testbox.yml",
+    });
+    state.gates = "pass";
+    state.priorCi.security.combinedState = "success";
+    state.priorCi.security.publisherEvent = "workflow_dispatch";
+    state.priorCi.jobs = ["build-artifacts", "admission"].map((name, index) => ({
+      id: 601 + index,
+      name,
+      status: "completed",
+      conclusion: index === 0 ? "failure" : "skipped",
+      run_id: 501,
+      head_sha: f.head,
+      check_run_url: `https://api.github.com/repos/fixture/repo/check-runs/${601 + index}`,
+    }));
+    f.save(state);
+    const { aggregate: _aggregate, cancellation: _cancellation, ...attribution } = f.evidence;
+    const evidence = {
+      ...attribution,
+      primaryCi: { runId: 502, runAttempt: 2 },
+      failures: f.evidence.failures.map((failure) => ({
+        ...failure,
+        sourcePaths: [...failure.sourcePaths, ".github/workflows/ci-build-artifacts-testbox.yml"],
+      })),
+    };
+    writeFileSync(f.path, JSON.stringify(evidence));
+    return { ...f, evidence };
+  }
+
+  return { candidate, preExistingCandidate, artifactBuildCandidate };
 }

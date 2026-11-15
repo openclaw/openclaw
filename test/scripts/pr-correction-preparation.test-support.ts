@@ -1,9 +1,39 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { validReview, writeReviewArtifacts } from "./pr-review-artifact-fixture.js";
 
 const scripts = join(process.cwd(), "scripts");
+
+export function createCapturedHashProbe(root: string, write = false) {
+  const scratch = join(root, ".local/tmp");
+  mkdirSync(scratch, { recursive: true });
+  const git = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
+  const probe = join(root, ".local/git-probe");
+  const calls = join(root, ".local/hash-probe-calls");
+  const args = ["hash-object", "--no-filters", ...(write ? ["-w"] : []), "--stdin"];
+  writeFileSync(
+    probe,
+    `#!/usr/bin/env python3
+import os,sys,stat,fcntl
+args=sys.argv[1:]
+if args == ${JSON.stringify(args)}:
+ s=os.fstat(0)
+ assert stat.S_ISREG(s.st_mode), 'snapshot stdin must be a regular file'
+ assert s.st_nlink == 0, 'snapshot pathname still linked'
+ assert stat.S_IMODE(s.st_mode) == 0o600, 'snapshot is not private'
+ assert fcntl.fcntl(0,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY, 'snapshot is writable'
+ assert os.lseek(0,0,os.SEEK_CUR) == 0, 'snapshot offset is not zero'
+ assert not any(n.startswith('openclaw-pr-hash-') for n in os.listdir(os.environ['TMPDIR'])), 'snapshot directory retained at dispatch'
+ with open(${JSON.stringify(calls)},'a') as record: record.write(str(s.st_size)+'\\n')
+ if os.environ.get('MUTATE_ORIGINAL'): open('.local/correction-review.json','wb').write(b'changed after capture')
+ if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
+os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
+`,
+  );
+  chmodSync(probe, 0o700);
+  return { scratch, calls, env: { TMPDIR: scratch, OPENCLAW_PR_GIT: probe } };
+}
 
 export function reviewWithFinding(head: string, area: string, id = "I1") {
   const review = validReview(head);

@@ -15,6 +15,8 @@ import { discoverConfigSecretTargetsByIds } from "../secrets/target-registry.js"
 import { listDefaultAgentDatabasePaths } from "../state/agent-database-path-discovery.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry-listing.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { resolveMemoryRebuildConcurrency } from "./doctor-database-port-memory-concurrency.js";
 
 type MemoryRebuildTarget = { agentId: string; path: string };
 type MemoryRebuildResult = MemoryRebuildTarget & {
@@ -79,8 +81,8 @@ export async function rebuildPortedAgentMemory(params: {
         const agents = listAgentEntriesWithSource(config);
         const targetIds = getMemoryEmbeddingCommandSecretTargetIds(config);
         const secretTargets = discoverConfigSecretTargetsByIds(config, targetIds);
-        const results: MemoryRebuildResult[] = [];
-        for (const target of targets) {
+        // Each agent owns its store and reindex lock; the rest never wait on a slow peer.
+        const rebuild = async (target: MemoryRebuildTarget): Promise<MemoryRebuildResult> => {
           if (
             !configured.has(target.agentId) ||
             path.resolve(target.path) !==
@@ -89,13 +91,10 @@ export async function rebuildPortedAgentMemory(params: {
                 env,
               })
           ) {
-            results.push(
-              failed(
-                target,
-                "Retained store needs its original agent configuration before rebuilding.",
-              ),
+            return failed(
+              target,
+              "Retained store needs its original agent configuration before rebuilding.",
             );
-            continue;
           }
           const started = performance.now();
           try {
@@ -129,8 +128,7 @@ export async function rebuildPortedAgentMemory(params: {
               inspectSources: true,
             });
             if (!manager) {
-              results.push(failed(target, "The selected memory plugin is unavailable."));
-              continue;
+              return failed(target, "The selected memory plugin is unavailable.");
             }
             let outcome: MemoryRebuildResult;
             try {
@@ -168,15 +166,22 @@ export async function rebuildPortedAgentMemory(params: {
                 };
               }
             }
-            results.push(outcome);
+            return outcome;
           } catch {
             // Provider errors can contain credentials or source text; return only recovery guidance.
-            results.push(
-              failed(target, "Memory rebuild failed after the database port completed."),
-            );
+            return failed(target, "Memory rebuild failed after the database port completed.");
           }
-        }
-        return results;
+        };
+        const { results } = await runTasksWithConcurrency({
+          tasks: targets.map((target) => () => rebuild(target)),
+          limit: resolveMemoryRebuildConcurrency(),
+        });
+        // An unexpected throw fails only its own agent, never the peers that rebuilt.
+        return targets.map(
+          (target, index) =>
+            results[index] ??
+            failed(target, "Memory rebuild failed after the database port completed."),
+        );
       },
     });
   } catch {

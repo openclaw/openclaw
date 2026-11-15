@@ -143,6 +143,7 @@ const CONCEPT_STOP_WORDS = new Set([
   "einen",
   "einer",
   "für",
+  "ich",
   "im",
   "in",
   "mit",

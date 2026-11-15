@@ -1,6 +1,6 @@
 /**
- * Owner-only tools on a scheduled run whose owner bit comes from a requester.
- * The run's tools are built once, so each call rechecks that requester before
+ * Owner-only tools whose eligibility comes from a retained requester or operator.
+ * A run's tools are built once, so each call rechecks that authority before
  * the tool runs, and the call's Gateway caller carries the same check as a
  * receipt fence: every dispatch and commit inside the call rechecks it, so a
  * requester revoked while the tool awaits is refused before the effect.
@@ -21,7 +21,10 @@ function isGuardedOwnerTool(tool: AnyAgentTool): boolean {
   return OWNER_ONLY_TOOLS.has(tool.name) && !isAutomationsToolName(tool.name);
 }
 
-function guardOwnerTool<T extends AnyAgentTool>(tool: T, assertOwnerCurrent: () => void): T {
+export function guardOwnerTool<T extends AnyAgentTool>(tool: T, assertOwnerCurrent: () => void): T {
+  if (!isGuardedOwnerTool(tool)) {
+    return tool;
+  }
   const run = async <R>(operation: () => Promise<R>): Promise<R> => {
     assertOwnerCurrent();
     const caller = getGatewayToolCallerIdentity();
@@ -56,7 +59,5 @@ export function guardScheduledOwnerOnlyTools(
   if (!assertOwnerCurrent) {
     return tools;
   }
-  return tools.map((tool) =>
-    isGuardedOwnerTool(tool) ? guardOwnerTool(tool, assertOwnerCurrent) : tool,
-  );
+  return tools.map((tool) => guardOwnerTool(tool, assertOwnerCurrent));
 }

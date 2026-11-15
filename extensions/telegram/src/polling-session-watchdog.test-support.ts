@@ -1,5 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { vi } from "vitest";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { expect, it, vi, type Mock } from "vitest";
+import type { TelegramPollingSession } from "./polling-session.js";
 
 const POLLING_TEST_WATCHDOG_INTERVAL_MS = 30_000;
 const watchdogClock = vi.hoisted((): { now: number | undefined } => ({ now: undefined }));
@@ -84,4 +87,140 @@ export function installPollingStallWatchdogHarness() {
       watchdogClock.now = undefined;
     },
   };
+}
+
+type SessionOptions = ConstructorParameters<typeof TelegramPollingSession>[0];
+
+export function registerPollingStallRestartTests({
+  createPollingSession,
+  createTelegramBotMock,
+  makeIsolatedBot,
+  sleepWithAbortMock,
+}: {
+  createPollingSession: (
+    params: Pick<SessionOptions, "abortSignal" | "ingress"> & Partial<SessionOptions>,
+  ) => TelegramPollingSession;
+  createTelegramBotMock: Mock;
+  makeIsolatedBot: () => unknown;
+  sleepWithAbortMock: Mock;
+}) {
+  it.each(["same", "different"] as const)(
+    "restarts isolated ingress when worker liveness stalls with a %s transport",
+    async (replacementKind) => {
+      const abort = new AbortController();
+      const log = vi.fn();
+      const setStatus = vi.fn<(patch: Omit<ChannelAccountSnapshot, "accountId">) => void>();
+      using now = vi.spyOn(Date, "now").mockReturnValue(1_000_000);
+      const backoff = createDeferred<void>();
+      sleepWithAbortMock.mockImplementationOnce(() => backoff.promise);
+      const transport = {
+        fetch: globalThis.fetch,
+        sourceFetch: globalThis.fetch,
+        close: vi.fn(async (): Promise<void> => undefined),
+      };
+      const replacement =
+        replacementKind === "same"
+          ? transport
+          : { ...transport, close: vi.fn(async (): Promise<void> => undefined) };
+      const releaseClose = createDeferred<void>();
+      replacement.close.mockImplementation(async () => await releaseClose.promise);
+      const createTelegramTransport = vi.fn(() => replacement);
+      createTelegramBotMock.mockReturnValue(makeIsolatedBot());
+
+      const { promise: firstWorkerTask, resolve: firstWorkerDone } = createDeferred<void>();
+      const firstWorkerStop = vi.fn(async () => {
+        firstWorkerDone?.();
+      });
+      let workerCycle = 0;
+      const createWorker = vi.fn(() => {
+        workerCycle += 1;
+        if (workerCycle === 1) {
+          return {
+            stop: firstWorkerStop,
+            task: vi.fn(async () => {
+              await firstWorkerTask;
+            }),
+          };
+        }
+        return {
+          stop: vi.fn(async () => undefined),
+          task: vi.fn(async () => {
+            expect(replacement.close).not.toHaveBeenCalled();
+            abort.abort();
+          }),
+        };
+      });
+      const watchdogHarness = installPollingStallWatchdogHarness();
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+        log,
+        setStatus,
+        telegramTransport: transport,
+        createTelegramTransport,
+        stallThresholdMs: 30_000,
+        ingress: {
+          createWorker,
+          drainIntervalMs: 500,
+        },
+      });
+
+      let runPromise: Promise<void> | undefined;
+      try {
+        let stopped = false;
+        runPromise = session.runUntilAbort().then(() => {
+          stopped = true;
+        });
+        const watchdog = await watchdogHarness.waitForWatchdog();
+        watchdogHarness.setNow(31_000);
+        watchdog?.();
+
+        const disconnect = setStatus.mock.calls.at(-1)?.[0]?.lastDisconnect;
+        expect(disconnect).toEqual({
+          at: 1_000_000,
+          error: expect.stringContaining("Polling stall"),
+        });
+        now.mockReturnValue(1_090_000);
+        await vi.waitFor(() => expect(firstWorkerStop).toHaveBeenCalledTimes(1), { interval: 1 });
+        await vi.waitFor(() => expect(sleepWithAbortMock).toHaveBeenCalledOnce(), { interval: 1 });
+        expect(setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
+          connected: false,
+          lifecycle: "recovering",
+          lastDisconnect: disconnect,
+        });
+        backoff.resolve();
+        await vi.waitFor(() => expect(createWorker).toHaveBeenCalledTimes(2), { interval: 1 });
+        await vi.waitFor(() => expect(replacement.close).toHaveBeenCalledOnce(), { interval: 1 });
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(stopped).toBe(false);
+        releaseClose.resolve();
+        await runPromise;
+        expect(createTelegramBotMock).toHaveBeenCalledTimes(2);
+        expect(createTelegramBotMock.mock.calls.at(0)?.[0]?.telegramTransport).toBe(transport);
+        expect(createTelegramBotMock.mock.calls.at(1)?.[0]?.telegramTransport).toBe(replacement);
+        expect(transport.close).toHaveBeenCalledOnce();
+        expect(replacement.close).toHaveBeenCalledOnce();
+        expect(setStatus).toHaveBeenCalledWith(
+          expect.objectContaining({ lifecycle: "recovering" }),
+        );
+
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Polling stall detected"));
+        expect(log).toHaveBeenCalledWith(
+          expect.stringContaining(
+            "isolated polling ingress finished reason=polling stall detected",
+          ),
+        );
+        expect(log).not.toHaveBeenCalledWith(
+          expect.stringContaining("Isolated polling ingress stop timed out"),
+        );
+      } finally {
+        backoff.resolve();
+        releaseClose.resolve();
+        watchdogHarness.restore();
+        abort.abort();
+        await runPromise;
+      }
+    },
+  );
 }

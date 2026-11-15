@@ -18,6 +18,14 @@ When an agent schema needs an upgrade, Doctor defers legacy session-entry
 inspection until its stopped-writer schema repair finishes. This applies to
 PostgreSQL as well as SQLite.
 
+Before rewriting stored auth profiles, Doctor saves a verified backup of the
+owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
+an exact export directory with its matching anchor and original credential rows.
+Doctor checks the captured credentials and rotation state against its migration
+plan before rewriting either store. Keep the reported backup for recovery.
+This repair runs in the candidate Doctor during an update; the installed updater
+needs no change.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its
@@ -32,6 +40,11 @@ headers. Already imported events succeed without duplication; a verified missing
 suffix can be appended. Matching stores finish archival with the original bytes
 preserved. Genuine content conflicts retain the affected store and its originals;
 Doctor displays the blocking finding and records archive validation as failed.
+
+Retained session recovery prepares archive mappings once per verification phase,
+including when the legacy index is already archived. Source files are still
+rechecked after asynchronous verification. Interrupted-run manifests remain
+available as recovery evidence; you do not need to delete them before retrying.
 
 Session-key repair treats paths that resolve to the same physical database as one
 store, including case variants on case-insensitive filesystems. For example, an
@@ -411,11 +424,26 @@ Stop OpenClaw processes and back up both databases named in the warning before r
 For the retired QMD memory backend, including config rewrites and derived
 workspace cleanup, see [Migrating from QMD](/concepts/memory-builtin#migrating-from-qmd).
 
+Doctor also reclaims legacy memory reindex shadows named `<database>.tmp-<uuid>`
+and their SQLite companions once the primary has been archived as `.migrated`
+and no primary or primary companion remains. Every file in the shadow family
+must be a regular file at least 24 hours old. Doctor previews eligible files and
+declares them for migration backups. Every cleanup path also reports each file
+to standard error before removing it, including automatic Doctor migrations
+without a backup capture. Failed removals produce recoverable warnings.
+Live indexes, current `.memory-reindex-<uuid>` shadows,
+configured import sources (including aliases), and unresolved legacy recovery
+files remain untouched. Newly archived indexes
+become eligible on the next Doctor run. This repair runs in candidate Doctor;
+the installed updater needs no new protocol.
+
 This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop the Gateway before repair. Doctor imports valid credentials into `<state-dir>/state/openclaw.sqlite`, preserves an existing SQLite session when both stores exist, drops the obsolete persisted OAuth `state` value, and uses its receipt to prevent a recreated stale file from resurrecting logged-out credentials. Retired `.lock` sidecars block the import: if Doctor reports a stale owner, verify that no older OpenClaw process is running, remove that sidecar, and rerun Doctor.
 
 After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime schema readiness for existing configured, default-layout, and registered databases before reporting completion, including stores whose migration failed before registration. A blocked required migration exits nonzero; stop the Gateway and other OpenClaw processes, then rerun repair. Unrelated advisory warnings, including archived transcript repair failures, do not make a ready database fail this check. Missing databases are not created by the readiness check.
 
 Doctor also discovers retired setup state and interrupted migration claims in every resolved agent workspace, active sandbox workspace, and explicitly configured `agents.defaults.workspace` root. That shared root is included even when an explicit multi-agent roster uses only its subdirectories. Doctor imports `<workspace>/openclaw-workspace-state.json` through the existing migration; it does not assign the root to an agent or move persona and memory files.
+
+Gateway startup and config reloads refuse while a configured workspace still has any of these sources. Sandboxed code can write inside its sandbox workspace, so for a sandbox workspace only a state-directory attestation blocks the Gateway. A setup file inside the sandbox copy never blocks the Gateway. If it exists when that sandbox is first prepared in a Gateway process, that sandbox's turns refuse until `openclaw doctor --fix` repairs it; a file written later takes effect when the Gateway process next starts. An in-process restart keeps the earlier result.
 
 Doctor no longer scans, imports, or removes the older
 `<workspace>/.openclaw/workspace-state.json` layout. Its files remain untouched. Upgrade

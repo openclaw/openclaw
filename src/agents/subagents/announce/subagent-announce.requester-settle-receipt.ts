@@ -14,14 +14,14 @@ export function createRequesterSettleReceiptAdmission(params: {
   storeSessionKey: string;
   storeAgentId?: string;
   storePaths(): readonly (string | null | undefined)[];
-  isRecoveryCurrent(): boolean;
+  isSourceCurrent(): boolean;
   readCurrent(): SessionEntryCurrentFacts | undefined;
   isStoreCurrent(): boolean;
 }) {
   const isEntryCurrent = (entry: SessionEntryCurrentFacts | undefined) =>
     entry?.sessionId === params.identity.sessionId &&
     entry.lifecycleRevision === params.identity.lifecycleRevision &&
-    params.isRecoveryCurrent();
+    params.isSourceCurrent();
   const admission: GatewayToolCallerReceiptAdmission = {
     async prepare() {
       const storeCurrent = captureSystemEventStoreCurrentCheck(
@@ -99,28 +99,5 @@ export function createRequesterSettleReceiptAdmission(params: {
     },
     isStoreCurrent: () =>
       evaluateGatewayToolCallerReceiptAdmission(admission, () => params.isStoreCurrent()),
-    async appendRecoveryWaitNotice(idempotencyKey: string, isSourceCurrent: () => boolean) {
-      const assertCurrent = () => {
-        if (!isSourceCurrent()) {
-          throw new Error("Requester completion source changed before recovery notice.");
-        }
-      };
-      assertCurrent();
-      const { appendAssistantMessageToSessionTranscript } =
-        await import("../../../config/sessions/transcript.js");
-      const notice = await appendAssistantMessageToSessionTranscript({
-        agentId: params.requester.agentId,
-        sessionKey: params.requester.canonicalKey,
-        storePath: params.requester.storePath,
-        expectedSessionId: params.identity.sessionId,
-        expectedLifecycleRevision: params.identity.lifecycleRevision,
-        idempotencyKey,
-        text: "A child task finished while this session was waiting for restart recovery. Its result is saved. Use Resume in WebChat to continue in this session.",
-        assertCurrent,
-      });
-      if (!notice.ok) {
-        throw new Error(`Could not record pending child completion: ${notice.reason}`);
-      }
-    },
   });
 }

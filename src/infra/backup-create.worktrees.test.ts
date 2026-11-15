@@ -5,10 +5,10 @@ import { withWorktreeAllocationLease } from "../agents/worktrees/allocation.js";
 import { reservePendingWorktree } from "../agents/worktrees/pending-slots.js";
 import { insertRegistryWorktree } from "../agents/worktrees/registry.js";
 import { makeWorktreeRecord } from "../agents/worktrees/service.test-support.js";
-import { buildBackupArchivePath } from "../commands/backup-shared.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { buildBackupArchivePath } from "./backup-archive-path-policy.js";
 import {
   backupCase,
   createOwnedSqliteDatabase,

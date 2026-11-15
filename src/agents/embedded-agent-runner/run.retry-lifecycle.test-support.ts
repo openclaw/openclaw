@@ -297,8 +297,8 @@ describe("direct embedded retry lifecycle", () => {
       const { buildEmbeddedRunPayloads } =
         await vi.importActual<typeof import("./run/payloads.js")>("./run/payloads.js");
       mockedBuildEmbeddedRunPayloads.mockImplementation(buildEmbeddedRunPayloads);
-      let nowMs = Date.now();
-      const now = vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+      let nowMs = performance.now();
+      const now = vi.spyOn(performance, "now").mockImplementation(() => nowMs);
       const onAgentEvent = vi.fn();
       let attempts = 0;
       try {

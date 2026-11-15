@@ -27,6 +27,7 @@ const windows = [
 const wire = { api: "openai-responses", baseUrl: "https://api.test", headers: { x: "y" } };
 const scope = { baseUrlHosts: ["api.test"], providerConfigApiIn: ["qwen", "modelstudio"] };
 const suppression = { provider: "alias", model: "m", reason: "retired", when: scope };
+const utility = { defaultUtilityModel: "u", defaultUtilityModels: { vendor: "vendor/small" } };
 it.each<[string, unknown, unknown]>([
   [
     "providers",
@@ -35,11 +36,12 @@ it.each<[string, unknown, unknown]>([
         ...wire,
         defaultModel: " m ",
         defaultUtilityModel: " u ",
+        defaultUtilityModels: { " Vendor ": " vendor/small ", blank: " " },
         models: [{ id: "m" }, { id: "" }],
       },
       other: { models: [{ id: "x" }] },
     },
-    { openai: { ...wire, defaultModel: "m", defaultUtilityModel: "u", models: [{ id: "m" }] } },
+    { openai: { ...wire, defaultModel: "m", ...utility, models: [{ id: "m" }] } },
   ],
   [
     "aliases",
@@ -52,10 +54,7 @@ it.each<[string, unknown, unknown]>([
       {
         ...suppression,
         provider: "Alias",
-        when: {
-          baseUrlHosts: ["API.TEST"],
-          providerConfigApiIn: ["Qwen", "ModelStudio"],
-        },
+        when: { baseUrlHosts: ["API.TEST"], providerConfigApiIn: ["Qwen", "ModelStudio"] },
       },
     ],
     [suppression],
@@ -370,11 +369,7 @@ const invalidV2: Rejection[] = [
   [{ pricing: {} }],
 ];
 for (const recommendedModels of [["vendor/model", " vendor/model "], [" "], ["second-only"]]) {
-  invalidV2.push([
-    {
-      providers: { first: { recommendedModels }, second: {} },
-    },
-  ]);
+  invalidV2.push([{ providers: { first: { recommendedModels }, second: {} } }]);
 }
 for (const pricing of [
   { "vendor/model": { input: 1, output: 2 } },
@@ -479,43 +474,18 @@ it("strips v2 transport metadata while preserving transport-like provider identi
     },
     { ...validBundleV2.models[1], provider: "baseUrl" },
   ];
-  const bundle = sanitizeV2({
-    ...validBundleV2,
-    providers: { headers: {}, baseUrl: {} },
-    models,
-  });
+  const bundle = sanitizeV2({ ...validBundleV2, providers: { headers: {}, baseUrl: {} }, models });
   expect(Object.keys(bundle.providers)).toEqual(["headers", "baseUrl"]);
   expect(bundle.models.map((model) => model.provider)).toEqual(["headers", "baseUrl"]);
-  expect(bundle.models[0]).toEqual({
-    ...models[0],
-    compat: { supportsTools: true, nested: {} },
-  });
+  expect(bundle.models[0]).toEqual({ ...models[0], compat: { supportsTools: true, nested: {} } });
   expect(() => parseV2(bundle)).not.toThrow();
 });
 
-it("negotiates task metadata only on v3 and rejects malformed declarations per row", () => {
+it("rejects task metadata and unknown schema versions on the v2 wire", () => {
   const inference = { chat: false, decision: { protocol: "fixture", input: ["text"] } };
-  const native = { ...firstModel, inference, compat: { nested: transport } };
-  const candidate = {
-    ...validBundleV2,
-    schemaVersion: 3,
-    providers: { first: { recommendedModels: [native.id] } },
-    models: [native],
-  };
+  const candidate = { ...validBundleV2, models: [{ ...firstModel, inference }] };
   expect(() => parseV2(candidate)).toThrow();
-  expect(() => parseV2({ ...candidate, schemaVersion: 2 })).toThrow();
-  expect(parseV3(candidate).models[0]?.inference).toEqual(inference);
-  const warn = vi.fn();
-  const invalid = {
-    ...native,
-    id: "invalid",
-    inference: { ...inference, decision: { ...inference.decision, protocol: "invalid protocol" } },
-  };
-  const admitted = sanitizeV3({ ...candidate, models: [native, invalid] }, warn);
-  expect(admitted.models).toHaveLength(1);
-  expect(admitted.models[0]).toMatchObject({ inference, compat: { nested: {} } });
-  expect(admitted.providers.first?.recommendedModels).toEqual([]);
-  expect(warn).toHaveBeenCalledOnce();
+  expect(() => parseV2({ ...candidate, schemaVersion: 3 })).toThrow();
 });
 
 it("limits configured-origin discovery to owned runtime catalogs", () => {
@@ -531,4 +501,123 @@ it("limits configured-origin discovery to owned runtime catalogs", () => {
     discovery: { live: "runtime", cached: "refreshable", fixed: "static" },
     configuredEndpointDiscovery: ["live"],
   });
+});
+
+it("preserves canonical task facts on v3 and keeps chat references chat-only", () => {
+  const inference = {
+    chat: false,
+    decision: {
+      protocol: "fixture.decisions",
+      input: ["text"],
+      questions: { boolean: { probabilities: "boolean", abstention: true } },
+      limits: { maxQuestions: 32 },
+      billing: { unit: "requests", source: "provider-catalog" },
+    },
+  };
+  const native = { ...modelV2("native"), inference };
+  const dual = { ...modelV2("dual"), inference: { ...inference, chat: true } };
+  const bundle = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    providers: { first: { defaultModel: "dual", recommendedModels: ["dual"] } },
+    models: [native, dual],
+  };
+  expect(parseV3(bundle).models).toEqual([native, dual]);
+  for (const provider of [
+    { defaultModel: "native" },
+    { defaultUtilityModel: "missing" },
+    { recommendedModels: ["native"] },
+  ]) {
+    const candidate = { ...bundle, providers: { first: provider } };
+    expect(() => parseV3(candidate)).toThrow();
+    expect(sanitizeV3(candidate).providers.first).toEqual(
+      provider.recommendedModels ? { recommendedModels: [] } : {},
+    );
+  }
+  expect(() => parseV3({ ...bundle, schemaVersion: 4 })).toThrow();
+});
+
+it("drops unknown v3 keys and degrades unknown values to the narrowest field", () => {
+  const priced = { ...knownPrice, input: 1, output: 2 };
+  const unknownPrice = { status: "unknown" };
+  const decision = { protocol: "fixture.decisions", input: ["text"] };
+  const row = (id: string, patch: Record<string, unknown> = {}) => ({
+    ...modelV2(id, "first", priced),
+    ...patch,
+  });
+  const upstream = { input: 1, output: 2, source: "native" };
+  const window = { id: "w", label: "W", contextWindow: 9 };
+  const newer = {
+    ...validBundleV2,
+    schemaVersion: 3,
+    futureEnvelope: 1,
+    providers: {
+      first: {
+        api: "future-api",
+        defaultModel: null,
+        recommendedModels: ["chat", "chat"],
+        futureProvider: true,
+      },
+      second: {},
+    },
+    models: [
+      // Unknown keys at any depth are dropped silently.
+      row("chat", {
+        futureRow: { unit: "image" },
+        pricing: { ...priced, futureRate: 1 },
+        inference: { chat: true, music: { input: ["text"] } },
+      }),
+      row("per-image", {
+        inference: { chat: false },
+        pricing: { ...knownPrice, unit: "image", perImage: 0.04 },
+      }),
+      row("future-status", { pricing: { status: "tiered" } }),
+      row("eur", { pricing: { ...priced, currency: "EUR" } }),
+      row("negative", { pricing: { ...priced, input: -1 } }),
+      row("retired", { status: "retired" }),
+      row("future-decision", {
+        inference: { chat: false, decision: { ...decision, input: ["audio"] } },
+      }),
+      row("nulls", { name: null, statusReason: null, pricing: { ...priced, source: null } }),
+      row("future-api", { api: "future-api" }),
+      row("windows", {
+        contextWindow: 9,
+        contextWindows: Array.from({ length: 17 }, () => window),
+        contextWindowDefault: "w",
+      }),
+    ],
+    upstreamPricing: {
+      "vendor/kept": upstream,
+      "vendor/not-passthrough": { ...upstream, passthroughOnly: false },
+      "no-slash": upstream,
+    },
+    providerPricing: { "vendor/negative": { ...upstream, input: -1 } },
+  };
+  const warn = vi.fn();
+  const bundle = sanitizeV3(newer, warn);
+  expect(bundle.providers).toEqual({ first: { recommendedModels: ["chat"] }, second: {} });
+  expect(bundle.models).toEqual([
+    row("chat", { inference: { chat: true } }),
+    row("per-image", { inference: { chat: false }, pricing: unknownPrice }),
+    row("future-status", { pricing: unknownPrice }),
+    row("eur", { pricing: unknownPrice }),
+    row("negative", { pricing: unknownPrice }),
+    // Deprecated rows stay selectable for configured refs but leave pickers and utility defaults.
+    row("retired", { status: "deprecated" }),
+    row("future-decision", { inference: { chat: false } }),
+    row("nulls"),
+    row("windows", { contextWindow: 9 }),
+  ]);
+  expect(bundle.upstreamPricing).toEqual({ "vendor/kept": upstream });
+  expect(bundle.providerPricing).toEqual({});
+  expect(warn).toHaveBeenCalledTimes(13);
+  warn.mockClear();
+  expect(sanitizeV3(bundle, warn)).toEqual(bundle);
+  expect(warn).not.toHaveBeenCalled();
+  // The publisher schema stays strict, and frozen v2 readers still reject the same envelope.
+  expect(newer.models[0]).toHaveProperty("futureRow");
+  for (const model of [newer.models[0], newer.models[6]]) {
+    expect(() => parseV3({ ...validBundleV2, schemaVersion: 3, models: [model] })).toThrow();
+  }
+  expect(() => sanitizeV2({ ...newer, schemaVersion: 2, models: [row("chat")] })).toThrow();
 });

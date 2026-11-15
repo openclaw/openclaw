@@ -75,16 +75,17 @@ const OWNED_DATABASE_SELECTION = new Set([
   // QA and database tooling select explicit fixtures or storage paths.
   "qa *",
   "database *",
-  // Agent execution selects its own backend; package authoring selects a target package.
+  // Exec selects configured retained storage under its lock, or SQLite for temporary/isolated runs.
   "agent exec",
+  // Package authoring selects a target package.
   "plugins build",
   "plugins validate",
   "plugins lint",
   "plugins init",
-  "claws create",
-  "claws validate",
-  "claws build",
-  "claws dev",
+  "templates create",
+  "templates validate",
+  "templates build",
+  "templates dev",
   // Mutation parsing preserves DSN-only repair; other edits select under offline custody.
   "config set",
   "config patch",

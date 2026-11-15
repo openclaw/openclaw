@@ -445,7 +445,7 @@ describe("direct compactor through the context-engine delegate", () => {
     async ({ budget, pendingPrompt }) => {
       const fixture = await createFixture("endpoint");
       const compactorPrompt = "Summarize the deployment discussion.";
-      buildConfiguredAgentSystemPromptMock.mockReturnValue(compactorPrompt);
+      buildConfiguredAgentSystemPromptMock.mockResolvedValue(compactorPrompt);
       const requestBudget = requestBudgets.createCompactionRequestBudget({
         contextWindow: model.contextWindow,
         reserveTokens: 16_384,
@@ -817,7 +817,7 @@ describe("direct compactor through the context-engine delegate", () => {
         observed.restore();
       }
       // Header, retained request, full summary, and all six current message entries.
-      expect(observed.hydrations[0]).toMatchObject({ kind: "bounded", events: 9 });
+      expect(observed.hydrations[0]).toMatchObject({ kind: "streamed-bounded", events: 9 });
       expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
       const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
       expect(requests.some((request) => request.includes(marker))).toBe(true);

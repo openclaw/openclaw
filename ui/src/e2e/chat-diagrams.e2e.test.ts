@@ -57,6 +57,10 @@ suite.define(() => {
         scrollTo: image,
       });
       await writeFile(path.join(suite.artifactDir, `diagram-${scenario.name}.png`), frame.png);
+      const displayedSvg = await image.evaluate((element: HTMLImageElement) =>
+        fetch(element.src).then((response) => response.text()),
+      );
+      await writeFile(path.join(suite.artifactDir, `diagram-${scenario.name}.svg`), displayedSvg);
     }
 
     await diagram.getByRole("button", { name: "Diagram options", exact: true }).click();

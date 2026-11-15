@@ -23,6 +23,7 @@ import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/c
 import { isArtifactPreservingStateRead } from "../../state/artifact-preserving-state-reads.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../../state/openclaw-state-maintenance-context.js";
+import type { AuthProfileStoreOwner } from "./types.js";
 
 type FileChange = {
   directory: string;
@@ -186,12 +187,15 @@ function directoryState(directory: string): DirectoryState {
       if (event === "change" && filename !== undefined) {
         return;
       }
-      if (
-        filename === undefined ||
-        legacyNames.has(filename) ||
-        [...identities.keys()].some((databasePath) => filename === path.basename(databasePath))
-      ) {
+      if (filename === undefined || legacyNames.has(filename)) {
         void refreshDirectory(directory, state);
+        return;
+      }
+      for (const databasePath of identities.keys()) {
+        if (filename === path.basename(databasePath)) {
+          void refreshDirectory(directory, state);
+          return;
+        }
       }
     }),
   };
@@ -207,6 +211,22 @@ export function readAuthProfileDatabaseIdentity(
   if (!state.identities.has(databasePath)) {
     const identity = inspectDatabasePathIdentitySync(databasePath);
     state.identities.set(databasePath, identity);
+  }
+  return state.identities.get(databasePath);
+}
+
+/** Cold runtime preparation joins the existing file-fact owner without blocking the host. */
+export async function readAuthProfileDatabaseIdentityAsync(databasePath: string) {
+  const directory = path.dirname(databasePath);
+  const state = directoryState(directory);
+  if (!state.identities.has(databasePath)) {
+    const identity = await readDatabasePathIdentity(databasePath);
+    if (directories.get(directory) !== state) {
+      throw new Error("Auth profile file owner retired during admission");
+    }
+    if (!state.identities.has(databasePath)) {
+      state.identities.set(databasePath, identity);
+    }
   }
   return state.identities.get(databasePath);
 }
@@ -229,16 +249,34 @@ export function captureAuthProfileFileIdentity(databasePath: string) {
 }
 
 /** A first owner write makes an admitted absence available to subsequent readers immediately. */
-export function noteAuthProfileFileWrite(databasePath: string): void {
+export function noteAuthProfileFileWrite(
+  databasePath: string,
+  published?: AuthProfileStoreOwner["databaseIdentity"],
+): void {
   const absent = [...directories.values()].flatMap((state) =>
     [...state.identities].flatMap(([pathname, identity]) =>
       identity?.key.startsWith("file:") ? [] : [{ state, pathname, identity }],
     ),
   );
-  if (!absent.length) {
+  if (!absent.length && !published) {
     return;
   }
-  const written = inspectDatabasePathIdentitySync(databasePath);
+  const written = published
+    ? "kind" in published
+      ? {
+          key: `file:${published.physicalIdentity}`,
+          canonicalPath: published.nativeLocation,
+          birthtime: published.birthtime,
+        }
+      : published
+    : inspectDatabasePathIdentitySync(databasePath);
+  if (published) {
+    const state = directoryState(path.dirname(databasePath));
+    const previous = state.identities.get(databasePath);
+    if (previous?.key !== written?.key || previous?.birthtime !== written?.birthtime) {
+      state.identities.set(databasePath, written);
+    }
+  }
   for (const { state, pathname, identity } of absent) {
     if (
       pathname === databasePath ||

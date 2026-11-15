@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import zlib from "node:zlib";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
@@ -47,7 +48,7 @@ beforeAll(async () => {
       timestamp: new Date(10 + index).toISOString(),
       message: {
         role: index % 2 ? "assistant" : "user",
-        content: [{ type: "text", text: `message ${index}: ${"hello 🦞\n".repeat(30)}` }],
+        content: [{ type: "text", text: `message ${index}: ${"hello 🦞\n".repeat(3)}` }],
       },
     })),
   ]);
@@ -106,6 +107,15 @@ async function archive() {
   );
 }
 
+function restorationPlan(descriptor: NonNullable<ReturnType<typeof readSessionColdTranscript>>) {
+  return {
+    kind: "cold-restore" as const,
+    databaseOptions: fixture.options,
+    sessionId: historicalId,
+    archive: descriptor,
+  };
+}
+
 it("archives a window larger than the per-file bound and restores all bytes and metadata", async () => {
   expect((await archive()).archivedTranscripts).toBe(1);
   const descriptor = readSessionColdTranscript(fixture.database(), historicalId)!;
@@ -118,20 +128,31 @@ it("archives a window larger than the per-file bound and restores all bytes and 
     );
     expect(zlib.zstdDecompressSync(bytes).byteLength).toBeLessThanOrEqual(4096);
   }
-  const plan = {
-    kind: "cold-restore" as const,
-    databaseOptions: fixture.options,
-    sessionId: historicalId,
-    archive: descriptor,
-  };
+  const plan = restorationPlan(descriptor);
+  const tables = [
+    "transcript_events",
+    "transcript_event_identities",
+    "session_transcript_active_events",
+  ] as const;
+  const inserts = trackSqliteStatementExecutions(
+    fixture.database(),
+    tables,
+    (sql) => tables.find((table) => sql.startsWith(`insert into "${table}"`)) ?? null,
+  );
   const decompress = vi.spyOn(zlib, "zstdDecompressSync");
   try {
     const records = await prepareSessionColdRestoreInWorker(plan);
     expect(decompress.mock.calls.length).toBe(0);
     expect(mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored).toBe(true);
     expect(decompress).toHaveBeenCalledTimes(chunks.length);
+    expect(chunks.length).toBeLessThan(descriptor.event_count);
+    for (const table of tables) {
+      expect(inserts.counts[table], table).toBeGreaterThan(0);
+      expect(inserts.counts[table], table).toBeLessThanOrEqual(chunks.length);
+    }
   } finally {
     decompress.mockRestore();
+    inserts.restore();
   }
   expect(fixture.snapshot()).toEqual(original);
 });
@@ -157,12 +178,7 @@ it("rolls back streamed rows when a checksummed chunk fails its final metadata c
     )
     .run(hash, `${hash}.jsonl.zst`, historicalId);
   const changedArchive = readSessionColdTranscript(fixture.database(), historicalId)!;
-  const plan = {
-    kind: "cold-restore" as const,
-    databaseOptions: fixture.options,
-    sessionId: historicalId,
-    archive: changedArchive,
-  };
+  const plan = restorationPlan(changedArchive);
   const before = fixture.snapshot();
   const records = await prepareSessionColdRestoreInWorker(plan);
   expect(() => mutateSessionColdTranscriptInWorker(plan, records, () => {})).toThrow(
@@ -181,12 +197,7 @@ it.each(["missing", "corrupt"])(
     const middle = chunks[Math.floor(chunks.length / 2)]!;
     const file = resolveSessionColdArchivePath(fixture.scope.storePath, middle.archive_name);
     const bytes = await fs.readFile(file);
-    const plan = {
-      kind: "cold-restore" as const,
-      databaseOptions: fixture.options,
-      sessionId: historicalId,
-      archive: descriptor,
-    };
+    const plan = restorationPlan(descriptor);
     const records = await prepareSessionColdRestoreInWorker(plan);
     const before = fixture.snapshot();
     try {
@@ -232,12 +243,7 @@ it("embeds every chunk for a self-contained backup and re-externalizes it", asyn
   for (const chunk of chunks) {
     await fs.unlink(resolveSessionColdArchivePath(fixture.scope.storePath, chunk.archive_name));
   }
-  const plan = {
-    kind: "cold-restore" as const,
-    databaseOptions: fixture.options,
-    sessionId: historicalId,
-    archive: descriptor,
-  };
+  const plan = restorationPlan(descriptor);
   // All original files are absent: successful verification depends on the embedded child blobs.
   await prepareSessionColdRestoreInWorker(plan);
   expect((await archive()).externalizedTranscripts).toBe(1);

@@ -186,7 +186,7 @@ describe("Google embedding-batch bounded JSON reads", () => {
       timeoutMs: 1_000,
       debug: (message) => {
         if (message.includes("batches/b-0 pending")) {
-          vi.setSystemTime(1_000);
+          vi.advanceTimersByTime(1_000);
         }
       },
     });

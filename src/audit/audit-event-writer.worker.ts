@@ -82,6 +82,12 @@ export const auditOperations = {
     const results: AuditWriterResult[] = [];
     try {
       const database = { ...context.stateOptions(), database: context.open() };
+      const batched = requests.length > 1;
+      const plainBatch =
+        batched &&
+        requests.every(
+          (request) => request.type === "record-event" && request.input.kind !== "message",
+        );
       const process = () => {
         for (const request of requests) {
           const result = executeAuditAttempt(
@@ -90,7 +96,7 @@ export const auditOperations = {
                 if (isOutboundMessageProgressInput(request.input)) {
                   recordOutboundMessageProgressInDatabase(request.input, database);
                 } else {
-                  recordAuditEventInDatabase(request.input, database, request.eventId);
+                  recordAuditEventInDatabase(request.input, database, request.eventId, plainBatch);
                 }
               } else if (request.type === "record-run") {
                 recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
@@ -106,6 +112,9 @@ export const auditOperations = {
             (error) => formatAuditWriterRequestError(request, error),
           );
           assertTransactionUsable(database.database.db);
+          if (batched && !database.database.db.isTransaction) {
+            throw new Error("Audit batch transaction was rolled back");
+          }
           results.push(result);
           if (result.status === "retry") {
             break;
@@ -114,7 +123,7 @@ export const auditOperations = {
         return results;
       };
       // Coalesce only queued neighbors; a lone item keeps its owner's autocommit.
-      // Savepoints isolate rejections, and results leave only after outer commit.
+      // Multi-statement items keep savepoints; results leave only after outer commit.
       return requests.length === 1
         ? process()
         : runOpenClawStateWriteTransaction(process, database);

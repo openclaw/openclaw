@@ -130,7 +130,7 @@ describe("prepared auth profile row reads", () => {
               },
             });
           } finally {
-            admission.finish();
+            await admission.finish();
             sender.close();
             receiver.close();
           }

@@ -1,0 +1,45 @@
+{
+  "featureNames": [
+    "basenameMatch",
+    "pathTokenOverlap",
+    "sameDirectory",
+    "observedDependency",
+    "changedPathCountLog"
+  ],
+  "featureSchema": "native-graph-v1",
+  "training": {
+    "corpusSha256": "888db937516fe81e0d471d670dfa140b7430ea48a7e9e30d6cf20ace0361f19d",
+    "evaluationPositiveRows": 6,
+    "evaluationRows": 64,
+    "evaluationRowsSha256": "48488858337d6bca4769d5384ac9296f92e7347607ff6656fe9d8b99715f8e2a",
+    "label": "file.failed > 0 after complete mutation execution",
+    "method": {
+      "maxDepth": 3,
+      "minLeafRows": 4,
+      "splitTieBreak": "greatest gain, feature index, split value",
+      "weights": "inverse episode size, then equal total class weight"
+    },
+    "reservedRows": 64,
+    "scope": "exact extracted shared-module source and original tests; planted mutations, not natural regression history",
+    "scoreSemantics": "raw class-balanced CART leaf score; not calibrated probability",
+    "sourceManifestSha256": "bca35c1403089e262409e15188457549675f08c0111d441a3dc4df62dbe3662d",
+    "sourceRevision": "0c0953f93bff2ca22abfba96d2367f72c2c4b413",
+    "sourceRows": 248,
+    "sourceRowsSha256": "f2ec3eda867f020f116e9e53e76ec9c8a07d51b7011ffbff6f8758ac32d9e38f",
+    "split": "owner-disjoint 60/20/20 by controlled episode index",
+    "trainingPositiveRows": 10,
+    "trainingRows": 120,
+    "trainingRowsSha256": "88f64d543b4bf5ce6c55c399fc60610c7134f3f0436d28bd08628d82af3929e4"
+  },
+  "tree": {
+    "feature": 1,
+    "left": {
+      "score": 0.0
+    },
+    "right": {
+      "score": 0.9565217391304348
+    },
+    "threshold": 0.6666666666666666
+  },
+  "version": 1
+}

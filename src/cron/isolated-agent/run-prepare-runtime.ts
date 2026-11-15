@@ -1,7 +1,7 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
+import { resolveBundledCliBackendAuthPolicy } from "../../agents/cli-runner/cli-backend-auth-policy.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -109,38 +109,26 @@ export function createCronSessionRowWriter(params: {
   };
 }
 
-function hasConfiguredAuthProfiles(cfg: OpenClawConfig): boolean {
-  return (
-    Boolean(cfg.auth?.profiles && Object.keys(cfg.auth.profiles).length > 0) ||
-    Boolean(cfg.auth?.order && Object.keys(cfg.auth.order).length > 0)
-  );
-}
-
 /**
- * Resolves the run's auth profile, skipping the lazy runtime entirely when no
- * override, configured profile, or store source exists for it to find. Auth
- * resolution may mutate session state, so it uses the store and key that
- * persistence will write.
+ * The shared resolver validates explicit and matching default account selections
+ * even without a credential store. Resolution may mutate session state, so it
+ * uses the store and key that persistence will write.
  */
 export async function resolveCronAuthSelection(params: {
   agentId: string;
   cfg: OpenClawConfig;
   provider: string;
   modelId: string;
+  agentRuntime: string;
   configuredProfileId?: string;
   agentDir: string;
   cronSession: MutableCronSession;
   sessionKey: string;
   isNewSession: boolean;
 }) {
-  const hasSessionOverride = Boolean(params.cronSession.sessionEntry.authProfileOverride?.trim());
-  if (
-    !hasSessionOverride &&
-    !hasConfiguredAuthProfiles(params.cfg) &&
-    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
-  ) {
-    return undefined;
-  }
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.agentRuntime,
+  )?.nativeAuthProfileIds;
   const runtime = await cronAuthProfileRuntimeLoader.load();
   return await runtime.resolveSessionAuthSelection({
     agentId: params.agentId,
@@ -148,6 +136,7 @@ export async function resolveCronAuthSelection(params: {
     provider: params.provider,
     modelId: params.modelId,
     ...(params.configuredProfileId ? { configuredProfileId: params.configuredProfileId } : {}),
+    nativeAuthProfileIds,
     agentDir: params.agentDir,
     sessionEntry: params.cronSession.sessionEntry,
     sessionStore: params.cronSession.store,

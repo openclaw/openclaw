@@ -22,7 +22,13 @@ async function serve(handler: RequestListener) {
   const closed: Promise<unknown>[] = [];
   server = createServer((request, response) => {
     if (request.method !== "POST") {
-      closed.push(once(request.socket, "close"));
+      // Bounded reads cancel oversized bodies, so the client may reset the socket
+      // while streamBody still writes. Wait for close; never reject on that error.
+      closed.push(
+        new Promise((resolve) => {
+          request.socket.once("close", resolve);
+        }),
+      );
     }
     handler(request, response);
   });
@@ -123,15 +129,18 @@ it.each([
   expect(message).not.toContain(COOKIE);
   expect(Buffer.byteLength(message, "utf8")).toBeLessThan(32 * 1024);
   expect(message).toContain("X");
+  await expect(deps.closed()).resolves.toBeUndefined();
 });
 it("bounds streaming successful scry responses", async () => {
-  await expect(
-    scry((_request, response) => {
-      response.writeHead(200, { "Content-Type": "application/json" });
-      response.write('{"payload":"');
-      streamBody(response, 18 * 1024 * 1024, '"}');
-    }),
-  ).rejects.toThrow(`Tlon scry response for path ${PATH}: JSON response exceeds 16777216 bytes`);
+  const deps = await serve((_request, response) => {
+    response.writeHead(200, { "Content-Type": "application/json" });
+    response.write('{"payload":"');
+    streamBody(response, 18 * 1024 * 1024, '"}');
+  });
+  await expect(scryUrbitPath(deps, { path: PATH, auditContext: "test" })).rejects.toThrow(
+    `Tlon scry response for path ${PATH}: JSON response exceeds 16777216 bytes`,
+  );
+  await expect(deps.closed()).resolves.toBeUndefined();
 });
 it("delivers an authenticated outbound message and closes its unread poke body", async () => {
   let observedCookie: string | undefined;

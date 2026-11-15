@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import { createRequire } from "node:module";
 import path from "node:path";
 import {
   collectPackageDistImports,
   preparePackageDistJavaScript,
+  resolvePackageDistCommonJs,
   type PackageDistImport,
 } from "../../../scripts/lib/package-dist-imports.mjs";
 import { collectRootPackageExcludedExtensionDirs } from "../../../scripts/lib/root-package-bundled-plugin-excludes.mjs";
@@ -63,6 +63,12 @@ export async function resolveNodeBootstrapRuntimeChunks(
     }
     return buffer;
   };
+  const packageJsons = new Map<string, string>();
+  for (const file of files) {
+    if (path.posix.basename(file) === "package.json") {
+      packageJsons.set(file, (await read(file)).toString("utf8"));
+    }
+  }
   // Current root and shared imports override build ownership, including native require edges.
   const retained = new Set(files.filter((file) => !privateChunks.has(file)));
   for (const file of retained) {
@@ -71,41 +77,34 @@ export async function resolveNodeBootstrapRuntimeChunks(
       continue;
     }
     const source = (await read(file)).toString("utf8");
-    // Dist inspection skips nested dependencies; absence of a callback there is not a fact.
-    let hasNodeLoader = /(?:^|\/)node_modules\//u.test(file);
+    const literalCalls = new Set<string>();
     const staticImports: string[] = [];
     const fileImports = collectPackageDistImports({
       files: [file],
       includeTypeScript,
       readText: () => source,
-      onNodeLoaderReference: () => {
-        hasNodeLoader = true;
-      },
+      onLiteralCall: (specifier) => literalCalls.add(specifier),
       onStaticImport: (specifier) => {
         staticImports.push(specifier);
       },
     });
     sourceFacts.set(file, { imports: fileImports });
     const dependencies = new Set(fileImports.map(({ importedPath }) => importedPath));
-    const resolveImport = createRequire(path.join(packageRoot, file)).resolve;
-    const rootImports = hasNodeLoader
+    // Dist inspection deliberately skips nested dependencies; keep their existing
+    // scope-aware fallback. Root bundles use the bounded statement scan instead.
+    const rootImports = /(?:^|\/)node_modules\//u.test(file)
       ? collectPackageRootImports(preparePackageDistJavaScript(file, source))
-      : staticImports;
+      : new Set([...staticImports, ...literalCalls]);
+    // False positives only retain extra chunks; required-import validation stays exact.
     for (const specifier of rootImports) {
       if (!specifier.startsWith(".")) {
         continue;
       }
       const specifierPath = specifier.replace(/[?#].*$/u, "");
       const direct = path.posix.normalize(path.posix.join(path.posix.dirname(file), specifierPath));
-      if (fileSet.has(direct) && dependencies.has(direct)) {
-        continue;
-      }
-      try {
-        dependencies.add(
-          path.relative(packageRoot, resolveImport(specifierPath)).split(path.sep).join("/"),
-        );
-      } catch {
-        // The archive's closure check owns missing relative imports.
+      const target = resolvePackageDistCommonJs(direct, fileSet, packageJsons);
+      if (target) {
+        dependencies.add(target);
       }
     }
     for (const dependency of dependencies) {

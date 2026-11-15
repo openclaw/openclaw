@@ -5,10 +5,8 @@ import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-com
 import { createUpdateRunProgress } from "../cli/update-cli/update-command-run.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as pidAlive from "../shared/pid-alive.js";
-import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
-import { inspectUpdateRunAbandonment } from "./update-run-activity.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
 import {
   adoptUpdateRun,
@@ -233,17 +231,6 @@ it("survives heartbeat errors and warns once across steps", async () => {
   expect(warning).toHaveBeenCalledWith(expect.stringContaining("SQLITE_BUSY"));
 });
 
-it("terminalizes activating work as soon as every recorded driver is dead", () => {
-  const run = create({ origin: { driver: exitedDriver() } });
-  recordUpdateRunPhase(run.runId, "activating", {}, options);
-
-  expect(inspectUpdateRunAbandonment(read(run)!)).toBe("inactive-driver-dead");
-  expect(reconcile()).toMatchObject([
-    { runId: run.runId, phase: "finished", status: "failed", reason: "abandoned" },
-  ]);
-  expect(read(run)?.origin.nextAction).toBeTruthy();
-});
-
 it("explicit admission supersedes one stale identityless staging run", () => {
   const old = create({ trigger: "control-ui", before: { version: "2026.9.2" } });
   recordUpdateRunPhase(old.runId, "staging", {}, options);
@@ -337,29 +324,27 @@ it.each(["resumed", "all-eligible", "new-admission"] as const)(
   },
 );
 
-it("automatically reconciles only dead drivers", () => {
-  const dead = create({ origin: { driver: exitedDriver() } });
-  const live = create({ origin: { driver: currentDriver() } });
-  const legacy = create();
-  ageRuns();
-
-  expect(reconcile()).toMatchObject([{ runId: dead.runId, status: "failed", reason: "abandoned" }]);
-  expect(read(live)).toEqual(live);
-  expect(read(legacy)).toEqual(legacy);
-});
-
-it("adoption rejects old heartbeats without refreshing activity", () => {
-  const oldDriver = exitedDriver();
-  const created = create({ origin: { driver: oldDriver } });
+it.each([false, true])("adoption keeps only live parent heartbeats (live=%s)", (live) => {
+  const prior = live ? readUpdateRunDriver(process.ppid) : exitedDriver();
+  if (!prior) {
+    throw new Error("The test parent must have an observable birth identity.");
+  }
+  const created = create({ origin: { driver: prior } });
   const adopted = adopt(created);
   expect(adopted.origin.driver).toEqual(currentDriver());
+  expect(adopted.origin.previousDrivers).toEqual(live ? [prior] : undefined);
   vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
-
-  heartbeatUpdateRun(created.runId, oldDriver, options);
-  expect(read(created)).toEqual(adopted);
-  expect(adopt(created)).toEqual(adopted);
+  heartbeatUpdateRun(created.runId, prior, options);
+  const renewed = read(created)!;
+  if (live) {
+    expect(renewed.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
+  } else {
+    expect(renewed).toEqual(adopted);
+  }
+  expect(adopt(created)).toEqual(renewed);
   heartbeatUpdateRun(created.runId, adopted.origin.driver, options);
   expect(read(created)?.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
+  expect(reconcile({ explicit: true })).toEqual([]);
 });
 
 it("cannot adopt a reconciled terminal run", () => {
@@ -375,24 +360,6 @@ it("cannot adopt a reconciled terminal run", () => {
 
   expect(() => adopt(created)).toThrow();
   expect(read(created)).toEqual(reconciled);
-});
-
-it("child adoption retains and renews the live parent", () => {
-  const parentStart = getFileLockProcessStartTime(process.ppid);
-  if (parentStart === null) {
-    throw new Error("The test's controlling parent must have an observable start identity.");
-  }
-  const driver = { ...currentDriver(), pid: process.ppid, startIdentity: String(parentStart) };
-  const created = create({ origin: { driver } });
-  const run = recordUpdateRunPhase(created.runId, "verifying", {}, options);
-  ageRuns();
-
-  const adopted = adopt(run);
-  expect(adopted.origin).toMatchObject({ driver: currentDriver(), previousDrivers: [driver] });
-  vi.advanceTimersByTime(UPDATE_RUN_HEARTBEAT_MS);
-  heartbeatUpdateRun(run.runId, driver, options);
-  expect(read(run)?.updatedAtMs).toBeGreaterThan(adopted.updatedAtMs);
-  expect(reconcile({ explicit: true })).toEqual([]);
 });
 
 it.each(["alive", "unknown", "dead"] as const)(

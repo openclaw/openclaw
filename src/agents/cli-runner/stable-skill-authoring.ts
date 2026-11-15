@@ -8,15 +8,16 @@ const shapes = new Map<
 >();
 
 /**
- * Keeps the skill_workshop definition stable across a session's CLI turns.
+ * Keeps the skill_library and skill_workshop definitions stable across a
+ * session's CLI turns.
  *
  * Only human turns receive personal-library authority, so completion and other
- * internal turns would otherwise publish a different skill_workshop schema and
- * break the native prompt cache. Those turns reuse the session's last shape
- * with an expired grant: the definition matches and personal-library calls are
- * refused. Workshop calls through the workspace-default wrapper keep the
- * ordinary no-grant rule (unsandboxed runs only), so this definition neither
- * revokes nor widens workspace access.
+ * internal turns would otherwise publish a different tool set and break the
+ * native prompt cache. Those turns reuse the session's last shape with an
+ * expired grant: the definitions match and personal-library calls are refused.
+ * Workshop calls through the workspace-default guard keep the ordinary no-grant
+ * rule (unsandboxed runs only), so this definition neither revokes nor widens
+ * workspace access.
  */
 export function resolveStableCliSkillAuthoring(
   sessionKey: string | undefined,

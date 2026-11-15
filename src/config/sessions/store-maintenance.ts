@@ -12,7 +12,6 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
-import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
 import { isPinnableSessionEntry } from "./session-pin-policy.js";
 import {
   getSessionMaintenanceActivityAt,
@@ -226,6 +225,7 @@ export function pruneStaleEntries(
     nowMs?: number;
     onPruned?: (params: { key: string; entry: SessionEntry }) => void;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -338,6 +338,7 @@ export function archiveStaleDashboardEntries(
     log?: boolean;
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -421,6 +422,8 @@ function isProtectedSessionMaintenanceEntry(
 type SessionMaintenanceEntryParams = {
   key: string;
   entry: SessionEntry | undefined;
+  /** Keep every durable row unarchived while a preserve provider is still loading. */
+  deferArchiving?: boolean;
   preserveKeys?: ReadonlySet<string>;
   preserveRecentMs?: number | null;
   nowMs?: number;
@@ -435,7 +438,8 @@ function shouldPreserveNonArchivedMaintenanceEntry(params: SessionMaintenanceEnt
   // the same conversation under an incompatible model, so pressure may exceed
   // configured retention limits while the lock remains.
   return (
-    (hasMainSessionRecoveryClaim(params.entry) && !params.entry?.mainRestartRecovery?.tombstone) ||
+    params.entry?.resumeAfterRestart !== undefined ||
+    params.entry?.pendingFinalDelivery?.kind === "transport-only" ||
     params.entry?.modelSelectionLocked === true ||
     params.preserveKeys?.has(params.key) === true ||
     isRecentSessionMaintenanceEntry(params) ||
@@ -447,7 +451,9 @@ export function shouldPreserveMaintenanceEntry(params: SessionMaintenanceEntryPa
   // Ordinary age/count maintenance never deletes an archived session. Disk-budget cleanup has a
   // separate positive eligibility check for rows that this product automatically archived.
   return (
-    params.entry?.archivedAt !== undefined || shouldPreserveNonArchivedMaintenanceEntry(params)
+    params.entry?.archivedAt !== undefined ||
+    (params.deferArchiving === true && !isSyntheticSessionMaintenanceKey(params.key)) ||
+    shouldPreserveNonArchivedMaintenanceEntry(params)
   );
 }
 
@@ -467,6 +473,7 @@ function selectSessionEntryCapVictims(
   preserveKeys?: ReadonlySet<string>,
   preserveRecentMs?: number | null,
   nowMs?: number,
+  deferArchiving?: boolean,
 ): string[] {
   const keys = Object.keys(store).filter((key) => store[key]?.archivedAt === undefined);
   const overflow = keys.length - Math.max(0, maxEntries);
@@ -485,6 +492,7 @@ function selectSessionEntryCapVictims(
         preserveKeys,
         preserveRecentMs,
         nowMs,
+        deferArchiving,
       }),
   );
   // Rank the whole eligible roster by its latest activity signal so the sessions untouched for
@@ -514,6 +522,7 @@ export function capEntryCount(
     nowMs?: number;
     onArchived?: (params: { key: string; entry: SessionEntry }) => void;
     onRemoved?: (params: { key: string; entry: SessionEntry }) => void;
+    deferArchiving?: boolean;
     preserveKeys?: ReadonlySet<string>;
     preserveRecentMs?: number | null;
   } = {},
@@ -524,6 +533,7 @@ export function capEntryCount(
     opts.preserveKeys,
     opts.preserveRecentMs,
     opts.nowMs,
+    opts.deferArchiving,
   );
   if (victims.length === 0) {
     return 0;
