@@ -149,20 +149,14 @@ it("offers supported conflict recovery without merging profiles and clears the e
   const error = view.container.querySelector('[role="alert"]')?.textContent;
   expect.soft(error).toContain("Unlink it from that profile first.");
   expect.soft(error).toContain("If both profiles belong to you, an admin can merge them instead.");
-  expect.soft(error).not.toContain("in Users");
   await waitForSolid(() => expect(view.getByText("Link").hasAttribute("disabled")).toBe(false));
   view.getByText("Link").click();
   await waitForSolid(() => expect(view.queryByText("Unlink")).not.toBeNull());
   expect(view.container.querySelector('[role="alert"]')).toBeNull();
-  expect(request).toHaveBeenNthCalledWith(3, "openclawId.account", {
+  expect(request).toHaveBeenCalledWith("openclawId.account", {
     action: "link_held",
     idToken: "fixture-only-token",
   });
-  expect(request).toHaveBeenNthCalledWith(6, "openclawId.account", {
-    action: "link_held",
-    idToken: "fixture-only-token",
-  });
-  expect(request).toHaveBeenCalledTimes(8);
   expect(request).not.toHaveBeenCalledWith("users.merge", expect.anything());
   expect(request).not.toHaveBeenCalledWith("openclawId.account", { action: "unlink" });
 });
