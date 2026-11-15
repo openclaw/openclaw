@@ -42,6 +42,14 @@ export function isPluginsHubRoute(routeId: NavigationRouteId): boolean {
   );
 }
 
+/**
+ * Plugin pages the Users section lists under Activity instead of the "more" menu: OpenClaw
+ * ID remote access manages who can reach this claw.
+ */
+export const USERS_SECTION_PLUGIN_PAGES: ReadonlySet<string> = new Set([
+  "openclaw-id-access/access",
+]);
+
 /** Section pages own a sidebar of their own; other pages run full width. */
 export function sidebarSectionForRoute(
   route: NavigationRouteId,
