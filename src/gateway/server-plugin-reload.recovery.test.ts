@@ -69,6 +69,7 @@ import {
   verifyGatewayMemoryWatcherRestart,
   verifyUnchangedMemoryServiceSurvivesReload,
 } from "./server-plugin-reload.memory.test-support.js";
+import { verifyRetainedNativeCommandRefresh } from "./server-plugin-reload.native-commands.test-support.js";
 import {
   createRecoveryChannelManager,
   createPluginReloadRecoveryFixture,
@@ -466,6 +467,9 @@ it.each(["retry", "shutdown"] as const)(
 
 it("replaces channel command provenance while keeping webhook ingress retryable", () =>
   verifyChannelReplacementContracts(createRecoveryFixture));
+
+it("refreshes native command channels when an unrelated plugin reloads", () =>
+  verifyRetainedNativeCommandRefresh(createRecoveryFixture));
 
 it("keeps cold accounts isolated while replacing their plugin and healthy accounts", () =>
   verifyColdAccountReplacement(createRecoveryFixture));
