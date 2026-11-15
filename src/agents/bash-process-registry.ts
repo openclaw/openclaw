@@ -269,6 +269,17 @@ export function setDurableProcessObserver(observer: (() => Promise<void>) | unde
   observeDurableProcesses = observer;
   scheduleSweeper();
 }
+
+type ExitWakeRecorder = {
+  backgrounded: (session: ProcessSession) => void;
+  exited: (session: ProcessSession) => void;
+};
+let exitWakeRecorder: ExitWakeRecorder | undefined;
+
+/** The Gateway's durable store records wake-armed ordinary processes so a restart can report them. */
+export function setExitWakeRecorder(recorder: ExitWakeRecorder | undefined) {
+  exitWakeRecorder = recorder;
+}
 type ProcessChange = { sessionKey: string; agentId?: string };
 const changeListeners = new Set<(target: ProcessChange) => void>();
 const pendingChanges = new Map<string, Set<string | undefined>>();
@@ -570,6 +581,7 @@ export function markExited(
   wakeSessionPolls(session);
   if (session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.exited(session);
   }
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
@@ -601,6 +613,7 @@ export function markCancellationRequested(session: ProcessSession) {
 export function markBackgrounded(session: ProcessSession) {
   if (!session.backgrounded) {
     queueProcessChange(session);
+    exitWakeRecorder?.backgrounded(session);
   }
   session.backgrounded = true;
   const active = activeExecSessions.get(session.id);

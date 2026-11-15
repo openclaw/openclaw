@@ -23,6 +23,8 @@ export type DurableProcessRecord = Pick<
   | "notifyOnExitEmptySuccess"
   | "cancellationRequested"
 > & {
+  /** An ordinary wake-armed process: no unit, so a restart always settles it as lost. */
+  kind?: "ordinary";
   agentId: string;
   sessionKey: string;
   sessionId: string;

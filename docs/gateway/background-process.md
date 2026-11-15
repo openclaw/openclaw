@@ -55,7 +55,7 @@ Behavior:
 - Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
 - Isolated cron exec completions stay on the originating run's session, including jobs with `delivery.mode: "announce"`. They never wake the agent main session. A completion accepted while that run is active waits for it to finish before starting a follow-up turn. Completions not yet accepted when the originating run ends cannot start another turn; retained output remains available through `process poll` or `process log`. Jobs with `delivery.mode: "none"` keep automatic completion wakes disabled. The cron job's normal announcement delivery is unchanged.
 - A failed background command wakes its originating session even when other sessions or automations are busy. If that session is still running, the completion waits until it is free. This also applies when a watcher exits before the work it was watching finishes.
-- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. After a graceful restart, the conversation that started them receives one [resume input](/gateway/restart-recovery#automatic-resume) saying they were stopped, so the agent can rerun what it still needs. After a crash, no such input is sent. Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as stopped. Check saved output and side effects before repeating work whose outcome is unknown.
+- Ordinary Gateway-hosted background processes still end with the Gateway, and their in-memory handles and requester continuations are not restored after restart. A command whose exit would wake its conversation is reported after the restart instead; see [lost background commands](#lost-background-commands). Use `durable: true` on a supported Linux or macOS Gateway when the physical process must survive. A surviving durable process is not reported as lost. Check saved output and side effects before repeating work whose outcome is unknown.
 - Timeouts also wake the session when the command produced no output. The completion includes retry-safety guidance: verify any external side effects before retrying.
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
@@ -83,6 +83,28 @@ Behavior:
 | `tools.exec.cleanupMs`                | 1800000 | Same as `OPENCLAW_BASH_JOB_TTL_MS`.                                                                              |
 | `tools.exec.notifyOnExit`             | true    | Continue backgrounded host exec through an ordinary turn in its originating session on exit.                     |
 | `tools.exec.notifyOnExitEmptySuccess` | true    | Also wake the session when a backgrounded run succeeds with no output. Set false to keep silent successes quiet. |
+
+### Lost background commands
+
+When the Gateway restarts while an ordinary background command is still running and its
+exit would wake the conversation, the next Gateway start sends that conversation a
+notice for each such command, which starts a turn. The notice names the command's process handle and start time, so
+the agent can find the command in its transcript and decide whether to run it again.
+This covers crashes too, not only graceful restarts. The notice is new system input under
+the session's current authority; reset, archived, incognito, hidden subagent and ended
+cron sessions get no notice, and disabling `tools.exec.notifyOnExit` suppresses it.
+A command whose exit would not wake the conversation, such as a service started with
+`notifyOnExit` off, gets no notice.
+
+What happened to the command depends on how the Gateway stopped:
+
+- A graceful stop or restart stops ordinary commands. The notice says the command was stopped.
+- On Linux, a Gateway that crashes or is killed also takes its ordinary commands with it. The notice says the command was stopped.
+- On macOS, a killed Gateway can leave a command running: it keeps going until it next writes output, then ends. The notice says the command may still be running but its result will not wake the conversation.
+
+The stored row carries no command text or output. If the Gateway cannot record the
+row, the command still runs normally; only the restart notice is missing. Use
+`durable: true` when the command itself must survive a restart.
 
 ### Disable automatic completion turns
 
