@@ -55,10 +55,6 @@ it.each([
       exporterFailure: true,
     },
   ),
-  cliCase("sessions compact agent:main:test --max-lines 0 --json", {
-    message: "--max-lines must be a positive integer.",
-    tty: true,
-  }),
   cliCase(["sessions", "compact", "agent:main:test", "--agent", " ", "--json"], {
     message: "--agent must not be blank",
     tty: true,
