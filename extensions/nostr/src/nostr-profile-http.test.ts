@@ -28,6 +28,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   };
 });
 
+// mock-isolation: Inject the request scope without initializing the Gateway runtime barrel.
 vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
   getPluginRuntimeGatewayRequestScope: runtimeScopeMock,
 }));
