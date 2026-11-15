@@ -434,8 +434,8 @@ export function resolveExtensionBatchPlan() { return ${JSON.stringify(plan)}; }`
       const preload = path.join(root, "batch-plan-loader.mjs");
       write(
         preload,
-        `import { registerHooks } from "node:module";
-registerHooks({ resolve(specifier, context, nextResolve) {
+        `import nodeModule from "node:module";
+nodeModule.registerHooks({ resolve(specifier, context, nextResolve) {
   const resolved = nextResolve(specifier, context);
   return resolved.url === ${JSON.stringify(owner)} && context.parentURL !== ${JSON.stringify(fixture)} ? {...resolved, url: ${JSON.stringify(fixture)}} : resolved;
 }});`,
