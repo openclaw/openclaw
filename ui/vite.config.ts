@@ -828,7 +828,13 @@ export function controlUiRuntimeDefines(
 }
 
 export default function controlUiViteConfig(
-  options: { outDir?: string; command?: "serve" | "build"; buildInfo?: ControlUiBuildInfo } = {},
+  options: {
+    outDir?: string;
+    command?: "serve" | "build";
+    buildInfo?: ControlUiBuildInfo;
+    /** Local previews served without the Gateway's sidecar lookup skip compression work. */
+    precompressAssets?: boolean;
+  } = {},
 ): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const polling = process.env.CHOKIDAR_USEPOLLING?.toLowerCase();
@@ -1021,7 +1027,7 @@ export default function controlUiViteConfig(
       controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
       controlUiNavigationPreloadsPlugin(),
-      controlUiPrecompressedAssetsPlugin(),
+      ...(options.precompressAssets === false ? [] : [controlUiPrecompressedAssetsPlugin()]),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
       ...controlUiUpdateCachePlugins(),
       {

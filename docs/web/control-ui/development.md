@@ -234,6 +234,14 @@ without existing service workers or operator credentials. Chat, presence, and
 profile data are synthetic. Add `--fixture attachments` for media examples; the
 printed board fixture URL is also available.
 
+Add `--prod` when the browser reaches the mock over a high-latency link, such
+as a remote machine on a VPN. The dev server sends one request per source
+module; `--prod` serves a compressed production bundle of the same mock
+instead. Each change under `ui/src` triggers a full rebuild (about 10 seconds)
+that replaces the served bundle when it finishes; reload the page afterward.
+There is no hot module replacement, and the board fixture page is
+dev-server only.
+
 The mock preview selects its own origin for Gateway resources, including
 avatars, before application startup. It supplies synthetic WebSocket responses
 and confines native resource requests to the serving origin and local data/blob

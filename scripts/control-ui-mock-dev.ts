@@ -4,7 +4,15 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import qrcode from "qrcode";
-import { createServer, mergeConfig, type Plugin, type ViteDevServer } from "vite";
+import {
+  build as buildVite,
+  createServer,
+  mergeConfig,
+  preview,
+  type Plugin,
+  type PreviewServer,
+  type ViteDevServer,
+} from "vite";
 import type {
   ArtifactSummary,
   Question,
@@ -125,6 +133,7 @@ type CliOptions = {
   host: string;
   operatorScopes?: string[];
   port: number;
+  prod: boolean;
 };
 
 type SessionActorFixture = { type: "human" | "agent"; id: string; label: string };
@@ -384,7 +393,7 @@ function mockFileHash(value: string): string {
 }
 
 function parseArgs(args: string[]): CliOptions {
-  const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187 };
+  const options: CliOptions = { allowedHosts: [], host: "127.0.0.1", port: 5187, prod: false };
   for (let i = 0; i < args.length; i += 1) {
     const arg = expectDefined(args[i], `control UI mock argument at index ${i}`);
     if (arg === "--allowed-host") {
@@ -409,6 +418,8 @@ function parseArgs(args: string[]): CliOptions {
       options.port = parsePort(args[++i], options.port);
     } else if (arg.startsWith("--port=")) {
       options.port = parsePort(arg.slice("--port=".length), options.port);
+    } else if (arg === "--prod") {
+      options.prod = true;
     } else if (arg === "--operator-scopes") {
       options.operatorScopes = parseOperatorScopes(args[++i]);
     } else if (arg.startsWith("--operator-scopes=")) {
@@ -4004,7 +4015,7 @@ function hostForUrl(boundAddress: string, requestedHost: string): string {
 }
 
 function resolveServerUrl(
-  server: ViteDevServer,
+  server: ViteDevServer | PreviewServer,
   requestedHost: string,
   pathname = "/chat",
 ): string {
@@ -4035,90 +4046,158 @@ const cacheDir = await mkdtemp(path.join(cacheRoot, "server-"));
 // Vite's SIGTERM handler calls process.exit() after closing, bypassing finally.
 // The process owns this cache, so its exit hook is the single cleanup path.
 process.once("exit", () => rmSync(cacheDir, { recursive: true, force: true }));
-let server: ViteDevServer | undefined;
+let server: ViteDevServer | PreviewServer | undefined;
+let sourceWatcher: fs.FSWatcher | undefined;
 let sessionDesignSandbox: Awaited<ReturnType<typeof startSessionDesignSandbox>> | undefined;
 try {
   if (options.fixture === "session-design") {
     sessionDesignSandbox = await startSessionDesignSandbox();
   }
-  server = await createServer(
-    mergeConfig(
-      controlUiViteConfig({
-        command: "serve",
-        buildInfo: {
-          version: "2026.7.10",
-          commit: "0123456789abcdef0123456789abcdef01234567",
-          commitAt: "2026-07-10T11:22:33.000Z",
-          builtAt: "2026-07-10T12:34:56.000Z",
-          branch: null,
-          dirty: null,
-          release: false,
-          buildId: expectDefined(scenario.serverBuildId, "Control UI mock build ID"),
-        },
-      }),
-      {
-        base: "/",
-        cacheDir,
-        clearScreen: false,
-        configFile: false,
-        logLevel: "error",
-        optimizeDeps: {
-          ...(options.fixture === "board"
-            ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
-            : {}),
-          include: ["diff"],
-        },
-        plugins: [
-          ...createStandaloneMockIsolationPlugins(
-            sessionDesignSandbox
-              ? {
-                  sandboxUrl: new URL(
-                    sessionDesignSandbox.descriptor.sandboxUrl,
-                    sessionDesignSandbox.descriptor.sandboxOrigin,
-                  ).href,
-                  allowDesktopPopup: true,
-                }
-              : undefined,
-          ),
-          await createMockGatewayPlugin(
-            scenario,
-            options.fixture,
-            sessionDesignSandbox?.descriptor,
-          ),
-          createBoardFixturePlugin(),
-          ...(options.fixture === "session-design"
-            ? [
-                createSessionDesignPortalFixturePlugin(),
-                createSessionDesignDesktopFixturePlugin(),
-                createSessionDesignFileFixturePlugin(scenario),
-              ]
-            : []),
-          ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
-        ],
-        publicDir: path.join(uiRoot, "public"),
-        resolve: {
-          alias: [
-            ...resolveExternalPackageAliasesForVite(),
-            ...resolveSourcePackageAliasesForVite(),
-            ...resolveTsconfigPathAliasesForVite(),
-          ],
-        },
-        root: uiRoot,
-        server: {
-          allowedHosts: options.allowedHosts,
-          host: options.host,
-          port: options.port,
-          strictPort: true,
-        },
-      },
+  const mockPlugins = [
+    ...createStandaloneMockIsolationPlugins(
+      sessionDesignSandbox
+        ? {
+            sandboxUrl: new URL(
+              sessionDesignSandbox.descriptor.sandboxUrl,
+              sessionDesignSandbox.descriptor.sandboxOrigin,
+            ).href,
+            allowDesktopPopup: true,
+          }
+        : undefined,
     ),
+    await createMockGatewayPlugin(scenario, options.fixture, sessionDesignSandbox?.descriptor),
+    ...(options.prod ? [] : [createBoardFixturePlugin()]),
+    ...(options.fixture === "session-design"
+      ? [
+          createSessionDesignPortalFixturePlugin(),
+          createSessionDesignDesktopFixturePlugin(),
+          createSessionDesignFileFixturePlugin(scenario),
+        ]
+      : []),
+    ...(options.fixture === "attachments" ? [createChatAttachmentFixturePlugin()] : []),
+  ];
+  const viteConfig = mergeConfig(
+    controlUiViteConfig({
+      command: options.prod ? "build" : "serve",
+      outDir: path.join(cacheDir, "dist"),
+      precompressAssets: false,
+      buildInfo: {
+        version: "2026.7.10",
+        commit: "0123456789abcdef0123456789abcdef01234567",
+        commitAt: "2026-07-10T11:22:33.000Z",
+        builtAt: "2026-07-10T12:34:56.000Z",
+        branch: null,
+        dirty: null,
+        release: false,
+        buildId: expectDefined(scenario.serverBuildId, "Control UI mock build ID"),
+      },
+    }),
+    {
+      base: "/",
+      cacheDir,
+      clearScreen: false,
+      configFile: false,
+      logLevel: "error",
+      optimizeDeps: {
+        ...(options.fixture === "board"
+          ? { entries: [path.join(uiRoot, "src", "test-helpers", "board-fixture.tsx")] }
+          : {}),
+        include: ["diff"],
+      },
+      // Preview serves the same fixture routes the dev server does. These fixture
+      // hooks only register connect middlewares, which both server types expose.
+      plugins: options.prod
+        ? mockPlugins.map((plugin) =>
+            plugin.configureServer
+              ? {
+                  ...plugin,
+                  configurePreviewServer:
+                    plugin.configureServer as Plugin["configurePreviewServer"],
+                }
+              : plugin,
+          )
+        : mockPlugins,
+      publicDir: path.join(uiRoot, "public"),
+      resolve: {
+        alias: [
+          ...resolveExternalPackageAliasesForVite(),
+          ...resolveSourcePackageAliasesForVite(),
+          ...resolveTsconfigPathAliasesForVite(),
+        ],
+      },
+      root: uiRoot,
+      server: {
+        allowedHosts: options.allowedHosts,
+        host: options.host,
+        port: options.port,
+        strictPort: true,
+      },
+      preview: {
+        allowedHosts: options.allowedHosts,
+        host: options.host,
+        port: options.port,
+        strictPort: true,
+      },
+    },
   );
+  if (options.prod) {
+    // A production bundle loads in a few round trips instead of one per source
+    // module, which keeps the mock usable over high-latency remote links. Each
+    // change rebuilds into a staging directory that replaces the served one, so
+    // the page keeps working while the next build runs.
+    const distDir = path.join(cacheDir, "dist");
+    const rebuild = async () => {
+      const started = performance.now();
+      const stagingDir = `${distDir}-next`;
+      try {
+        await buildVite(
+          mergeConfig(viteConfig, { build: { outDir: stagingDir, sourcemap: false } }),
+        );
+        rmSync(`${distDir}-old`, { recursive: true, force: true });
+        if (fs.existsSync(distDir)) {
+          fs.renameSync(distDir, `${distDir}-old`);
+        }
+        fs.renameSync(stagingDir, distDir);
+        rmSync(`${distDir}-old`, { recursive: true, force: true });
+        console.log(
+          `[control-ui-mock] built in ${Math.round(performance.now() - started)}ms; reload the page`,
+        );
+      } catch (error) {
+        console.error(`[control-ui-mock] build failed: ${String(error)}`);
+      }
+    };
+    await rebuild();
+    let pending: Promise<void> | undefined;
+    let queued = false;
+    const schedule = () => {
+      if (pending) {
+        queued = true;
+        return;
+      }
+      pending = rebuild().finally(() => {
+        pending = undefined;
+        if (queued) {
+          queued = false;
+          schedule();
+        }
+      });
+    };
+    // Editors emit several events per save; settle them into one rebuild.
+    let settle: NodeJS.Timeout | undefined;
+    sourceWatcher = fs.watch(path.join(uiRoot, "src"), { recursive: true }, () => {
+      clearTimeout(settle);
+      settle = setTimeout(schedule, 150);
+    });
+    server = await preview(viteConfig);
+  } else {
+    server = await createServer(viteConfig);
+    await server.listen();
+  }
 
   // Vite can exit from its signal handler; close the auxiliary listener with its HTTP owner too.
   server.httpServer?.once("close", () => {
     void sessionDesignSandbox?.close();
   });
-  await server.listen();
   if (sessionDesignSandbox) {
     console.log(
       `[control-ui-mock] sandbox (forward this port unchanged): ${JSON.stringify(sessionDesignSandbox.descriptor)}`,
@@ -4127,11 +4206,14 @@ try {
   console.log(
     `[control-ui-mock] ${resolveServerUrl(server, options.host, controlUiSessionPath(scenario.sessionKey ?? "agent:main:main"))}`,
   );
-  console.log(
-    `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
-  );
+  if (!options.prod) {
+    console.log(
+      `[control-ui-mock] board fixture: ${resolveServerUrl(server, options.host, boardFixturePath)}`,
+    );
+  }
   await waitForShutdown();
 } finally {
+  sourceWatcher?.close();
   await server?.close();
   await sessionDesignSandbox?.close();
 }
