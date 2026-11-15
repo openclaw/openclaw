@@ -453,7 +453,9 @@ describe("split runtime timing feedback", () => {
     const build = vi
       .spyOn(buildPrerequisites, "resolveVitestPretestBuildMode")
       .mockImplementation((selections) => {
-        if (!rows.some((row) => row.runtime)) return undefined;
+        if (!rows.some((row) => row.runtime)) {
+          return undefined;
+        }
         const spare = rows.find((row) => !row.runtime)!;
         return selections.some(
           (selection) =>
@@ -592,8 +594,8 @@ describe("split runtime timing feedback", () => {
       vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-all");
       vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME", runtime);
       const observations = testTimings.readRuntimePlacementTimings("blacksmith");
-      const group = owner(cold, runtime, configs[0]!).groups.find((group) =>
-        group.configs.includes(configs[0]!),
+      const group = owner(cold, runtime, configs[0]!).groups.find((candidate) =>
+        candidate.configs.includes(configs[0]!),
       )!;
       expect(testTimings.resolveRuntimePlacementSeconds(group, observations)).toBe(seconds);
       expect(
