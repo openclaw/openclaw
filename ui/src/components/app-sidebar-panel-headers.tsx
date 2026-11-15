@@ -5,6 +5,7 @@ import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
+import { SidebarAutomationsFilter } from "./app-sidebar-automations-filter.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
@@ -72,6 +73,7 @@ export function SidebarAutomationsHeader(props: { host: AppSidebarRenderHost }) 
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{titleForRoute("cron", t)}</span>
+      <SidebarAutomationsFilter />
     </SidebarPanelHeader>
   );
 }
