@@ -8,6 +8,7 @@ import type { ControlUiRootState } from "../../../src/gateway/server-control-ui-
 import "../../../src/test-utils/prepare-compiled-subprocesses.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { beginUiE2ePhase } from "../../../test/helpers/ui-e2e-phase.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { buildProductionControlUiE2e, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -32,17 +33,22 @@ const suite = createControlUiE2eSuite({
       currentUiRoot = await mkdtemp(path.resolve(".openclaw/tmp/fallback-current-ui-"));
       await buildProductionControlUiE2e(currentUiRoot, "fallback-current-source");
     }
+    const finishStateImport = beginUiE2ePhase("fresh-visit-state-import", true);
     const { createOpenClawTestState } =
-      await import("../../../src/test-utils/openclaw-test-state.ts");
+      await import("../../../src/test-utils/openclaw-test-state.ts").finally(finishStateImport);
+    const finishStateCreate = beginUiE2ePhase("fresh-visit-state-create", true);
     const state = await createOpenClawTestState({
       prefix: "fresh-browser-maintenance-",
       scenario: "minimal",
       applyEnv: true,
       prepareProfileCatalog: true,
-    });
+    }).finally(finishStateCreate);
     let harness: typeof import("../../../src/gateway/server-http.test-harness.ts");
+    const finishHarnessImport = beginUiE2ePhase("fresh-visit-harness-import", true);
     try {
-      harness = await import("../../../src/gateway/server-http.test-harness.ts");
+      harness = await import("../../../src/gateway/server-http.test-harness.ts").finally(
+        finishHarnessImport,
+      );
     } catch (error) {
       await state.cleanup();
       throw error;
@@ -100,7 +106,8 @@ const suite = createControlUiE2eSuite({
         productionRoot ? Promise.resolve() : rm(currentUiRoot, { recursive: true, force: true }),
     );
     void lifetime.catch(ready.reject);
-    return ready.promise;
+    const finishReady = beginUiE2ePhase("fresh-visit-ready", true);
+    return ready.promise.finally(finishReady);
   },
 });
 

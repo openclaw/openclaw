@@ -15,6 +15,7 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/sessions.ts";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import { beginUiE2ePhase } from "../../../test/helpers/ui-e2e-phase.ts";
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "../build-info.ts";
 import { createControlUiAttachmentFacts } from "./control-ui-attachment-fixtures.ts";
@@ -294,6 +295,7 @@ export async function startControlUiE2eServer(
   );
   // Shared browser fixtures import this helper; load filesystem-bound Vite
   // configuration only when its Node-owned development server actually starts.
+  const finishImports = beginUiE2ePhase("source-server-imports", true);
   const [
     { createServer },
     { controlUiLocaleModulesPlugin },
@@ -312,10 +314,12 @@ export async function startControlUiE2eServer(
     import("../../config/control-ui-solid.ts"),
     import("../../config/control-ui-plugin-distributions.ts"),
     import("../../vite.config.ts"),
-  ]);
+  ]).finally(finishImports);
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
-  const port = await resolveAvailableLoopbackPort();
+  const finishPort = beginUiE2ePhase("source-server-port", true);
+  const port = await resolveAvailableLoopbackPort().finally(finishPort);
+  const finishCreate = beginUiE2ePhase("source-server-create", true);
   const server = await createServer({
     base: "/",
     cacheDir: path.join(repoRoot, ".artifacts", "control-ui-e2e-vite"),
@@ -346,8 +350,9 @@ export async function startControlUiE2eServer(
       port,
       strictPort: true,
     },
-  });
-  await server.listen(port);
+  }).finally(finishCreate);
+  const finishListen = beginUiE2ePhase("source-server-listen", true);
+  await server.listen(port).finally(finishListen);
   return {
     baseUrl: resolveServerBaseUrl(server),
     close: () => server.close(),
