@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { fromMarkdown } from "mdast-util-from-markdown";
 import { describe, expect, it } from "vitest";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import { importMemoryWikiOkfBundle } from "./okf.js";
@@ -158,6 +159,58 @@ describe("importMemoryWikiOkfBundle", () => {
     });
     expect(reimport).toMatchObject({ importedCount: 3, skippedCount: 0, warnings: [] });
     expect(orders.frontmatter.type).toBe("BigQuery Table");
+  });
+
+  it("rewrites parsed inline destinations while preserving labels, titles, and literal examples", async () => {
+    const { run, page, read, write } = await createImport("links-okf");
+    await write("tables/plan (draft).md", "Target body.", "Plan");
+    const literal = [
+      "`[example](<tables/plan (draft).md>)`",
+      "<!-- [example](tables/plan%20(draft).md) -->",
+      "\\[example](tables/plan%20(draft).md)",
+      "[reference][plan]\n\n[plan]: <tables/plan (draft).md>",
+      "[Missing](missing(draft).md)",
+      "[External](https://example.invalid/plan(draft).md)",
+    ];
+    await write(
+      "source.md",
+      [
+        '[Angle](<tables/plan (draft).md?x=1&amp;y=2#notes> "angle title")',
+        "[Encoded **draft** \\[v1\\]](tables/plan%20(draft).md)",
+        "![Image](tables/plan%20\\(draft\\).md)",
+        "[Multiline](\n<tables/plan (draft).md>\n'multiline title')",
+        "[![Nested](tables/plan%20(draft).md)](tables/plan%20(draft).md)",
+        ...literal,
+      ].join("\n\n"),
+      "Source",
+    );
+
+    const result = await run();
+    const target = path.basename(page(result.pagePaths, "plan-draft"));
+    const source = parseWikiMarkdown(await read(page(result.pagePaths, "source")));
+    const links = fromMarkdown(source.body).children.flatMap((node) =>
+      node.type === "paragraph"
+        ? node.children.filter((child) => child.type === "link" || child.type === "image")
+        : [],
+    );
+    expect(links.slice(0, 4).map((link) => ({ url: link.url, title: link.title }))).toEqual([
+      { url: `${target}?x=1&y=2#notes`, title: "angle title" },
+      { url: target, title: null },
+      { url: target, title: null },
+      { url: target, title: "multiline title" },
+    ]);
+    expect(links[4]).toMatchObject({
+      type: "link",
+      url: target,
+      children: [{ type: "image", url: target }],
+    });
+    expect(source.body).toContain("[Encoded **draft** \\[v1\\]](");
+    for (const example of literal) {
+      expect(source.body).toContain(example);
+    }
+    expect(source.frontmatter.relationships).toEqual([
+      expect.objectContaining({ targetPath: `concepts/${target}`, kind: "okf-link" }),
+    ]);
   });
 
   it("prunes repository metadata and dependency subtrees", async () => {
