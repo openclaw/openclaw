@@ -328,8 +328,7 @@ export const sendHandlers: GatewayRequestHandlers = {
                 const result = await runMessageAction({
                   ...actionContext,
                   gatewayOwnedDelivery: true,
-                  // The delegating client records the confirmed send in its destination.
-                  callerRecordsDestinationHistory: true,
+                  callerRecordsDestinationHistory: Boolean(client?.internal?.agentRuntimeIdentity),
                   ...(request.action === "send"
                     ? {
                         actionOrigin: trustedContext.runtimeAgentId

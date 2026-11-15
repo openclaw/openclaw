@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { jsonResult } from "../../agents/tools/common.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import * as confirmedVisibleMessage from "../../sessions/confirmed-visible-message.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   createGatewayActionPlugin,
@@ -185,5 +186,35 @@ describe("runMessageAction gateway dispatch", () => {
       ctx: { input: { requireQueuePersistence: true } },
     });
     expect(result).toMatchObject({ handledBy: "core" });
+  });
+
+  it("does not commit destination transcript history from an external CLI caller", async () => {
+    const commitSpy = vi.spyOn(confirmedVisibleMessage, "commitConfirmedVisibleMessage");
+    const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
+    setTestPlugin(
+      createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "gatewaychat",
+        blurb: "Gateway dispatch test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction,
+      }),
+      "gatewaychat",
+    );
+    mocks.callGatewayLeastPrivilege.mockResolvedValueOnce({
+      ok: true,
+      messageId: "gw-cli-1",
+    });
+
+    await runGatewayAction(
+      "send",
+      { target: "user-123", message: "hello from external cli" },
+      { sessionKey: "agent:main:main" },
+    );
+
+    expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledOnce();
+    expect(handleAction).not.toHaveBeenCalled();
+    expect(commitSpy).not.toHaveBeenCalled();
   });
 });

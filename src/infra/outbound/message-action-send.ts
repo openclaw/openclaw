@@ -609,9 +609,10 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
-      // The Gateway owns source-reply history; other conversations get the
-      // confirmed send through the destination history owner.
-      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery) {
+      // Host-bound (in-process) callers own destination-history recording for
+      // Gateway-executed sends; external CLI/transport callers must not write to
+      // the Gateway's SQLite transcript from outside the Gateway process.
+      if (!dryRun && outboundRoute && !deliveryFact?.partialDelivery && ctx.gateway?.request) {
         await recordGatewayActionSend({
           cfg,
           channel,
