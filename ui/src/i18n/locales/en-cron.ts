@@ -97,7 +97,7 @@ const enCron = {
     },
 
     attention: {
-      title: "Run failed",
+      title: "Last run failed",
       autoDisabledTitle: "Automatically stopped",
       causeUnknown:
         "No failure details were recorded. Review the run history for available evidence.",
@@ -106,6 +106,7 @@ const enCron = {
       running: "A new run is in progress. Review its outcome before starting another run.",
       effectsUnknown: "Check for completed actions before running again.",
       reviewRun: "Review run",
+      errorDetails: "Error details",
     },
 
     jobs: {
@@ -355,6 +356,11 @@ const enCron = {
       noSummary: "No summary.",
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
+      conditionCheckFailed: "Condition check failed",
+      deliveryFailed: "Delivery failed: {error}",
+      deliveryNote: "Delivery: {error}",
+      showDetails: "Show details",
+      hideDetails: "Hide details",
       transcript: "Conversation",
       viewTranscript: "View transcript",
       transcriptScope:
