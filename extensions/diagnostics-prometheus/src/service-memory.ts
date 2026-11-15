@@ -132,6 +132,28 @@ export function recordMemorySample(
       labels,
       message.unmeasuredMessages,
     );
+    for (const [requestClass, components] of Object.entries(message.payloadComponents ?? {})) {
+      for (const [component, sample] of Object.entries(components)) {
+        const componentLabels = { request_class: requestClass, component };
+        store.counterValue(
+          "openclaw_worker_authority_component_sampled_bytes_total",
+          "Sampled worker-to-main actor facts bytes; marginal V8 sizes, one in 128 operations.",
+          componentLabels,
+          sample.bytes,
+        );
+        for (const [result, count] of [
+          ["measured", sample.samples],
+          ["unmeasured", sample.unmeasured],
+        ] as const) {
+          store.counterValue(
+            "openclaw_worker_authority_component_samples_total",
+            "Actor authority component samples; unmeasured graphs contribute no bytes.",
+            { ...componentLabels, result },
+            count,
+          );
+        }
+      }
+    }
   }
   for (const reader of memory.sqliteReaderMetrics ?? []) {
     const labels = { reader_operation: reader.operation };

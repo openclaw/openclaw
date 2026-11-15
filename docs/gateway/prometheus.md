@@ -225,6 +225,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_session_row_partition_revisions_total`          | counter   | `reason`                                                                                  |
 | `openclaw_worker_message_payload_bytes_total`             | counter   | `kind`, `direction`, `request_class` (SQLite and authority)                               |
 | `openclaw_worker_message_unmeasured_total`                | counter   | `kind`, `direction`                                                                       |
+| `openclaw_worker_authority_component_sampled_bytes_total` | counter   | `request_class`, `component`                                                              |
+| `openclaw_worker_authority_component_samples_total`       | counter   | `request_class`, `component`, `result`                                                    |
 | `openclaw_child_process_spawn_total`                      | counter   | `family`, `operation`                                                                     |
 | `openclaw_memory_rss_bytes`                               | histogram | none                                                                                      |
 | `openclaw_memory_pressure_total`                          | counter   | `level`, `reason`                                                                         |
@@ -315,6 +317,41 @@ Object graphs without a known size increase `openclaw_worker_message_unmeasured_
 instead of appearing as measured zero-byte messages. Compare byte rankings with
 this coverage counter before drawing conclusions; nested worker-to-worker traffic
 does not cross the main-thread boundary.
+
+Actor authority component counters sample one complete operation in 128, separately
+for each fixed `session.actor.*` request class. They include native admission facts
+that have no `payloadBytes` and therefore remain absent from the older payload byte
+counter. The older counter is unchanged: do not add it to the sampled series.
+Only numbers and fixed labels are retained; sampling does not change worker frames.
+
+Components partition V8-serialized facts using marginal removal sizes:
+`admission_entry` removes the snapshot's full entry; `admission_other` includes
+references and all remaining admission facts. `receipt_entry` removes the postimage
+entry and the complete entry-metadata receipts (including their small envelopes).
+`receipt_events` then removes appended events and transcript authority receipts.
+`receipt_other` includes everything left, including the append value and model
+prompt projection. Shared objects belong to the last component still referencing
+them. The components sum exactly to each sampled fact payload's V8 size; port,
+decision-cell and transport framing bytes are excluded. This is byte attribution,
+not a measurement of structured-clone allocation. Unsupported graphs increment
+`result="unmeasured"` samples instead of contributing bytes.
+
+For ordinary appends with one committed receipt, divide each component's sampled
+bytes by receipt samples to estimate bytes per append (including all admission
+frames in each sampled operation):
+
+```promql
+sum by (component) (
+  rate(openclaw_worker_authority_component_sampled_bytes_total{request_class="session.actor.appendTranscriptEvent"}[15m])
+)
+/
+scalar(sum(rate(openclaw_worker_authority_component_samples_total{request_class="session.actor.appendTranscriptEvent",component="receipt_other",result="measured"}[15m])))
+```
+
+Check sample counts and unmeasured samples before interpreting a short window.
+Rejected admissions can contribute bytes without a receipt; oversized transferred
+outcomes appear under admission-other rather than decoded receipt components.
+Systematic sampling can correlate with periodic workloads; compare longer windows.
 
 Foreign Worker instances with accessor or read-only methods, or nonextensible
 instances, retain CPU and lifecycle tracking but exclude per-message traffic.
@@ -1386,8 +1423,8 @@ attributes.
     | 512 | `gateway_rpc_client_requests_total`, `worker_message_payload_bytes_total`, `worker_queue_depth`, `worker_queue_wait_seconds`, `worker_request_seconds` |
     | 384 | `gc_duration_seconds` |
     | 256 | All other `gateway_rpc_*` families; `gateway_ws_event_bytes_total`, `gateway_ws_event_wire_bytes_total`, `gateway_ws_events_total`, `gateway_ws_session_event_bytes_total`, `gateway_ws_session_event_frames_total`; `heap_space_bytes` |
-    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total` |
-    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total` |
+    | 128 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_failover_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_catalog_total`, `tool_catalog_tools_total`, `tool_execution_blocked_total`, `tool_execution_total`, `tool_execution_duration_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes`, `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes`, `worker_gc_collections_total`, `worker_gc_duration_seconds_total`, `worker_gc_reclaimed_bytes_total`, `worker_heap_used_high_water_bytes`, `worker_tasks_completed_total`, `worker_authority_component_samples_total` |
+    | 64 | `heap_used_after_major_gc_bytes`, `heap_used_after_major_gc_timestamp_seconds`, `session_row_selections_total`, `session_row_selection_rows_total`, `worker_started_total`, `worker_retired_total`, `worker_message_unmeasured_total`, `worker_messages_total`, `worker_authority_component_sampled_bytes_total` |
     | 32 | `chat_send_phase_seconds`, `session_row_partition_cache_total`, `worktree_preparation_seconds` |
     | 8 | `session_row_partition_revisions_total` |
     | 4 | Every other cataloged family |

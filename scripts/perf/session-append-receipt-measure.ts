@@ -10,6 +10,12 @@
  * Acceptance: identical model-context bytes, proportional receipts, lower allocation
  * or CPU, no material latency/GC regression. Census includes capture overhead; replay
  * excludes fixture preparation and sender-thread CPU. This is not Gateway load proof.
+ * --authority replays all native authority frames per append through the byte counter;
+ * Use --sessions 2 --rows 4 for resident and --sessions 100 --rows 4 for evicted entries.
+ * Compare timing and allocation separately, counterbalanced, >=2000 iterations/arm.
+ * --compare-metrics-file <baseline> runs AB/BA plus A/A in one process on the same captured frames.
+ * The saved baseline exports recordWorkerAuthorityMessage as the original counter call returning false.
+ * Authority acceptance: unchanged frames, <=3% added main/worker CPU per append.
  */
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
@@ -37,6 +43,8 @@ const { values } = parseArgs({
     "text-repeats": { type: "string", default: "500" },
     "owner-file": { type: "string" },
     "check-compact": { type: "boolean", default: false },
+    authority: { type: "boolean", default: false },
+    "compare-metrics-file": { type: "string" },
   },
 });
 assert(values.output && ["census", "timing", "allocation"].includes(values.mode));
@@ -58,6 +66,18 @@ const source = values["owner-file"] ? pathToFileURL(path.resolve(values["owner-f
 const sourceDigest = createHash("sha256").update(readFileSync(source)).digest("hex");
 const receiptOwner = pathToFileURL(path.resolve("src/config/sessions/session-actor-receipt.ts"));
 const captured: unknown[] = [];
+const authorityFrames: Record<string, unknown>[][] = [];
+let currentFrames: Record<string, unknown>[] = [];
+const authorityCaptureKey = Symbol.for("openclaw.benchmark.authorityCapture");
+Reflect.set(globalThis, authorityCaptureKey, (wire: unknown, requestClass: string) => {
+  if (
+    capture &&
+    isRecord(wire) &&
+    ["session.actor.appendTranscriptEvent", "session.actor.appendToolResult"].includes(requestClass)
+  ) {
+    currentFrames.push(structuredClone(wire));
+  }
+});
 const census: Array<Record<string, unknown>> = [];
 let capture = false;
 const captureKey = Symbol.for("openclaw.benchmark.appendReceiptCapture");
@@ -70,8 +90,26 @@ let loaded = false;
 const evictions = { count: 0, bytes: 0 };
 const evictionKey = Symbol.for("openclaw.benchmark.receiptEvictions");
 Reflect.set(globalThis, evictionKey, evictions);
+const baselineMetricsUrl =
+  pathToFileURL(path.resolve("src/infra/worker-message-metrics.ts")).href + "?baseline";
 registerHooks({
   load(url, context, next) {
+    if (values["compare-metrics-file"] && url === baselineMetricsUrl) {
+      return next(pathToFileURL(path.resolve(values["compare-metrics-file"])).href, context);
+    }
+    if (values.authority && url.endsWith("/src/infra/sqlite-worker-operation-admission.ts")) {
+      const result = next(url, context);
+      assert(typeof result.source === "string");
+      const anchor = /const receive\s*=\s*(?:__name\()?\s*(?:\([^)]*\)|wire)\s*=>\s*\{/;
+      assert(anchor.test(result.source));
+      return {
+        ...result,
+        source: result.source.replace(
+          anchor,
+          `$& globalThis[Symbol.for("openclaw.benchmark.authorityCapture")](wire, admission.requestClass);`,
+        ),
+      };
+    }
     if (url === receiptOwner.href) {
       const result = next(url, context);
       assert(typeof result.source === "string");
@@ -107,7 +145,11 @@ const { withSelectedTranscriptReader } =
 const { upsertSessionEntryCore } = await import("../../src/config/sessions/session-accessor.js");
 const { replaceTranscriptEvents } =
   await import("../../src/config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
-const { getWorkerMessageMetrics } = await import("../../src/infra/worker-message-metrics.js");
+const workerMetrics = await import("../../src/infra/worker-message-metrics.js");
+const { getWorkerMessageMetrics } = workerMetrics;
+const baselineMetrics: typeof workerMetrics | undefined = values["compare-metrics-file"]
+  ? await import(baselineMetricsUrl)
+  : undefined;
 const { drainGlobalSingletonLifecycleState, readGlobalSingleton } =
   await import("../../src/shared/global-singleton.js");
 assert(loaded, "Replica owner substitution was not loaded");
@@ -283,11 +325,16 @@ try {
         const start = performance.now(),
           before = captured.length;
         capture = round >= 0;
+        currentFrames = [];
         await readers[slot]!(() => manager.appendMessageAsync(message));
         capture = false;
         const appendMs = performance.now() - start;
         if (round < 0) {
           continue;
+        }
+        if (values.authority) {
+          assert(currentFrames.some((frame) => frame.kind === "native-settlement"));
+          authorityFrames.push(currentFrames);
         }
         requestBytes += metric("sqlite_request") - requestsBefore;
         receiptBytes += metric("authority") - receiptsBefore;
@@ -340,23 +387,43 @@ try {
   await drainGlobalSingletonLifecycleState();
   Reflect.deleteProperty(globalThis, captureKey);
   Reflect.deleteProperty(globalThis, evictionKey);
+  Reflect.deleteProperty(globalThis, authorityCaptureKey);
   rmSync(stateRoot, { recursive: true, force: true });
 }
 function allocated(node: HeapProfiler.SamplingHeapProfileNode): number {
   return node.selfSize + node.children.reduce((total, child) => total + allocated(child), 0);
 }
-let replay: Record<string, unknown> | undefined;
-if (values.mode !== "census") {
+const replays: Record<string, unknown>[] = [];
+async function measureReplay(arm: string): Promise<Record<string, unknown>> {
+  const replayMetrics = arm === "base" ? baselineMetrics : workerMetrics;
+  assert(replayMetrics);
   // The separate sender isolates native structured-clone decoding and allocation on main.
   const worker = new Worker(
     `const { parentPort, workerData } = require('node:worker_threads');
     let sent = 0;
+    let cpuUs = 0;
     parentPort.on('message', () => {
+      const cpu = process.threadCpuUsage();
       const end = Math.min(sent + 32, workerData.iterations);
-      while (sent < end) parentPort.postMessage(workerData.receipts[sent++ % workerData.receipts.length]);
+      while (sent < end) {
+        const item = workerData.receipts[sent++ % workerData.receipts.length];
+        if (workerData.authority) {
+          for (const frame of item) parentPort.postMessage(frame);
+        } else parentPort.postMessage(item);
+      }
+      const used = process.threadCpuUsage(cpu);
+      cpuUs += used.user + used.system;
+      if (sent === workerData.iterations) parentPort.postMessage({ benchmarkCpuUs: cpuUs });
     });
     parentPort.postMessage('ready');`,
-    { eval: true, workerData: { receipts: captured, iterations } },
+    {
+      eval: true,
+      workerData: {
+        receipts: values.authority ? authorityFrames : captured,
+        iterations,
+        authority: values.authority,
+      },
+    },
   );
   const inspector = new Session(),
     gc = new GCProfiler();
@@ -380,15 +447,35 @@ if (values.mode !== "census") {
     gc.start();
     const cpu = process.threadCpuUsage(),
       start = performance.now();
+    const metricsBefore = getWorkerMessageMetrics();
+    let workerCpuUs = 0;
     await new Promise<void>((resolve, reject) => {
       let received = 0;
+      let samplePayload: boolean | undefined;
       worker.once("error", reject);
       worker.on("message", (message: unknown) => {
-        assert(isRecord(message) && message.kind === "committed");
-        received++;
-        if (received === iterations) {
+        assert(isRecord(message));
+        if (typeof message.benchmarkCpuUs === "number") {
+          workerCpuUs = message.benchmarkCpuUs;
           resolve();
-        } else if (received % 32 === 0) {
+          return;
+        }
+        if (values.authority) {
+          const requestClass = "session.actor.appendTranscriptEvent";
+          samplePayload = replayMetrics.recordWorkerAuthorityMessage(
+            message,
+            requestClass,
+            samplePayload,
+          );
+          if (message.kind !== "native-settlement") {
+            return;
+          }
+          samplePayload = undefined;
+        } else {
+          assert(message.kind === "committed");
+        }
+        received++;
+        if (received < iterations && received % 32 === 0) {
           worker.postMessage("next", []);
         }
       });
@@ -402,10 +489,14 @@ if (values.mode !== "census") {
       values.mode === "allocation"
         ? (await inspector.post("HeapProfiler.stopSampling")).profile
         : undefined;
-    replay = {
+    const replay = {
+      arm,
       iterations,
       elapsedMs,
       mainThreadCpuUsPerReceipt: (used.user + used.system) / iterations,
+      workerCpuUsPerAppend: workerCpuUs / iterations,
+      metricsBefore,
+      metricsAfter: getWorkerMessageMetrics(),
       sampledBytesPerReceipt: profile ? allocated(profile.head) / iterations : undefined,
       gc: pauses,
       memoryBefore,
@@ -414,15 +505,33 @@ if (values.mode !== "census") {
       hostLoadAfter: loadavg(),
     };
     if (profile) {
-      writeFileSync(path.join(output, "allocation.json"), JSON.stringify(profile));
+      writeFileSync(
+        path.join(output, `allocation-${replays.length + 1}.json`),
+        JSON.stringify(profile),
+      );
     }
+    return replay;
   } finally {
     inspector.disconnect();
     await worker.terminate();
   }
 }
+if (values.mode !== "census") {
+  for (const arm of baselineMetrics
+    ? ["base", "candidate", "candidate", "base", "base", "base"]
+    : ["candidate"]) {
+    replays.push(await measureReplay(arm));
+  }
+}
+const replay = replays.at(-1);
 const result = {
   sourceDigest,
+  metricsSourceDigest: createHash("sha256")
+    .update(readFileSync("src/infra/worker-message-metrics.ts"))
+    .digest("hex"),
+  baselineMetricsSourceDigest: values["compare-metrics-file"]
+    ? createHash("sha256").update(readFileSync(values["compare-metrics-file"])).digest("hex")
+    : undefined,
   mode: values.mode,
   rows,
   textRepeats,
@@ -431,9 +540,26 @@ const result = {
   requestBytes,
   receiptBytes,
   evictions,
+  authority: values.authority,
+  authorityFrameCounts: authorityFrames.map((frames) => frames.length),
   census,
   replay,
+  replays,
   node: process.version,
 };
 writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));
-console.log(JSON.stringify({ output, sessions, evictions, requestBytes, receiptBytes, replay }));
+console.log(
+  JSON.stringify({
+    output,
+    sessions,
+    evictions,
+    requestBytes,
+    receiptBytes,
+    replay: replay && {
+      iterations: replay.iterations,
+      mainThreadCpuUsPerReceipt: replay.mainThreadCpuUsPerReceipt,
+      workerCpuUsPerAppend: replay.workerCpuUsPerAppend,
+      sampledBytesPerReceipt: replay.sampledBytesPerReceipt,
+    },
+  }),
+);
