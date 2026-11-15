@@ -80,6 +80,12 @@ Key/value environment overrides merged on top of the inherited environment.
 Return a running process handle after this delay (ms), at most 120000; larger values are capped and the running result says so. On the Gateway and in its sandbox, an ordinary yielded command remains owned by its request: the browser's Stop button and typed `/stop` cancel it. Normal model completion leaves it running.
 </ParamField>
 
+<ParamField path="awaitResults" type="boolean" default="false">
+Keep the tool call open until the command exits and its terminal result is collected. Use this for bounded tests and builds whose result is needed before continuing, including headless coding runs, instead of a short `yieldMs` followed by polling. It takes precedence over `yieldMs`; Stop and process deadlines still apply. Cannot be combined with `background: true` or `durable: true`.
+
+In [Code Mode](/tools/code-mode/tool-surface#required-results), set `awaitResults: true` on the outer cell to collect ordinary nested shell commands without model polling. Explicit `background: true` commands remain detached.
+</ParamField>
+
 <ParamField path="background" type="boolean" default="false">
 Start a deliberately independent service immediately. Request Stop leaves it running; stop it separately with its process handle. Use `yieldMs` for ordinary work. The process timeout still applies after the tool returns.
 </ParamField>
@@ -171,8 +177,8 @@ Notes:
 - Running, completed, and failed results preserve execution warnings in structured `warningText` as well as visible text, so Code Mode callers can follow guidance such as using a noninteractive command when sandbox PTY is unavailable. Calls without warnings omit this field.
 - Before a Gateway restart, a background command continuation keeps the original requester's still-current authority, including permitted reviewer models. Another participant's permissions do not replace it, and revoked authority prevents further execution. Adopted durable completions after restart are new system input under the owning session principal's current authority; requester continuations are not restored.
 - When an approved async command completes, its continuation uses the normal agent run timeout from `agents.defaults.timeoutSeconds`. The follow-up observer can finish waiting while the accepted agent run continues.
-- Hidden subagent sessions do not receive automatic background-exec wakes; visible spawned sessions do. Their running and `process` results give manual-collection guidance instead of a wake promise. Collect the result with `process poll` before yielding without another completion source.
-- Isolated cron runs also receive manual-collection guidance: completion admission requires the originating run to remain active. If the run needs a background command's result, collect it with `process poll` before ending the turn.
+- Hidden subagent runs and isolated cron runs are one-shot: their final reply is the result, so ending the turn does not wait for a background command. Their running result tells the agent to call `sessions_yield` if only waiting remains. `sessions_yield` then awaits the wake-armed commands that this run started, and the first exit resumes the same run with the same wake content (exit code, duration, last 2,000 characters). A hidden subagent resumes as its original task, so its final result still goes to its requester. A cron run continues in place, and the resumed turn's reply is the run's result. The command's `timeoutSeconds` bounds the wait, because a timeout also ends the command and resumes the run. A command with `timeoutSeconds: 0` has no deadline, so its running result gives manual-collection guidance instead. Visible spawned sessions are woken like other sessions.
+- Without `sessions_yield`, a hidden subagent that ends its turn gets the exit only as a passive notice in its next turn, and a cron run that has ended gets no completion turn. A cron job with delivery `none` suppresses exec completion, so its commands keep manual-collection guidance.
 - The process owner tracks agent-started background commands. Use the returned process session ID to inspect output, poll, or stop a command; its completion can wake the agent.
 - A one-time wait inside the current conversation (CI, a deploy, a short delay) is one background command. When its running result says the exit wakes the conversation, the agent ends the turn; otherwise it collects the result with `process poll`. Saved reminders, recurring work and follow-ups from another session use [automations](/automation/cron-jobs).
 
@@ -363,10 +369,16 @@ Foreground:
 { "tool": "exec", "command": "ls -la" }
 ```
 
-Ordinary work that yields a handle, then poll:
+Bounded tests or builds needed before continuing:
 
 ```json
-{"tool":"exec","command":"npm run build","yieldMs":1000}
+{ "tool": "exec", "command": "npm run build", "awaitResults": true, "timeoutSeconds": 120 }
+```
+
+If ordinary work returns a running handle, collect that handle instead of restarting the command:
+
+```json
+{"tool":"exec","command":"npm run build"}
 {"tool":"process","action":"poll","sessionId":"<id>","timeout":30000}
 ```
 

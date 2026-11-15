@@ -661,7 +661,7 @@ it.for([
           }
           if (locked) {
             expect(completedOutcome.error).toBe(
-              "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
+              "⚠️ This model was not found. Choose another model in the OpenClaw app or run `openclaw configure`.",
             );
             expect((await readSessionEntryInWorker(scope))?.modelSelectionLocked).toBe(true);
           }

@@ -224,10 +224,10 @@ reports the conflict without replacing them. Plugin and skill trust warnings
 require explicit consent. Automations are assigned to the new agent.
 If a declared plugin still needs setup, a referenced environment variable is
 missing, or an OAuth MCP server is not authorized, Add creates the declared
-automations paused. Their schedules, prompts, and imported scratch stay intact.
+automations disabled. Their schedules, prompts, and imported scratch stay intact.
 Connect the requirement through its ordinary plugin or MCP controls, then enable
 the jobs through the agent's automation controls; Add does not create substitute
-routines or automatically enable paused jobs later.
+routines or automatically enable disabled jobs later.
 
 A package may declare `agent.heartbeat` in `CLAW.md` or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
@@ -264,7 +264,7 @@ agent:
   memory: { search: { enabled: false } }
 ```
 
-Set `enabled: false` on an automation to install it paused; omitting the field
+Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
 in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
 and update its timezone, tools, or timeout through ordinary automation controls.
@@ -305,7 +305,7 @@ version review and installation. The Gateway chooses the new workspace;
 precedence over registry names and require the Gateway to be stopped.
 
 Offline Add uses the same installer and local scheduler after acquiring exclusive
-state ownership. Explicitly paused automations remain paused.
+state ownership. Explicitly disabled automations remain disabled.
 
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
@@ -331,8 +331,8 @@ greeting or a message sent on your behalf. Later setup failure retains the expos
 agent and conversation; completion does not replace an existing draft.
 
 The installer shows a card for each newly installed plugin and an automation-created
-notice as each routine is added. Paused routines stay paused until their setup
-prerequisites are ready. Actual installation failures appear in the plugin card or
+notice as each routine is added. Disabled routines remain disabled while their setup
+prerequisites are missing. Actual installation failures appear in the plugin card or
 a concise automation-failed notice; continue setup in the same agent. Successful
 skill and MCP setup, absent optional files, and empty categories stay silent. There
 is no final setup receipt or second model recap. Declared package bootstrap still

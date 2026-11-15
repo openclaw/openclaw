@@ -34,12 +34,12 @@ import {
 
 const hash = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const time = "2026-08-28T12:00:00.000Z";
-const version = "2026.8.28-beta.1";
 const workflowPath = (name: string) => `.github/workflows/${name}.yml`;
 
 export function candidatePublicationFixture(
   options: {
     candidateSha?: string;
+    candidateVersion?: string;
     transportRef?: string;
     runId?: string;
     purpose?: "publish" | "main-qualification" | "diagnostic";
@@ -47,7 +47,9 @@ export function candidatePublicationFixture(
     publicationRoute?: PublicationSelection["route"];
   } = {},
 ) {
-  const fixture = trustedMainNpmFixture();
+  const version = options.candidateVersion ?? "2026.8.28-beta.1";
+  const beta = version.includes("-beta.");
+  const fixture = trustedMainNpmFixture(beta ? "beta" : "stable", { targetVersion: version });
   const q = options.candidateSha ?? defaultQ;
   const branch =
     options.transportRef ??
@@ -67,7 +69,7 @@ export function candidatePublicationFixture(
   const laneInputs = { qualification_baselines_json: qualificationBaselinesJson };
   const selection: PublicationSelection = {
     route: options.publicationRoute ?? "normal",
-    npmDistTag: "beta",
+    npmDistTag: beta ? "beta" : "latest",
     publishOpenclawNpm: true,
     pluginPublishScope: "all-publishable",
     plugins: [],
@@ -79,11 +81,11 @@ export function candidatePublicationFixture(
   Object.assign(inputs, {
     ref: q,
     expected_sha: q,
-    target_context_ref: "release/2026.8.28",
-    release_profile: "beta",
+    target_context_ref: "release/" + version.split("-")[0],
+    release_profile: beta ? "beta" : "stable",
     rerun_group: "all",
     mode: "both",
-    run_release_soak: "false",
+    run_release_soak: String(!beta),
     trusted_workflow_json: publicationDispatchEnvelope(tooling, intent, laneInputs),
   });
   const admission = admissionFixture(options.protectedTag ?? true, {
@@ -116,8 +118,8 @@ export function candidatePublicationFixture(
       PUBLICATION_TOOLING_JSON: JSON.stringify(tooling),
       PUBLICATION_TARGET_CONTEXT: inputs.target_context_ref,
       PUBLICATION_TARGET_SHA: q,
-      PUBLICATION_COVERAGE_POLICY: "npm-beta-v1",
-      PUBLICATION_SKIP_TELEGRAM: "true",
+      PUBLICATION_COVERAGE_POLICY: beta ? "npm-beta-v1" : "npm-stable-v1",
+      PUBLICATION_SKIP_TELEGRAM: String(beta),
       GITHUB_REPOSITORY: repository,
       GITHUB_REF: tooling.fullRef,
       GITHUB_SHA: q,

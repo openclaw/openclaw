@@ -49,7 +49,6 @@ Behavior:
 
 - A completion wake lets the agent continue outstanding work; it does not require a new chat message. The agent is instructed to report requested results not yet delivered, meaningful outcome changes, or new actionable failures, and stay silent for routine, duplicate, superseded, or already-recovered results. A completion without captured output, such as a command that redirected its output to a file, continues the same way, so the agent can read that file and report. This is a model instruction, not a rule-based notification filter, and it does not disable the completion turn. A silent completion turn is valid in every conversation, including Control UI chats; subagent runs still require a final result.
 - Raw exec completion notices stay in the agent's transcript but are hidden from the Control UI's chat history and live message updates. The agent's user-facing reply remains visible.
-- While an idle conversation waits on such a command, the Control UI shows a **Waiting on …** card above the composer that opens the command's output ([Chat](/web/control-ui/chat)). `sessions.processes.list` marks these running rows with `wakesSession: true`.
 - A host command started in a chat conversation completes through ordinary execution in that conversation: the completion turn runs with its session history, and any reply goes back to the captured account, chat, and topic. It waits behind existing work in that session, independently of heartbeat cadence, active hours, and delivery settings. A command started in an automatically silent run keeps that restriction for its completion. Current session permissions and tool restrictions can tighten the captured permissions before execution.
 - Completions that arrive while an earlier completion turn in the same conversation is still queued or running wait for it, plus about one second for close stragglers, then share one turn: the agent gets every waiting result (each with its process ID, status, exit code, duration and output tail) in one message instead of one turn per command. One shared turn carries at most about 8,000 characters of results; later results start the next turn. Only completions of commands started by the same request and the same agent run share a turn: a request Stop retires the whole shared turn, and the turn's input provenance names one launching run. A completion with no earlier completion turn in flight starts at once, as before. A waiting completion can start after a human message queued in `followup` or `collect` mode.
 - Before a Gateway restart, when a channel owner started the command, its completion turn keeps that owner's owner-only tools, such as `openclaw` and `gateway`, so the agent can finish the task without a new message. OpenClaw rechecks owner status against the current config each time; if the sender is no longer an owner, the tools stay unavailable. Commands started by other senders do not inherit those owner-only tools. After restart, durable outcomes use the owning session principal's current authority as described below.
@@ -60,7 +59,7 @@ Behavior:
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
 - If automatic completion wake is unavailable, or `tools.exec.notifyOnExitEmptySuccess=false` keeps silent successes quiet, poll with `process`.
-- Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- Hidden subagent runs and isolated cron runs end with their final reply, so their running results say to call `sessions_yield` if only waiting remains. `sessions_yield` awaits the wake-armed commands this run started, bounded by each command's `timeoutSeconds`, and the first exit resumes the same run with the exit result. Without that yield, a hidden subagent gets the exit only as a passive notice. Visible spawned sessions are woken like other sessions.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate saved reminders, recurring work or cross-session follow-ups with `sleep` loops or repeated polling; use cron for those. A one-time wait in the current conversation is one background command.
 
@@ -204,11 +203,11 @@ sessions, incognito sessions, subagents, ended cron runs, and disabled completio
 notifications receive no restart wake. Empty successful outcomes follow the
 captured `notifyOnExitEmptySuccess` policy. The registry checks these conditions
 when it adopts the process and again when it exits. A still-running adopted
-process whose exit will wake its session says so in `process poll`, and the
-Control UI shows its **Waiting on …** card above the composer. Before restart, ordinary live-requester
-completion behavior stays unchanged. Completed durable records and their logs
-expire under the captured completion-relative retention setting and normal
-registry limits; restarting does not renew retention.
+process whose exit will wake its session says so in `process poll`. Before
+restart, ordinary live-requester completion behavior stays unchanged. Completed
+durable records and their logs expire under the captured completion-relative
+retention setting and normal registry limits; restarting does not renew
+retention.
 
 ## Worker environments
 
@@ -274,7 +273,12 @@ Cleanup stops when the groups disappear or their cleanup budgets expire; it does
 not periodically scan the host's process table.
 
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
-before loading its main runtime.
+before loading its main runtime. On hosts with 1 GiB of RAM or less, or a process
+memory limit of 1 GiB or less, it uses in-process spawning instead. This leaves
+more memory for requests but retains Linux's per-command fork cost. Commands
+spawned in-process do not use the broker's optional agent-exec cgroup placement;
+shared command memory monitoring still applies. Native database resource brokers
+keep their separate ownership and cleanup.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
 entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.

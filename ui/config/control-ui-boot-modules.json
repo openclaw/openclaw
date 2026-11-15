@@ -806,6 +806,7 @@
   "ui/src/lib/model-runtime-choice.ts",
   "ui/src/lib/native-overlay-occlusion.ts",
   "ui/src/lib/navigation-click.ts",
+  "ui/src/lib/nodes/device-signing.noble.ts",
   "ui/src/lib/nodes/device-signing.runtime.ts",
   "ui/src/lib/nodes/index.ts",
   "ui/src/lib/observer-digest.ts",

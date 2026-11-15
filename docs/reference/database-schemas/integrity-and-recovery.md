@@ -1207,8 +1207,8 @@ session validation once instead of reusing the original identity receipt.
 
 ## Planner statistics maintenance
 
-The shared-state writer maintains SQLite planner statistics once during its
-30-minute WAL maintenance pass, after a successful checkpoint. It uses
+Shared-state and agent writers maintain SQLite planner statistics once during
+each database's 30-minute WAL maintenance pass, after a successful checkpoint. They use
 `PRAGMA analysis_limit=1000; PRAGMA optimize=0x10002;` under the existing writer
 admission and transaction authority, with no busy wait. SQLite analyzes only
 tables with missing or stale statistics, including tables this maintenance
@@ -1219,14 +1219,21 @@ later periodic maintenance retries. Checkpoint-only ticks, database admission,
 opens, and ordinary writes do not analyze tables. Vacuum continuation units do
 not repeat the analysis. Shutdown joins accepted maintenance before native close.
 
+Default periodic WAL maintenance starts 30–60 minutes after each connection opens,
+then repeats every 30 minutes. The initial random offset spreads the first
+statistics refresh across databases instead of concentrating it after a restart.
+Checkpoint-only ticks and explicitly selected maintenance intervals keep their
+existing deadlines.
+
 The limit bounds sampling per index, not total work or elapsed time across the
 database. Statistics are SQLite-owned, derived data: application records,
 retention, and schema versions are unchanged. Updates and rollback require no
 migration. Existing read snapshots remain intact. Newly opened readers use the
 latest statistics; retained connections can keep older selectivity after later
-refreshes until their normal retirement. This policy does not add recurring
-analysis to agent databases; Doctor's stopped-writer same-version media repair
-uses the same bounded statistics primitive.
+refreshes until their normal retirement. Periodic agent maintenance covers growth
+even when session retention has deleted nothing. Bulk session deletion retains
+its separate bounded analysis to refresh estimates after shrinkage. Doctor's
+stopped-writer same-version media repair uses the same statistics primitive.
 Modern version migrations leave unrelated planner statistics unchanged.
 
 ## Historical import evidence

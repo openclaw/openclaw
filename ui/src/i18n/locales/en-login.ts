@@ -7,7 +7,7 @@ const enLogin = {
     help: {
       title: "How to connect",
       step1: "Start the Gateway on this computer:",
-      step2: "Get a one-time dashboard link:",
+      step2: "Get a one-time sign-in link:",
       step3: "Enter the Gateway URL and secret above, or open the link.",
       docsLink: "Read the docs →",
     },
@@ -15,11 +15,10 @@ const enLogin = {
   login: {
     unsupportedBrowser: {
       title: "Update your browser to use OpenClaw",
-      description:
-        "This browser is missing features the Control UI needs to display menus and dialogs.",
+      description: "This browser is missing features OpenClaw needs to display menus and dialogs.",
       apple: "Use macOS 26.2 or iOS 26.2 or later, with Safari 26.2 or later.",
       browsers: "You can also use Chrome or Firefox released within the last six months.",
-      native: "On an older Mac, open this dashboard in an up-to-date browser instead.",
+      native: "On an older Mac, open this page in an up-to-date browser instead.",
       open: "Open in browser",
       opened: "Opened in your default browser.",
       failed: "Couldn’t open your browser. Copy this page’s address into an up-to-date browser.",
@@ -131,7 +130,7 @@ const enLogin = {
       trustedProxy: {
         title: "Proxy authentication required",
         summary: "Couldn’t verify your proxy sign-in. Sign in through the proxy to continue.",
-        stepSignIn: "Open the dashboard through the sign-in proxy, not the Gateway directly.",
+        stepSignIn: "Open OpenClaw through the sign-in proxy, not the Gateway directly.",
         stepHeaders:
           "Ask an admin to check identity headers, required-header forwarding on WebSocket upgrade requests, and your account access.",
         stepNoToken: "A Gateway token cannot replace proxy authentication.",
@@ -195,10 +194,10 @@ const enLogin = {
       protocol: {
         title: "Protocol mismatch",
         summary:
-          "Couldn’t connect because this page and the Gateway use different versions. Reopen the dashboard.",
+          "Couldn’t connect because this page and the Gateway use different versions. Reopen OpenClaw.",
         refresh: "Refresh page",
         stepDashboard:
-          "Reopen the served dashboard with openclaw dashboard so the UI and Gateway come from the same install.",
+          "Reopen OpenClaw with openclaw dashboard so the web app and Gateway come from the same install.",
         stepDevUi:
           "If using pnpm ui:dev, rebuild or restart the dev UI against the current checkout.",
         stepRestart:

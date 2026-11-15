@@ -20,10 +20,13 @@ it("shares issued bindings only inside one synchronous consuming step", async ()
   bindSynchronousSessionSource(first.assertCurrent);
   bindSynchronousSessionSource(second.assertCurrent);
   const assertion = composeSessionSourceAssertion(
-    [first.assertCurrent, second.assertCurrent],
+    [composeSessionSourceAssertion([first.assertCurrent]), second.assertCurrent],
     undefined,
     { synchronousCheck: true },
   );
+  composeSessionSourceAssertion([first.assertCurrent, first.assertCurrent])();
+  expect(first.assertCurrent).toHaveBeenCalledOnce();
+  first.assertCurrent.mockClear();
   withSessionSourceValidation(() => {
     assertion();
     assertion();

@@ -365,6 +365,7 @@ suite.define(() => {
       await ui.menuItem(page, "Advanced").click();
       await ui.menuItem(page.locator("openclaw-session-menu"), "Delete…", false).click();
       const confirmation = await support.waitForConfirmModal(page);
+      await support.captureUiProof(suite, page, "delete-confirmation.png", confirmation);
       await gateway.deferNext("sessions.delete");
       await ui.button(confirmation, "Delete").evaluate((control) => {
         if (!(control instanceof HTMLButtonElement)) {
@@ -387,5 +388,40 @@ suite.define(() => {
       expect(await error.textContent()).not.toContain("GatewayRequestError");
       await ui.visible(row);
       expect(nativeDialogs).toEqual([]);
+      if (support.captureUiProofEnabled) {
+        // Supplementary production-dialog rendering; the real sidebar path is exercised above.
+        const modules = await page.evaluateHandle<{
+          dialog: typeof import("../components/confirm-dialog.ts");
+          copy: typeof import("../lib/sessions/session-delete-confirmation.ts");
+          i18n: typeof import("../i18n/index.ts");
+        }>(
+          '(async () => ({ dialog: await import("/src/components/confirm-dialog.ts"), copy: await import("/src/lib/sessions/session-delete-confirmation.ts"), i18n: await import("/src/i18n/index.ts") }))()',
+        );
+        for (const incognitoOnly of [true, false]) {
+          await modules.evaluate(({ dialog, copy, i18n }, only) => {
+            const sessions = [{ key: "agent:main:dashboard:incognito-private", incognito: true }];
+            if (!only) {
+              sessions.push({ key: "agent:main:research", incognito: false });
+            }
+            void dialog.showConfirmDialog({
+              title: only
+                ? i18n.t("sessionsView.deleteSessionTitle", { session: "Private notes" })
+                : i18n.t("sessionsView.deleteSessionsTitle", { count: "2" }),
+              message: copy.sessionDeleteConfirmationMessage(sessions),
+              confirmLabel: i18n.t("common.delete"),
+              danger: true,
+            });
+          }, incognitoOnly);
+          const modal = await support.waitForConfirmModal(page);
+          await support.captureUiProof(
+            suite,
+            page,
+            incognitoOnly ? "incognito-confirmation.png" : "mixed-confirmation.png",
+            modal,
+          );
+          await ui.button(modal, "Cancel").click();
+        }
+        await modules.dispose();
+      }
     }));
 });

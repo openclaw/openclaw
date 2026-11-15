@@ -179,6 +179,20 @@ the later lazy boot-identity table. The update must preserve that launch alongsi
 the existing session, transcript, search, and SQLite reclamation assertions. This
 is persisted-state upgrade proof; it does not exercise a running remote node.
 
+`OPENCLAW_PUBLISHED_DRIVER_LINKED_ROOT=1` moves the installed driver into
+`releases/<version>/` under the prefix and leaves a relative link at the package
+path before the update. No shipped release produces that layout. It is what a
+downgrade would leave under a proposed layout that keeps each release in its
+own directory, so this mode shows what a published driver does when it meets one. The update,
+readiness, version, and session assertions are unchanged, and the incognito scan
+also covers the directory behind the link, where such a driver keeps its
+backups. The cell records where the package path points before and after the
+update, including after a failed update. Published drivers follow the link and
+swap inside the directory behind it; that record is an observation, not an
+assertion. Run it with `pnpm test:docker:published-driver-linked-root`. No CI
+workflow selects this lane; `ci-published-driver-update.yml` runs only the
+scoped-restore mode.
+
 After the Docker cell, the same job reuses its verified candidate tarball for the
 [native systemd survivor flow](/help/testing-updates-plugins#native-systemd-update-matrix),
 initially against published `2026.10.9`. Its separate fifteen-minute step requires
