@@ -20,6 +20,7 @@ import * as schemaMigrations from "./doctor-schema-migrations.js";
 // The copy-and-swap upgrade at Gateway start brings these databases current before the
 // activation repair can see them. This file covers the repair path that remains for starts the
 // upgrade skips (for example a database under a symlinked directory), so the upgrade is off here.
+// mock-isolation: the startup upgrade must not run so the in-place activation repair stays reachable.
 vi.mock("../state/state-upgrade-startup.js", () => ({
   upgradeStateOnGatewayStart: vi.fn(async () => {}),
 }));
