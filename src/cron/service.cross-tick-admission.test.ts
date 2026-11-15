@@ -4,6 +4,10 @@ import { afterEach, expect, it, vi } from "vitest";
 import { stubFreeMemory } from "../../test/helpers/cron/free-memory.js";
 import * as cron from "../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  applyGatewayLaneConcurrency,
+  resolveGatewayLaneConcurrency,
+} from "../gateway/server-lanes.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import * as hostMemory from "../infra/host-memory.js";
 import * as childMemory from "../process/child-memory.js";
@@ -758,6 +762,32 @@ it("runs a fired payload when a conversation turn ending frees a run slot", asyn
     await Promise.all(turns);
     await waitForCronRunQueue(state);
     stop(state);
+  }
+});
+
+it("counts hook sessions sharing automation's budget when a provider pushes back", async () => {
+  applyGatewayLaneConcurrency(
+    resolveGatewayLaneConcurrency({
+      hooks: { enabled: true },
+      agents: { defaults: { maxConcurrent: 32 } },
+    }),
+  );
+  const end = createDeferred();
+  const sessions = [CommandLane.CronNested, CommandLane.HookDispatch].flatMap((lane) =>
+    Array.from({ length: 8 }, () => enqueueCommandInLane(lane, async () => await end.promise)),
+  );
+  const stopWatch = watchCronRunSlotPushback();
+  try {
+    await vi.waitFor(() =>
+      expect(getCommandLaneSnapshot(CommandLane.CronNested).groupActive).toBe(16),
+    );
+    // Eight automation runs and eight hook turns are in flight: pushback halves sixteen.
+    rateLimited();
+    expect(resolveCronRunSlots()).toBe(8);
+  } finally {
+    stopWatch();
+    end.resolve();
+    await Promise.all(sessions);
   }
 });
 
