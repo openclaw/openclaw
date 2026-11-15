@@ -105,7 +105,13 @@ export type SessionTreeEntry = SessionTreeEntryBase &
       }
     | { type: "label"; targetId: string; label: string | undefined }
     | { type: "session_info"; name?: string }
-    | { type: "leaf"; targetId: string | null; appendParentId?: string | null }
+    | {
+        type: "leaf";
+        targetId: string | null;
+        appendParentId?: string | null;
+        /** An in-place history cut: usage bills the branch it displaced. */
+        billsDisplaced?: true;
+      }
   );
 
 export interface SessionContext {

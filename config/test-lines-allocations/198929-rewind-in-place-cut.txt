@@ -7,7 +7,7 @@
 # tests, and one superseded ordering test was deleted. Three lines are notes: a mock-isolation
 # note this branch predates on main's worker-idle-gc test, and why the Gateway startup-trace
 # memory case cannot assert the process-wide worker count its shard shares. Fifteen lines pin
-# the upgrade cases: a v2026.11.3 whole-transcript rewind or switch copy bills only what its
-# retained source never billed, before and after an in-place rewind, and a marked copy's own
+# the upgrade cases: a v2026.11.3 whole-transcript rewind or switch copy keeps stable's bill,
+# also after an in-place rewind marks its displaced branch, and a main-era marked copy's own
 # inactive-sibling spend survives an in-place rewind.
 88

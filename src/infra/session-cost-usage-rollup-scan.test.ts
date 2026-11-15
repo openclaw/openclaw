@@ -68,7 +68,7 @@ it("preserves rewind, side append and parentless navigation with canonical byte 
       appendMode: "side",
       timestamp: "2026-10-18T12:00:00.000Z",
     },
-    { type: "leaf", id: "rewind", parentId: "side", targetId: "a" },
+    { type: "leaf", id: "rewind", parentId: "side", targetId: "a", billsDisplaced: true },
     message(7, { id: "c" }),
   ];
   // The last raw event is outside the visible branch, but still owns the byte anchor.

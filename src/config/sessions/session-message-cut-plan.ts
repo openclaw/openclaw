@@ -252,6 +252,8 @@ export function planInPlaceSessionMessageCut(
       parentId: reader.tailEventId(),
       timestamp: new Date().toISOString(),
       targetId: repointTargetId,
+      // Usage bills this control's displaced branch: before in-place cuts a retired copy did.
+      billsDisplaced: true,
     },
     result: {
       status: "created",

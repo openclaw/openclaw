@@ -45,13 +45,14 @@ function makeRow(
     },
   };
 }
+const cut = { billsDisplaced: true }; // an in-place cut bills the branch it displaced
 const control = (
   seq: number,
   type: string,
   id: string,
   parentId: string | null,
   targetId?: string,
-): Row => ({ seq, event: { type, id, parentId, ...(targetId ? { targetId } : {}) } });
+): Row => ({ seq, event: { type, id, parentId, ...(targetId ? { targetId, ...cut } : {}) } });
 const initial = [makeRow(1, "root", null, 1), makeRow(4, "a", "root", 2)];
 const appended = [...initial, makeRow(9, "b", "a", 4), makeRow(12, "c", "b", 8)];
 async function scan(
@@ -310,17 +311,16 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
       window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
     ].reduce((sum, rows) => sum + tokensOf(rows), 0),
   ).toBe(70);
-  // v2026.11.3 copied without `inheritedThrough`, then displaced the source's tip a2 with its
-  // own control: the source bills that path, a switch copy keeps the sibling a2b it never billed.
+  // A v2026.11.3 copy keeps stable's active-path bill; a later in-place cut keeps its a2b.
   const stableCopy = (targetId: string, ...leaves: TranscriptEvent[]) => [
     createSessionTranscriptHeader(),
     ...branchedSource().slice(1),
     { type: "leaf", id: "stable", parentId: "a2", targetId, timestamp: new Date().toISOString() },
     ...leaves,
   ];
-  const rewound = { type: "leaf", id: "rewound", parentId: "stable", targetId: "a1" };
+  const rewound = { type: "leaf", id: "rewound", parentId: "stable", targetId: "a1", ...cut };
   expect([stableCopy("a1"), stableCopy("a2b"), stableCopy("a2b", rewound)].map(tokensOf)).toEqual([
-    0, 40, 40,
+    10, 50, 50,
   ]);
   // Rewinding the marked switch copy in place keeps its own a2b, which its source never billed.
   const upgraded = [switchLeaf, { ...rewound, parentId: "97c81933" }];
@@ -391,7 +391,7 @@ const u = (id: string, parentId: string | null, second: number) =>
 const a = (id: string, parentId: string, second: number) =>
   stamp(answerEvent(id, parentId, 1), second);
 const leafRow = (parentId: string, targetId: string | null) =>
-  ({ type: "leaf", id: "cut", parentId, targetId }) as Record<string, unknown>;
+  ({ type: "leaf", id: "cut", parentId, targetId, ...cut }) as Record<string, unknown>;
 const latencySamples = (entry: UsageCostRollupEntry) =>
   Object.values(entry.rollup.buckets)
     .flatMap((bucket) => bucket.latency.centroids.map((centroid) => centroid.value))
