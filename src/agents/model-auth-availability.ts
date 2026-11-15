@@ -17,6 +17,7 @@ import type {
 } from "../plugin-sdk/provider-model-types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import {
@@ -128,6 +129,8 @@ type CreateModelAuthAvailabilityResolverParams = {
   metadataSnapshot?: PluginMetadataSnapshot;
   externalCliProviderIds?: readonly string[];
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
+  /** Config/source route facts only; account and credential decisions remain local. */
+  resolveOpenAIProviderRoutes?: Parameters<typeof createOpenAIModelRoutesResolver>[1];
   preparedRuntimeAuthStore?: AuthProfileStore;
   preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
@@ -226,21 +229,12 @@ export function createModelAuthAvailabilityResolver(
     : params.authStore;
   const runtimeStore =
     params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
-  const { overlay: runtimeCredentialOverlay, hydratedProfileIds } = createRuntimeCredentialOverlay({
+  const runtimeCredentials = createRuntimeCredentialOverlay({
     cfg: params.cfg,
+    authStore: store,
     runtimeStore,
     now,
   });
-  const orderProfiles = runtimeStore
-    ? Object.fromEntries(
-        Object.entries(store.profiles).map(([profileId, credential]) => [
-          profileId,
-          runtimeCredentialOverlay(profileId, credential),
-        ]),
-      )
-    : store.profiles;
-  const orderStore =
-    orderProfiles === store.profiles ? store : { ...store, profiles: orderProfiles };
   const { aliasMap, envCandidateMap, authEvidenceMap } = resolveProviderEnvAuthLookupMaps({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -255,22 +249,28 @@ export function createModelAuthAvailabilityResolver(
   ) {
     synthetic.add("codex");
   }
-  const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
-    config: params.cfg,
-    agentId: params.agentId,
-    primaryModel: resolveDefaultModelForAgent({
-      cfg: params.cfg,
+  const resolveOpenAIProviderRoutes =
+    params.resolveOpenAIProviderRoutes ??
+    createProviderModelRoutesResolver({ provider: OPENAI_PROVIDER_ID, config: params.cfg, env });
+  const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)(
+    {
+      config: params.cfg,
       agentId: params.agentId,
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }),
-    resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
-    resolveProfileAuthFlow: (profileId) => {
-      const credential = orderStore.profiles[profileId];
-      return credential?.type === "oauth" ? credential.authFlow : undefined;
+      primaryModel: resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      }),
+      resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+      resolveProfileAuthFlow: (profileId) => {
+        const credential = runtimeCredentials.orderStore.profiles[profileId];
+        return credential?.type === "oauth" ? credential.authFlow : undefined;
+      },
+      env,
     },
-    env,
-  });
+    resolveOpenAIProviderRoutes,
+  );
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
@@ -335,7 +335,7 @@ export function createModelAuthAvailabilityResolver(
     const resolution = prependAuthProfilePin(
       resolveAuthProfileOrderWithMetadata({
         cfg: params.cfg,
-        store: orderStore,
+        store: runtimeCredentials.orderStore,
         provider: normalized,
         preferredProfile: preferredProfileId,
         forModel,
@@ -357,7 +357,7 @@ export function createModelAuthAvailabilityResolver(
     if (cached) {
       return cached;
     }
-    const credential = orderStore.profiles[profileId];
+    const credential = runtimeCredentials.orderStore.profiles[profileId];
     const authFlow = credential?.type === "oauth" ? credential.authFlow : undefined;
     const facts = authFlow
       ? {
@@ -403,7 +403,7 @@ export function createModelAuthAvailabilityResolver(
       profileId !== undefined &&
       !resolveAuthProfileEligibility({
         cfg: params.cfg,
-        store: orderStore,
+        store: runtimeCredentials.orderStore,
         provider: normalizeProvider(provider),
         profileId,
         now,
@@ -426,7 +426,7 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return false;
     }
-    if (hydratedProfileIds.has(profileId)) {
+    if (runtimeCredentials.hydratedProfileIds.has(profileId)) {
       return (
         credential.type !== "token" || credential.expires === undefined || credential.expires > now
       );
@@ -464,7 +464,7 @@ export function createModelAuthAvailabilityResolver(
     if (!storedCredential) {
       return false;
     }
-    const credential = runtimeCredentialOverlay(profileId, storedCredential);
+    const credential = runtimeCredentials.overlay(profileId, storedCredential);
     if (!profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
       return false;
     }
@@ -520,7 +520,7 @@ export function createModelAuthAvailabilityResolver(
     }
     const binding = target.pinnedProfileId ? { kind: "none" as const } : providerBinding(provider);
     if (binding.kind === "profile") {
-      const credential = runtimeCredentialOverlay(binding.profileId, binding.credential);
+      const credential = runtimeCredentials.overlay(binding.profileId, binding.credential);
       const availability =
         !profileInCooldown(binding.profileId, target) &&
         profileEligibleForReadOnlyAvailability(
@@ -1325,7 +1325,7 @@ export function createModelAuthAvailabilityResolver(
     addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
   }
   const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(
-    { ...params, authStore: orderStore },
+    { ...params, authStore: runtimeCredentials.orderStore },
     evaluateModelAuth,
   );
   return {
@@ -1345,6 +1345,7 @@ export function createModelAuthAvailabilityResolver(
           modelApi: ref.api,
           modelBaseUrl: ref.baseUrl,
           env: params.env,
+          resolveOpenAIProviderRoutes,
         };
         configuredRuntimePolicy = resolveModelRuntimePolicy(policyParams);
         runtimeId = resolveAgentHarnessPolicy(policyParams, configuredRuntimePolicy).runtime;

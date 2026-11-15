@@ -7,6 +7,7 @@ import {
   resolveProviderAuthScope,
 } from "../plugins/provider-auth-scope.js";
 import { resolveLoadedProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
@@ -243,11 +244,18 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       return statusSource.pendingProviders;
     },
   };
+  // Share only stable provider/config indexes within this decision owner, never account decisions.
+  const resolveOpenAIProviderRoutes = createProviderModelRoutesResolver({
+    provider: "openai",
+    config: params.cfg,
+    env: process.env,
+  });
   const nativeEvaluator = prepareModelCatalogView({
     ...params,
     snapshot,
     workspaceDir,
     profileProvider,
+    resolveOpenAIProviderRoutes,
   }).evaluateNative;
   // A selected profile is host-owned auth, not evidence from the shared native
   // login; the harness evaluator already applies this rule to session pins.
@@ -350,6 +358,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: authStore,
     routeResolverFactory: params.routeResolverFactory,
+    resolveOpenAIProviderRoutes,
     // Read at evaluation time: selected-account discovery replaces outcomes in place. Entitlement
     // is per account, so only the listing discovery made with this exact credential applies.
     accountListedModelIds: (provider, profileId) => {
@@ -590,6 +599,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               entry,
               evaluation,
               pluginRegistry: params.pluginRegistry,
+              resolveOpenAIProviderRoutes,
             })?.id ?? "openclaw";
           const selected = selectModelCatalogRuntimeEntry({ entry, routeVariants, runtimeId });
           return view.project(selected.entry, evaluation, selected.variants).runtimeEntry;
@@ -604,6 +614,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
     prepareSelectedAccountCatalog,
     evaluateEntry,
     evaluateNative,
+    resolveOpenAIProviderRoutes,
     snapshot,
     metadataSnapshot,
     authStore,
@@ -612,6 +623,9 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
       entry: ModelCatalogEntry,
       variants: readonly ModelCatalogEntry[] = [entry],
     ): string[] | undefined {
+      const providerBindings = cliRuntimeBindings.filter(
+        (binding) => normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
+      );
       const initial = evaluateEntry(entry, variants);
       const selected = resolveCatalogDecisionRuntime({
         cfg: params.cfg,
@@ -619,6 +633,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         entry,
         evaluation: initial,
         pluginRegistry: params.pluginRegistry,
+        resolveOpenAIProviderRoutes,
       });
       const candidates = new Set([
         selected?.id ?? "openclaw",
@@ -629,12 +644,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               (route) => route.runtimePolicy?.compatibleIds ?? [],
             )
           : []),
-        ...cliRuntimeBindings
-          .filter(
-            (binding) =>
-              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
-          )
-          .map((binding) => binding.runtime),
+        ...providerBindings.map((binding) => binding.runtime),
       ]);
       const choices: string[] = [];
       let unknown = false;
@@ -656,6 +666,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
           modelApi: route?.api ?? entry.api,
           modelBaseUrl: route?.baseUrl ?? entry.baseUrl,
           requestTransportOverrides: route?.requestTransportOverrides,
+          resolveOpenAIProviderRoutes,
         });
         if (policy.forcedByEnvironment && policy.runtime !== runtimeId) {
           continue;
@@ -669,11 +680,7 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
         }
         if (
           runtimeId !== "openclaw" &&
-          !cliRuntimeBindings.some(
-            (binding) =>
-              binding.runtime === runtimeId &&
-              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
-          )
+          !providerBindings.some((binding) => binding.runtime === runtimeId)
         ) {
           const harness = params.pluginRegistry?.agentHarnesses.find(
             (registration) => registration.harness.id === runtimeId,

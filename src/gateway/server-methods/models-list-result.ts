@@ -351,8 +351,7 @@ export async function prepareModelsListResult({
         ...(decisionModels.length ? { decisionModels } : {}),
       };
     };
-    const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
-    const capableProviders = includeProviderCapabilities
+    const capableProviders = params.params.includeProviderCapabilities
       ? resolveModelProviderCapabilities({ config: cfg, metadataSnapshot, workspaceDir })
       : undefined;
     const apiKeyProviders = new Map(
@@ -421,6 +420,7 @@ export async function prepareModelsListResult({
                 entry,
                 evaluation,
                 pluginRegistry: preparedPluginRegistry,
+                resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
               });
           const agentRuntime = selectedRuntime
             ? preparedPluginRegistry
@@ -642,6 +642,7 @@ export async function prepareModelsListResult({
                 modelId: entry.id,
                 modelApi: entry.api,
                 modelBaseUrl: entry.baseUrl,
+                resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
               }).runtime
             : undefined;
           const preparedHost = evaluateEntry(entry, variants, baseRuntime);
