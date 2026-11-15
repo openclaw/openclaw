@@ -277,6 +277,26 @@ it("retains pending receipt across remount and promotes only a matching registry
   expect(request.mock.calls.filter(([m]) => m === "templates.drafts.publish")).toHaveLength(1);
 });
 
+it("disables a stale review while a revised proposal is incomplete", async () => {
+  const { page, request, flow } = await fixture();
+  request.mockImplementation(async (method) => {
+    if (method === "templates.drafts.read") {
+      return { revision: "c".repeat(64), content: JSON.stringify({ scope: {} }) };
+    }
+    throw new Error("Unexpected " + method);
+  });
+  await vi.advanceTimersByTimeAsync(2500);
+  expect(flow.reviewCurrent).toBe(false);
+  await waitForSolid(() =>
+    expect(page.getByRole("button", { name: "Publish" }).hasAttribute("disabled")).toBe(true),
+  );
+  expect(page.getByRole("button", { name: "Refresh review" })).toBeTruthy();
+  expect(
+    request.mock.calls.filter(([method]) => method === "templates.drafts.review"),
+  ).toHaveLength(1);
+  expect(page.getByRole("heading", { name: reviewed.displayName })).toBeTruthy();
+});
+
 it("will not publish when review is stale or operator authority is revoked", async () => {
   const { request, flow } = await fixture();
   flow.reviewCurrent = false;
