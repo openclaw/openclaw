@@ -17,7 +17,7 @@
       "team-reports"
     ],
     "schemaVersions": {
-      "state": 40,
+      "state": 41,
       "agent": 42
     }
   },
@@ -508,7 +508,8 @@
     "!dist/plugin-sdk/memory-core-host-transcript-stats.d.ts",
     "!dist/plugin-sdk/skill-authoring-runtime.d.ts",
     "!dist/plugin-sdk/skill-workshop-host-runtime.d.ts",
-    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts"
+    "!dist/plugin-sdk/skill-workshop-host-cli.d.ts",
+    "!dist/plugin-sdk/github-worker-runtime.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1780,6 +1781,9 @@
     },
     "./plugin-sdk/llm": {
       "default": "./dist/plugin-sdk/llm.js"
+    },
+    "./plugin-sdk/github-worker-runtime": {
+      "default": "./dist/plugin-sdk/github-worker-runtime.js"
     },
     "./runtime-artifacts": {
       "types": "./dist/runtime-artifacts.d.ts",

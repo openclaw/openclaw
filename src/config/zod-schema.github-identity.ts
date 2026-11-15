@@ -13,7 +13,7 @@ const identityFields = {
     .optional(),
 };
 const id = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
-const GitHubAppInstallationSchema = z.strictObject({
+export const GitHubAppInstallationSchema = z.strictObject({
   appId: id,
   installationId: id,
   accountId: id,

@@ -583,7 +583,13 @@ it("never exposes a recipient selector, a raw identity, or a fabricated successf
       "FORBIDDEN",
     );
     expectMentionError(
-      await listInbox(f.inbox, { ...raw, authenticatedGitHubIdentitySync: vi.fn() }),
+      await listInbox(f.inbox, {
+        ...raw,
+        authenticatedGitHubIdentitySync: vi.fn(async () => ({
+          profileId: f.bob.id,
+          updatedAt: Date.now(),
+        })),
+      }),
       "UNAVAILABLE",
       { retryable: true },
     );

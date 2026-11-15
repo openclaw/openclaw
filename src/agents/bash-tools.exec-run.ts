@@ -44,6 +44,7 @@ import {
   createExecRequestPreparation,
   type ExecToolArgs,
   resolveExecPreparedRunEnvironment,
+  prepareLocalGitHubAppExecution,
   resolveExecNotificationDefaults,
   resolvePreparedExecEnvironment,
 } from "./bash-tools.exec-request-preparation.js";
@@ -53,13 +54,13 @@ import {
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
   normalizePathPrepend,
-  resolveApprovalRunningNoticeMs,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
   attachExecApprovalReview,
   buildExecForegroundResult,
   resolveExecReviewerDefaults,
+  resolveApprovalRunningNoticeMs,
 } from "./bash-tools.exec-support.js";
 import {
   canInterruptExec,
@@ -490,6 +491,11 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             ? preparedRunEnvironment.localIdentityEnv.GH_CONFIG_DIR
             : undefined;
 
+        const githubApp = prepareLocalGitHubAppExecution(
+          defaults,
+          host === "gateway" ? preparedRunEnvironment.appInstallationProfileId : undefined,
+        );
+
         if (host === "gateway" && !bypassApprovals) {
           gatewayApproval = await processGatewayAllowlist({
             ...hostApprovalParams(),
@@ -497,6 +503,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             secretEgressBindings,
             durable: params.durable ? durableNotifications : undefined,
             githubProfileDir,
+            githubApp,
             pathPrepend: defaultPathPrepend,
             pty: params.pty === true && !sandbox,
             safeBins,
@@ -538,6 +545,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           notifyOnExit && allowBackground ? await resolveSubagentSession() : false;
         assertSourceActive();
         run = await runExecProcess({
+          workerMemoryBoundary: defaults?.workerMemoryBoundary,
           command: params.command,
           execCommand: execCommandOverride,
           workdir,
@@ -546,6 +554,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           durable: params.durable ? durableNotifications : undefined,
           sessionId: defaults?.sessionId,
           githubProfileDir,
+          githubApp,
           pathPrepend: defaultPathPrepend,
           sandbox,
           containerWorkdir,

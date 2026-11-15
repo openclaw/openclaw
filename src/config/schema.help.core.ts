@@ -219,6 +219,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Optional replacement allowlist of model references, configured aliases, or trailing prefix wildcards such as "provider/*" or "provider/family-*". Omitted uses the source agent primary and fallbacks; an empty list denies all models. The first permitted source model remains Default, followed by explicit allowed models.',
   "gateway.roles.definitions.*.modelPolicy.deny":
     'Model references, source-agent aliases, or trailing prefix wildcards excluded from this role. A pattern such as "provider/family-*" excludes future members of that family too. Exclusions match resolved model identities and take precedence over allowed and source-agent models.',
+  "gateway.roles.definitions.*.verifiedIdentityWrite":
+    "Grant read/write scopes to a current verified profile authenticated by trusted proxy or Tailscale, within the role and transport scope ceilings. Does not grant administrator scopes or change device pairing.",
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
   "gateway.roles.definitions.*.workerProfiles":

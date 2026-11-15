@@ -1,11 +1,13 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
+import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import {
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
 } from "../agents/tools/gateway-caller-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
+import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { intersectOperatorScopes, roleScopesAllow } from "../shared/operator-scope-compat.js";
 import {
@@ -24,6 +26,7 @@ import {
   prepareGitHubPublicationSource,
   type GitHubPublicationSourceCapability,
 } from "./github-publication-source.js";
+import type { RepositoryCredentialSource } from "./github-user-identity.types.js";
 import {
   isOpenClawIdTunnelPrincipalCurrent,
   OpenClawIdPrincipalChangedError,
@@ -105,6 +108,8 @@ export type GitHubPublicationRequesterPolicyV2 = GitHubPublicationRequesterPolic
       requestDigest: string;
       assertCurrent: () => void;
     }): GitHubCredentialReader | undefined;
+    /** Live invocation source; deliberately absent from durable requester snapshots. */
+    repositoryCredentialSource?: RepositoryCredentialSource;
     signal: AbortSignal;
     prepareSource(
       selector: GitHubPublicationSourceSelector,
@@ -457,6 +462,7 @@ export async function prepareGitHubPublicationRequesterV2(
             input.assertCurrent();
           },
         }),
+      repositoryCredentialSource: source?.authority.repositoryCredentialSource,
       signal,
       snapshot,
       assertInvocationCurrent,
@@ -628,4 +634,33 @@ export async function restoreGitHubPublicationRequester(
     release();
     throw error;
   }
+}
+
+/** Reuse an exact live invocation; durable restoration cannot manufacture its credential source. */
+export async function prepareGitHubPublicationExecutionRequester(
+  json: string | null | undefined,
+  session: PublicationSession,
+  getCommittedRuntimeConfig: () => OpenClawConfig,
+  current?: GitHubPublicationRequesterPolicyV2,
+): Promise<{ requester: GitHubPublicationRequesterPolicyV2; release: () => void }> {
+  const config = getCommittedRuntimeConfig();
+  const selected =
+    resolveConfiguredGitHubToolIdentity({ config, agentId: session.agentId, scope: "agent" }) ??
+    resolveConfiguredGitHubToolIdentity({ config, agentId: session.agentId, scope: "system" });
+  if (
+    Boolean(getRepositoryIntegration(config)) &&
+    selected?.kind === "app-installation" &&
+    current?.repositoryCredentialSource &&
+    isGitHubPublicationRequesterV2(current) &&
+    encodeGitHubPublicationRequester(current.snapshot) === json
+  ) {
+    current.assertCurrent();
+    return { requester: current, release: () => {} };
+  }
+  const restored = await restoreGitHubPublicationRequester(
+    json,
+    session,
+    getCommittedRuntimeConfig,
+  );
+  return { requester: restored, release: restored.release };
 }

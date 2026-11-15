@@ -270,17 +270,6 @@ export async function attachAuthenticatedGatewayConnect(
   // Identity-derived scopes must be capped only after their durable profile is known.
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
-  const effectiveScopes = remoteIngressPrincipal
-    ? deviceScopes
-    : authResult.delegation
-      ? [...authResult.delegation.scopes]
-      : resolveEffectiveConnectionScopes({
-          role,
-          deviceScopes,
-          verifiedIdentity: state.authPolicy.verifiedIdentity,
-          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
-          upgradeReq: context.handler.upgradeReq,
-        });
   // OpenClaw ID members are capped by their membership role, whatever the device requested.
   const openclawIdRolePolicy =
     role === "operator" ? openclawIdTunnelRolePolicy(openclawIdPrincipal) : undefined;
@@ -296,6 +285,20 @@ export async function attachAuthenticatedGatewayConnect(
             preparedProfile?.authority.githubLogin ?? null,
           )
         : undefined;
+  const effectiveScopes = remoteIngressPrincipal
+    ? deviceScopes
+    : authResult.delegation
+      ? [...authResult.delegation.scopes]
+      : resolveEffectiveConnectionScopes({
+          role,
+          deviceScopes,
+          verifiedIdentity: state.authPolicy.verifiedIdentity,
+          identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+          verifiedIdentityWrite:
+            Boolean(preparedProfile && rolePolicy?.verifiedIdentityWrite) &&
+            (authResult.method === "trusted-proxy" || authResult.method === "tailscale"),
+          upgradeReq: context.handler.upgradeReq,
+        });
   const scopes = rolePolicy
     ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
     : effectiveScopes;

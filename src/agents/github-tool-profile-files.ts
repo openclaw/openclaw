@@ -16,7 +16,7 @@ import { notifyManagedGitHubProfileChanged } from "./github-tool-identity-lifecy
 /** Write gh's external file contract without touching its OS keyring or verifying again. */
 export async function writeManagedGitHubProfileFiles(
   profileDir: string,
-  identity: { login: string; token: string },
+  identity: { login: string; token: string; host?: string },
   options?: { assertCurrent: () => void },
 ): Promise<void> {
   if (process.platform === "win32") {

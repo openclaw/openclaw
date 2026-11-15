@@ -111,13 +111,15 @@ export async function prepareGitHubPublicationOptionsRead(
   const profileReference = client?.authenticatedUserProfile?.profileId;
   const userId = client?.authenticatedUserId;
   const access = client?.internal?.operatorAccessAuthority;
+  const credentialSource = client?.authenticatedRepositoryCredentialSource;
   const assertConnection = () => {
     signal?.throwIfAborted();
     authority.assertCurrent();
     if (
       client?.authenticatedUserProfile?.profileId !== profileReference ||
       client?.authenticatedUserId !== userId ||
-      client?.internal?.operatorAccessAuthority !== access
+      client?.internal?.operatorAccessAuthority !== access ||
+      client?.authenticatedRepositoryCredentialSource !== credentialSource
     ) {
       throw new Error("GitHub profile changed; retry publication options.");
     }

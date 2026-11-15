@@ -34,7 +34,6 @@ import {
   onGatewayDeviceSourceRevoked,
   readGatewayDeviceSourceAuthority,
   readGatewayDeviceSourceIdentity,
-  readGatewayDeviceReconnectSourceIdentity,
   retainGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import {
@@ -54,28 +53,9 @@ import {
   sourceRolePolicy,
 } from "./operator-role-source-policy.js";
 import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
+import { retainOperatorSource, type OperatorSource } from "./operator-run-source-retention.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/shared-types.js";
 
-type OperatorSource = {
-  owners: readonly [
-    gateway: object,
-    resolver: GatewayRequestContext["resolveGatewayContext"],
-    config: GatewayRequestContext["getRuntimeConfig"],
-    device: object | undefined,
-    access: object | null | undefined,
-    ingress: object | undefined,
-  ];
-  membership: string | undefined;
-  token: object;
-  references: number;
-};
-
-// Comparison records live only while captured work retains their original authority.
-type OperatorSourceBucket = {
-  owner: object;
-  entries: Set<OperatorSource>;
-};
-const operatorSources = new WeakMap<object, OperatorSourceBucket>();
 const continuationAuthorities = resolveGlobalSingleton(
   Symbol.for("openclaw.gatewayOperatorContinuationAuthorities"),
   () => new WeakMap<AdmittedRunOperatorAuthority, AdmittedRunOperatorAuthority>(),
@@ -87,58 +67,6 @@ export function bindGatewayOperatorContinuationAuthority(
   source: AdmittedRunOperatorAuthority,
 ): void {
   continuationAuthorities.set(work, source);
-}
-
-function getOperatorSources(owner: object): OperatorSourceBucket {
-  let sources = operatorSources.get(owner);
-  if (!sources) {
-    sources = { owner, entries: new Set() };
-    operatorSources.set(owner, sources);
-  }
-  return sources;
-}
-
-/** A captured transport principal keeps its source's comparison identity, not new authority. */
-export function transferGatewayOperatorSourceIdentity(
-  source: GatewayClient,
-  target: GatewayClient,
-): void {
-  operatorSources.set(target, getOperatorSources(source));
-}
-
-function retainOperatorSource(
-  client: GatewayClient,
-  owners: OperatorSource["owners"],
-  membership: string | undefined,
-  callerGuard: (() => boolean) | undefined,
-) {
-  const clientSources = getOperatorSources(client);
-  const deviceSource = readGatewayDeviceReconnectSourceIdentity(callerGuard, clientSources.owner);
-  // A reconnect joins comparison records, never either request's live authority.
-  const sources = deviceSource ? getOperatorSources(deviceSource).entries : clientSources.entries;
-  let source =
-    membership === undefined
-      ? undefined
-      : [...sources].find(
-          (entry) =>
-            entry.membership === membership &&
-            entry.owners.every((owner, index) => owner === owners[index]),
-        );
-  if (!source) {
-    source = { owners, membership, token: Object.freeze({}), references: 0 };
-    sources.add(source);
-  }
-  const retained = source;
-  const bucket = sources;
-  retained.references += 1;
-  return {
-    token: retained.token,
-    release: () => {
-      if (--retained.references === 0) {
-        bucket.delete(retained);
-      }
-    },
-  };
 }
 
 function prepareRunRolePolicy(
@@ -401,6 +329,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
         : GATEWAY_OWNER_PROFILE_ID;
   const connectionId = client.connId;
   const connectionSignal = client.connectionSignal;
+  const repositoryCredentialSource = client.authenticatedRepositoryCredentialSource;
   if (params.hasCurrentClientAuthority?.() === false) {
     throw new Error("Gateway caller authority is no longer active.");
   }
@@ -427,6 +356,8 @@ export async function captureGatewayOperatorRunAuthority(input: {
       (params.hasCurrentClientAuthority ? {} : undefined),
     sourceAuthority,
     ingressPrincipal,
+    params.invocationAuthority,
+    repositoryCredentialSource,
   ];
   let releaseSource: (() => void) | undefined;
   let references = 1;
@@ -513,6 +444,9 @@ export async function captureGatewayOperatorRunAuthority(input: {
           "gateway-current",
           capturedAt,
         );
+      }
+      if (client.authenticatedRepositoryCredentialSource !== repositoryCredentialSource) {
+        throw new Error("operator GitHub credential source changed; start a new request");
       }
       assertSources();
       if (openclawIdPrincipal && !isOpenClawIdTunnelPrincipalCurrent(openclawIdPrincipal)) {
@@ -676,6 +610,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
     const admission = {
       profileId,
       openclawIdPrincipal,
+      repositoryCredentialSource,
       scopes,
       gatewayAccessGrant: grant ? Object.freeze({ ...grant }) : grant,
       assertCurrent,

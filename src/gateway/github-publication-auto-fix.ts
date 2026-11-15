@@ -15,13 +15,15 @@ import {
   readPrAutoFixFeedback,
 } from "./github-publication-auto-fix-feedback.js";
 import {
-  assertExpectedSharedGitHubPublisher,
   currentGitHubPublicationConfig,
   prepareGitHubPublicationSession,
   readGitHubPublicationWorktreeOwner,
 } from "./github-publication-availability.js";
 import { GitHubPublicationReadUnavailableError } from "./github-publication-json-read.js";
-import { projectGitHubPublicationResult } from "./github-publication-receipt.js";
+import {
+  assertExpectedSharedGitHubPublisher,
+  projectGitHubPublicationResult,
+} from "./github-publication-receipt.js";
 import { prepareGitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import { prepareSelectedGitHubPullRequestReader } from "./github-publication-selected-read.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
@@ -52,6 +54,7 @@ export async function readSessionPrAutoFixObservation(params: {
     agentId: loaded.agentId,
     sessionKey: loaded.canonicalKey,
     sessionId: loaded.entry.sessionId,
+    lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
   };
   const binding = loaded.entry.worktree?.githubPullRequest;
   const publication = await readSharedGitHubPublication(session, {}, selected.readCurrent);
@@ -135,7 +138,7 @@ export async function readSessionPrAutoFixObservation(params: {
           repository: binding?.base.repository ?? owner + "/" + repo,
           branch,
         };
-        const reader = await prepareSelectedGitHubPullRequestReader({
+        await using reader = await prepareSelectedGitHubPullRequestReader({
           session,
           pullRequest,
           binding,

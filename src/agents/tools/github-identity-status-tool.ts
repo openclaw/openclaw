@@ -32,18 +32,25 @@ export function createGitHubIdentityStatusTool(
         agentId: caller.agentId,
         selectedScope: "agent",
       });
+      const unverifiedApp =
+        status.effective.credentialKind === "app-installation" &&
+        status.effective.credentialState === "unverified";
       const reconnect =
         status.effective.credentialState !== "available" ||
         ["expired", "failed", "unavailable"].includes(status.effective.refreshState);
       return jsonResult({
         ...status,
-        ...(reconnect
+        ...(unverifiedApp
           ? {
-              nextAction: githubIdentitySettingsAvailable
-                ? "Use screen action github_identity_settings to open the masked operator reconnect flow, then check github_identity_status again."
-                : "Ask the operator to open Settings → Profile → GitHub accounts, reconnect this agent’s GitHub account, then check github_identity_status again.",
+              nextAction:
+                "The configured GitHub App will be verified during an authorized operation, including scheduled automation.",
             }
-          : {}),
+          : reconnect
+            ? {
+                nextAction:
+                  "Ask the operator to connect or reconnect GitHub under Settings → Agents → Tools.",
+              }
+            : {}),
       });
     },
   };

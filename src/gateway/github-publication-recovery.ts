@@ -303,7 +303,7 @@ export async function observeGitHubPublication<Row extends GitHubPublicationExec
   }
   let worktreeOwner: Awaited<ReturnType<typeof readLocalGitHubPublicationWorktreeOwner>>;
   let releaseWorktree: (() => void) | undefined;
-  const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
+  await using executionIdentity = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
     validateAuthority: params.validateCustody,
@@ -311,6 +311,7 @@ export async function observeGitHubPublication<Row extends GitHubPublicationExec
       worktreeOwner.assertCurrent();
     },
   });
+  const { assertCurrent, refreshIdentity } = executionIdentity;
   let url: string | undefined;
   try {
     worktreeOwner = await readLocalGitHubPublicationWorktreeOwner(row);

@@ -1,12 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
-import type {
-  GitHubPublicationPublisher,
-  SessionGitHubReadinessResult,
-} from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
+import type { SessionGitHubReadinessResult } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import { resolveGitHubHost } from "../agents/github-host-runtime.js";
 import {
   matchesPreparedGitHubPublicationIdentity,
-  prepareGitHubPublicationIdentity,
   prepareGitHubPublicationOptionsIdentity,
   type PreparedGitHubPublicationIdentity,
 } from "../agents/github-tool-identity.js";
@@ -39,8 +35,6 @@ import { requestCurrentGitHubOAuthRefresh } from "./github-oauth-lifecycle.js";
 import {
   GitHubPublicationWorkspaceChangedError,
   GitHubPublicationSessionChangedError,
-  rejectGitHubPublicationSelection,
-  type GitHubPublicationPreparation,
 } from "./github-publication-failure.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
 import type {
@@ -54,10 +48,19 @@ import {
   type PublicationSessionOwner,
 } from "./github-publication-worktree-owner.js";
 import { parseGitHubRemoteUrl } from "./github-remote.js";
+import {
+  preparePublicationGitHubIdentity,
+  type RepositoryPublicationActor,
+  type RepositoryPublicationCredential,
+} from "./repository-integration-identity.js";
 import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { findCanonicalStoreMatch } from "./session-utils-store-selection.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
+export {
+  repositoryPublicationPreflightCredential,
+  repositoryPublicationPreflightActor,
+} from "./repository-integration-identity.js";
 // Discovery is best effort for 15 seconds; publication resolves the current Git repository again.
 const repositoryTargets = createStaleWhileRevalidateCache<boolean>({
   maxEntries: 256,
@@ -68,30 +71,8 @@ const repositoryTargets = createStaleWhileRevalidateCache<boolean>({
 
 function publicationConfigSnapshot() {
   const active = getActiveSecretsRuntimeConfigSnapshot();
-  if (active) {
-    return active;
-  }
-  const config = getRuntimeConfig();
-  return { config, sourceConfig: config };
-}
-
-export function assertExpectedSharedGitHubPublisher(
-  expected: GitHubPublicationPublisher | undefined,
-  actual: GitHubPublicationPublisher,
-  preparation?: GitHubPublicationPreparation,
-): void {
-  if (
-    actual.source === "personal" ||
-    (expected &&
-      (expected.source !== actual.source ||
-        expected.accountId !== actual.accountId ||
-        expected.login.toLowerCase() !== actual.login.toLowerCase()))
-  ) {
-    rejectGitHubPublicationSelection(
-      "GitHub publication identity changed; review the current shared account and try again.",
-      preparation,
-    );
-  }
+  const config = active?.config ?? getRuntimeConfig();
+  return active ?? { config, sourceConfig: config };
 }
 
 export function currentGitHubPublicationConfig() {
@@ -100,21 +81,28 @@ export function currentGitHubPublicationConfig() {
 
 export async function prepareCurrentGitHubPublicationIdentity(
   agentId: string,
-  assertCurrent?: () => void,
-  beforeCredentialRead?: () => void,
+  actor?: RepositoryPublicationActor | (() => void),
+  credentialOrBeforeRead?: RepositoryPublicationCredential | (() => void),
+  allowAppInstallation = true,
 ): Promise<PreparedGitHubPublicationIdentity> {
+  const credential =
+    typeof credentialOrBeforeRead === "function" ? undefined : credentialOrBeforeRead;
+  const assertCurrent = typeof actor === "function" ? actor : actor?.assertCurrent;
   assertCurrent?.();
+  credential?.assertCurrent();
   await requestCurrentGitHubOAuthRefresh(agentId);
   assertCurrent?.();
-  // Observe rotation after our own refresh, before the credential-read awaits.
-  beforeCredentialRead?.();
-  const snapshot = publicationConfigSnapshot();
-  return await prepareGitHubPublicationIdentity({
-    config: snapshot.config,
-    sourceConfig: snapshot.sourceConfig,
+  if (typeof credentialOrBeforeRead === "function") {
+    credentialOrBeforeRead();
+  }
+  credential?.assertCurrent();
+  return preparePublicationGitHubIdentity(
+    publicationConfigSnapshot(),
     agentId,
-    assertCurrent,
-  });
+    actor,
+    credential,
+    allowAppInstallation,
+  );
 }
 
 export async function prepareCurrentGitHubPublicationOptionsIdentity(
@@ -124,10 +112,8 @@ export async function prepareCurrentGitHubPublicationOptionsIdentity(
   assertCurrent?.();
   await requestCurrentGitHubOAuthRefresh(agentId);
   assertCurrent?.();
-  const snapshot = publicationConfigSnapshot();
   return await prepareGitHubPublicationOptionsIdentity({
-    config: snapshot.config,
-    sourceConfig: snapshot.sourceConfig,
+    ...publicationConfigSnapshot(),
     agentId,
     assertCurrent,
   });

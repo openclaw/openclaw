@@ -228,5 +228,6 @@
   "web-content-extractor",
   "webhook-targets",
   "windows-spawn",
-  "worker-task-server"
+  "worker-task-server",
+  "github-worker-runtime"
 ]

@@ -1,16 +1,14 @@
+import { generateKeyPairSync } from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
 import {
   GitHubIdentityError,
   installManagedGitHubProfile,
   writeManagedGitHubProfileFiles,
   removeManagedGitHubProfile,
-  resolveManagedGitHubProfileDir,
 } from "../../agents/github-tool-identity.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -18,10 +16,20 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { recordCommittedSessionMetadataPublication } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as turnClaims from "./placement-turn-claim-events.js";
+import type { RepositoryIntegration } from "../../plugins/repository-integration.types.js";
+import type { RepositoryCredentialSource } from "../github-user-identity.types.js";
+import { prepareWorkerGitHubBindingGrant } from "./worker-github-execution-identity.js";
+const policy = vi.hoisted(() => ({ current: undefined as RepositoryIntegration | undefined }));
+vi.mock("../../plugins/repository-integration-runtime.js", () => ({
+  getRepositoryIntegration: () => policy.current,
+}));
 import { syncSessionRepositoryWorkspace } from "./repository-workspace-startup.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import { bindWorkerGitHubTurn, prepareGitHubPublicationFact } from "./worker-github-binding.js";
+import {
+  workerGitHubFixture,
+  createWorkerGitHubBindingFixture,
+} from "./worker-github-binding.test-support.js";
 
 async function prepareWorkerGitHubBinding(
   params: Parameters<typeof prepareGitHubPublicationFact>[0],
@@ -158,100 +166,27 @@ vi.mock("../../state/session-repository-workspaces.js", () => ({
 // mock-isolation: Grant tests control OAuth expiry without reading the persistent credential store.
 vi.mock("../../agents/github-oauth-records.js", () => ({ inspectGitHubOAuthRecord: mocks.oauth }));
 vi.mock("../../process/exec.js", () => ({ runCommandBuffered: mocks.nativeToken }));
+// Resident profile facts and external HTTP are fixtures; proof issuance and redemption stay real.
+vi.mock("../../state/user-profile-list.js", async (original) => ({
+  ...(await original<typeof import("../../state/user-profile-list.js")>()),
+  captureResidentUserProfileAccess: () => ({
+    readCurrentFacts: () => ({
+      profileId: "operator-profile",
+      emails: [`github:${config.gateway?.github?.host ?? "github.com"}:77`],
+    }),
+  }),
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const profileId = "ghp_11111111111111111111111111111111";
-const token = "synthetic-worker-github-binding-token";
-const sessionStorePath = "/worker-github-binding/sessions.sqlite";
-const session = { sessionId: "worker-session", sessionKey: "agent:main:worker", agentId: "main" };
-const sessionReadSource = {
-  agentId: session.agentId,
-  path: sessionStorePath,
-  databaseIdentity: "synthetic-worker-github-binding",
-};
-const worktree = {
-  id: "worker-worktree",
-  path: "/repo/worktree",
-  repoRoot: "/repo",
-  repoFingerprint: "repository-fingerprint",
-  branch: "openclaw/session-branch",
-  ownerKind: "session",
-  ownerId: session.sessionKey,
-};
-const verified = {
-  status: "available" as const,
-  account: { accountId: 42, login: "shared-bot", avatarUrl: null },
-  scopes: [],
-};
+const { profileId, token, session, sessionReadSource, worktree, verified } = workerGitHubFixture;
 let config: OpenClawConfig;
 
-async function installProfile(scope: "agent" | "system" = "system") {
-  const profileDir = resolveManagedGitHubProfileDir({ agentId: "main", scope, profileId });
-  await installManagedGitHubProfile({
-    profileDir,
-    token,
-    commitConfig: async () => {},
-  });
-  mocks.verify.mockClear();
-  return profileDir;
-}
-
-async function bindPreparedGrant(
-  fact: Awaited<ReturnType<typeof prepareGitHubPublicationFact>>,
-  assertCurrent = () => {},
-  operatorAuthority?: AdmittedRunOperatorAuthority,
-) {
-  // Renewal tests isolate turn attachment; placement-owner tests cover admission.
-  using attachment = vi.spyOn(turnClaims, "bindWorkerTurnGitHubGrant");
-  attachment.mockImplementation(() => {});
-  const grant = await bindWorkerGitHubTurn({
-    operatorAuthority,
-    session,
-    fact,
-    sessionTarget: {
-      ...session,
-      storePath: "/synthetic/admitted.sqlite",
-      expectedWriterRunId: "writer",
-    },
-    store: {
-      prepareTurnClaimAuthority: async () => {
-        throw new Error("Grant lifecycle tests do not acquire turn ownership");
-      },
-    },
-    claim: {
-      sessionId: session.sessionId,
-      claimId: "grant-claim",
-      runId: "grant-run",
-      placementGeneration: 1,
-      owner: { kind: "worker", environmentId: "grant-worker", ownerEpoch: 1 },
-    },
-    protocolFeatures: [WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE],
-    signal: new AbortController().signal,
-    assertCurrent,
-  });
-  if (!grant) {
-    throw new Error("Expected prepared grant");
-  }
-  return grant;
-}
-
-async function prepareGrant(assertCurrent = () => {}, accessExpiresAtMs?: number) {
-  const fact = await prepareGitHubPublicationFact(session);
-  if (!fact?.github || !fact.identity || !fact.workspaceKey) {
-    throw new Error("Expected background identity");
-  }
-  mocks.verify.mockClear();
-  return bindPreparedGrant(
-    {
-      ...fact,
-      identity: {
-        ...fact.identity,
-        ...(accessExpiresAtMs !== undefined ? { accessExpiresAtMs } : {}),
-      },
-    },
-    assertCurrent,
-  );
-}
+const { installProfile, prepareGrant, bindPreparedGrant } = createWorkerGitHubBindingFixture({
+  session,
+  profileId,
+  token,
+  resetVerification: () => mocks.verify.mockClear(),
+});
 
 describe("worker GitHub launch binding", () => {
   beforeEach(() => {
@@ -285,9 +220,24 @@ describe("worker GitHub launch binding", () => {
     });
   });
   afterEach(() => {
+    policy.current = undefined;
     clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not discover host credentials without a selected worker GitHub identity", async () => {
+    config = {};
+    setRuntimeConfigSnapshot(config);
+    mocks.nativeToken.mockRejectedValue(new Error("Optional host CLI is unavailable"));
+    await expect(prepareWorkerGitHubBindingGrant(session)).resolves.toBeUndefined();
+    expect(mocks.nativeToken).not.toHaveBeenCalled();
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await expect(
+      prepareWorkerGitHubBindingGrant({ ...session, expectedProfileId: profileId }),
+    ).rejects.toThrow("Selected GitHub App changed");
   });
 
   it.each([
@@ -405,20 +355,39 @@ describe("worker GitHub launch binding", () => {
     expect(release).toHaveBeenCalledOnce();
   });
 
-  it("binds the verified shared account and canonical HTTPS remote", async () => {
-    await installProfile();
-
+  it.each([
+    ["github.com", true],
+    ["github.com", false],
+    ["enterprise.ghe.com", false],
+  ] as const)("binds discovered host %s (managed=%s)", async (host, managed) => {
+    if (managed) {
+      await installProfile();
+    } else {
+      config = {};
+    }
+    config.gateway = { github: { host, apiBaseUrl: `https://api.${host}` } };
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    vi.stubEnv("GH_ENTERPRISE_TOKEN", undefined);
+    vi.stubEnv("GITHUB_ENTERPRISE_TOKEN", undefined);
+    const canonicalRemote = managed || host !== "github.com";
+    mocks.repository.mockResolvedValue({
+      originUrl: canonicalRemote
+        ? `git@${host}:owner/repo.git`
+        : "https://example.test/owner/repo.git",
+    });
     await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
       token,
+      host,
       login: "shared-bot",
       branch: worktree.branch,
-      remoteUrl: "https://github.com/owner/repo.git",
-      gitAuthor: { name: "Shared Bot" },
+      ...(canonicalRemote ? { remoteUrl: `https://${host}/owner/repo.git` } : {}),
+      ...(managed ? { gitAuthor: { name: "Shared Bot" } } : {}),
     });
-    expect(mocks.verify).toHaveBeenCalledWith(token, {
-      apiBaseUrl: "https://api.github.com",
-    });
-    expect(mocks.nativeToken).not.toHaveBeenCalled();
+    expect(mocks.verify).toHaveBeenCalledWith(token, { apiBaseUrl: `https://api.${host}` });
+    if (managed) {
+      expect(mocks.nativeToken).not.toHaveBeenCalled();
+    }
   });
 
   it("uses the agent override author without inheriting system author fields", async () => {
@@ -442,16 +411,6 @@ describe("worker GitHub launch binding", () => {
     },
   );
 
-  it("binds native shared auth without a managed author or non-GitHub remote", async () => {
-    config = {};
-    mocks.repository.mockResolvedValue({ originUrl: "https://example.test/owner/repo.git" });
-    await expect(prepareWorkerGitHubBinding(session)).resolves.toEqual({
-      token,
-      login: "shared-bot",
-      branch: worktree.branch,
-    });
-  });
-
   it.each(["missing-profile", "unavailable"] as const)(
     "keeps publication discovery optional when the managed identity is %s",
     async (failure) => {
@@ -460,6 +419,9 @@ describe("worker GitHub launch binding", () => {
         mocks.verify.mockResolvedValue({ status: failure });
       }
       await expect(prepareWorkerGitHubBinding(session)).resolves.toBeUndefined();
+      await expect(prepareWorkerGitHubBindingGrant(session)).rejects.toBeInstanceOf(
+        GitHubIdentityError,
+      );
       expect(mocks.nativeToken).not.toHaveBeenCalled();
     },
   );
@@ -564,35 +526,48 @@ describe("worker GitHub launch binding", () => {
       expect(mocks.worktree).not.toHaveBeenCalled();
     },
   );
-  it("rejects an older worker before disclosing the prepared credential", async () => {
-    await installProfile();
-    const fact = await prepareGitHubPublicationFact(session);
-    expect(fact?.github).toBeDefined();
-    mocks.verify.mockClear();
-    await expect(
-      bindWorkerGitHubTurn({
-        session,
-        fact,
-        sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
-        store: {
-          prepareTurnClaimAuthority: async () => {
-            throw new Error("older worker must not acquire a grant");
+  it.each(["shared", "integration"])(
+    "rejects an older $0 worker before disclosing the prepared credential",
+    async (mode) => {
+      await installProfile();
+      const fact = await prepareGitHubPublicationFact(session);
+      expect(fact?.github).toBeDefined();
+      if (mode === "integration") {
+        policy.current = {
+          version: 1,
+          preparedCapacity: "image",
+          resolveConnectionIdentity: () => undefined,
+          withIdentity: async () => {
+            throw new Error("Older worker must not enter integration policy");
           },
-        },
-        claim: {
-          sessionId: session.sessionId,
-          claimId: "old-worker-claim",
-          runId: "old-worker-run",
-          placementGeneration: 1,
-          owner: { kind: "worker", environmentId: "old-worker", ownerEpoch: 1 },
-        },
-        protocolFeatures: [],
-        signal: new AbortController().signal,
-        assertCurrent() {},
-      }),
-    ).rejects.toThrow("redispatch the session");
-    expect(mocks.verify).not.toHaveBeenCalled();
-  });
+        };
+      }
+      mocks.verify.mockClear();
+      await expect(
+        bindWorkerGitHubTurn({
+          session,
+          fact,
+          sessionTarget: { ...session, storePath: "/synthetic/admitted.sqlite" },
+          store: {
+            prepareTurnClaimAuthority: async () => {
+              throw new Error("older worker must not acquire a grant");
+            },
+          },
+          claim: {
+            sessionId: session.sessionId,
+            claimId: "old-worker-claim",
+            runId: "old-worker-run",
+            placementGeneration: 1,
+            owner: { kind: "worker", environmentId: "old-worker", ownerEpoch: 1 },
+          },
+          protocolFeatures: [],
+          signal: new AbortController().signal,
+          assertCurrent() {},
+        }),
+      ).rejects.toThrow("redispatch the session");
+      expect(mocks.verify).not.toHaveBeenCalled();
+    },
+  );
 
   it("binds a repository credential without synchronous identity discovery", async () => {
     await installProfile();
@@ -709,5 +684,348 @@ describe("worker GitHub launch binding", () => {
       entry: { sessionId: session.sessionId, activeWriterRunId: "writer" },
     });
     await expect(bindPreparedGrant(fact)).rejects.toThrow();
+  });
+});
+
+// Native token delivery and publication/session owners remain real; external integration policy is a fixture.
+describe("same-bound integrated worker credential renewal", () => {
+  const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
+    type: "pkcs8",
+    format: "pem",
+  });
+  async function fixture(
+    host: string,
+    apiBaseUrl: string,
+    throughTurn = false,
+    sourceLifetime: "valid" | "missing" | "expired" | "short" = "valid",
+  ) {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const selected = {
+      profileId,
+      kind: "app-installation" as const,
+      app: {
+        appId: 101,
+        installationId: 202,
+        accountId: 303,
+        repositories: [{ id: 404, fullName: "example/project" }],
+        permissions: { contents: "write" as const },
+        privateKey,
+        keyVersion: "test-v1",
+      },
+    };
+    config = { gateway: { github: { host, apiBaseUrl } }, tools: { github: selected } };
+    setRuntimeConfigSnapshot(config);
+    mocks.snapshot.mockImplementation(() => ({ config, sourceConfig: config }));
+    mocks.refresh.mockResolvedValue(undefined);
+    mocks.session.mockReturnValue({
+      canonicalKey: session.sessionKey,
+      agentId: session.agentId,
+      entry: { sessionId: session.sessionId },
+    });
+    const credentialSource: RepositoryCredentialSource | undefined =
+      sourceLifetime === "missing"
+        ? undefined
+        : Object.freeze({
+            id: `${host === "engineering.ghe.com" ? "browser" : "ahp"}:${"a".repeat(64)}`,
+            expiresAtMs:
+              now +
+              (sourceLifetime === "expired"
+                ? -1
+                : sourceLifetime === "short"
+                  ? 55 * 60_000
+                  : 2 * 3_600_000),
+          });
+
+    let issued = 0;
+    let status = 200;
+    let botId = 9001;
+    let reuseToken = false;
+    let onMint: (() => Promise<void>) | undefined;
+    const removed: string[] = [];
+    const fetcher = vi.fn(async (url: string, init: RequestInit) => {
+      const pathname = url.slice(apiBaseUrl.length);
+      if (!url.startsWith(apiBaseUrl)) {
+        throw new Error("Wrong GitHub issuer");
+      }
+      if (init.method === "DELETE") {
+        removed.push(String(new Headers(init.headers).get("authorization")));
+        return new Response(null, { status: 204 });
+      }
+      if (status !== 200) {
+        return new Response(null, { status });
+      }
+      if (pathname.endsWith("/access_tokens")) {
+        await onMint?.();
+        issued++;
+        return Response.json({
+          token: `synthetic-app-${reuseToken ? 1 : issued}`,
+          expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+          permissions: { contents: "write", metadata: "read" },
+        });
+      }
+      const bodies: Record<string, unknown> = {
+        "/app": { id: 101, slug: "factory", permissions: { contents: "write", metadata: "read" } },
+        "/app/installations/202": {
+          id: 202,
+          app_id: 101,
+          account: { id: 303 },
+          suspended_at: null,
+          permissions: { contents: "write", metadata: "read" },
+        },
+        "/users/factory%5Bbot%5D": {
+          id: botId,
+          login: "factory[bot]",
+          type: "Bot",
+          avatar_url: null,
+        },
+        "/installation/repositories?per_page=100": {
+          total_count: 1,
+          repositories: [{ id: 404, full_name: "example/project" }],
+        },
+      };
+      return Response.json(bodies[pathname]);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const admissions = vi.fn(async (_source: typeof credentialSource) => {});
+    policy.current = {
+      version: 1,
+      preparedCapacity: "image",
+      resolveConnectionIdentity: () => undefined,
+      async withIdentity(context, run) {
+        const originalSource = context.actor.credentialSource;
+        const assertCurrent = () => {
+          context.assertCurrent();
+          if (!originalSource || originalSource.expiresAtMs <= Date.now()) {
+            throw new Error("Original repository credential source is unavailable");
+          }
+        };
+        assertCurrent();
+        return run({
+          env: context.env,
+          assertCurrent,
+          readNativeCredential: async (_env, admission) => {
+            assertCurrent();
+            expect(admission).toMatchObject({ kind: "repository-admission", host });
+            await admissions(originalSource);
+            assertCurrent();
+            return undefined;
+          },
+        });
+      },
+    };
+    const controller = new AbortController();
+    const operator = createAdmittedRunOperatorAuthority({
+      profileId: "operator-profile",
+      repositoryCredentialSource: credentialSource,
+      scopes: ["operator.write"],
+      signal: controller.signal,
+      assertCurrent() {},
+    });
+    const grant = throughTurn
+      ? await bindPreparedGrant(undefined, () => {}, operator)
+      : await prepareWorkerGitHubBindingGrant({ ...session, operatorAuthority: operator });
+    if (!grant) {
+      throw new Error("Expected admitted grant");
+    }
+    return {
+      grant,
+      now,
+      removed,
+      admissions,
+      fetcher,
+      controller,
+      credentialSource,
+      get issued() {
+        return issued;
+      },
+      setStatus(value: number) {
+        status = value;
+      },
+      changeAccount() {
+        botId++;
+      },
+      reuseToken() {
+        reuseToken = true;
+      },
+      onMint(value: () => Promise<void>) {
+        onMint = value;
+      },
+    };
+  }
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    policy.current = undefined;
+    clearRuntimeConfigSnapshot();
+  });
+
+  it.each([
+    { host: "engineering.ghe.com", api: "https://api.engineering.ghe.com" },
+    { host: "microsoft.ghe.com", api: "https://api.microsoft.ghe.com" },
+  ])(
+    "binds worker turns to the admitted operator without an ambient caller on $host",
+    async ({ host, api }) => {
+      const h = await fixture(host, api, true);
+      expect(h.grant.binding.host).toBe(host);
+      expect(h.issued).toBe(1);
+      h.controller.abort();
+      expect(() => h.grant.assertCurrent()).toThrow();
+      await expect(h.grant.refresh(0)).rejects.toThrow();
+      await h.grant.revoke();
+    },
+  );
+
+  it.each([
+    { host: "engineering.ghe.com", api: "https://api.engineering.ghe.com" },
+    { host: "microsoft.ghe.com", api: "https://api.microsoft.ghe.com" },
+  ])(
+    "crosses the old expiry only after same-account installation ACK on $host",
+    async ({ host, api }) => {
+      const h = await fixture(host, api);
+      try {
+        expect(h.grant.binding.host).toBe(host);
+        await vi.advanceTimersByTimeAsync(55 * 60_000);
+        const [first, concurrent] = await Promise.all([h.grant.refresh(0), h.grant.refresh(0)]);
+        expect(first).toMatchObject({ generation: 1, token: "synthetic-app-2" });
+        expect(concurrent).toEqual(first);
+        expect(h.issued).toBe(2);
+        expect(await h.grant.refresh(0)).toEqual(first);
+        expect(h.removed).toEqual([]);
+        await h.grant.refresh(1);
+        expect(h.removed).toEqual([]);
+        await vi.advanceTimersByTimeAsync(6 * 60_000);
+        expect(() => h.grant.assertCurrent()).not.toThrow();
+        expect(h.grant.signal.aborted).toBe(false);
+        expect(h.admissions).toHaveBeenCalledTimes(2);
+        expect(h.admissions.mock.calls[0]?.[0]).toBe(h.credentialSource);
+        expect(h.admissions.mock.calls[1]?.[0]).toBe(h.credentialSource);
+      } finally {
+        await h.grant.revoke();
+      }
+      expect(h.removed).toEqual(["Bearer synthetic-app-1", "Bearer synthetic-app-2"]);
+      await expect(h.grant.refresh(1)).rejects.toThrow();
+    },
+  );
+
+  it.each(["missing", "expired"] as const)(
+    "refuses an initially %s original source before broker lookup or App issuance",
+    async (sourceLifetime) => {
+      await expect(
+        fixture("microsoft.ghe.com", "https://api.microsoft.ghe.com", false, sourceLifetime),
+      ).rejects.toThrow("Original repository credential source is unavailable");
+      expect(fetch).not.toHaveBeenCalled();
+    },
+  );
+
+  it("refuses renewal after original source expiry without selecting another credential", async () => {
+    const h = await fixture("microsoft.ghe.com", "https://api.microsoft.ghe.com", false, "short");
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    await expect(h.grant.refresh(0)).rejects.toThrow(
+      "Original repository credential source is unavailable",
+    );
+    await h.grant.revoke();
+    expect(h.issued).toBe(1);
+    expect(h.admissions).toHaveBeenCalledOnce();
+    expect(h.removed).toEqual(["Bearer synthetic-app-1"]);
+  });
+
+  it("refuses renewal when the original source is denied by its broker owner", async () => {
+    const h = await fixture("microsoft.ghe.com", "https://api.microsoft.ghe.com");
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    h.admissions.mockRejectedValueOnce(new Error("Integration admission refused"));
+    await expect(h.grant.refresh(0)).rejects.toThrow();
+    await h.grant.revoke();
+    expect(h.issued).toBe(1);
+    expect(h.removed).toEqual(["Bearer synthetic-app-1"]);
+  });
+
+  it("does not extend or revoke an unchanged bearer returned by the issuer", async () => {
+    const h = await fixture("engineering.ghe.com", "https://api.engineering.ghe.com");
+    h.reuseToken();
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    expect(await h.grant.refresh(0)).toBeUndefined();
+    expect(h.removed).toEqual([]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(h.grant.signal.aborted).toBe(true);
+    await h.grant.revoke();
+    expect(h.removed).toEqual(["Bearer synthetic-app-1"]);
+  });
+
+  it("keeps the original deadline without an installation ACK", async () => {
+    const h = await fixture("engineering.ghe.com", "https://api.engineering.ghe.com");
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    expect(await h.grant.refresh(0)).toMatchObject({ generation: 1 });
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(h.grant.signal.aborted).toBe(true);
+    await h.grant.revoke();
+    expect(h.removed).toContain("Bearer synthetic-app-2");
+  });
+
+  it("bounds transient retries by polling and the installed credential expiry", async () => {
+    const h = await fixture("engineering.ghe.com", "https://api.engineering.ghe.com");
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    h.setStatus(503);
+    expect(await h.grant.refresh(0)).toBeUndefined();
+    const attempted = h.fetcher.mock.calls.length;
+    expect(await h.grant.refresh(0)).toBeUndefined();
+    expect(h.fetcher).toHaveBeenCalledTimes(attempted);
+    await vi.advanceTimersByTimeAsync(30_000);
+    h.setStatus(200);
+    expect(await h.grant.refresh(0)).toMatchObject({ generation: 1 });
+    await vi.advanceTimersByTimeAsync(270_000);
+    expect(h.grant.signal.aborted).toBe(true);
+    await h.grant.revoke();
+  });
+
+  it.each(["host", "api", "account", "operator", "closed", "denied"])(
+    "refuses renewal after %s changes without adopting another credential",
+    async (change) => {
+      const h = await fixture("microsoft.ghe.com", "https://api.microsoft.ghe.com");
+      await vi.advanceTimersByTimeAsync(55 * 60_000);
+      if (change === "host") {
+        config.gateway!.github!.host = "github.com";
+      }
+      if (change === "api") {
+        config.gateway!.github!.apiBaseUrl = "https://other.example/api/v3";
+      }
+      if (change === "account") {
+        h.changeAccount();
+      }
+      if (change === "operator") {
+        h.controller.abort();
+      }
+      if (change === "closed") {
+        await h.grant.revoke();
+      }
+      if (change === "denied") {
+        h.setStatus(403);
+      }
+      await expect(h.grant.refresh(0)).rejects.toThrow();
+      expect(h.grant.signal.aborted).toBe(true);
+      await h.grant.revoke();
+      expect(h.issued).toBe(change === "account" ? 2 : 1);
+    },
+  );
+
+  it("settles late token issuance during turn closure before credential cleanup completes", async () => {
+    const h = await fixture("engineering.ghe.com", "https://api.engineering.ghe.com");
+    await vi.advanceTimersByTimeAsync(55 * 60_000);
+    const entered = createDeferred();
+    const release = createDeferred();
+    h.onMint(async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    const renewing = h.grant.refresh(0);
+    await entered.promise;
+    const closed = h.grant.revoke();
+    release.resolve();
+    await expect(renewing).rejects.toThrow();
+    await closed;
+    expect(h.removed).toContain("Bearer synthetic-app-2");
+    expect(h.removed).toContain("Bearer synthetic-app-1");
   });
 });

@@ -3,7 +3,10 @@ import { isMainThread, MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
-import { getDatabaseEngineInput } from "../../infra/database-engine/context.js";
+import {
+  getDatabaseEngineInput,
+  isDatabaseEngineReadOnlyAdmission,
+} from "../../infra/database-engine/context.js";
 import { captureSqliteAuthSchema } from "../../infra/sqlite-readonly-auth-schema.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { getArtifactPreservingSqliteRead } from "../../infra/sqlite-snapshot-source.js";
@@ -202,6 +205,16 @@ export function prepareAgentAuthProfileRowsRead(options: {
       registerOwners();
     }
   };
+  let source: AuthProfileReadSource | undefined;
+  const readSource = (): AuthProfileReadSource =>
+    (source ??= {
+      kind: "agent",
+      databasePath,
+      agentId,
+      identity: identity?.key,
+      schema:
+        identity && !postgres ? captureSqliteAuthSchema(databasePath, identity.key) : undefined,
+    });
   const readRows = async (): Promise<AuthProfileRowRead> => {
     assertCurrent();
     if (!identity) {
@@ -214,20 +227,36 @@ export function prepareAgentAuthProfileRowsRead(options: {
     if (!identity.key.startsWith("file:")) {
       return missing;
     }
-    const inspection = getArtifactPreservingSqliteRead(databasePath);
-    const rows = postgres
-      ? await readAgentAuthProfileRows(
-          { databasePath, agentId, env },
-          assertCurrent,
-          controller.signal,
-        )
-      : await runSqliteReadOnlyWorker(inspection?.canonicalPath ?? databasePath, {
-          mode: "auth-profile-rows",
-          source: inspection ? "snapshot" : "canonical",
-          expectedIdentity: inspection?.key ?? identity.key,
-          env,
-          signal: controller.signal,
-        });
+    let rows: { store: unknown; state: unknown; cacheable: boolean };
+    if (postgres && isDatabaseEngineReadOnlyAdmission()) {
+      if (!captured.ok) {
+        throw captured.error;
+      }
+      // The ordinary agent actor claims a durable writer lease even for reads.
+      // Standby uses the existing observational source reader on the state actor.
+      rows =
+        (
+          await readAuthProfileSources(captured.value, [readSource()], {
+            artifactPreserving: true,
+            assertCurrent,
+          })
+        )?.get(databasePath) ?? missing;
+    } else {
+      const inspection = getArtifactPreservingSqliteRead(databasePath);
+      rows = postgres
+        ? await readAgentAuthProfileRows(
+            { databasePath, agentId, env },
+            assertCurrent,
+            controller.signal,
+          )
+        : await runSqliteReadOnlyWorker(inspection?.canonicalPath ?? databasePath, {
+            mode: "auth-profile-rows",
+            source: inspection ? "snapshot" : "canonical",
+            expectedIdentity: inspection?.key ?? identity.key,
+            env,
+            signal: controller.signal,
+          });
+    }
     controller.signal.throwIfAborted();
     assertCurrent();
     if (!isInspection(rows.store) || !isInspection(rows.state)) {
@@ -252,19 +281,11 @@ export function prepareAgentAuthProfileRowsRead(options: {
     void operation.finally(() => pending.delete(operation)).catch(() => undefined);
     return operation;
   };
-  let source: AuthProfileReadSource | undefined;
   return {
     identity: identity && `${identity.key}:${identity.birthtime ?? ""}`,
     databaseIdentity: identity,
     get source() {
-      return (source ??= {
-        kind: "agent",
-        databasePath,
-        agentId,
-        identity: identity?.key,
-        schema:
-          identity && !postgres ? captureSqliteAuthSchema(databasePath, identity.key) : undefined,
-      });
+      return readSource();
     },
     captureCredentialAuthority(profileId) {
       if (!captured.ok) {

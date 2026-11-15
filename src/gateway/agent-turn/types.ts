@@ -28,6 +28,8 @@ export type AgentTurnPrincipal = Pick<
   GatewayClient,
   | "authenticatedUserId"
   | "authenticatedUserProfile"
+  | "authenticatedGitHubAccountId"
+  | "authenticatedRepositoryCredentialSource"
   | "authPolicy"
   | "connId"
   | "connect"

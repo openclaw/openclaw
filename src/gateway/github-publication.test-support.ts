@@ -535,6 +535,10 @@ export function installGitHubPublicationTestHarness(
     }),
   );
   beforeEach(async () => {
+    // Ordinary publication fixtures model an unconstrained process. Pressure cases
+    // override the real constraint APIs after setup and keep their own pause proof.
+    const constraint = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+    onTestFinished(() => constraint.mockRestore());
     mocks.persistedSessionKeys.clear();
     for (const mock of Object.values(mocks)) {
       if (vi.isMockFunction(mock)) {

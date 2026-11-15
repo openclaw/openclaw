@@ -13,8 +13,12 @@ export async function prepareHostExecSpawn(params: {
   env: Record<string, string>;
   pathPrepend?: string[];
   githubProfileDir?: string;
+  githubAppCredential?: boolean;
   usePty: boolean;
 }) {
+  if (params.githubAppCredential && !params.usePty && process.platform === "win32") {
+    throw new Error("GitHub App execution on Windows requires a PTY; retry with pty enabled.");
+  }
   const { shell, args: shellArgs } = await getShellConfig();
   // The env may predate an approval wait; credential names published since then stay out.
   const env = omitGatewayCredentialEnv(params.env);
@@ -48,11 +52,13 @@ export async function prepareHostExecSpawn(params: {
   const shellArgv = [shell, ...shellArgs, commandWithShellSnapshot];
   return {
     mode: params.usePty ? ("pty" as const) : ("child" as const),
-    argv: params.githubProfileDir
-      ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir, {
-          githubHost: env.GH_HOST,
-        })
-      : shellArgv,
+    argv:
+      params.githubProfileDir && !(params.githubAppCredential && params.usePty)
+        ? buildGitHubExecLaunchArgv(shellArgv, params.githubProfileDir, {
+            githubHost: env.GH_HOST,
+            privateCredential: params.githubAppCredential,
+          })
+        : shellArgv,
     env,
     cwd: params.workdir,
     stdinMode: params.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),

@@ -111,7 +111,7 @@ export async function withControlUiSessionGitHubRead<T>(
       agentId,
       requestedRepository: `${repository.owner}/${repository.repo}`,
       assertActive: assertCurrent,
-      factoryCredential: {
+      repositoryCredential: {
         claim: {
           purpose: "session-item-read",
           binding: {
@@ -148,7 +148,7 @@ export async function withControlUiSessionGitHubRead<T>(
           apiBaseUrl,
           admitted.id,
           client.authenticatedUserProfile?.profileId,
-          client.authenticatedFactoryGitHubAccountId,
+          client.authenticatedGitHubAccountId ?? client.authenticatedFactoryGitHubAccountId,
           session.identity,
           identity.cacheScope,
         ]),

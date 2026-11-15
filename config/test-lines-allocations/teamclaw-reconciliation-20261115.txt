@@ -3,4 +3,4 @@
 # native snapshots/fresh reuse, request-scoped GitHub/Codex credentials, creation
 # replay, provider sizing, worker memory ownership, and cloud project routing.
 # Existing main consumer proof is retained; new cases cover distinct owner boundaries.
-66
+1049

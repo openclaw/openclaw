@@ -1,3 +1,4 @@
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type {
   GitHubIdentityPreparation,
   GitHubReadIdentityStarter,
@@ -29,6 +30,8 @@ export type PreparedGitHubToolEnvironment = Readonly<{
   excludedStoreNames: readonly string[];
   /** A local process must retain the host-selected profile and author identity. */
   managedLocalIdentity: boolean;
+  /** App execution obtains an ephemeral credential from the session grant owner. */
+  appInstallationProfileId?: string;
   /** Selected credentials require the host-owned exec lifecycle, not a runtime shell overlay. */
   hostExecutionRequired?: true;
 }>;
@@ -41,4 +44,22 @@ export type PreparedGitHubPublicationIdentity = Readonly<{
   env: NodeJS.ProcessEnv;
   stale?: true;
   accessExpiresAtMs?: number;
+  revoke?: () => Promise<void>;
 }>;
+
+/** Shared execution cannot select a person's publication credential. */
+export type PreparedSharedGitHubPublicationIdentity = Omit<
+  PreparedGitHubPublicationIdentity,
+  "source"
+> & {
+  source: Exclude<PreparedGitHubPublicationIdentity["source"], "personal">;
+};
+
+/** Nonsecret execution identity captured before approval can detach from its caller. */
+export type LocalGitHubAppExecution = {
+  profileId: string;
+  agentId: string;
+  sessionId: string;
+  sessionKey: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+};

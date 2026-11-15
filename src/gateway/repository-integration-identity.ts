@@ -1,17 +1,54 @@
 import type { GitHubCredentialReader } from "../agents/github-credential-reader.js";
 import { resolveGitHubHost, resolveGitHubApiBaseUrl } from "../agents/github-host-runtime.js";
+import {
+  GitHubIdentityError,
+  type GitHubIdentityPreparation,
+} from "../agents/github-read-identity.js";
+import {
+  prepareGitHubPublicationIdentity,
+  resolveConfiguredGitHubToolIdentity,
+} from "../agents/github-tool-identity.js";
 import { getRepositoryIntegration } from "../plugins/repository-integration-runtime.js";
 import type {
   RepositoryActor,
   RepositoryOperation,
 } from "../plugins/repository-integration.types.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
-type RepositoryCredential = { claim: RepositoryOperation; assertCurrent: () => void };
+import type { GitHubPublicationRequesterPolicyV2 } from "./github-publication-requester.js";
+export type RepositoryPublicationActor = RepositoryActor;
+export type RepositoryPublicationCredential = {
+  claim: RepositoryOperation;
+  assertCurrent: () => void;
+};
+
+export function repositoryPublicationPreflightCredential(params: {
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+  requestDigest?: string;
+  assertCurrent: () => void;
+}): RepositoryPublicationCredential {
+  return {
+    claim: {
+      purpose: "publication-preflight",
+      binding: {
+        kind: "session",
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        lifecycleRevision: params.lifecycleRevision,
+        ...(params.requestDigest ? { requestDigest: params.requestDigest } : {}),
+      },
+    },
+    assertCurrent: params.assertCurrent,
+  };
+}
 
 /** Native lifetimes surround policy; plugins never replace current session/profile owners. */
 export async function withRepositoryIdentity<T>(
   actor: RepositoryActor,
-  credential: RepositoryCredential,
+  credential: RepositoryPublicationCredential,
   run: (
     env: NodeJS.ProcessEnv,
     readNativeCredential: GitHubCredentialReader,
@@ -115,4 +152,94 @@ export async function withRepositoryIdentity<T>(
   );
   assertCurrent();
   return result;
+}
+
+/** Project the original admitted requester; plugin policy does not own session lifetimes. */
+export function repositoryPublicationPreflightActor(
+  requester: Pick<GitHubPublicationRequesterPolicyV2, "snapshot" | "repositoryCredentialSource">,
+  sessionKey: string,
+  assertCurrent: () => void,
+): RepositoryPublicationActor | undefined {
+  const actor = requester.snapshot.actor;
+  return actor.kind === "operator"
+    ? {
+        profileId: actor.profileId,
+        credentialSource: requester.repositoryCredentialSource,
+        sessionKey,
+        assertCurrent,
+      }
+    : undefined;
+}
+
+/** Resolve the effective identity before selecting App broker admission or native credentials. */
+export async function preparePublicationGitHubIdentity(
+  snapshot: Pick<GitHubIdentityPreparation, "config" | "sourceConfig">,
+  agentId: string,
+  actor?: RepositoryPublicationActor | (() => void),
+  credential?: RepositoryPublicationCredential,
+  allowAppInstallation = true,
+) {
+  const callerAssert = typeof actor === "function" ? actor : actor?.assertCurrent;
+  const repositoryActor = typeof actor === "function" ? undefined : actor;
+  const assertCurrent = () => {
+    callerAssert?.();
+    credential?.assertCurrent();
+  };
+  const prepare = (
+    env?: NodeJS.ProcessEnv,
+    readNativeCredential?: import("../agents/github-credential-reader.js").GitHubCredentialReader,
+  ) =>
+    prepareGitHubPublicationIdentity({
+      config: snapshot.config,
+      sourceConfig: snapshot.sourceConfig,
+      agentId,
+      env,
+      readNativeCredential,
+      assertCurrent,
+    });
+  const selected =
+    resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "agent" }) ??
+    resolveConfiguredGitHubToolIdentity({ config: snapshot.config, agentId, scope: "system" });
+  if (selected?.kind === "app-installation" && !allowAppInstallation) {
+    throw new GitHubIdentityError("unavailable");
+  }
+  let issued: Awaited<ReturnType<typeof prepare>> | undefined;
+  let identity: Awaited<ReturnType<typeof prepare>>;
+  try {
+    if (selected?.kind === "app-installation" && getRepositoryIntegration()) {
+      if (!repositoryActor || !credential) {
+        throw new Error("Repository operation requires current actor and session authority");
+      }
+      identity = await withRepositoryIdentity(
+        repositoryActor,
+        credential,
+        async (env, reader, assertPolicyCurrent) => {
+          issued = await prepareGitHubPublicationIdentity({
+            config: snapshot.config,
+            sourceConfig: snapshot.sourceConfig,
+            agentId,
+            env,
+            readNativeCredential: reader,
+            assertCurrent: () => {
+              assertCurrent();
+              assertPolicyCurrent();
+            },
+          });
+          return issued;
+        },
+      );
+    } else {
+      identity = await prepare();
+    }
+  } catch (error) {
+    await issued?.revoke?.();
+    throw error;
+  }
+  try {
+    assertCurrent();
+  } catch (error) {
+    await identity.revoke?.();
+    throw error;
+  }
+  return identity;
 }

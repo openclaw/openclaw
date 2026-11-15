@@ -7,6 +7,7 @@ import type {
   ExecHostCommandParams,
   ExecApprovalFollowupFactory,
 } from "./bash-tools.exec-types.js";
+import type { LocalGitHubAppExecution } from "./github-tool-identity.types.js";
 import type { AgentToolResult } from "./runtime/index.js";
 
 export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
@@ -14,6 +15,7 @@ export type ProcessGatewayAllowlistParams = ExecHostCommandParams & {
   secretEgressBindings?: readonly SecretEgressSentinelBinding[];
   durable?: DurableExecOptions;
   githubProfileDir?: string;
+  githubApp?: LocalGitHubAppExecution;
   pathPrepend?: string[];
   pty: boolean;
   safeBins: Set<string>;

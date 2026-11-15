@@ -45,6 +45,14 @@ export type CachedGitHubIdentity = { profileId: string; updatedAt: number };
 /** A sign-in binding verified earlier: Access email + immutable account ID, or a GitHub login alias. */
 export type CachedGitHubIdentityBinding = { accountId: number; email: string } | { login: string };
 
+/** A host-authenticated selector; lookup never establishes or repairs a binding. */
+export type ExistingUserProfileAuthentication =
+  | { kind: "owner" }
+  | { kind: "email"; email: string }
+  | { kind: "provider"; provider: string; subject: string }
+  | { kind: "github"; binding: CachedGitHubIdentityBinding }
+  | { kind: "enterprise-github"; principal: string; login?: string; email?: string };
+
 export type StoredGitHubIdentity = { accountId: number; login: string };
 
 export type EnterpriseGitHubIdentity = StoredGitHubIdentity & {

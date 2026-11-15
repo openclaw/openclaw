@@ -126,15 +126,15 @@ export async function executeGitHubPublication<Row extends PublicationRow>(param
     currentWorktree();
   };
   const custodyCommands = createGitHubPublicationCommandRunner(assertCustody);
-  const { assertCurrent: assertAuthority, refreshIdentity } =
-    createGitHubPublicationExecutionIdentity({
-      row: initial,
-      identity: params.identity,
-      validateAuthority: params.validateAuthority,
-      assertWorkspace: () => {
-        currentWorktree();
-      },
-    });
+  await using executionIdentity = createGitHubPublicationExecutionIdentity({
+    row: initial,
+    identity: params.identity,
+    validateAuthority: params.validateAuthority,
+    assertWorkspace: () => {
+      currentWorktree();
+    },
+  });
+  const { assertCurrent: assertAuthority, refreshIdentity } = executionIdentity;
   let bound: Awaited<ReturnType<typeof prepareBoundGitHubPublication>> | undefined;
   const assertCurrent = () => {
     assertAuthority();

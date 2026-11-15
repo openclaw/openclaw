@@ -33,10 +33,8 @@ import {
   resolveRegisteredExecApprovalDecision,
 } from "./bash-tools.exec-approval-request.js";
 import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
-import {
-  buildApprovalPendingMessage,
-  DEFAULT_APPROVAL_TIMEOUT_MS,
-} from "./bash-tools.exec-runtime.js";
+import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
+import { buildApprovalPendingMessage } from "./bash-tools.exec-support.js";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 import { isExecDeniedResultText } from "./exec-approval-result.js";
 import type { ExecApprovalRegistration, ExecApprovalTransport } from "./exec-approval-transport.js";

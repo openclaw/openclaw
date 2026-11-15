@@ -35,6 +35,9 @@ async function bindWorkerGitHubCheckout(
   baseEnv: NodeJS.ProcessEnv,
   signal?: AbortSignal,
 ) {
+  if (!binding.branch) {
+    return;
+  }
   const git = (args: string[], timeoutMs = 5_000) =>
     executeGitCommand(cwd, args, {
       baseEnv,
@@ -189,6 +192,7 @@ export async function prepareWorkerGitHubEnvironment(params: {
   }
   const localIdentityEnv = managedGitHubIdentityEnvironment({
     profileDir,
+    host: binding.host,
     gitAuthor: binding.gitAuthor,
     // Reset inherited helpers so paired-device credentials cannot override the turn identity.
     gitConfig: [

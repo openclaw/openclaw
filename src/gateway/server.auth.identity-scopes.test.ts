@@ -1014,3 +1014,44 @@ test("keeps Tailscale identity scopes without a named-role cap when only definit
     expect(responseAuth(connected)?.deviceToken).toBeTruthy();
   });
 });
+
+test("restores verified role write without pairing and preserves both scope ceilings", async () => {
+  await configureGatewayAuth(proxyAuth(), {
+    default: "engineer",
+    definitions: {
+      engineer: { ...role(READ_WRITE), verifiedIdentityWrite: true },
+      reader: { ...role(["operator.read"]), verifiedIdentityWrite: true },
+      disabled: { ...role(READ_WRITE), verifiedIdentityWrite: false },
+    },
+  });
+  setUserProfileRole(ensureProfileForEmail("reader@example.com").id, "reader");
+  setUserProfileRole(ensureProfileForEmail("disabled@example.com").id, "disabled");
+  const cases: Array<[string, string, OperatorScope[]]> = [
+    ["admin@example.com", "operator.read,operator.write,operator.admin", READ_WRITE],
+    ["admin@example.com", "operator.read", ["operator.read"]],
+    ["admin@example.com", "", []],
+    ["reader@example.com", "operator.write", ["operator.read"]],
+    ["disabled@example.com", "operator.read,operator.write", []],
+  ];
+  await withIdentityServer(async ({ connect }) => {
+    for (const [identity, cap, expected] of cases) {
+      const { ws, connected } = await connect(
+        { device: null, scopes: UPGRADE_SCOPES },
+        { ...TRUSTED_PROXY_HEADERS, "x-forwarded-user": identity, "x-openclaw-scopes": cap },
+      );
+      expectScopes(connected, expected);
+      expect(responseAuth(connected)?.deviceToken).toBeUndefined();
+      expect((await rpcReq(ws, "sessions.list", {})).ok).toBe(expected.length > 0);
+      expect((await rpcReq(ws, "exec.approvals.get", {})).ok).toBe(false);
+      if (expected.includes("operator.write")) {
+        expect(
+          (await rpcReq(ws, "sessions.create", { key: "agent:main:verified-role-cap" })).ok,
+        ).toBe(true);
+      } else {
+        await expectWriteDenied(ws, "agent:main:verified-role-cap");
+      }
+      ws.close();
+    }
+    expect(await listDevicePairing()).toEqual({ pending: [], paired: [] });
+  });
+});

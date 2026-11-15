@@ -52,10 +52,8 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { abortChatRunById } from "../../chat-abort.js";
 import { transferGatewayLocalUserIngress } from "../../local-user-ingress.js";
-import {
-  captureGatewayOperatorRunAuthority,
-  transferGatewayOperatorSourceIdentity,
-} from "../../operator-run-authority.js";
+import { captureGatewayOperatorRunAuthority } from "../../operator-run-authority.js";
+import { transferGatewayOperatorSourceIdentity } from "../../operator-run-source-retention.js";
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import { handleTrustedInternalChatSend } from "../../server-methods/chat-send-handler.js";
 import { gatewayClientSessionCreator } from "../../server-methods/gateway-client-identity.js";

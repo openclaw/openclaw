@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitTrustedSecurityEvent } from "../infra/diagnostic-events.js";
 import type { ExecAllowlistAnalysis } from "../infra/exec-approvals-allowlist.js";
+import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
@@ -227,4 +229,60 @@ export function publishGatewayGuardianReview(
       review,
     },
   });
+}
+
+/** Emit the fixed Gateway approval audit projection without command contents. */
+export function createGatewayExecApprovalEventEmitter(context: {
+  hostSecurity: ExecSecurity;
+  hostAsk: ExecAsk;
+  evaluation: Pick<ExecAllowlistAnalysis, "segments">;
+  params: Pick<ProcessGatewayAllowlistParams, "agentId" | "trigger">;
+}) {
+  const { hostSecurity, hostAsk, evaluation, params } = context;
+  return function emitApprovalEvent(event: {
+    action: "exec.approval.requested" | "exec.approval.approved" | "exec.approval.denied";
+    outcome: "success" | "denied" | "error";
+    severity: "low" | "medium" | "high";
+    reason?: string;
+    decision?: string | null;
+  }) {
+    emitTrustedSecurityEvent({
+      category: "approval",
+      action: event.action,
+      outcome: event.outcome,
+      severity: event.severity,
+      actor: {
+        kind: "agent",
+      },
+      target: {
+        kind: "tool",
+        name: "system.exec",
+        owner: "gateway",
+      },
+      policy: {
+        id: "exec.approval",
+        decision:
+          event.action === "exec.approval.requested"
+            ? "ask"
+            : event.outcome === "success"
+              ? "allow"
+              : "deny",
+        ...(event.reason ? { reason: event.reason } : {}),
+      },
+      control: {
+        id: "exec.approval",
+        family: "approval",
+      },
+      ...(event.reason ? { reason: event.reason } : {}),
+      attributes: {
+        host: "gateway",
+        security: hostSecurity,
+        ask: hostAsk,
+        segment_count: evaluation.segments.length,
+        has_agent_id: Boolean(params.agentId?.trim()),
+        ...(params.trigger ? { trigger: params.trigger } : {}),
+        ...(event.decision ? { decision: event.decision } : {}),
+      },
+    });
+  };
 }

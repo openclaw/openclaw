@@ -387,5 +387,6 @@
   "web-media",
   "agent-core",
   "agent-sessions",
-  "llm"
+  "llm",
+  "github-worker-runtime"
 ]

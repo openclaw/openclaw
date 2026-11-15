@@ -90,7 +90,7 @@ function prepare(caller = client(), requestedRepository?: string) {
     client: caller,
     requestedRepository,
     assertActive,
-    factoryCredential: { claim: structuredClone(claim), assertCurrent: assertActive },
+    repositoryCredential: { claim: structuredClone(claim), assertCurrent: assertActive },
   });
 }
 

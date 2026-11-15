@@ -9,12 +9,15 @@ import {
   resolveConfiguredGitHubHost,
   resolveConfiguredGitHubApiBaseUrl,
 } from "../agents/github-host.js";
+import type { PreparedGitHubPublicationIdentity } from "../agents/github-tool-identity.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
+  repositoryPublicationPreflightActor,
+  repositoryPublicationPreflightCredential,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
 import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
@@ -136,6 +139,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   session: PublicationSessionIdentity;
   requester: GitHubPublicationRequesterPolicyV2;
+  identity?: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
 }): Promise<{
   result: Inspection;
@@ -164,6 +168,7 @@ export async function inspectOwnGitHubPullRequest(params: {
   const inspected = await readOwnGitHubPullRequest({
     pullRequestUrl: params.pullRequestUrl,
     agentId: params.session.agentId,
+    identity: params.identity,
     reader: captureOwnGitHubPullRequestReader(
       actor.kind === "operator" ? actor.profileId : undefined,
       () => resolveConfiguredGitHubHost(currentGitHubPublicationConfig()),
@@ -200,6 +205,7 @@ export async function readOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
   reader: ReturnType<typeof captureOwnGitHubPullRequestReader>;
+  identity?: PreparedGitHubPublicationIdentity;
   assertCurrent: () => void;
 }) {
   const { host, accountIds: admittedIds, publication, operatorWrite } = params.reader;
@@ -215,7 +221,15 @@ export async function readOwnGitHubPullRequest(params: {
     params.assertCurrent();
     params.reader.assertCurrent();
   };
-  const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId, assertRequester);
+  const identity =
+    params.identity ??
+    // Raw cached readers do not own App cleanup; foreground operations pass their owned identity.
+    (await prepareCurrentGitHubPublicationIdentity(
+      params.agentId,
+      assertRequester,
+      undefined,
+      false,
+    ));
   const config = currentGitHubPublicationConfig();
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
@@ -385,9 +399,28 @@ export async function performSessionGitHubInspection(
   const session = { agentId: loaded.agentId, sessionKey: loaded.canonicalKey };
   const admitted = await prepareGitHubPublicationRequesterV2(options, session);
   using _ = { [Symbol.dispose]: admitted.release };
+  const assertCurrent = () => {
+    selected.readCurrent();
+    admitted.requester.assertCurrent();
+  };
+  const identity = await prepareCurrentGitHubPublicationIdentity(
+    session.agentId,
+    repositoryPublicationPreflightActor(admitted.requester, session.sessionKey, assertCurrent),
+    repositoryPublicationPreflightCredential({
+      ...session,
+      sessionId: loaded.entry.sessionId,
+      lifecycleRevision: loaded.entry.lifecycleRevision ?? null,
+      assertCurrent,
+    }),
+  );
+  await using identityLifetime = {
+    identity,
+    [Symbol.asyncDispose]: async () => identity.revoke?.(),
+  };
   const inspected = await inspectOwnGitHubPullRequest({
     pullRequestUrl: params.pullRequestUrl,
     session: { ...session, sessionId: loaded.entry.sessionId },
+    identity: identityLifetime.identity,
     requester: admitted.requester,
     assertCurrent: () => {
       selected.readCurrent();

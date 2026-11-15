@@ -15,6 +15,7 @@ import {
 } from "./user-profile-github-identity.js";
 import {
   readUserProfileSnapshotCommand,
+  selectExistingUserProfileAuthentication,
   selectUserProfileIdentityInDatabase,
 } from "./user-profile-identity.read.js";
 import {
@@ -31,6 +32,13 @@ export function readUserProfileCommand(
   >,
 ) {
   switch (command.type) {
+    case "userProfiles.authenticationIdentity":
+      return {
+        type: command.type,
+        result: runSqliteReadSnapshotSync(db, () =>
+          selectExistingUserProfileAuthentication(db, command.selector),
+        ),
+      };
     case "userProfiles.identity":
       return {
         type: command.type,

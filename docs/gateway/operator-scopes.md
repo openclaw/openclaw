@@ -27,6 +27,11 @@ Every Gateway WebSocket client connects with one role:
 Operator RPC methods require the `operator` role. Node-originated methods
 require the `node` role.
 
+Named roles can opt into `verifiedIdentityWrite: true` to grant read/write access
+to a currently verified, profile-bound identity. The role's own scopes and the
+transport's scope ceiling still apply; this option never grants administrator
+access. Anonymous or unverified identities retain their existing restrictions.
+
 ## Scope levels
 
 | Scope                     | Meaning                                                                                                                                                                         |

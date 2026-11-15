@@ -93,6 +93,7 @@ export function createAdmittedRunOperatorAuthority(
     openclawIdPrincipal: source.openclawIdPrincipal
       ? freezeJsonSnapshot(structuredClone(source.openclawIdPrincipal))
       : undefined,
+    repositoryCredentialSource: source.repositoryCredentialSource,
     recoverySnapshot: source.recoverySnapshot
       ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
       : undefined,

@@ -275,9 +275,9 @@ export async function readNativeGitHubToken(
 export type GitHubIdentityPreparation = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
-  readNativeCredential?: GitHubCredentialReader;
   agentId: string;
   env?: NodeJS.ProcessEnv;
+  readNativeCredential?: GitHubCredentialReader;
 };
 /** Release admission after starting the operation, before its asynchronous result settles. */
 export type GitHubReadIdentityStarter = <T>(start: () => T) => Promise<Awaited<T>>;
@@ -311,8 +311,37 @@ export function startGitHubIdentityOperation<T>(
     : operation();
 }
 
+export type GitHubIdentityDiagnosticOrigin =
+  | "app-not-admitted"
+  | "repository-not-selected"
+  | "native-reader-missing"
+  | "native-reader-failed"
+  | "issuer-key-unresolved"
+  | "issuer-failed";
+
+// Error identity owns these private facts; no arbitrary error properties or messages
+// become log fields, and response serialization never sees the diagnostic metadata.
+const identityErrorOrigins = new WeakMap<Error, GitHubIdentityDiagnosticOrigin>();
+export function annotateGitHubIdentityError<T>(
+  error: T,
+  origin: GitHubIdentityDiagnosticOrigin,
+): T {
+  if (error instanceof Error && !identityErrorOrigins.has(error)) {
+    identityErrorOrigins.set(error, origin);
+  }
+  return error;
+}
+export function getGitHubIdentityErrorOrigin(
+  error: unknown,
+): GitHubIdentityDiagnosticOrigin | undefined {
+  return error instanceof Error ? identityErrorOrigins.get(error) : undefined;
+}
+
 export class GitHubIdentityError extends Error {
-  constructor(readonly reason: "unavailable" | "changed" | "rate_limited" | "unverified") {
+  constructor(
+    readonly reason: "unavailable" | "changed" | "rate_limited" | "unverified",
+    origin?: GitHubIdentityDiagnosticOrigin,
+  ) {
     super(
       reason === "changed"
         ? "GitHub identity changed; reload the dashboard and retry."
@@ -322,6 +351,9 @@ export class GitHubIdentityError extends Error {
             ? "The effective GitHub identity could not be verified; retry or reconnect the agent's GitHub identity."
             : "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
     );
+    if (origin) {
+      annotateGitHubIdentityError(this, origin);
+    }
   }
 }
 
@@ -331,6 +363,7 @@ export type GitHubReadIdentitySelection = Readonly<{
   accountId: number;
 }>;
 type GitHubReadAuthority = {
+  /** App tokens retain cleanup with the request that admitted their issuance. */
   revoke?: () => Promise<void>;
   stale?: true;
   cacheScope: string;

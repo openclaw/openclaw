@@ -10,9 +10,10 @@ import type {
 import { readAcceptedGatewayDeviceSourceAuthority } from "./device-revocation.js";
 import { withRepositoryIdentity } from "./repository-integration-identity.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+export type { RepositoryOperation } from "../plugins/repository-integration.types.js";
 
 /** Capture host-authenticated operator authority; no wire metadata can create this handle. */
-function captureRepositoryClientActor(input: {
+export function captureRepositoryClientActor(input: {
   client: GatewayClient | null | undefined;
   claim: RepositoryOperation;
   assertCurrent: () => void;
@@ -77,7 +78,10 @@ function captureRepositoryClientActor(input: {
       directPerson,
       principal: userId,
     }),
-    sessionKey: input.claim.binding.sessionKey,
+    sessionKey:
+      input.claim.binding.kind === "connection"
+        ? input.claim.binding.connectionId
+        : input.claim.binding.sessionKey,
     assertCurrent,
   });
 }
@@ -90,7 +94,57 @@ type ChatDispatchAdmission = {
   runId: string;
   assertCurrent: () => void;
 };
-const chatDispatchAdmission = new AsyncLocalStorage<ChatDispatchAdmission>();
+type ActiveChatDispatchAdmission = ChatDispatchAdmission & { source: ChatDispatchAdmission };
+const chatDispatchAdmission = new AsyncLocalStorage<ActiveChatDispatchAdmission>();
+
+/** Core Goal queue retains the authenticated source, never a proof or closed dispatch. */
+export function captureRepositoryGoalDispatch(assertCurrent: () => void) {
+  const source = chatDispatchAdmission.getStore()?.source;
+  if (!source) {
+    return undefined;
+  }
+  source.assertCurrent();
+  const actorId = source.client?.authenticatedGitHubAccountId;
+  const profileId = source.client?.authenticatedUserProfile?.profileId;
+  const credentialSource = source.client?.authenticatedRepositoryCredentialSource;
+  const assertGoalSourceCurrent = () => {
+    // The queue retains operator authority independently of the completed input's
+    // work lease. The repository reader still verifies the live resident identity.
+    assertCurrent();
+    if (
+      source.client?.invalidated ||
+      source.client?.authenticatedGitHubAccountId !== actorId ||
+      source.client?.authenticatedUserProfile?.profileId !== profileId ||
+      source.client?.authenticatedRepositoryCredentialSource !== credentialSource
+    ) {
+      throw new Error("Goal source authority changed.");
+    }
+  };
+  return <T>(
+    identity: { agentId: string; sessionKey: string; sessionId: string; runId: string },
+    run: () => Promise<T>,
+  ) => {
+    const assertContinuationCurrent = () => {
+      assertGoalSourceCurrent();
+      if (
+        identity.agentId !== source.agentId ||
+        identity.sessionKey !== source.sessionKey ||
+        identity.sessionId !== source.getSessionId()
+      ) {
+        throw new Error("Goal continuation session changed.");
+      }
+    };
+    return withRepositoryChatDispatch(
+      {
+        ...source,
+        runId: identity.runId,
+        getSessionId: () => identity.sessionId,
+        assertCurrent: assertContinuationCurrent,
+      },
+      run,
+    );
+  };
+}
 
 /** Carry the current authenticated input, never a broker proof, into worker preparation. */
 export async function withRepositoryChatDispatch<T>(
@@ -102,6 +156,7 @@ export async function withRepositoryChatDispatch<T>(
     return await chatDispatchAdmission.run(
       {
         ...admission,
+        source: admission,
         assertCurrent: () => {
           if (!active) {
             throw new Error("Repository chat dispatch admission was released.");
@@ -174,6 +229,24 @@ export function repositoryDispatchCredentialReader(params: {
         agentId: params.agentId,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
+        requestDigest: params.requestDigest,
+      },
+    },
+  });
+}
+
+export function repositoryProjectCredentialReader(params: {
+  client: GatewayClient | null | undefined;
+  requestDigest: string;
+  assertCurrent: () => void;
+}): GitHubCredentialReader | undefined {
+  return repositoryCredentialReader({
+    ...params,
+    claim: {
+      purpose: "project-add",
+      binding: {
+        kind: "connection",
+        connectionId: params.client?.connId ?? "",
         requestDigest: params.requestDigest,
       },
     },

@@ -1,17 +1,24 @@
 import path from "node:path";
 import { toUSVString } from "node:util";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
-import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
+import { parseEnterpriseGitHubPrincipal } from "../shared/enterprise-github-principal.js";
+import { normalizeVerifiedEmail } from "../shared/verified-email.js";
+import { normalizeGitHubLogin } from "../utils/github-login.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
+import { delegatedProfileProvider } from "./user-profile-delegation.js";
+import { selectVerifiedEnterpriseGitHubIdentities } from "./user-profile-enterprise-github-identity.js";
 import {
+  githubAuthenticationSubject,
   selectProfileAccessEntries,
   selectUserProfileGitHubIdentities,
 } from "./user-profile-github-identity.js";
+import { openClawIdProfileProvider } from "./user-profile-openclaw-id.types.js";
 import {
   matchUserProfileReference,
   resolveCatalogProfile,
@@ -24,6 +31,7 @@ import {
   userProfileDisplaySelection,
 } from "./user-profiles-internal.js";
 import type {
+  ExistingUserProfileAuthentication,
   ProfileDisplayRow,
   UserProfileEmailBinding,
   UserProfileIdentity,
@@ -287,4 +295,71 @@ export function resolveUserProfileReferenceInCatalog(
         .filter((row) => allowed(row) && row.id.toLowerCase().startsWith(prefix))
         .map((row) => row.merged_into ?? row.id),
   );
+}
+
+/** Resolve only an exact persisted authentication key; display names and email lookalikes are irrelevant. */
+export function selectExistingUserProfileAuthentication(
+  db: EngineConnection,
+  selector: Extract<ExistingUserProfileAuthentication, { kind: "provider" | "enterprise-github" }>,
+) {
+  if (!tableExists(db, "user_profiles") || !tableExists(db, "user_profile_identities")) {
+    return undefined;
+  }
+  const enterprise =
+    selector.kind === "enterprise-github"
+      ? parseEnterpriseGitHubPrincipal(selector.principal)
+      : undefined;
+  if (selector.kind === "enterprise-github" && !enterprise) {
+    return undefined;
+  }
+  const provider =
+    selector.kind === "provider"
+      ? selector.provider.trim().toLowerCase()
+      : `github:${enterprise!.host}`;
+  const subject =
+    selector.kind === "provider"
+      ? provider === "github"
+        ? githubAuthenticationSubject(selector.subject)
+        : provider === openClawIdProfileProvider
+          ? selector.subject // OCID account keys are opaque and case-sensitive, as in their writer.
+          : selector.subject.trim().toLowerCase()
+      : String(enterprise!.accountId);
+  const row = executeSqliteQueryTakeFirstSync(
+    db,
+    userProfilesDb(db)
+      .selectFrom("user_profile_identities")
+      .select("profile_id")
+      .where("provider", "=", provider)
+      .where("subject", "=", subject),
+  );
+  if (!row) {
+    return undefined;
+  }
+  if (selector.kind === "enterprise-github" && enterprise) {
+    const expectedEmail = normalizeVerifiedEmail(selector.email);
+    const identity = selectVerifiedEnterpriseGitHubIdentities(
+      db,
+      [row.profile_id],
+      enterprise.host,
+      enterprise.accountId,
+    ).get(row.profile_id)?.[0];
+    if (
+      !identity ||
+      (selector.login !== undefined &&
+        identity.login.toLowerCase() !== normalizeGitHubLogin(selector.login)?.toLowerCase()) ||
+      (selector.email !== undefined && (!expectedEmail || identity.verifiedEmail !== expectedEmail))
+    ) {
+      return undefined;
+    }
+  }
+  const profile = selectResolvedUserProfileMetadataById(db, row.profile_id);
+  if (provider === delegatedProfileProvider && profile?.id !== row.profile_id) {
+    throw new Error("Delegated profile binding was merged");
+  }
+  return profile
+    ? {
+        profile: { profileId: profile.id, updatedAt: profile.updated_at },
+        profileIds: [row.profile_id, profile.id],
+      }
+    : undefined;
 }

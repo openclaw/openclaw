@@ -13,6 +13,8 @@ import { normalizeAgentId } from "../routing/session-key.js";
 import {
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
+  repositoryPublicationPreflightActor,
+  repositoryPublicationPreflightCredential,
   prepareGitHubPublicationRepositoryIdentity,
   prepareGitHubPublicationSession,
 } from "./github-publication-availability.js";
@@ -127,17 +129,26 @@ export async function performSessionGitHubPreparation(
   ) {
     throw new Error("Workspace coordination is unavailable; retry after Gateway startup.");
   }
+  await using credentialLifetime = new AsyncDisposableStack();
   const inspectCurrent = async (assertWorkspace: () => void) => {
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      session.agentId,
+      repositoryPublicationPreflightActor(admitted.requester, session.sessionKey, assertWorkspace),
+      repositoryPublicationPreflightCredential({
+        ...session,
+        sessionId: loaded.entry!.sessionId,
+        lifecycleRevision: loaded.entry!.lifecycleRevision ?? null,
+        assertCurrent: assertWorkspace,
+      }),
+    );
+    credentialLifetime.defer(async () => identity.revoke?.());
     const inspected = await inspectOwnGitHubPullRequest({
       pullRequestUrl,
       session: publicationSession,
       requester: admitted.requester,
+      identity,
       assertCurrent: assertWorkspace,
     });
-    const identity = await prepareCurrentGitHubPublicationIdentity(
-      session.agentId,
-      inspected.assertCurrent,
-    );
     const assertCurrent = () => {
       inspected.assertCurrent();
       if (!matchesCurrentGitHubPublicationIdentity({ agentId: session.agentId, identity })) {

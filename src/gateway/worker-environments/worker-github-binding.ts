@@ -1,6 +1,9 @@
 import { WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { assertAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-operator-authority.types.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  type AdmittedRunOperatorAuthority,
+} from "../../agents/admitted-run-context.js";
+import { githubRepositoryUrl } from "../../agents/github-host.js";
 import {
   onManagedGitHubProfileChanged,
   resolveConfiguredGitHubToolIdentity,
@@ -10,6 +13,7 @@ import type { AgentRunSessionTarget } from "../../agents/run-session-target.type
 import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { registerConfigWriteListener } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { getRepositoryIntegration } from "../../plugins/repository-integration-runtime.js";
 import {
   onUserProfilesChanged,
   onUserProfileEmailBindingChanged,
@@ -38,6 +42,7 @@ import type {
   WorkerGitHubBindingGrant,
   WorkerGitHubBindingRefresh,
 } from "./worker-github-binding-contract.js";
+import { prepareWorkerGitHubBindingGrant } from "./worker-github-execution-identity.js";
 
 function workspaceKey(
   workspace: Awaited<ReturnType<typeof prepareGitHubPublicationWorkspaceOwner>>["initial"],
@@ -79,7 +84,12 @@ export async function prepareGitHubPublicationFact(
     const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
     using _ = { [Symbol.dispose]: () => currentWorkspace.release() };
     const workspace = currentWorkspace.initial;
-    const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId);
+    const identity = await prepareCurrentGitHubPublicationIdentity(
+      params.agentId,
+      undefined,
+      undefined,
+      false,
+    );
     const originUrl =
       workspace.kind === "repository"
         ? workspace.workspace.url
@@ -92,10 +102,10 @@ export async function prepareGitHubPublicationFact(
     ) {
       return undefined;
     }
-    const remote = parseGitHubRemoteUrl(originUrl);
+    const remote = parseGitHubRemoteUrl(originUrl, identity.host);
     const remoteUrl =
       remote && /^[A-Za-z0-9_.-]+$/u.test(remote.owner) && /^[A-Za-z0-9_.-]+$/u.test(remote.repo)
-        ? `https://github.com/${remote.owner}/${remote.repo}.git`
+        ? githubRepositoryUrl(`${remote.owner}/${remote.repo}`, identity.host)
         : undefined;
     const scope =
       identity.source === "agent-override"
@@ -112,6 +122,7 @@ export async function prepareGitHubPublicationFact(
       : undefined;
     const binding = parseWorkerGitHubLaunchBinding({
       token: identity.env.GH_TOKEN,
+      host: identity.host,
       login: identity.account.login,
       branch:
         workspace.kind === "repository" ? workspace.workspace.branch : workspace.worktree.branch,
@@ -130,7 +141,7 @@ export async function prepareGitHubPublicationFact(
 const log = createSubsystemLogger("gateway/worker-github");
 
 /** Discovery prepared the account off the turn path; admission binds only local live authority. */
-async function prepareWorkerGitHubBindingGrant(
+async function prepareDiscoveredWorkerGitHubBindingGrant(
   params: PublicationSessionIdentity & {
     operatorAuthority?: AdmittedRunOperatorAuthority;
     github: WorkerGitHubLaunchBinding;
@@ -333,6 +344,30 @@ export async function bindWorkerGitHubTurn(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<WorkerGitHubBindingGrant | undefined> {
+  if (getRepositoryIntegration()) {
+    if (!params.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE)) {
+      throw new StaleWorkerBuildError();
+    }
+    const grant = await prepareWorkerGitHubBindingGrant({
+      ...params.session,
+      operatorAuthority: params.operatorAuthority,
+      signal: params.signal,
+      assertCurrent: () => {
+        params.assertCurrent();
+        return true;
+      },
+    });
+    if (grant) {
+      try {
+        params.assertCurrent();
+        bindWorkerTurnGitHubGrant(params.store, params.claim, grant);
+      } catch (error) {
+        await grant.revoke();
+        throw error;
+      }
+    }
+    return grant;
+  }
   const { github, identity, workspaceKey: expectedWorkspace } = params.fact ?? {};
   if (!github || !identity || !expectedWorkspace) {
     return undefined;
@@ -340,7 +375,7 @@ export async function bindWorkerGitHubTurn(params: {
   if (!params.protocolFeatures.includes(WORKER_GITHUB_REFRESH_PROTOCOL_FEATURE)) {
     throw new StaleWorkerBuildError();
   }
-  const preparing = prepareWorkerGitHubBindingGrant({
+  const preparing = prepareDiscoveredWorkerGitHubBindingGrant({
     ...params.session,
     operatorAuthority: params.operatorAuthority,
     github,
@@ -364,3 +399,8 @@ export async function bindWorkerGitHubTurn(params: {
   }
   return grant;
 }
+
+export type {
+  WorkerGitHubBindingGrant,
+  WorkerGitHubBindingRefresh,
+} from "./worker-github-binding-contract.js";

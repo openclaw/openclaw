@@ -93,12 +93,13 @@ export async function executeRepositoryGitHubPublication(params: {
 }) {
   const { execution, snapshot } = params;
   const row = execution.row;
-  const { assertCurrent, refreshIdentity } = createGitHubPublicationExecutionIdentity({
+  await using executionIdentity = createGitHubPublicationExecutionIdentity({
     row,
     identity: params.identity,
     assertWorkspace: params.assertWorkspace,
     validateAuthority: () => params.validateAuthority() && execution.ownsExecution(),
   });
+  const { assertCurrent } = executionIdentity;
   let dispatched = row.last_effect !== null;
   let integration: Awaited<ReturnType<PrepareRepositoryPublicationIntegration>> | undefined;
   try {
@@ -116,7 +117,8 @@ export async function executeRepositoryGitHubPublication(params: {
         "GitHub publication accepted checkpoint changed.",
       );
     }
-    let identity = await refreshIdentity();
+    let identity = await executionIdentity.refreshIdentity();
+    const refreshIdentity = async () => (identity = await executionIdentity.refreshIdentity());
     const endpoint = "repos/" + pushRepository + "/git/";
     const sourceRepository = await api("repos/" + pushRepository, identity, assertCurrent);
     if (

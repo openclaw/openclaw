@@ -13,6 +13,33 @@ export type RepositoryConnectionIdentity = Readonly<{
     avatarUrl?: string;
   }>;
 }>;
+type SessionBinding = {
+  kind: "session";
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+  requestDigest?: string;
+};
+type PublicationBinding = {
+  kind: "publication";
+  agentId: string;
+  sessionKey: string;
+  sessionId: string;
+  lifecycleRevision: string | null;
+  executionKind: "worktree" | "repository";
+  requestId: string;
+  ownerId: string;
+  requestDigest: string;
+};
+type ConnectionBinding = { kind: "connection"; connectionId: string; requestDigest: string };
+type SessionCreateBinding = {
+  kind: "session-create";
+  agentId: string;
+  sessionKey: string;
+  sessionId?: string;
+  requestDigest: string;
+};
 type SessionDispatchBinding = {
   kind: "session-dispatch";
   agentId: string;
@@ -21,10 +48,14 @@ type SessionDispatchBinding = {
   requestDigest: string;
 };
 
-export type RepositoryOperation = {
-  purpose: "session-dispatch-project";
-  binding: SessionDispatchBinding;
-};
+export type RepositoryOperation =
+  | { purpose: "publication-preflight"; binding: SessionBinding }
+  | { purpose: "session-issue-read"; binding: SessionBinding & { requestDigest: string } }
+  | { purpose: "session-item-read"; binding: SessionBinding & { requestDigest: string } }
+  | { purpose: "publication-execution"; binding: PublicationBinding }
+  | { purpose: "project-add" | "project-search"; binding: ConnectionBinding }
+  | { purpose: "session-create-project"; binding: SessionCreateBinding }
+  | { purpose: "session-dispatch-project"; binding: SessionDispatchBinding };
 
 type RepositoryAuthorization = Readonly<
   | {
