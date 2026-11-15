@@ -59,7 +59,7 @@ export async function updateGitCheckout(params: {
 }): Promise<UpdateRunResult> {
   const { opts, timeoutMs, startedAt } = params;
   // POSIX checkouts update by switching a release link; the checkout is never written.
-  if (process.platform !== "win32" && !opts.prepareGitExposure && !opts.publishGitCheckout) {
+  if (opts.gitReleases) {
     return await updateGitRelease(params);
   }
   const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);

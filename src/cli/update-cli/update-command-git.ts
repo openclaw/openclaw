@@ -506,6 +506,9 @@ export async function updateGitInstall(params: {
       timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
       startedAt: params.startedAt,
       opts: {
+        // POSIX checkouts run from releases (#198835's link); Windows keeps the in-place path.
+        gitReleases: !params.switchToGit && process.platform !== "win32",
+        releaseNode: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         sourceRuntimePrepared: params.sourceRuntimePrepared,
         progress: params.progress,

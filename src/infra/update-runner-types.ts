@@ -58,6 +58,8 @@ export type UpdateRunnerOptions = {
   /** Accepted candidate checks join the update's step results. */
   validateCandidate: (root: string) => Promise<readonly UpdateStepResult[] | void>;
   beforeGitMutation: (target: GitUpdateTarget) => Promise<void>;
+  /** Build the target as a release behind the release link instead of updating the checkout in place. */
+  gitReleases?: boolean;
   /** The service's Node, which must load a Git release before the link names it. */
   releaseNode?: string;
   /** Required work uses the caller's deadline; probes, cleanup, and optional replay keep finite defaults. */
