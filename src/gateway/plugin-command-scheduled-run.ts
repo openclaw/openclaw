@@ -50,6 +50,7 @@ import {
   buildRunUserTurnIdempotencyKey,
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
@@ -60,7 +61,33 @@ type ScheduledResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]
 
 type ScheduledCommandRequester = NonNullable<
   Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>>["requester"]
->;
+> & { commandSenderId?: string };
+
+/**
+ * The requester an occurrence rechecks: a channel identity re-derived from its link, or a
+ * Gateway person's live profile command sender kept store-private beside the envelope.
+ */
+export function resolveScheduledCommandRequester(params: {
+  storedSender: string | undefined;
+  operatorSource: PluginCommandSchedule["operatorSource"];
+  restored: Pick<
+    Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>>,
+    "authority" | "requester"
+  >;
+}): ScheduledCommandRequester | undefined {
+  const { storedSender: sender, operatorSource, restored } = params;
+  if (sender === undefined) {
+    return restored.requester;
+  }
+  if (
+    operatorSource.kind !== "gateway" ||
+    operatorSource.snapshot.profileId !== sender ||
+    restored.authority.profileId !== sender
+  ) {
+    throw new Error("Scheduled plugin command requester changed; submit a new request.");
+  }
+  return { channel: INTERNAL_MESSAGE_CHANNEL, commandSenderId: sender };
+}
 
 /** External-origin Gateway requesters keep admission: live used an account the recovery lacks. */
 export function isScheduledOccurrenceCommandAuthorized(
@@ -248,6 +275,7 @@ export async function runPluginCommandScheduledTurn(params: {
         resolveCronRequesterExecutionRevision(current) !== revision ||
         !isDeepStrictEqual(current.pluginCommand, schedule) ||
         !isDeepStrictEqual(current.state.pluginCommandBinding, job.state.pluginCommandBinding) ||
+        current.state.pluginCommandSenderProfileId !== job.state.pluginCommandSenderProfileId ||
         Date.now() >= schedule.deadlineAtMs
       ) {
         throw new Error("Scheduled plugin command source changed or expired.");
@@ -336,7 +364,11 @@ export async function runPluginCommandScheduledTurn(params: {
       // Only commands.allowFrom is re-derivable here; channel reachability keeps its admission.
       const commandAuthorized = isScheduledOccurrenceCommandAuthorized(
         cfg,
-        restored.requester,
+        resolveScheduledCommandRequester({
+          storedSender: job.state.pluginCommandSenderProfileId,
+          operatorSource: schedule.operatorSource,
+          restored,
+        }),
         schedule.channel,
       );
       if (!commandAuthorized) {

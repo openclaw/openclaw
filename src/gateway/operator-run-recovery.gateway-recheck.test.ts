@@ -11,14 +11,20 @@ import { prepareUserProfileIdentity } from "../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
-import { captureGatewayOperatorRecoverySnapshot } from "./operator-run-recovery-source.js";
+import {
+  captureGatewayOperatorRecoverySnapshot,
+  resolveLiveProfileCommandSender,
+} from "./operator-run-recovery-source.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import {
   type createOperatorRecoveryFixture,
   pairedOperator,
   recoveryFixture,
 } from "./operator-run-recovery.test-support.js";
-import { isScheduledOccurrenceCommandAuthorized } from "./plugin-command-scheduled-run.js";
+import {
+  isScheduledOccurrenceCommandAuthorized,
+  resolveScheduledCommandRequester,
+} from "./plugin-command-scheduled-run.js";
 import { createRemoteControlUiIngressTestContext } from "./remote-control-ui.test-support.js";
 import { registerIngressPrincipalRecovery } from "./remote-ingress-principal-recovery.js";
 import { resolveChatSendCallerContext } from "./server-methods/gateway-client-identity.js";
@@ -47,17 +53,31 @@ function withRecovery(
   });
 }
 
-async function restoreRequester(fixture: RecoveryFixture, snapshot: object = fixture.snapshot) {
-  const persisted: unknown = structuredClone({ kind: "gateway", snapshot });
-  const resumed = await restoreGatewayQueuedOperatorRecovery({
-    source: decodeQueuedOperatorRecoverySource(persisted),
+/** The persisted source reads back unchanged through the strict codec current main ships. */
+function decodeReleasedShape(snapshot: unknown) {
+  const source = decodeQueuedOperatorRecoverySource(structuredClone({ kind: "gateway", snapshot }));
+  expect(source).toEqual({ kind: "gateway", snapshot });
+  if (source.kind !== "gateway") {
+    throw new Error("expected a gateway source");
+  }
+  return source;
+}
+
+/** Restore the stored source and resolve the occurrence's requester as the scheduled run does. */
+async function restoreRequester(
+  fixture: RecoveryFixture,
+  storedSender = fixture.sourceAuthority.commandSenderProfileId,
+) {
+  const operatorSource = decodeReleasedShape(fixture.snapshot);
+  const restored = await restoreGatewayQueuedOperatorRecovery({
+    source: operatorSource,
     context: fixture.context,
     assertCurrent: () => {},
   });
   try {
-    return resumed.requester;
+    return resolveScheduledCommandRequester({ storedSender, operatorSource, restored });
   } finally {
-    resumed.release();
+    restored.release();
   }
 }
 
@@ -90,8 +110,8 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     async ({ id, mode, scopes }) => {
       await withRecovery(
         async (fixture, _stateDir, profile) => {
-          // Live, the profileId was this surface's only command sender.
-          expect(fixture.snapshot.commandSenderProfileIdOnly).toBe(true);
+          // Live, the profileId was this surface's only command sender; kept beside the snapshot.
+          expect(fixture.sourceAuthority.commandSenderProfileId).toBe(profile.id);
           const requester = expectDefined(
             await restoreRequester(fixture),
             "re-checkable gateway requester",
@@ -118,8 +138,8 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
   );
 
   it("keeps a schedule routed with an external origin on its original admission", async () => {
-    await withRecovery(async (fixture) => {
-      expect(fixture.snapshot.commandSenderProfileIdOnly).toBe(true);
+    await withRecovery(async (fixture, _stateDir, profile) => {
+      expect(fixture.sourceAuthority.commandSenderProfileId).toBe(profile.id);
       const requester = await restoreRequester(fixture);
       const narrowed = allowFromConfig({ "*": ["other-operator"] });
       expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester, "webchat")).toBe(false);
@@ -132,7 +152,7 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     await withRecovery(
       async (fixture) => {
         // No live sender candidate (shared-secret owner): the recovery must not invent one.
-        expect(fixture.snapshot).not.toHaveProperty("commandSenderProfileIdOnly");
+        expect(fixture.sourceAuthority.commandSenderProfileId).toBeUndefined();
         expect(await restoreRequester(fixture)).toBeUndefined();
       },
       { withoutCommandSender: true },
@@ -143,19 +163,46 @@ describe("gateway operator-UI occurrence rechecks commands.allowFrom", () => {
     await withRecovery(
       async (fixture) => {
         // A non-UI client is matched live by a content sender id, which is not re-checkable here.
-        expect(fixture.snapshot).not.toHaveProperty("commandSenderProfileIdOnly");
+        expect(fixture.sourceAuthority.commandSenderProfileId).toBeUndefined();
         expect(await restoreRequester(fixture)).toBeUndefined();
       },
       { clientInfo: { id: GATEWAY_CLIENT_IDS.CLI, mode: "cli" } },
     );
   });
 
-  it("keeps a pre-marker gateway snapshot on its original admission", async () => {
-    // A schedule accepted before the marker existed reads back without the fact.
+  it("keeps a schedule stored without the command sender on its original admission", async () => {
+    // Accepted by an older build, or from an authority rebuilt from a snapshot (no live client).
     await withRecovery(async (fixture) => {
-      const legacy: Record<string, unknown> = { ...fixture.snapshot };
-      delete legacy.commandSenderProfileIdOnly;
-      expect(await restoreRequester(fixture, legacy)).toBeUndefined();
+      const requester = await restoreRequester(fixture, undefined);
+      expect(requester).toBeUndefined();
+      const narrowed = allowFromConfig({ "*": ["other-operator"] });
+      expect(isScheduledOccurrenceCommandAuthorized(narrowed, requester, "webchat")).toBe(true);
+    });
+  });
+
+  it("fails closed when the stored command sender is not the source's person", async () => {
+    await withRecovery(async (fixture, _stateDir, profile) => {
+      await expect(restoreRequester(fixture, "other-operator")).rejects.toThrow(
+        "requester changed",
+      );
+      const operatorSource = decodeReleasedShape(fixture.snapshot);
+      const resolve = (
+        source: Parameters<typeof resolveScheduledCommandRequester>[0]["operatorSource"],
+        authorityProfileId: string,
+      ) =>
+        resolveScheduledCommandRequester({
+          storedSender: profile.id,
+          operatorSource: source,
+          restored: { authority: { ...fixture.sourceAuthority, profileId: authorityProfileId } },
+        });
+      expect(resolve(operatorSource, profile.id)).toEqual({
+        channel: "webchat",
+        commandSenderId: profile.id,
+      });
+      // The restored authority must be the same person, and only a Gateway source carries it.
+      expect(() => resolve(operatorSource, "other-operator")).toThrow("requester changed");
+      const channelSource = { kind: "channel", snapshot: {} } as unknown as typeof operatorSource;
+      expect(() => resolve(channelSource, profile.id)).toThrow("requester changed");
     });
   });
 
@@ -280,6 +327,7 @@ describe("remote operator-UI schedule source round-trips through the production 
       });
       const identity = await prepareUserProfileIdentity(profileId);
       let persisted: string;
+      let storedSender: string | undefined;
       try {
         const snapshot = captureGatewayOperatorRecoverySnapshot({
           client,
@@ -295,11 +343,14 @@ describe("remote operator-UI schedule source round-trips through the production 
           config: REMOTE_PERSON_CONFIG,
         });
         expect(snapshot).toMatchObject({ sourceIngress: "principal", ingress: recoverySource });
-        expect(snapshot?.commandSenderProfileIdOnly).toBe(recorded ? true : undefined);
+        decodeReleasedShape(snapshot);
+        storedSender = resolveLiveProfileCommandSender(client, profileId);
+        expect(storedSender).toBe(recorded ? profileId : undefined);
         persisted = JSON.stringify({ kind: "gateway", snapshot });
       } finally {
         identity.release();
       }
+      const operatorSource = decodeReleasedShape(JSON.parse(persisted).snapshot);
       const restore = () =>
         restoreGatewayQueuedOperatorRecovery({
           source: JSON.parse(persisted),
@@ -309,7 +360,12 @@ describe("remote operator-UI schedule source round-trips through the production 
       try {
         const restored = await restore();
         try {
-          expect(restored.requester).toEqual(
+          const requester = resolveScheduledCommandRequester({
+            storedSender,
+            operatorSource,
+            restored,
+          });
+          expect(requester).toEqual(
             recorded ? { channel: "webchat", commandSenderId: profileId } : undefined,
           );
           const live = resolveChatSendCallerContext(client);
@@ -321,7 +377,7 @@ describe("remote operator-UI schedule source round-trips through the production 
               commandAuthorized: true,
             }).isAuthorizedSender;
             // The occurrence refuses exactly when a live command from this client would.
-            expect(isScheduledOccurrenceCommandAuthorized(cfg, restored.requester, "webchat")).toBe(
+            expect(isScheduledOccurrenceCommandAuthorized(cfg, requester, "webchat")).toBe(
               recorded ? liveAuthorized : true,
             );
             if (recorded) {

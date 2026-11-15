@@ -61,6 +61,11 @@ export function assertCronJobStateTimestamps(state: Partial<CronJobState>): void
       "cron state.pluginCommandBinding is private restart continuity and cannot be authored",
     );
   }
+  if (Object.hasOwn(state, "pluginCommandSenderProfileId")) {
+    throw new Error(
+      "cron state.pluginCommandSenderProfileId is private requester authority and cannot be authored",
+    );
+  }
   const invalidField = getInvalidCronJobStateTimestampField(state);
   if (invalidField) {
     throw new Error(

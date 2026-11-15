@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getLoadedChannelPluginForRead } from "../channels/plugins/registry-loaded.js";
-import { getChannelPlugin } from "../channels/plugins/registry.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -54,12 +53,9 @@ describe("isCommandsAllowFromAuthorized re-evaluates retained scheduled work", (
     );
   });
 
-  it("resolves the normalizer from the bundled fallback when the transport is not loaded", () => {
-    expect(getLoadedChannelPluginForRead(CHANNEL)).toBeUndefined();
-    expect(typeof getChannelPlugin(CHANNEL)?.config?.formatAllowFrom).toBe("function");
-  });
-
   it("authorizes a prefixed allowFrom entry that normalizes to the requester via the bundled plugin", () => {
+    // The transport is not loaded, so only the bundled fallback can normalize the entry.
+    expect(getLoadedChannelPluginForRead(CHANNEL)).toBeUndefined();
     expect(
       isCommandsAllowFromAuthorized(allowFromConfig({ [CHANNEL]: ["discord:100"] }), requester),
     ).toBe(true);

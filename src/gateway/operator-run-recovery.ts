@@ -23,7 +23,6 @@ import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
 } from "../state/user-profile-list.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { captureGatewayAuthPolicy, isGatewayAuthGrantCurrent } from "./auth-policy.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
@@ -495,7 +494,6 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       channel: string;
       accountId?: string;
       senderId?: string;
-      commandSenderId?: string;
     };
   }
 > {
@@ -516,18 +514,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
     if (!restored) {
       throw new Error("Queued operator recovery source is unavailable.");
     }
-    // Other gateway senders cannot be re-derived from the recovery, so they keep their admission.
-    return {
-      ...restored,
-      ...(source.snapshot.commandSenderProfileIdOnly
-        ? {
-            requester: {
-              channel: INTERNAL_MESSAGE_CHANNEL,
-              commandSenderId: source.snapshot.profileId,
-            },
-          }
-        : {}),
-    };
+    return restored;
   }
   const snapshot = source.snapshot;
   const getConfig = params.context.getCommittedRuntimeConfig ?? params.context.getRuntimeConfig;

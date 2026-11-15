@@ -64,9 +64,31 @@ export function captureQueuedOperatorRecoverySource(
   }
 }
 
-function isLiveCommandSenderProfileIdOnly(client: GatewayClient, profileId: string): boolean {
+/**
+ * The person's profile id when it is this live client's only command sender (an operator UI,
+ * local or remote, with no SenderId). Kept beside the recovery snapshot, never inside it.
+ */
+export function resolveLiveProfileCommandSender(
+  client: GatewayClient,
+  profileId: string,
+): string | undefined {
   const live = resolveChatSendCallerContext(client);
-  return live.SenderId === undefined && getCommandSenderAuthority(live)?.() === profileId;
+  return live.SenderId === undefined && getCommandSenderAuthority(live)?.() === profileId
+    ? profileId
+    : undefined;
+}
+
+/** The recovery snapshot, plus the live profile command sender kept beside it (never inside). */
+export function captureGatewayOperatorRecovery(
+  params: Parameters<typeof captureGatewayOperatorRecoverySnapshot>[0],
+): Pick<AdmittedRunOperatorAuthority, "recoverySnapshot" | "commandSenderProfileId"> {
+  const recoverySnapshot = captureGatewayOperatorRecoverySnapshot(params);
+  return {
+    recoverySnapshot,
+    commandSenderProfileId: recoverySnapshot
+      ? resolveLiveProfileCommandSender(params.client, params.authority.profileId)
+      : undefined,
+  };
 }
 
 /** Capture only handshake-attested input; internal callers cannot manufacture a durable source. */
@@ -116,10 +138,6 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
       ingress: remote.recoverySource,
       controlUiAdmin: false,
       localOperator: false,
-      // A remote operator UI's live command sender is the person's profile id, as on a local one.
-      ...(isLiveCommandSenderProfileIdOnly(client, authority.profileId)
-        ? { commandSenderProfileIdOnly: true }
-        : {}),
     });
   }
   const ocid = authority.openclawIdPrincipal?.authority !== undefined;
@@ -177,10 +195,6 @@ export function captureGatewayOperatorRecoverySnapshot(params: {
     controlUiAdmin: client.internal?.controlUiAdmin === true,
     localOperator: client.internal?.isLocalClient === true,
     sourceIngress: isBrowserOperatorUiClient(client.connect.client) ? "control-ui" : "internal",
-    // Only true is written, so other snapshots keep the shape older readers accept.
-    ...(isLiveCommandSenderProfileIdOnly(client, authority.profileId)
-      ? { commandSenderProfileIdOnly: true }
-      : {}),
   };
   return normalizeGatewayOperatorRecoverySnapshot(source);
 }

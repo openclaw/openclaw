@@ -349,6 +349,12 @@ export type CronJobState = Omit<
   pluginCommandRuns?: number;
   /** Store-private restart continuity for a plugin command schedule; see its type. */
   pluginCommandBinding?: PluginCommandScheduleBinding;
+  /**
+   * Store-private: the requester's profile id when it was their only live command sender.
+   * Kept in job state so the envelope keeps its released shape; occurrences recheck
+   * commands.allowFrom against it. Older readers ignore it.
+   */
+  pluginCommandSenderProfileId?: string;
   /** Durable pre-admission reservation. Cleared on restart without recording a run. */
   queuedAtMs?: number;
   /** Exact receipt awaiting scheduler reconciliation, even after execution authority closes. */
@@ -518,6 +524,7 @@ type CronJobStateInput = Partial<
     | "runningScheduleChangeId"
     | "pluginCommandRuns"
     | "pluginCommandBinding"
+    | "pluginCommandSenderProfileId"
   >
 >;
 

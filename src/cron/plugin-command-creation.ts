@@ -16,6 +16,8 @@ type Creation = {
   envelope: PluginCommandSchedule;
   /** Code identity of the admitting instance; absent without captured plugin source. */
   sourceDigest?: string;
+  /** Requester's live profile command sender; absent when it was not the only one. */
+  commandSenderProfileId?: string;
   input: CronJobCreate;
   assertCurrent: () => void;
   consumed: boolean;
@@ -33,11 +35,13 @@ export async function withPluginCommandScheduleCreation(
   assertCurrent: () => void,
   execute: () => Promise<unknown>,
   sourceDigest?: string,
+  commandSenderProfileId?: string,
 ) {
   const creation: Creation = {
     token: randomUUID(),
     envelope: structuredClone(envelope),
     ...(sourceDigest ? { sourceDigest } : {}),
+    ...(commandSenderProfileId ? { commandSenderProfileId } : {}),
     input: structuredClone(input),
     assertCurrent,
     consumed: false,
@@ -126,6 +130,7 @@ export function readPluginCommandCreation(params: Record<string, unknown>) {
     creation: {
       envelope: creation.envelope,
       sourceDigest: creation.sourceDigest,
+      commandSenderProfileId: creation.commandSenderProfileId,
       assertCurrent: creation.assertCurrent,
       record(stored: CronStoredJob) {
         if (!stored.pluginCommand || !isDeepStrictEqual(stored.pluginCommand, creation.envelope)) {

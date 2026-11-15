@@ -51,6 +51,12 @@ export function preparePluginCommandScheduledTurns(params: {
   ) {
     return undefined;
   }
+  // Store-private beside the envelope (whose shape stays released); same person as the source.
+  const commandSenderProfileId =
+    operatorSource.kind === "gateway" &&
+    params.source.operatorAuthority?.commandSenderProfileId === operatorSource.snapshot.profileId
+      ? operatorSource.snapshot.profileId
+      : undefined;
   const assertCurrent = () => {
     params.assertCurrent();
     if (
@@ -247,6 +253,7 @@ export function preparePluginCommandScheduledTurns(params: {
                 assertCurrent,
                 () => automations.execute(callId, args, params.source.options.abortSignal),
                 sourceDigest,
+                commandSenderProfileId,
               ),
           ),
         );
