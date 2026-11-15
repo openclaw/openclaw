@@ -9,7 +9,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { wrapPluginStateError } from "../../plugin-state/plugin-state-store.database.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { MEMBER_ROLE_PRESETS } from "./member-role-presets.js";
+import { MEMBER_ROLE_PRESETS } from "./member-role-presets.test-support.js";
 import { linkedClaw, memoryStore, serviceFor } from "./openclaw-id.test-support.js";
 
 afterEach(clearRuntimeConfigSnapshot);

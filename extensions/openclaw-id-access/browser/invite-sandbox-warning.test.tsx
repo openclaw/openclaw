@@ -3,8 +3,8 @@ import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { mountSolid } from "../../../ui/src/test-helpers/mount-solid.js";
+import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
-import { InviteForm } from "./people-sections.js";
 
 it("warns from the selected role's catalog policy and tracks backend and definition changes", () => {
   let selectRole: (role: string) => void = () => {};
