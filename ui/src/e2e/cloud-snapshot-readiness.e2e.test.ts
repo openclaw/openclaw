@@ -86,8 +86,11 @@ suite.define(() => {
         expect.soft(await row.textContent()).not.toContain("Cold only");
         expect.soft(await sheet.textContent()).not.toContain("Cold only");
         const reopen = async () => {
+          const after = (await gateway.getRequests("crabbox.images.list")).length;
           await page.getByRole("link", { name: "Channels", exact: true }).first().click();
+          await sheet.waitFor({ state: "hidden" });
           await page.getByRole("link", { name: "Cloud environments", exact: true }).first().click();
+          await gateway.waitForRequest("crabbox.images.list", { after });
           await sheet.waitFor();
         };
         await gateway.setMethodResponse("crabbox.images.list", images);
