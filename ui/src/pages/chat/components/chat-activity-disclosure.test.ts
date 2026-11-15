@@ -337,8 +337,30 @@ it.each([
       ? [createAssistantMessage([], { activity: [preparedOutcome("blocked")] })]
       : attachHistoryActivity(
           prepareChatHistoryFixture(
-            [0, 1].map((index) => {
+            [0, 1].flatMap((index) => {
               const id = `call-${index}`;
+              if (source.startsWith("failed code")) {
+                return [
+                  createAssistantMessage([createToolCall(id, "exec", { code: "return 1;" })]),
+                  createToolResultMessage(
+                    id,
+                    "exec",
+                    [
+                      {
+                        type: "text",
+                        text: JSON.stringify({
+                          status: "failed",
+                          code: "internal_error",
+                          failurePhase: "bridge",
+                          bridgeDispatchStarted: source === "failed code after dispatch",
+                          error: "File not found",
+                        }),
+                      },
+                    ],
+                    { isError: true },
+                  ),
+                ];
+              }
               return source === "paginated shell results"
                 ? createToolResultMessage(id, "bash", [{ type: "text", text: "ok" }], {
                     runId: "result-page",
@@ -347,17 +369,7 @@ it.each([
                   })
                 : createAssistantMessage([
                     createToolCall(id, "exec", { code: "return 1;" }),
-                    createToolResultBlock(id, "exec", "1", {
-                      isError: source.startsWith("failed code"),
-                      ...(source.startsWith("failed code")
-                        ? {
-                            details: {
-                              status: "failed",
-                              bridgeDispatchStarted: source === "failed code after dispatch",
-                            },
-                          }
-                        : {}),
-                    }),
+                    createToolResultBlock(id, "exec", "1", { isError: false }),
                   ]);
             }),
           ),

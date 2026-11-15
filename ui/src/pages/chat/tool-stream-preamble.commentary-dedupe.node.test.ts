@@ -2,8 +2,13 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createChatRunState } from "../../../../src/gateway/server-chat-state.js";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { isHiddenAssistantStreamText as isHiddenStreamText } from "../../lib/chat/message-visibility.ts";
+import { extractToolCardsCached as extractToolCards } from "../../lib/chat/tool-cards.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { activeHistory, createState } from "./chat-history.inflight.test-support.ts";
+import {
+  activeHistory,
+  buildStateItems,
+  createState,
+} from "./chat-history.inflight.test-support.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
 import { TOOL_STREAM_TEST_NOW, useToolStreamFakeTimers } from "./tool-stream.test-helpers.ts";
@@ -74,12 +79,74 @@ function commentaryHarness() {
     visibleAssistantStreamParts(host, { includeCurrent: true, isHiddenStreamText });
   const expectParts = (...expected: [string, string | undefined][]) =>
     expect(parts().map((part) => [part.text.trim(), part.itemId])).toEqual(expected);
-  return { host, stream, preamble, persist, tool, expectParts };
+  return { host, stream, preamble, persist, tool, expectParts, agent };
 }
 
 afterEach(() => {
   vi.clearAllTimers();
   vi.useRealTimers();
+});
+
+it("keeps a nested wait after its introducing commentary when the saved call predates it", () => {
+  const h = commentaryHarness();
+  h.host.chatMessages = [{ role: "user", content: "Collect the results", timestamp: 1 }];
+  h.preamble("collect-commentary", "Waiting for the collected results.");
+  const args = { title: "Collect results", code: "return await agents_wait({ids: ['child']});" };
+  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
+  applySessionMessagePayload(
+    h.host,
+    {
+      runId: RUN_ID,
+      messageId: "saved-collect",
+      messageSeq: 1,
+      message: {
+        role: "assistant",
+        timestamp: TOOL_STREAM_TEST_NOW - 1_000,
+        content: [{ type: "toolCall", id: "collect", name: "exec", arguments: args }],
+        __openclaw: { id: "saved-collect", seq: 1, runId: RUN_ID },
+      },
+    },
+    true,
+    { kind: "live", activeRunId: RUN_ID },
+  );
+  h.agent("tool", {
+    phase: "start",
+    toolCallId: "wait",
+    parentToolCallId: "collect",
+    name: "agents_wait",
+    args: { ids: ["child"] },
+  });
+  vi.advanceTimersByTime(100);
+  const order = buildStateItems(h.host).flatMap((item) =>
+    item.kind === "group"
+      ? item.messages.flatMap(({ message }) => {
+          const cards = extractToolCards(message);
+          return cards.length ? cards.map((card) => card.callId) : [item.role];
+        })
+      : [item.kind],
+  );
+  expect(order).toEqual(["user", "stream", "collect", "wait"]);
+});
+
+it("does not anchor new commentary to a reused call ID from an older run", () => {
+  const h = commentaryHarness();
+  h.host.chatMessages = [
+    { role: "user", content: "Earlier request", timestamp: 1 },
+    {
+      role: "assistant",
+      timestamp: 2,
+      content: [{ type: "toolCall", id: "collect", name: "exec", arguments: {} }],
+      __openclaw: { id: "old-collect", seq: 1, runId: "old-run" },
+    },
+    { role: "user", content: "Collect the results", timestamp: 3 },
+  ];
+  h.preamble("collect-commentary", "Waiting for the collected results.");
+  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args: {} });
+  vi.advanceTimersByTime(100);
+  const rows = buildStateItems(h.host).flatMap((item) =>
+    item.kind === "group" ? [item.role] : [item.kind],
+  );
+  expect(rows.indexOf("stream")).toBeGreaterThan(rows.lastIndexOf("user"));
 });
 
 it("does not let stale item identity prune a newer unscoped append", () => {

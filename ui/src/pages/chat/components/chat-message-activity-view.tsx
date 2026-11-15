@@ -216,7 +216,7 @@ export function prepareActivityGroup(
     }
     if (
       card.exitCode !== undefined ||
-      (codeExecutions.has(key) && asNullableRecord(card.details)?.bridgeDispatchStarted === true)
+      (codeExecutions.has(key) && card.bridgeDispatchStarted === true)
     ) {
       executedCommands.add(key);
     }

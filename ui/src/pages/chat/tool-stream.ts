@@ -596,6 +596,21 @@ export function handleAgentEvent(
   }
   entry.name = name;
   entry.parentToolCallId ??= parentToolCallId;
+  if (phase === "start" && !entry.parentToolCallId) {
+    // Bind completed commentary to the next root call, not to nested work or
+    // a replayed start that predates it. Saved call timestamps may be earlier.
+    const introducesCall = (segment: (typeof host.chatStreamSegments)[number]) =>
+      Boolean(segment.itemId) &&
+      !segment.toolCallId &&
+      segment.runId === payload.runId &&
+      segment.afterUserSendId === entry.afterUserSendId &&
+      segment.ts <= entry.startedAt;
+    if (host.chatStreamSegments.some(introducesCall)) {
+      host.chatStreamSegments = host.chatStreamSegments.map((segment) =>
+        introducesCall(segment) ? { ...segment, toolCallId } : segment,
+      );
+    }
+  }
   if (args !== undefined) {
     entry.args = args;
   }

@@ -89,6 +89,10 @@ import {
   optionalRunIdentity,
   resolveRunInsertionBounds,
 } from "./chat-thread-run-identity.ts";
+import {
+  createRecordedToolKeyLookup,
+  createStreamSegmentProjector,
+} from "./chat-thread-stream-projection.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
@@ -523,28 +527,11 @@ export function buildChatItems(
       });
     }
   }
-  const appendStreamSegment = (
-    segment: Pick<ChatStreamSegment, "ts" | "runId" | "afterUserSendId">,
-    key: string,
-    text: string,
-    thinking?: string,
-    beforeKey?: string,
-  ) => {
-    const bounds = resolveProjectionBounds(segment.runId, segment.afterUserSendId);
-    projections.push({
-      item: {
-        kind: "stream",
-        key,
-        text,
-        ...(thinking ? { thinking } : {}),
-        startedAt: segment.ts,
-        isStreaming: false,
-        ...optionalRunIdentity(segment.runId),
-        ...optionalBoundaryIdentity(segment.runId),
-      },
-      bounds: beforeKey ? { ...bounds, beforeKey } : bounds,
-    });
-  };
+  const appendStreamSegment = createStreamSegmentProjector(
+    items,
+    projections,
+    resolveProjectionBounds,
+  );
   let previousAccumulatedStreamText: string | null = null;
   const maxLen = Math.max(indexedSegments.length, toolItems.length);
   for (let i = 0; i < maxLen; i++) {
@@ -584,12 +571,22 @@ export function buildChatItems(
       projections.push(tool.projection);
     }
   }
-  // Keyed commentary does not advance cumulative text and follows the indexed
-  // stream/tool pairs on timestamp ties.
+  // Keyed commentary does not advance cumulative text. Its next root call is
+  // a stronger boundary than provider timestamps, including after persistence.
+  const recordedToolKey = keyedSegments.some((segment) => segment.toolCallId)
+    ? createRecordedToolKeyLookup(historyItems)
+    : undefined;
   for (const segment of keyedSegments) {
     const text = sanitizeStreamText(segment.text);
     if (text.length > 0) {
-      appendStreamSegment(segment, `stream-seg:${props.sessionKey}:${segment.itemId}`, text);
+      const streamKey = `stream-seg:${props.sessionKey}:${segment.itemId}`;
+      const runId = normalizeOptionalString(segment.runId);
+      const callId = segment.toolCallId?.trim();
+      appendStreamSegment(segment, streamKey, text, undefined, recordedToolKey?.(runId, callId));
+      const tool = toolLookup.get(runId, callId);
+      if (tool) {
+        tool.predecessorKey = streamKey;
+      }
     }
   }
 

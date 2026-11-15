@@ -404,12 +404,11 @@ function extractToolCards(message: unknown): ToolCard[] {
     // Recorded catalog prose cannot establish an execution outcome.
     const isError =
       readToolErrorFlag(item) ?? messageIsError ?? (catalogSource ? false : undefined);
-    const exitCode = readToolExitCode(
-      item,
-      details,
-      !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined,
-      standalone ? undefined : m,
-    );
+    const recordedResult = !catalogSource && text ? safeParseJsonRecord(text.trim()) : undefined;
+    const bridgeDispatchStarted = catalogSource
+      ? undefined
+      : (asNullableRecord(details)?.bridgeDispatchStarted ?? recordedResult?.bridgeDispatchStarted);
+    const exitCode = readToolExitCode(item, details, recordedResult, standalone ? undefined : m);
     return {
       outputText: text,
       ...(catalogSource && metadata?.catalogTruncated === true ? { catalogTruncated: true } : {}),
@@ -427,6 +426,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       ...(details !== undefined ? { details } : {}),
       ...(isError !== undefined ? { isError } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),
+      ...(typeof bridgeDispatchStarted === "boolean" ? { bridgeDispatchStarted } : {}),
       ...(catalogSource ? {} : extractToolPresentation(details, text, browserToolName)),
     };
   };
