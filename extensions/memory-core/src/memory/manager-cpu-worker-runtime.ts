@@ -1,8 +1,8 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
-import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import type {
+  readTranscriptStatsBatchReadOnlySync,
   SessionEntryStream,
   SessionEntrySummary,
 } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";

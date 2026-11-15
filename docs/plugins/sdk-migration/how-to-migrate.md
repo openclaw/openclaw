@@ -808,12 +808,29 @@ Use `await statSessionEntry(path, options)` from
 metadata through the worker. `statSessionEntrySync` remains available through
 2026-12-31; passing already prepared transcript statistics to it
 only projects those values and does not query SQLite. `buildSessionEntry`
-renders SQLite exports in the worker and assembles the complete entry on the
-caller. With an `onTranscriptMessage` observer, the worker also delivers the
-original messages and timestamps in bounded pages and the observer runs on the
-caller. Memory engines that only need pages, the entry hash or provenance use
-`streamSessionEntry` or `streamSessionEntries`, which deliver about 1 MiB of
-rendered lines at a time and never hold the complete export.
+also reads durable snapshots in the worker when an `onTranscriptMessage`
+observer is supplied, then invokes the observer on the caller with the original
+messages and timestamps. Because this legacy callback cannot retract observations,
+durable exports retain its original messages until each entry succeeds, discard
+abandoned attempts, and invoke the callback once per message in the successful
+snapshot. This applies to both full builders and streaming calls that supply the
+legacy observer; those calls may retain the full original message payloads.
+
+For memory indexing, use `streamSessionEntry(path, options, stream)` or
+`streamSessionEntries(inputs)` from the same SDK surface. `onPage` receives
+consecutive rendered lines, their source line map, timestamps, and provenance;
+return a promise to apply backpressure. `onReset` means earlier pages belong to
+an abandoned export and must be discarded before accepting new pages. The
+returned summary retains the persisted entry hash and reset-recall metadata.
+Durable SQLite exports release each read transaction before delivering a page;
+incognito exports recheck the actor's live authority before each disclosure.
+
+`buildSessionEntry`, `buildSessionEntries`, and `matchesSessionEntryPrefixHash`
+retain their complete-entry contracts. The builders collect streamed pages for
+callers that need the full document; they are not bounded-memory consumers.
+File-based archives and a single large record can also require their original
+input in memory. Memory indexing, startup scanning, and dreaming consume the
+stream without collecting the full rendered document.
 
 ## Prepare session entry changes
 
