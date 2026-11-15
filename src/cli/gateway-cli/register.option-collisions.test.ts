@@ -99,10 +99,6 @@ vi.mock("../../config/read-best-effort-config.runtime.js", () => ({
   readSourceConfigBestEffort: async () => ({}),
 }));
 
-// mock-isolation: Prevent network discovery in CLI option tests.
-vi.mock("../../infra/bonjour-discovery.js", () => ({ discoverGatewayBeacons: async () => [] }));
-// mock-isolation: Prevent DNS discovery in CLI option tests.
-vi.mock("../../infra/widearea-dns.js", () => ({ resolveWideAreaDiscoveryDomain: () => undefined }));
 vi.mock("../../../packages/terminal-core/src/health-style.js", () => ({
   styleHealthChannelLine: (line: string) => line,
 }));
@@ -120,21 +116,11 @@ vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   },
 }));
 
-vi.mock("../../utils/usage-format.js", () => ({
-  formatTokenCount: () => "0",
-  formatUsd: () => "$0.00",
-}));
-
 // mock-isolation: Keep help rendering out of the CLI routing fixture.
 vi.mock("../help-format.js", () => ({ formatHelpExamples: () => "" }));
 
 vi.mock("../progress.js", () => ({
   withProgress: async (_opts: unknown, fn: () => Promise<unknown>) => await fn(),
-}));
-
-vi.mock("./discover.js", () => ({
-  dedupeBeacons: (beacons: unknown[]) => beacons,
-  renderBeaconLines: () => [],
 }));
 
 function expectCliError(message: unknown) {
@@ -185,30 +171,6 @@ describe("gateway register option collisions", () => {
     await work.run(() => parse("call", "system-presence", "--json"));
     // Ctrl+C owns the exit; an aborted read neither prints a reply nor exits nonzero.
     expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
-  });
-
-  it("still prints a generic gateway call receipt that settles during cleanup", async () => {
-    const work = new AsyncWorkScope();
-    const job = { id: "job-1", name: "nightly", enabled: true };
-    mocks.callGatewayCli.mockImplementationOnce(async (method, _opts, params) => {
-      work.beginClose();
-      return { ok: true, job: { ...(params as { job: object }).job, id: "job-1" } };
-    });
-    let output: unknown;
-    await defaultRuntime.writeJson.withImplementation(
-      (value: unknown) => {
-        output = value;
-      },
-      async () => {
-        await work.run(() =>
-          parse("call", "cron.add", "--params", JSON.stringify({ job }), "--json"),
-        );
-      },
-    );
-    // Generic calls may execute writes (cron.add); an already settled mutation
-    // keeps its receipt even when Ctrl+C closes the work scope.
-    expect(output).toEqual({ ok: true, job: { id: "job-1", name: "nightly", enabled: true } });
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
   });
 

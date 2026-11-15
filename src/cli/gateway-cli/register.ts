@@ -42,12 +42,10 @@ const DEFAULT_GATEWAY_RPC_TIMEOUT_MS = 10_000;
 const SETUP_INFERENCE_DETECT_RPC_TIMEOUT_MS = 40_000;
 
 /**
- * Gateway methods with an established read-only contract, each backed by a
- * dedicated read-only CLI subcommand (gateway health/status, system presence,
- * usage-cost, stability). `gateway call` is a generic escape hatch that can
- * run writes (e.g. cron.add), so only these methods cancel their read on
- * Ctrl+C; a reply that lands during cleanup is otherwise still printed so an
- * already committed mutation keeps its receipt.
+ * Cancellation follows established read-only CLI contracts, not authorization
+ * scopes: operator.read also covers side-effecting flows such as GitHub sign-in.
+ * Other generic calls can write, so preserve their settlement receipts during
+ * cleanup.
  */
 const READ_ONLY_GATEWAY_CALL_METHODS = new Set([
   "health",
