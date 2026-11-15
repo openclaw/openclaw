@@ -10,7 +10,6 @@ import {
   resolveConfiguredGitHubApiBaseUrl,
 } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
-import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   currentGitHubPublicationConfig,
@@ -218,22 +217,25 @@ export async function readOwnGitHubPullRequest(params: {
   };
   const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId, assertRequester);
   const config = currentGitHubPublicationConfig();
-  const configRevision = getRuntimeConfigSnapshotMetadata();
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
     host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
+  let checkedConfig = config;
   const assertIdentityCurrent = () => {
     params.reader.assertCurrent();
+    // Retained readers outlive config/secrets reloads; only an API base change revokes them.
+    const currentConfig = currentGitHubPublicationConfig();
     if (
       (identity.host ?? "github.com") !== host ||
-      currentGitHubPublicationConfig() !== config ||
-      getRuntimeConfigSnapshotMetadata() !== configRevision ||
+      (currentConfig !== checkedConfig &&
+        resolveConfiguredGitHubApiBaseUrl(currentConfig) !== apiBaseUrl) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
       (publicContinuation &&
         (!publication || !matchesGitHubPublicationIdentityRow(publication.publisher, identity)))
     ) {
       throw new Error("The GitHub publisher changed; retry inspection.");
     }
+    checkedConfig = currentConfig;
   };
   const assertCurrent = () => {
     params.assertCurrent();
