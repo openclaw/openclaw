@@ -172,7 +172,32 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
         XCTAssertEqual(saved.map(\.text), ["Reply.", "Late."])
     }
 
+    func testConsultWaitsForTheQuestionBeforePersistingItsPreamble() async throws {
+        let preamble = expectation(description: "consult preamble processed")
+        let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
+            after: [
+                #"{"type":"input_audio_buffer.committed","item_id":"question"}"#,
+                #"{"type":"conversation.item.added","item":{"id":"preamble","type":"message","role":"assistant"}}"#,
+                #"{"type":"response.output_audio_transcript.done","item_id":"preamble","transcript":"Let me check that for you."}"#,
+            ],
+            expecting: 2,
+            onTranscript: { if $0 == "Let me check that for you." { preamble.fulfill() } },
+            afterEvents: { talk, channel in
+                await self.fulfillment(of: [preamble], timeout: 5)
+                // This MainActor task runs when flush suspends. No wall-clock race.
+                let final = Task { @MainActor in
+                    let json = #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"question","transcript":"Has France had another capital?"}"#
+                    talk.dataChannel(channel, didReceiveMessageWith: RTCDataBuffer(data: Data(json.utf8), isBinary: false))
+                }
+                await talk.flushTranscriptWrites()
+                await final.value
+            })
+        XCTAssertEqual(saved.map(\.text), ["Has France had another capital?", "Let me check that for you."])
+    }
+
     func testConsultFlushPersistsFinalsHeldBehindAStalledTurn() async throws {
+        let clock = TranscriptHoldClock()
+        defer { clock.resumeAll() }
         let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
             after: [
                 #"{"type":"conversation.item.added","item":{"id":"reply-0","type":"message","role":"assistant"}}"#,
@@ -186,15 +211,56 @@ final class TalkRealtimeTranscriptOrderStallTests: XCTestCase {
                     sessionKey: "main",
                     voiceSessionId: "voice-1",
                     transcriptStore: TalkRealtimeTranscriptStore(retryDelaysNanoseconds: []),
-                    transcriptHoldTimeoutSeconds: 60,
+                    transcriptHoldTimeoutSeconds: 1,
+                    transcriptHoldSleep: { await clock.sleep($0) },
                     delegate: delegate)
             },
             afterEvents: { talk, _ in
-                try await Task.sleep(nanoseconds: 200_000_000)
-                // The consult path flushes before reading history.
+                await self.fulfillment(of: [clock.firstScheduled], timeout: 5)
+                let expiry = Task { @MainActor in clock.resumeOldest() }
                 await talk.flushTranscriptWrites()
+                await expiry.value
             })
         XCTAssertEqual(saved.map(\.text), ["Ask OpenClaw."])
+    }
+
+    func testConsultDoesNotWaitForSuccessiveHoldTimers() async throws {
+        let clock = TranscriptHoldClock()
+        defer { clock.resumeAll() }
+        let flushed = expectation(description: "consult flush finished after first timeout")
+        let saved = try await TalkRealtimeTranscriptOrderTests.persistedTranscripts(
+            after: [
+                #"{"type":"input_audio_buffer.committed","item_id":"question-1"}"#,
+                #"{"type":"input_audio_buffer.committed","item_id":"question-2"}"#,
+                #"{"type":"conversation.item.added","item":{"id":"reply","type":"message","role":"assistant"}}"#,
+                #"{"type":"response.output_audio_transcript.done","item_id":"reply","transcript":"Reply."}"#,
+            ],
+            expecting: 1,
+            makeSession: { gateway, delegate in
+                TalkRealtimeWebRTCSession(
+                    gateway: gateway,
+                    sessionKey: "main",
+                    voiceSessionId: "voice-1",
+                    transcriptStore: TalkRealtimeTranscriptStore(retryDelaysNanoseconds: []),
+                    transcriptHoldTimeoutSeconds: 1,
+                    transcriptHoldSleep: { await clock.sleep($0) },
+                    delegate: delegate)
+            },
+            afterEvents: { talk, _ in
+                await self.fulfillment(of: [clock.firstScheduled], timeout: 5)
+                let flush = Task { @MainActor in
+                    await talk.flushTranscriptWrites()
+                    flushed.fulfill()
+                }
+                // Enqueue expiry after flush so it observes the original hold.
+                let expiry = Task { @MainActor in clock.resumeOldest() }
+                await self.fulfillment(of: [flushed], timeout: 2)
+                // Release synthetic sleepers even on the old behavior's failure path.
+                clock.resumeAll()
+                await flush.value
+                await expiry.value
+            })
+        XCTAssertEqual(saved.map(\.text), ["Reply."])
     }
 
     func testStopPersistsFinalsHeldBehindAnUnfinishedTurn() async throws {

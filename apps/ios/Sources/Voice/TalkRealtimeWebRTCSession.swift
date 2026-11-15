@@ -458,7 +458,10 @@ final class TalkRealtimeWebRTCSession: NSObject {
     #endif
 
     func flushTranscriptWrites() async {
-        // A consult reads persisted history: finals received so far must not wait on a stalled turn.
+        // Give the current blocker its remaining grace period, not every later turn.
+        if let hold = self.transcriptHoldTask {
+            await hold.value
+        }
         self.recordFinalTranscripts(self.transcriptOrder.releaseHeld())
         guard let voiceSessionId = self.voiceSessionId else { return }
         await self.transcriptStore.flush(voiceSessionId: voiceSessionId)
