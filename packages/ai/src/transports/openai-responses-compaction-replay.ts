@@ -72,14 +72,14 @@ function readOpenAIResponsesCompactionReplayState(
     : undefined;
 }
 
-export function hasOpenAIResponsesItemRecovery(
+export function readOpenAIResponsesItemRecoveryAnchor(
   replay: ProviderReplayState | undefined,
-  anchor: string,
-) {
+): string | undefined {
   const state = readOpenAIResponsesCompactionReplayState(replay);
-  return (
-    state?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE && state.itemRecovery === anchor
-  );
+  return state?.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE &&
+    typeof state.itemRecovery === "string"
+    ? state.itemRecovery
+    : undefined;
 }
 
 export function captureOpenAIResponsesCompaction(

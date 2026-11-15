@@ -19,7 +19,10 @@ export {
   stripCompactionReplayCheckpointInPlace,
 } from "./provider-compaction-checkpoint.js";
 
-export { CompactionReplayRefreshRequiredError } from "./openai-responses-compaction-replay.js";
+export {
+  CompactionReplayRefreshRequiredError,
+  readOpenAIResponsesItemRecoveryAnchor,
+} from "./openai-responses-compaction-replay.js";
 
 type ReplayIdentity = { sessionId?: string; authProfileId?: string; enabled?: boolean };
 type ReplayMessage = { role: string };

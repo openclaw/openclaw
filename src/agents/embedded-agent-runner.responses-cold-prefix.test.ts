@@ -26,9 +26,10 @@ function responseMessage(id: string, text: string) {
   return { type: "message", id, role: "assistant", status: "completed", content };
 }
 
-it.each([false, true])(
-  "preserves Responses replay across a cold runner reopen (conflict=%s)",
-  async (conflictingReplay) => {
+it.each(["healthy", "recovered", "failed-repair"] as const)(
+  "preserves Responses replay across a cold runner reopen (%s)",
+  async (mode) => {
+    const conflictingReplay = mode !== "healthy";
     await withOpenClawTestState({ label: "responses-cold-prefix" }, async (state) => {
       const sessionId = "responses-cold-prefix";
       const sessionKey = "agent:main:" + sessionId;
@@ -95,10 +96,11 @@ it.each([false, true])(
           requests.push(payload);
           if (
             conflictingReplay &&
-            payload.input.some((value) => {
-              const item = value as Record<string, unknown>;
-              return item.id === "fc_response_1" && item.arguments !== "{ }";
-            })
+            ((mode === "failed-repair" && requests.length === 5) ||
+              payload.input.some((value) => {
+                const item = value as Record<string, unknown>;
+                return item.id === "fc_response_1" && item.arguments !== "{ }";
+              }))
           ) {
             conflicts++;
             return Response.json(
@@ -188,7 +190,7 @@ it.each([false, true])(
             },
           });
           try {
-            const result = await runEmbeddedAgent({
+            const run = runEmbeddedAgent({
               userTurnTranscriptRecorder: recorder,
               preparedRunAdmission: admission,
               agentId: "main",
@@ -209,15 +211,23 @@ it.each([false, true])(
               timeoutMs: 60000,
               prompt: "visible turn " + turn,
             });
-            expect(result.meta.error).toBeUndefined();
-            expect(requests).toHaveLength(turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0));
+            if (mode === "failed-repair" && turn === 2) {
+              await expect(run).rejects.toMatchObject({ code: "item_conflict" });
+            } else {
+              expect((await run).meta.error).toBeUndefined();
+            }
+            expect(requests).toHaveLength(
+              mode === "failed-repair"
+                ? [3, 5, 8][turn - 1]!
+                : turn * 3 + (conflictingReplay && turn > 1 ? 1 : 0),
+            );
           } finally {
             admission.close();
           }
         }
         expect(requests[1]?.previous_response_id).toBe("response_1");
         expect(requests[3]?.previous_response_id).toBeUndefined();
-        expect(conflicts).toBe(conflictingReplay ? 1 : 0);
+        expect(conflicts).toBe(mode === "failed-repair" ? 2 : conflictingReplay ? 1 : 0);
         // The repair changes only the poisoned prefix once. Later cold turns retain it.
         for (let index = conflictingReplay ? 4 : 1; index < prefixes.length; index++) {
           assertStableProviderPrefix(prefixes[index - 1]!, prefixes[index]!, {

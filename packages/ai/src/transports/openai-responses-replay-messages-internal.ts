@@ -28,7 +28,7 @@ import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import { parseOpenAIResponsesTextSignature } from "../utils/text-signature.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
-  hasOpenAIResponsesItemRecovery,
+  readOpenAIResponsesItemRecoveryAnchor,
   isSafeResponsesReplayItemId,
   type OpenAIResponsesReplayMode,
 } from "./openai-responses-compaction-replay.js";
@@ -645,7 +645,7 @@ function convertResponsesMessagesWithStyle(
       "role" in msg &&
       msg.role === "assistant" &&
       replayPlan.itemRecovery &&
-      hasOpenAIResponsesItemRecovery(msg.providerReplay, replayPlan.itemRecovery.anchor)
+      readOpenAIResponsesItemRecoveryAnchor(msg.providerReplay) === replayPlan.itemRecovery.anchor
     ) {
       pastRecoveryBoundary = true;
     }
