@@ -119,7 +119,7 @@ it("retires selected months across batches atomically while retaining other part
 });
 
 it.each([0, 24])(
-  "keeps mixed usage writes indexed after outgrowing %i months of statistics",
+  "keeps usage writes and prunes indexed after outgrowing %i months of statistics",
   async (months) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const log = path.join(state.root, "usage-write-counts.txt");
@@ -167,7 +167,7 @@ if (!isMainThread) {
         await using owner = await acquireUsageLock(agentId);
         const ids = Array.from({ length: 50 }, (_, index) => `session-${index}`);
         await owner.writeRollup(
-          [...ids, "unrelated"].map((id) =>
+          [...ids, "unrelated", "stale-0", "stale-1"].map((id) =>
             Object.assign(rollup(id, { totalTokens: 7 }, 1, new Uint8Array([1])), {
               partitions: partitions(["2026-01-01", "2026-02-01"], { tokens: 3 }, 2),
             }),
@@ -187,6 +187,7 @@ if (!isMainThread) {
             })),
           ),
         ).toBe(true);
+        await owner.pruneRows(readRows(agentId).filter(({ key }) => key.startsWith("stale-")));
         const executions = (await fs.readFile(log, "utf8"))
           .trim()
           .split("\n")

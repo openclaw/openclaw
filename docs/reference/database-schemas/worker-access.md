@@ -1017,10 +1017,12 @@ Discovery still reads only metadata, and body reads retain their payload bounds.
 Full refresh prunes stale row snapshots in batches of up to 1,024 rows or 1 MiB
 of JSON and key data, with oversized rows sent alone. Each batch waits outside
 the existing writer FIFO until it drains, then commits through its ordinary
-transaction and checkpoint and timestamp comparisons. A row and its partitions
-remain atomic; a later failed batch leaves earlier batches committed. Restart
-or the next refresh rediscovers remaining obsolete rows, making partial cleanup
-safe to retry without retaining the whole inventory on the host.
+transaction and checkpoint and timestamp comparisons. Its partition range and
+rollup key deletes use the same primary-key index as publication deletes. A row
+and its partitions remain atomic; a later failed batch leaves earlier batches
+committed. Restart or the next refresh rediscovers remaining obsolete rows,
+making partial cleanup safe to retry without retaining the whole inventory on
+the host.
 Targeted refreshes do not prune other keys. Selected month deletion uses bounded
 key batches within the rollup write transaction. Transcript statistics use
 the existing batched read directly, without registering per-session write scopes

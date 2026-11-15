@@ -14,6 +14,7 @@ import {
 } from "./session-cost-usage-partitions.js";
 import {
   deleteSessionCostUsagePartitionsInDatabase,
+  indexedUsageCacheEntries,
   pruneSessionCostUsagePartitionsInDatabase,
 } from "./session-cost-usage-partitions.worker.js";
 import { USAGE_COST_QUARTER_SCOPE } from "./session-cost-usage-quarters.js";
@@ -244,7 +245,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
       executeSqliteQuerySync(
         db,
         kysely
-          .deleteFrom("cache_entries")
+          .deleteFrom(indexedUsageCacheEntries(db))
           .where("scope", "=", ROLLUP_SCOPE)
           // Keep indexed key probes and each snapshot's exact comparison together.
           .where(
