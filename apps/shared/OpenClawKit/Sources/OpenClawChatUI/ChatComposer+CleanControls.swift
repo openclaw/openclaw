@@ -336,11 +336,11 @@ extension OpenClawChatComposer {
         #endif
     }
 
-    /// Keep recovery visible when authentication blocks send or capture UI replaces the model menu.
+    /// Capture UI replaces the model menu; otherwise sign-in stays in that menu.
     var showsModelSignInRow: Bool {
         #if os(iOS)
         guard self.composerChrome == .clean else { return true }
-        return self.viewModel.composerModelAvailabilityMessage != nil || self.cleanShowsCameraFlip ||
+        return self.cleanShowsCameraFlip ||
             self.voiceNoteControl?.recorder.isRecording == true
         #else
         !self.usesDesktopModelMenu

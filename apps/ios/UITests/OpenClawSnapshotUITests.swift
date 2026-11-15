@@ -963,7 +963,10 @@ extension OpenClawSnapshotUITests {
     func testSelectedAuthFailedModelDisablesOnlineSend() throws {
         self.launchApp(
             for: Self.chatScreenshotTarget,
-            additionalArguments: ["--openclaw-selected-model-auth-failure-fixture"])
+            additionalArguments: [
+                "--openclaw-selected-model-auth-failure-fixture",
+                "--openclaw-model-sign-in-fixture", "ordinary",
+            ])
         let app = try XCTUnwrap(self.app)
         let input = self.chatMessageInput(in: app)
         XCTAssertTrue(input.waitForExistence(timeout: 8))
@@ -976,8 +979,14 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "Authentication failed. Review the provider credential or sign-in, then retry.",
         ].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.buttons["chat-model-sign-in"].exists)
+        XCTAssertFalse(app.buttons["chat-model-sign-in"].exists)
         self.attachScreenshot(named: "chat-composer-model-auth-failed")
+        let modelMenu = app.buttons["chat-composer-inline-model"]
+        XCTAssertTrue(modelMenu.isEnabled, "Authentication recovery must remain reachable")
+        modelMenu.tap()
+        self.attachScreenshot(named: "chat-composer-auth-recovery-menu")
+        self.assertModelSignInSheetOpens(in: app)
+        XCTAssertFalse(send.isEnabled, "Opening sign-in must not bypass authentication")
     }
 
     func testModelSignInMovesToModelMenuWhileSelectedModelCanSend() throws {
@@ -1055,7 +1064,9 @@ extension OpenClawSnapshotUITests {
         XCTAssertTrue(app.staticTexts[
             "No native sign-in options are available. Open Models in the Dashboard, or update the Gateway.",
         ].waitForExistence(timeout: 5))
-        app.buttons["Close"].tap()
+        let close = app.buttons.matching(identifier: "Close").allElementsBoundByIndex.first { $0.isHittable }
+        XCTAssertNotNil(close, "The sign-in sheet must have a hittable Close button")
+        close?.tap()
     }
 
     func testModelSelectionTargetVariantsPersistAcrossBothPickers() throws {
