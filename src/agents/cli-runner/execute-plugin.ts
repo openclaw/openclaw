@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { stripSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -54,7 +55,6 @@ import { createSteeredCliMessageInjection } from "./execute-plugin.steered-trans
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
-import { executeWithBoundHostCallbacks } from "./plugin-host-callbacks.js";
 import { isCliNativeToolCallable, normalizeCliToolName } from "./tool-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
 
@@ -561,7 +561,9 @@ export async function executePluginOwnedProcess(params: {
     assertCurrent();
     const started = await runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
       assertCurrent();
-      const execution = executeWithBoundHostCallbacks(params.execute, {
+      // Warm transports retain their first turn's async context. Bind every host
+      // callback here so reused transports enter the current turn's source scope.
+      const execution = params.execute({
         command,
         argv0: params.executionArgv0,
         args: executionArgs,
@@ -577,30 +579,33 @@ export async function executePluginOwnedProcess(params: {
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
         useResume: params.useResume,
         abortSignal: signal,
-        assertCurrent,
-        ...(prepareCredentialUse ? { prepareCredentialUse } : {}),
+        assertCurrent: AsyncLocalStorage.bind(assertCurrent),
+        ...(prepareCredentialUse
+          ? { prepareCredentialUse: AsyncLocalStorage.bind(prepareCredentialUse) }
+          : {}),
         // Host-internal, not in the plugin SDK type, like the forwarded auth credential: a
         // native login can change after the check above, so the bundled Claude runtime
         // repeats it where saved turn context leaves, at prompt send and the prompt hook answer.
         ...(historyWriter?.bindsNativeLogin
           ? {
-              assertPrivateInputCurrent: () =>
+              assertPrivateInputCurrent: AsyncLocalStorage.bind(() =>
                 historyWriter.checkNativeLoginBoundary(historyWriter.replaysHistory),
+              ),
             }
           : {}),
         timeoutMs: run.timeoutMs,
         ...(run.executionMode ? { executionMode: run.executionMode } : {}),
         ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),
         ...(liveSession ? { liveSession } : {}),
-        registerTurnStatus: (status: CliBackendTurnStatus) => {
+        registerTurnStatus: AsyncLocalStorage.bind((status: CliBackendTurnStatus) => {
           assertCurrent();
           const registration: ReplyBackendTurnStatus = bindCliTurnStatus(
             status,
             () => turnStatus === registration && assertionSucceeds(assertCurrent),
           );
           turnStatus = registration;
-        },
-        registerTurnInterrupt: (interrupt) => {
+        }),
+        registerTurnInterrupt: AsyncLocalStorage.bind((interrupt: CliBackendTurnInterrupt) => {
           assertCurrent();
           params.mcpCapture?.registerTurnInterrupt?.({
             interrupt: async (reason) => {
@@ -613,20 +618,24 @@ export async function executePluginOwnedProcess(params: {
               }
             },
           });
-        },
+        }),
         ...(detachReplyBackend
           ? {
-              registerMessageInjection: (injection: CliBackendMessageInjection) => {
-                messageInjection = injection;
-              },
+              registerMessageInjection: AsyncLocalStorage.bind(
+                (injection: CliBackendMessageInjection) => {
+                  messageInjection = injection;
+                },
+              ),
             }
           : {}),
-        requestToolPermission,
-        requestUserInput: createPluginUserInputHandler({
-          context: params.context,
-          abortSignal: signal,
-          onPendingInput: updatePendingApproval,
-        }),
+        requestToolPermission: AsyncLocalStorage.bind(requestToolPermission),
+        requestUserInput: AsyncLocalStorage.bind(
+          createPluginUserInputHandler({
+            context: params.context,
+            abortSignal: signal,
+            onPendingInput: updatePendingApproval,
+          }),
+        ),
       });
       const executionIterator = execution[Symbol.asyncIterator]();
       iterator = executionIterator;
