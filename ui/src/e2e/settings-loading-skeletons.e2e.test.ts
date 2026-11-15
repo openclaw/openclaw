@@ -1,6 +1,10 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { emptyPairingSnapshot } from "../pages/channels/pairing.test-support.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -42,6 +46,85 @@ const withPage = (run: (page: import("playwright").Page) => Promise<void>) =>
   runPage(({ page }) => run(page));
 
 suite.define(() => {
+  it("does not diagnose desktop sharing before the environment catalog answers", async () => {
+    await suite.withPage(
+      { viewport: { width: 1280, height: 900 }, locale: "en-US" },
+      async ({ page }) => {
+        const environment = { id: "node:studio", type: "node", status: "available", desktop: true };
+        const gateway = await installMockGateway(page, {
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "environments.list",
+            "desktop.observe",
+          ],
+          heldMethods: ["environments.list"],
+          methodResponses: {
+            "node.list": {
+              nodes: [
+                {
+                  nodeId: "studio",
+                  displayName: "Studio",
+                  paired: true,
+                  connected: true,
+                  platform: "darwin",
+                  commands: ["desktop.stream"],
+                },
+              ],
+            },
+            "device.pair.list": { pending: [], paired: [] },
+            "system-presence": [],
+            "environments.list": { environments: [environment] },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "settings/devices");
+        await gateway.waitForRequest("environments.list");
+        const row = page.locator(".device-entry", { hasText: "Studio" });
+        await row.locator(":scope > summary").click();
+        const hint = row.getByText(/Desktop sharing starts enabled/);
+        const prematureHints = await hint.count();
+        const artifacts =
+          process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+            ? createControlUiE2eArtifactDir("defensive-desktop")
+            : undefined;
+        const capture = async (name: string) => {
+          if (!artifacts) {
+            return;
+          }
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            row,
+            [row.locator(":scope > summary")],
+            {
+              animations: "disabled",
+              scrollTo: row,
+              elements: [row],
+            },
+          );
+          await writeFile(path.join(artifacts, name + ".png"), frame.png);
+        };
+        await capture("pending");
+        await gateway.resolveDeferred("environments.list", { environments: [environment] });
+        await row.getByRole("button", { name: "Open desktop", exact: true }).waitFor();
+        expect(await hint.count()).toBe(0);
+        await capture("available");
+        const reads = await gateway.deferNext("environments.list");
+        await gateway.emitGatewayEvent("node.runnerInventory.changed", {});
+        await gateway.waitForRequest("environments.list", { after: reads });
+        await gateway.resolveDeferred("environments.list", {
+          environments: [{ ...environment, desktop: false }],
+        });
+        await hint.waitFor();
+        await capture("disabled");
+        expect(await row.getByRole("button", { name: "Open desktop", exact: true }).count()).toBe(
+          0,
+        );
+        expect(
+          prematureHints,
+          "A pending catalog is not evidence that desktop sharing needs repair",
+        ).toBe(0);
+      },
+    );
+  });
   it.each([
     ["approvals", "Recent exec, plugin, and system-agent approvals."],
     [
