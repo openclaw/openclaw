@@ -38,7 +38,15 @@ vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 // mock-isolation: Synthetic process groups must not leave real reaper work in the shared test worker.
 vi.mock("./scoped-child-reaper.js", () => ({ scheduleAdoptedChildZombieReapAfterExit: vi.fn() }));
 vi.mock("./exec-termination.js", () => ({
-  createCommandTerminationController: () => ({ terminate: () => false, settle: transport.settle }),
+  createCommandTerminationController: ({
+    cancelController,
+  }: {
+    cancelController: AbortController;
+  }) => ({
+    terminate: () => false,
+    cancel: () => cancelController.abort(),
+    settle: transport.settle,
+  }),
 }));
 
 const scopes: Promise<unknown>[] = [];

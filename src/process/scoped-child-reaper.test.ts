@@ -32,7 +32,11 @@ vi.mock("../infra/windows-install-roots.js", () => ({
   },
 }));
 vi.mock("../shared/pid-alive.js", () => ({ getFileLockProcessStartTime: () => null }));
-vi.mock("./child-process-tree.js", () => ({ isChildProcessTreeAlive: proc.alive }));
+vi.mock("./command-process-identity.js", () => ({ readCommandProcessStartTime: () => null }));
+vi.mock("./child-process-tree.js", () => ({
+  isChildProcessTreeAliveAsync: async () => proc.alive(),
+  isProcessGroupGoneByKernel: () => !proc.alive(),
+}));
 vi.mock("./kill-tree.js", () => ({ killProcessTree: vi.fn() }));
 vi.mock("./exec-spawn.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./exec-spawn.js")>()),
