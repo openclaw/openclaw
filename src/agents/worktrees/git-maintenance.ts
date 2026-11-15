@@ -29,7 +29,7 @@ import {
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { WorktreeGcProgress } from "./gc-progress.js";
-import { listGitWorktrees, requireGit, resolveGitMetadataPath, runGit } from "./git.js";
+import * as git from "./git.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeGcResult } from "./types.js";
 
@@ -90,7 +90,7 @@ async function repairWorktreeObjects(
       env: { GIT_NO_LAZY_FETCH: "1" },
     };
   };
-  const worktrees = (await listGitWorktrees(repoRoot, options())).toSorted((a, b) =>
+  const worktrees = (await git.listGitWorktrees(repoRoot, options())).toSorted((a, b) =>
     a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
   );
   const cursorKey = `worktrees.objectRepair:${repoRoot}`;
@@ -104,7 +104,7 @@ async function repairWorktreeObjects(
     for (;;) {
       // Include this index's resolve-undo objects, but not every linked index.
       // Quiet suppresses healthy OIDs while preserving Git's missing-object output.
-      const inventory = await requireGit(
+      const inventory = await git.requireGit(
         worktree.path,
         [
           "rev-list",
@@ -146,7 +146,7 @@ async function repairWorktreeObjects(
           offset + Math.min(OBJECT_REPAIR_BATCH_SIZE, OBJECT_REPAIR_MAX_OBJECTS - fetched.size),
         );
         try {
-          await requireGit(
+          await git.requireGit(
             repoRoot,
             [
               "fetch",
@@ -210,7 +210,7 @@ async function maintainWorktreePacks(
     env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
   };
   const packDirectory = await withContentGitSlot(
-    () => resolveGitMetadataPath(repoRoot, "objects/pack", options),
+    () => git.resolveGitMetadataPath(repoRoot, "objects/pack", options),
     params.signal,
   );
   // Git rejects an empty pack directory; inspect only this shallow metadata directory.
@@ -227,7 +227,7 @@ async function maintainWorktreePacks(
     await report(0, 0);
     return false;
   }
-  const commonDir = await requireGit(repoRoot, ["rev-parse", "--git-common-dir"], options);
+  const commonDir = await git.requireGitPath(repoRoot, ["rev-parse", "--git-common-dir"], options);
   // Content writers acquire their slot before publishing refs; keep that order
   // so maintenance cannot hold the ref queue while waiting for those writers.
   return await withContentGitSlot(async () => {
@@ -318,7 +318,7 @@ async function consolidatePacks(
   commonDir: string,
   directory: string,
   names: string[],
-  options: NonNullable<Parameters<typeof requireGit>[2]> & { startRun: GitOperationStarter },
+  options: NonNullable<Parameters<typeof git.requireGit>[2]> & { startRun: GitOperationStarter },
   onlyIfBacklogged: boolean,
 ) {
   const remove = async (pathname: string, lease: OpenClawStateAsyncLeaseContext) => {
@@ -332,7 +332,7 @@ async function consolidatePacks(
   const retirementKey = `worktrees.packRetirement:${repoRoot}`;
   let objectFormat: string | undefined;
   const verify = async (selected: string[]) => {
-    objectFormat ??= await requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
+    objectFormat ??= await git.requireGit(repoRoot, ["rev-parse", "--show-object-format"], options);
     const verifyDeadline = performance.now() + PACK_BATCH_TIMEOUT_MS;
     for (let offset = 0; offset < selected.length; offset += 128) {
       const timeoutMs = Math.ceil(verifyDeadline - performance.now());
@@ -340,7 +340,7 @@ async function consolidatePacks(
         throw new Error("Git pack verification exceeded its thirty-minute budget");
       }
       // Relative names and bounded argv also fit Windows' command-line limit.
-      await requireGit(
+      await git.requireGit(
         directory,
         [
           "-c",
@@ -521,7 +521,7 @@ async function consolidatePacks(
     const alias =
       "!if command -v ionice >/dev/null 2>&1; then ionice -c 3 -p $$ >/dev/null 2>&1; fi; git pack-objects --stdin-packs --stdout --window=10 --window-memory=8m --threads=1 | git index-pack --stdin --threads=1" +
       (promisor ? " --promisor" : "");
-    const result = await requireGit(
+    const result = await git.requireGit(
       repoRoot,
       ["-c", `alias.openclaw-consolidate=${alias}`, "openclaw-consolidate"],
       {
@@ -673,7 +673,7 @@ export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
             if (params.retryDeferred) {
               state.stage = "objects";
               await report(state.stage);
-              const config = await runGit(
+              const config = await git.runGit(
                 repoRoot,
                 ["config", "--bool", "--get-regexp", "^remote\\..*\\.promisor$"],
                 options,
@@ -705,7 +705,7 @@ export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
             await report(state.stage);
             await withContentGitSlot(
               () =>
-                requireGit(
+                git.requireGit(
                   repoRoot,
                   ["maintenance", "run", "--auto", "--task=commit-graph", "--task=loose-objects"],
                   options,
