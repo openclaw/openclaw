@@ -273,9 +273,20 @@ describe("dashboard action ownership", () => {
       return null;
     });
     const sessions: Array<EventEmitter & { detach: ReturnType<typeof vi.fn> }> = [];
+    let closed = false;
+    const closeListeners = new Set<() => void>();
     const page = {
       url: () => currentUrl,
       goto,
+      isClosed: () => closed,
+      on: (event: string, listener: () => void) => {
+        if (event === "close") {
+          closeListeners.add(listener);
+        }
+      },
+      off: (_event: string, listener: () => void) => {
+        closeListeners.delete(listener);
+      },
       context: () => ({
         newCDPSession: async () => {
           const session = Object.assign(new EventEmitter(), {
@@ -325,12 +336,21 @@ describe("dashboard action ownership", () => {
         expect(page.url()).toBe(dashboard.url);
       }
       expect(preparations).toBe(retry ? 2 : 1);
+      // The tab's document fence keeps one session for every attempt until the tab closes.
       // Successful navigation also reads the selected target through a temporary CDP session.
-      expect(sessions).toHaveLength((retry ? 2 : 1) + (revoke === "none" ? 1 : 0));
-      for (const session of sessions) {
+      const [fenceSession, ...temporary] = sessions;
+      expect(temporary).toHaveLength(revoke === "none" ? 1 : 0);
+      for (const session of temporary) {
         expect(session.detach).toHaveBeenCalledOnce();
         expect(session.eventNames()).toEqual([]);
       }
+      expect(fenceSession?.detach).not.toHaveBeenCalled();
+      closed = true;
+      for (const listener of closeListeners) {
+        listener();
+      }
+      await vi.waitFor(() => expect(fenceSession?.detach).toHaveBeenCalledOnce());
+      expect(fenceSession?.eventNames()).toEqual([]);
     }).finally(() => gotoGuard.mockRestore());
   });
 });
