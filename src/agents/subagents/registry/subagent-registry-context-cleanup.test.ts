@@ -105,7 +105,7 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() =>
       instance.run(() => registry),
     );
-    const resume = createDeferred<void>();
+    const resume = createDeferred();
     const ended = turn.run(async () => {
       await resume.promise;
       await cleanup.notifyContextEngineSubagentEnded(
