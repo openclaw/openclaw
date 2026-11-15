@@ -7,16 +7,6 @@ import {
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
-type DeepSeekBalanceResponse = {
-  is_available?: boolean;
-  balance_infos?: {
-    currency?: string;
-    total_balance?: string | number | null;
-    granted_balance?: string | number | null;
-    topped_up_balance?: string | number | null;
-  }[];
-};
-
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 function formatCurrencyAmount(amount: number, currency?: string): string {
@@ -51,18 +41,24 @@ export async function fetchDeepSeekUsage(
     return parsed.snapshot;
   }
 
-  const data = isRecord(parsed.data) ? (parsed.data as DeepSeekBalanceResponse) : undefined;
+  const data = isRecord(parsed.data) ? parsed.data : undefined;
   const balances = data && Array.isArray(data.balance_infos) ? data.balance_infos : [];
   const parts: string[] = [];
   const billing: NonNullable<ProviderUsageSnapshot["billing"]> = [];
   for (const info of balances) {
+    if (!isRecord(info)) {
+      continue;
+    }
+    const currency = info.currency;
+    if (currency != null && typeof currency !== "string") {
+      continue;
+    }
     const amount = parseFiniteNumber(info.total_balance);
     if (amount === undefined) {
       continue;
     }
     const granted = parseFiniteNumber(info.granted_balance);
     const toppedUp = parseFiniteNumber(info.topped_up_balance);
-    const currency = info.currency;
     const normalized = currency?.trim().toUpperCase();
     parts.push(`Balance ${formatCurrencyAmount(amount, normalized)}`);
     if (granted !== undefined && granted > 0) {

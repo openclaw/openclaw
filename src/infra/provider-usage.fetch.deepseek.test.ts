@@ -52,6 +52,38 @@ describe("fetchDeepSeekUsage", () => {
     });
   });
 
+  it.each([
+    ["non-record rows", [null, [], false, 42, "invalid"]],
+    [
+      "non-string currencies",
+      [42, false, [], {}].map((currency) => ({ currency, total_balance: "9" })),
+    ],
+  ])("keeps usable balances around %s", async (_name, malformed) => {
+    const mockFetch = createProviderUsageFetch(async () =>
+      makeResponse(200, {
+        balance_infos: [
+          ...malformed,
+          { currency: " usd ", total_balance: "1.25" },
+          ...malformed,
+          { currency: null, total_balance: "2" },
+        ],
+      }),
+    );
+
+    const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);
+
+    expect(result).toEqual({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      billing: [
+        { type: "balance", amount: 1.25, unit: "USD" },
+        { type: "balance", amount: 2, unit: "credits" },
+      ],
+      summary: "Balance $1.25 · Balance 2.00",
+    });
+  });
+
   it("returns HTTP errors for failed balance requests", async () => {
     const response = makeResponse(401, { error: "invalid api key" });
     const cancel = vi.spyOn(response.body!, "cancel").mockResolvedValue(undefined);
@@ -65,13 +97,37 @@ describe("fetchDeepSeekUsage", () => {
     expect(result.summary).toBeUndefined();
   });
 
-  it.each([["null response", null]])("treats %s as absent balance data", async (_name, payload) => {
+  it.each([
+    ["null response", null],
+    ["array response", []],
+    ["missing balances", {}],
+    ["non-array balances", { balance_infos: {} }],
+    ["empty balances", { balance_infos: [] }],
+    [
+      "unusable balances",
+      {
+        balance_infos: [
+          null,
+          [],
+          { currency: 42, total_balance: "9" },
+          { total_balance: "Infinity" },
+          { total_balance: "1e309" },
+          { total_balance: "1.25invalid" },
+          { total_balance: null },
+        ],
+      },
+    ],
+  ])("treats %s as absent balance data", async (_name, payload) => {
     const mockFetch = createProviderUsageFetch(async () => makeResponse(200, payload));
 
     const result = await fetchDeepSeekUsage("deepseek-key", 5000, mockFetch);
 
-    expect(result.error).toBe("No balance data");
-    expect(result.windows).toHaveLength(0);
+    expect(result).toEqual({
+      provider: "deepseek",
+      displayName: "DeepSeek",
+      windows: [],
+      error: "No balance data",
+    });
   });
 
   it("marks unavailable accounts while keeping the balance summary", async () => {
