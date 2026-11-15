@@ -22,6 +22,7 @@ vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: mocks.readServiceCommand }),
 }));
 
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { checkCliGatewayStateDir, compareCliGatewayStateDirs } from "./state-dir-gateway-check.js";
 
 describe("state-dir-gateway-check", () => {
@@ -140,6 +141,28 @@ describe("state-dir-gateway-check", () => {
     } else {
       expect(message).not.toContain("This shell selects");
     }
+  });
+
+  it("forwards this command's interrupt signal to the live status read", async () => {
+    const work = new AsyncWorkScope();
+    await work.run(() => check());
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "status", signal: work.signal }),
+    );
+  });
+
+  it("stops an interrupted status read before offline service diagnostics", async () => {
+    const work = new AsyncWorkScope();
+    mocks.callGateway.mockImplementation(async (options: { signal?: AbortSignal }) => {
+      // The command is cancelled while its live status read is still in flight.
+      work.beginClose();
+      options.signal?.throwIfAborted();
+    });
+
+    await expect(work.run(() => check())).rejects.toMatchObject({ name: "AbortError" });
+    expect(mocks.readServiceCommand).not.toHaveBeenCalled();
+    expect(mocks.probeGateway).not.toHaveBeenCalled();
   });
 
   it("allows an offline command and does not probe an ordinary transport failure", async () => {

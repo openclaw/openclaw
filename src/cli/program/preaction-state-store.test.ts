@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import type { CliGatewayStateDirOutcome } from "../state-dir-gateway-check.js";
 import { registerPreActionHooks } from "./preaction.js";
 
@@ -66,6 +67,21 @@ describe("state-store preAction guard", () => {
     await expect(program.parseAsync(process.argv)).resolves.toBe(program);
 
     expect(mocks.debug).toHaveBeenCalledWith("state-store guard unavailable: inspection failed");
+    expect(mocks.action).toHaveBeenCalledOnce();
+  });
+
+  it("stays quiet when the guard read was cancelled", async () => {
+    const work = new AsyncWorkScope();
+    mocks.check.mockImplementationOnce(async () => {
+      // SIGINT cancels the live status read while the command is still starting.
+      work.beginClose();
+      throw new Error("This operation was aborted");
+    });
+
+    await expect(work.run(() => program.parseAsync(process.argv))).resolves.toBe(program);
+
+    expect(mocks.debug).not.toHaveBeenCalled();
+    expect(mocks.log).not.toHaveBeenCalled();
     expect(mocks.action).toHaveBeenCalledOnce();
   });
 
