@@ -36,6 +36,22 @@ async function expectFailure(
   }
 }
 
+it("reports a missing manifest before a missing default entry", async () => {
+  const homeDir = tempDirs.make("openclaw-plugin-missing-manifest-home-");
+  const rootDir = path.join(homeDir, "plugins", "missing-manifest");
+  fs.mkdirSync(rootDir, { recursive: true });
+  const packageBytes = '{"name":"validation-fixture"}\n';
+  fs.writeFileSync(path.join(rootDir, "package.json"), packageBytes);
+  await expectFailure(
+    { root: rootDir },
+    { OPENCLAW_HOME: homeDir },
+    `plugin manifest not found: ${path.join(rootDir, "openclaw.plugin.json")}`,
+    "plugin manifest not found: $OPENCLAW_HOME/plugins/missing-manifest/openclaw.plugin.json",
+  );
+  expect(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(packageBytes);
+  expect(fs.readdirSync(rootDir)).toEqual(["package.json"]);
+});
+
 it.each(
   ["implicit", "explicit"].flatMap((entry) => [false, true].map((debug) => ({ entry, debug }))),
 )(

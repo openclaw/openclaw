@@ -96,9 +96,7 @@ function resolveEntryPath(rootDir: string, entry: string | undefined): string {
     if (!error || typeof error !== "object" || !("code" in error) || error.code !== "ENOENT") {
       throw error;
     }
-    return throwExpectedCliError(
-      `plugin entry not found: ${normalizeRelativePath(rootDir, candidate)}`,
-    );
+    return candidate;
   }
 }
 
@@ -332,7 +330,9 @@ export async function runPluginsInitCommand(
   }
   const prefix = resolvePathPrefixSync(directory);
   if (prefix.unresolvedSegments.includes("..")) {
-    throwExpectedCliError(`Plugin destination traverses a missing directory: ${directory}`);
+    throwExpectedCliError(
+      `Plugin destination traverses a missing directory: ${directory}. Create the missing parent directory first, or choose a path through existing directories, then retry.`,
+    );
   }
   const rootDir = path.resolve(
     fs.realpathSync.native(prefix.existingPath),

@@ -747,7 +747,9 @@ describe("plugin authoring commands", () => {
       runPluginsInitCommand("replacement", {
         directory: `${physical}${path.sep}missing${path.sep}..${path.sep}plugin-init-test`,
       }),
-    ).rejects.toThrow("Plugin destination traverses a missing directory");
+    ).rejects.toThrow(
+      "Create the missing parent directory first, or choose a path through existing directories, then retry.",
+    );
     const packageManifest = readJson(projectDir, "package.json");
     expect(packageManifest).toMatchObject({
       name: "@acme/openclaw-plugin-plugin-init-test",
