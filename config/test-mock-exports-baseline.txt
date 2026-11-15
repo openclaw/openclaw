@@ -2874,7 +2874,6 @@
 ["src/cli/program/preaction-output-mode.test.ts","../state-dir-gateway-check.js","c77e993d19b405ab0d1e6e363fadc77209ed0e73ca8b040cb989689bb3a9d8c4",1]
 ["src/cli/program/preaction-output-mode.test.ts","./config-guard.js","786e9552d1f8c196b7ffa83f8b440dd8fe4e184e97c209e99aff3d199ce400b4",1]
 ["src/cli/program/preaction-state-store.test.ts","../../logger.js","d7b231c39ceb6f59643caf318dd9866ae7978eb894d3847fef768a07c5a3a01b",1]
-["src/cli/program/preaction-state-store.test.ts","../../runtime.js","65badf307d633bc06f98cf2123b42a5880bc34da493099dde0899e0474f52a90",1]
 ["src/cli/program/preaction-state-store.test.ts","../command-execution-startup.js","c81e940531cc3fbbd1f580dc797d041fe2c88521747631d9398e106e17b8e9a9",1]
 ["src/cli/program/preaction-state-store.test.ts","../state-dir-gateway-check.js","f3ff38781e49ec1b06b8a372c5e324cec59f7b87c89b63ae726344a440fcdfdf",1]
 ["src/cli/program/preaction.test.ts","../state-dir-gateway-check.js","c77e993d19b405ab0d1e6e363fadc77209ed0e73ca8b040cb989689bb3a9d8c4",1]
