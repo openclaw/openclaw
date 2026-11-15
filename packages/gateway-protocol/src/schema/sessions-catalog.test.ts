@@ -97,6 +97,28 @@ describe("session catalog schemas", () => {
     );
   });
 
+  it("bounds a source-owned explanation for unavailable continuation", () => {
+    checkCatalog(
+      Catalog.SessionCatalogSessionSchema,
+      {
+        threadId: "thread-1",
+        status: "stored",
+        archived: false,
+        canContinue: false,
+        canArchive: false,
+        continuationUnavailableReason: "Release this source before continuing.",
+        continuationUnavailableReasonCode: "source-handoff-required",
+      },
+      [
+        { continuationUnavailableReason: "" },
+        { continuationUnavailableReason: "x".repeat(385) },
+        { continuationUnavailableReason: true },
+        { continuationUnavailableReasonCode: "unknown" },
+        { continuationUnavailableReasonCode: true },
+      ],
+    );
+  });
+
   it("accepts the terminal start contract and rejects unknown fields", () => {
     const params = {
       catalogId: "codex",

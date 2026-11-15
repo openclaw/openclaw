@@ -1,6 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { pbkdf2Sync, scryptSync } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createStallFlightRecorder } from "./diagnostic-stall-flight-recorder.js";
@@ -98,7 +99,7 @@ function capture(json: string) {
 }
 it("keeps live kernel evidence when sampled stacks exhaust the shared report budget", () => {
   const evidence = ` kernel=${JSON.stringify([{ state: "D", wchan: "filemap_fault", stack: "x".repeat(1_300) }])}`;
-  native.kernel.mockReturnValue({ take: () => evidence, stop: vi.fn() });
+  native.kernel.mockReturnValue({ take: () => ({ kernelSummary: evidence }), stop: vi.fn() });
   const { result } = capture(profile(0, "x".repeat(230)));
   expect(result).toContain(evidence);
   expect(result).toContain("reportTruncated=true");
@@ -359,6 +360,26 @@ it("caps oversized windows and disables failed capture without failing the sampl
   expect(recorder.sample({ startedAt: 0, endedAt: 1_500 })).toBeUndefined();
 });
 
+it.each(["unsupported", "failed"])("preserves kernel evidence when CPU capture is %s", (kind) => {
+  const evidence = ' kernel=[{"at":1100,"state":"S","wchan":"futex_wait","syscall":"202"}]';
+  native.kernel.mockReturnValue({
+    take: (stall: unknown) => ({ kernelSummary: stall ? evidence : "" }),
+    stop: vi.fn(),
+  });
+  native.versions.node = kind === "unsupported" ? "24.22.1" : "26.6.0";
+  const { handles, sampleAt } = fixture();
+  handles[0]!.stop.mockImplementation(() => {
+    throw new Error("native capture failed");
+  });
+  const result = sampleAt(1_500);
+  expect(result).toContain(evidence);
+  expect(result).toContain("windowMs=1500");
+  expect(result).toContain("cpuProfile=unavailable");
+  expect(result).not.toContain("intervalMs=");
+  expect(Buffer.byteLength(result!)).toBeLessThanOrEqual(2_048);
+  expect(sampleAt(3_000, null)).toBeUndefined();
+});
+
 it.each(["runtime", "profiler", "worker"])(
   "leaves an unsupported or conflicting %s alone",
   (kind) => {
@@ -371,11 +392,44 @@ it.each(["runtime", "profiler", "worker"])(
   },
 );
 
-it.skipIf(
-  process.platform !== "linux" ||
-    Boolean(process.versions.bun) ||
-    Number(process.versions.node.split(".")[0]) < 26,
-)(
+it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) >= 26)(
+  "reports the interrupted Node 24 CPU owner without running queued microtasks",
+  async () => {
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        "--input-type=module",
+        "-e",
+        `
+      import { createStallFlightRecorder } from ${JSON.stringify(new URL("./diagnostic-stall-flight-recorder.ts", import.meta.url).href)};
+      import { stallCpuOwner } from ${JSON.stringify(new URL("./diagnostic-stall-cpu.test-support.ts", import.meta.url).href)};
+      const recorder = createStallFlightRecorder(message => { throw new Error(message); });
+      try {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        let reentered = false;
+        queueMicrotask(() => { reentered = true; });
+        const startedAt = performance.now();
+        stallCpuOwner();
+        const endedAt = performance.now();
+        console.log(JSON.stringify({reentered, report: recorder.sample({startedAt, endedAt})}));
+      } finally { recorder.stop(); }
+      `,
+      ],
+      { timeout: 12_000 },
+    );
+    const { reentered, report } = JSON.parse(stdout.trim());
+    expect(reentered).toBe(false);
+    expect(report).toContain("sampleMode=interrupt");
+    expect(report).toContain(
+      "stallCpuOwner@openclaw:src/logging/diagnostic-stall-cpu.test-support.ts",
+    );
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_048);
+  },
+);
+
+it.skipIf(process.platform !== "linux" || Boolean(process.versions.bun))(
   "captures the main thread's live futex wait three times within the profile byte cap",
   async () => {
     // Vitest runs in a worker; a subprocess exercises the real main-thread recorder.
@@ -426,5 +480,42 @@ it.skipIf(
       expect(sample.io).toHaveLength(7);
       expect(sample.ctxt).toHaveLength(2);
     }
+  },
+);
+
+it.skipIf(Boolean(process.versions.bun) || Number(process.versions.node.split(".")[0]) < 26)(
+  "reports the spinning function from the observer before the main thread can return",
+  async () => {
+    const child = spawn(
+      process.execPath,
+      [
+        "--import",
+        import.meta.resolve("tsx"),
+        fileURLToPath(new URL("./diagnostic-stall-spin.test-support.ts", import.meta.url)),
+        "--fast",
+      ],
+      { timeout: 5_000, killSignal: "SIGKILL", stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let output = "";
+    let report = "";
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+    });
+    child.stderr.on("data", (chunk: Buffer) => {
+      report += chunk.toString();
+      if (report.includes("main-thread stall in progress:") && report.endsWith("\n")) {
+        child.kill("SIGKILL");
+      }
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("close", () => resolve());
+    });
+    expect(output).toContain("spin-entered");
+    expect(report).toContain("main-thread stall in progress:");
+    expect(report).toContain(
+      "stallProbeSpin@openclaw:src/logging/diagnostic-stall-spin.test-support.ts",
+    );
+    expect(Buffer.byteLength(report)).toBeLessThanOrEqual(2_200);
   },
 );

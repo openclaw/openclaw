@@ -48,6 +48,7 @@ import {
   SESSION_ID,
   sessionTarget,
 } from "./worker-turn-launcher.test-support.js";
+import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   createWorkerWorkspaceRecoveryFixture,
   expectWorkspaceFiles,
@@ -59,7 +60,6 @@ import {
 import { useRepositoryWorkspaceResultFixture } from "./workspace-result-repository.test-support.js";
 import {
   hasWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -263,7 +263,7 @@ describe("repository workspace result ownership", () => {
         const pausedCandidates = await candidates();
         expect(pausedCandidates).toHaveLength(boundary === "publication-metadata" ? 1 : 0);
         if (boundary === "publication-metadata") {
-          const raw = await readStagedWorkerWorkspaceResult(artifactRoot, pausedCandidates[0]!);
+          const raw = await loadStagedWorkspaceManifest(artifactRoot, pausedCandidates[0]!);
           expect(raw.current.baseCommit).toBe(before.baseCommit);
           expect(raw.changedEntries.map((entry) => entry.path)).toContain("editor.txt");
         }
@@ -597,8 +597,9 @@ describe("repository workspace result ownership", () => {
     expect(await fs.readFile(path.join(f.remote, "publish.txt"), "utf8")).toBe(
       "later unselected edit\n",
     );
-    await placements.acceptWorkspaceResult(owned.turnClaim);
-    await placements.completeWorkspaceResultAndReleaseTurn(owned.turnClaim);
+    await f.finishTurn(owned);
+    expect(capture).toHaveBeenCalledTimes(1);
+    await f.expectSettled();
   });
 
   it("recovers unknown editor writes through pending result custody", async () => {

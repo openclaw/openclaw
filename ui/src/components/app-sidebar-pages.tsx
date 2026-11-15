@@ -8,12 +8,10 @@ import {
   titleForRoute,
   type SidebarZoneEntry,
 } from "../app-navigation.ts";
-import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { renderAppSidebarPluginTab, type AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 import { McpAppCatalog } from "./mcp-app-catalog.tsx";
-import { SidebarCollapseToggle } from "./sidebar-collapse-toggle.tsx";
 import { restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
 import { Icon } from "./solid/icon.tsx";
 
@@ -61,10 +59,6 @@ export function SidebarPages(props: { host: AppSidebarRenderHost }): JSX.Element
       onDragOver={(event) => props.host.sessionOrganizer.handleSessionListDragOver(event)}
       onDrop={(event) => props.host.sessionOrganizer.handleSessionListDrop(event)}
     >
-      <div class="sidebar-pages__heading sidebar-panel-header" onMouseDown={beginNativeWindowDrag}>
-        <span>{t("nav.pages")}</span>
-        <SidebarCollapseToggle onToggle={() => props.host.onToggleSidebar?.()} />
-      </div>
       <McpAppCatalog surface="sidebar" />
       <For each={entries()}>
         {(key) => {

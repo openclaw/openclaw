@@ -13,6 +13,7 @@ import {
   parseUpdateCompatibilityInventory,
   recordUpdateCompatibilityRelease,
   readUpdateCompatibilityInventory,
+  writeUpdateCompatibilityChunks,
   type UpdateCompatibilityInventory,
 } from "./lib/update-compat-chunks.mts";
 import { supportsUpdateSchemas } from "./lib/update-compat-contract.mjs";
@@ -224,11 +225,25 @@ async function runUpdateCompatibilityInventory(
     }
   } else if (values.check) {
     inventory = readUpdateCompatibilityInventory(output);
-    checkRegistryCoverage(inventory, values.output);
   } else {
     throw new Error(
       "Usage: pnpm update:compat:gen (--release <unpacked-dir>=<npm-dist.integrity> | --registry-release <version>) [...] [--output <file>] or pnpm update:compat:check",
     );
+  }
+  if (values.check) {
+    const distDir = path.resolve("dist");
+    if (!fs.existsSync(distDir) || !fs.statSync(distDir).isDirectory()) {
+      throw new Error("Run pnpm build before checking update compatibility: dist is missing");
+    }
+    writeUpdateCompatibilityChunks({
+      distDir,
+      sourceDir: process.cwd(),
+      inventory,
+      dryRun: true,
+    });
+    if (!values.release?.length && !values["registry-release"]?.length) {
+      checkRegistryCoverage(inventory, values.output);
+    }
   }
   console.log(
     `${values.check ? "Verified" : "Recorded"} update compatibility inventory: ${inventory.releases.map((release) => `${release.version} (${release.chunks.length} chunks)`).join(", ")}`,

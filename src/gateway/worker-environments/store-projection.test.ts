@@ -36,6 +36,7 @@ const environment: WorkerEnvironmentRecord = {
   },
   provisionOperationId: "provision",
   resourceReceipt: null,
+  retention: null,
   nodeSetupId: "setup",
   nodeDeviceId: "node",
   sharedHost: false,

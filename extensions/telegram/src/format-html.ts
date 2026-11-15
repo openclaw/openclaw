@@ -12,6 +12,11 @@ export function escapeTelegramHtmlAttr(text: string): string {
   return escapeTelegramHtml(text).replace(/"/g, "&quot;");
 }
 
+// `<tg-time>` attributes: positive Unix time and optional Bot API date-time format.
+// Shared so legacy HTML and rich date_time nodes use one attribute contract.
+export const TELEGRAM_TIME_TAG_ATTRS_PATTERN =
+  /^\s+unix="([1-9]\d*)"(?:\s+format="(r|w?[dD]?[tT]?)")?\s*$/;
+
 const TELEGRAM_HTML_ENTITY_PATTERN = /&(#(?:[xX][0-9A-Fa-f]+|\d+)|[A-Za-z0-9]+);/g;
 const TELEGRAM_HTML_ENTITY_AT = new RegExp(TELEGRAM_HTML_ENTITY_PATTERN.source, "y");
 
@@ -31,6 +36,12 @@ export const TELEGRAM_HTML_BLOCK_ISLAND_TAGS: readonly string[] = [
   "details",
   "figure",
   "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
   "hr",
   "img",
   "ol",
@@ -52,12 +63,6 @@ const TELEGRAM_LINE_BREAK_STRUCTURAL_TAGS = new Set([
   "col",
   "colgroup",
   "figcaption",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
   "li",
   "summary",
   "tbody",

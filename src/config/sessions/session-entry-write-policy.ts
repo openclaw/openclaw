@@ -103,6 +103,17 @@ export function applySessionEntryWritePolicy(
     const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
     normalizedEntry = forkEntry;
   }
+  // Authenticated sources belong to this logical node's people, not its transcript generation.
+  // Writers that omit the private field keep the committed sources; a fork starts without them.
+  const operatorSources = Object.hasOwn(normalizedEntry, "operatorSources")
+    ? normalizedEntry.operatorSources
+    : canonicalPreviousEntry?.operatorSources;
+  if (operatorSources && (canonicalPreviousEntry || options.allowStoredAliases)) {
+    normalizedEntry = { ...normalizedEntry, operatorSources };
+  } else if (Object.hasOwn(normalizedEntry, "operatorSources")) {
+    const { operatorSources: _forkSources, ...entryWithoutSources } = normalizedEntry;
+    normalizedEntry = entryWithoutSources;
+  }
   const previousEntry =
     options.previousEntry === undefined
       ? canonicalPreviousEntry

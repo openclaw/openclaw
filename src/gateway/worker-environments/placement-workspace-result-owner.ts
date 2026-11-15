@@ -1,5 +1,6 @@
 import type { DB as StateDatabase } from "../../state/openclaw-state-db.generated.js";
 import { requireRepositoryWorkspaceDiskAuthority } from "../../state/session-repository-workspaces.authority.js";
+import type { WorkerPlacementMoveIntent } from "./placement-move-intent.types.js";
 import {
   isCurrentPlacementTurnClaim,
   placementTurnOwner,
@@ -45,6 +46,29 @@ export function isCurrentWorkerWorkspacePendingResultOwner(
     });
   }
   return matchesWorkspaceResultGeneration(placement, pending.placementGeneration);
+}
+
+/** A Move may refresh only to export its original accepted disk, never to launch work. */
+export function isRepositoryDiskGatewayMoveResult(
+  placement: WorkerSessionPlacementRecord | undefined,
+  pending: WorkerWorkspacePendingResult | undefined,
+  move: WorkerPlacementMoveIntent | undefined,
+): boolean {
+  return Boolean(
+    placement?.state === "draining" &&
+    pending?.repositoryWorkspaceId &&
+    pending.repositoryDiskAuthority?.environmentId === placement.environmentId &&
+    pending.placementGeneration === placement.generation &&
+    pending.claimId === pending.runId &&
+    pending.claimId.startsWith("reclaim-") &&
+    isCurrentWorkerWorkspacePendingResultOwner(placement, pending) &&
+    move?.sessionId === placement.sessionId &&
+    move.target.kind === "gateway" &&
+    !move.abandonSource &&
+    move.source.environmentId === placement.environmentId &&
+    move.source.ownerEpoch === placement.activeOwnerEpoch &&
+    move.source.generation + 1 === placement.generation,
+  );
 }
 
 export function isWorkerWorkspaceResultReconciling(

@@ -1,7 +1,5 @@
 // Matrix tests cover outbound preparation reuse before provider delivery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PluginRuntime } from "../../runtime-api.js";
-import { setMatrixRuntime } from "../runtime.js";
 import type { MatrixClient } from "./sdk.js";
 
 const bodyProjection = vi.hoisted(() => ({ count: 0 }));
@@ -19,21 +17,9 @@ vi.mock("./format.js", async () => {
 
 import { sendMessageMatrix } from "./send.js";
 
-const runtimeStub = {
-  channel: {
-    text: {
-      chunkMarkdownTextWithMode: (text: string) => [text],
-      resolveChunkMode: () => "length",
-      resolveMarkdownTableMode: () => "code",
-      resolveTextChunkLimit: () => 4000,
-    },
-  },
-} as unknown as PluginRuntime;
-
 describe("sendMessageMatrix preparation performance", () => {
   beforeEach(() => {
     bodyProjection.count = 0;
-    setMatrixRuntime(runtimeStub);
   });
 
   it("projects a single-event body once before provider delivery", async () => {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { createApiKeyCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveConfigForRead } from "../../config/io.read-helpers.js";
 import { setConfigResolutionFacts } from "../../config/resolution-facts.js";

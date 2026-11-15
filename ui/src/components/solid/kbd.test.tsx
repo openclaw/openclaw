@@ -9,7 +9,8 @@ afterEach(cleanup);
 describe("Solid keyboard hints", () => {
   it.each([
     [KEYBOARD_SHORTCUT_COMBOS.browserPanel, true, false, ["⌘⌥⇧U"], 3],
-    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["Ctrl+Alt+Shift+U"], 0],
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, false, ["CtrlAlt⇧U"], 1],
+    [KEYBOARD_SHORTCUT_COMBOS.browserPanel, false, true, ["Ctrl", "Alt", "⇧", "U"], 1],
     [KEYBOARD_SHORTCUT_COMBOS.newline, true, true, ["⇧", "⏎"], 2],
   ] as const)(
     "renders platform key labels and accessible symbols",

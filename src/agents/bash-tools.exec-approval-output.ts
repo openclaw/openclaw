@@ -4,7 +4,8 @@ import {
   formatExecAutoReviewAssessment,
   type ExecAutoReviewDecision,
 } from "../infra/exec-auto-review.js";
-import type { ExecHostCommandParams, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
+import type { ExecHostCommandParams } from "./bash-tools.exec-types.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS } from "./tool-result-limits.js";

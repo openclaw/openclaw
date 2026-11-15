@@ -1,9 +1,15 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import {
   createProviderBrowserAuthSession,
   handleProviderOAuthCallback,
@@ -27,6 +33,7 @@ afterEach(() => {
   closeSession?.();
   clearOrigin();
   resetGatewayWorkAdmission();
+  clearRuntimeConfigSnapshot();
 });
 
 const authorization = {
@@ -190,3 +197,84 @@ it("requires the initiating browser cookie without consuming another browser's c
   await expect(result).resolves.toMatchObject({ code: "valid" });
   expect(callback("state=login-state&code=valid").res.statusCode).toBe(410);
 });
+
+const proxyOrigin = "https://control.example.com";
+const proxyBrowser = { origin: proxyOrigin, requestHost: "gateway.internal:18789" };
+const proxyConfig: OpenClawConfig = {
+  gateway: {
+    publicOrigin: proxyOrigin,
+    trustedProxies: ["127.0.0.1"],
+    auth: { mode: "trusted-proxy", trustedProxy: { userHeader: "x-forwarded-user" } },
+  },
+};
+const proxyPrincipal = {
+  role: "operator",
+  authMethod: "trusted-proxy" as const,
+  verifiedIdentity: "operator@example.com",
+  browserOrigin: proxyBrowser,
+};
+
+it.each([
+  [proxyOrigin, undefined],
+  [proxyOrigin + ":443", undefined],
+  [proxyOrigin + "/", undefined],
+  [proxyOrigin, "publicOrigin"],
+  [proxyOrigin, "proxy-policy"],
+] as const)(
+  "binds a trusted-proxy callback to current public-origin authority (%s, %s)",
+  async (publicOrigin, change) => {
+    const config = { gateway: { ...proxyConfig.gateway, publicOrigin } };
+    setRuntimeConfigSnapshot(config);
+    const opened = createDeferredCore<string>();
+    const session = createSession({
+      browserOrigin: proxyBrowser,
+      authPolicy: captureGatewayAuthPolicy(config, proxyPrincipal),
+      openUrl: async (url) => opened.resolve(url),
+    });
+    expect(session.available).toBe(true);
+    const result = session.authorize(authorization);
+    const url = new URL(await opened.promise);
+    expect(url.searchParams.get("callback_url")).toBe(
+      proxyOrigin + PROVIDER_OAUTH_CALLBACK_PATH + "?state=login-state",
+    );
+    if (change) {
+      setRuntimeConfigSnapshot({
+        gateway: {
+          ...proxyConfig.gateway,
+          ...(change === "publicOrigin"
+            ? { publicOrigin: "https://replacement.example" }
+            : { trustedProxies: [] }),
+          controlUi: { allowedOrigins: [proxyOrigin] },
+        },
+      });
+      const rejected = expect(result).rejects.toThrow("expired");
+      expect(callback("state=login-state&code=stale").res.statusCode).toBe(410);
+      await rejected;
+    } else {
+      expect(callback("state=login-state&code=valid").res.statusCode).toBe(200);
+      await expect(result).resolves.toEqual({ code: "valid", state: "login-state" });
+    }
+  },
+);
+
+it.each([
+  [undefined, proxyOrigin],
+  ["token", proxyOrigin],
+  ["trusted-proxy", "https://different.example"],
+] as const)(
+  "requires trusted-proxy authentication and the exact public origin (%s, %s)",
+  (authMethod, publicOrigin) => {
+    const config = {
+      gateway: {
+        ...proxyConfig.gateway,
+        publicOrigin,
+        controlUi: { allowedOrigins: [proxyOrigin] },
+      },
+    };
+    setRuntimeConfigSnapshot(config);
+    const authPolicy = authMethod
+      ? captureGatewayAuthPolicy(config, { ...proxyPrincipal, authMethod })
+      : undefined;
+    expect(resolveBrowserAuthOrigin(proxyBrowser, { authPolicy })).toBeUndefined();
+  },
+);

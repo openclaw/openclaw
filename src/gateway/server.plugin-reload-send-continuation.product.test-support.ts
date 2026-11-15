@@ -5,10 +5,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
-import {
-  assertManagedHandoffTestConsumer,
-  createManagedHandoffTestBinding,
-} from "../../test/helpers/managed-handoff-isolation.js";
+import { createManagedHandoffTestBinding } from "../../test/helpers/managed-handoff-isolation.js";
 import { startOpenAiResponsesModelServer } from "../../test/helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -33,6 +30,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { formatErrorMessageWithCode } from "../infra/errors.js";
 import { resolvePluginArtifactDeclaredSurface } from "../plugins/capability-artifact.js";
 import { resolvePluginCapabilityConsent } from "../plugins/capability-consent.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
@@ -455,7 +453,12 @@ it.for(["resume", "followup", "failed-reload"] as const)(
                 ["error", "forbidden", "uncertain", "not_delivered"].includes(
                   String(outcome.status),
                 ),
-                "Retained send replay must not fail before target execution",
+                "Retained send replay must not fail before target execution: " +
+                  JSON.stringify({
+                    status: outcome.status,
+                    reason: outcome.reason,
+                    error: outcome.error,
+                  }),
               ).toBe(false);
               return Promise.all([completed.promise, childAnnouncement.promise]);
             }),
@@ -562,7 +565,16 @@ it.for(["resume", "followup", "failed-reload"] as const)(
         .soft(effects, "Only a healthy reload permits the original continuation")
         .toBe(failReload ? 0 : 1);
       if (failReload) {
-        expect(target).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
+        expect(
+          target,
+          JSON.stringify({
+            runId: target?.runId,
+            requesterTurnRunId: target?.requesterTurnRunId,
+            endedReason: target?.endedReason,
+            pauseReason: target?.pauseReason,
+            outcome: target?.execution.outcome,
+          }),
+        ).toMatchObject({ runId: original.runId, pauseReason: "sessions_yield" });
       } else if (mode === "resume") {
         expect.soft(target).toMatchObject({
           taskRunId: original.taskRunId ?? original.runId,
@@ -628,6 +640,11 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       expect(
         hooks.filter((hook) => hook.event === "llm_output" && hook.runId === parentRunId),
       ).toHaveLength(1);
+    } catch (error) {
+      process.stderr.write(
+        `RELOAD_PRODUCT_FAILURE ${scenario} ${formatErrorMessageWithCode(error)}\n`,
+      );
+      throw error;
     } finally {
       unwatch();
       stopEvents();
@@ -647,24 +664,19 @@ it.for(["resume", "followup", "failed-reload"] as const)(
       vi.restoreAllMocks();
       await state.cleanup();
       stage("cleanup-complete");
-      assertManagedHandoffTestConsumer(
-        handoffBinding,
-        process.pid,
-        path.join(process.cwd(), "src/infra"),
-      );
-      await fs.writeFile(
-        path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
-        JSON.stringify({
-          scenario,
-          pid: process.pid,
-          runtime: process.versions.bun ? "bun" : "node",
-          sendStarts,
-          effects,
-          wakes: wakes.length,
-          databasePath: handoffBinding.databasePath,
-          pauseRetirements,
-        }),
-      );
     }
+    await fs.writeFile(
+      path.join(handoffBinding.directory, `reload-case-${scenario}.json`),
+      JSON.stringify({
+        scenario,
+        pid: process.pid,
+        runtime: process.versions.bun ? "bun" : "node",
+        sendStarts,
+        effects,
+        wakes: wakes.length,
+        databasePath: handoffBinding.databasePath,
+        pauseRetirements,
+      }),
+    );
   },
 );

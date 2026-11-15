@@ -29,6 +29,7 @@ Preconditions:
   E2E_TELEGRAM_PROVIDER_API=openai-responses \
   E2E_TELEGRAM_CONFIG_PATCH='{"streaming":{"mode":"progress","progress":{"commentary":true}}}' \
   node "$TELEGRAM_E2E_SKILL_DIR/scripts/run-mock-sut-user-e2e.mjs" \
+    --gateway-port "$TELEGRAM_GATEWAY_PORT" --mock-port "$TELEGRAM_MOCK_PORT" \
     --dm --timeout-ms 30000 \
     --text 'Run the OPENCLAW_E2E_DRAFTPROOF scenario.' \
     --record "$TELEGRAM_E2E_PROOF_DIR/delivery-lifecycle/events.ndjson" \

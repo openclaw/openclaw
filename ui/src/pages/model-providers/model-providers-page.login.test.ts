@@ -281,7 +281,7 @@ describe("Models provider login", () => {
             { timeout: 3000 },
           );
           expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-            "Example browser sign-in is connected",
+            "Example browser sign-in is ready",
           );
           expect(session?.getStatus()).toBe("done");
           expect(page.renderRoot.textContent).toContain(
@@ -397,7 +397,7 @@ describe("Models provider login", () => {
     expect(dismissal.defaultPrevented).toBe(true);
     cancel.resolve({ status: "running" });
     await waitForSolid(() =>
-      expect(page.renderRoot.textContent).toContain("Credentials are being saved."),
+      expect(page.renderRoot.textContent).toContain("Your account is being saved."),
     );
     expect(page.querySelector("openclaw-modal-dialog")).not.toBeNull();
     expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
@@ -411,7 +411,7 @@ describe("Models provider login", () => {
       expect(page.querySelector('[data-provider-id="example"]')).not.toBeNull(),
     );
     expect(page.querySelector(".model-setup-wizard")?.textContent).toContain(
-      "Example API key is connected",
+      "Example API key is ready",
     );
     expect(context.navigate).not.toHaveBeenCalled();
     expect(runtimeConfig.patch).not.toHaveBeenCalled();
@@ -666,11 +666,12 @@ describe("Models provider login", () => {
     await searchProviders(page, "");
     expect(providerChoices(page)).toEqual(["alpha", "example", "quick-key-only", "zebra"]);
     await selectProvider(page, "quick-key-only");
-    expect(page.querySelector("[data-models-login-choice] button")).toBeNull();
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-api-key]"));
-    page.querySelector<HTMLButtonElement>("[data-models-login-back]")!.click();
+    // One way in and nothing saved: the key form opens without a method step.
+    expect(page.querySelector("[data-models-login-choice]")).toBeNull();
+    expect(page.querySelector("[data-models-key-dialog]")).not.toBeNull();
+    page.querySelector<HTMLButtonElement>("[data-models-key-dialog] .oc-dialog__close")!.click();
     await page.updateComplete;
-    expect(document.activeElement).toBe(page.querySelector("[data-models-login-search]"));
+    await openPicker(page);
     await selectProvider(page, "zebra");
     expect(document.activeElement).toBe(page.querySelector("[data-models-login-choice] button"));
     await startSelectedLogin(page, "Device sign-in");
@@ -753,7 +754,7 @@ describe("Models provider login", () => {
     addAccount!.click();
     await page.updateComplete;
     expect(page.querySelector("[data-models-login-search]")).toBeNull();
-    expect(page.querySelector(".model-provider-login__provider")?.textContent).toContain(
+    expect(page.querySelector(".model-provider-login .oc-dialog__title")?.textContent).toContain(
       "Example provider",
     );
     const dialog = page.querySelector("openclaw-modal-dialog")!;
@@ -768,7 +769,7 @@ describe("Models provider login", () => {
     ).toBe(true);
     expect(profiles[0]?.textContent).toContain("External CLI account");
     expect(profiles[1]?.textContent).toContain("Saved browser account");
-    expect(profiles[1]?.textContent).toContain("Credentials configured");
+    expect(profiles[1]?.textContent).toContain("Account added");
     expect(profiles[1]?.textContent).toContain(
       "Access-token expiry alone does not mean you need to sign in again.",
     );
@@ -905,7 +906,9 @@ describe("Models provider login", () => {
         view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
       ).toBe("Loading…"),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     expect(controller.busy).toBe(false);
     agentId = "reviewer";
     await controller.open();
@@ -948,7 +951,9 @@ describe("Models provider login", () => {
         "Inventory unavailable",
       ),
     );
-    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    view.container
+      .querySelector<HTMLButtonElement>(".model-provider-login .oc-dialog__close")!
+      .click();
     if (cached) {
       authStatus = ready;
     }

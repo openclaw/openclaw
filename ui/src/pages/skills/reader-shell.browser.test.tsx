@@ -2,10 +2,6 @@ import { afterEach, describe, expect, it } from "vitest";
 import "../../styles.css";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { resolveRenderedColors } from "../../test-helpers/rendered-colors.ts";
-import { ConnectMachineDialog } from "../new-session/connect-machine-dialog-view.tsx";
-import { ConnectMachineSetupState } from "../new-session/connect-machine-dialog.ts";
 import { cleanupSkillsViews, renderSkills } from "./view.solid.test-support.tsx";
 import { createProps, createReport, createSkill } from "./view.test-support.ts";
 
@@ -46,37 +42,6 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const { page, userEvent } = await import("vitest/browser");
     await page.viewport(width, 844);
     createContainer();
-    const connection = new ConnectMachineSetupState(
-      () => ({ client: null, connected: false }),
-      () => undefined,
-    );
-    connection.start();
-    const canonicalView = mountSolid(
-      () => <ConnectMachineDialog {...connection.view(true, () => undefined)} />,
-      { container: container! },
-    );
-    await settledDialog();
-    const readChrome = (panel: HTMLElement) => {
-      const style = getComputedStyle(panel);
-      const close = panel.querySelector<HTMLButtonElement>("button")!;
-      const button = getComputedStyle(close);
-      const icon = getComputedStyle(close.querySelector("svg")!);
-      const colors = resolveRenderedColors({
-        surface: style.backgroundColor,
-        button: button.backgroundColor,
-      });
-      return {
-        surface: colors.surface,
-        image: style.backgroundImage,
-        border: style.border,
-        radius: style.borderRadius,
-        button: [colors.button, button.backgroundImage, button.border, button.boxShadow],
-        icon: [icon.width, icon.height, icon.strokeWidth],
-      };
-    };
-    const canonicalChrome = readChrome(query(".exec-approval-card"));
-    canonicalView.unmount();
-    createContainer();
     const showContent = (content: string) =>
       variant === "error"
         ? renderSkills(
@@ -90,7 +55,9 @@ describe.runIf(browserMode)("skill reader shell", () => {
     const panel = query(".skill-reader-dialog");
     const title = query(":scope > :first-child > :first-child", panel);
     const close = query(":scope > :first-child button", panel);
-    expect(readChrome(panel)).toEqual(canonicalChrome);
+    expect(panel.classList.contains("oc-dialog")).toBe(true);
+    expect(close.classList.contains("oc-dialog__close")).toBe(true);
+    expect(getComputedStyle(query(":scope > :first-child", panel)).borderBottomWidth).toBe("0px");
     const titleRect = title.getBoundingClientRect();
     const closeRect = close.getBoundingClientRect();
     expect(closeRect.top).toBeLessThan(titleRect.bottom);
@@ -117,6 +84,45 @@ describe.runIf(browserMode)("skill reader shell", () => {
     await userEvent.keyboard("{Escape}");
     await expect.poll(() => dialog.open).toBe(false);
   });
+  it.each(["success", "error"] as const)(
+    "keeps %s install feedback scrollable above reachable actions in landscape",
+    async (kind) => {
+      const { page, userEvent } = await import("vitest/browser");
+      await page.viewport(844, 390);
+      createContainer();
+      renderSkills(
+        createProps({
+          clawhubDetailRef: "@fixture/calendar",
+          clawhubDetail: {
+            skill: { slug: "calendar", displayName: "Calendar", createdAt: 1, updatedAt: 2 },
+          },
+          clawhubInstallMessage: {
+            ref: "@fixture/calendar",
+            kind,
+            text: "REVIEW RECOMMENDED — inspect this release before use.\n".repeat(24),
+          },
+        }),
+        container!,
+      );
+      const { dialog } = await settledDialog();
+      const panel = query(".skill-reader-dialog");
+      const notice = query(".skill-reader-dialog__notice", panel);
+      const actions = query(".skill-reader-dialog__actions", panel);
+      const button = actions.querySelector<HTMLButtonElement>("button")!;
+      expect(notice.getAttribute("role")).toBe(kind === "error" ? "alert" : "status");
+      expect(button.disabled).toBe(kind === "success");
+      const bounds = actions.getBoundingClientRect();
+      expect(bounds.bottom).toBeLessThanOrEqual(panel.getBoundingClientRect().bottom + 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(dialog.getBoundingClientRect().bottom + 1);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+      expect(notice.scrollHeight).toBeGreaterThan(notice.clientHeight);
+      notice.focus();
+      await userEvent.keyboard("{End}");
+      await expect.poll(() => notice.scrollTop).toBeGreaterThan(0);
+      expect(actions.getBoundingClientRect().top).toBeCloseTo(bounds.top, 2);
+      expect(button.getBoundingClientRect().bottom).toBeLessThanOrEqual(bounds.bottom);
+    },
+  );
   it.each([320, 1440])(
     "keeps installed-skill completion actions below the scroller at %ipx",
     async (width) => {

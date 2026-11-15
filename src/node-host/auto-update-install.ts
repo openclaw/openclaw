@@ -14,10 +14,9 @@ import {
   packNpmSpecToArchive,
   resolveNpmSpecMetadata,
   withInstallWorkspace,
-  type NpmSpecResolution,
 } from "../infra/install-source-utils.js";
 import { resolveNpmIntegrityDriftWithDefaultMessage } from "../infra/npm-integrity.js";
-import { isExactSemverVersion } from "../infra/npm-registry-spec.js";
+import { isExactSemverVersion, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
 import { collectPackageDistContentInventoryErrors } from "../infra/package-dist-inventory.js";
 import { runGlobalPackageUpdateSteps } from "../infra/package-update-steps.js";
 import { lstatIfExists } from "../infra/path-existence.js";

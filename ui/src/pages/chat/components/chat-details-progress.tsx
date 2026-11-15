@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, Show } from "solid-js";
+import { createMemo, createUniqueId, onSettled, Show } from "solid-js";
 import {
   ProgressDetailsContent,
   ProgressDetailsRefresh,
@@ -14,9 +14,12 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { SwitchIndicator } from "../../../components/solid/switch.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { hasLoadedDetailsSubagents } from "../chat-spawned-subagent.ts";
 import { projectProgressCardRuntime } from "../chat-subagent-wait.ts";
+import type { ChatDetailsSnapshot } from "../session-details-snapshot-schema.ts";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -31,8 +34,48 @@ type Props = {
 
 /** The pane owns the durable card, lifetime and all actions. */
 export function ChatDetailsProgress(props: Props) {
+  const live = createMemo<ChatDetailsSnapshot["progress"]>(() => {
+    const details = props.props;
+    if (!details?.progressCard) {
+      return undefined;
+    }
+    const { progressCard: card, selectedSession: session } = details;
+    return {
+      revision: card.revision,
+      updatedAt: card.updatedAt,
+      sessionStatus: session?.status,
+      startedAt: session?.startedAt,
+      endedAt: session?.endedAt,
+      hasActiveRun: details.runActive,
+      runtime: projectProgressCardRuntime(session, details, card.updatedAt, details.connected),
+    };
+  });
+  const cached = () => {
+    const remembered = props.props?.cachedDetails?.progress;
+    return props.desktop &&
+      remembered?.revision === props.props?.progressCard?.revision &&
+      remembered?.updatedAt === props.props?.progressCard?.updatedAt
+      ? remembered
+      : undefined;
+  };
+  const liveReady = () =>
+    props.props?.connected &&
+    !props.props.progressCardInitialLoading &&
+    (hasLoadedDetailsSubagents(props.props) || props.props.subagentSessionsUnavailable);
+  const presentation = () => (!liveReady() && cached()) || live();
+  const receipt = createMemo(() => {
+    const progress = props.desktop && liveReady() ? live() : undefined;
+    const write = progress && props.props?.onDetailsSnapshot;
+    return progress && write ? { write, progress } : undefined;
+  });
   return (
     <openclaw-chat-details-progress>
+      <Show when={receipt()} keyed>
+        {(value) => {
+          onSettled(() => value.write({ progress: value.progress }));
+          return null;
+        }}
+      </Show>
       <Show
         when={props.props?.progressCard}
         fallback={
@@ -51,16 +94,11 @@ export function ChatDetailsProgress(props: Props) {
           desktopDetails={props.desktop}
           onDismiss={props.props?.onDismissProgressCard}
           onClearSaved={props.props?.onClearSavedProgressCard}
-          sessionStatus={props.props?.selectedSession?.status}
-          startedAt={props.props?.selectedSession?.startedAt}
-          endedAt={props.props?.selectedSession?.endedAt}
-          hasActiveRun={props.props?.runActive}
-          runtime={projectProgressCardRuntime(
-            props.props?.selectedSession,
-            props.props ?? {},
-            props.props!.progressCard!.updatedAt,
-            props.props?.connected,
-          )}
+          sessionStatus={presentation()?.sessionStatus}
+          startedAt={presentation()?.startedAt}
+          endedAt={presentation()?.endedAt}
+          hasActiveRun={presentation()?.hasActiveRun}
+          runtime={presentation()?.runtime}
           collapseComposerByDefault={props.props?.collapseTaskProgress}
           composerDisclosureContext={{
             presented: props.presented,
@@ -208,12 +246,9 @@ export function MobileTaskProgressControls(props: MobileTaskProgressProps) {
           class="oc-menu-item oc-menu-item--switch task-progress-details__show-in-chat"
         >
           <span class="oc-menu-item__label">{t("sessionProgressCard.showInChat")}</span>
-          <span
-            class="task-progress-details__switch"
-            data-checked={props.showTaskProgress ? "true" : "false"}
-            aria-hidden="true"
-            inert
-          />
+          <span class="task-progress-details__switch" inert>
+            <SwitchIndicator checked={props.showTaskProgress} size="sm" />
+          </span>
         </button>
       ),
     },

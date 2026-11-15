@@ -105,8 +105,11 @@ qualification accepted. A metadata retry starting is not qualification success.
 terminal (choosing the same producer or all-jobs mode for attempt-bound install-smoke
 payload consumers), while sibling children and the original parent may still run. It
 adopts active attempts without duplicating them and leaves green child
-workflows untouched. After the resulting child evidence is green and the
-original parent finishes, it reruns the parent once. The original Decision and
+workflows untouched. Each invocation reruns a child once; if that rerun fails
+again, it exits at once with the failed attempt and remaining rerun budget rather
+than waiting for siblings. A duplicate-job (ghost) attempt is unsealable: start
+a fresh all-group FRV instead of rerunning again. After the resulting child
+evidence is green and the original parent finishes, it reruns the parent once. The original Decision and
 Drain may disagree after an early retry; the final parent attempt restores the
 same immutable execution plan and seals the updated evidence. Existing plan
 and attempt-binding checks remain mandatory.
@@ -133,8 +136,12 @@ Changed source, tooling, dispatch identity, superseded jobs, missing evidence,
 and expired receipts remain errors, not reasons to trust stale evidence.
 
 A failed npm producer is a retry target, not a reason to reject continuation.
-The controller uses GitHub's failed-job rerun operation on the same run, then
-collects its result. Frozen workflows still execute their original code:
+When exactly one npm qualification job and its dependent **Seal artifact producer
+receipt** fail, the controller targets only the qualification job on the same run.
+GitHub reruns its dependent seal as well; the controller does not send a second
+request for the seal. Multiple independent failed npm jobs remain a recovery
+error rather than triggering a broader retry. The controller then collects the
+new attempt. Frozen workflows still execute their original code:
 upgrading the local controller does not retrofit receipt adoption into an older
 workflow. Final verification must pass before recovery is reported successful.
 

@@ -70,18 +70,25 @@ function stubXaiModels(...data: unknown[]) {
   return stubXaiFetch(() => Response.json({ data }));
 }
 
+type XaiTestAuthQuery = { credentialType?: "api_key" | "oauth" | "token" };
+
 function xaiToolContext(
   name: XaiBilledToolName,
   provider: string | undefined,
   enabled?: boolean,
   hasAuth = true,
+  credentialType: "api_key" | "oauth" = "api_key",
 ) {
+  const matches = (id: string, query?: XaiTestAuthQuery) =>
+    hasAuth &&
+    id === "xai" &&
+    (query?.credentialType === undefined || query.credentialType === credentialType);
   return {
     config: createXaiBilledToolConfig(name, enabled),
     activeModel: provider === undefined ? {} : { provider },
-    hasAuthForProvider: (id: string) => hasAuth && id === "xai",
-    resolveApiKeyForProvider: async (id: string) =>
-      hasAuth && id === "xai" ? "xai-test-key" : undefined,
+    hasAuthForProvider: (id: string, query?: XaiTestAuthQuery) => matches(id, query),
+    resolveApiKeyForProvider: async (id: string, query?: XaiTestAuthQuery) =>
+      matches(id, query) ? "xai-test-key" : undefined,
   };
 }
 
@@ -220,18 +227,22 @@ describe("xai provider plugin", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
-          ...chatModels.toReversed(),
-          "grok-4.20-multi-agent-0309",
-          "grok-imagine-image",
-          "grok-imagine-video",
-        ].map((id) => ({ id, object: "model" })),
+          ...chatModels
+            .toReversed()
+            .map((id) => ({ id, object: "model", capabilities: { chat: true } })),
+          { id: "grok-4.20-multi-agent-0309", object: "model", capabilities: { chat: true } },
+          { id: "grok-imagine-image", object: "model", modalities: { output: ["image"] } },
+          { id: "grok-imagine-video", object: "model", modalities: { output: ["video"] } },
+        ],
       }),
       finalUrl: "https://api.x.ai/v1/models",
       release,
     }));
 
     const provider = await buildLiveXaiProvider({ apiKey: "xai-key", fetchGuard });
-    expect(provider.models.map((model) => model.id)).toEqual(chatModels);
+    expect(
+      provider.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+    ).toEqual(chatModels);
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
     expect(new Headers(fetchParams?.init?.headers).get("Authorization")).toBe("Bearer xai-key");
@@ -472,6 +483,79 @@ describe("xai provider plugin", () => {
       });
 
       expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+      if (expected) {
+        const next = factory(xaiToolContext(toolName, "xai", true));
+        assert(tool && next && !Array.isArray(tool) && !Array.isArray(next));
+        expect(next.parameters).toBe(tool.parameters);
+        expect(next.execute).not.toBe(tool.execute);
+      }
+    });
+  });
+
+  describe("Grok OAuth subscription exposure", () => {
+    it.each([
+      ["x_search on a non-xAI model", "x_search", "anthropic", undefined, true],
+      ["x_search explicitly disabled", "x_search", "anthropic", false, false],
+      ["x_search without an active provider", "x_search", undefined, undefined, false],
+      [
+        "code_execution keeps cross-provider opt-in",
+        "code_execution",
+        "anthropic",
+        undefined,
+        false,
+      ],
+    ] as const)("%s", (_label, toolName, provider, enabled, expected) => {
+      const tool = billedToolFactory(toolName)(
+        xaiToolContext(toolName, provider, enabled, true, "oauth"),
+      );
+      expect(tool).toEqual(expected ? expect.objectContaining({ name: toolName }) : null);
+    });
+
+    function subscriptionContext(oauthToken: string | undefined) {
+      return {
+        config: createXaiBilledToolConfig("x_search"),
+        activeModel: { provider: "anthropic" },
+        hasAuthForProvider: (id: string, query?: XaiTestAuthQuery) =>
+          id === "xai" && (query?.credentialType !== "oauth" || oauthToken !== undefined),
+        resolveApiKeyForProvider: async (id: string, query?: XaiTestAuthQuery) =>
+          id !== "xai" ? undefined : query?.credentialType === "oauth" ? oauthToken : "xai-paid",
+      };
+    }
+
+    it("searches with the OAuth credential instead of a paid key on a non-xAI model", async () => {
+      const fetchMock = stubXaiFetch(() =>
+        Response.json({
+          output: [
+            { type: "message", content: [{ type: "output_text", text: "subscription result" }] },
+          ],
+          citations: ["https://x.com/openclaw/status/1"],
+        }),
+      );
+      const tool = billedToolFactory("x_search")(subscriptionContext("xai-oauth-token"));
+      assert(tool && !Array.isArray(tool), "Expected the subscription X search tool");
+
+      const result = await tool.execute("oauth-x-search", { query: "openclaw" });
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      const target = url instanceof Request ? url.url : url instanceof URL ? url.href : url;
+      expect(target).toBe("https://api.x.ai/v1/responses");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer xai-oauth-token");
+      expect(JSON.stringify(result)).toContain("subscription result");
+    });
+
+    it("never falls back to a paid key when the OAuth credential cannot resolve", async () => {
+      const fetchMock = stubXaiFetch(() => Response.json({}));
+      const context = subscriptionContext("xai-oauth-token");
+      const tool = billedToolFactory("x_search")(context);
+      assert(tool && !Array.isArray(tool), "Expected the subscription X search tool");
+      context.resolveApiKeyForProvider = async (id, query) =>
+        id === "xai" && query?.credentialType !== "oauth" ? "xai-paid" : undefined;
+
+      const result = await tool.execute("oauth-x-search-expired", { query: "openclaw" });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(JSON.stringify(result)).toContain("missing_xai_api_key");
     });
   });
 
@@ -531,7 +615,7 @@ describe("xai provider plugin", () => {
           Authorization: "Bearer oauth-token",
           Accept: "application/json",
           "x-grok-client-mode": "cli",
-          "x-grok-client-version": "1.0.4",
+          "x-grok-client-version": "1.0.13",
         });
         return makeResponse(status, payload);
       }),

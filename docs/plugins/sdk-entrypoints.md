@@ -339,9 +339,9 @@ path projection, context order, instruction carriers, and session/turn lifetimes
 Optional `projectPath` projects file paths after budgeting without changing their
 contents or personal-user provenance. It describes existing execution placement;
 it does not transfer or mount files.
-Full-context preparation preserves Codex's existing selection timing: projecting
-the root instruction path away from `workspaceDir` produces an empty root snapshot.
-Callers preparing source-workspace instructions should omit `projectPath`.
+Root instruction selection uses source paths before projection, preserving the
+bounded snapshot when a sandbox remaps the workspace. The selected document is
+excluded from project context without granting the agent source-file access.
 
 `buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
 renders that root instruction document from already-bounded context, including
@@ -353,6 +353,15 @@ current client does not implement per-turn developer instructions, persona and
 personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
+
+## Subagent progress references
+
+`formatSubagentProgressReference(id)` from
+`openclaw/plugin-sdk/agent-harness-runtime` returns a display-only four-character
+UUID suffix, or `undefined` when no UUID is available. Keep human labels and
+the original identity: short references can collide and must never be used
+for routing, authorization, deduplication, or lifecycle keys. Native harnesses
+should pass their actual worker/thread ID, not infer a session ID from a path.
 
 ## Tool failure diagnostics
 
@@ -403,7 +412,10 @@ To post a notice into a session's chat without sending it to the model, call
 `appendAssistantMirrorMessageByIdentity` with `text` and
 `deliveryMirror: { kind: "plugin-notice", pluginId, type, data }`. Every client
 shows the text. `data` is JSON that a client can use to render a richer row for a
-notice type it knows. The row is never replayed to the model.
+notice type it knows. The row is never replayed to the model. For a notice from
+background work that must skip a reset session or also reach the session's
+channel, use `api.runtime.system.postSessionNotice`; see
+[background session notices](/plugins/sdk-runtime#background-session-notices).
 
 For ordinary session preparation, await `getSessionEntryAsync`,
 `readSessionUpdatedAtAsync`, `getConversationSessionAsync`, or
@@ -434,6 +446,50 @@ When awaiting further preparation after `readSessionTranscriptCatalogPage`, its
 optional second argument captures an actor-currentness assertion. Call it at final
 serialization along with the caller's session/source checks. It does not grant
 access to the transcript or extend the session reader's lifetime.
+
+## Skill authoring
+
+`skill-authoring-runtime` is a private official-plugin runtime for plugins that
+keep learned skills in the per-agent folder their manifest names in
+`agentSkillsDir`. Skill loading already reads that folder; this subpath writes it.
+
+The host resolves the skills root from the calling plugin's own manifest. Calls take
+the target agent (`{ config, agentId }`) and a skill name, never a folder or path, so
+a plugin cannot name another plugin's skills. A plugin without `agentSkillsDir` gets
+`SkillAuthoringError` with code `no_skills_root`.
+
+- `resolveSkillsRoot({ config, agentId })` returns the calling plugin's folder for
+  one agent, for listing its skills.
+- `readSkillFile({ config, agentId, skillName, filePath })` and `listSkillFiles`
+  read with byte limits and refuse links.
+- `normalizeSkillFilePath(path)` accepts `SKILL.md` or a relative path below
+  `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.
+- `parseSkillFrontmatter` parses strictly; `splitSkillFrontmatter` returns the
+  frontmatter record and body and never throws.
+- `validateSkillFile({ skillName, filePath, content, maxSkillBytes })` checks
+  the support path, the `SKILL.md` frontmatter (`name` must match the folder,
+  `description` must be 1 to 1,024 bytes), the size limits, and the skill security
+  scan. It returns the description.
+- `writeSkillFile` and `removeSkillFile` validate, then change one file of one
+  skill. A skill name that is not one plain folder name, or a skill folder that a
+  link moves outside the root, is refused.
+- `commitSkillChange({ config, agentId, skillName, apply })` runs `apply`,
+  refreshes skill discovery, and dispatches one `skill_changed` hook with
+  `source: "plugin"`, the calling plugin's `pluginId`, and the before and after
+  artifacts. A failed `apply` dispatches nothing. Serialize overlapping changes to
+  one skill in the plugin.
+
+These calls must run inside a plugin call (a tool, hook, command, service, or
+`api.lifecycle.runInBackgroundContext` work). They carry the calling plugin's live
+authority from the host and check it after each awaited step and immediately before
+each file change and the `skill_changed` dispatch. When the plugin is disabled,
+replaced, or unloaded, they throw `PluginInstanceUnavailableError` and commit
+nothing.
+
+Refusals throw `SkillAuthoringError`. Its message says what to change, and its
+`code` (`invalid_path`, `path_escape`, `too_large`, `invalid_frontmatter`,
+`unsafe_content`, or `no_skills_root`) lets the plugin add its own guidance.
+Versioning, drafts, and naming rules stay with the plugin.
 
 ## Stateful CLI commands
 
@@ -468,10 +524,33 @@ database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
 
+## Prepared Decision HTTP runtime
+
+`openclaw/plugin-sdk/decisions-http-runtime` is the one HTTP executor for
+provider-owned JSON Decision protocols. Import it lazily.
+`evaluateDecisionHttp(context, route)` projects the host-prepared V2 context;
+`executeDecisionHttp(execution)` takes the same facts explicitly for other
+contracts. The provider supplies only its route: base URL, relative endpoint
+path, serialized body (omit it for a GET), and a decoder for the bounded JSON
+payload. Optional route fields cover real provider differences: `authHeaders`
+replaces the default `Authorization: Bearer` header, `statusReason` maps a
+documented provider status, and `maxResponseBytes` changes the 1 MiB read bound.
+
+The executor owns the deadline and timeout signal, one admission check when the
+request starts, guarded fetch with the trusted env-proxy mode, no redirects,
+status classification (401/403 authentication, 429 rate-limited with
+Retry-After, 400/413/422 unsupported input, otherwise transport), the bounded
+read, credential-reflection rejection, and release. Cancellation and thrown
+admission errors pass through. A decoder that throws returns an invalid
+response. It makes one request, never discovers credentials, and never retries.
+A provider with a queue wait or retry calls it again, which checks admission
+again. The provider owns request eligibility, native semantics, retention
+controls, and validation of decoded results.
+
 ## OpenAI-compatible Decisions runtime
 
 `openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
-Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+Decisions codec used by OpenAI, Celeris, Nace, and ClawRouter. Import it
 only from a lazy decision runtime, not a plugin's eager entrypoint.
 
 `evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
@@ -482,13 +561,6 @@ The helper uses the prepared credential, headers, proxy/TLS policy, abort signal
 deadline, and live admission assertion. It never discovers credentials or
 constructs conversation history. Consumers own endpoint eligibility and any
 account-specific route grant before calling it.
-
-`executeOpenAIDecision(batch, execution)` accepts those same prepared facts as
-explicit fields: provider, model ID, base URL, headers, auth, request overrides,
-signal, deadline, admission assertion, and optional reasoning. Use it when a
-provider has already projected its execution inputs. Pass the full prepared
-request overrides, including auth metadata used to reject credential reflection.
-The context-based helper remains supported and delegates to this executor.
 
 `supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
 question bounds, and automatic reasoning before transport/discovery. Malformed
@@ -519,5 +591,8 @@ This capability is host-local and is never a wire environment override.
 
 `process-runtime` exports `createBoundedLineFramer` for bounded LF-delimited byte
 streams. It preserves incomplete lines and leaves CR handling to the consumer.
+`stripGatewayAllocatorEnv` removes `MALLOC_CONF` and jemalloc `LD_PRELOAD`
+entries in place from a caller-owned child environment. Copy inherited values
+first; never pass `process.env`. Other preload libraries remain available.
 Node duplex calls may supply `assertCurrent` to compose caller-owned liveness with
 the runtime's existing dispatch and delivery authority.

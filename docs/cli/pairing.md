@@ -44,6 +44,9 @@ and `approve` uses the account belonging to the matching request. Explicitly emp
 or whitespace-only values, such as `--account ""`, are rejected with
 `--account must not be blank`.
 
+Input errors, such as a missing channel or unmatched code, print their reason and
+recovery guidance on stderr without debug mode. They still exit with status `1`.
+
 ## `pairing list`
 
 List pending pairing requests for one channel.

@@ -252,7 +252,7 @@ suite.define(() => {
         await gateway.waitForRequest("sessions.patch", { match: { key, thinkingLevel: "high" } });
         await page.keyboard.press("Escape");
         await model.click();
-        const contextWindow = pane.locator("[data-chat-context-window-toggle]");
+        const contextWindow = pane.locator(".chat-controls__context-trigger");
         await expect.poll(() => contextWindow.isVisible()).toBe(true);
         await expect.poll(() => contextWindow.isDisabled()).toBe(true);
         await page.keyboard.press("Escape");
@@ -271,7 +271,7 @@ suite.define(() => {
         const send = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(send).toMatchObject({ sessionKey: key, message: "Continue my work." });
         const runId = String(send.idempotencyKey);
-        const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
+        const stop = pane.getByRole("button", { name: "Stop", exact: true });
         await stop.waitFor();
         const researchListCount = (
           await gateway.getRequests("sessions.list", { agentId: "research" })

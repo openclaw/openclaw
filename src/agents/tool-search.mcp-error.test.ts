@@ -81,6 +81,18 @@ describe("Tool Search MCP failures", () => {
     expect(text).not.toContain(image.data);
   });
 
+  it("sends a wrapped MCP array to the model once, without indentation", async () => {
+    const items = [{ id: "C1", name: "#general" }];
+    const { callTool, target } = await createDeferredMcpCall({
+      content: [{ type: "text", text: JSON.stringify(items, null, 1) }],
+      structuredContent: { items },
+    });
+    const result = await callTool.execute("deferred-wrapped", { id: target.name, args: {} });
+    const text = JSON.stringify(result.content);
+    expect(text.match(/#general/g)).toHaveLength(1);
+    expect(text).not.toMatch(/\\n {2}/);
+  });
+
   it.each([
     { innerStatus: "timeout", outerStatus: "timed_out" },
     { innerStatus: "cancelled", outerStatus: "cancelled" },

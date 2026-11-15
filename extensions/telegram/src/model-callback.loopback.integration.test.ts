@@ -437,22 +437,20 @@ describe("Telegram model callback loopback", () => {
 
         await tapModel(bot, callbackData, mediaMessage, true);
 
-        // Clear stale buttons before sending the replacement confirmation.
+        // Retire the stale controls only after the replacement has been accepted.
         expect(requests.map(({ method }) => method)).toEqual([
           "answerCallbackQuery",
           "editMessageText",
+          "sendMessage",
           "deleteMessage",
           "editMessageReplyMarkup",
-          "sendMessage",
         ]);
-        expect(requests[3]?.payload).toMatchObject({
+        expect(requests[4]?.payload).toMatchObject({
           chat_id: CHAT_ID,
           message_id: 99,
           reply_markup: { inline_keyboard: [] },
         });
-        expect(requests.at(-1)?.payload.text).toContain(
-          `Model changed to <b>${PROVIDER}/${MODEL}</b>`,
-        );
+        expect(requests[2]?.payload.text).toContain(`Model changed to <b>${PROVIDER}/${MODEL}</b>`);
       },
     );
   });

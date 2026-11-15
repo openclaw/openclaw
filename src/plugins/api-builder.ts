@@ -84,6 +84,7 @@ export const pluginApiDefaultHandlers = {
   scheduleSessionTurn: async () => undefined,
   unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
   registerMemoryCapability: () => {},
+  registerLearnContribution: () => {},
   registerMemoryPromptSupplement: () => {},
   registerMemoryPromptPreparation: () => {},
   registerMemoryCorpusSupplement: () => {},

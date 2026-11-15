@@ -17,10 +17,15 @@ import {
 import { createControlUiE2eArtifactDir } from "../../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import { evaluateControlUiContext } from "../../ui/src/test-helpers/control-ui-e2e-context.ts";
 import { waitForControlUiGatewayReady } from "../../ui/src/test-helpers/control-ui-e2e-readiness.ts";
+import { qualifyDetailsSubagentsWarmState } from "../lib/control-ui-bench-warm-state.ts";
 import { installPaneChromeProbe } from "../lib/control-ui-pane-chrome-probe.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import { freeProofPort, startWarmReloadAdmission } from "./warm-reload-admission.ts";
-import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
+import {
+  installWarmReloadBrowserProbe,
+  proofRegions,
+  summarizeDetailsGeometry,
+} from "./warm-reload-browser-probe.ts";
 import { launchWarmReloadBrowser, calibrateWarmReloadPaintHolding } from "./warm-reload-browser.ts";
 import { prepareWarmReloadBuild, createWarmReloadComparison } from "./warm-reload-compare.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
@@ -36,12 +41,23 @@ const { values } = parseArgs({
     candidate: { type: "string" },
     admission: { type: "string", default: "signed-in" },
     reloads: { type: "string", default: "11" },
+    "prime-reloads": { type: "string" },
+    "visual-proofs": { type: "boolean", default: false },
     sessions: { type: "string", default: "3000" },
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     "transcript-late-paint": { type: "boolean", default: false },
+    "dashboard-end-anchor": { type: "boolean", default: false },
+    "dashboard-pane-chrome": { type: "boolean", default: false },
+    "plugin-activation": { type: "boolean", default: false },
+    "details-session-facts": { type: "boolean", default: false },
+    "details-subagent-activity": { type: "boolean", default: false },
+    "details-child-count": { type: "string", default: "3" },
+    "active-targets": { type: "boolean", default: false },
+    "composer-controls": { type: "boolean", default: false },
     "reload-after-navigation": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
+    "init-script": { type: "string", multiple: true, default: [] },
     route: { type: "string", default: "both" },
     "audit-report": { type: "string" },
     "paint-audit": { type: "string" },
@@ -52,9 +68,14 @@ if (values.help) {
   console.info(`Usage: node --import ./scripts/tsx.mjs scripts/perf/warm-reload-proof.ts
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --admission signed-in|token --base <dist|ref> --candidate <dist|ref>
-  --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
-  --transcript-late-paint --reload-after-navigation --cpu-profile
-Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
+  --reloads 11 --prime-reloads 1 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
+  --visual-proofs (opt in to geometry, screencast, backtracking and pixel census)
+  --transcript-late-paint --plugin-activation --active-targets --reload-after-navigation --cpu-profile
+  --details-subagent-activity --details-child-count 3..8 (active chat ordinary children; default 3)
+  --init-script <browser-script.js> (repeatable)
+Creates fresh isolated state and Chromium, records cold + warm timings, then stops both.
+Default: one unmeasured warm prime; --prime-reloads 0 measures the first warm return.
+--cpu-profile retains full visual attribution and defaults to no priming.
 Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
   process.exit(0);
@@ -85,9 +106,22 @@ function integer(raw: string, name: string, min: number, max: number) {
   return number;
 }
 const reloads = integer(values.reloads, "--reloads", 0, 100);
+const primeReloads = integer(
+  values["prime-reloads"] ?? (values["cpu-profile"] ? "0" : "1"),
+  "--prime-reloads",
+  0,
+  10,
+);
+const visualProofs = values["visual-proofs"] || values["cpu-profile"];
 const sessions = integer(values.sessions, "--sessions", 2000, 20000);
 const rttMs = integer(values["rtt-ms"], "--rtt-ms", 0, 1000);
 const captureMs = integer(values["capture-ms"], "--capture-ms", 1000, 60000);
+const detailsChildren = values["details-subagent-activity"]
+  ? integer(values["details-child-count"], "--details-child-count", 3, 8)
+  : 0;
+const extraInitScripts = await Promise.all(
+  values["init-script"].map((file) => readFile(file, "utf8")),
+);
 if (!["both", "chat", "dashboard"].includes(values.route)) {
   throw new Error("--route must be both, chat, or dashboard");
 }
@@ -110,7 +144,7 @@ const buildIdentity = {
 };
 const directory = createControlUiE2eArtifactDir("warm-reload", values.output);
 const stateDir = path.join(directory, "state");
-const viewport = { width: 1720, height: 1180 };
+const viewport = { width: 1720, height: values["dashboard-end-anchor"] ? 1515 : 1180 };
 const revision = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
 
 async function waitForGateway(url: string, child: ChildProcess) {
@@ -133,19 +167,52 @@ async function waitForGateway(url: string, child: ChildProcess) {
 }
 
 async function readProbe(page: Page) {
-  return await page.evaluate(() => {
+  const probe = await page.evaluate(() => {
     const data: NonNullable<ReturnType<typeof installWarmReloadBrowserProbe>> = Reflect.get(
       window,
       "__warmReloadProof",
     );
     data.stopped = true;
+    const rig: { loaf: unknown[]; mut: Map<string, unknown> } | undefined = Reflect.get(
+      window,
+      "__perf",
+    );
+    const detailsPlacement: unknown = Reflect.get(window, "__detailsPlacementReads");
+    const paneChrome: ReturnType<typeof installPaneChromeProbe> | undefined = Reflect.get(
+      window,
+      "__paneChrome",
+    );
     return {
       ...data,
-      paneChrome: Reflect.get(window, "__paneChrome").read(data.firstTranscriptDomMs),
+      rig: rig
+        ? {
+            loaf: rig.loaf,
+            mutations: [...rig.mut],
+            detailsPlacement,
+          }
+        : undefined,
+      paneChrome: paneChrome?.read(data.firstTranscriptDomMs),
+      marks: performance
+        .getEntriesByType("mark")
+        .map(({ name, startTime }) => ({ name, startTime })),
+      modules: performance
+        .getEntriesByType("resource")
+        .flatMap((entry) =>
+          entry instanceof PerformanceResourceTiming &&
+          /\/assets\/.*\.js(?:\?.*)?$/u.test(entry.name)
+            ? [{ url: entry.name, startedAtMs: entry.startTime, arrivedAtMs: entry.responseEnd }]
+            : [],
+        ),
       timeOrigin: performance.timeOrigin,
       capturedUntilMs: performance.now(),
     };
   });
+  return {
+    ...probe,
+    detailsGeometry: probe.paneChrome
+      ? summarizeDetailsGeometry(probe.paneChrome.detailsFrames)
+      : undefined,
+  };
 }
 async function regionBoxes(page: Page) {
   return await page.evaluate((selectors) => {
@@ -274,6 +341,16 @@ async function inspectWarmCache(page: Page, sessionKey: string, removeTarget = f
         }
         return {
           targetSnapshots: targetKeys.length,
+          targetComposerSnapshots: targetRecords.filter(
+            (record) =>
+              record !== null &&
+              typeof record === "object" &&
+              "snapshot" in record &&
+              record.snapshot !== null &&
+              typeof record.snapshot === "object" &&
+              "composer" in record.snapshot &&
+              record.snapshot.composer != null,
+          ).length,
           targetSnapshotBytes: targetRecords.reduce<number>(
             (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
             0,
@@ -306,6 +383,102 @@ type ShortVisit = {
   cache: Awaited<ReturnType<typeof inspectWarmCache>>;
   elapsedBeforeCaptureMs: number;
 };
+async function captureTimingReload(
+  page: Page,
+  cdp: CDPSession,
+  url: string,
+  outputDir: string,
+  warm: boolean,
+  route: string,
+  shortVisit?: ShortVisit,
+  warmReloadOrdinal?: number,
+) {
+  await mkdir(outputDir, { recursive: true });
+  const oldPage = warm
+    ? await page.evaluate(() => ({
+        path: location.pathname,
+        transcriptRows: document.querySelectorAll(".chat-virtual-row .chat-text").length,
+      }))
+    : null;
+  if (route === "chat" && oldPage && oldPage.transcriptRows === 0) {
+    throw new Error("Warm timing requires the real old transcript document");
+  }
+  const tree = await cdp.send("Page.getFrameTree");
+  type DocumentRequest = Parameters<Parameters<typeof cdp.on<"Network.requestWillBeSent">>[1]>[0];
+  const documents: Array<{ path: string; epochMs: number; monotonicMs: number; loaderId: string }> =
+    [];
+  const errors: string[] = [];
+  const onDocument = (event: DocumentRequest) => {
+    if (event.type === "Document" && event.frameId === tree.frameTree.frame.id) {
+      documents.push({
+        path: new URL(event.request.url).pathname,
+        epochMs: event.wallTime * 1000,
+        monotonicMs: event.timestamp * 1000,
+        loaderId: event.loaderId,
+      });
+    }
+  };
+  const onError = (error: Error) => errors.push(error.message);
+  cdp.on("Network.requestWillBeSent", onDocument);
+  page.on("pageerror", onError);
+  try {
+    if (warm) {
+      await page.reload({ waitUntil: "domcontentloaded" });
+    } else {
+      await page.goto(url, { waitUntil: "domcontentloaded" });
+    }
+    await page.waitForFunction((duration) => performance.now() >= duration, captureMs, {
+      timeout: captureMs + 60000,
+      polling: 250,
+    });
+    const probe = await readProbe(page);
+    if (
+      !probe.fcpMs ||
+      !probe.helloHandledMs ||
+      (warm && route === "chat" && !probe.firstPaintedRowsMs) ||
+      errors.length ||
+      (values.admission === "signed-in" && documents.length !== 1)
+    ) {
+      throw new Error(
+        `Incomplete timing capture: ${JSON.stringify({
+          fcpMs: probe.fcpMs,
+          helloHandledMs: probe.helloHandledMs,
+          firstPaintedRowsMs: probe.firstPaintedRowsMs,
+          documents: documents.length,
+          errors,
+        })}`,
+      );
+    }
+    const report = {
+      warm,
+      warmReloadOrdinal,
+      ...(shortVisit ? { shortVisit } : {}),
+      oldPage,
+      url: new URL(url).pathname,
+      probe,
+      documents,
+      errors,
+      paintMilestoneMethod:
+        "Navigation-relative Element Timing and Paint Timing; no geometry, backtracking, compositor or pixel proof",
+      outputDir,
+    };
+    await writeFile(path.join(outputDir, "reload.json"), JSON.stringify(report, null, 2));
+    console.info(
+      JSON.stringify({
+        reload: outputDir,
+        warmReloadOrdinal,
+        firstPaintedRowsMs: probe.firstPaintedRowsMs,
+        fcpMs: probe.fcpMs,
+        helloHandledMs: probe.helloHandledMs,
+      }),
+    );
+    return report;
+  } finally {
+    cdp.off("Network.requestWillBeSent", onDocument);
+    page.off("pageerror", onError);
+  }
+}
+
 async function captureReload(
   page: Page,
   cdp: CDPSession,
@@ -314,7 +487,20 @@ async function captureReload(
   warm: boolean,
   route: string,
   shortVisit?: ShortVisit,
+  warmReloadOrdinal?: number,
 ) {
+  if (!visualProofs) {
+    return await captureTimingReload(
+      page,
+      cdp,
+      url,
+      outputDir,
+      warm,
+      route,
+      shortVisit,
+      warmReloadOrdinal,
+    );
+  }
   await mkdir(outputDir, { recursive: true });
   const oldAnimationSample = warm
     ? await page.evaluate(() => {
@@ -469,12 +655,23 @@ async function captureReload(
     const finalDocumentTimeOrigin = probe.timeOrigin;
     const navigationOrigin = documents[0]?.epochMs ?? finalDocumentTimeOrigin;
     const documentOffsetMs = finalDocumentTimeOrigin - navigationOrigin;
+    for (const module of probe.modules) {
+      module.startedAtMs += documentOffsetMs;
+      module.arrivedAtMs += documentOffsetMs;
+    }
     for (const key of [
       "firstAppDomMs",
       "firstMainDomMs",
       "firstTranscriptDomMs",
       "firstDashboardContentDomMs",
+      "allBoardWidgetsVisibleMs",
+      "cachedBoardLayoutMs",
       "firstPaintedRowsMs",
+      "firstDetailsDomMs",
+      "firstDetailsPaintMs",
+      "bottomParagraphPaintMs",
+      "transcriptTextPaintMs",
+      "pluginsCompleteMs",
       "finalRowsDomMs",
       "helloPublishedMs",
       "helloHandledMs",
@@ -492,6 +689,11 @@ async function captureReload(
       ...probe.textStates,
       ...probe.animationSamples,
       ...probe.sidebarFrames,
+      ...probe.transcriptGeometry,
+      ...probe.pluginStates,
+      ...probe.pluginMarks,
+      ...probe.textPaints,
+      ...probe.contextRingFrames,
     ]) {
       entry.atMs += documentOffsetMs;
     }
@@ -583,8 +785,11 @@ async function captureReload(
         `Signed-in admission must yield one top-level document; saw ${documents.length}. Inspect ${outputDir}`,
       );
     }
+    const firstRing = probe.contextRingFrames[0]?.ring;
+    const finalRing = probe.contextRingFrames.at(-1)?.ring;
     const report = {
       warm,
+      warmReloadOrdinal,
       ...(shortVisit ? { shortVisit } : {}),
       oldPage: oldPage
         ? {
@@ -600,6 +805,16 @@ async function captureReload(
       firstAppCandidateFrameMs: candidateFrameAfter(probe.firstAppDomMs),
       firstMainCandidateFrameMs: candidateFrameAfter(probe.firstMainDomMs),
       firstDashboardCandidateFrameMs: candidateFrameAfter(probe.firstDashboardContentDomMs),
+      firstComposerCandidateFrameMs: candidateFrameAfter(probe.contextRingFrames[0]?.atMs ?? null),
+      firstComposerDomHasFinalRing: Boolean(
+        firstRing &&
+        finalRing &&
+        firstRing.width > 0 &&
+        firstRing.height > 0 &&
+        firstRing.opacity === "1" &&
+        firstRing.label === finalRing.label &&
+        firstRing.dashOffset === finalRing.dashOffset,
+      ),
       paintMilestoneMethod: "DOM-correlated candidates; first visible paint requires a pixel audit",
       regions,
       visual,
@@ -693,7 +908,9 @@ const results: Array<{
   route: "chat" | "dashboard";
   coldReset: unknown;
   warmCache: Awaited<ReturnType<typeof inspectWarmCache>> | null;
+  detailsSubagentsWarmState: Awaited<ReturnType<typeof qualifyDetailsSubagentsWarmState>>;
   runs: Array<Awaited<ReturnType<typeof captureReload>>>;
+  priming: Array<Awaited<ReturnType<typeof captureReload>>>;
 }> = [];
 try {
   const arms: Array<{
@@ -732,6 +949,13 @@ try {
     uiRoot: servedUiRoot,
     sessions,
     transcriptLatePaint: values["transcript-late-paint"],
+    dashboardEndAnchor: values["dashboard-end-anchor"],
+    dashboardPaneChrome: values["dashboard-pane-chrome"],
+    pluginActivation: values["plugin-activation"],
+    detailsSessionFacts: values["details-session-facts"],
+    detailsSubagentActivity: detailsChildren,
+    activeTargets: values["active-targets"],
+    composerControls: values["composer-controls"],
     ...(admission
       ? {
           admission: {
@@ -762,11 +986,9 @@ try {
     if (interrupted) {
       throw new Error("Proof interrupted");
     }
-    if (activeUiRoot === arm.build.uiRoot) {
-      return;
-    }
     // Configured custom roots deliberately do not retain asset bytes. Swap only
-    // this tool's copied root while browser pages are frozen; keep Gateway caches warm.
+    // this tool's copied root while browser pages are frozen. Prepare every sample
+    // equally, including A/A and consecutive reloads of the same arm.
     const stage = path.join(directory, "next-ui");
     await cp(arm.build.uiRoot, stage, { recursive: true });
     if (activeUiRoot) {
@@ -814,20 +1036,44 @@ try {
   browser = launched.browser;
   browserConfiguration = launched.configuration;
   if (admission) {
-    // Pause peer JavaScript without hiding the pages, which would clear their viewer declarations.
+    // Keep peers visible and running so their viewer declarations and socket heartbeats stay live.
     for (const peer of admission.peerSessions) {
-      for (const routePath of [fixture.chatPath, fixture.dashboardPath]) {
+      for (const [routePath, target] of [
+        [fixture.chatPath, fixture.fixtureSummary.targets[0]!],
+        [fixture.dashboardPath, fixture.fixtureSummary.targets[1]!],
+      ] as const) {
         const context = await browser.newContext({ viewport, colorScheme: "dark" });
         await context.addCookies([peer.cookie]);
         const page = await context.newPage();
         await page.goto(baseUrl);
         await waitForControlUiGatewayReady(page, 60000);
+        // A rendered header can precede the viewer declaration; wait for its ack.
+        const declared = page.waitForEvent("websocket").then(async (socket) => {
+          const { payload: declaration } = await socket.waitForEvent("framesent", {
+            predicate: ({ payload }) => {
+              const frame: { method?: string; params?: { sessionKeys?: string[] } } = JSON.parse(
+                payload.toString(),
+              );
+              return (
+                frame.method === "sessions.viewers.set" &&
+                frame.params?.sessionKeys?.includes(target.key) === true
+              );
+            },
+            timeout: 60000,
+          });
+          const request: { id: string } = JSON.parse(declaration.toString());
+          await socket.waitForEvent("framereceived", {
+            predicate: ({ payload }) => {
+              const frame: { id?: string; ok?: boolean } = JSON.parse(payload.toString());
+              return frame.id === request.id && frame.ok === true;
+            },
+            timeout: 60000,
+          });
+        });
         await page.goto(`${baseUrl}${routePath}`);
         await waitForControlUiGatewayReady(page, 60000);
+        await declared;
         await page.locator(".chat-pane__header").first().waitFor({ state: "visible" });
-        const cdp = await context.newCDPSession(page);
-        await cdp.send("Debugger.enable");
-        await cdp.send("Debugger.pause");
       }
     }
   }
@@ -869,8 +1115,11 @@ try {
           const page = await context.newPage();
           diagnosticPage = page;
           page.setDefaultTimeout(60000);
+          if (extraInitScripts.length) {
+            await page.addInitScript({ content: extraInitScripts.join("\n") });
+          }
           await page.addInitScript({
-            content: `globalThis.__name = (fn) => fn; const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome); (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]});`,
+            content: `globalThis.__name = (fn) => fn; ${visualProofs ? `const __paneChrome = (${installPaneChromeProbe.toString()})(); Reflect.set(window, "__paneChrome", __paneChrome);` : ""} (${installWarmReloadBrowserProbe.toString()})(${JSON.stringify(route)}, ${values["transcript-late-paint"]}, ${values["active-targets"] || values["composer-controls"]}, ${visualProofs});`,
           });
           const cdp = await context.newCDPSession(page);
           await cdp.send("Page.enable");
@@ -930,8 +1179,40 @@ try {
           });
           await cdp.send("Network.clearBrowserCache");
           await page.evaluate(
-            ({ viewerId, groups }) => {
+            ({ viewerId, groups, endAnchor, targetKey, anchorFixture }) => {
               const gatewayUrl = `ws://${location.host}`;
+              if (anchorFixture) {
+                localStorage.setItem(
+                  `openclaw.control.settings.v1:${gatewayUrl}`,
+                  JSON.stringify({ fontChat: "lora" }),
+                );
+              }
+              if (endAnchor) {
+                const key = `openclaw.control.settings.v1:${gatewayUrl}`;
+                const settings = JSON.parse(localStorage.getItem(key) ?? "{}");
+                settings.sidebarSessionLayouts = {
+                  [targetKey]: {
+                    columns: [
+                      {
+                        id: "side-panel-column",
+                        side: "right",
+                        panels: [
+                          { id: "dashboard", slot: "dashboard" },
+                          { id: "conversation", slot: "conversation" },
+                        ],
+                        activePanelId: "conversation",
+                        height: 360,
+                        width: 320,
+                      },
+                    ],
+                    mainPanelId: "dashboard",
+                    open: true,
+                    dock: "right",
+                    dashboardPresentationOverride: "split",
+                  },
+                };
+                localStorage.setItem(key, JSON.stringify(settings));
+              }
               localStorage.setItem("openclaw:sidebar:sessions:grouping", "category");
               localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
               localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
@@ -950,6 +1231,9 @@ try {
             },
             {
               viewerId: fixture.fixtureSummary.viewerId,
+              endAnchor: values["dashboard-end-anchor"] && route === "dashboard",
+              anchorFixture: values["dashboard-end-anchor"],
+              targetKey: fixture.fixtureSummary.targets[1]!.key,
               groups: Array.from(
                 { length: 97 },
                 (_, index) => `Synthetic group ${String(index + 1).padStart(2, "0")}`,
@@ -962,6 +1246,8 @@ try {
             route,
             coldReset,
             warmCache: null as Awaited<ReturnType<typeof inspectWarmCache>> | null,
+            detailsSubagentsWarmState: null,
+            priming: [],
             runs: [
               await captureReload(
                 page,
@@ -996,6 +1282,25 @@ try {
           ) {
             await details.first().click();
           }
+          if (values["composer-controls"]) {
+            const model = page.locator("[data-chat-model-select]:visible").first();
+            if ((await model.count()) > 0) {
+              // The catalog is demand-loaded: warm the controls through their real picker.
+              await model.click();
+              await page.waitForFunction(() => {
+                const modelText = document.querySelector("[data-chat-model-select]")?.textContent;
+                const effort = document.querySelector("[data-chat-thinking-select]")?.textContent;
+                return (
+                  modelText?.includes("Claude Haiku 5.5") &&
+                  modelText.includes("200K") &&
+                  effort?.includes("High")
+                );
+              });
+              await page.keyboard.press("Escape");
+            } else if (values["active-targets"]) {
+              throw new Error("Active composer fixture has no visible model control");
+            }
+          }
           // Let existing cache owners persist the fully loaded route before warm samples.
           await page.waitForFunction(
             () =>
@@ -1020,15 +1325,36 @@ try {
               .waitFor({ state: "visible" });
           }
           const target = fixture.fixtureSummary.targets[route === "chat" ? 0 : 1]!;
+          if (route === "chat" && fixture.fixtureSummary.ordinaryChildren.length > 0) {
+            const qualified = await page.waitForFunction(qualifyDetailsSubagentsWarmState, {
+              sessionKey: target.key,
+              rows: fixture.fixtureSummary.ordinaryChildren,
+            });
+            results.at(-1)!.detailsSubagentsWarmState = await qualified.jsonValue();
+            await qualified.dispose();
+          }
           const cache = await inspectWarmCache(page, target.key);
           results.at(-1)!.warmCache = cache;
           await writeFile(
             path.join(arm.directory, route, "warm-cache.json"),
-            JSON.stringify(cache, null, 2),
+            JSON.stringify(
+              { ...cache, detailsSubagentsWarmState: results.at(-1)!.detailsSubagentsWarmState },
+              null,
+              2,
+            ),
           );
           if (reloads > 0 && cache.targetSnapshots === 0) {
             throw new Error(
               "No owned transcript snapshot persisted for this route; warm proof would be invalid",
+            );
+          }
+          if (
+            values["composer-controls"] &&
+            values["active-targets"] &&
+            !cache.targetComposerSnapshots
+          ) {
+            throw new Error(
+              "Composer catalog did not persist; warm controls proof would be invalid",
             );
           }
           if (values.base) {
@@ -1043,9 +1369,12 @@ try {
           throw error;
         }
       }
-      for (let index = 1; index <= reloads; index++) {
-        // Alternate pair order so one arm does not always inherit the hotter server.
-        const order = index % 2 === 1 ? prepared : prepared.toReversed();
+      const warmCaptures = reloads > 0 ? primeReloads + reloads : 0;
+      for (let index = 1; index <= warmCaptures; index++) {
+        const priming = index <= primeReloads;
+        const measuredIndex = priming ? index : index - primeReloads;
+        // Priming does not shift the alternating order of measured pairs.
+        const order = measuredIndex % 2 === 1 ? prepared : prepared.toReversed();
         for (const item of order) {
           await activate(item.arm);
           if (values.base) {
@@ -1086,12 +1415,17 @@ try {
             item.page,
             item.cdp,
             `${baseUrl}${routePath}`,
-            path.join(item.arm.directory, route, `warm-${String(index).padStart(2, "0")}`),
+            path.join(
+              item.arm.directory,
+              route,
+              `${priming ? "prime" : "warm"}-${String(measuredIndex).padStart(2, "0")}`,
+            ),
             true,
             route,
             shortVisit,
+            index,
           );
-          item.result.runs.push(run);
+          (priming ? item.result.priming : item.result.runs).push(run);
           if (values.base) {
             await item.cdp.send("Page.setWebLifecycleState", { state: "frozen" });
           }
@@ -1106,6 +1440,16 @@ try {
   const report = {
     revision,
     profiled: values["cpu-profile"],
+    captureMode: visualProofs ? "visual" : "timing",
+    harness: {
+      geometrySampler: visualProofs,
+      screencast: visualProofs,
+      rpcCensus: visualProofs,
+      cpuProfiler: values["cpu-profile"],
+      externalInitScripts: extraInitScripts.length,
+      primingReloads: reloads > 0 ? primeReloads : 0,
+      firstMeasuredWarmOrdinal: reloads > 0 ? primeReloads + 1 : null,
+    },
     buildIdentity,
     dist,
     viewport,
@@ -1140,8 +1484,9 @@ try {
       chromium: browser.version(),
       quietBeforeCapture: quietHost,
     },
-    measurement:
-      "PNG compositor surfaces delivered by Chromium, not display-vsync completeness. Warm display timelines start with the observed old surface carried across navigation. DOM candidates are not paint measurements. Visible census groups only recognized stable-layout/content animation pixels; inspect raw and visible sheets. Compare mode isolates browser caches by arm, alternates AB/BA pairs, and uses the same built Gateway and durable state; The owned custom UI-root copy is swapped between arms outside navigation measurement; the Gateway process and its caches stay warm. CDP shaping is not calibrated per-RPC wire RTT.",
+    measurement: visualProofs
+      ? "PNG compositor surfaces delivered by Chromium, not display-vsync completeness. Warm display timelines start with the observed old surface carried across navigation. DOM candidates are not paint measurements. Visible census groups only recognized stable-layout/content animation pixels; inspect raw and visible sheets. Compare mode isolates browser caches by arm, alternates AB/BA pairs, and uses the same built Gateway and durable state; The owned custom UI-root copy is swapped between arms outside navigation measurement; the Gateway process and its caches stay warm. CDP shaping is not calibrated per-RPC wire RTT."
+      : "Navigation-relative Element Timing, Paint Timing and PerformanceObserver metrics from real old-page reloads. No geometry sampler, screencast, RPC census, backtracking or pixel proof. Explicit init scripts remain additional instrumentation; CDP shaping is not calibrated per-RPC wire RTT.",
     results,
   };
   await writeFile(path.join(directory, "report.json"), JSON.stringify(report, null, 2));

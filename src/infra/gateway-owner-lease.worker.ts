@@ -1,9 +1,9 @@
 import { sql } from "kysely";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
+import { stateEngineInput } from "../state/openclaw-state-db-engine-input.js";
 import {
   assertStateFileSnapshotAllowed,
-  stateEngineInput,
   stateEngineSchema,
 } from "../state/openclaw-state-db-engine.js";
 import { openTrackedStateDatabase } from "../state/openclaw-state-db-handle.js";

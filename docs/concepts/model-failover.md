@@ -39,6 +39,17 @@ errors. `Retry-After` and exhausted quota reset headers are honored by the provi
 error parser. A full-refill reset is not a minimum wait when the bucket still has
 tokens and the provider supplies a shorter retry hint.
 
+A timed 429 with a retry delay longer than one minute also uses this shared
+route/account gate, even without organization-TPM wording. When the remaining
+wait exceeds `retry.provider.maxRetryDelayMs`, later turns fail fast without
+sending another request to that route. The terminal notice names the limited
+model, gives the provider's reset time as a relative wait and an absolute date,
+and points to the model picker or `agents.defaults.model.fallbacks` in Settings.
+Dates use the configured UI locale and `agents.defaults.userTimezone` when
+available, otherwise the host's locale and timezone. Short or unknown waits
+retain the brief retry notice. These in-memory gates do not survive a Gateway
+restart; saved auth-profile cooldowns retain their existing persistence.
+
 During recovery, interactive turns take priority over subagents and background
 work such as reviews and titles. Queued requests resume one at a time with
 100–250 ms of jitter between admissions. The status reads **Waiting for rate
@@ -172,6 +183,8 @@ existing run deadline and cost limits still apply.
 Local session-coordination errors also stop fallback. For example, when prepared
 session capability metadata changes, OpenClaw surfaces that error without trying
 another model. Changing providers cannot repair stale session authority.
+The `model-fallback/decision` logger records `local_runtime_coordination` for
+these stops and `transcript_not_continuable` when the transcript cannot continue.
 
 Fallback requests reuse the original user turn and its attachments exactly once.
 Fresh plugin context for the fallback model is added separately, preserving the

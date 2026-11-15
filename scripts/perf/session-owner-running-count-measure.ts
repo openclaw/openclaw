@@ -156,6 +156,11 @@ if (!values.sample) {
     return {
       build: query.buildSubagentRunReadIndexFromRuns,
       project: filters.projectSessionOwnerRunningCounts,
+      priorProject: filters.projectSessionOwnerRunningCounts as unknown as (
+        params: SessionListFilterParams,
+        selection: SessionEntrySelection,
+        candidates: () => Iterable<string>,
+      ) => SessionEntrySelection,
     };
   }
   const source = await loadSource(values.repo);
@@ -187,17 +192,29 @@ if (!values.sample) {
       getTarget: (key) => rows.get(key),
       involvementKeys: () => new Set(),
     };
-    const candidateKeys = () =>
-      shape === "all"
-        ? rows.keys()
-        : new Set(
-            [...context.subagentRuns.requesterSessionKeys()].filter(
-              (key) => context.subagentRuns.countActiveDescendantRuns(key) > 0,
+    const candidateKeys = () => {
+      if (shape === "all") {
+        return rows.keys();
+      }
+      // Compare the former requester filter with the maintained owner fact.
+      const prior = context.subagentRuns as typeof index & {
+        requesterSessionKeys?: () => Iterable<string>;
+      };
+      return prior.requesterSessionKeys
+        ? new Set(
+            [...prior.requesterSessionKeys()].filter(
+              (key) => prior.countActiveDescendantRuns(key) > 0,
             ),
-          );
+          )
+        : context.subagentRuns.activeRequesterSessionKeys();
+    };
     return () => {
       context.subagentRuns = index.atTime(clock++);
-      return source.project(params, selection, candidateKeys).ownerSessionCounts!;
+      return (
+        "requesterSessionKeys" in context.subagentRuns
+          ? source.priorProject(params, selection, candidateKeys)
+          : source.project(params, selection)
+      ).ownerSessionCounts!;
     };
   }
   const inspector = new Session();

@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { quoteCliArg } from "../cli/quote-cli-arg.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../shared/update-outcome.js";
 import { hasErrnoCode, ignoreMissingPath, isErrno } from "./errno.js";
@@ -8,7 +9,8 @@ import { formatErrorMessage } from "./errors.js";
 import { parseNpmErrorCode } from "./npm-error.js";
 import { packageActivationIdentity } from "./package-update-activation-paths.js";
 import { resolvePackageUpdateLauncherNames } from "./package-update-filesystem.js";
-import { createUpdateFailureFact } from "./update-failure-facts.js";
+import { realpathOrResolve } from "./path-existence.js";
+import { createPackageUpdateErrorFacts, createUpdateFailureFact } from "./update-failure-facts.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   listActivePnpmIsolatedGlobalPackages,
@@ -20,10 +22,6 @@ import {
   readPackageManagerProbeValue,
 } from "./update-npm-prefix.js";
 import type { UpdateStepResult } from "./update-step-result.js";
-
-export async function resolveCanonicalPath(filePath: string): Promise<string> {
-  return path.resolve(await fs.realpath(filePath).catch(() => filePath));
-}
 
 export async function runPnpmPreflightProbe(params: {
   installTarget: ResolvedGlobalInstallTarget;
@@ -143,8 +141,7 @@ export async function validatePnpmIsolatedUpdate(params: {
   if (
     !reportedGlobalRoot ||
     !expectedGlobalRoot ||
-    (await resolveCanonicalPath(reportedGlobalRoot)) !==
-      (await resolveCanonicalPath(expectedGlobalRoot))
+    (await realpathOrResolve(reportedGlobalRoot)) !== (await realpathOrResolve(expectedGlobalRoot))
   ) {
     return {
       globalBinDir: null,
@@ -204,23 +201,25 @@ async function existingDirectory(target: string): Promise<string> {
 
 async function permissionFailure(
   step: UpdateStepResult,
-  directory: string,
+  directory: string | null,
   code: string,
   env?: NodeJS.ProcessEnv,
 ): Promise<UpdateStepResult> {
-  const stat = await fs.stat(directory).catch(() => null);
+  const stat = directory ? await fs.stat(directory).catch(() => null) : null;
   const owner =
     process.platform === "win32" || !stat
       ? "owner unavailable"
       : `owner UID ${stat.uid}${stat.uid === 0 ? " (root)" : ""}, GID ${stat.gid}`;
   const repair =
-    process.platform !== "win32" && stat && stat.uid === process.getuid?.()
+    process.platform !== "win32" && directory && stat && stat.uid === process.getuid?.()
       ? `Run \`chmod u+rwx ${quoteCliArg(directory)}\`, then rerun \`openclaw update\`.`
       : "Run the package update as the directory's owning account, keeping the Gateway's existing state/configuration; or ask that account to grant you write access, then rerun `openclaw update`.";
-  const message = `Package update cannot write ${directory} (${code}; ${owner}). ${repair}`;
+  const message = directory
+    ? `Package update cannot write ${directory} (${code}; ${owner}). ${repair}`
+    : `Package update permission denied (${code}); denied path is unknown or outside the install root. Inspect the original error before changing permissions.`;
   return {
     ...step,
-    stderrTail: message,
+    stderrTail: [message, step.stderrTail].filter(Boolean).join("\n"),
     failureFacts: [
       createUpdateFailureFact(
         { check: "package-install", code: UPDATE_GLOBAL_PERMISSION_REASON, message },
@@ -306,11 +305,21 @@ export async function checkGlobalPackageUpdateAdmission(
 
 /** Keep real install/staging errors actionable even when permissions change after admission. */
 export async function classifyPackageUpdatePermissionFailure(
-  step: UpdateStepResult,
+  inputStep: UpdateStepResult,
   target: ResolvedGlobalInstallTarget,
   env?: NodeJS.ProcessEnv,
   error?: unknown,
 ): Promise<UpdateStepResult> {
+  const step =
+    error !== undefined
+      ? {
+          ...inputStep,
+          failureFacts: [
+            ...createPackageUpdateErrorFacts(inputStep.name, error, env),
+            ...(inputStep.failureFacts ?? []),
+          ].slice(0, 5),
+        }
+      : inputStep;
   const text = step.stderrTail ?? "";
   const code = isErrno(error)
     ? error.code
@@ -319,17 +328,20 @@ export async function classifyPackageUpdatePermissionFailure(
     return step;
   }
   const reportedPath =
-    (isErrno(error) ? error.path : undefined) ??
+    (isRecord(error) ? (error.path ?? error.dest) : undefined) ??
     text.match(/(?:^|\n)npm (?:ERR!|error) path (.+)/u)?.[1] ??
     text.match(/(?:mkdir|mkdtemp|rename|unlink|open|scandir) '([^']+)'/u)?.[1];
-  const targetPath =
-    reportedPath && path.isAbsolute(reportedPath) ? reportedPath : target.globalRoot;
-  if (!targetPath) {
-    return step;
+  if (typeof reportedPath !== "string" || !path.isAbsolute(reportedPath) || !target.globalRoot) {
+    return await permissionFailure(step, null, code, env);
   }
+  const relative = path.relative(target.globalRoot, reportedPath);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    return await permissionFailure(step, null, code, env);
+  }
+  // Only a reported location inside the install root supports ownership repair advice.
   // Rename/unlink require the parent directory even when the package itself exists.
   const directory = await existingDirectory(
-    reportedPath && /\b(rename|unlink)\b/u.test(text) ? path.dirname(targetPath) : targetPath,
+    /\b(rename|unlink)\b/u.test(text) ? path.dirname(reportedPath) : reportedPath,
   );
   return await permissionFailure(step, directory, code, env);
 }

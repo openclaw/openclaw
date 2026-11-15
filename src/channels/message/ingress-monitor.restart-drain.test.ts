@@ -343,21 +343,30 @@ it.each(["pause", "stop"] as const)(
   },
 );
 
-it("propagates a rejected pump wrapper without spinning idle or stop waits", async () => {
+it.each(["sync", "async"] as const)("recovers after a %s pump wrapper rejection", async (mode) => {
   await withQueue(async (queue) => {
     const rejection = new Error("pump wrapper rejected");
+    let reject = true;
     const monitor = createMonitor(
       queue,
       async () => {},
       undefined,
-      async () => {
-        throw rejection;
+      (work) => {
+        if (!reject) {
+          return work();
+        }
+        if (mode === "sync") {
+          throw rejection;
+        }
+        return Promise.reject(rejection);
       },
     );
     monitor.start();
-
     await expect(monitor.waitForIdle()).rejects.toBe(rejection);
-    await expect(monitor.stop()).rejects.toBe(rejection);
+    reject = false;
+    monitor.requestDrain();
+    await expect(monitor.waitForIdle()).resolves.toBeUndefined();
+    await expect(monitor.stop()).resolves.toBeUndefined();
   });
 });
 

@@ -127,7 +127,7 @@ describe("tsdown config", () => {
         cacheKeyGenerator = generator;
       },
     });
-    const result = plugin.load.call(
+    const result = plugin.load.handler.call(
       { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
       modulePath,
     );
@@ -208,6 +208,7 @@ describe("tsdown config", () => {
   });
 
   it.each([
+    ["infra/device-identity", "src/infra/device-identity.ts"],
     [
       "config/sessions/session-transcript-reconcile",
       "src/config/sessions/session-transcript-reconcile.ts",

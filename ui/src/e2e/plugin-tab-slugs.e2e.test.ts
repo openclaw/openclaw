@@ -89,6 +89,8 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await openReports(page);
       await expectReports(page);
+      // A Gateway-advertised tab names the page by its label, not the generic "Plugin".
+      await expect.poll(() => page.title()).toBe("Reports — OpenClaw");
     });
   });
 

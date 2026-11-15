@@ -60,7 +60,7 @@ async function seededStore() {
   return store;
 }
 
-async function putSidebar(value: unknown, savedAt: number, projectionVersion = 3) {
+async function putSidebar(value: unknown, savedAt: number, projectionVersion = 7) {
   const database = await openSessionSnapshotDatabase();
   assert(database, "expected snapshot database");
   const transaction = database.transaction(SIDEBAR, "readwrite");
@@ -152,7 +152,7 @@ it("writes each changed presentation once across independent tab stores", async 
   expect(await read(peer)).toEqual(changed);
 });
 
-it.each([1, 2, 3])(
+it.each([1, 2, 3, 4, 5, 6])(
   "retires an incompatible sidebar version %i without evicting valid caches",
   async (projectionVersion) => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
@@ -291,12 +291,11 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
     ),
   );
   assert(removed && retained);
-  const saved = {
+  const parent = { ...retained, childLoadParentKeys: [removed.key], children: [removed] };
+  const saved: typeof sidebarSnapshot = {
     ...sidebarSnapshot,
-    pinnedSessions: [
-      removed,
-      { ...retained, childLoadParentKeys: [removed.key], children: [removed] },
-    ],
+    windowKeys: [removed.key, retained.key],
+    pinnedSessions: [removed, parent],
     pages: [removed, retained],
     entries: [`session:${removed.key}`, `session:${retained.key}`, "route:usage"],
   };
@@ -315,6 +314,7 @@ it("keeps the sidebar and unrelated chats when a deleted session is pruned from 
   expect(restored.pages.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions.map((row) => row.key)).toEqual([retained.key]);
   expect(restored.pinnedSessions[0]?.children).toEqual([]);
+  expect(restored.windowKeys).toEqual([retained.key]);
   expect(restored.entries).toEqual([`session:${retained.key}`, "route:usage"]);
   expect(await store.readSidebar(key(otherAccount), parseSidebarSnapshot)).toEqual(saved);
   expect(await store.read(`${accountPrefix}${retained.key}`)).toEqual(transcript);

@@ -21,14 +21,19 @@ import {
   markDiagnosticEmbeddedRunStarted,
   resetDiagnosticRunActivityForTest,
 } from "../../../logging/diagnostic-run-activity.js";
+import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controller.watchdog-state.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
+import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import {
   clearToolActivityRun,
   notifyToolActivity,
 } from "../../../shared/tool-activity-heartbeat.js";
+import { createAgentRunRestartAbortError } from "../../run-termination.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
+import { withEmbeddedAttemptToolActivity } from "./tool-activity-heartbeat.js";
 
 function openStream(
   baseFn: StreamFn,
@@ -291,17 +296,60 @@ describe("streamWithIdleTimeout", () => {
     const baseFn: StreamFn = vi.fn((_model, _context, options) => {
       const stream = createAssistantMessageEventStream();
       notifyLlmRequestActivity(options?.signal, false);
-      setTimeout(() => stream.push(textDelta("done")), 120);
+      setTimeout(() => stream.push(textDelta("done")), 90);
       return stream;
     });
     const stream = await openStream(baseFn, undefined, { runId: TEST_RUN });
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 
-    setTimeout(() => notifyToolActivity(TEST_RUN), 40);
-    setTimeout(() => notifyToolActivity(TEST_RUN), 80);
-    await expectDelta(next, 120, "done");
+    setTimeout(() => notifyToolActivity(TEST_RUN), 30);
+    setTimeout(() => notifyToolActivity(TEST_RUN), 60);
+    await expectDelta(next, 90, "done");
     await iterator.return?.();
+  });
+
+  it("bounds a silent model stream while an unresolved tool keeps sending heartbeats", async () => {
+    const source = createAssistantMessageEventStream();
+    const operation = createDeferred();
+    const onTimeout = vi.fn();
+    const beginRequest = vi.fn<SessionControllerWatchdogAttempt["beginRequest"]>(() => () => {});
+    let requestSignal: AbortSignal | undefined;
+    const startedAt = Date.now();
+    const stream = await streamWithIdleTimeout(
+      (_model, _context, options) => {
+        requestSignal = options?.signal;
+        notifyLlmRequestActivity(requestSignal, false);
+        return source;
+      },
+      120_000,
+      onTimeout,
+      { runId: TEST_RUN, watchdogAttempt: { beginRequest } },
+    )({} as Parameters<StreamFn>[0], { messages: [] });
+    const iterator = stream[Symbol.asyncIterator]();
+    const next = iterator.next().catch((error: unknown) => error);
+    const tool = withEmbeddedAttemptToolActivity(TEST_RUN, () => operation.promise);
+    try {
+      await vi.advanceTimersByTimeAsync(239_999);
+      expect(onTimeout).not.toHaveBeenCalled();
+      const watchdogDeadline = beginRequest.mock.calls[0]?.[0].deadlineAtMs;
+      await vi.advanceTimersByTimeAsync(1);
+      expect(onTimeout).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          name: "LlmNoProgressError",
+          message: "LLM idle timeout (240s): no model progress",
+        }),
+      );
+      expect(watchdogDeadline).toBe(startedAt + 240_000 + SESSION_WATCHDOG_WARNING_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(await next).toBe(onTimeout.mock.calls[0]?.[0]);
+    } finally {
+      operation.resolve();
+      await tool;
+      source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+      await next;
+      await iterator.return?.();
+    }
   });
 
   it.each(["structural", "notified", "skew"] as const)(
@@ -535,3 +583,63 @@ describe("streamWithIdleTimeout parked consumer", () => {
     await expect(iterator.next()).resolves.toEqual({ done: true, value: undefined });
   });
 });
+
+it.each([
+  { scope: "creation-and-gaps", terminal: false },
+  { scope: "creation-only", terminal: false },
+  { scope: "creation-and-gaps", terminal: true },
+] as const)(
+  "bounds restart consumption without dropping timely terminals ($scope, terminal=$terminal)",
+  async ({ scope, terminal }) => {
+    const caller = new AbortController();
+    const source = createAssistantMessageEventStream();
+    const timedOut = vi.fn();
+    const work = new AsyncWorkScope();
+    const stream = await work.run(() =>
+      streamWithIdleTimeout(() => source, 300_000, timedOut, { scope })(
+        {} as Parameters<StreamFn>[0],
+        {} as Parameters<StreamFn>[1],
+        { signal: caller.signal },
+      ),
+    );
+    const iterator = stream[Symbol.asyncIterator]();
+    let outcome: unknown;
+    let pending = iterator.next().catch((error: unknown) => {
+      outcome = error;
+    });
+    const reason = createAgentRunRestartAbortError();
+    try {
+      caller.abort(reason);
+      await vi.advanceTimersByTimeAsync(200);
+      source.push(textDelta("late chunk"));
+      await pending;
+      if (terminal) {
+        const error = makeAgentAssistantMessage({
+          content: [{ type: "text", text: "partial" }],
+          stopReason: "aborted",
+        });
+        source.push({ type: "error", reason: "aborted", error });
+        // The producer finished in budget; a parked consumer may read it later.
+        await vi.advanceTimersByTimeAsync(250);
+        await expect(iterator.next()).resolves.toMatchObject({ value: { error } });
+        return;
+      }
+      pending = iterator.next().catch((error: unknown) => {
+        outcome = error;
+      });
+      await vi.advanceTimersByTimeAsync(49);
+      expect(outcome).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome).toMatchObject({ name: "AbortError", cause: reason });
+      expect(timedOut).not.toHaveBeenCalled();
+      // Caller preemption cannot release possibly write-capable producer cleanup.
+      expect(work.hasPendingWork).toBe(true);
+    } finally {
+      source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
+      await pending;
+      await iterator.return?.();
+      await work.drain();
+      expect(work.hasPendingWork).toBe(false);
+    }
+  },
+);

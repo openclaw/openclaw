@@ -50,7 +50,7 @@ import {
 } from "./bash-tools.exec-host-node-failure.js";
 import type { ExecuteNodeHostCommandParams } from "./bash-tools.exec-host-node.types.js";
 import { appendExecTimeoutRetryGuidance, renderExecUpdateText } from "./bash-tools.exec-output.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolDetails } from "./bash-tools.exec-result.types.js";
 import { resolveNodeExecTimeouts } from "./exec-tool-timeout.js";
 import type { AgentToolResult } from "./runtime/index.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -493,13 +493,13 @@ export async function analyzeNodeApprovalRequirement(params: {
               }
               const coverage =
                 params.prepared.allowAlwaysCoverage ??
-                resolveAllowAlwaysPatternCoverage({
+                (await resolveAllowAlwaysPatternCoverage({
                   segments: [...entry.allowlistEval.segments],
                   cwd: entry.cwd,
                   env: analysisEnv,
                   platform: params.target.platform,
                   strictInlineEval: params.request.strictInlineEval,
-                });
+                }));
               const expectedPatterns = coverage.patterns.map(
                 (pattern) => `${pattern.pattern}\x00${pattern.argPattern ?? ""}`,
               );
@@ -582,7 +582,7 @@ export async function analyzeNodeApprovalRequirement(params: {
       params.request.autoReview === true &&
       (autoReviewBlockedByShellStartup || !autoReviewEligibility.eligible)
         ? { kind: "one-shot", reasons: ["no-reusable-pattern"] }
-        : resolveAllowAlwaysPersistenceDecision({
+        : await resolveAllowAlwaysPersistenceDecision({
             segments: baseAllowlistEval.segments,
             commandText: approvalCommand,
             cwd: approvalCwd,

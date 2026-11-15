@@ -27,9 +27,9 @@ export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow
     <td>
       <select
         disabled={props.loading || Boolean(props.groupWriteDisabledReason)}
-        title={props.groupWriteDisabledReason ?? undefined}
+        title={props.groupWriteDisabledReason ?? (current() || undefined)}
         aria-label={t("sessionsView.moveToGroup")}
-        class="session-group-select"
+        class="settings-select session-group-select"
         onChange={(e) => {
           if (props.groupWriteDisabledReason) {
             return;
@@ -49,7 +49,7 @@ export function CategoryCell(props: CategoryCellProps & { row: GatewaySessionRow
         </option>
         <For each={options()}>
           {(name) => (
-            <option value={name} selected={current() === name}>
+            <option value={name} title={name} selected={current() === name}>
               {name}
             </option>
           )}

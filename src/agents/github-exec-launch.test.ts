@@ -68,7 +68,7 @@ async function run(argv: string[], home: string, options: SpawnOptions = {}) {
 }
 
 const psArgs = ["-NoProfile", "-NonInteractive", "-Command"];
-const powershell = process.platform === "win32" ? getShellConfig().shell : "pwsh";
+const powershell = process.platform === "win32" ? (await getShellConfig()).shell : "pwsh";
 const hasPowerShell =
   spawnSync(powershell, [...psArgs, "exit 0"], {
     env: {

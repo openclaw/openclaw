@@ -21,7 +21,6 @@ it("persists guarded position updates and rejects stale card edits without chang
   const seed = {
     boards: [{ id: "default" }],
     cards: [initial, { ...initial, id: "second", title: "Second card", position: 2000 }],
-    tasks: [],
     methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
   };
   gatewayPage.execute("Date.now = () => 1;");

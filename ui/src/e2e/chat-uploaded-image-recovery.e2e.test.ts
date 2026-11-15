@@ -70,7 +70,7 @@ suite.define(() => {
           const image = row.locator("img.chat-message-image");
           await expect.poll(() => imageRequests).toBe(1);
           await card.waitFor({ timeout: 5_000 });
-          expect(await card.textContent()).toContain("Could not load this image. Try again.");
+          expect(await card.textContent()).toContain("Couldn’t load this image. Try again.");
           expect(await image.count()).toBe(0);
           await page.clock.fastForward(15_000);
           expect([metadataRequests, imageRequests]).toEqual([1, 1]);

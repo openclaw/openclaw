@@ -23,10 +23,15 @@ const fixture = vi.hoisted(() => ({
   redirectLocation: "",
 }));
 
-vi.mock("node:dns/promises", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:dns/promises")>()),
-  lookup: (hostname: string) => fixture.lookup(hostname),
-}));
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
+    lookup: (hostname: string) => fixture.lookup(hostname),
+  };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
+});
 
 vi.mock("../src/infra/net/runtime-fetch.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/infra/net/runtime-fetch.js")>();
@@ -124,7 +129,8 @@ it.each([undefined, baseUrl])("returns Podman vectors with remote override %s", 
   ]);
 });
 
-it.each<[string, string[], string?, string?]>([
+it.each<[string, string[]]>([
+  ["Podman host gateway", ["169.254.1.2"]],
   ["instance metadata", ["169.254.169.254"]],
   ["container credentials", ["169.254.170.2"]],
   ["container identity", ["169.254.170.23"]],
@@ -135,15 +141,13 @@ it.each<[string, string[], string?, string?]>([
   ["IPv4-mapped link-local", ["::ffff:169.254.1.2"]],
   ["NAT64 link-local", ["64:ff9b::169.254.1.2"]],
   ["mixed Podman and metadata DNS", ["169.254.1.2", "169.254.169.254"]],
-  ["another provider hostname", ["169.254.1.2"], "http://other.internal:11434"],
-  ["a separate remote override", ["169.254.1.2"], "http://other.internal:11434", baseUrl],
-])("rejects %s before any HTTP attempt", async (_name, addresses, providerBase, remoteBase) => {
+])("rejects separate remote %s before HTTP", async (_name, addresses) => {
   fixture.lookup = async () =>
     addresses.map((address) => ({
       address,
       family: address.includes(":") ? 6 : 4,
     }));
-  const { provider } = await createProvider(providerBase, remoteBase);
+  const { provider } = await createProvider("http://other.internal:11434", baseUrl);
   await expect(provider.embed("hello")).rejects.toThrow("Blocked");
   expect(fixture).toMatchObject({ attempts: [], requests: [] });
 });

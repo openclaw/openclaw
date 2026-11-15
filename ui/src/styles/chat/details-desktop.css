@@ -1,97 +1,3 @@
-/* Discrete display transitions keep the closed surface painted during its exit. */
-.chat-details:has(> .chat-details-desktop-body) {
-  container-type: inline-size;
-  flex-direction: column;
-  padding: 0;
-  overflow: hidden;
-}
-
-.chat-details:not([hidden]):has(> .chat-details-desktop-body) {
-  display: flex;
-}
-
-.chat-details-desktop-body {
-  --details-row-font-size: calc(13px * var(--control-ui-text-scale));
-  --details-row-line-height: 24px;
-  --details-meta-font-size: var(--control-ui-text-sm);
-  --details-meta-line-height: 20px;
-  --details-row-padding: 4px;
-  --details-row-outset: 4px;
-  --details-row-height: 30px;
-  --details-row-padding-block: 3px;
-  --details-row-icon-size: 15px;
-  --details-row-icon-slot: 16px;
-  --details-row-gap: 8px;
-  --details-row-list-gap: 0px;
-  --details-section-padding: 10px;
-  /* Follows the surface it sits on, so docked and floating panels read the same. */
-  --details-separator: color-mix(in srgb, var(--text) 8%, var(--details-surface));
-  --scrollbar-size: 8px;
-  --scrollbar-thumb-inset: 2px;
-  --details-scrollbar-thumb: transparent;
-  --details-fade-top: 0px;
-  --details-fade-bottom: 0px;
-  font-variant-numeric: tabular-nums;
-  flex: 0 1 auto;
-  min-height: 0;
-  min-width: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  scrollbar-gutter: stable both-edges;
-  scrollbar-color: var(--details-scrollbar-thumb) transparent;
-}
-
-.chat-details-desktop-body:hover {
-  --details-scrollbar-thumb: color-mix(in srgb, var(--muted) 32%, transparent);
-}
-
-.chat-details-desktop-body[data-fade-top] {
-  --details-fade-top: 24px;
-}
-
-.chat-details-desktop-body[data-fade-bottom] {
-  --details-fade-bottom: 24px;
-}
-
-.chat-details-desktop-body:is([data-fade-top], [data-fade-bottom]) {
-  mask:
-    linear-gradient(
-      to bottom,
-      transparent,
-      black var(--details-fade-top),
-      black calc(100% - var(--details-fade-bottom)),
-      transparent
-    ),
-    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
-}
-
-.chat-details-desktop-body__content {
-  /* Subtract the native gutters before the first layout measurement. */
-  padding: 4px calc(16px + 50% - 50cqi);
-}
-
-@supports selector(::-webkit-scrollbar) {
-  .chat-details-desktop-body {
-    scrollbar-width: auto;
-    scrollbar-color: auto;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar {
-    width: var(--scrollbar-size);
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-track {
-    margin-block: 16px;
-  }
-
-  .chat-details-desktop-body::-webkit-scrollbar-thumb {
-    border: var(--scrollbar-thumb-inset) solid transparent;
-    border-radius: 4px;
-    background: var(--details-scrollbar-thumb);
-    background-clip: content-box;
-  }
-}
-
 .chat-details-desktop-section {
   margin: 0;
   padding-block: var(--details-section-padding, 10px);
@@ -202,9 +108,10 @@
   > .chat-details-processes__envelope
   > .chat-details-processes__motion-content
   > .chat-details-desktop-section,
+.chat-details-desktop-body__content > openclaw-chat-summary-automations > .chat-details__group,
 .chat-details-desktop-body__content
   > openclaw-chat-summary-automations
-  > :is(.chat-details__group, .chat-details-desktop-section) {
+  > .chat-details-desktop-section {
   margin: 0;
   padding: var(--details-section-padding) 0;
   border-top: 1px solid var(--details-separator);
@@ -439,6 +346,7 @@
   background: var(--surface-hover);
 }
 
+/* Row icons share the slot; stacked Subagents keep the native avatar that People matches. */
 .chat-details
   .chat-details-desktop-body
   :is(
@@ -446,7 +354,7 @@
     .chat-summary__automation-icon,
     .chat-outputs__icon,
     .chat-environment-desktop__machine-icon,
-    .chat-details-subagents__avatar,
+    :where(.chat-details-subagents__row) > .chat-details-subagents__avatar,
     .chat-details-processes__icon
   ) {
   display: inline-flex;
@@ -472,18 +380,13 @@
     .chat-outputs__icon > svg,
     .chat-outputs__icon > .chat-attachment-file-icon,
     .chat-environment-desktop__machine-icon > svg,
-    .chat-details-subagents__avatar > svg,
+    :where(.chat-details-subagents__row) > .chat-details-subagents__avatar > svg,
     .chat-details-processes__icon > svg,
     .chat-details-people__avatar .viewer-avatar
   ) {
   flex: none;
   width: var(--details-row-icon-size);
   height: var(--details-row-icon-size);
-}
-
-.chat-details .chat-details-desktop-body .chat-details-subagents__avatar {
-  background: transparent;
-  color: var(--muted);
 }
 
 /* Collapsed People matches the native Subagents avatar, not the expanded row icon. */
@@ -577,12 +480,6 @@
   height: var(--details-row-line-height);
 }
 
-.chat-details .chat-details-desktop-body .session-progress-card__step-marker svg {
-  width: var(--details-row-icon-size);
-  height: var(--details-row-icon-size);
-  stroke-width: 2px;
-}
-
 .chat-details .chat-details-desktop-body .session-progress-card__step-text {
   font-size: var(--details-row-font-size);
 }
@@ -592,8 +489,8 @@
   line-height: inherit;
 }
 
-/* Icon buttons keep their hit area but draw their glyph on the right content edge. */
-.chat-details .chat-details-desktop-body .chat-pr__actions-trigger,
+/* Only unboxed icon buttons hang past the content edge; publication groups own their surface. */
+.chat-details .chat-details-desktop-body .chat-pr--summary .chat-pr__actions-trigger,
 .chat-details .chat-details-desktop-body .session-progress-card__options {
   margin-inline-end: -6px;
 }

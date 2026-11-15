@@ -20,6 +20,7 @@ import {
 import { captureSessionMutationRouting } from "../session-sharing-preparation.js";
 import type { GatewaySessionEntryRead } from "../session-utils.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
+import { isWorkerRetainedWindowOpen } from "../worker-environments/retained-work-window.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -194,6 +195,19 @@ export async function resolveRepositoryWorkspaceAccess(
         };
         const run = async (assertOperation = assertAuthorized) => {
           assertOperation();
+          // Editor wake belongs to the mutation owner, before its result/readiness gate.
+          if (
+            operation !== "set" &&
+            repository.diskAuthority &&
+            !isWorkerRetainedWindowOpen(environments.get(placement.environmentId))
+          ) {
+            await environments.ensureRetainedRunning({
+              environmentId: placement.environmentId,
+              expectedOwnerEpoch: placement.activeOwnerEpoch,
+              assertCurrent: assertOperation,
+            });
+            assertOperation();
+          }
           const tunnel = await environments.startTunnel({
             environmentId: placement.environmentId,
             ownerEpoch: placement.activeOwnerEpoch,

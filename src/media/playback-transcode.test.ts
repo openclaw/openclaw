@@ -328,7 +328,9 @@ describe("resolvePlaybackTranscode", () => {
   ] as const)(
     "single-flights %s conversion and reuses its store entry",
     async (extension, mimeType, format, videoIndex, audioIndex) => {
-      const source = await createSource(`single-flight.${extension}`);
+      const source = await createSource(
+        `single-flight-${mimeType.replaceAll("/", "-")}.${extension}`,
+      );
       if (extension !== "mkv") {
         probePlaybackMediaFileDescriptor.mockResolvedValueOnce(
           videoProbe({

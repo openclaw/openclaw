@@ -33,6 +33,9 @@ import { captureSessionTarget } from "../../sessions/session-controller.target.j
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
+import { isInternalRouteContext } from "../../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
+import { createToolTurnHandoff } from "../agent-tools.abort.js";
 import { jsonResult, ToolInputError } from "./common.js";
 import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
@@ -52,6 +55,8 @@ export async function handoffSessionTool(
     fenceSuccessors?: true;
     /** Retained sends may defer without stopping the current response. */
     yield?: "conditional" | "after_turn";
+    /** Accepting this handoff must stop the initiating invocation, including a Code Mode guest. */
+    terminal?: true;
     retainRequester?: true;
     sessionId?: string;
     runId?: string;
@@ -64,7 +69,11 @@ export async function handoffSessionTool(
     formatResult: (payload: Record<string, unknown>) => string;
   },
 ) {
-  if (!params.yield && getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults) {
+  if (
+    !params.yield &&
+    !params.terminal &&
+    getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults
+  ) {
     return jsonResult({
       status: "deferred",
       message: `Read earlier async results before handing off ${params.name}.`,
@@ -143,6 +152,15 @@ export async function handoffSessionTool(
     if (target.sessionId !== params.sessionId || !storePath) {
       throw new ToolInputError("The requesting session changed before handoff.");
     }
+    // An internal turn without an external recipient of its own (Control UI, internal source
+    // hints) has no external conversation to resume in; keep its resume from falling back to
+    // the session's recorded external route.
+    const resumeRoute =
+      isInternalRouteContext({ channel: caller.turnSourceChannel }) &&
+      (!caller.turnSourceTo || caller.turnSourceTo === caller.sessionKey) &&
+      target.deliveryContext?.channel
+        ? { channel: INTERNAL_MESSAGE_CHANNEL }
+        : undefined;
     continuation.assertCurrent();
     assertSessionControllerOperation(operation);
     params.signal?.throwIfAborted();
@@ -154,8 +172,22 @@ export async function handoffSessionTool(
         start: () => handoffSettled.promise,
       });
     }
+    const handoffReceipt = {
+      status: "started",
+      async: true,
+      ...(params.yield ? {} : { yielded: true as const }),
+      message: `${params.name} will run after turn cleanup. Started is not success: its result, which may be a refusal, resumes this session as the next turn.`,
+    } as const;
+    const handoffResult = jsonResult(handoffReceipt);
     const message = params.name + " handed off; resume with its result in this same conversation.";
-    if (params.yield === "conditional") {
+    if (params.terminal) {
+      await params.onYield(message, undefined, undefined, {
+        terminal: createToolTurnHandoff(
+          getAgentToolExecutionContext()?.toolCall.id,
+          handoffReceipt,
+        ),
+      });
+    } else if (params.yield === "conditional") {
       await params.onYield(message, undefined, undefined, { conditional: true });
     } else if (params.yield !== "after_turn") {
       await params.onYield(message);
@@ -257,6 +289,7 @@ export async function handoffSessionTool(
                     sourceRunId: params.runId,
                     contextKey,
                     expectedTarget: target,
+                    ...(resumeRoute ? { deliveryContext: resumeRoute } : {}),
                     assertCurrent: retained.assertCurrent,
                     abortSignal: signal,
                   },
@@ -310,12 +343,7 @@ export async function handoffSessionTool(
         }),
     );
     // The shared async-result receipt is also the yield owner's continuation evidence.
-    return jsonResult({
-      status: "started",
-      async: true,
-      ...(params.yield ? {} : { yielded: true }),
-      message: `${params.name} will run after turn cleanup; its result will resume this session.`,
-    });
+    return handoffResult;
   } catch (error) {
     handoffSettled.resolve(undefined);
     pending.delete(operation);

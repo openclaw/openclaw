@@ -55,6 +55,7 @@ import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-acce
 
 const loadWorkerTurnExecution = createLazyRuntimeModule(() => import("./worker-turn-execution.js"));
 const loadRemoteExecTurn = createLazyRuntimeModule(() => import("./workspace-result-finalize.js"));
+const loadRetainedWorkerTurn = createLazyRuntimeModule(() => import("./worker-turn-retained.js"));
 
 export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLauncherOptions) {
   const activeWorkerTurns = new Map<string, workerTurnOwner.ActiveWorkerTurn>();
@@ -282,8 +283,23 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
               );
               continue;
             }
+            // A live compute window does not attest the current Gateway build.
+            const retained = options.environments.get(environmentId)?.retention
+              ? await (
+                  await loadRetainedWorkerTurn()
+                ).prepareRetainedWorkerTurn({
+                  options,
+                  placement,
+                  turn,
+                  assertCurrent: assertAdmissionCurrent,
+                })
+              : undefined;
+            if (retained) {
+              placement = retained.placement;
+            }
             const assertClaimCurrent = () => {
               assertAdmissionCurrent();
+              retained?.assertCurrent();
               if (options.environments.readRuntimeRefresh?.(environmentId)) {
                 throw new WorkerRuntimeRefreshPendingError(
                   "Worker runtime refresh started during turn admission",
@@ -336,6 +352,8 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
                 error,
               );
               continue;
+            } finally {
+              await retained?.release();
             }
             if (!admitted) {
               routablePlacement = await readRoutablePlacement(

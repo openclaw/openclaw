@@ -505,6 +505,7 @@ it.each(["accepted clear", "ordinary edit"] as const)(
       await Promise.all(writes.mock.results.map((result) => result.value));
       expect(first.context.sessions.createResult).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledExactlyOnceWith({
+        severity: "error",
         message:
           "Saving your new-session choices could not be confirmed. Check them before starting a session.",
       });

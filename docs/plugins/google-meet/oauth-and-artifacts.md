@@ -172,6 +172,7 @@ openclaw googlemeet attendance --today --format csv --output attendance.csv
 ```
 
 `--today` searches today's `primary` calendar for an event with a Meet link; `--event <query>` searches matching event text; `--calendar <id>` targets a non-primary calendar. `calendar-events` previews matching events and marks which one `latest`/`artifacts`/`attendance`/`export` will choose.
+Calendar listing and lookup follow all result pages, including empty pages with a continuation token, before selecting the best matching event.
 
 If you already know the conference record id, address it directly:
 
@@ -210,6 +211,8 @@ For `artifacts` and `attendance`, `--output <path>` writes the selected format, 
 
 Document bodies requested with `--include-doc-bodies` remain in `transcript.md`
 when `--no-transcript-entries` is set or only smart notes are available.
+
+If Google repeats a pagination token, collection stops with an error instead of waiting indefinitely. Retry the request later. Smart-note and transcript-entry errors remain partial-retrieval warnings.
 
 For `export`, `--output <dir>` preserves the literal directory name, including leading or trailing spaces; quote such paths in the shell. A missing or all-whitespace value uses the generated default directory.
 

@@ -1,6 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isDeepStrictEqual } from "node:util";
+import { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import { observeOwnedDirectory } from "../../infra/owned-directory-observation.js";
@@ -25,7 +27,8 @@ import type {
   WorkspaceSkillSourceRequest,
   WorkspaceSkillSources,
 } from "../loading/workspace-skill-sources.types.js";
-import type { SkillSnapshot } from "../types.js";
+import { SKILLS_DISCOVERY_KEY, type SkillSnapshot } from "../types.js";
+import { createSkillsFilesystemOperations } from "./discovery-filesystem.js";
 import {
   captureSkillsDiscoveryEnvironment,
   type SkillsDiscoveryEnvironment,
@@ -67,6 +70,8 @@ type Source = {
   unavailable?: boolean;
   watchDirectories?: string[];
   observations: Map<string, ReturnType<typeof observeOwnedDirectory>>;
+  /** Why a reset removed this registration; a config refresh is not a shutdown. */
+  retiredBy?: "refresh" | "shutdown";
 };
 type DiscoveryState = {
   catalog: Map<string, Skill>;
@@ -79,7 +84,7 @@ type DiscoveryState = {
 };
 
 const state = resolveGlobalSingleton<DiscoveryState>(
-  Symbol.for("openclaw.skillsDiscovery"),
+  SKILLS_DISCOVERY_KEY,
   () => ({ sources: new Map(), plans: new Map(), catalog: new Map() }),
   () => closeSkillsWatchers(),
 );
@@ -103,6 +108,9 @@ function shareCatalogSkill(skill: Skill): Skill {
   if (skill.discoveryRoot) {
     Object.freeze(skill.discoveryRoot);
   }
+  if (skill.resourceRootIdentity) {
+    Object.freeze(skill.resourceRootIdentity);
+  }
   state.catalog.set(key, Object.freeze(skill));
   // Bound catalogs from retired workspaces and transient resource locations.
   if (state.catalog.size > 4096) {
@@ -117,13 +125,32 @@ function pool() {
       new WorkerTaskPool({
         workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.skillsDiscovery),
         workerClass: "singleton",
-        idleTimeoutMs: 0,
       }),
   ));
 }
 
+export const {
+  prepareSkillResourceRoot,
+  prepareSandboxMounts,
+  prepareSandboxMountSources,
+  runSkillLibraryFilesystemTask,
+  syncSkillsFilesystem,
+  prepareSandboxFsContext,
+  prepareSandboxFsPath,
+} = createSkillsFilesystemOperations(async () => {
+  if (state.closing) {
+    await state.closing;
+  }
+  return pool();
+});
+
 function observeSource(source: Source) {
-  if (!source.watch || !source.watchDirectories) {
+  // A read retains its selection, but passive observation follows the active config.
+  if (
+    !source.watch ||
+    !source.watchDirectories ||
+    getRuntimeConfigSnapshot()?.skills?.load?.watch === false
+  ) {
     return;
   }
   const directories = new Set(source.watchDirectories);
@@ -190,6 +217,7 @@ function scanDirtySources(): Promise<void> {
         const response = await pool().run(
           {
             kind: "scan",
+            nativeMode: getFsSafeNativeConfig().mode,
             requests: selected.map(([key, source]) => ({
               key,
               environment: source.environment,
@@ -331,10 +359,21 @@ function readRegisteredSource({ key, source }: Awaited<ReturnType<typeof registe
   return source.sources;
 }
 
-async function publishRegisteredSource(registration: Awaited<ReturnType<typeof registerSource>>) {
+async function publishRegisteredSource(
+  registration: Awaited<ReturnType<typeof registerSource>>,
+  retried = false,
+): Promise<WorkspaceSkillSources> {
   const { source } = registration;
   if (source.dirty || !source.sources) {
-    await scanDirtySources();
+    await scanDirtySources().catch((error: unknown) => {
+      if (source.retiredBy !== "refresh") {
+        throw error;
+      }
+    });
+  }
+  // A config refresh replaces registrations mid-read; publish the same selection once more.
+  if (!retried && source.retiredBy === "refresh") {
+    return publishRegisteredSource(await registerSource(source.selection, source.watch), true);
   }
   return readRegisteredSource(registration);
 }
@@ -382,17 +421,25 @@ export async function prepareSkillSourcePlan(
 export async function projectSkillSnapshot(
   input: SkillSnapshotProjectionInput,
 ): Promise<SkillSnapshot> {
+  const nativeMode = getFsSafeNativeConfig().mode;
   if (state.closing) {
     await state.closing;
   }
-  const skills = input.eligible.map((entry) => shareCatalogSkill(entry.skill));
   const result = await pool().run(
-    { kind: "project", input, environment: captureSkillsDiscoveryEnvironment() },
+    {
+      kind: "project",
+      input,
+      environment: captureSkillsDiscoveryEnvironment(),
+      nativeMode,
+    },
     { timeoutMs: 120_000 },
   );
   if (result.kind !== "project") {
     throw new Error("Unexpected Skills projection response");
   }
+  const skills = input.eligible.map(({ skill }, index) =>
+    shareCatalogSkill({ ...skill, resourceRootIdentity: result.resourceRoots[index] }),
+  );
   return {
     ...result.snapshot,
     resolvedSkills: result.resolvedIndices.map((index) => skills[index]!),
@@ -552,6 +599,7 @@ async function resetSkillsDiscoverySources(
   }
   for (const source of state.sources.values()) {
     closeSource(source);
+    source.retiredBy = retireWorker ? "shutdown" : "refresh";
   }
   state.sources.clear();
   state.plans.clear();

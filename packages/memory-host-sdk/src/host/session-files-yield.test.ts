@@ -10,6 +10,7 @@ import { buildSessionEntry } from "./session-files.js";
 const sessionDirs = useSessionStoreTempDirs(afterAll, "session-entry-yield-");
 
 describe("buildSessionEntry responsiveness", () => {
+  // SQLite exports render in the transcript worker and observe messages one page at a time.
   it.each(["archive", "sqlite"])(
     "yields at raw ordinals even for excluded %s records",
     async (source) => {
@@ -69,7 +70,7 @@ describe("buildSessionEntry responsiveness", () => {
       });
 
       await immediate;
-      expect(observedAtYield).toBe(5);
+      expect(observedAtYield).toBe(source === "sqlite" ? 13 : 5);
       expect(observed).toBe(13);
       expect(entry?.content).toBe("User: message 24");
       expect(entry?.lineMap).toEqual([25]);

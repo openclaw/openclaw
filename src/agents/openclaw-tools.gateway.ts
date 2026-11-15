@@ -22,6 +22,7 @@ export function createHostedGatewayTools(
     createGatewayTool({
       allowConfigReads: options?.gatewayConfigReadAllowed === true,
       senderIsOwner: options?.senderIsOwner,
+      operatorAuthority: options?.pluginExecutionAuthority,
       requesterSenderId: options?.requesterSenderId,
     }),
     createPluginsTool({

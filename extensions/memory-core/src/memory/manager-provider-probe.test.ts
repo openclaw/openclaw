@@ -1,7 +1,7 @@
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
+import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { MEMORY_SEARCH_DEADLINE_CONTROL } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { expect, it, vi } from "vitest";
-import type { EmbeddingProvider } from "./embeddings.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const embeddings = await import("./embeddings.js");
@@ -14,9 +14,9 @@ it.each([
   ["openai", 60_000, undefined, true],
 ] as const)("probe %s: %i ms, override=%s, pause=%s", async (id, timeoutMs, override, pause) => {
   const model = id === "local" ? "embeddinggemma" : "mock-embed";
-  const entered = createDeferred<Parameters<EmbeddingProvider["embed"]>[1]>();
+  const entered = createDeferred<Parameters<MemoryEmbeddingProvider["embed"]>[1]>();
   const completion = createDeferred<number[]>();
-  const embed = vi.fn<EmbeddingProvider["embed"]>(async (_input, options) => {
+  const embed = vi.fn<MemoryEmbeddingProvider["embed"]>(async (_input, options) => {
     entered.resolve(options);
     return await completion.promise;
   });

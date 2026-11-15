@@ -179,6 +179,44 @@ fs.openSync = (pathname, ...args) => {
 );
 
 describe("scoped SQLite read-only children", () => {
+  it("preserves selected Node compiler flags in scoped snapshot children", async () => {
+    const source = createDatabase(witnessSql("preserved"));
+    const root = tempDirs.make("openclaw-scoped-compiler-policy-");
+    const observed = path.join(root, "exec-argv.json");
+    const preload = path.join(root, "compiler-policy.mjs");
+    fs.writeFileSync(
+      preload,
+      `import fs from "node:fs";
+fs.writeFileSync(${JSON.stringify(observed)}, JSON.stringify(process.execArgv));`,
+    );
+    const originalExecArgv = process.execArgv;
+    process.execArgv = [...originalExecArgv, "--no-concurrent-sparkplug"];
+    try {
+      await withWorker(
+        async (worker) => {
+          const location = await worker.run(source, { mode: "sync", stagingRoot: root });
+          if (typeof location !== "string") {
+            throw new Error("Expected a snapshot location");
+          }
+          expect(readQueries(location, "SELECT value FROM witness")).toEqual([
+            { value: "preserved" },
+          ]);
+          expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toContain(
+            "--no-concurrent-sparkplug",
+          );
+        },
+        captureSqliteReadOnlyWorkerLaunch({
+          ...process.env,
+          NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${pathToFileURL(preload).href}`]
+            .filter(Boolean)
+            .join(" "),
+        }),
+      );
+    } finally {
+      process.execArgv = originalExecArgv;
+    }
+  });
+
   it("forks through retained IPC and joins cleanup after disposal refusal", async () => {
     const source = createDatabase(witnessSql("checkpointed"));
     using writer = openDatabase(source);

@@ -7,6 +7,8 @@ import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
 import { isExactAttachedEnvironment } from "./placement-target.js";
 import { completeWorkerWorkspaceTeardown } from "./placement-teardown.js";
+import { isRepositoryDiskGatewayMoveResult } from "./placement-workspace-result-owner.js";
+import { isWorkerRetainedWindowOpen } from "./retained-work-window.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import type { WorkerWorkspaceQuiescence } from "./tunnel-contract.js";
 
@@ -64,13 +66,8 @@ export async function settleRepositoryDiskGatewayMove(params: {
   if (
     !pending?.repositoryDiskAuthority ||
     !pending.repositoryWorkspaceId ||
-    move?.target.kind !== "gateway" ||
-    move.abandonSource ||
-    move.source.environmentId !== placement.environmentId ||
-    move.source.ownerEpoch !== placement.activeOwnerEpoch ||
-    move.source.generation + 1 !== placement.generation ||
-    turnClaim.claimId !== turnClaim.runId ||
-    !turnClaim.claimId.startsWith("reclaim-")
+    !move ||
+    !isRepositoryDiskGatewayMoveResult(placement, pending, move)
   ) {
     throw new Error("Repository disk transfer requires its exact Gateway move result");
   }
@@ -105,6 +102,14 @@ export async function settleRepositoryDiskGatewayMove(params: {
       }
       if (params.recovering) {
         await environments.stopTunnel(placement.environmentId, placement.activeOwnerEpoch);
+        assertCurrent();
+      }
+      if (!isWorkerRetainedWindowOpen(environments.get(placement.environmentId))) {
+        await environments.ensureRetainedRunning({
+          environmentId: placement.environmentId,
+          expectedOwnerEpoch: placement.activeOwnerEpoch,
+          assertCurrent,
+        });
         assertCurrent();
       }
       const tunnel = await environments.startTunnel({

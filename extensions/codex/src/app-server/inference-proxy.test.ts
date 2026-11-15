@@ -182,6 +182,55 @@ async function fixture(
   return { proxy, controller, registration, body };
 }
 
+const providerDnsCases = [
+  { address: "198.18.0.42", family: 4, allowed: true },
+  { address: "fc00::42", family: 6, allowed: true },
+  { address: "127.0.0.1", family: 4, allowed: false },
+  { address: "10.0.0.5", family: 4, allowed: false },
+  { address: "169.254.169.254", family: 4, allowed: false },
+  { address: "fd00:ec2::254", family: 6, allowed: false },
+] as const;
+
+it.each(providerDnsCases)(
+  "routes HTTP provider DNS $address with allowed=$allowed",
+  async ({ address, family, allowed }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+      "openclaw/plugin-sdk/ssrf-runtime",
+    );
+    const fetchImpl = vi.fn<typeof fetch>(async (_url, init) => {
+      await new Response(init?.body).arrayBuffer();
+      return new Response("synthetic provider response");
+    });
+    const lookupFn = async () => [{ address, family }];
+    transport.fetch.mockImplementation(
+      async (params: Parameters<typeof actual.fetchWithSsrFGuard>[0]) => {
+        const guarded = await actual.fetchWithSsrFGuard({
+          ...params,
+          lookupFn,
+          dispatcherPolicy: { mode: "direct" },
+          fetchImpl,
+        });
+        await expect(
+          actual.resolvePinnedHostnameWithPolicy("other.example.com", {
+            lookupFn,
+            policy: params.policy,
+          }),
+        ).rejects.toThrow("Blocked hostname (not in allowlist)");
+        return guarded;
+      },
+    );
+    const { proxy, body } = await fixture();
+    const result = await post(proxy.baseUrl + "/responses", body);
+    expect(result.status).toBe(allowed ? 200 : 502);
+    expect(await result.text()).toBe(
+      allowed
+        ? "synthetic provider response"
+        : "Codex parent-local inference transport failed; retry on a fresh connection.",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  },
+);
+
 it("reports bounded stage and cause without exposing private upstream errors", async () => {
   const debug = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
   try {
@@ -476,28 +525,55 @@ describe("private inference WebSocket relay", () => {
     expect(transport.resolve).not.toHaveBeenCalled();
     expect(transport.dials).toEqual([]);
   });
-  it("rejects private destination DNS on a direct WebSocket route", async () => {
-    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
-      "openclaw/plugin-sdk/ssrf-runtime",
-    );
-    transport.resolve.mockImplementation((hostname: string, options: { signal?: AbortSignal }) =>
-      actual.resolvePinnedHostnameWithPolicy(hostname, {
-        ...options,
-        lookupFn: async () => [{ address: "127.0.0.1", family: 4 }],
-      }),
-    );
-    const { proxy } = await fixture();
-    const socket = connect(proxy);
-    socket.on("error", () => {});
-    const { response, text } = await rejectedResponse(socket);
-    expect(response.statusCode).toBe(502);
-    expect(text).toBe(
-      "Codex parent-local inference transport failed; retry on a fresh connection.",
-    );
-    expect(transport.resolve).toHaveBeenCalledOnce();
-    expect(transport.proxyAgent).toHaveBeenCalledOnce();
-    expect(transport.dials).toEqual([]);
-  });
+  it.each(providerDnsCases)(
+    "routes direct WebSocket provider DNS $address with allowed=$allowed",
+    async ({ address, family, allowed }) => {
+      const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/ssrf-runtime")>(
+        "openclaw/plugin-sdk/ssrf-runtime",
+      );
+      const lookupFn = async () => [{ address, family }];
+      transport.resolve.mockImplementation(
+        async (
+          hostname: string,
+          options: Parameters<typeof actual.resolvePinnedHostnameWithPolicy>[1],
+        ) => {
+          const pinned = await actual.resolvePinnedHostnameWithPolicy(hostname, {
+            ...options,
+            lookupFn,
+          });
+          await expect(
+            actual.resolvePinnedHostnameWithPolicy("other.example.com", {
+              lookupFn,
+              policy: options?.policy,
+            }),
+          ).rejects.toThrow("Blocked hostname (not in allowlist)");
+          return pinned;
+        },
+      );
+      const final = '{"type":"response.completed","response":{"id":"synthetic-response"}}';
+      const received = allowed ? await upstreamFixture(final) : [];
+      const { proxy, body } = await fixture();
+      const socket = connect(proxy);
+      if (allowed) {
+        await once(socket, "open");
+        const response = once(socket, "message");
+        socket.send(JSON.stringify({ ...body, type: "response.create" }));
+        expect((await response)[0].toString()).toBe(final);
+        expect(received).toHaveLength(1);
+        expect(transport.dials).toEqual(["wss://api.openai.com/v1/responses"]);
+        return;
+      }
+      socket.on("error", () => {});
+      const { response, text } = await rejectedResponse(socket);
+      expect(response.statusCode).toBe(502);
+      expect(text).toBe(
+        "Codex parent-local inference transport failed; retry on a fresh connection.",
+      );
+      expect(transport.resolve).toHaveBeenCalledOnce();
+      expect(transport.proxyAgent).toHaveBeenCalledOnce();
+      expect(transport.dials).toEqual([]);
+    },
+  );
 
   it("rejects blocked hostnames before proxy or DNS work", async () => {
     const agent = proxyAgent();

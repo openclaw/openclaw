@@ -573,11 +573,7 @@ describe("worker turn launcher local placement", () => {
   it("rejects an active worker turn assigned to a configured CLI runtime", async () => {
     const runtimeId = "claude-cli";
     await fx.seedActivePlacement();
-    const getEnvironment = vi.fn(() => undefined);
-    const environments: fx.WorkerTurnEnvironmentService = {
-      ...fx.unusedEnvironments(),
-      get: getEnvironment,
-    };
+    const environments = fx.unusedEnvironments();
     const provider = createLauncher({ environments });
     const runLocal = vi.fn(localResult);
     const runId = `run-${runtimeId}`;
@@ -628,7 +624,12 @@ describe("worker turn launcher local placement", () => {
       `Cloud worker turns require the OpenClaw runtime, not ${runtimeId}`,
     );
 
-    expectUncalled(runLocal, environments.acquireTurnCredential, environments.startTunnel);
+    expectUncalled(
+      runLocal,
+      environments.ensureRetainedRunning,
+      environments.acquireTurnCredential,
+      environments.startTunnel,
+    );
     expect(fx.placements.get(fx.SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     expect(release).toHaveBeenCalledOnce();
   });

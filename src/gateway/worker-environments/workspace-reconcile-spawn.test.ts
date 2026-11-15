@@ -18,7 +18,7 @@ import {
   writeWorkspaceFiles,
 } from "./workspace-recovery.test-support.js";
 import {
-  readStagedWorkerWorkspaceResult,
+  withStagedWorkerWorkspaceResult,
   workerWorkspaceResultStaging,
 } from "./workspace-result-staging.js";
 
@@ -88,13 +88,14 @@ it.skipIf(!supportsSpawnBrokerCommandTransport())(
         expect(gitLaunches().filter(([, child]) => !(child instanceof BrokerChild))).toHaveLength(
           1,
         );
-        const staged = await readStagedWorkerWorkspaceResult(root, stagedResultRef);
-        expect(staged.current).toEqual(current);
-        for await (const { entry, content } of staged.readEntries()) {
-          expect(content).toEqual(
-            Uint8Array.from(Buffer.from(newFiles[entry.path as keyof typeof newFiles])),
-          );
-        }
+        await withStagedWorkerWorkspaceResult({ root, stagedResultRef }, async (staged) => {
+          expect(staged.changedEntryCount).toBe(Object.keys(newFiles).length);
+          for (const [name, content] of Object.entries(newFiles)) {
+            expect(await fs.readFile(path.join(staged.stagingRoot, name))).toEqual(
+              Buffer.from(content),
+            );
+          }
+        });
       });
     } finally {
       await host.close();

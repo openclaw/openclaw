@@ -109,8 +109,9 @@ start a fresh Gateway.
 `--force` begins restart immediately and closes new admissions. It skips active-work
 deferral, then follows the same marker, abort, persistence, and bounded-cleanup
 path. Plain `restart` normally uses the service-manager restart path. The next
-Gateway sends one ordinary resume input to each marked root session. A crash or
-`SIGKILL` writes no markers and resumes nothing automatically.
+Gateway sends one ordinary resume input to each marked root session. After a crash
+or `SIGKILL`, eligible roots with a persisted unfinished run receive that same
+input. A session with both records still receives only one continuation.
 
 During an upgrade, restart records its reason and drain options in the existing
 Gateway state without starting a schema migration while the old Gateway is still
@@ -282,6 +283,15 @@ Stops and restarts record running sessions before aborting their work. Shutdown
 logs name cleanup steps that fail or exceed their bounded grace. The Gateway
 does not wait for active agent work to finish. Diagnostics do not change cleanup
 budgets or the service manager's stop deadline.
+
+The `plugin-registry` and `plugin-metadata` shutdown spans include nested process
+and database cleanup. Compare their child spans before attributing a long close
+to a plugin. A broken service-child stdin shutdown write does not fail cleanup
+when the process owner still verifies its closing receipt and descendant
+extinction. Missing receipts or unverifiable descendants remain cleanup failures.
+Completed cleanup attempts retain their failures for the originating run and scope.
+A later shutdown warns about these historical failures instead of treating them as
+active resources; failures while draining current runs still fail that shutdown.
 
 A client disconnect leaves interactive setup available for reconnect. A Gateway
 stop or restart closes setup prompts before cleanup. Settings writes already

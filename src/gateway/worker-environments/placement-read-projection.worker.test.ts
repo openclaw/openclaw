@@ -662,11 +662,13 @@ it.each([false, true])(
       state: "local",
       environmentId: null,
       moveSourceEnvironmentId: "source-move-z-local",
+      workspaceRecoveryPending: true,
     });
     expect(candidates.find((candidate) => candidate.sessionId === "journal-draining")).toEqual({
       sessionId: "journal-draining",
       state: "draining",
       environmentId: "env-journal-draining",
+      workspaceRecoveryPending: true,
     });
     counters.expectIdle();
     db.prepare("UPDATE worker_session_placements SET updated_at_ms = ? WHERE session_id = ?").run(

@@ -351,6 +351,12 @@ Set `event.modelIterations` when the harness observes model calls directly, and
 `ctx.skillWorkshopAvailable` are deprecated aliases for those two fields,
 supported through 2026-12-31.
 
+Set `completedTurnSource` to the transcript target and entry id of the turn's
+final message. The helpers resolve it once, under the turn lease, and pass
+`ctx.completedTurn` to `agent_end` hooks. Omit it when the turn left no final
+entry that should be reviewed. `skillExperienceReviewSource` is its deprecated
+alias, supported through 2026-12-31.
+
 Pass `ctx.foregroundPromptContext` built with
 `buildEmbeddedForegroundPromptContext(params, agentDir)` from the same
 `EmbeddedRunAttemptParams` the attempt ran with. The detached Skill Workshop

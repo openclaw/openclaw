@@ -12,15 +12,16 @@ import {
 } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isNativeEmbedHost } from "../../app/native-web-chrome.ts";
-import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { KeyboardShortcut, ShortcutText } from "../../components/solid/kbd.tsx";
 import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import {
   SettingsPage,
+  SettingsPageHeader,
   SettingsRow as Row,
   SettingsSection as Section,
   SettingsStatus as Status,
+  SettingsEmpty,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -498,7 +499,7 @@ export function DebugPage() {
         <Section title={t("debug.eventLogTitle")} description={t("debug.eventLogSubtitle")}>
           <For
             each={events.read().entries}
-            fallback={<div class="settings-empty">{t("debug.noEvents")}</div>}
+            fallback={<SettingsEmpty message={t("debug.noEvents")} />}
           >
             {(event) => (
               <Row
@@ -524,13 +525,7 @@ export function DebugPage() {
 
   return (
     <openclaw-debug-page>
-      <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
-        <section class="content-header">
-          <div>
-            <h1 class="page-title">{t("tabs.debug")}</h1>
-          </div>
-        </section>
-      </ShellLayoutBoundary>
+      <SettingsPageHeader title={t("tabs.debug")} />
       <SettingsWorkspace>
         <DebugPageView />
       </SettingsWorkspace>

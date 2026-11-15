@@ -18,7 +18,7 @@ import {
 } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { choosePickerValue } from "../../test-helpers/select-picker.ts";
+import { choosePickerValue, openPicker } from "../../test-helpers/select-picker.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ModelAccountsTargetSource } from "./model-accounts-state.ts";
@@ -127,13 +127,23 @@ async function mount(
     gateway,
   } as unknown as ApplicationContext);
   let profileId = "profile-1";
+  let pageRefresh = () => {};
   const target: ModelAccountsTargetSource = {
     read: () => ({ gateway: gateway.snapshot, identityId: "profile-1", profileId }),
     subscribe: (listener) => gateway.subscribe(listener),
+    subscribeRefresh: (listener) => {
+      pageRefresh = listener;
+      return () => {
+        pageRefresh = () => {};
+      };
+    },
   };
   const view = mountSolid(() => <ModelAccounts target={target} />, { wrapper: provider.wrapper });
   const accounts = view.container;
   const button = (selector: string) => accounts.querySelector<HTMLButtonElement>(selector)!;
+  const accountPicker = () => accounts.querySelector<HTMLElement>(auth("account-picker"))!;
+  const accountTrigger = () =>
+    accountPicker().querySelector<HTMLButtonElement>(".picker-select__trigger")!;
   await waitForSolid(() => expect(button(auth("add-account")).disabled).toBe(false));
   return {
     accounts,
@@ -143,6 +153,29 @@ async function mount(
     query: accounts.querySelector.bind(accounts),
     queryAll: (selector: string) => accounts.querySelectorAll(selector),
     button,
+    refresh: () => pageRefresh(),
+    accountPicker,
+    accountTrigger,
+    current: () => accountTrigger().textContent,
+    async chooseAccount(value: string) {
+      await choosePickerValue(accountPicker(), value);
+      flush();
+    },
+    async accountChoices() {
+      const picker = await openPicker(accountPicker());
+      const choices = [...picker.querySelectorAll('[role="option"]')].map(
+        (option) => option.textContent,
+      );
+      accountTrigger().click();
+      flush();
+      return choices;
+    },
+    async openSignIn() {
+      button(auth("add-account")).click();
+      await waitForSolid(() =>
+        expect(button(auth("provider .picker-select__trigger")).disabled).toBe(false),
+      );
+    },
     input: (selector: string, value: string) => input(accounts, selector, value),
     text: () => accounts.textContent,
     error: () => accounts.querySelector(ui.alert)?.textContent,
@@ -156,7 +189,7 @@ async function mount(
     },
     request,
     async start(providerId = "openai") {
-      button(auth("add-account")).click();
+      button(auth("add-account"))?.click();
       await waitForSolid(() =>
         expect(button(auth("provider .picker-select__trigger")).disabled).toBe(false),
       );
@@ -200,6 +233,51 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+it.each(["identity", "write", "profile", "disconnected"] as const)(
+  "explains the %s restriction without changing saved accounts",
+  async (reason) => {
+    const h = await mount(undefined, { accounts: [personal] });
+    if (reason === "identity") {
+      h.emit({ selfUser: null });
+    } else if (reason === "write") {
+      h.emit({
+        hello: {
+          type: "hello-ok",
+          protocol: 3,
+          auth: { role: "operator", scopes: ["operator.read"] },
+        },
+      });
+    } else if (reason === "profile") {
+      h.setProfileId("");
+    } else {
+      h.emit({ phase: "reconnecting" });
+    }
+    await waitForSolid(() => expect(h.text()).toContain(copy(`unavailable.${reason}`)));
+    for (const other of ["identity", "write", "profile", "disconnected"]) {
+      if (other !== reason) {
+        expect(h.text()).not.toContain(copy(`unavailable.${other}`));
+      }
+    }
+    expect(h.calls("users.authConnect.start")).toHaveLength(0);
+    expect(h.calls("users.unlinkAuthProfile")).toHaveLength(0);
+    if (reason === "disconnected") {
+      expect(h.button(auth("add-account")).disabled).toBe(true);
+      expect(h.current()).toContain(personal.label);
+    } else {
+      expect(h.query(auth("add-account"))).toBeNull();
+    }
+  },
+);
+
+it("offers personal sign-in with write access, without requiring admin access", async () => {
+  const h = await mount();
+  expect(h.text()).toContain("Saved accounts");
+  expect(h.text()).toContain("New sessions use the shared default account.");
+  await h.openSignIn();
+  expect(h.query(auth("link-input"))).toBeNull();
+  expect(h.button(auth("provider .picker-select__trigger")).disabled).toBe(false);
+});
+
 it.each([12, 100])("does not rescan %s unchanged accounts on status publications", async (size) => {
   const accounts = Array.from({ length: size }, (_, index) => ({
     ...personal,
@@ -221,10 +299,8 @@ it.each([12, 100])("does not rescan %s unchanged accounts on status publications
   expect(scanned).toHaveLength(0);
   expect(h.calls("users.listModelAccounts")).toHaveLength(1);
   h.showAccounts(accounts.with(0, { ...accounts[0]!, label: "Renamed" }));
-  h.button(auth("accounts-refresh")).click();
-  await waitForSolid(() =>
-    expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain("Renamed"),
-  );
+  h.refresh();
+  await waitForSolid(() => expect(h.current()).toContain("Renamed"));
 });
 
 it("refreshes account defaults and appends later pages without losing earlier choices", async () => {
@@ -234,24 +310,28 @@ it("refreshes account defaults and appends later pages without losing earlier ch
   const h = await mount(undefined, { accounts: [personal] });
   const refreshed = inventory([first, updated]);
   h.request.mockResolvedValueOnce({ ...refreshed, nextCursor: "page-2" });
-  const currentAccount = () => h.query(auth("link-unlink"))?.getAttribute("aria-label");
   expect(h.text()).not.toContain(first.authProfileId);
   h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: { authChanged: false } });
   flush();
   h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
-  await waitForSolid(() => expect(currentAccount()).toContain(updated.label));
+  await waitForSolid(() => expect(h.current()).toContain(updated.label));
   h.request.mockResolvedValueOnce({ ...inventory([later]), links: refreshed.links });
   h.button(auth("accounts-more")).click();
-  await waitForSolid(() => expect(h.queryAll(auth("account-select"))).toHaveLength(2));
-  expect(h.text()).toContain(first.authProfileId);
-  expect(h.text()).toContain(later.authProfileId);
-  expect(h.query(auth("accounts-more"))).toBeNull();
+  await waitForSolid(() => expect(h.query(auth("accounts-more"))).toBeNull());
+  const choices = await h.accountChoices();
+  expect(choices).toHaveLength(4);
+  // Identical labels are told apart by their stored profile ids.
+  expect(choices[0]).toContain(first.authProfileId);
+  expect(choices[2]).toContain(later.authProfileId);
+  expect(choices[1]).not.toContain(updated.authProfileId);
   h.expectCall("users.listModelAccounts", { cursor: "page-2" });
   h.showAccounts([first, { ...later, label: "Later workspace" }]);
-  h.button(auth("accounts-refresh")).click();
-  await waitForSolid(() => expect(h.text()).toContain("Later workspace"));
-  expect(h.text()).not.toContain(first.authProfileId);
-  expect(h.text()).not.toContain(later.authProfileId);
+  h.refresh();
+  await waitForSolid(() => expect(h.current()).toContain(copy("unlinkAction")));
+  const relabelled = await h.accountChoices();
+  expect(relabelled.join(" ")).toContain("Later workspace");
+  expect(relabelled.join(" ")).not.toContain(first.authProfileId);
+  expect(relabelled.join(" ")).not.toContain(later.authProfileId);
   h.unmount();
   h.emitEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
   expect(h.request).toHaveBeenCalledTimes(4);
@@ -278,35 +358,46 @@ it.each(["select", "link"] as const)(
     );
     if (action === "link") {
       expect(h.text()).toContain(copy("empty"));
+      await h.openSignIn();
       await h.input(auth("link-input"), work.authProfileId);
       h.button(auth("link-submit")).click();
     } else {
       expect(h.query(auth("link-input"))).toBeNull();
-      expect(h.text()).toContain(work.label);
+      expect((await h.accountChoices()).join(" ")).toContain(work.label);
       expect(h.text()).not.toContain(work.authProfileId);
-      h.button('[data-auth-profile-id="openai:work"]').click();
+      await h.chooseAccount(work.authProfileId);
     }
     await waitForSolid(() => {
-      expect(h.button(auth("link-unlink")).disabled).toBe(false);
-      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(work.label);
+      expect(h.accountTrigger().disabled).toBe(false);
+      expect(h.current()).toContain(work.label);
     });
     if (action === "link") {
       expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("");
     } else {
-      expect(h.query('[data-auth-profile-id="openai:personal"]')).not.toBeNull();
+      expect((await h.accountChoices()).join(" ")).toContain(personal.label);
     }
     h.expectCall(method, { authProfileId: work.authProfileId });
     expect(h.text()).toContain(copy("notices.selected"));
-    h.button(auth("link-unlink")).click();
-    await waitForSolid(() => expect(h.queryAll(auth("account-select"))).toHaveLength(saved.length));
-    expect(h.query(auth("link-unlink"))).toBeNull();
+    await h.chooseAccount("gateway-default");
+    await waitForSolid(() => expect(h.current()).toContain(copy("unlinkAction")));
     expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("true");
     unlinkReply.resolve({ links: [] });
     await waitForSolid(() => expect(h.text()).toContain(copy("notices.cleared")));
-    h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
-    expect(h.request.mock.calls.some(([called]) => called.startsWith("users.authConnect."))).toBe(
-      false,
+    expect(h.text()).toContain(
+      "New sessions use the shared default for this provider. Saved accounts and existing sessions are unchanged.",
     );
+    const savedChoices = (await h.accountChoices()).join(" ");
+    expect(savedChoices).toContain(work.label);
+    if (action === "select") {
+      expect(savedChoices).toContain(personal.label);
+    }
+    h.expectCall("users.unlinkAuthProfile", { provider: "openai" });
+    expect(
+      h.request.mock.calls.some(
+        ([called]) =>
+          called.startsWith("users.authConnect.") && called !== "users.authConnect.catalog",
+      ),
+    ).toBe(false);
   },
 );
 
@@ -317,10 +408,10 @@ it.each(["rejection", "connection replacement"])(
     const h = await mount(async () => pending.promise, {
       accounts: [personal, work],
     });
-    h.button('[data-auth-profile-id="openai:work"]').click();
+    await h.chooseAccount(work.authProfileId);
     await waitForSolid(() => {
       expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("true");
-      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(work.label);
+      expect(h.current()).toContain(work.label);
     });
     if (outcome === "rejection") {
       pending.reject(new Error("Default selection rejected"));
@@ -329,15 +420,15 @@ it.each(["rejection", "connection replacement"])(
     }
     await waitForSolid(() => {
       expect(h.query(ui.host)?.getAttribute("aria-busy")).toBe("false");
-      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(personal.label);
-      expect(h.button('[data-auth-profile-id="openai:work"]').disabled).toBe(false);
+      expect(h.current()).toContain(personal.label);
+      expect(h.accountTrigger().disabled).toBe(false);
     });
     if (outcome === "rejection") {
       expect(h.error()).toContain("Default selection rejected");
     } else {
       pending.resolve({ links: inventory([{ ...work, selected: true }]).links });
       await advance(0);
-      expect(h.button(auth("link-unlink")).getAttribute("aria-label")).toContain(personal.label);
+      expect(h.current()).toContain(personal.label);
     }
   },
 );
@@ -348,7 +439,7 @@ it.each(["connection", "profile"] as const)(
     const h = await mount();
     const old = createDeferred<UsersListModelAccountsResult>();
     h.request.mockImplementationOnce(async () => old.promise);
-    h.button(auth("accounts-refresh")).click();
+    h.refresh();
     if (scope === "connection") {
       h.emit({ phase: "reconnecting" });
       h.emit({ phase: "connected" });
@@ -371,17 +462,18 @@ it("retains the account draft through a failed inventory refresh and recovers on
     accounts: [personal],
     scopes: ["operator.write", "operator.admin"],
   });
+  await h.openSignIn();
   const draft = await h.input(auth("link-input"), "openai:work");
   const pending = createDeferred<UsersListModelAccountsResult>();
   h.request.mockImplementationOnce(async () => pending.promise);
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(draft.disabled).toBe(true));
   expect(h.text()).toContain(personal.label);
   pending.reject(new Error("Inventory unavailable"));
   await waitForSolid(() => expect(h.error()).toContain("Inventory unavailable"));
   expect(h.query(auth("link-input"))).toBe(draft);
   expect(draft.value).toBe("openai:work");
-  h.button(auth("accounts-refresh")).click();
+  h.refresh();
   await waitForSolid(() => expect(draft.disabled).toBe(false));
   expect(h.query(ui.alert)).toBeNull();
   expect(draft.value).toBe("openai:work");
@@ -492,6 +584,7 @@ it("retains drafts through a blip, then retires the old client and its held poll
     accounts: [personal],
     scopes: ["operator.write", "operator.admin"],
   });
+  await h.openSignIn();
   await h.input(auth("link-input"), "openai:draft");
   await h.start();
   await h.input(ui.answer, "https://example.test/callback");
@@ -514,9 +607,10 @@ it("retains drafts through a blip, then retires the old client and its held poll
   h.emit({ phase: "connected" }, true);
   flush();
   expect(h.query(ui.flow)).toBeNull();
-  expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("");
+  expect(h.query(auth("link-input"))).toBeNull();
   await waitForSolid(() => expect(h.button(auth("add-account")).disabled).toBe(false));
   await h.start();
+  expect(h.query<HTMLInputElement>(auth("link-input"))?.value).toBe("");
   oldPoll.resolve(connected);
   await advance(0);
   expect(h.query<HTMLAnchorElement>(".wizard-step__external-link")?.href).toContain("state=2");
@@ -537,12 +631,14 @@ it("keeps repeated failed status checks retryable and retains the answer while c
   });
   await h.start();
   await advance(2_000);
+  expect(h.error()).toContain(copy("statusFailed"));
   expect(h.error()).toContain("Gateway disconnected");
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
   const answer = await h.input(ui.answer, "https://example.test/callback");
   h.button(auth("connect-check")).click();
   await waitForSolid(() => {
+    expect(h.error()).toContain(copy("actionFailed"));
     expect(h.error()).toContain("Gateway disconnected");
     expect(h.button(auth("connect-check")).disabled).toBe(false);
   });
@@ -600,6 +696,7 @@ it("adds a catalog-provided account through its masked auth step without provide
         "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
     },
   );
+  await h.openSignIn();
   expect(h.text()).toContain("wss://test.invalid/control");
   expect(h.accounts.innerHTML).not.toContain("synthetic-");
   await h.start("xai");

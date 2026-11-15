@@ -4,7 +4,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
-import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
+import { parseGatewayClientPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
 import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
@@ -22,10 +22,12 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../infra/gateway-discovery-targets.js";
+import { formatHostForUrl } from "../infra/net/hostname.js";
 import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-display.js";
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { monotonicNow } from "../shared/monotonic-time.js";
 import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import {
@@ -56,7 +58,7 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return null;
   }
   const user = normalizeOptionalString(input.user) ?? "";
-  return `${user ? `${user}@` : ""}${host}${input.port ? `:${input.port}` : ""}`;
+  return `${user ? `${user}@` : ""}${formatHostForUrl(host)}${input.port ? `:${input.port}` : ""}`;
 }
 
 export async function gatewayStatusCommand(
@@ -79,14 +81,14 @@ export async function gatewayStatusCommand(
     explicitAuth: resolveExplicitGatewayAuth(opts),
     errorHint: "Fix: pass --token or --password with --url.",
   });
-  const startedAt = Date.now();
+  const startedAt = monotonicNow();
   const cfg = await readBestEffortConfig();
   const rich = isRich() && opts.json !== true;
   const defaultTimeoutMs = 3000;
   const overallTimeoutMs = parseTimeoutMsWithFallback(opts.timeout, defaultTimeoutMs, {
     invalidType: "error",
   });
-  const portOverride = parseGatewayPortOption(opts.port);
+  const portOverride = parseGatewayClientPortOption(opts.port);
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
@@ -268,7 +270,7 @@ export async function gatewayStatusCommand(
                 const parsed = parseSshTarget(sshRouteTarget);
                 if (parsed) {
                   const config = await resolveSshConfig(parsed, {
-                    explicitPort: /:\d+$/.test(sshRouteTarget.trim()),
+                    explicitPort: parsed.explicitPort,
                     identity: sshIdentity ?? undefined,
                     timeoutMs: Math.min(800, remainingMs()),
                     signal: controller.signal,
@@ -483,7 +485,7 @@ export async function gatewayStatusCommand(
       degraded,
       capability,
       ts: Date.now(),
-      durationMs: Date.now() - startedAt,
+      durationMs: Math.round(monotonicNow() - startedAt),
       timeoutMs: overallTimeoutMs,
       primaryTargetId: primary?.target.id ?? null,
       warnings,

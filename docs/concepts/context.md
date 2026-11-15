@@ -39,6 +39,11 @@ capacity and configured limits. If neither current metadata nor a matching
 verified budget is available, the denominator is `?` (`null` in session-list
 JSON); reports do not substitute a generic window or another model's capacity.
 
+For models with selectable windows, `/status` and `session_status` use the selected
+window or the catalog's default window, rather than the model's larger scalar
+capacity. This also applies to the active fallback model; a smaller configured
+runtime cap still takes precedence.
+
 The Control UI context meter uses the last run's prompt budget when it still
 matches the selected model and effective context cap. This budget leaves room
 for the runtime's compaction reserve. Its label is **Prompt budget (last run)**:

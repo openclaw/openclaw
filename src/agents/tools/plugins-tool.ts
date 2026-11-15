@@ -36,7 +36,7 @@ function pluginsToolResult(payload: Record<string, unknown>, refreshUnavailable 
     .join(" ");
   const response = continuation ? { ...payload, next: continuation } : payload;
   const size = boundedJsonUtf8Bytes(response, PLUGINS_TOOL_RESULT_MAX_BYTES);
-  const text = size.complete ? JSON.stringify(response, null, 2) : undefined;
+  const text = size.complete ? JSON.stringify(response) : undefined;
   if (text !== undefined && Buffer.byteLength(text, "utf8") <= PLUGINS_TOOL_RESULT_MAX_BYTES) {
     return textResult(text, response);
   }
@@ -104,6 +104,17 @@ const PluginsToolSchema = Type.Object(
     version: Type.Optional(
       Type.String({ description: "ClawHub package version; omit for official catalog installs." }),
     ),
+    expectedPluginId: Type.Optional(
+      Type.String({
+        description: "Exact plugin identity required by a saved Template setup requirement.",
+      }),
+    ),
+    expectedIntegrity: Type.Optional(
+      Type.String({
+        description:
+          "Pinned ClawHub SHA-256 artifact integrity; never replaces current capability consent.",
+      }),
+    ),
     reviewToken: Type.Optional(
       Type.String({ description: "Capability review acknowledged by the operator." }),
     ),
@@ -156,6 +167,8 @@ export function createPluginsTool(options?: {
           return await handoffSessionTool({
             ...options,
             name: "Plugin reload",
+            terminal: true,
+            fenceSuccessors: true,
             operation,
             requestOwners,
             signal,
@@ -192,12 +205,19 @@ export function createPluginsTool(options?: {
             );
           }
           const version = readToolStringParam(params, "version");
+          const expectedPluginId = readToolStringParam(params, "expectedPluginId");
+          const expectedIntegrity = readToolStringParam(params, "expectedIntegrity");
           method = "plugins.install";
           request = {
             source,
             ...(source === "official"
               ? { pluginId: required("pluginId") }
-              : { packageName: required("packageName"), ...(version ? { version } : {}) }),
+              : {
+                  packageName: required("packageName"),
+                  ...(version ? { version } : {}),
+                  ...(expectedPluginId ? { expectedPluginId } : {}),
+                  ...(expectedIntegrity ? { expectedIntegrity } : {}),
+                }),
             ...(params.acknowledgeInstallPolicyWarning === true
               ? { acknowledgeInstallPolicyWarning: true }
               : {}),
@@ -243,12 +263,12 @@ export function createPluginsTool(options?: {
       if (action === "list") {
         // SAFETY: The list action dispatches only plugins.list, whose handler returns listManagedPlugins.
         const inventory = result as Awaited<ReturnType<typeof listManagedPlugins>>;
-        const query = readToolStringParam(params, "query")?.toLowerCase();
+        const query = readToolStringParam(params, "query")?.toLowerCase().normalize("NFC");
         const matching = inventory.plugins.filter(
           (plugin) =>
             !query ||
             [plugin.id, plugin.name, plugin.description].some((value) =>
-              value?.toLowerCase().includes(query),
+              value?.toLowerCase().normalize("NFC").includes(query),
             ),
         );
         return pluginsToolResult({

@@ -6,6 +6,7 @@ import type {
 } from "./restart-health.types.js";
 
 const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
+  "auth-rejected": "the Gateway rejected this CLI's credentials",
   "plugin-errors": "activated plugins reported load errors",
   "channel-errors": "channel health checks failed",
   "version-mismatch": "the running Gateway version did not match the expected version",
@@ -93,7 +94,10 @@ export function formatGatewayRestartFailure(params: {
   health: GatewayRestartSnapshot;
   port: number;
   defaultTimeoutSeconds: number;
+  /** The lifecycle action to name; `gateway start` and install never restart anything. */
+  action?: "start" | "restart";
 }): { statusLine: string; failMessage: string } {
+  const { action = "restart" } = params;
   const refusal = params.health.runtime?.systemd?.startRefusal;
   if (params.health.waitOutcome === "service-definition-refused" && refusal) {
     const message = `SERVICE-DEFINITION: ${refusal.message}`;
@@ -112,13 +116,13 @@ export function formatGatewayRestartFailure(params: {
   if (params.health.waitOutcome === "stopped-free") {
     const elapsedSeconds = Math.max(1, Math.round((params.health.elapsedMs ?? 0) / 1000));
     return {
-      statusLine: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
-      failMessage: `Gateway restart failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
+      statusLine: `Gateway ${action} failed after ${elapsedSeconds}s: service stayed stopped and port ${params.port} stayed free.`,
+      failMessage: `Gateway ${action} failed after ${elapsedSeconds}s: service stayed stopped and health checks never came up.`,
     };
   }
   const reason = params.health.waitOutcome && restartFailureReasons[params.health.waitOutcome];
   if (reason) {
-    const message = `Gateway restart failed: ${reason}.`;
+    const message = `Gateway ${action} failed: ${reason}.`;
     return { statusLine: message, failMessage: message };
   }
   const timeoutSeconds = Math.max(
@@ -131,7 +135,7 @@ export function formatGatewayRestartFailure(params: {
   );
   return {
     statusLine: `Timed out after ${timeoutSeconds}s waiting for gateway port ${params.port} to become healthy.`,
-    failMessage: `Gateway restart timed out after ${timeoutSeconds}s waiting for health checks.`,
+    failMessage: `Gateway ${action} timed out after ${timeoutSeconds}s waiting for health checks.`,
   };
 }
 

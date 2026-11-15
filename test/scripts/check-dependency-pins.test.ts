@@ -3,10 +3,9 @@ import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
-import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
 
-const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
 const hangingGitTimeoutMs = 1_000;
 const revision = "0123456789abcdef0123456789abcdef01234567";
@@ -41,7 +40,7 @@ fi
 }
 
 function makeRepo(manifests: Record<string, unknown> = { "package.json": {} }, workspace?: string) {
-  const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-");
+  const dir = tempDirs.make("openclaw-dependency-pins-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
   for (const [file, value] of Object.entries(manifests)) {
     const target = path.join(dir, file);
@@ -55,10 +54,12 @@ function makeRepo(manifests: Record<string, unknown> = { "package.json": {} }, w
   return dir;
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-  cleanupTempDirs(tempDirs);
-});
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    cleanup();
+  }),
+);
 
 it("accepts exact dependency specs and intentionally ranged peer contracts", () => {
   const dir = makeRepo(
@@ -146,10 +147,7 @@ it("reads tracked package manifests from the index when sparse checkout omits th
 });
 
 itUnix.each(["ls-files", "show"] as const)("terminates SIGTERM-resistant git %s", (command) => {
-  const dir =
-    command === "show"
-      ? makeRepo()
-      : makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
+  const dir = command === "show" ? makeRepo() : tempDirs.make("openclaw-dependency-pins-timeout-");
   if (command === "show") {
     rmSync(path.join(dir, "package.json"));
   }

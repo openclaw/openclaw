@@ -87,6 +87,10 @@ it.each([
     ["src/foo.ts", "scripts/run-vitest.mts", "scripts/run-vitest.mjs"],
     "global execution or resolution input: scripts/run-vitest.mts",
   ],
+  [
+    ["scripts/lib/vitest-node-args.mts"],
+    "global execution or resolution input: scripts/lib/vitest-node-args.mts",
+  ],
   [null, "missing changed paths"],
 ] satisfies [string[] | null, string][])(
   "classifies release fast-lane eligibility for %j",

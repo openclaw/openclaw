@@ -53,7 +53,7 @@ it("settles plugin repair after a deleted session archive is removed", async () 
   });
 });
 
-it("settles plugin repair with a warning when an older retained original is gone", async () => {
+it("settles plugin repair onto a verified survivor when an older retained original is gone", async () => {
   await withOpenClawTestState({ label: "missing-import-original" }, async (state) => {
     const { cfg, storePath } = await seedDeferredPluginSessionSource(state, "default");
     const run = () =>
@@ -92,10 +92,9 @@ it("settles plugin repair with a warning when an older retained original is gone
         await settleRetainedDoctorSessionSources(report, ["fixture-plugin"], authority, () =>
           authority.assertCurrent(),
         );
-        expect(report.targets.flatMap((owner) => owner.issues)).toContainEqual({
-          code: "historical_transcript_deferred",
-          message: expect.stringContaining("artifact is unexpectedly missing"),
-        });
+        expect(report.targets.flatMap((owner) => owner.issues)).toContainEqual(
+          expect.objectContaining({ code: "historical_duplicate_settled" }),
+        );
         expect(
           readSessionSqliteMigrationManifest(report.migrationRun!.manifestPath)?.failedAt,
         ).toBeUndefined();
@@ -103,9 +102,10 @@ it("settles plugin repair with a warning when an older retained original is gone
     });
     expect(fs.existsSync(storePath)).toBe(false);
     expect(fs.readFileSync(originals[1]!, "utf8")).toBe(bytes);
-    const retained = readSessionSqliteMigrationManifest(
-      prior.manifestPath,
-    )?.targets[0]?.completedMoves.find((move) => move.archivePath === originals[0]);
-    expect(retained?.artifact?.disposal).toEqual({ state: "retained" });
+    const retained = readSessionSqliteMigrationManifest(prior.manifestPath)!.targets[0]!;
+    for (const move of [...retained.plannedMoves, ...retained.completedMoves]) {
+      expect(move.archivePath).toBe(originals[1]);
+      expect(move.artifact?.disposal).toEqual({ state: "retained" });
+    }
   });
 });
