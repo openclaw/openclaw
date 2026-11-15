@@ -997,7 +997,11 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
           delete childEnv.OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG;
           const auditConfig = resolveCiTestAuditConfig(selectedArgs);
           const auditCli =
-            observeAuditCli && !observedAuditCli && auditConfig && selectedVitestArgs.length === 0;
+            observeAuditCli &&
+            !observedAuditCli &&
+            auditConfig &&
+            vitestExtraArgs.length === 0 &&
+            (auditConfig === "test/vitest/vitest.cli-process.config.ts" || runtime === "bun");
           if (
             !nativeBun &&
             (auditCli ||

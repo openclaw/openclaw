@@ -13243,10 +13243,28 @@ describe("ci workflow guards", () => {
         { name: "first-cli", configs: [cli] },
         { name: "unit", configs: [unit] },
         { name: "mixed", configs: [unit, cli] },
-        { name: "gateway-database", configs: ["test/vitest/vitest.gateway-server-isolated.config.ts", "test/vitest/vitest.gateway-database-workers.config.ts"] },
-        { name: "gateway-methods", configs: ["test/vitest/vitest.gateway-methods.config.ts", "test/vitest/vitest.gateway-methods-isolated.config.ts"] },
+        {
+          name: "gateway-database",
+          configs: [
+            "test/vitest/vitest.gateway-server-isolated.config.ts",
+            "test/vitest/vitest.gateway-database-workers.config.ts",
+          ],
+        },
+        {
+          name: "gateway-methods",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.gateway-methods-isolated.config.ts",
+          ],
+        },
         { name: "unknown-gateway", configs: ["test/vitest/vitest.gateway-server.config.ts"] },
-        { name: "unqualified-mixed", configs: ["test/vitest/vitest.gateway-methods.config.ts", "test/vitest/vitest.infra.config.ts"] },
+        {
+          name: "unqualified-mixed",
+          configs: [
+            "test/vitest/vitest.gateway-methods.config.ts",
+            "test/vitest/vitest.infra.config.ts",
+          ],
+        },
         { name: "second-cli", configs: [cli] },
       ];
       const manifest = runCiManifestFixture({

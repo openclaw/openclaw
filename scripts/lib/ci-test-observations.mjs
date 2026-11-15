@@ -9,8 +9,14 @@ const auditConfigGroups = [
   [[auditCliConfig], auditCliConfig],
   [[auditMethodsConfig], auditMethodsConfig],
   [[auditDatabaseConfig], auditDatabaseConfig],
-  [[auditMethodsConfig, "test/vitest/vitest.gateway-methods-isolated.config.ts"], auditMethodsConfig],
-  [["test/vitest/vitest.gateway-server-isolated.config.ts", auditDatabaseConfig], auditDatabaseConfig],
+  [
+    [auditMethodsConfig, "test/vitest/vitest.gateway-methods-isolated.config.ts"],
+    auditMethodsConfig,
+  ],
+  [
+    ["test/vitest/vitest.gateway-server-isolated.config.ts", auditDatabaseConfig],
+    auditDatabaseConfig,
+  ],
 ];
 
 // Mixed commands run one process per config. Only the named failure-bearing
