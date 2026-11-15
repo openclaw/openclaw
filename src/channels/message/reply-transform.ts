@@ -70,3 +70,23 @@ export function applyChannelReplyTransform(params: {
         ),
       });
 }
+
+export function applyChannelDeliverableReplyPayload(params: {
+  messaging: ChannelMessagingAdapter | undefined;
+  payload: ReplyPayload;
+  kind: "tool" | "block" | "final";
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): ReplyPayload | null {
+  const prepare = params.messaging?.prepareDeliverableReplyPayload;
+  if (!prepare || !params.messaging) {
+    return params.payload;
+  }
+  const prepared = prepare.call(params.messaging, {
+    payload: params.payload,
+    kind: params.kind,
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  return prepared === null ? null : copyReplyPayloadMetadata(params.payload, prepared);
+}

@@ -2,7 +2,10 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
+import {
+  applyChannelDeliverableReplyPayload,
+  createChannelReplyTransform,
+} from "../../channels/message/reply-transform.js";
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
@@ -213,6 +216,19 @@ async function routeReplyOperation(
   const bundledPlugin = channelId && !loadedPlugin ? getBundledChannelPlugin(channelId) : undefined;
   const messaging = loadedPlugin?.messaging ?? bundledPlugin?.messaging;
   const threading = loadedPlugin?.threading ?? bundledPlugin?.threading;
+  const deliverablePayload =
+    operation.kind === "raw"
+      ? applyChannelDeliverableReplyPayload({
+          messaging,
+          payload,
+          kind: params.replyKind,
+          cfg,
+          accountId,
+        })
+      : payload;
+  if (!deliverablePayload) {
+    return suppress("suppressed");
+  }
   const resolvedAgentId = resolveSessionAgentId({
     sessionKey: params.sessionKey,
     config: cfg,
@@ -224,10 +240,10 @@ async function routeReplyOperation(
     accountId,
   }).responsePrefix;
   const transformReplyPayload = createChannelReplyTransform({ messaging, cfg, accountId });
-  const normalization = normalizeReplyPayloadOutcome(payload, {
+  const normalization = normalizeReplyPayloadOutcome(deliverablePayload, {
     preserveLeadingSourceBoundary:
       params.replyKind === "block" &&
-      getReplyPayloadMetadata(payload)?.streamedSourceBoundary === true,
+      getReplyPayloadMetadata(deliverablePayload)?.streamedSourceBoundary === true,
     responsePrefix,
     responsePrefixContext: params.responsePrefixContext,
     transformReplyPayload,

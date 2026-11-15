@@ -19,6 +19,10 @@ const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: C
   pluginId: "a2a",
   artifactBasename: "channel-plugin-api.js",
 });
+const { whatsappPlugin } = await loadBundledPluginFacade<{ whatsappPlugin: ChannelPlugin }>({
+  pluginId: "whatsapp",
+  artifactBasename: "channel-plugin-api.js",
+});
 
 const channelState = vi.hoisted(() => ({
   outcomes: [] as Array<"delivered" | "failed" | "held" | "ambiguous">,
@@ -344,22 +348,14 @@ describe("follow-up delivery channel boundary", () => {
     );
   });
 
-  it("carries current-reply intent through queued status delivery", async () => {
+  it("carries current-reply intent and dedupes status against its thread root", async () => {
     registerCurrentReplyThreading();
     const turn = createTurn("discord", "slack");
     turn.queued.originatingThreadId = "111.000";
     channelState.outcomes = ["delivered"];
     await sendToOrigin(turn, [currentReply], { kind: "block" });
-
-    expect(channelState.deliver).toHaveBeenCalledWith(
-      expect.objectContaining({ replyToId: "111.000" }),
-      undefined,
-      undefined,
-    );
-  });
-
-  it("dedupes a current-reply status against its actual thread root", () => {
-    registerCurrentReplyThreading();
+    const match = expect.objectContaining({ replyToId: "111.000" });
+    expect(channelState.deliver).toHaveBeenCalledWith(match, undefined, undefined);
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: {},
@@ -376,42 +372,54 @@ describe("follow-up delivery channel boundary", () => {
   });
 
   it("renders post-compaction model failures after queued payload selection", async () => {
+    const payload = { text: "⚠️ Provider billing failed.", isError: true };
+    const outcome = { kind: "rejected" as const, payload, postCompactionModelFailure: true };
     const decision = await resolveFollowupDeliveryDecision({
       turn: createTurn(),
-      execution: {
-        runId: "run-1",
-        outcome: {
-          kind: "rejected",
-          payload: { text: "⚠️ Provider billing failed.", isError: true },
-          postCompactionModelFailure: true,
-        },
-      },
+      execution: { runId: "run-1", outcome },
     });
+    const text = [
+      "⚠️ Context compaction succeeded, but the later model request still failed.",
+      "Provider billing failed.",
+    ].join(" ");
+    expect(decision).toMatchObject({ kind: "deliver", payloads: [{ text, isError: true }] });
+  });
 
-    expect(decision).toMatchObject({
-      kind: "deliver",
-      payloads: [
-        {
-          text: "⚠️ Context compaction succeeded, but the later model request still failed. Provider billing failed.",
-          isError: true,
-        },
-      ],
-    });
+  it("suppresses WhatsApp text tool chatter on queued turns", async () => {
+    register(whatsappPlugin);
+    const turn = createTurn("whatsapp", "whatsapp");
+    turn.queued.originatingTo = "+15551234567";
+    const observed = vi.fn();
+    const toolPayloads = [
+      { text: "verbose=full tool stdout" },
+      { text: "verbose=full tool stdout", mediaUrl: "https://x.test/chart.png" },
+    ];
+    const midErr = { text: "mid error", isError: true };
+    channelState.outcomes = ["delivered", "delivered"];
+    await sendToOrigin(turn, toolPayloads, { kind: "tool", onObservedReplyDelivery: observed });
+    await sendToOrigin(turn, [currentReply, midErr], { kind: "block" });
+    await sendToOrigin(turn, [{ text: "final error", isError: true }], { kind: "final" });
+    expect(observed).toHaveBeenCalledOnce();
+    expect(channelState.deliver.mock.calls.map(([send]) => send.payloads)).toEqual([
+      [{ text: "", mediaUrls: ["https://x.test/chart.png"] }],
+      [{ text: "final error", isError: true }],
+    ]);
   });
 
   it("preserves the batched reply slot when earlier media was already sent", () => {
-    const duplicatePayload = { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" };
-
+    const duplicate = { mediaUrl: "/tmp/already-sent.png", replyToId: "parent" };
+    const answer = { text: "actual answer", replyToId: "parent" };
+    const sentMediaUrls = ["/tmp/already-sent.png"];
     expect(
       resolveFollowupDeliveryPayloads({
         cfg: {},
-        payloads: [duplicatePayload, { text: "actual answer", replyToId: "parent" }],
+        payloads: [duplicate, answer],
         originatingChannel: "discord",
         originatingReplyToMode: "batched",
-        sentMediaUrls: ["/tmp/already-sent.png"],
+        sentMediaUrls,
         sentTexts: ["already sent"],
       }),
-    ).toEqual([{ text: "actual answer", replyToId: "parent" }]);
+    ).toEqual([answer]);
   });
 
   it("dedupes later Slack replies against their actual first-mode transport thread", () => {

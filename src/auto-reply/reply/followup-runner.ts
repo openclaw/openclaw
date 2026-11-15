@@ -147,7 +147,8 @@ export function createFollowupRunner(
       turn: AdmittedFollowupTurn,
       payloads: ReplyPayload[],
       kind: "tool" | "block",
-    ) => {
+    ): Promise<boolean> => {
+      let progressDelivered = false;
       const delivery = await deliverFollowupDecision({
         decision: { kind: "deliver", payloads },
         turn,
@@ -155,9 +156,13 @@ export function createFollowupRunner(
         runId: turn.runId,
         runFollowup,
         kind,
-        onObservedReplyDelivery,
+        onObservedReplyDelivery: async () => {
+          progressDelivered = true;
+          await onObservedReplyDelivery();
+        },
       });
       deliveryPending ||= delivery.kind === "pending";
+      return progressDelivered || delivery.payloads.length > 0;
     };
     const endDeliveryCorrelations = (queued.deliveryCorrelations ?? [])
       .map((correlation) => correlation.begin())
