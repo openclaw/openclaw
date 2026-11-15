@@ -13,7 +13,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { openNodeSqliteDatabase, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 import { pathEntryExists } from "./path-existence.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { copySqliteFile } from "./sqlite-file-copy.js";
@@ -36,11 +36,11 @@ import {
   hashOpenPublishedFile,
   hashPublishedFile,
   hashPublishedFileSync,
-  removePublicationStagingDirectory,
   removePublishedTargetIfOwned,
   sameFileStatFingerprint,
   type SqliteFileContent,
 } from "./sqlite-snapshot-file.js";
+import { removePublicationStagingDirectory } from "./sqlite-snapshot-publication-cleanup.js";
 import {
   prepareSqliteReadOnlyLocation,
   withSqliteSnapshotSource,
@@ -109,12 +109,9 @@ async function copyFileExclusive(
   let target: Awaited<ReturnType<typeof fs.open>> | undefined;
   let targetIdentity: BigIntStats | undefined;
   try {
-    const publication = await copySqliteFile(
-      sourcePath,
-      targetPath,
-      sourceFingerprint,
+    const publication = await copySqliteFile(sourcePath, targetPath, sourceFingerprint, {
       beforeByteCopy,
-    );
+    });
     target = await fs.open(targetPath, "r+");
     // Native receipts retain exact Windows file IDs beyond Number precision.
     const openedIdentity = await target.stat({ bigint: true });
@@ -156,6 +153,7 @@ export async function createStoppedSqliteSnapshot(options: {
   sourcePath: string;
   targetPath: string;
   sourceIdentity: BigIntStats;
+  integrity?: CreateVerifiedSqliteSnapshotOptions["integrity"];
 }): Promise<VerifiedSqliteSnapshot> {
   if (options.sourceIdentity.size === 0n) {
     throw new Error(`SQLite snapshot source must not be empty: ${options.sourcePath}`);
@@ -169,6 +167,9 @@ export async function createStoppedSqliteSnapshot(options: {
   let userVersion: number;
   try {
     configureSqliteSnapshotPragmas(snapshot);
+    if (options.integrity) {
+      assertSqliteIntegrity(snapshot, options.targetPath, options.integrity);
+    }
     userVersion = readSqliteUserVersion(snapshot);
   } finally {
     snapshot.close();
@@ -462,13 +463,14 @@ async function publishSqliteFile(
       expectedIdentity,
     );
     assertExpectedContent(publishedContent, expectedContent, options.targetPath);
-    await fs.rmdir(stagingDir);
+    // Retiring an open hard-link alias can leave an NFS .nfs file in staging.
+    await target.close();
+    target = undefined;
+    await removePublicationStagingDirectory(stagingDir, stagingIdentity);
     requireDirectorySync(
       await syncDirectory(targetDirectoryReceipt),
       "SQLite publication directory",
     );
-    await target.close();
-    target = undefined;
     targetPinFileDescriptor = fsSync.openSync(options.targetPath, "r");
     assertOpenFileIdentitySync(targetPinFileDescriptor, options.targetPath, expectedIdentity);
 
@@ -560,6 +562,7 @@ export async function createVerifiedSqliteSnapshot(
   options: CreateVerifiedSqliteSnapshotOptions,
 ): Promise<VerifiedSqliteSnapshot> {
   const retained = options.sourceAcquisition?.preparedSource;
+  const cleanupOptions = { cleanupFailure: options.sourceAcquisition?.cleanupFailure };
   // Take cleanup custody before any asynchronous admission; a rejected transfer
   // must retire this image rather than reacquire a different source generation.
   const create = async () => {
@@ -568,6 +571,16 @@ export async function createVerifiedSqliteSnapshot(
       : options.sourcePath;
     await assertRegularSourceFile(sourcePath, options.requireNonEmptySource === true);
     await assertTargetAbsent(options.targetPath);
+    const acquireSource = async <T>(prepare: () => Promise<T>): Promise<T> => {
+      const sourceBytes = options.onStage ? (await fs.stat(sourcePath)).size : 0;
+      options.onStage?.("source-acquisition", "start", sourceBytes);
+      return await prepare();
+    };
+    const reportAcquired = async (privateSourcePath: string) => {
+      if (options.onStage) {
+        options.onStage("source-acquisition", "done", (await fs.stat(privateSourcePath)).size);
+      }
+    };
 
     if (retained) {
       const current = captureSqlitePrivateSnapshotFamily(
@@ -591,32 +604,40 @@ export async function createVerifiedSqliteSnapshot(
         sourcePath,
         options.integrity,
       );
-      const prepared = await prepareSqliteReadOnlyLocation(sourcePath, {
-        preserveSourceArtifacts: true,
-      });
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity),
+      const prepared = await acquireSource(() =>
+        prepareSqliteReadOnlyLocation(sourcePath, { preserveSourceArtifacts: true }),
       );
+      return withPreparedSqliteSnapshot(prepared, async (privateSourcePath) => {
+        await reportAcquired(privateSourcePath);
+        return verifyAndPublishSqliteSnapshot(options, privateSourcePath, recordSourceIntegrity);
+      });
     }
     if (options.sourceAcquisition) {
-      const prepared = options.sourceAcquisition.preserveSourceArtifacts
-        ? await prepareSqliteReadOnlyCopyInProcess(
-            sourcePath,
-            options.sourceAcquisition.stagingRoot,
-          )
-        : await prepareSqliteReadOnlyLocationInProcess(
-            sourcePath,
-            options.sourceAcquisition.stagingRoot,
-            undefined,
-            options.onProgress,
-          );
-      return withPreparedSqliteSnapshot(prepared, (privateSourcePath) =>
-        verifyAndPublishSqliteSnapshot(options, privateSourcePath),
+      const acquisition = options.sourceAcquisition;
+      const prepared = await acquireSource(() =>
+        acquisition.preserveSourceArtifacts
+          ? prepareSqliteReadOnlyCopyInProcess(sourcePath, acquisition.stagingRoot)
+          : prepareSqliteReadOnlyLocationInProcess(
+              sourcePath,
+              acquisition.stagingRoot,
+              undefined,
+              options.onProgress,
+            ),
+      );
+      return withPreparedSqliteSnapshot(
+        prepared,
+        async (privateSourcePath) => {
+          await reportAcquired(privateSourcePath);
+          return verifyAndPublishSqliteSnapshot(options, privateSourcePath);
+        },
+        cleanupOptions,
       );
     }
     return verifyAndPublishSqliteSnapshot(options);
   };
-  return retained ? withPreparedSqliteSnapshot(retained.prepared, create) : create();
+  return retained
+    ? withPreparedSqliteSnapshot(retained.prepared, create, cleanupOptions)
+    : create();
 }
 
 async function verifyAndPublishSqliteSnapshot(
@@ -629,11 +650,16 @@ async function verifyAndPublishSqliteSnapshot(
     : await createPrivateSqliteTempDirectory(path.dirname(options.targetPath), ".sqlite-snapshot-");
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = privateSourcePath ?? path.join(stagingDir, "database.sqlite");
+  let outputPath = stagedPath;
+  let sourceBytes = 0;
   let stagedIdentity: BigIntStats | undefined;
   try {
     await withSqliteSnapshotSource(
       privateSourcePath ?? options.sourcePath,
       async (snapshotSourcePath) => {
+        if (options.onStage) {
+          sourceBytes = (await fs.stat(snapshotSourcePath)).size;
+        }
         if (!privateSourcePath) {
           await fs.rm(stagedPath, { force: true });
         }
@@ -656,12 +682,18 @@ async function verifyAndPublishSqliteSnapshot(
             // Only normalization without rewrites or callbacks can defer admission
             // to the final private image; all publication byte checks still apply.
             if (autoVacuum !== 0 && autoVacuum !== 2) {
+              options.onStage?.("source-integrity", "start", sourceBytes);
               assertSqliteIntegrity(source, options.sourcePath, options.integrity);
+              options.onStage?.("source-integrity", "done", sourceBytes);
               recordSourceIntegrity?.();
             }
             options.validate?.(source, options.sourcePath);
             if (!privateSourcePath) {
+              options.onStage?.("online-copy", "start", sourceBytes);
               await backupNodeSqliteDatabase(source, stagedPath, options.onProgress);
+              if (options.onStage) {
+                options.onStage("online-copy", "done", (await fs.stat(stagedPath)).size);
+              }
             }
           } finally {
             source.exec("ROLLBACK;");
@@ -672,6 +704,9 @@ async function verifyAndPublishSqliteSnapshot(
           }
         }
       },
+      options.onStage
+        ? (phase, bytes) => options.onStage?.("source-acquisition", phase, bytes)
+        : undefined,
     );
 
     await fs.chmod(stagedPath, 0o600);
@@ -687,18 +722,29 @@ async function verifyAndPublishSqliteSnapshot(
       // checkpoints opt out because VACUUM can rewrite implicit row IDs. DELETE
       // journaling above still makes the published artifact single-file.
       if (!options.preserveRowIds) {
-        snapshot.exec("VACUUM;");
+        options.onStage?.("vacuum", "start", sourceBytes);
+        // Keep the database-sized rebuild on the staging volume rather than
+        // SQLite's potentially quota-limited SQLITE_TMPDIR/TMPDIR filesystem.
+        // Reuse the staging payload name recognized by abandoned-snapshot reclamation.
+        const compactedPath = path.join(stagingDir, "database.sqlite.partial");
+        snapshot.prepare("VACUUM INTO ?;").run(resolveSqliteFilesystemPath(compactedPath));
+        outputPath = compactedPath;
+        await fs.chmod(outputPath, 0o600);
+        options.onStage?.("vacuum", "done", (await fs.stat(outputPath)).size);
       }
       // Publication validates this output once, after transfer and before exposing the target.
       const userVersion = readSqliteUserVersion(snapshot);
       snapshot.close();
-      await syncFile(stagedPath);
-      stagedIdentity = await fs.lstat(stagedPath, { bigint: true });
-      const expectedContent = await hashPublishedFile(stagedPath, stagedIdentity);
+      await syncFile(outputPath);
+      stagedIdentity = await fs.lstat(outputPath, { bigint: true });
+      const publishedBytes = Number(stagedIdentity.size);
+      options.onStage?.("hash", "start", publishedBytes);
+      const expectedContent = await hashPublishedFile(outputPath, stagedIdentity);
+      options.onStage?.("hash", "done", publishedBytes);
       await publishSqliteFile(
         {
           sourceIdentity: stagedIdentity,
-          sourcePath: stagedPath,
+          sourcePath: outputPath,
           targetPath: options.targetPath,
           expectedContent,
           beforePublish: options.beforePublish,
@@ -709,7 +755,9 @@ async function verifyAndPublishSqliteSnapshot(
             });
             try {
               published.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+              options.onStage?.("published-integrity", "start", publishedBytes);
               assertSqliteIntegrity(published, options.targetPath, options.integrity);
+              options.onStage?.("published-integrity", "done", publishedBytes);
               options.validate?.(published, options.targetPath);
             } finally {
               published.close();

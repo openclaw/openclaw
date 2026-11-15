@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import {
   enqueueMessageInjection,
   MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionClosedError,
   withMessageInjectionAdmission,
 } from "../../auto-reply/reply/message-injection-authority.js";
 import { throwCollectedErrors } from "../../infra/error-graph-internal.js";
@@ -536,7 +537,7 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       try {
         await withMessageInjectionAdmission(prepareInjection, () => {
           if (canInject && !canInject()) {
-            throw new Error("active session is finalizing");
+            throw new MessageInjectionClosedError();
           }
           notify = this.queueSteer(message, expandedText);
           onAccepted?.();

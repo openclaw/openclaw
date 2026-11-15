@@ -1,10 +1,10 @@
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { parseRegistryNpmSpec, type NpmSpecResolution } from "../infra/npm-registry-spec.js";
+import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveTrustedOfficialPrereleaseResolution } from "./install-npm-metadata.js";
+import { validateOpenClawPackageInstallCompatibility } from "./package-compat.js";
 import {
   expectedIntegrityForNpmUpdate,
-  isNpmMetadataCompatibleWithCurrentHost,
   shouldBypassTrustedOfficialUnchangedNpmCheck,
 } from "./update-source.js";
 
@@ -39,9 +39,14 @@ export async function prepareNpmPluginUpdateMetadata(params: {
       record: params.record,
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     });
+  const currentHostVersion = resolveCompatibilityHostVersion();
   if (
     !params.catalogExpectedIntegrity &&
-    (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata) ||
+    (validateOpenClawPackageInstallCompatibility({
+      currentHostVersion,
+      pluginId: expectedIntegrityMetadata.name ?? params.spec,
+      packageMetadata: expectedIntegrityMetadata.packageOpenClaw,
+    }) !== null ||
       (bypassUnchanged && !trustedPrereleaseResolution))
   ) {
     expectedIntegrity = undefined;
@@ -53,6 +58,12 @@ export async function prepareNpmPluginUpdateMetadata(params: {
       ...(trustedPrereleaseResolution ? { trustedPrereleaseResolution } : {}),
     },
     expectedIntegrity,
-    unchangedEligible: !bypassUnchanged && isNpmMetadataCompatibleWithCurrentHost(params.metadata),
+    unchangedEligible:
+      !bypassUnchanged &&
+      validateOpenClawPackageInstallCompatibility({
+        currentHostVersion,
+        pluginId: params.metadata.name ?? params.spec,
+        packageMetadata: params.metadata.packageOpenClaw,
+      }) === null,
   };
 }

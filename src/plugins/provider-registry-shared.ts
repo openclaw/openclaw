@@ -88,3 +88,18 @@ export function buildCapabilityProviderIndex<T extends { id: string; aliases?: r
 
   return index;
 }
+
+/** Keeps provider lookups within one already-acquired operation scope. */
+export function createCapabilityProviderLookup<
+  T extends { id: string; aliases?: readonly string[] },
+>(providers: readonly T[]) {
+  const canonical = buildCapabilityProviderIndex(providers, "canonical");
+  const aliases = buildCapabilityProviderIndex(providers, "aliases");
+  return {
+    getProvider: (id: string | undefined) => {
+      const normalized = normalizeCapabilityProviderId(id);
+      return normalized ? aliases.get(normalized) : undefined;
+    },
+    listProviders: () => [...canonical.values()],
+  };
+}

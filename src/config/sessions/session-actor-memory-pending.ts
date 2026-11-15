@@ -20,6 +20,7 @@ import type {
 } from "./session-pending-input-operations.types.js";
 import {
   isFinalInputCompletion,
+  markSessionPendingInputCancelledByUser,
   normalizePendingInputReceiptRunIds,
   projectPendingInputReceipts,
   resolvePendingInputHistoryLimit,
@@ -217,7 +218,12 @@ export function createSessionActorMemoryPending(
       }
       const row = pending(input);
       if (input.kind === "stage") {
-        if (row?.input_id !== input.expected.existing?.input_id) {
+        // Compare-and-set: a restage may rebind run_id, so a concurrent reopen must lose.
+        if (
+          row?.input_id !== input.expected.existing?.input_id ||
+          row?.run_id !== input.expected.existing?.run_id ||
+          row?.state !== input.expected.existing?.state
+        ) {
           throw new SessionPendingInputCustodyError(
             "Pending input changed before staging committed",
           );
@@ -254,7 +260,12 @@ export function createSessionActorMemoryPending(
       options.admit("transaction", grant);
       if (input.kind === "stage") {
         const staged: SessionPendingInputRow = row
-          ? { ...row, state: "queued", lifecycle_generation: input.lifecycleGeneration }
+          ? {
+              ...row,
+              state: "queued",
+              run_id: input.runId,
+              lifecycle_generation: input.lifecycleGeneration,
+            }
           : {
               seq:
                 [...state.pendingInputs.values()].reduce(
@@ -309,7 +320,13 @@ export function createSessionActorMemoryPending(
           receipt.outcome = structuredClone(outcome);
         }
       } else if (row?.state === "queued" && row.consumed_event_id === null) {
-        state.pendingInputs.set(input.idempotencyKey, { ...row, state: input.disposition });
+        state.pendingInputs.set(input.idempotencyKey, {
+          ...row,
+          state: input.disposition,
+          ...(input.cancelledByUser
+            ? { message_json: markSessionPendingInputCancelledByUser(row.message_json) }
+            : {}),
+        });
         if (input.disposition === "cancelled") {
           receipt.withdrawnInputId = input.inputId;
         }

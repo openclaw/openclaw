@@ -3,7 +3,9 @@ import http from "node:http";
 import { duplexPair, PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { markGatewayIngressTransport } from "../ingress-attribution.js";
 import { handleDesktopAudioUpgrade } from "./audio-bridge.js";
 import { closeServer, listenLoopback } from "./desktop.test-support.js";
 import {
@@ -11,6 +13,7 @@ import {
   mintDesktopObserverToken,
   releaseDesktopObserverToken,
 } from "./observe-bridge.js";
+import { resolveDesktopObserveRequester } from "./observe-requester.js";
 import type { DesktopSessionRegistry } from "./session-registry.js";
 const version = Buffer.from("RFB 003.008\n");
 const httpServer = http.createServer();
@@ -19,6 +22,14 @@ let registry: Pick<DesktopSessionRegistry, "attachObserver" | "claimStream">;
 const cleanups: Array<() => void> = [];
 beforeAll(async () => {
   httpServer.on("upgrade", (req, socket, head) => {
+    const peerKey = req.headers["x-test-id-peer"];
+    if (typeof peerKey === "string") {
+      markGatewayIngressTransport(req, {
+        kind: "openclaw-id-tunnel",
+        peerKey,
+        clientIp: "198.51.100.1",
+      });
+    }
     if (!handleDesktopAudioUpgrade(req, socket, head)) {
       handleDesktopObserveUpgrade(req, socket, head, { registry });
     }
@@ -30,13 +41,33 @@ afterEach(() => {
   vi.useRealTimers();
 });
 afterAll(() => closeServer(httpServer));
-async function attach(path: string) {
-  const socket = new WebSocket(origin + path);
+function requester(peerKey?: string, signal?: AbortSignal) {
+  return resolveDesktopObserveRequester({
+    client: {
+      connId: "audio-authorization-test",
+      connectionSignal: signal,
+      connect: {
+        minProtocol: 1,
+        maxProtocol: 1,
+        client: { id: GATEWAY_CLIENT_IDS.CLI, version: "test", platform: "test", mode: "cli" },
+      },
+      internal: { openclawIdPeerKey: peerKey },
+    },
+  });
+}
+function connect(path: string, peerKey?: string) {
+  const socket = new WebSocket(origin + path, {
+    headers: peerKey ? { "x-test-id-peer": peerKey } : undefined,
+  });
   cleanups.push(() => socket.terminate());
+  return socket;
+}
+async function attach(path: string, peerKey?: string) {
+  const socket = connect(path, peerKey);
   await once(socket, "open");
   return socket;
 }
-it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
+it.each(["success", "id-peer", "rejected", "released", "expired", "stale-owner"] as const)(
   "does not bypass screen authorization: %s",
   async (outcome) => {
     if (outcome === "expired") {
@@ -59,7 +90,8 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
       claimStream: () => gatewayStream,
       attachObserver: () => (outcome === "stale-owner" ? undefined : { release() {} }),
     };
-    const requester = { connId: "audio-authorization-test", isCurrent: () => true };
+    const peerKey = outcome === "id-peer" ? "iroh:owner" : undefined;
+    const observer = requester(peerKey);
     const grant = mintDesktopObserverToken({
       sourceKey: "host",
       ownerEpoch: 1,
@@ -67,10 +99,10 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
       attachment: { kind: "stream", streamId: "synthetic-rfb" },
       preauth: { auth: "vnc-password", credentials: { password: "synthetic" } },
       audio: { start },
-      requester,
+      requester: observer,
     });
     expect(grant.audio).toBeDefined();
-    const audio = await attach(grant.audio!.wsPath);
+    const audio = await attach(grant.audio!.wsPath, peerKey);
     const audioClosed = once(audio, "close");
     const expectAudioDenied = async () => {
       await audioClosed;
@@ -79,7 +111,7 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
     audio.send(JSON.stringify({ action: "start" }));
     if (outcome === "released") {
       expect(
-        await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, requester),
+        await releaseDesktopObserverToken("/desktop/observe?token=" + grant.token, observer),
       ).toBe(true);
       return expectAudioDenied();
     }
@@ -96,8 +128,7 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
         authenticated.resolve();
       }
     });
-    const screen = new WebSocket(origin + "/desktop/observe?token=" + grant.token);
-    cleanups.push(() => screen.terminate());
+    const screen = connect("/desktop/observe?token=" + grant.token, peerKey);
     const browserReplies = [version, Buffer.from([1])];
     screen.on("message", () => {
       const reply = browserReplies.shift();
@@ -132,3 +163,47 @@ it.each(["success", "rejected", "released", "expired", "stale-owner"] as const)(
     expect(start.mock.calls[0]?.[0].aborted).toBe(true);
   },
 );
+
+it.each(
+  [
+    { source: "iroh:owner", destination: "iroh:member" },
+    { source: "iroh:owner", destination: undefined },
+    { source: undefined, destination: "iroh:member" },
+  ].flatMap(({ source, destination }) =>
+    ["observe", "audio"].map((kind) => ({ source, destination, kind })),
+  ),
+)("refuses $kind from $source on $destination ingress", async ({ source, destination, kind }) => {
+  const controller = new AbortController();
+  cleanups.push(() => controller.abort());
+  const start = vi.fn(async () => {
+    throw new Error("A different observer must not start capture");
+  });
+  const claimStream = vi.fn();
+  const attachObserver = vi.fn();
+  registry = { claimStream, attachObserver };
+  const grant = mintDesktopObserverToken({
+    sourceKey: "host",
+    ownerEpoch: 1,
+    control: false,
+    attachment: { kind: "stream", streamId: "unclaimed" },
+    preauth: { auth: "vnc-password", credentials: { password: "synthetic" } },
+    audio: { start },
+    requester: requester(source, controller.signal),
+  });
+  const socket = connect(
+    kind === "audio" ? grant.audio!.wsPath : "/desktop/observe?token=" + grant.token,
+    destination,
+  );
+  const status = await new Promise<number>((resolve, reject) => {
+    socket.once("open", () => resolve(101));
+    socket.once("unexpected-response", (_request, response) => {
+      response.resume();
+      resolve(response.statusCode ?? 0);
+    });
+    socket.once("error", reject);
+  });
+  expect(status).toBe(401);
+  expect(claimStream).not.toHaveBeenCalled();
+  expect(attachObserver).not.toHaveBeenCalled();
+  expect(start).not.toHaveBeenCalled();
+});

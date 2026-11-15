@@ -108,8 +108,13 @@ function splitRichTextByChars(text: RichText, limit: number): RichText[] {
       }
       return;
     }
-    if (node.type === "mathematical_expression" || node.type === "custom_emoji") {
+    if (
+      node.type === "mathematical_expression" ||
+      node.type === "custom_emoji" ||
+      node.type === "date_time"
+    ) {
       // Atomic leaves: never sliced, only placed whole into the current piece.
+      // A sliced date_time would show the same formatted date in every piece.
       const atomicChars = countRichTextChars(node);
       if (chars > 0 && chars + atomicChars > limit) {
         flush();

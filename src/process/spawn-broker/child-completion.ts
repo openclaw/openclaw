@@ -1,5 +1,22 @@
 import type { ChildProcess } from "node:child_process";
 
+export function disposeFailedChild(child: ChildProcess | undefined): void {
+  if (!child) {
+    return;
+  }
+  // Setup can fail before Node emits its queued spawn error.
+  child.once("error", () => {});
+  if (child.pid && child.exitCode === null && child.signalCode === null) {
+    child.kill("SIGKILL");
+  }
+  if (child.connected) {
+    child.disconnect();
+  }
+  for (const stream of child.stdio ?? []) {
+    stream?.destroy();
+  }
+}
+
 /** Observe immediately after spawn, before this owner can disconnect or transfer pipes. */
 export function waitForBrokerChildCompletion(child: ChildProcess): Promise<void> {
   return new Promise((resolve) => {

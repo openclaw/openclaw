@@ -463,6 +463,7 @@ export async function executeSessionPatchMutations(params: {
                           entry: projected.entry,
                           expectedEntry: existingEntry,
                           callerCanConsent: callerIsAdmin,
+                          operatorAuthority,
                           catalog: (await catalogs.available(target.targetAgentId))?.entries,
                           validateModelSelection: projected.validateModelSelection,
                           placement: { context: params.context, sessionKey: primaryKey },
@@ -615,7 +616,7 @@ export async function executeSessionPatchMutations(params: {
                 };
                 const applyGroup = createSessionPatchGroupWriter({
                   store: groupStore,
-                  patch: first.fullPatch,
+                  targets: group,
                   project: projectGroup,
                   timing: groupTiming,
                 });

@@ -109,6 +109,7 @@ it.each(["qwen", "qwen-token-plan"])(
               id: "qwen3.8-27b",
               reasoning: true,
               input: ["text", "image"],
+              output: ["text"],
               context_window: 1_000_000,
               max_output_tokens: 131_072,
             },

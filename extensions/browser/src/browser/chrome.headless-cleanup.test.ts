@@ -226,7 +226,10 @@ function stubReadyLaunch() {
     stderr: new EventEmitter(),
     kill: vi.fn(),
   });
-  fixture.spawn.mockReturnValue(proc);
+  fixture.spawn.mockImplementation(() => {
+    fixture.diagnose.mockResolvedValue({ ok: true });
+    return proc;
+  });
   return proc;
 }
 

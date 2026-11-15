@@ -1,10 +1,13 @@
 import { gatewayCredentialScope, gatewayOriginScope } from "@openclaw/gateway-client/browser";
-import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { normalizeTabIconPreference } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import {
+  normalizeTabIconPreference,
+  UI_PREFERENCE_DEFAULTS,
+} from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import { CONTROL_UI_TOKEN_SESSION_KEY_PREFIX } from "../../../src/shared/control-ui-storage.js";
 import { DEFAULT_SIDEBAR_ENTRIES, normalizeSidebarEntries } from "../app-navigation.ts";
 import { configuredUiDevGateway } from "../dev-gateway.ts";
@@ -37,6 +40,8 @@ import {
   normalizeChatMessageMaxWidth,
   normalizeChatSendShortcut,
   normalizeChatWorkspaceDock,
+  normalizeDashboardsDisplay,
+  normalizeSessionFilesDisplay,
   normalizeTextScale,
   UI_APPEARANCE_DEFAULTS,
   type UiPreferences,
@@ -377,9 +382,9 @@ export function loadUiPreferences(
     lastActiveSessionKey: "main",
     theme: UI_APPEARANCE_DEFAULTS.theme,
     themeMode: UI_APPEARANCE_DEFAULTS.themeMode,
-    chatShowThinking: true,
-    chatShowToolCalls: true,
-    chatPersistCommentary: true,
+    chatShowThinking: UI_PREFERENCE_DEFAULTS.chatShowThinking,
+    chatShowToolCalls: UI_PREFERENCE_DEFAULTS.chatShowToolCalls,
+    chatPersistCommentary: UI_PREFERENCE_DEFAULTS.chatPersistCommentary,
     chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
@@ -442,6 +447,7 @@ export function loadUiPreferences(
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
       chatShowThinking: booleanSetting("chatShowThinking"),
       chatShowToolCalls: booleanSetting("chatShowToolCalls"),
+      chatInlineCommands: booleanSetting("chatInlineCommands"),
       chatPersistCommentary: booleanSetting("chatPersistCommentary"),
       chatShowTaskProgress: booleanSetting("chatShowTaskProgress"),
       chatCollapseTaskProgress: booleanSetting("chatCollapseTaskProgress"),
@@ -460,6 +466,8 @@ export function loadUiPreferences(
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
       chatWorkspaceDock: normalizeChatWorkspaceDock(parsed.chatWorkspaceDock),
       boardSessionViews: normalizeBoardSessionViews(parsed.boardSessionViews),
+      dashboardsDisplay: normalizeDashboardsDisplay(parsed.dashboardsDisplay),
+      sessionFilesDisplay: normalizeSessionFilesDisplay(parsed.sessionFilesDisplay),
       sidebarSessionLayouts: normalizeSidebarSessionLayouts(parsed.sidebarSessionLayouts),
       sidebarSessionActivePanels: normalizeSidebarSessionActivePanels(
         parsed.sidebarSessionActivePanels,
@@ -492,6 +500,7 @@ export function loadUiPreferences(
       ...(parsed.lobsterPetSounds === true ? { lobsterPetSounds: true } : {}),
       ...(parsed.sessionDeleteConfirm === false ? { sessionDeleteConfirm: false } : {}),
       ...(parsed.chatModelChangeConfirm === false ? { chatModelChangeConfirm: false } : {}),
+      dismissedReadOnlyConfigNotice: normalizeOptionalString(parsed.dismissedReadOnlyConfigNotice),
       ...(parsed.openLinksInControlUiBrowser === true ? { openLinksInControlUiBrowser: true } : {}),
       ...(parsed.openLinksExternally === true ? { openLinksExternally: true } : {}),
     };
@@ -627,6 +636,7 @@ export function saveSettings(
     terminalFontFamily: normalizeTerminalFontFamily(next.terminalFontFamily),
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
+    chatInlineCommands: next.chatInlineCommands === true ? true : undefined,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
     chatShowTaskProgress: next.chatShowTaskProgress === false ? false : undefined,
     chatCollapseTaskProgress: next.chatCollapseTaskProgress === true ? true : undefined,
@@ -648,6 +658,8 @@ export function saveSettings(
       next.boardSessionViews && Object.keys(next.boardSessionViews).length > 0
         ? next.boardSessionViews
         : undefined,
+    dashboardsDisplay: normalizeDashboardsDisplay(next.dashboardsDisplay),
+    sessionFilesDisplay: normalizeSessionFilesDisplay(next.sessionFilesDisplay),
     sidebarSessionLayouts:
       next.sidebarSessionLayouts && Object.keys(next.sidebarSessionLayouts).length > 0
         ? next.sidebarSessionLayouts
@@ -696,6 +708,7 @@ export function saveSettings(
     // Only the opted-out value is persisted; absence means the safe default.
     sessionDeleteConfirm: next.sessionDeleteConfirm === false ? false : undefined,
     chatModelChangeConfirm: next.chatModelChangeConfirm === false ? false : undefined,
+    dismissedReadOnlyConfigNotice: normalizeOptionalString(next.dismissedReadOnlyConfigNotice),
     // External links keep host behavior unless the operator explicitly opts in.
     openLinksInControlUiBrowser: next.openLinksInControlUiBrowser === true ? true : undefined,
     openLinksExternally: next.openLinksExternally === true ? true : undefined,

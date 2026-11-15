@@ -10,6 +10,7 @@ import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 /** Observable command facts; the custody adapter, not this view, owns termination. */
 export type OpenClawTestProcess = EventEmitter & {
   readonly pid?: number;
+  readonly memoryRootPid?: number;
   exitCode: number | null;
   signalCode: NodeJS.Signals | null;
   killed: boolean;
@@ -82,8 +83,9 @@ export async function createOpenClawTestProcess(params: {
       return true;
     },
   });
-  // Command admission may assign its PID after construction.
+  // Command admission may assign its PID later; sampling retains the separate custody root.
   Object.defineProperty(child, "pid", { get: () => adapter.pid });
+  Object.defineProperty(child, "memoryRootPid", { get: () => adapter.memoryRootPid });
   child.on("error", params.onError);
   adapter.onStdout((chunk) => stdout.write(chunk));
   adapter.onStderr((chunk) => stderr.write(chunk));

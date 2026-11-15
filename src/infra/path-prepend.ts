@@ -11,7 +11,7 @@ import {
  * On Windows, `process.env` stores it as `Path` (not `PATH`),
  * and after copying to a plain object the original casing is preserved.
  */
-export function findPathKey(env: Record<string, string>): string {
+export function findPathKey(env: Record<string, string | undefined>): string {
   if ("PATH" in env) {
     return "PATH";
   }
@@ -52,7 +52,10 @@ export function removePathPrepend(
 }
 
 /** Applies configured PATH prepends in-place, preserving Windows PATH key casing. */
-export function applyPathPrepend(env: Record<string, string>, prepend: string[] | undefined) {
+export function applyPathPrepend(
+  env: Record<string, string | undefined>,
+  prepend: string[] | undefined,
+) {
   if (!Array.isArray(prepend) || prepend.length === 0) {
     return;
   }

@@ -127,7 +127,13 @@
 @media (hover: hover) and (pointer: fine) {
   .session-diff-sync-mobile__viewport pre:not(:hover, :focus-visible) {
     --scrollbar-thumb: transparent;
-    scrollbar-color: transparent transparent;
+    --scrollbar-thumb-near: transparent;
+  }
+
+  @supports not selector(::-webkit-scrollbar) {
+    .session-diff-sync-mobile__viewport pre:not(:hover, :focus-visible) {
+      scrollbar-color: transparent transparent;
+    }
   }
 }
 

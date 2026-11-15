@@ -162,7 +162,6 @@ export function CustodianSetupCard(props: {
             </Show>
           </Show>
           <Show when={!setup().pending && result()?.status === "needs-sign-in"}>
-            <p>{t("custodian.autoSetup.signInBody")}</p>
             <Show when={!busy()}>
               <button class="btn primary" type="button" onClick={() => props.actions.signIn()}>
                 {t("custodian.autoSetup.signIn")}

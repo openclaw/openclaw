@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   Agent,
@@ -262,12 +262,17 @@ describe("ensureGlobalUndiciDispatcherStreamTimeouts", () => {
     getDefaultAutoSelectFamily.mockReturnValue(true);
     vi.mocked(isWSL2Sync).mockReturnValue(true);
     const dispatcher = installProxyDispatcher(new ManagedDispatcher());
+    const dispatch = vi.spyOn(dispatcher, "dispatch");
 
     api.ensureGlobalUndiciDispatcherStreamTimeouts({ timeoutMs: 1_900_000 });
 
     currentTimedDispatcher().dispatch(request, {});
     expect(setDefaultAutoSelectFamily).toHaveBeenNthCalledWith(1, false);
     expect(setDefaultAutoSelectFamily).toHaveBeenNthCalledWith(2, true);
+    const dispatchOrder = dispatch.mock.invocationCallOrder[0];
+    assert.isDefined(dispatchOrder);
+    expect(setDefaultAutoSelectFamily.mock.invocationCallOrder[0]).toBeLessThan(dispatchOrder);
+    expect(setDefaultAutoSelectFamily.mock.invocationCallOrder[1]).toBeGreaterThan(dispatchOrder);
     expect(dispatcher.dispatchCalls).toEqual([timedRequest()]);
   });
 

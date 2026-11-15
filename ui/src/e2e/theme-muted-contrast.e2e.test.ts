@@ -10,18 +10,10 @@ import { openPicker, pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { configSnapshot, settingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
+// Palette tests cover every family; render the default and high-contrast palettes here.
 const themeCases = [
   ["claw", "dark", "light"],
-  ["knot", "openknot", "openknot-light"],
-  ["dash", "dash", "dash-light"],
-  ["absolutely", "absolutely", "absolutely-light"],
-  ["tide", "tide", "tide-light"],
   ["beacon", "beacon", "beacon-light"],
-  ["phosphor", "phosphor", "phosphor-light"],
-  ["crt", "crt", "crt-light"],
-  ["manuscript", "manuscript", "manuscript-light"],
-  ["rose", "rose", "rose-light"],
-  ["miami", "miami", "miami-light"],
 ] as const;
 const appearances = themeCases.flatMap(([family, dark, light]) => [
   { family, mode: "dark" as const, resolved: dark },
@@ -253,10 +245,10 @@ suite.define(() => {
                 };
               });
             };
-            // Composite translucent option fills against the painted menu surface.
+            // The translucent menu surface composites over content, so measure its opaque base.
             const listboxBackground = await picker
               .locator(".picker-select__menu")
-              .evaluate((element) => getComputedStyle(element).backgroundColor);
+              .evaluate((element) => getComputedStyle(element).getPropertyValue("--popover"));
             const assertOptionContrast = async (option: typeof selected) => {
               const paint = await optionPaint(option);
               const optionColors = await page.evaluate(resolveRenderedColors, {

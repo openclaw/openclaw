@@ -1,4 +1,5 @@
 import {
+  execFileSync,
   spawn,
   spawnSync,
   type ChildProcess,
@@ -10,6 +11,7 @@ import os from "node:os";
 import path from "node:path";
 import { brotliCompressSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import {
   isDirectScriptExecution,
   resolveUiBuildEnvironment,
@@ -31,7 +33,7 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { installDistArtifactScripts } from "./dist-artifact-fixture.js";
+import { writeFixtureFiles as writeFiles } from "./z0632-fixtures.test-support.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
 const procSafeRoot = fs.realpathSync(
@@ -52,38 +54,29 @@ afterAll(async () => {
   await receipts.close();
 });
 
-function writeFiles(root: string, files: Record<string, string>): void {
-  for (const [file, bytes] of Object.entries(files)) {
-    const destination = path.join(root, file);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.writeFileSync(destination, bytes);
-  }
-}
-
+let uiFixtureSources: string[] | undefined;
 function copyUiFixture(root: string, extra: string[] = []): void {
-  for (const file of [
-    "scripts/ui.js",
-    "scripts/ui.mts",
-    "scripts/pnpm-runner.mts",
-    "scripts/run-node-package-bin.mts",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/build-identity.mts",
-    "scripts/lib/control-ui-build-inputs.mts",
-    "scripts/lib/output-root-guard.mjs",
-    "scripts/lib/record-shared.mjs",
-    "scripts/lib/prepare-control-ui-settings.mts",
-    "src/infra/process-env.ts",
-    "src/infra/windows-process-start.ts",
-    "src/shared/freebsd-process-identity.ts",
-    "src/shared/freebsd-process-identity-native.ts",
-    "src/shared/pid-alive.ts",
+  // Runtime imports plus URL launchers and cache-only inputs own this fixture.
+  // Compiler fixtures retain their separate declaration/source-signature inventory.
+  uiFixtureSources ??= [
+    ...collectRuntimeImportClosure(
+      process.cwd(),
+      [
+        "scripts/ui.js",
+        "scripts/tsx.mjs",
+        "scripts/lib/managed-memory-launcher.mts",
+        "scripts/lib/managed-windows-job-launcher.mts",
+      ],
+      { includeDynamicImports: true },
+    ),
     "ui/package.json",
-    "ui/src/build-info-normalizers.ts",
-    "packages/normalization-core/src/record-coerce.ts",
-    "packages/normalization-core/src/string-coerce.ts",
-    "packages/normalization-core/src/utf16-slice.ts",
-    ...extra,
-  ]) {
+    "packages/normalization-core/package.json",
+    ...fs
+      .readdirSync("scripts/lib")
+      .filter((file) => file.startsWith("control-ui-i18n"))
+      .map((file) => "scripts/lib/" + file),
+  ];
+  for (const file of [...uiFixtureSources, ...extra]) {
     const destination = path.join(root, file);
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.copyFileSync(file, destination);
@@ -98,7 +91,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
       'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
   });
   fs.mkdirSync(path.join(root, ".git"));
-  installDistArtifactScripts(root, [], { compiler: false });
+  for (const name of ["tsx", "@openclaw/fs-safe"]) {
+    fs.symlinkSync(
+      path.resolve("node_modules", name),
+      path.join(root, "node_modules", name),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+  }
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -293,6 +292,30 @@ async function withUiProcessCleanup(
 }
 
 describe("scripts/ui", () => {
+  it("reads the UI checkout's HEAD when launched outside it", () => {
+    const root = fs.realpathSync(tempDirs.make("openclaw-ui-git-identity-"));
+    copyUiFixture(root);
+    const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("config", "user.name", "OpenClaw Tests");
+    git("config", "user.email", "openclaw-tests@example.invalid");
+    git("-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture");
+    const commit = git("rev-parse", "HEAD").trim();
+    const modules = path.join(root, "ui/node_modules");
+    for (const name of ["vite", "dompurify"]) {
+      writeUiPackageBin(modules, name, "console.log(process.env.GIT_COMMIT);\n");
+    }
+    const result = runNode(
+      tempDirs.make("openclaw-ui-outside-"),
+      [path.join(root, "scripts/ui.js"), "build", "--help"],
+      {
+        env: mergeProcessEnv([process.env, { GIT_COMMIT: undefined, GIT_SHA: undefined }]),
+      },
+    );
+    expectExit(result);
+    expect(result.stdout.trim()).toBe(commit);
+  });
+
   it.each([
     ["standalone rebuild", "a", false, true],
     ["different source revision", "b", false, false],
@@ -350,43 +373,60 @@ describe("scripts/ui", () => {
     expect(isDirectScriptExecution(junctionScriptPath, realScriptPath, realpath)).toBe(true);
   });
 
-  it("runs build from isolated dependencies without package shims", () => {
-    const root = fs.realpathSync(tempDirs.make("openclaw-ui-layout-"));
-    const ui = path.join(root, "ui");
-    const modules = path.join(ui, "node_modules");
-    const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
-    copyUiFixture(root);
-    for (const name of ["vite", "dompurify"]) {
-      writeUiPackageBin(
-        modules,
-        name,
-        `console.log(JSON.stringify({
+  it.each(["build", "test"])(
+    "runs %s from isolated dependencies without package shims",
+    (action) => {
+      const root = fs.realpathSync(tempDirs.make("openclaw-ui-layout-"));
+      const ui = path.join(root, "ui");
+      const modules = path.join(ui, "node_modules");
+      const forwarded = ["--help", "--mode", "fixture with spaces & symbols"];
+      copyUiFixture(root);
+      for (const name of [
+        "vite",
+        "dompurify",
+        "vitest",
+        "@vitest/browser-playwright",
+        "playwright",
+      ]) {
+        writeUiPackageBin(
+          modules,
+          name,
+          `console.log(JSON.stringify({
   args: process.argv.slice(2), cwd: process.cwd(),
-  commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP
+  commit: process.env.GIT_COMMIT, timestamp: process.env.OPENCLAW_BUILD_TIMESTAMP,
+  codec: ${name === "vitest" ? "Uint8Array.fromBase64(Uint8Array.of(255).toBase64()).toHex()" : "null"}
 }));
 process.exitCode = 0;\n`,
+        );
+      }
+      const pnpm = path.join(root, "pnpm.cjs");
+      fs.writeFileSync(
+        pnpm,
+        'throw new Error("Installed UI tools must not need package shims");\n',
       );
-    }
-    const pnpm = path.join(root, "pnpm.cjs");
-    fs.writeFileSync(pnpm, 'throw new Error("Installed UI tools must not need package shims");\n');
-    const result = runNode(root, ["scripts/ui.js", "build", ...forwarded], {
-      env: mergeProcessEnv([
-        process.env,
-        {
-          PATH: "",
-          npm_execpath: pnpm,
-          ...buildEnvironment,
-        },
-      ]),
-    });
-    expectExit(result);
-    expect(JSON.parse(result.stdout)).toEqual({
-      args: ["build", ...forwarded],
-      cwd: ui,
-      commit: "a".repeat(40),
-      timestamp: "2026-08-27T00:00:00.000Z",
-    });
-  });
+      const result = runNode(root, ["scripts/ui.js", action, ...forwarded], {
+        env: mergeProcessEnv([
+          process.env,
+          {
+            PATH: "",
+            npm_execpath: pnpm,
+            ...buildEnvironment,
+          },
+        ]),
+      });
+      expectExit(result);
+      expect(JSON.parse(result.stdout)).toEqual({
+        args: [
+          ...(action === "test" ? ["run", "--config", "vitest.config.ts"] : ["build"]),
+          ...forwarded,
+        ],
+        cwd: ui,
+        commit: "a".repeat(40),
+        timestamp: "2026-08-27T00:00:00.000Z",
+        codec: action === "test" ? "ff" : null,
+      });
+    },
+  );
 
   const liveUiBuildSiblings = [
     `control-ui.build-${process.pid}-live`,

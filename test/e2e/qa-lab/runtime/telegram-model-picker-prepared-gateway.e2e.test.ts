@@ -5,6 +5,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import net from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse } from "@babel/parser";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
@@ -217,21 +218,40 @@ async function reservePort(): Promise<number> {
   return address.port;
 }
 
+/** Finds a hashed chunk by the bindings it exports; bundler formatting is not a contract. */
 async function resolveBuiltModule(params: {
   distDir: string;
   prefix: string;
-  exportMarker: string;
+  exports: string[];
 }): Promise<string> {
   for (const name of await fs.readdir(params.distDir)) {
     if (!name.startsWith(params.prefix) || !/\.m?js$/u.test(name)) {
       continue;
     }
     const filePath = path.join(params.distDir, name);
-    if ((await fs.readFile(filePath, "utf8")).includes(params.exportMarker)) {
+    const source = await fs.readFile(filePath, "utf8");
+    // Every exported name appears in the module text, so most chunks never need parsing.
+    if (!params.exports.every((binding) => source.includes(binding))) {
+      continue;
+    }
+    const exported = new Set(
+      parse(source, { sourceType: "module" }).program.body.flatMap((statement) =>
+        statement.type === "ExportNamedDeclaration"
+          ? statement.specifiers.map((specifier) =>
+              specifier.exported.type === "Identifier"
+                ? specifier.exported.name
+                : specifier.exported.value,
+            )
+          : [],
+      ),
+    );
+    if (params.exports.every((binding) => exported.has(binding))) {
       return pathToFileURL(filePath).href;
     }
   }
-  throw new Error(`Could not resolve built ${params.prefix} module`);
+  throw new Error(
+    `Could not resolve a built ${params.prefix} module exporting ${params.exports.join(", ")}`,
+  );
 }
 
 async function startControlledSourceGateway(params: {
@@ -246,15 +266,15 @@ async function startControlledSourceGateway(params: {
   const port = await reservePort();
   const distDir = path.join(params.repoRoot, "dist");
   const [serverUrl, runtimeUrl] = await Promise.all([
-    resolveBuiltModule({
-      distDir,
-      prefix: "server-",
-      exportMarker: "startGatewayServer, truncateCloseReason",
-    }),
+    resolveBuiltModule({ distDir, prefix: "server-", exports: ["startGatewayServer"] }),
     resolveBuiltModule({
       distDir,
       prefix: "prepared-model-runtime-",
-      exportMarker: "export { PreparedModelRuntimeOwnerNotPublishedError",
+      exports: [
+        "markPreparedModelRuntimeSnapshotsStale",
+        "refreshPreparedModelRuntimeSnapshots",
+        "rejectPendingPreparedModelRuntimeReplacement",
+      ],
     }),
   ]);
   await fs.writeFile(
@@ -884,6 +904,13 @@ test("lists native CLI-bound models through Telegram polling and provider callba
               fixtureProviderRequests: providerRequests,
             }),
           );
+          // Published model rows can precede the asynchronous native initialization.
+          await expect
+            .poll(async () => (await fs.readFile(nativeRequestsPath, "utf8")).trim(), {
+              interval: 50,
+              timeout: 30_000,
+            })
+            .not.toBe("");
           const cliCalls = (await fs.readFile(authCallsPath, "utf8"))
             .trim()
             .split("\n")

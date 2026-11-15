@@ -1,0 +1,6 @@
+# Telegram agent typed-callback regressions: message(action=send) buttons render the
+# tgac1 agent envelope through the outbound send path, an unclaimed tap reaches the agent
+# as callback_data (slash and delimiters kept as data), a malformed tgac1 envelope and a
+# tap with inline buttons disabled expire, and message(action=edit) keeps agent ownership.
+# Exact net growth for PR #196217.
+122

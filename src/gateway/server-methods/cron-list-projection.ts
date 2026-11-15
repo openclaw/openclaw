@@ -74,6 +74,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     updatedAtMs: job.updatedAtMs,
     declarationKey: job.declarationKey || undefined,
     displayName: job.displayName || undefined,
+    ...(job.cyberAccessProgram !== undefined ? { cyberAccessProgram: job.cyberAccessProgram } : {}),
     owner: job.owner,
     enabled: job.enabled,
     // Keep epoch fields for existing clients; readable dates avoid model timestamp arithmetic.
@@ -95,6 +96,7 @@ function compactCronListJob(job: CronJob): CronCompactJob {
     lastRunError: job.state.lastError ?? null,
     runningAtMs: job.state.runningAtMs,
     autoDisabled: job.state.autoDisabled,
+    admissionDeferred: job.state.admissionDeferred,
     lastDelivered: job.state.lastDelivered,
     lastDeliveryStatus: job.state.lastDeliveryStatus,
     lastDeliveryError: job.state.lastDeliveryError,

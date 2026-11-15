@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SystemRunExecutionContext } from "../../packages/gateway-protocol/src/system-run-execution-context.js";
-import { normalizeChatChannelId } from "../channels/ids.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { ExecHost } from "../infra/exec-approvals.js";
 import {
@@ -34,9 +33,13 @@ import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 import { type ExecWorkdirResolution, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { buildSandboxEnv, coerceEnv } from "./bash-tools.shared.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { EXEC_NODE_PATH_PREPEND_WARNING } from "./exec-node-path-prepend.js";
 import { prepareGitHubToolEnvironment } from "./github-tool-identity.js";
 import { sanitizeEnvVars } from "./sandbox/sanitize-env-vars.js";
-import { isSubagentEnvelopeSession } from "./subagents/spawn/subagent-capabilities.js";
+import {
+  isSubagentEnvelopeSession,
+  isVisibleSpawnedSession,
+} from "./subagents/spawn/subagent-capabilities.js";
 import { ToolInputError } from "./tools/common.js";
 
 export type ExecToolArgs = Record<string, unknown> & {
@@ -45,6 +48,7 @@ export type ExecToolArgs = Record<string, unknown> & {
   env?: Record<string, string>;
   yieldMs?: number;
   background?: boolean;
+  durable?: boolean;
   awaitResults?: boolean;
   timeoutSeconds?: number;
   pty?: boolean;
@@ -72,6 +76,21 @@ const resolvedExecWorkdirPreparedStates = new WeakMap<
 >();
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = ["command", "workdir", "host", "ask", "node"] as const;
 
+export function assertDurableExecAvailable(
+  args: ExecToolArgs,
+  host: ExecHost,
+  allowBackground: boolean,
+): void {
+  if (!args.durable) {
+    return;
+  }
+  if (host !== "gateway" || !allowBackground) {
+    throw new Error(
+      "Durable exec requires Gateway-host background execution on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session, and the process tool enabled. Sandbox, node, and worker execution are unsupported.",
+    );
+  }
+}
+
 export function assertSupportedExecParams(args: unknown): void {
   if (!isRecord(args)) {
     return;
@@ -86,6 +105,23 @@ export function assertSupportedExecParams(args: unknown): void {
   }
   if (args.awaitResults === true && args.background === true) {
     throw new ToolInputError("exec with awaitResults=true cannot be detached with background=true");
+  }
+  if (args.durable !== undefined && typeof args.durable !== "boolean") {
+    throw new ToolInputError("exec durable must be a boolean");
+  }
+  if (args.durable === true) {
+    if (
+      args.background !== true &&
+      !(typeof args.yieldMs === "number" && Number.isFinite(args.yieldMs))
+    ) {
+      throw new ToolInputError("Durable exec requires background=true or yieldMs");
+    }
+    if (args.awaitResults === true) {
+      throw new ToolInputError("Durable exec cannot use awaitResults");
+    }
+    if (args.pty === true) {
+      throw new ToolInputError("Durable exec does not support interactive input or PTY");
+    }
   }
   if (Object.hasOwn(args, "timeout")) {
     throw new ToolInputError(
@@ -125,17 +161,11 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function resolveNotifyOnExitEmptySuccess(defaults?: ExecToolDefaults): boolean {
-  if (typeof defaults?.notifyOnExitEmptySuccess === "boolean") {
-    return defaults.notifyOnExitEmptySuccess;
-  }
-  return normalizeChatChannelId(defaults?.messageProvider) !== null;
-}
-
 /** Capture notification routing and child identity before process lifetime detaches. */
 export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
   const notifyOnExit = defaults?.notifyOnExit !== false;
-  const notifyOnExitEmptySuccess = resolveNotifyOnExitEmptySuccess(defaults);
+  // Every exit of a wake-armed command wakes its conversation unless the operator opts out.
+  const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess !== false;
   const notifySessionKey = normalizeOptionalString(
     defaults?.notifySessionKey ?? defaults?.runSessionKey ?? defaults?.sessionKey,
   );
@@ -162,9 +192,12 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
           agentId: notifyAgentSession.agentId,
         }),
       });
-      return isSubagentEnvelopeSession(notifySessionKey, {
-        entry: read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry,
-      });
+      const entry = read.entries.find(({ sessionKey }) => sessionKey === notifySessionKey)?.entry;
+      // Visible spawns are interactive; only hidden workers report through the announce chain.
+      return (
+        isSubagentEnvelopeSession(notifySessionKey, { entry }) &&
+        !isVisibleSpawnedSession(notifySessionKey, { entry })
+      );
     })().catch(() => {
       // Identity enrichment must not prevent exec; retry the worker on the next call.
       subagentSession = undefined;
@@ -172,7 +205,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     }));
   const notifyDeliveryContext = normalizeDeliveryContext({
     channel: defaults?.messageProvider,
-    to: defaults?.currentChannelId,
+    to: defaults?.currentMessagingTarget ?? defaults?.currentChannelId,
     accountId: defaults?.accountId,
     threadId: defaults?.currentThreadTs,
   });
@@ -386,7 +419,6 @@ export function resolvePreparedExecEnvironment(params: {
   execParams: ExecToolArgs;
   host: ExecHost;
   sandbox?: BashSandboxConfig;
-  containerWorkdir?: string | null;
   channelContext?: PluginHookChannelContext;
   subagentExecution?: boolean;
   defaultPathPrepend: string[];
@@ -507,7 +539,7 @@ export function resolvePreparedExecEnvironment(params: {
           defaultPath: DEFAULT_PATH,
           paramsEnv: untrustedRequestedEnv,
           sandboxEnv: params.sandbox.env,
-          containerWorkdir: params.containerWorkdir ?? params.sandbox.containerWorkdir,
+          containerWorkdir: params.sandbox.containerWorkdir,
         })
       : (hostEnvResult?.env ?? inheritedBaseEnv);
 
@@ -524,9 +556,7 @@ export function resolvePreparedExecEnvironment(params: {
   // The Gateway CLI shim is merged in automatically and only exists on the Gateway host.
   if (params.host === "node") {
     if (omitGatewayAgentCliPath(params.defaultPathPrepend).length > 0) {
-      params.warnings.push(
-        "Warning: tools.exec.pathPrepend is ignored for host=node. Configure PATH on the node host/service instead.",
-      );
+      params.warnings.push(EXEC_NODE_PATH_PREPEND_WARNING);
     }
   } else {
     applyPathPrepend(env, params.defaultPathPrepend);

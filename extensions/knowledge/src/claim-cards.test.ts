@@ -30,7 +30,7 @@ async function listFixture() {
     data,
     scans: () => count,
     list: async (input: Parameters<SampleVault["list"]>[0]) =>
-      checked("records", await vault.list(input)),
+      checked("records_detail", await vault.list(input)),
   };
 }
 
@@ -131,7 +131,7 @@ it("connection pages batch only current unambiguous endpoints on the requested p
     includeEndpoints: true,
     limit: 1,
   } as const;
-  const first = checked("connections", connections(data, input));
+  const first = checked("connections_detail", connections(data, input));
   expect(new Set(ids(first.endpoints))).toStrictEqual(
     new Set([edge!.metadata.from, edge!.metadata.to]),
   );
@@ -144,7 +144,7 @@ it("connection pages batch only current unambiguous endpoints on the requested p
   target!.lifecycle = "withdrawn";
   target!.metadata.lifecycle = "withdrawn";
   const historical = () =>
-    checked("connections", connections(data, { ...input, historical: true }));
+    checked("connections_detail", connections(data, { ...input, historical: true }));
   expect(ids(historical().endpoints)).not.toContain(target!.id);
   target!.lifecycle = "active";
   target!.metadata.lifecycle = "active";

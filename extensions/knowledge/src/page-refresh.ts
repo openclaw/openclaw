@@ -110,7 +110,9 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
       factsBefore = s.storesSnapshot;
     let statusRequest = !s.viewing || s.storesSnapshot ? feature.invoke("status", {}) : undefined;
     statusRequest?.catch(() => undefined);
-    const stores = await base.invoke("stores_snapshot", {}).catch(() => undefined);
+    const stores = await base
+      .invoke("stores_snapshot", { includeRecordCounts: false })
+      .catch(() => undefined);
     if (s.disposed || n !== s.statusGeneration || !s.context.host.connection.connected) {
       return;
     }

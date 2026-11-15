@@ -87,7 +87,7 @@ suite.define(() => {
     await modelSelect.click();
     const modelOption = main.locator(`[data-chat-model-option="${modelKey}"]`);
     await revealChatModelOption(main, modelKey);
-    await expect.poll(() => modelOption.textContent()).toContain("262.1k");
+    await expect.poll(() => modelOption.textContent()).toContain("262k");
 
     await page.keyboard.press("Escape");
     await effortSelect.click();

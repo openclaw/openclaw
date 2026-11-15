@@ -4,7 +4,7 @@ import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
 import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isPendingSendMessage } from "./chat-thread-items.ts";
+import { isPendingSendMessage } from "./chat-thread-item-identity.ts";
 
 type PreparedChatItem =
   | Exclude<ChatItem, { kind: "message" }>

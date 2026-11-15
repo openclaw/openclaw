@@ -1,4 +1,5 @@
 import type { TalkCatalogResult, TalkConfigResult } from "@openclaw/gateway-protocol";
+import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -44,6 +45,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
   private catalogSessionKey: string | undefined;
   private catalogRequest = 0;
   private stopFocus: (() => void) | undefined;
+  canConfigure = true;
   realtimeStatus: ComposerTalkCapabilityStatus = "unknown";
   dictationStatus: ComposerTalkCapabilityStatus = "unknown";
   // Terminal login changes credentials without replacing the Gateway connection.
@@ -55,22 +57,31 @@ export class ComposerMicrophoneOwner extends EventTarget {
 
   syncCatalog(client: GatewayBrowserClient | null, connected: boolean, sessionKey?: string): void {
     const canRead = hasOperatorReadAccess(client?.auth ?? null);
-    const catalogConnected = connected && canRead;
+    const canDictate =
+      Boolean(sessionKey) &&
+      roleScopesAllow({
+        role: client?.auth?.role ?? "operator",
+        requestedScopes: ["operator.sessions.write"],
+        allowedScopes: client?.auth?.scopes ?? [],
+      });
+    const catalogConnected = connected && (canRead || canDictate);
     if (
       client === this.catalogClient &&
       catalogConnected === this.catalogConnected &&
+      canRead === this.canConfigure &&
       sessionKey === this.catalogSessionKey
     ) {
       return;
     }
     this.stopFocus?.();
     this.stopFocus = undefined;
+    this.canConfigure = canRead;
     this.catalogClient = client;
     this.catalogConnected = catalogConnected;
     this.catalogSessionKey = sessionKey;
     this.catalogRequest++;
     this.realtimeStatus = canRead ? "unknown" : "unavailable";
-    this.dictationStatus = canRead ? "unknown" : "unavailable";
+    this.dictationStatus = canRead || canDictate ? "unknown" : "unavailable";
     if (!client || !catalogConnected) {
       return;
     }
@@ -140,7 +151,7 @@ export class ComposerMicrophoneOwner extends EventTarget {
 
   private async loadCatalog(): Promise<void> {
     const client = this.catalogClient;
-    if (!client || !this.catalogConnected || !hasOperatorReadAccess(client.auth)) {
+    if (!client || !this.catalogConnected) {
       return;
     }
     const request = ++this.catalogRequest;
@@ -152,12 +163,18 @@ export class ComposerMicrophoneOwner extends EventTarget {
           "talk.catalog",
           this.catalogSessionKey === undefined ? {} : { sessionKey: this.catalogSessionKey },
         ),
-        client.request<TalkConfigResult>("talk.config", {}),
+        this.canConfigure
+          ? client.request<TalkConfigResult>("talk.config", {})
+          : Promise.resolve(null),
       ]);
       if (request !== this.catalogRequest) {
         return;
       }
       this.dictationStatus = catalog.transcription?.ready === true ? "ready" : "unavailable";
+      if (!config) {
+        this.realtimeStatus = "unavailable";
+        return;
+      }
       const talk = config.config?.talk;
       if (talk?.realtime?.mode !== "stt-tts") {
         this.realtimeStatus = catalog.realtime?.ready === true ? "ready" : "unavailable";

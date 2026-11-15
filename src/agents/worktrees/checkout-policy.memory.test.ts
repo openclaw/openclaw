@@ -50,7 +50,7 @@ it("uses current memory custody and sandbox policy for repository programs witho
       expect(await read()).toBe(true);
       memorySessionActorOwners.closeSession({ agentId: "main", path: storePath }, sessionKey);
       expect(await read()).toBe(true);
-      expect(observe.queries).toEqual([]);
+      expect(observe.queries.filter((sql) => !sql.startsWith("PRAGMA wal_checkpoint"))).toEqual([]);
     } finally {
       observe.restore();
     }

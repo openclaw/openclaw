@@ -117,6 +117,7 @@ function TerminalComposer(props: { state: TerminalPanelViewState }) {
                 <PanelIconButton
                   class="tp-attachment__remove"
                   label={`${t("common.remove")}: ${attachment().name}`}
+                  title={false}
                   icon={<Icon name="x" />}
                   onClick={() => props.state.onRemoveAttachment(index())}
                 />
@@ -147,6 +148,7 @@ function TerminalComposer(props: { state: TerminalPanelViewState }) {
           <PanelIconButton
             class="tp-composer__attach tp-upload"
             label={t("terminal.addFiles")}
+            title={t("terminal.addFilesLabel")}
             icon={<Icon name="paperclip" />}
             disabled={
               !props.state.connected ||
@@ -182,6 +184,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         icon: terminalPanelTabIcon(),
         domId: `${idPrefix}-tab-${tab.id}`,
         closeLabel: `${t("terminal.closeSession")}: ${tab.label}`,
+        onActivate: () => props.view().onSelect(tab.id),
       }),
     ),
   );

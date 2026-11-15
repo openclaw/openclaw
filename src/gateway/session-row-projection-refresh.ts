@@ -25,6 +25,7 @@ export function createSessionRowRefresh(
   owner: Omit<MaterializationOwner, "isActive"> & {
     state: () => {
       cfg: records.Inputs["cfg"];
+      stores: ReadonlyMap<string, records.SessionRowStore>;
       disposed: boolean;
       topologyDirty: boolean;
       registryPrepared: boolean;
@@ -184,6 +185,9 @@ export function createSessionRowRefresh(
     ) {
       throw new WorkerTaskError("Session row preparation capacity reached", "overloaded");
     }
+    // One request awaits all its keys. Group agent/store-prefixed identities before
+    // appending to the FIFO so interleaved list rows share worker admissions.
+    missing.sort();
     for (const id of missing) {
       const row = owner.rows.get(id)!;
       const read: ExactRowPreparation = {
@@ -217,6 +221,7 @@ export function createSessionRowRefresh(
     return withSessionRowDatabaseFacts(
       {
         rows: owner.rows,
+        stores: owner.state().stores,
         dirty: owner.dirty,
         selected,
         isActive: () => !owner.state().disposed,

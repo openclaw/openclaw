@@ -3,6 +3,7 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { createOAuthRefreshCredential } from "../../agents/auth-profiles/credential-fixtures.test-support.js";
 import * as personalCatalogReads from "../../agents/auth-profiles/sqlite-read.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
+import { resolveStatusUtilityModel } from "../../commands/models/list.status-utility.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
@@ -147,8 +148,8 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
       }),
     );
     expect(result.defaultModels).toEqual({
-      automaticUtilityModel: `openai/${luna}`,
-      utilityRuntime: { id: "openclaw", kind: "api", label: "OpenClaw Default" },
+      automaticUtilityModel: "openai/gpt-5.5",
+      utilityRuntime: { id: "codex", kind: "harness", label: "OpenAI Codex" },
     });
     const pinnedConfig = agentConfig(
       { ...cfg.agents?.defaults, utilityModel: "openai/gpt-5.5@openai:utility" },
@@ -184,7 +185,7 @@ it("projects utility runtimes for API, subscription, unavailable, and disabled s
         catalog: [catalogEntry("gpt-5.5", "openai-chatgpt-responses")],
       });
       expect(projected.defaultModels, name).toEqual({
-        automaticUtilityModel: `openai/${luna}`,
+        automaticUtilityModel: "openai/gpt-5.5",
         ...(expected ? { utilityRuntime: expected } : {}),
       });
     }
@@ -250,6 +251,64 @@ it.each(["small", undefined])(
     });
   },
 );
+
+it("publishes the requested agent's account-scoped utility decision for status", async () => {
+  await withState(async (state) => {
+    const cfg = agentConfig(
+      { model: "other/primary" },
+      {
+        models: {
+          providers: {
+            custom: { api: "openai-completions", baseUrl: "https://custom.example/v1", models: [] },
+          },
+        },
+      },
+      { worker: { model: "custom/primary@work", utilityModel: { fallbacks: ["custom/backup"] } } },
+    );
+    const result = await configuredList(state, {
+      cfg,
+      agentId: "worker",
+      agentDir: state.agentDir("worker"),
+      view: "all",
+      includeDefaultModels: true,
+      catalog: ["primary", "small", "backup"].map((id) => providerCatalogEntry("custom", id)),
+      preparedAuthStore: modelAuthStore({
+        work: { type: "api_key", provider: "custom", key: "synthetic-key" },
+      }),
+      catalogDiagnostics: {
+        providerOutcomes: [
+          { provider: "custom", profileId: "work", status: "ready", listedModelIds: ["primary"] },
+        ],
+      },
+      metadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "custom",
+            providers: ["custom", "other"],
+            modelCatalog: {
+              providers: {
+                custom: { defaultUtilityModel: "small", models: [] },
+                other: { defaultUtilityModel: "tiny", models: [] },
+              },
+            },
+          },
+        ],
+      }),
+    });
+    expect(result.defaultModels?.automaticUtilityModel).toBe("other/tiny");
+    expect(result.utilityModel).toEqual({
+      modelRef: "custom/primary@work",
+      source: "provider-default",
+    });
+    expect(result.providerOutcomes?.[0]).not.toHaveProperty("listedModelIds");
+    expect(
+      resolveStatusUtilityModel({ cfg, agentId: "worker", gatewayCatalog: result }),
+    ).toMatchObject({
+      ref: "custom/primary@work",
+      source: "provider-default",
+    });
+  }, true);
+});
 
 it("projects personal-only models for the authenticated requester without publishing shared auth", async () => {
   await withState(async (state) => {

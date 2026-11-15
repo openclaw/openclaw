@@ -21,6 +21,7 @@ import { loadChatHistory } from "./chat-history.ts";
 import { expectRequestCounts, makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { createTestPageState } from "./chat-page-state.test-support.ts";
+import { buildPendingInputItems } from "./chat-pending-input-presentation.ts";
 import {
   input,
   makeChatPageHost,
@@ -28,11 +29,7 @@ import {
   sessionId,
   sessionKey,
 } from "./chat-pending-inputs.test-support.ts";
-import {
-  applyChatPendingInputs,
-  buildPendingInputItems,
-  getChatPendingInputs,
-} from "./chat-pending-inputs.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { readChatQueueForScope } from "./chat-queue.ts";
 import { retireDeliveredQueuedUserTurn } from "./chat-send-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
@@ -519,7 +516,7 @@ describe("server-owned pending input display", () => {
     },
   );
 
-  it.each(["send", "agent.run.started", "agent.input.settled"])(
+  it.each(["send", "agent.run.started", "agent.input.steering", "agent.input.settled"])(
     "refreshes accepted inputs on %s while a retained pane is running",
     async (reason) => {
       const host = makeChatPageHost({

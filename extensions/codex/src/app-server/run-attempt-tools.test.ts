@@ -288,6 +288,7 @@ it.each<{
   available: boolean;
   restricted?: boolean;
   expected: boolean | undefined;
+  guidance?: boolean;
 }>([
   { name: "callable default", available: true, expected: false },
   { name: "unavailable default", available: false, expected: undefined },
@@ -308,12 +309,14 @@ it.each<{
     config: { "features.default_mode_request_user_input": true },
     available: true,
     expected: undefined,
+    guidance: true,
   },
   {
     name: "nested Default-mode native questions",
     config: { features: { default_mode_request_user_input: true } },
     available: true,
     expected: undefined,
+    guidance: true,
   },
   {
     name: "explicit native denial without an executor",
@@ -323,25 +326,41 @@ it.each<{
   },
   {
     name: "restricted native opt-in",
-    config: { "tools.experimental_request_user_input.enabled": true },
+    config: {
+      "tools.experimental_request_user_input.enabled": true,
+      "features.default_mode_request_user_input": true,
+    },
     available: true,
     restricted: true,
     expected: false,
   },
-])("preserves question policy for $name", ({ config, available, restricted, expected }) => {
-  const thread = buildCodexThreadConfiguration(
-    createAttemptParams({ config: {}, pluginHarnessToolPolicyRestricted: restricted }),
-    {
-      appServer: resolveCodexAppServerRuntimeOptions({}),
-      developerInstructions: "Test instructions",
-      hostSystemAgentActive: false,
-      nativeCodeModeEnabled: !restricted,
-      askUserAvailable: available,
-      config,
+  {
+    name: "Default eligibility does not register a disabled tool",
+    config: {
+      "tools.experimental_request_user_input.enabled": false,
+      "features.default_mode_request_user_input": true,
     },
-  );
-  expect(thread.config["tools.experimental_request_user_input.enabled"]).toBe(expected);
-  if (config && !restricted) {
-    expect(thread.config).toMatchObject(config);
-  }
-});
+    available: true,
+    expected: false,
+  },
+])(
+  "preserves question policy for $name",
+  ({ config, available, restricted, expected, guidance }) => {
+    const thread = buildCodexThreadConfiguration(
+      createAttemptParams({ config: {}, pluginHarnessToolPolicyRestricted: restricted }),
+      {
+        appServer: resolveCodexAppServerRuntimeOptions({}),
+        developerInstructions: "Test instructions",
+        hostSystemAgentActive: false,
+        nativeCodeModeEnabled: !restricted,
+        askUserAvailable: available,
+        config,
+      },
+    );
+    expect(thread.config["tools.experimental_request_user_input.enabled"]).toBe(expected);
+    expect(thread.developerInstructions.includes("`request_user_input`")).toBe(guidance === true);
+    if (config && !restricted) {
+      expect(thread.config).toMatchObject(config);
+    }
+  },
+);

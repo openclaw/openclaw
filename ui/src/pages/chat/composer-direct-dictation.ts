@@ -1,5 +1,7 @@
+import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { patchSettings } from "../../app/settings.ts";
+import { focusComposerInput, selectComposerInput } from "../../lib/composer-input.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { adjustTextareaHeight } from "./components/chat-composer-dom.ts";
 import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
@@ -60,9 +62,8 @@ export function createDirectDictationTextarea(read: () => HTMLTextAreaElement | 
       adjustTextareaHeight(target);
       queueMicrotask(() => {
         if (target.isConnected) {
-          target.focus({ preventScroll: true });
-          target.selectionStart = insertion.caret;
-          target.selectionEnd = insertion.caret;
+          focusComposerInput(target, { preventScroll: true });
+          selectComposerInput(target, insertion.caret, insertion.caret);
         }
       });
       return insertion.value;
@@ -76,6 +77,8 @@ type DirectDictationOptions = {
     "captureSelection" | "insertTranscript" | "previewTranscript"
   >;
   getClient: () => GatewayBrowserClient | null;
+  prepareSession?: () => Promise<string | undefined>;
+  getSessionKey?: () => string | undefined;
   isConnected: () => boolean;
   canCommit: () => boolean;
   onMessage: (message: string) => void;
@@ -135,12 +138,21 @@ export class DirectDictationControl extends EventTarget {
     const ownsDraft = () => this.owner === owner;
     const client = this.options.getClient();
     const connected = this.options.isConnected() && client !== null;
-    this.devicePicker.syncCatalog(client, connected);
+    this.devicePicker.syncCatalog(client, connected, this.options.getSessionKey?.());
     const enabled = this.options.canCommit();
     const dictationOptions = {
       client,
       connected,
       enabled,
+      prepareSession:
+        client?.auth &&
+        !roleScopesAllow({
+          role: client.auth.role ?? "operator",
+          requestedScopes: ["operator.talk"],
+          allowedScopes: client.auth.scopes ?? [],
+        })
+          ? this.options.prepareSession
+          : undefined,
       dictationAvailable: this.devicePicker.dictationStatus === "ready",
       realtimeTalkActive: false,
       onCommit: (transcript: string, late?: true) => {

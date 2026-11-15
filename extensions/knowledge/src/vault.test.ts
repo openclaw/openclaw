@@ -42,7 +42,7 @@ it("representative vault: records, ontology, diagnostics, citations, and zero wr
   expect(result.evidence[0]!.excerpt).toMatch(/small pilot garden/);
   expect(result.references.some((r) => r.id === "sample_person_alex")).toBeTruthy();
   const inspected = await inspectRecord(vault, { id: "sample_claim_pilot" });
-  expect(Check(contract.operations.record.output, inspected)).toBe(true);
+  expect(Check(contract.operations.record_detail.output, inspected)).toBe(true);
   expect(await hashes(sampleVaultRoot())).toStrictEqual(before);
 });
 it.each(["München", "Mu\u0308nchen"])("lists canonical %s titles", async (title) => {
@@ -59,7 +59,7 @@ it.each(["München", "Mu\u0308nchen"])("lists canonical %s titles", async (title
   const rows = [];
   do {
     const result = await vault.list({ offset, limit: 3 });
-    expect(Check(contract.operations.records.output, result)).toBeTruthy();
+    expect(Check(contract.operations.records_detail.output, result)).toBeTruthy();
     rows.push(...result.records);
     offset = result.nextOffset;
   } while (offset !== null);
@@ -69,8 +69,8 @@ it.each(["München", "Mu\u0308nchen"])("lists canonical %s titles", async (title
   expect(aliases).toContain("sample_project_garden");
   expect((await vault.list({ kind: "claim" })).total).toBe(1);
   expect((await vault.list({ query: "not here" })).total).toBe(0);
-  expect(Check(contract.operations.records.input, { limit: 101 })).toBe(false);
-  expect(Check(contract.operations.records.input, { root: "/etc" })).toBe(false);
+  expect(Check(contract.operations.records_detail.input, { limit: 101 })).toBe(false);
+  expect(Check(contract.operations.records_detail.input, { root: "/etc" })).toBe(false);
 });
 it("rename preserves identity and metadata; duplicate IDs never pick a winner", async () => {
   const { root, vault } = await fixture();

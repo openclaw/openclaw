@@ -159,7 +159,7 @@ function normalizeEnvelope(
       ? { requiresInput: { ...envelope.requiresInput, type: "input_request" as const } }
       : {}),
   };
-  if (Buffer.byteLength(JSON.stringify(normalized, null, 2), "utf8") > maxStdoutBytes) {
+  if (Buffer.byteLength(JSON.stringify(normalized), "utf8") > maxStdoutBytes) {
     throw new Error("lobster runtime result exceeded maxStdoutBytes");
   }
   return normalized;

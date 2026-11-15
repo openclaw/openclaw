@@ -104,10 +104,8 @@ export function createSessionMcpRuntimeManagerInstall(
   /** Install under the runtime-key queue shared by acquisition and disposal. */
   const getOrCreateRuntimeEntry = async (
     params: RuntimeEntryParams,
-    loaded?: Parameters<typeof loadSessionMcpConfig>[0]["loaded"],
+    config: ReturnType<typeof loadSessionMcpConfig>,
   ): Promise<SessionMcpRuntime> => {
-    // Static admission shares its synchronous preparation, never runtime reload inputs.
-    const config = loadSessionMcpConfig({ ...params, loaded, logDiagnostics: false });
     const nextFingerprint = requesterRuntimeFingerprint(
       config.fingerprint,
       params.requesterConnect,
@@ -198,7 +196,10 @@ export function createSessionMcpRuntimeManagerInstall(
     },
   ): Promise<SessionMcpRuntime> => {
     const connectionHash = hashMcpResolvedConnections(params.connectionOverrides);
-    const runtime = await getOrCreateRuntimeEntry(params);
+    const runtime = await getOrCreateRuntimeEntry(
+      params,
+      loadSessionMcpConfig({ ...params, logDiagnostics: false }),
+    );
     if (store.runtimesBySessionId.get(params.runtimeKey) === runtime) {
       store.connectionMetaByRuntimeKey.set(params.runtimeKey, {
         connectionHash,

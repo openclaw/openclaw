@@ -85,7 +85,7 @@ suite.define(() => {
           /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
         );
         await page.keyboard.press(shortcut);
-        const search = pane.getByRole("textbox", { name: "Search messages", exact: true });
+        const search = pane.getByRole("textbox", { name: "Search loaded messages", exact: true });
         await search.fill(sourceText);
         await polledCount(pane.locator('.chat-bubble[data-entry-id="inventory-prompt"]')).toBe(0);
         await source.waitFor({ state: "visible" });
@@ -102,7 +102,7 @@ suite.define(() => {
         const params = requireRecord((await gateway.waitForRequest("chat.send")).params);
         expect(params).toMatchObject({ sessionKey, message: followup, replyToId: sourceId });
         await expect.poll(() => composer.inputValue()).toBe("");
-        await exactButton(pane, "Stop generating").waitFor({ state: "visible" });
+        await exactButton(pane, "Stop").waitFor({ state: "visible" });
         await gateway.emitChatFinal({
           sessionKey,
           runId: requireString(params.idempotencyKey, "reply run ID"),

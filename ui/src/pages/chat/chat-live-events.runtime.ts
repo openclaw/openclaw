@@ -137,8 +137,16 @@ export function handleChatLiveEvent(
     event.event === "session.tool" ||
     event.event === "session.operation" ||
     (event.event === "chat" && asNullableRecord(event.payload)?.state === "delta");
-  chatRunPresentation(state).batch(
-    () => applyPageGatewayEvent(state, event, isPresented),
+  const presentation = chatRunPresentation(state);
+  presentation.batch(
+    () => {
+      const previousStream = state.chatStream;
+      applyPageGatewayEvent(state, event, isPresented);
+      // Show the first answer promptly; continuing text keeps its frame cadence.
+      if (!previousStream && state.chatStream) {
+        presentation.publish("immediate", false);
+      }
+    },
     frameBatched ? "animation-frame" : "immediate",
   );
 }
@@ -312,9 +320,10 @@ function applyPageGatewayEvent(
     const knownToolActivity =
       (payload?.stream === "tool" || payload?.stream === "item") &&
       state.knownAgentRunIds?.has(payload.runId);
-    if (handleAgentEvent(state, payload)) {
-      // Tool messages publish at their flush; first observed activity still wakes the pane.
-      chatRunPresentation(state).publish("animation-frame", !knownToolActivity);
+    if (handleAgentEvent(state, payload) && !knownToolActivity) {
+      // Existing tool contents publish at their flush; other changed run fields
+      // publish through the enclosing batch. First activity still wakes the pane.
+      chatRunPresentation(state).publish("animation-frame");
     }
     return;
   }

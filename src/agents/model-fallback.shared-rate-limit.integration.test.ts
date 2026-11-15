@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { buildKnownAgentRunFailureReplyPayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as backoff from "../infra/backoff.js";
@@ -49,6 +50,7 @@ it("shares model saturation across embedded sessions and preserves recovery with
     const requests: string[] = [];
     const gateWaits: string[] = [];
     let primaryFailures = Infinity;
+    let longWindow = false;
     const stream: StreamFn = (model) => {
       requests.push(model.id);
       const failed = model.id === "mock-primary" && primaryFailures-- > 0;
@@ -60,9 +62,10 @@ it("shares model saturation across embedded sessions and preserves recovery with
         stopReason: failed ? "error" : "stop",
         ...(failed
           ? {
-              errorMessage:
-                "429 Rate limit reached for mock-primary in organization org-fixture on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 48ms.",
-              retryAfterMs: 48,
+              errorMessage: longWindow
+                ? "429 Too Many Requests"
+                : "429 Rate limit reached for mock-primary in organization org-fixture on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 48ms.",
+              retryAfterMs: longWindow ? 3 * 86_400_000 : 48,
             }
           : {}),
       });
@@ -208,6 +211,37 @@ it("shares model saturation across embedded sessions and preserves recovery with
           expect(requests).toEqual(Array(4).fill("mock-primary"));
           expect(sleeps).toHaveBeenCalledTimes(3);
           expect(gateWaits.length).toBeGreaterThan(0);
+          offset += 120_000;
+          longWindow = true;
+          primaryFailures = Infinity;
+          requests.length = 0;
+          sleeps.mockClear();
+          expect((await run("long-window-fallback")).result.payloads?.[0]?.text).toBe(
+            "ANSWER:mock-fallback",
+          );
+          expect(requests).toEqual(["mock-primary", "mock-fallback"]);
+          expect(sleeps).not.toHaveBeenCalled();
+          requests.length = 0;
+          for (const sessionId of ["long-window-strict-a", "long-window-strict-b"]) {
+            const error: unknown = await run(sessionId, []).catch((failure: unknown) => failure);
+            const text = buildKnownAgentRunFailureReplyPayload({
+              err: error,
+              sessionCtx: {},
+              resolvedVerboseLevel: "off",
+              config,
+            })?.text;
+            expect(text).toContain("openai/mock-primary is rate-limited.");
+            expect(text).toContain("in 3 days");
+            expect(text).toContain("model picker");
+            expect(text).not.toContain("few minutes");
+          }
+          expect(requests).toEqual([]);
+          offset += 3 * 86_400_000 + 60_001;
+          primaryFailures = 0;
+          expect((await run("long-window-reset", [])).result.payloads?.[0]?.text).toBe(
+            "ANSWER:mock-primary",
+          );
+          expect(requests).toEqual(["mock-primary"]);
           expect(network).not.toHaveBeenCalled();
         },
       );

@@ -80,7 +80,12 @@ export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         capability: "audio",
         transport: "media-understanding",
       });
-    const temperature = asFiniteNumber(params.query?.temperature);
+    const { temperature: rawTemperature, ...upstreamOptions } = params.query ?? {};
+    const temperature = asFiniteNumber(rawTemperature);
+    // OpenRouter forwards provider.options.<slug> only to the provider serving the request.
+    // OpenClaw's providerOptions are flat, so the model's author prefix names that provider
+    // (elevenlabs/scribe-v2 -> elevenlabs); models served under another slug ignore them.
+    const upstreamSlug = model.includes("/") ? model.slice(0, model.indexOf("/")) : undefined;
 
     const payload = await postJsonResponse({
       url: `${baseUrl}/audio/transcriptions`,
@@ -93,6 +98,9 @@ export const openrouterMediaUnderstandingProvider: MediaUnderstandingProvider = 
         },
         ...(params.language?.trim() ? { language: params.language.trim() } : {}),
         ...(temperature !== undefined ? { temperature } : {}),
+        ...(upstreamSlug && Object.keys(upstreamOptions).length > 0
+          ? { provider: { options: { [upstreamSlug]: upstreamOptions } } }
+          : {}),
       },
       timeoutMs: params.timeoutMs,
       ...(params.signal ? { signal: params.signal } : {}),

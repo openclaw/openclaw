@@ -57,7 +57,7 @@ export function createSubscribedCodeModeHarness(params: {
   guardSessionManager(sessionManager, { config: {}, runId, sessionKey });
   const activeSession = Object.assign(session, {
     sessionManager,
-    agent: params.agent ?? { hasQueuedMessages: () => false },
+    agent: params.agent ?? session.agent,
     isStreaming: false,
     messages: [],
     pendingMessageCount: 0,

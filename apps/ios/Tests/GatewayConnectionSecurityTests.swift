@@ -22,6 +22,30 @@ import Testing
         GatewayConnectionController(appModel: NodeAppModel(), startDiscovery: false)
     }
 
+    @MainActor
+    private func ordinaryIngress() -> (GatewayIngressController, OSAllocatedUnfairLock<Int>) {
+        let probeCalls = OSAllocatedUnfairLock(initialState: 0)
+        let ingress = GatewayIngressController(
+            persistence: .init(
+                load: { _ in nil },
+                save: { _, _ in true },
+                delete: { _ in true }),
+            requestFactory: { _ in
+                { request, _ in
+                    probeCalls.withLock { $0 += 1 }
+                    guard let url = request.url,
+                          let response = HTTPURLResponse(
+                              url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+                    else { throw URLError(.badURL) }
+                    return (Data(), response)
+                }
+            },
+            profiles: { [] },
+            saveProfileOrigin: { _, _ in true },
+            retireTransports: { _ in })
+        return (ingress, probeCalls)
+    }
+
     private func makeDiscoveredGateway(
         stableID: String,
         lanHost: String?,
@@ -103,7 +127,7 @@ import Testing
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in
                 tcpCalls.withLock { $0 += 1 }
-                return true
+                return .reachable
             },
             tlsFingerprintProbe: { _ in
                 tlsCalls.withLock { $0 += 1 }
@@ -279,7 +303,7 @@ import Testing
             startDiscovery: false,
             tcpReachabilityProbe: { host, port, _, _ in
                 probes.withLock { $0.append((host, port)) }
-                return host.hasSuffix(".ts.net")
+                return host.hasSuffix(".ts.net") ? .reachable : .unreachable
             })
         let link = GatewayConnectDeepLink(
             host: "192.168.139.3",
@@ -305,7 +329,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: NodeAppModel(),
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in false })
+            tcpReachabilityProbe: { _, _, _, _ in .unreachable })
         let link = GatewayConnectDeepLink(
             host: "192.168.139.3",
             port: 18789,
@@ -328,18 +352,25 @@ import Testing
         self.clearTLSFingerprint(stableID: stableID)
 
         let appModel = NodeAppModel()
+        let probeState = DisplayStateRecorder()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
-            tlsFingerprintProbe: { _ in .fingerprint("abc123") })
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
+            tlsFingerprintProbe: { _ in
+                await probeState.record(GatewayStatusBuilder.build(appModel: appModel))
+                return .fingerprint("abc123")
+            })
 
         await controller.connectManual(host: host, port: port, useTLS: true)
 
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "abc123")
         #expect(controller.pendingTrustPrompt?.host == host)
         #expect(controller.pendingTrustPrompt?.port == port)
-        #expect(appModel.gatewayStatusText == "Verify gateway TLS fingerprint")
+        #expect(appModel.gatewayConnectionProgress == .awaitingTrust)
+        // Every status surface reads this: connecting while probing, attention while the user decides.
+        #expect(probeState.states == [.connecting])
+        #expect(GatewayStatusBuilder.build(appModel: appModel) == .error)
     }
 
     @Test(arguments: [false, true])
@@ -356,7 +387,7 @@ import Testing
             let controller = GatewayConnectionController(
                 appModel: appModel,
                 startDiscovery: false,
-                tcpReachabilityProbe: { _, _, _, _ in true },
+                tcpReachabilityProbe: { _, _, _, _ in .reachable },
                 tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "system-trusted") },
                 serviceEndpointResolver: { _ in (host: host, port: port) })
 
@@ -393,12 +424,13 @@ import Testing
 
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
+        let (ingress, probeCalls) = self.ordinaryIngress()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "setup-system-trusted") },
-            ingress: makeOrdinaryIngress())
+            ingress: ingress)
 
         let result = await controller.connectManual(
             host: link.host,
@@ -408,6 +440,7 @@ import Testing
         await self.waitUntil { appModel.activeGatewayConnectConfig != nil }
 
         #expect(result == .accepted)
+        #expect(probeCalls.withLock { $0 } > 0)
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.activeGatewayConnectConfig?.tls?.required == true)
         #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == nil)
@@ -432,10 +465,11 @@ import Testing
 
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
+        let (ingress, probeCalls) = self.ordinaryIngress()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
                 return .fingerprint(fingerprint)
@@ -444,7 +478,7 @@ import Testing
                 persistedFingerprint.withLock { $0 = (fingerprint, stableID) }
                 return true
             },
-            ingress: makeOrdinaryIngress())
+            ingress: ingress)
 
         let result = await controller.connectManual(
             host: link.host,
@@ -454,6 +488,7 @@ import Testing
         await self.waitUntil { !controller.hasPendingConnectionHandoff }
 
         #expect(result == .accepted)
+        #expect(probeCalls.withLock { $0 } > 0)
         #expect(tlsProbeCalls.withLock { $0 } == 1)
         #expect(controller.pendingTrustPrompt == nil)
         let config = try #require(appModel.activeGatewayConnectConfig)
@@ -483,7 +518,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
                 return .fingerprint(fingerprint)
@@ -526,7 +561,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 systemTrusted
                     ? .systemTrusted(fingerprint: observedFingerprint)
@@ -581,7 +616,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in reachable },
+            tcpReachabilityProbe: { _, _, _, _ in reachable ? .reachable : .unreachable },
             tlsFingerprintProbe: { _ in .failure(.tlsHandshakeTimeout) },
             persistTLSFingerprint: { _, _ in
                 persistenceCalls.withLock { $0 += 1 }
@@ -645,7 +680,7 @@ import Testing
             tcpReachabilityProbe: { _, _, _, _ in
                 tcpCalls.withLock {
                     $0 += 1
-                    return $0 > 1
+                    return ($0 > 1) ? .reachable : .unreachable
                 }
             },
             tlsFingerprintProbe: { url in
@@ -724,7 +759,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
                 return .fingerprint(fingerprint)
@@ -771,7 +806,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("abc123") },
             persistTLSFingerprint: { _, _ in
                 persistenceCalls.withLock { $0 += 1 }
@@ -810,7 +845,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .fingerprint("same-certificate") },
             persistTLSFingerprint: { _, _ in
                 persistenceCalls.withLock { $0 += 1 }
@@ -879,7 +914,7 @@ import Testing
             tcpReachabilityProbe: { host, _, _, _ in
                 probes.withLock {
                     $0.append(host)
-                    return $0.count > 1
+                    return ($0.count > 1) ? .reachable : .unreachable
                 }
             },
             tlsFingerprintProbe: { url in
@@ -941,17 +976,18 @@ import Testing
         let tcpCalls = OSAllocatedUnfairLock(initialState: 0)
         let appModel = NodeAppModel()
         defer { appModel.disconnectGateway() }
+        let (ingress, probeCalls) = self.ordinaryIngress()
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in
                 tcpCalls.withLock {
                     $0 += 1
-                    return $0 > 1
+                    return ($0 > 1) ? .reachable : .unreachable
                 }
             },
             tlsFingerprintProbe: { _ in .fingerprint(fingerprint) },
-            ingress: makeOrdinaryIngress())
+            ingress: ingress)
         var pending: GatewayConnectionController.ManualAuthOverride? = auth.manualAuthOverride
         let firstInput = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: "edited-token",
@@ -984,7 +1020,9 @@ import Testing
         #expect(retryInput.token == "edited-token")
         let accepted = await controller.retryGatewayConnection()
         #expect(accepted == .accepted)
+        await self.waitUntil { appModel.activeGatewayConnectConfig != nil }
         await self.waitUntil { !controller.hasPendingConnectionHandoff }
+        #expect(probeCalls.withLock { $0 } > 0)
         // Settings did not receive this result and still owns its old value. The controller's
         // shared handoff receipt, not a view-local clear, must retire its setup credentials.
         #expect(pending != nil)
@@ -1062,7 +1100,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in false },
+            tcpReachabilityProbe: { _, _, _, _ in .unreachable },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
                 return .fingerprint("abc123")
@@ -1092,7 +1130,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in false })
+            tcpReachabilityProbe: { _, _, _, _ in .unreachable })
 
         await controller.connectManual(host: host, port: port, useTLS: true)
 
@@ -1102,6 +1140,38 @@ import Testing
         #expect(appModel.lastGatewayProblem?.actionLabel == "Retry")
         #expect(appModel.lastGatewayProblem?.retryable == true)
         #expect(appModel.gatewayDisplayStatusText == "Gateway is not reachable")
+    }
+
+    /// A tailnet address on a gateway's loopback-only port is refused while Tailscale works. The
+    /// TCP check reported only "not reachable", so the user was told to open Tailscale.
+    @Test @MainActor func `refused tailscale route names the address and the Serve route`() async {
+        let host = "100.77.74.91"
+        let port = 18809
+        let stableID = "manual|\(host)|\(port)"
+        defer { clearTLSFingerprint(stableID: stableID) }
+        self.clearTLSFingerprint(stableID: stableID)
+        let appModel = NodeAppModel()
+        let tlsProbeCalls = OSAllocatedUnfairLock(initialState: 0)
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in .refused },
+            tlsFingerprintProbe: { _ in
+                tlsProbeCalls.withLock { $0 += 1 }
+                return .fingerprint("unused")
+            })
+
+        await controller.connectManual(host: host, port: port, useTLS: true)
+
+        let problem = appModel.lastGatewayProblem
+        #expect(problem?.kind == .connectionRefused)
+        #expect(problem?.localizedMessage.contains("100.77.74.91:18809 refused the connection") == true)
+        #expect(problem?.localizedMessage.contains("Tailscale Serve") == true)
+        #expect(problem?.localizedMessage.contains("install or open Tailscale") == false)
+        #expect(problem?.actionCommand == "openclaw qr")
+        #expect(problem?.docsURL == GatewayConnectionIssue.tailscaleServeDocsURL)
+        #expect(problem?.retryable == true)
+        #expect(tlsProbeCalls.withLock { $0 } == 0)
     }
 
     @Test @MainActor func `manual first use TLS probe reports handshake timeout without trust prompt`() async {
@@ -1121,11 +1191,11 @@ import Testing
             requestId: "stale-request",
             retryable: true,
             pauseReconnect: true)
-        appModel.applyOperatorGatewayConnectionProblem(staleProblem)
+        appModel.applyOperatorGatewayConnectionProblem(staleProblem, route: nil)
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in .failure(.tlsHandshakeTimeout) })
 
         await controller.connectManual(host: host, port: port, useTLS: true)
@@ -1133,8 +1203,6 @@ import Testing
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.lastGatewayProblem?.kind == .timeout)
         #expect(appModel.lastGatewayProblem?.requestId == nil)
-        #expect(!appModel.gatewayPairingPaused)
-        #expect(appModel.gatewayPairingRequestId == nil)
         #expect(appModel.gatewayDisplayStatusText == "TLS verification timed out")
         #expect(appModel.lastGatewayProblem?.message.contains("TLS fingerprint verification timed out") == true)
         #expect(appModel.lastGatewayProblem?.message.contains("\(host):\(port)") == true)
@@ -1164,7 +1232,7 @@ import Testing
         let controller = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in tlsResults.withLock { $0.removeFirst() } },
             serviceEndpointResolver: { _ in
                 resolverStarted.continuation.yield()
@@ -1208,7 +1276,7 @@ import Testing
         let firstController = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in false })
+            tcpReachabilityProbe: { _, _, _, _ in .unreachable })
         await firstController.connectManual(host: host, port: 443, useTLS: true)
         let problem = try #require(appModel.lastGatewayProblem)
         let started = AsyncStream<Void>.makeStream()
@@ -1216,7 +1284,7 @@ import Testing
         let retryController = GatewayConnectionController(
             appModel: appModel,
             startDiscovery: false,
-            tcpReachabilityProbe: { _, _, _, _ in true },
+            tcpReachabilityProbe: { _, _, _, _ in .reachable },
             tlsFingerprintProbe: { _ in
                 started.continuation.yield()
                 for await result in results.stream {
@@ -1277,7 +1345,7 @@ import Testing
             let controller = GatewayConnectionController(
                 appModel: appModel,
                 startDiscovery: false,
-                tcpReachabilityProbe: { _, _, _, _ in true },
+                tcpReachabilityProbe: { _, _, _, _ in .reachable },
                 tlsFingerprintProbe: { _ in
                     await withCheckedContinuation { continuation in
                         resultContinuation.withLock { $0 = continuation }
@@ -1313,9 +1381,7 @@ import Testing
                 attempt.cancel()
             } else {
                 _ = appModel.beginGatewayConnectAttempt()
-                appModel.beginGatewayPreconnectVerification(
-                    stableID: "manual|replacement.example.com|443",
-                    statusText: "Connecting replacement")
+                appModel.beginGatewayPreconnectVerification(stableID: "manual|replacement.example.com|443")
             }
             let continuation = try #require(resultContinuation.withLock { $0 })
             continuation.resume(returning: probe.result)
@@ -1324,8 +1390,9 @@ import Testing
             #expect(appModel.lastGatewayProblem == nil)
             #expect(persistenceCalls.withLock { $0 } == 0)
             #expect(appModel.activeGatewayConnectConfig == nil)
-            #expect(appModel.gatewayStatusText == (cancelTask
-                    ? "Verifying gateway TLS fingerprint…" : "Connecting replacement"))
+            // A stale probe result neither ends the current verification nor writes a notice.
+            #expect(appModel.gatewayConnectionProgress == .verifyingTLS)
+            #expect(appModel.gatewayStatusText == nil)
             #expect(controller.pendingTrustPrompt == nil)
         }
     }
@@ -1496,5 +1563,14 @@ import Testing
 
         #expect(problem?.kind == .tlsPinMismatch)
         #expect(problem?.canTrustRotatedCertificate == false)
+    }
+}
+
+@MainActor
+private final class DisplayStateRecorder {
+    private(set) var states: [GatewayDisplayState] = []
+
+    func record(_ state: GatewayDisplayState) {
+        self.states.append(state)
     }
 }

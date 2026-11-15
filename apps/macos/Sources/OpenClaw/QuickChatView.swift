@@ -258,7 +258,7 @@ struct QuickChatView: View {
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
         .disabled(!self.model.canCaptureWindow)
-        .help("Continue a recent conversation")
+        .help("Recent conversations")
         .accessibilityLabel("Continue a recent conversation")
     }
 
@@ -308,7 +308,6 @@ struct QuickChatView: View {
         }
         .buttonStyle(.plain)
         .disabled(!self.model.canSend)
-        .help("Send message")
         .accessibilityLabel("Send message")
         .accessibilityIdentifier("quick-chat-send")
     }
@@ -490,7 +489,9 @@ struct QuickChatView: View {
         if case let .failed(message) = self.model.sendState { return (message, true) }
         if let message = self.model.textContextCaptureMessage { return (message, false) }
         if let message = self.model.dictationStatusMessage { return (message, true) }
-        if let message = self.model.modelControlStatusMessage { return (message, true) }
+        if self.model.connectionGate == .available, let message = self.model.modelControlStatusMessage {
+            return (message, true)
+        }
         if let message = self.replyBinding.pasteStatusMessage { return (message, true) }
         if let message = self.model.connectionStatusMessage { return (message, false) }
         return nil

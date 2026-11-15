@@ -3,12 +3,14 @@ import type {
   SessionUsageCreator,
   SessionsUsageAggregates,
 } from "../../../../src/shared/usage-types.js";
+import type { OverlayPlacement } from "../../components/overlay-anchor.ts";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SessionOwnerChip } from "../../components/solid/session-owner-chip.tsx";
-import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { UsageValuePicker, type UsageValueOption } from "./view-value-picker.tsx";
 
 type UsageCreatorGroup = NonNullable<SessionsUsageAggregates["byCreator"]>[number];
 
@@ -59,32 +61,77 @@ function creatorLabel({ key, actor }: SessionUsageCreator): string {
     : name;
 }
 
+/** Whether a creator is the signed-in viewer, by profile identity or human actor id. */
+function isViewerCreator(creator: SessionUsageCreator, viewerId: string | null | undefined) {
+  if (!viewerId || !creator.actor) {
+    return false;
+  }
+  const identity = creator.actor.identity;
+  return identity?.type === "profile"
+    ? identity.id === viewerId
+    : creator.actor.type === "human" && creator.actor.id === viewerId;
+}
+
+/** Identity rows for the "Started by" picker: the viewer reads "You", with session counts. */
+export function usageCreatorOptions(
+  creators: readonly SessionUsageCreator[],
+  selectedKey: string | null,
+  viewerId: string | null | undefined,
+): UsageValueOption[] {
+  const entries = creators.map((creator): UsageValueOption => {
+    const viewer = isViewerCreator(creator, viewerId);
+    return {
+      value: creator.key,
+      label: viewer ? t("usage.creators.you") : creatorLabel(creator),
+      secondary: viewer ? creatorLabel(creator) : undefined,
+      count: creator.sessionCount,
+      pinned: viewer,
+      leading: creator.actor?.id ? (
+        <SessionOwnerChip owner={creator.actor} size="row" />
+      ) : undefined,
+    };
+  });
+  // Keep the active filter explicit when this range has no creator metadata.
+  if (selectedKey !== null && !entries.some((option) => option.value === selectedKey)) {
+    entries.push({ value: selectedKey, label: t("usage.creators.selected") });
+  }
+  return entries;
+}
+
 export function UsageCreatorFilter(props: {
   options: readonly SessionUsageCreator[];
   selectedKey: string | null;
+  viewerId?: string | null;
+  placement?: OverlayPlacement;
   onSelect: (key: string | null) => void;
 }) {
-  const options = createMemo(() => {
-    const entries = props.options
-      .toSorted((a, b) => creatorLabel(a).localeCompare(creatorLabel(b)))
-      .map((creator) => ({ value: creator.key, label: creatorLabel(creator) }));
-    // Keep the active filter explicit when this range has no creator metadata.
-    if (
-      props.selectedKey !== null &&
-      !entries.some((option) => option.value === props.selectedKey)
-    ) {
-      entries.push({ value: props.selectedKey, label: t("usage.creators.selected") });
-    }
-
-    return [{ value: "", label: t("usage.creators.all") }, ...entries];
-  });
+  const options = createMemo(() =>
+    usageCreatorOptions(props.options, props.selectedKey, props.viewerId),
+  );
+  const selectedLabel = () =>
+    props.selectedKey === null
+      ? t("usage.creators.all")
+      : (options().find((option) => option.value === props.selectedKey)?.label ??
+        t("usage.creators.selected"));
   return (
-    <SettingsSelect
-      class="usage-select usage-creator-filter"
-      aria-label={t("usage.creators.select")}
-      value={props.selectedKey ?? ""}
-      options={options()}
-      onChange={(event) => props.onSelect(event.currentTarget.value || null)}
+    <UsageValuePicker
+      id="creator"
+      label={t("usage.creators.select")}
+      class="usage-creator-filter"
+      triggerClass="usage-select usage-creator-trigger"
+      placement={props.placement}
+      multiple={false}
+      options={options}
+      isSelected={(value) => value === props.selectedKey}
+      searchLabel={() => t("usage.filters.search.creator")}
+      onToggle={(value) => props.onSelect(value === props.selectedKey ? null : value)}
+      onClear={() => props.onSelect(null)}
+      trigger={
+        <>
+          <span class="usage-creator-trigger__label">{selectedLabel()}</span>
+          <Icon name="chevronDown" />
+        </>
+      }
     />
   );
 }
@@ -106,7 +153,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
     const mode = props.mode;
     return groups().reduce((sum, group) => sum + value(group, mode), 0);
   });
-  const renderRows = (rows: readonly UsageCreatorGroup[]) => (
+  const CreatorTable = (tableProps: { rows: readonly UsageCreatorGroup[] }) => (
     <table class="usage-creators-table">
       <thead>
         <tr>
@@ -117,46 +164,46 @@ export function UsageCreators(props: UsageCreatorsProps) {
         </tr>
       </thead>
       <tbody>
-        <For each={rows}>
+        <For each={tableProps.rows} keyed={(group) => group.key}>
           {(group) => (
             <tr
               class={{
-                selected: group.key === props.selectedKey,
-                "usage-creator-row--unrecorded": !group.actor,
+                selected: group().key === props.selectedKey,
+                "usage-creator-row--unrecorded": !group().actor,
               }}
-              title={group.actor ? undefined : t("usage.creators.unattributedHint")}
+              title={group().actor ? undefined : t("usage.creators.unattributedHint")}
             >
               <th scope="row">
                 <button
                   type="button"
                   class="usage-creator-select"
-                  aria-pressed={group.key === props.selectedKey ? "true" : "false"}
-                  onClick={() => props.onSelect(group.key)}
+                  aria-pressed={group().key === props.selectedKey ? "true" : "false"}
+                  onClick={() => props.onSelect(group().key)}
                 >
                   <span class="usage-creator-name">
                     <span aria-hidden="true">
-                      {group.actor?.id ? (
-                        <SessionOwnerChip owner={group.actor} size="row" />
+                      {group().actor?.id ? (
+                        <SessionOwnerChip owner={group().actor} size="row" />
                       ) : undefined}
                     </span>
-                    <span>{creatorLabel(group)}</span>
+                    <span>{creatorLabel(group())}</span>
                   </span>
                   <span class="usage-creator-track" aria-hidden="true">
                     <span
                       style={{
-                        width: `${total() > 0 ? (value(group, props.mode) / total()) * 100 : 0}%`,
+                        width: `${total() > 0 ? (value(group(), props.mode) / total()) * 100 : 0}%`,
                       }}
                     />
                   </span>
                 </button>
               </th>
               <td class={{ "usage-creator-primary": props.mode === "tokens" }}>
-                {formatUsageTokens(group.totals.totalTokens)}
+                {formatUsageTokens(group().totals.totalTokens)}
               </td>
               <td class={{ "usage-creator-primary": props.mode === "cost" }}>
-                {formatUsageCost(group.totals.totalCost)}
+                {formatUsageCost(group().totals.totalCost)}
               </td>
-              <td>{group.sessionCount}</td>
+              <td>{group().sessionCount}</td>
             </tr>
           )}
         </For>
@@ -171,7 +218,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
     >
       <div class="usage-panel usage-creators">
         {groups().length > 0 ? (
-          renderRows(groups().slice(0, 8))
+          <CreatorTable rows={groups().slice(0, 8)} />
         ) : (
           <div class="usage-empty-block usage-empty-block--compact">
             {t("usage.creators.empty")}
@@ -180,7 +227,7 @@ export function UsageCreators(props: UsageCreatorsProps) {
         {groups().length > 8 ? (
           <details class="usage-creators-more">
             <summary>{t("usage.creators.more", { count: String(groups().length - 8) })}</summary>
-            {renderRows(groups().slice(8))}
+            <CreatorTable rows={groups().slice(8)} />
           </details>
         ) : undefined}
       </div>

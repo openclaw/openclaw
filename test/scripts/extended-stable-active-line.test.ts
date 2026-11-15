@@ -85,7 +85,7 @@ process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: main
         TARGET_SHA: "a".repeat(40),
         RELEASE_NPM_DIST_TAG: "extended-stable",
         PUBLISH_OPENCLAW_NPM: "true",
-        WAIT_FOR_CLAWHUB: "false",
+        CLAWHUB_ONLY: "false",
         RUNNER_TEMP: root,
         BYPASS_EXTENDED_STABLE_GUARD: "true",
       },
@@ -98,3 +98,18 @@ process.stdout.write(${JSON.stringify(Buffer.from(JSON.stringify({ version: main
     expect(calls).toEqual(expectedStatus === 42 ? ["main-read", "admitted"] : ["main-read"]);
   },
 );
+
+it("requires a scoped reason only for genuinely retired extended-stable lines", () => {
+  expect(() =>
+    validateActiveExtendedStableLine("2026.9.37", "2026.11.2", "Named retirement decision"),
+  ).not.toThrow();
+  for (const [release, main, reason] of [
+    ["2026.10.37", "2026.11.2", "Not retired"],
+    ["2026.12.37", "2026.11.2", "Future"],
+    ["2026.9.37", "invalid", "Missing live main"],
+    ["2026.9.37", "2026.11.2", ""],
+    ["2026.9.37", "2026.11.2", "line\nbreak"],
+  ]) {
+    expect(() => validateActiveExtendedStableLine(release, main, reason)).toThrow();
+  }
+});

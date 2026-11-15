@@ -87,6 +87,13 @@ json_expires_for_anthropic_any() {
     ' 2>/dev/null || echo "0"
 }
 
+file_expires_for_anthropic_any() {
+    jq -r '
+        [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
+        | max // 0
+    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0"
+}
+
 json_best_anthropic_profile() {
     echo "$STATUS_JSON" | jq -r '
         [.auth.oauth.profiles[]
@@ -131,10 +138,7 @@ check_openclaw_auth() {
             return 0
         fi
     elif [ -f "$OPENCLAW_AUTH" ]; then
-        expires_at=$(jq -r '
-            [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
-            | max // 0
-        ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+        expires_at=$(file_expires_for_anthropic_any)
     else
         echo "MISSING"
         return 1
@@ -153,7 +157,7 @@ if [ "$OUTPUT_MODE" = "json" ]; then
         openclaw_expires=$(json_expires_for_anthropic_any)
     else
         claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
-        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+        openclaw_expires=$(file_expires_for_anthropic_any)
     fi
 
     jq -n \
@@ -230,10 +234,7 @@ else
         | sort_by(.value.expires) | reverse
         | .[0].key // "none"
     ' "$OPENCLAW_AUTH" 2>/dev/null || echo "none")
-    expires=$(jq -r '
-        [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
-        | max // 0
-    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+    expires=$(file_expires_for_anthropic_any)
     api_keys=0
 fi
 

@@ -284,12 +284,13 @@ it("keeps a retained client fenced after a rejected account rotation", () =>
     const rejected = await refreshResponse(harness, "refresh-rejected");
     expectRefreshError(rejected, /different OAuth account/i);
 
+    // The rejected rotation consumed the refresh token: the terminal fence needs a fresh sign-in.
     const afterFence = await refreshResponse(harness, "refresh-after-fence");
     expectRefreshError(
       afterFence,
-      `auth profile "${PROFILE_ID}" could not resolve usable OAuth credentials from its OpenClaw credential store.`,
+      `auth profile "${PROFILE_ID}" could not refresh its OpenAI sign-in. Sign in again from Models, then retry.`,
     );
-    expect(afterFence.error?.message).not.toMatch(/HTTP 401|sign in again|re-authenticate/i);
+    expect(afterFence.error?.message).not.toMatch(/HTTP 401|openclaw doctor/i);
     expect(refreshOAuth).toHaveBeenCalledTimes(1);
 
     expect(JSON.stringify([rejected, afterFence])).not.toMatch(

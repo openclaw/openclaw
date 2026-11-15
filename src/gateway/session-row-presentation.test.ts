@@ -1,6 +1,12 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { SESSION_ROWS_DELTA_PREFIX } from "../../packages/gateway-protocol/src/session-row-fields.js";
+import {
+  expandSessionRowFacts,
+  SESSION_ROWS_DELTA_PREFIX,
+} from "../../packages/gateway-protocol/src/session-row-fields.js";
+import * as processes from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { publishSubagentRunChanges } from "../agents/subagents/registry/subagent-registry-publication.js";
@@ -11,6 +17,9 @@ import {
   removeSessionMember,
 } from "../config/sessions/session-sharing-store.native.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
 import {
   rpcSourceTesting,
   setRpcSourceIdentityForTest,
@@ -31,6 +40,7 @@ import {
 } from "./expected-profile.js";
 import { serializeGatewayFrame } from "./serialized-json.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
+import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { captureSessionRowGeneration } from "./session-row-identity.js";
@@ -49,10 +59,94 @@ import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-seri
 import * as sharingPolicy from "./session-sharing-policy.js";
 import { canReceiveSessionEvent } from "./session-sharing.js";
 import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import * as display from "./session-utils-display.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("shares live run display facts across one publication and refreshes the next publication", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:running", "agent:main:idle"];
+    keys.forEach((key) => seedRow(key, { sessionId: key, updatedAt: 1 }));
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    await projection.ensureMaterialized();
+    const records = keys.map((key) => projection.describe({ key, agentId: "main" })!);
+    const target = captureSessionTarget({
+      storeScope: records[0]!.storeTarget.storePath,
+      sessionKey: keys[0]!,
+      incarnation: keys[0]!,
+      agentId: "main",
+    });
+    const operation = createReplyOperation({
+      sessionKey: target.sessionKey,
+      sessionId: keys[0]!,
+      agentId: "main",
+      target,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    markReplyOperationExecutionStarted(operation);
+    try {
+      const projectRun = vi.fn(createVisibleActiveSessionRunProjector());
+      const publication = prepareSessionRowPublication(projection, Date.now());
+      for (let audience = 0; audience < 2; audience++) {
+        const presentation = publication(undefined, projectRun).getPresentation();
+        expect(records.map((row) => presentation.active(row)?.active)).toEqual([true, false]);
+        expect(records.map((row) => presentation.present(row)?.hasActiveRun)).toEqual([
+          true,
+          false,
+        ]);
+      }
+      expect(projectRun).toHaveBeenCalledTimes(records.length);
+      operation.complete();
+      await operation.ownerSettlement;
+      const next = prepareSessionRowPublication(projection, Date.now())(
+        undefined,
+        projectRun,
+      ).getPresentation();
+      expect(next.present(records[0]!)?.hasActiveRun).toBe(false);
+      expect(projectRun).toHaveBeenCalledTimes(records.length + 1);
+    } finally {
+      operation.complete();
+      await operation.ownerSettlement;
+    }
+  });
+});
+
+it("reads background processes once per presentation and refreshes counts after exit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = ["agent:main:process-a", "agent:main:process-b"];
+    keys.forEach((key, i) => seedRow(key, { sessionId: `process-${i}`, updatedAt: 1 }));
+    const process = createProcessSessionFixture({ id: "running", backgrounded: true });
+    process.scopeKey = "process-0";
+    process.agentId = "main";
+    processes.addSession(process);
+    try {
+      using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      using reads = vi.spyOn(processes, "listRunningSessions");
+      using runStates = vi.spyOn(display, "projectGatewaySessionRunState");
+      const read = () => {
+        reads.mockClear();
+        runStates.mockClear();
+        const presenter = prepareSessionRowPublication(projection, Date.now())().getPresentation();
+        const counts = keys.map(
+          (key) => presenter.snapshot({ key, agentId: "main" }).row?.backgroundProcessCount,
+        );
+        expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+        expect(runStates).toHaveBeenCalledTimes(keys.length);
+        return counts;
+      };
+      expect(read()).toEqual([1, undefined]);
+      expect(read()).toEqual([1, undefined]);
+      processes.markExited(process, 0, null, "completed");
+      expect(read()).toEqual([undefined, undefined]);
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+});
 
 function profileClient(profileId: string) {
   const client = sharingPolicyClient({ user: profileId });
@@ -127,10 +221,34 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
     }
     using projection = await createTestProjection({ cfg: rolePolicyConfig(), modelCatalog: [] });
     const diagnostics = vi.spyOn(sharingPolicy, "authorizeSessionAgentRun");
+    using runStates = vi.spyOn(display, "projectGatewaySessionRunState");
     const summaryEligibility = vi.spyOn(sharingPolicy, "authorizeIncognitoSessionTarget");
+    const compareWire = (
+      client: ReturnType<typeof profileClient>,
+      options: Parameters<ReturnType<typeof prepareProjectedSessionPresentation>["snapshot"]>[1],
+    ) => {
+      const now = Date.now();
+      const read = () =>
+        prepareProjectedSessionPresentation(projection, client, now).snapshot(
+          { agentId: "main", key: "agent:main:shared" },
+          options,
+        ).row!;
+      const prepared = read();
+      const present = projection.present.bind(projection);
+      using standalone = vi
+        .spyOn(projection, "present")
+        .mockImplementation((record, opts) =>
+          present(record, { ...opts, preparedRunState: undefined }),
+        );
+      const unprepared = read();
+      expect(standalone).toHaveBeenCalledOnce();
+      expect(JSON.stringify(prepared)).toBe(JSON.stringify(unprepared));
+      expect(serializeSessionRow(prepared)).toBe(serializeSessionRow(unprepared));
+    };
     for (const rowMode of ["sidebar", "compact", "dashboard", undefined, "sidebar"] as const) {
       for (const [index, client] of clients.entries()) {
         diagnostics.mockClear();
+        runStates.mockClear();
         summaryEligibility.mockClear();
         const result = await listProjectedSessions({
           projection,
@@ -139,12 +257,14 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           acceptsSerializedJson: true,
         });
         expect(result.count).toBe(index === 0 ? 2 : 1);
+        expect(runStates).toHaveBeenCalledTimes(result.count);
         const row = result.sessions.find((candidate) => candidate.key === "agent:main:shared")!;
         if (rowMode === "sidebar" || rowMode === "dashboard") {
           expect(diagnostics).not.toHaveBeenCalled();
           expect(summaryEligibility).not.toHaveBeenCalled();
           expect(row.activitySummary).toBeUndefined();
           expect(row.sendDisabledReason).toBeUndefined();
+          expect(row.workspaceReadDisabledReason).toBeUndefined();
         } else {
           expect(diagnostics).toHaveBeenCalled();
           expect(summaryEligibility).toHaveBeenCalled();
@@ -153,6 +273,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
             index === 0 ? null : "session is shared for this connection",
           );
         }
+        compareWire(client, { rowMode, includeActivitySummary: true });
       }
     }
     for (const role of ["write", "view"] as const) {
@@ -172,6 +293,7 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
           expect(row.activitySummary).toBeUndefined();
           expect(summaryEligibility).not.toHaveBeenCalled();
         }
+        compareWire(clients[1]!, { rowMode: "compact", includeActivitySummary });
       }
     }
     setUserProfileRole(guest.id, "none");
@@ -185,6 +307,71 @@ it("does not derive discarded diagnostics while interleaving row modes and viewe
         })
       ).sessions,
     ).toEqual([]);
+  });
+});
+
+it("propagates stored child activity through idle ancestors and clears it on settlement", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const keys = [
+      "agent:main:dashboard:waiting-root",
+      "agent:main:subagent:waiting-child",
+      "agent:main:subagent:waiting-grandchild",
+      "agent:main:subagent:working-leaf",
+    ];
+    const entries = keys.map((key, index) => ({
+      sessionId: key,
+      updatedAt: Date.now(),
+      status: "done" as const,
+      ...(index > 0 ? { spawnedBy: keys[index - 1], parentSessionKey: keys[index - 1] } : {}),
+    }));
+    keys.forEach((key, index) => seedRow(key, entries[index]!));
+    using projection = await createTestProjection({ cfg: {}, modelCatalog: [] });
+    const read = async (search?: string) => {
+      const opts = { rowMode: "sidebar" as const, search };
+      const result = await listProjectedSessions({ projection, opts });
+      return expandSessionRowFacts(result.sessions, result.sharedFacts);
+    };
+    const activity = async () => {
+      const rows = await read();
+      return keys.map((key) => rows.find((row) => row.key === key)!.hasActiveSubagentRun === true);
+    };
+    const work = (index: number, runId: string) => {
+      const claim = claimAgentRunContext(
+        runId,
+        {
+          sessionKey: keys[index],
+          sessionId: keys[index],
+          agentId: "main",
+          projectSessionActive: true,
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      if (!claim) {
+        throw new Error("Expected an active execution claim");
+      }
+      return { [Symbol.dispose]: () => releaseAgentRunContext(runId, claim) };
+    };
+    {
+      using _ = work(1, "direct-work");
+      expect((await read("waiting-root"))[0]?.hasActiveSubagentRun).toBe(true);
+    }
+    {
+      using _ = work(3, "nested-work");
+      // Present only the ancestor first: no intermediate UI row needs to be loaded.
+      expect((await read("waiting-root"))[0]?.hasActiveSubagentRun).toBe(true);
+      expect((await activity()).slice(0, 3)).toEqual([true, true, true]);
+      expect(
+        (await read()).filter((row) => row.key !== keys[3]).some((row) => row.hasActiveRun),
+      ).toBe(false);
+    }
+    expect(await activity()).toEqual([false, false, false, false]);
+    const root = projection.describe({ key: keys[0]!, agentId: "main" })!;
+    const atTime = vi.spyOn(projection.state.rowContext.subagentRuns, "atTime");
+    projection.readChildActivity(root, Date.now());
+    expect(atTime).not.toHaveBeenCalled();
+    // Malformed stored cycles neither invent activity nor recurse forever.
+    seedRow(keys[0]!, { ...entries[0]!, spawnedBy: keys[3] });
+    expect(await activity()).toEqual([false, false, false, false]);
   });
 });
 
@@ -284,13 +471,14 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
     const clients = profiles.map((profile) => profileClient(profile.id));
     const creatorId = clients[0]!.authenticatedUserProfile!.profileId;
-    const keys = ["host", "sandbox", "entry-blocked", "policy-blocked"];
+    const keys = ["host", "sandbox", "remote", "entry-blocked", "policy-blocked"];
     for (const key of keys) {
       seedRow(`agent:main:${key}`, {
         sessionId: key,
         updatedAt: 1,
         createdActor: { type: "human", source: "profile", id: creatorId },
-        ...(key === "host" ? {} : { sandbox: "required" as const }),
+        ...(key === "host" || key === "remote" ? {} : { sandbox: "required" as const }),
+        ...(key === "remote" ? { execNode: "synthetic-node" } : {}),
         ...(key === "entry-blocked" ? { sendPolicy: "deny" as const } : {}),
       });
     }
@@ -319,9 +507,21 @@ it("projects send policy and recipient restrictions, clearing them when the curr
     ] as const) {
       expect(reasonFor(index, key)).toBe(reason);
     }
+    const workspaceReasonFor = (key: string) =>
+      prepareProjectedSessionPresentation(projection, clients[0]!).snapshot({
+        agentId: "main",
+        key: `agent:main:${key}`,
+      }).row?.workspaceReadDisabledReason;
+    expect(workspaceReasonFor("host")).toBe(
+      "Your operator role requires a sandboxed session. You cannot read this session's host workspace files. Ask the owner to download and share the file, then attach it to your own session.",
+    );
+    for (const key of ["sandbox", "remote", "entry-blocked", "policy-blocked"]) {
+      expect(workspaceReasonFor(key)).toBeNull();
+    }
     setUserProfileRole(creatorId, "view");
     prepareGatewayRecipientProfile(clients[0]!);
     expect(reasonFor(0, "host")).toBeNull();
+    expect(workspaceReasonFor("host")).toBeNull();
   });
 });
 

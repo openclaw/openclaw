@@ -100,7 +100,7 @@ export function toStreamingMarkdownDomParts(
   const stableAppend = stableMarkdown.slice(incremental ? previous.markdown.length : 0);
   if (stableAppend) {
     const appendedHtml = markdownContentHtml(
-      renderSanitizedMarkdown(stableAppend, { ...renderOptions }),
+      renderSanitizedMarkdown(stableAppend, { ...renderOptions, streamingPrefix: true }),
     );
     // File-label collisions and standalone block art depend on the whole prefix.
     stableHtml =
@@ -108,7 +108,9 @@ export function toStreamingMarkdownDomParts(
       (renderOptions.fileLinks &&
         stableHtml.includes('class="markdown-file-link"') &&
         appendedHtml.includes('class="markdown-file-link"'))
-        ? markdownContentHtml(renderSanitizedMarkdown(stableMarkdown, { ...renderOptions }))
+        ? markdownContentHtml(
+            renderSanitizedMarkdown(stableMarkdown, { ...renderOptions, streamingPrefix: true }),
+          )
         : stableHtml + appendedHtml;
   }
   if (HIGHLIGHTABLE_CODE_RE.test(stableHtml) && markdownHighlightingPending()) {

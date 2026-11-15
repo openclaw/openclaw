@@ -5,7 +5,7 @@ import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { collectNestedErrorCandidates } from "../infra/error-graph-internal.js";
-import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
+import { extractErrorCode, formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import { runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import {
@@ -19,8 +19,11 @@ import {
 } from "../state/openclaw-update-schema-refusal.js";
 import { formatCliCommand } from "./command-format.js";
 import type { CronCliJobMatch } from "./cron-cli/cron-cli-error.js";
+import { ExpectedCliError } from "./expected-cli-error.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
 import { exitAfterSignalExitBarriers } from "./signal-exit-barrier.js";
+
+export { ExpectedCliError } from "./expected-cli-error.js";
 
 export function handleCliUncaughtException(error: unknown, argv?: string[]): void {
   if (isUncaughtExceptionHandled(error)) {
@@ -89,33 +92,6 @@ export function recordCliGatewayRunFailure(error: unknown, runId: string | undef
 /** Human diagnostics (agent transport-loss hint) read back the run identity recorded at dispatch. */
 export function readCliGatewayRunFailure(error: unknown): CliGatewayRunFailure | undefined {
   return error instanceof Error ? gatewayRunFailures.get(error) : undefined;
-}
-
-export class ExpectedCliError extends Error {
-  readonly humanOutput: string;
-  readonly humanOutputWritten: boolean;
-  readonly machineOutput: string;
-  readonly matches?: readonly CronCliJobMatch[];
-
-  constructor(params: {
-    message: string;
-    humanOutput: string;
-    humanOutputWritten?: boolean;
-    machineOutput: string;
-    matches?: readonly CronCliJobMatch[];
-    cause?: unknown;
-  }) {
-    super(params.message, params.cause === undefined ? undefined : { cause: params.cause });
-    this.name = "ExpectedCliError";
-    this.humanOutput = params.humanOutput;
-    this.humanOutputWritten = params.humanOutputWritten ?? false;
-    this.machineOutput = params.machineOutput;
-    this.matches = params.matches;
-  }
-}
-
-export function throwExpectedCliError(message: string): never {
-  throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
 }
 
 export function isGatewayCredentialsCliError(
@@ -318,12 +294,18 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     if (stateRefusal) {
       return [`[openclaw] ${options.title}`, reason(stateRefusal)];
     }
+    // Engine selection throws config read failures unprinted; Doctor cannot read the file either.
+    if (extractErrorCode(options.error) === "CONFIG_READ_FAILED") {
+      return [`[openclaw] ${options.title}`, reason(options.error)];
+    }
     // Config validation owns actionable file/field details; some startup paths have not printed them.
     const showReason = isInvalidConfigError(options.error)
       ? !options.error.diagnosticEmitted
       : isUpdateCommand ||
         isPluginUpdateCommand ||
+        (options.error instanceof Error && options.error.name === "GatewayClientRequestError") ||
         isNodeRunCommand ||
+        commandPath[0] === "connect" ||
         isForegroundGatewayRunArgv(argv);
     return [
       `[openclaw] ${options.title}`,

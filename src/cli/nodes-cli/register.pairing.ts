@@ -8,7 +8,12 @@ import { defaultRuntime } from "../../runtime.js";
 import { parsePairingList } from "../../shared/node-list-parse.js";
 import type { PendingRequest } from "../../shared/node-list-types.js";
 import { formatCliCommand } from "../command-format.js";
-import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import {
+  formatConnectionFlagReminder,
+  getNodesTheme,
+  runNodesCommand,
+  runNodesReadCommand,
+} from "./cli-utils.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
   callNodesGatewayCli,
@@ -86,8 +91,8 @@ export function registerNodesPairingCommands(nodes: Command) {
       .command("pending")
       .description("List pending pairing requests")
       .action(async (opts: NodesRpcOpts) => {
-        await runNodesCommand("pending", async () => {
-          const result = await callNodesGatewayCli("node.pair.list", opts, {});
+        await runNodesReadCommand("pending", async (signal) => {
+          const result = await callNodesGatewayCli("node.pair.list", opts, {}, { signal });
           const { pending } = parsePairingList(result);
           if (opts.json) {
             defaultRuntime.writeJson(pending);

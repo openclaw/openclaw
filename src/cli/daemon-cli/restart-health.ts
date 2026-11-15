@@ -1,6 +1,7 @@
 // Restart health probes for gateway service restarts and port listener recovery.
 import type { ChildProcess } from "node:child_process";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { createConfiguredGatewayLocalProbe } from "../../gateway/local-http-probe.js";
@@ -16,6 +17,7 @@ import {
   hasCommandProcessCleanupError,
   ignoreNonCleanupCommandError,
 } from "../../process/exec-result.js";
+import { resolveCommandProcessSignal } from "../../process/exec-spawn.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils.js";
 import {
@@ -93,6 +95,7 @@ type GatewayRestartWaitOptions = {
   deadlineOutcome?: "throw" | "snapshot";
   phase?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
   expectedVersion?: string | null;
   expectedBuildId?: string | null;
   requireRunningService?: boolean;
@@ -118,7 +121,9 @@ export async function waitForGatewayHealthyRestart(
       | { child: Pick<ChildProcess, "pid" | "exitCode" | "signalCode">; service?: never }
     ),
 ): Promise<GatewayRestartResult> {
-  const signal = params.deadline?.signal ?? params.signal;
+  // A cancelled scope kills native inspections at spawn. Polling on would only ever read
+  // an unknown service while a healthy Gateway keeps the interrupted command waiting.
+  const signal = resolveCommandProcessSignal(params.deadline?.signal ?? params.signal);
   const read = <T>(phase: string, operation: () => Promise<T>) =>
     params.deadline
       ? params.deadline.read(`${params.phase ?? "health-wait"}:${phase}`, operation)
@@ -188,6 +193,8 @@ export async function waitForGatewayHealthyRestart(
   let observedStartupMigration = false;
   let observedRunning = false;
   let observedListener = false;
+  let startupPhasePid: number | undefined;
+  const observedStartupPhases = new Set<string>();
   let startupProgressDeadlineMs = progressWindowMs;
   let updateStartupDeadlineMs: number | undefined;
   let observedOwner: string | undefined;
@@ -234,10 +241,12 @@ export async function waitForGatewayHealthyRestart(
     const probeContext =
       params.probeContext ??
       (await read("probe-context", () =>
-        resolveGatewayRestartProbeContext(params.env, undefined, signal).catch(() => ({
-          auth: undefined,
-          config: {},
-        })),
+        resolveGatewayRestartProbeContext(params.env, undefined, signal, params.config).catch(
+          () => ({
+            auth: undefined,
+            config: {},
+          }),
+        ),
       ));
     const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
     const probeHosts =
@@ -493,9 +502,26 @@ export async function waitForGatewayHealthyRestart(
           listenerOwnedByRuntimePid({ listener, runtimePid }),
         );
       const running = snapshot.runtime.status === "running";
+      // Only new phases from the replacement's own listener renew the watchdog.
+      // Repeated phases and a supervisor's next process are not forward progress.
+      let phaseProgress = false;
+      if (
+        running &&
+        runtimePid !== undefined &&
+        reportedStartupPhase &&
+        (startupPhasePid === undefined || runtimePid === startupPhasePid) &&
+        allListenersOwnedByRuntimePid(snapshot.portUsage.listeners, runtimePid)
+      ) {
+        startupPhasePid = runtimePid;
+        phaseProgress = !observedStartupPhases.has(reportedStartupPhase);
+        observedStartupPhases.add(reportedStartupPhase);
+      }
       const startupProgress =
         attempt > 0 &&
-        ((!observedRunning && running) || (!observedListener && ownsListener) || identifiedBoot);
+        ((!observedRunning && running) ||
+          (!observedListener && ownsListener) ||
+          identifiedBoot ||
+          phaseProgress);
       const stableRunning =
         running && (snapshot.runtime.pid !== undefined || snapshot.gatewayBootId !== undefined);
       if (

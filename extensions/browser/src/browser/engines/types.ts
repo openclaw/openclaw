@@ -48,7 +48,7 @@ export type BrowserEngineDescriptor = {
 
 type BrowserEngineCdpNormalizer = {
   send: (message: object) => object;
-  receive: (message: Record<string, unknown>) => Record<string, unknown> | undefined;
+  receive: (message: Record<string, unknown>) => Record<string, unknown>[];
   clear: () => void;
 };
 
@@ -58,6 +58,8 @@ export type BrowserEngineAdapter = {
   requiresDedicatedEndpoint: boolean;
   canReconnectForSafeReads: boolean;
   maxPagesPerConnection?: number;
+  /** Engines whose only page can be released only by disconnecting. */
+  closePageClosesConnection?: boolean;
   defaultSnapshotRefs?: "aria" | "role";
   capabilities: (profile: ResolvedBrowserProfile) => BrowserProfileCapabilities;
   /** Engines with their own external launch protocol validate and resolve their profile here. */

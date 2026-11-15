@@ -6,6 +6,10 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import {
+  resolveConfiguredAgentDatabaseCandidatePaths,
+  type SessionStoreTarget,
+} from "../../config/sessions/targets.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   listAgentDatabaseAdmissionRefusals,
@@ -33,7 +37,8 @@ export async function assertAcpSessionKeysMigratedForStartup(
   env: NodeJS.ProcessEnv,
   admittedAgentIds: readonly string[],
   admittedDatabase: OpenClawAgentDatabaseOptions | undefined,
-  assertCurrent?: () => void,
+  assertCurrent: (() => void) | undefined,
+  excludeTarget: (target: SessionStoreTarget) => boolean,
 ): Promise<void> {
   assertCurrent?.();
   const result = await executeExistingOpenClawStateRead({ env }, { type: "acpSessions.list" });
@@ -45,8 +50,9 @@ export async function assertAcpSessionKeysMigratedForStartup(
   const admittedPath = admittedDatabase
     ? resolveOpenClawAgentSqlitePath(admittedDatabase)
     : undefined;
-  // Unknown owners still require validation. Only the admission owner's explicit
-  // refusals defer a physical store, and its preparation borrow restores the check.
+  // Historical ACP rows do not admit retired stores. Keep physical shared stores
+  // in scope, and let the admission owner's refusals defer configured stores.
+  const configuredPaths = resolveConfiguredAgentDatabaseCandidatePaths(cfg, { env });
   const refusedPaths = admittedDatabase
     ? []
     : listAgentDatabaseAdmissionRefusals({ env }).flatMap(
@@ -58,10 +64,10 @@ export async function assertAcpSessionKeysMigratedForStartup(
       toDatabaseOptions(resolveSqliteReadScope({ agentId, storePath, sessionKey, env })),
     );
   const ownsPath = (agentId: string, storePath: string, sessionKey: string) => {
-    if (admittedPath === undefined && refusedPaths.length === 0) {
-      return true;
-    }
     const pathname = candidatePath(agentId, storePath, sessionKey);
+    if (!configuredPaths.some((configuredPath) => matchesPath(pathname, configuredPath))) {
+      return false;
+    }
     return admittedPath === undefined
       ? !refusedPaths.some((refusedPath) => matchesPath(pathname, refusedPath))
       : matchesPath(pathname, admittedPath);
@@ -74,6 +80,18 @@ export async function assertAcpSessionKeysMigratedForStartup(
       local: boolean;
     }> = [];
     for (const identity of identities) {
+      // Historical explicit ACP owners can outlive their roster entry and schema.
+      if (
+        excludeTarget({
+          agentId: identity.agentId,
+          storePath: resolveSessionStorePathCore(cfg.session?.store, {
+            agentId: identity.agentId,
+            env,
+          }),
+        })
+      ) {
+        continue;
+      }
       let owner: ReturnType<typeof resolveSessionStorePathForAcp>;
       try {
         owner = resolveSessionStorePathForAcp({

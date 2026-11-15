@@ -32,6 +32,7 @@ import {
 } from "./session-accessor.pending-inputs.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { readSessionPendingInputReceiptsInWorker as listSessionPendingInputReceipts } from "./session-pending-input-receipts.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { deriveTranscriptPredicateFields } from "./transcript-predicate-fields.js";
@@ -49,6 +50,20 @@ const query = (sql: string) => database().db.prepare(sql);
 const rows = (sql: string) => query(sql).all();
 const pendingRows = (fields: string) =>
   rows(`SELECT ${fields} FROM session_pending_inputs ORDER BY seq`);
+const actorPendingInputs = async () => {
+  const actor = await createSessionActorFactory({ ...options(), path: database().path }).acquire(
+    {
+      sessionKey: scope().sessionKey,
+      database: { kind: "file" },
+    },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  try {
+    return (await actor.read({ assertCurrent() {}, authorize() {} })).pendingInputs;
+  } finally {
+    await actor.release();
+  }
+};
 const receipts: SessionPendingInputReceipt[] = [];
 const message = (id: string, content = "Synthetic accepted input") => ({
   role: "user" as const,
@@ -248,7 +263,9 @@ it("commits one collected message and retains exact source receipts across rewri
     message("collect-c", "First approved input\nSecond approved input"),
   );
   expect((await listSessionPendingInputs(scope())).total).toBe(2);
+  expect(await actorPendingInputs()).toHaveLength(2);
   const appended = await promote(aggregate);
+  expect(await actorPendingInputs()).toEqual([]);
   expect(appended).toMatchObject({ appended: true, messageId: aggregate.inputId });
   expect(
     (await readSessionSubmittedInput(scope(), "collect-c:user"))?.["__openclaw"],
@@ -266,6 +283,7 @@ it("commits one collected message and retains exact source receipts across rewri
   await finish(aggregate, "cancelled");
   await replaceTranscriptEvents(scope(), []);
   await restart();
+  expect(await actorPendingInputs()).toEqual([]);
   expect(await readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
   expect(await readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
   const duplicate = await stage("collect-a", {
@@ -276,6 +294,7 @@ it("commits one collected message and retains exact source receipts across rewri
     inputId: first.inputId,
     message: first.message,
   });
+  expect(await actorPendingInputs()).toEqual([]);
   expect(() => promote(duplicate)).toThrow("already been consumed");
   await expect(
     stage("collect-a", { message: message("collect-a", "Changed input") }),

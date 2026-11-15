@@ -92,10 +92,9 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
       monitor.logVerboseMessage(`mattermost: drop post (self sender=${senderId})`);
       return;
     }
-    if (normalizeOptionalString(post.type) !== undefined) {
-      monitor.logVerboseMessage(
-        `mattermost: drop post (system post type=${post.type ?? "unknown"})`,
-      );
+    // Person-authored link previews carry a non-system post type.
+    if (post.type?.startsWith("system_")) {
+      monitor.logVerboseMessage(`mattermost: drop post (system post type=${post.type})`);
       return;
     }
 

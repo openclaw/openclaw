@@ -139,9 +139,7 @@ suite.define(() => {
           });
           await writeFile(path.join(artifactDir, "active.png"), frame.png);
           expect(await pane.locator('[data-test-id="chat-delegation"]').count()).toBe(0);
-          expect(await pane.locator(".chat-thread openclaw-chat-subagent-activity").count()).toBe(
-            0,
-          );
+          expect(await pane.locator(".chat-thread .chat-subagent-activity").count()).toBe(0);
           await footer.getByRole("button", { name: label, exact: true }).click();
           const panel = pane.locator("openclaw-chat-subagents-panel");
           await panel.waitFor();

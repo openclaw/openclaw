@@ -7,7 +7,9 @@ struct RootSidebar: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.displayScale) private var displayScale
     @Bindable var model: RootSidebarModel
+    @State private var scrollAnchor = RootSidebarScrollAnchor()
     @State private var searchText = ""
+    @State private var collapsedParents: Set<String> = []
     @State private var isSearchActive = false
     @State private var showsPagesEditor = false
     @State private var presentedAttention: OpenClawChatAttentionPresentation?
@@ -36,7 +38,9 @@ struct RootSidebar: View {
             ScrollView {
                 // One 10pt unit everywhere: side insets, section gaps, and
                 // the picker card's clearance all match.
-                LazyVStack(alignment: .leading, spacing: 10) {
+                // Not lazy: with three sections it saves nothing, and a lazy stack drops a section the
+                // keyboard pushes out of view, which closes an alert or sheet opened from one of its rows.
+                VStack(alignment: .leading, spacing: 10) {
                     self.agentsSection
                     self.pagesSection(pinnedSessionNodes: sessionLayout.pinnedNodes, rowPass: rowPass)
                     self.sessionsSection(
@@ -44,10 +48,15 @@ struct RootSidebar: View {
                         hasPinnedSessions: !sessionLayout.pinnedNodes.isEmpty,
                         rowPass: rowPass)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 10)
                 .padding(.vertical, 10)
+                .modifier(RootSidebarAnchoredContent(anchor: self.scrollAnchor))
             }
             self.footer
+        }
+        .task(id: self.appModel.chatViewModelIdentityID) {
+            await self.appModel.sessionGroups.refresh(appModel: self.appModel)
         }
         .foregroundStyle(OpenClawSidebarPalette.text)
         .background(OpenClawSidebarPalette.background)
@@ -300,13 +309,20 @@ struct RootSidebar: View {
         ZStack {
             Circle()
                 .fill(OpenClawSidebarPalette.elevated)
-            Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
-                .font(OpenClawType.caption2Bold)
-                .foregroundStyle(OpenClawSidebarPalette.textStrong)
-                .minimumScaleFactor(0.65)
-                .lineLimit(1)
+            if let image = self.appModel.agentAvatarImage(for: agent.id) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Text(verbatim: Self.agentBadge(name: Self.agentDisplayName(agent), identity: agent.identity))
+                    .font(OpenClawType.caption2Bold)
+                    .foregroundStyle(OpenClawSidebarPalette.textStrong)
+                    .minimumScaleFactor(0.65)
+                    .lineLimit(1)
+            }
         }
         .frame(width: size, height: size)
+        .clipShape(Circle())
         .overlay(Circle().strokeBorder(OpenClawSidebarPalette.hairline, lineWidth: 1))
         .accessibilityHidden(true)
     }
@@ -369,6 +385,9 @@ struct RootSidebar: View {
         rowPass: SessionRowPass) -> some View
     {
         VStack(alignment: .leading, spacing: 6) {
+            if let failure = self.appModel.sessionGroups.failure {
+                Text(verbatim: failure).font(OpenClawType.captionMedium).foregroundStyle(OpenClawBrand.warn)
+            }
             if let sessionErrorText = self.model.sessionErrorText {
                 Text(verbatim: sessionErrorText)
                     .font(OpenClawType.captionMedium)
@@ -398,18 +417,43 @@ struct RootSidebar: View {
                     let title = section.id == "recent"
                         ? String(localized: "Sessions")
                         : (section.title ?? String(localized: "Sessions"))
-                    HStack(spacing: 0) {
-                        self.sectionTitle(title)
-                        Spacer(minLength: 0)
-                        self.attentionBadges(
-                            for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                    if section.id.hasPrefix("group:"), let name = section.title {
+                        CommandSessionGroupHeader(
+                            name: name,
+                            sessions: self.model.sessions,
+                            trailingCount: section.nodes.count,
+                            refresh: { await self.model.refreshSessions(appModel: self.appModel) },
+                            openSession: { key in
+                                self.appModel.openChat(sessionKey: key)
+                                self.selectSidebarDestination(.chat)
+                            },
+                            accessory: {
+                                self.attentionBadges(
+                                    for: Self.flattened(section.nodes).map(\.session),
+                                    targetID: "section:\(section.id)")
+                            })
+                            .foregroundStyle(OpenClawSidebarPalette.muted)
+                            // Leading inset only: the caret and count sit at the trailing edge.
+                            .padding(.leading, 10)
+                    } else {
+                        HStack(spacing: 0) {
+                            self.sectionTitle(title)
+                            Spacer(minLength: 0)
+                            self.attentionBadges(
+                                for: Self.flattened(section.nodes).map(\.session), targetID: "section:\(section.id)")
+                        }
                     }
-                    ForEach(self.sessionNodes(for: section)) { node in
-                        self.sessionButton(node, rowPass: rowPass)
+                    if !section.id.hasPrefix("group:") ||
+                        !self.appModel.sessionGroups.collapsed.contains(section.title ?? "") || !self.searchText.isEmpty
+                    {
+                        ForEach(self.sessionNodes(for: section)) { row in
+                            self.sessionTreeRow(row, rowPass: rowPass)
+                        }
                     }
                 }
             }
 
+            let isSessionsSelected = self.selectedDestination == .sessions
             Button {
                 self.selectSidebarDestination(.sessions)
             } label: {
@@ -426,6 +470,10 @@ struct RootSidebar: View {
             }
             .buttonStyle(.plain)
             .foregroundStyle(OpenClawSidebarPalette.accent)
+            .background(isSessionsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                cornerRadius: OpenClawProMetric.controlRadius,
+                style: .continuous))
+            .accessibilityAddTraits(isSessionsSelected ? .isSelected : [])
         }
     }
 
@@ -450,8 +498,8 @@ struct RootSidebar: View {
                 .accessibilityLabel(String(localized: "Edit Pages"))
             }
             self.homeRow
-            ForEach(pinnedSessionNodes) { node in
-                self.sessionButton(node, rowPass: rowPass)
+            ForEach(self.displayRows(pinnedSessionNodes)) { row in
+                self.sessionTreeRow(row, rowPass: rowPass)
             }
             ForEach(self.pinnedPages) { destination in
                 self.destinationButton(destination)
@@ -510,12 +558,18 @@ struct RootSidebar: View {
 
     /// Web-parity compact footer: connection state left, Settings gear right.
     private var footer: some View {
-        VStack(spacing: 0) {
+        let isGatewaySelected = self.selectedDestination == .gateway
+        let isSettingsSelected = self.selectedDestination == .settings
+        return VStack(spacing: 0) {
             self.separator
             HStack(spacing: 4) {
                 RootSidebarGatewayControl(fallbackName: self.gatewayName) {
                     self.selectSidebarDestination(.gateway)
                 }
+                .background(isGatewaySelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
+                .accessibilityAddTraits(isGatewaySelected ? .isSelected : [])
 
                 Spacer(minLength: 4)
 
@@ -525,7 +579,11 @@ struct RootSidebar: View {
                 {
                     self.selectSidebarDestination(.settings)
                 }
+                .background(isSettingsSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
+                    cornerRadius: OpenClawProMetric.controlRadius,
+                    style: .continuous))
                 .accessibilityIdentifier("RootTabs.Sidebar.Destination.settings")
+                .accessibilityAddTraits(isSettingsSelected ? .isSelected : [])
             }
         }
         .padding(.horizontal, 10)
@@ -566,6 +624,7 @@ struct RootSidebar: View {
             groups: categories.enumerated().map { offset, name in
                 OpenClawChatSessionGroup(name: name, position: offset)
             },
+            rosterIsComplete: self.model.isSessionRosterComplete,
             sessionRoutingContract: self.appModel.chatSessionRoutingContract,
             now: self.model.now)
     }
@@ -582,20 +641,20 @@ struct RootSidebar: View {
         var remainingSections = sections
         let pinnedSection = remainingSections.remove(at: pinnedIndex)
         return SessionLayout(
-            pinnedNodes: self.flattened(pinnedSection.nodes),
+            pinnedNodes: pinnedSection.nodes,
             sections: remainingSections)
     }
 
     private var sessionCategories: [String] {
-        CommandSessionGrouping.categories(from: self.model.sessions, knownGroups: SessionGroupStore.load())
+        self.appModel.sessionGroups.names(for: self.model.sessions)
     }
 
     private static func flattened(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Node] {
         nodes.flatMap { [$0] + self.flattened($0.children) }
     }
 
-    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Node] {
-        let nodes = Self.flattened(section.nodes)
+    private func sessionNodes(for section: ChatSessionSidebarModel.Section) -> [ChatSessionSidebarModel.Row] {
+        let nodes = self.displayRows(section.nodes)
         guard section.id == "recent", let limit = Self.recentSessionCap(searchText: self.searchText) else {
             return nodes
         }
@@ -613,6 +672,37 @@ struct RootSidebar: View {
         let categories: [String]
     }
 
+    private func displayRows(_ nodes: [ChatSessionSidebarModel.Node]) -> [ChatSessionSidebarModel.Row] {
+        ChatSessionSidebarModel.rows(nodes) { node in
+            !self.searchText.isEmpty || !self.collapsedParents.contains(node.id)
+        }
+    }
+
+    private func sessionTreeRow(
+        _ row: ChatSessionSidebarModel.Row,
+        rowPass: SessionRowPass) -> some View
+    {
+        HStack(spacing: 0) {
+            self.sessionButton(row.node, rowPass: rowPass)
+            if !row.node.children.isEmpty {
+                Button {
+                    if !self.collapsedParents.insert(row.id).inserted {
+                        self.collapsedParents.remove(row.id)
+                    }
+                } label: {
+                    Image(systemName: self.collapsedParents.contains(row.id) ? "chevron.right" : "chevron.down")
+                        .font(OpenClawType.captionSemiBold)
+                        .frame(width: 32, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(self.collapsedParents.contains(row.id)
+                    ? String(localized: "Show Sub-sessions") : String(localized: "Hide Sub-sessions"))
+            }
+        }
+        .padding(.leading, CGFloat(row.depth) * 12)
+        .modifier(RootSidebarAnchoredRow(id: row.id, anchor: self.scrollAnchor))
+    }
+
     private func sessionButton(
         _ node: ChatSessionSidebarModel.Node,
         rowPass: SessionRowPass) -> some View
@@ -620,90 +710,17 @@ struct RootSidebar: View {
         let session = node.session
         let isSelected = session.key == rowPass.selectedSessionKey
         return HStack(spacing: 0) {
-            Button {
-                self.selectSession(session)
-            } label: {
-                HStack(spacing: 9) {
-                    ZStack {
-                        if node.badges.runningCount > 0 {
-                            ProgressView()
-                                .controlSize(.mini)
-                                .tint(OpenClawSidebarPalette.accent)
-                        } else {
-                            Image(systemName: "bubble.left")
-                                .font(OpenClawType.captionSemiBold)
-                                .foregroundStyle(isSelected
-                                    ? OpenClawSidebarPalette.accent
-                                    : OpenClawSidebarPalette.muted)
-                        }
-                    }
-                    .frame(width: 18)
-
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(verbatim: CommandCenterTab.sessionTitle(session))
-                            .font(OpenClawType.subheadSemiBold)
-                            .foregroundStyle(isSelected
-                                ? OpenClawSidebarPalette.accent
-                                : OpenClawSidebarPalette.textStrong)
-                            .lineLimit(1)
-                        // Web-parity subtitle: the work line (repo/branch) names the
-                        // session; recency moves to the trailing metadata slot.
-                        if let subtitle = ChatSessionSidebarModel.subtitle(
-                            for: session,
-                            workSubtitle: ChatSessionSidebarModel.workSubtitle(for: session))
-                        {
-                            Text(verbatim: subtitle)
-                                .font(OpenClawType.caption2Medium)
-                                .foregroundStyle(OpenClawSidebarPalette.muted)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-                    if session.pinned == true {
-                        Image(systemName: "pin.fill")
-                            .font(OpenClawType.caption2Medium)
-                            .foregroundStyle(OpenClawSidebarPalette.accent)
-                            .accessibilityHidden(true)
-                    }
-                    Text(verbatim: CommandCenterTab.sessionDetail(session))
-                        .font(OpenClawType.caption2Medium)
-                        .foregroundStyle(OpenClawSidebarPalette.muted)
-                        .lineLimit(1)
-                    if session.unread == true {
-                        Circle()
-                            .fill(OpenClawSidebarPalette.accent)
-                            .frame(width: 7, height: 7)
-                            .accessibilityHidden(true)
-                    }
-                }
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .padding(.horizontal, 10)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .background(isSelected ? OpenClawSidebarPalette.selection : Color.clear, in: RoundedRectangle(
-                cornerRadius: OpenClawProMetric.controlRadius,
-                style: .continuous))
-            .overlay(alignment: .leading) {
-                OpenClawSessionColorStripe(color: session.color)
-            }
-            .commandSessionActions(
-                session: session,
+            RootSidebarSessionButton(
+                node: node,
+                isSelected: isSelected,
                 mainSessionKey: rowPass.mainSessionKey,
                 categories: rowPass.categories,
-                isEnabled: self.appModel.isOperatorGatewayConnected,
-                canArchive: ChatSessionSidebarModel.canArchiveSession(
-                    session,
-                    mainSessionKey: rowPass.mainSessionKey),
-                canDelete: ChatSessionSidebarModel.canDeleteSession(
-                    key: session.key,
-                    mainSessionKey: rowPass.mainSessionKey),
+                isConnected: self.appModel.isOperatorGatewayConnected,
+                minute: Int(Date().timeIntervalSince1970 / 60),
+                open: self.selectSession,
                 performMutation: self.performSessionMutation,
-                fork: { self.forkSession(session) })
-            .accessibilityValue(Self.sessionAccessibilityValue(
-                isPinned: session.pinned == true,
-                isUnread: session.unread == true))
+                fork: self.forkSession)
+                .equatable()
             self.attentionBadges(for: Self.flattened([node]).map(\.session), targetID: "session:\(session.key)")
         }
     }

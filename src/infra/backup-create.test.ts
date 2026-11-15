@@ -36,6 +36,7 @@ import {
   isolatedBackupCase as backupCase,
   withIsolatedBackupState as withOpenClawTestState,
 } from "./backup-create.test-support.js";
+import type { BackupProgressEvent } from "./backup-progress.js";
 import { classifyBackupSqliteSource } from "./backup-sqlite-snapshot.js";
 import { writeTarArchiveWithRetry } from "./backup-tar-retry.js";
 import * as backupTarWalk from "./backup-tar-walk.js";
@@ -736,6 +737,44 @@ describe("createBackupArchive", () => {
 
       const result = await createStateArchive(outputDir);
       await expectVerified(result.archivePath);
+    }),
+  );
+
+  it(
+    "reports bounded backup stages through real SQLite capture and archive verification",
+    withState(async (state) => {
+      openOpenClawStateDatabase({ env: state.env });
+      closeOpenClawStateDatabase();
+      const events: BackupProgressEvent[] = [];
+      const archive = await createBackupArchive({
+        output: state.path("backup.tar.gz"),
+        includeWorkspace: false,
+        onProgress: (event) => events.push(event),
+      });
+      await verifyBackupArchive(archive.archivePath, [], (event) => events.push(event));
+
+      for (const stage of [
+        "plan",
+        "sqlite-source-integrity",
+        "sqlite-online-copy",
+        "sqlite-vacuum",
+        "sqlite-hash",
+        "sqlite-published-integrity",
+        "archive-write",
+        "verify-archive-read",
+        "verify-sqlite-integrity",
+      ] as const) {
+        expect(events).toContainEqual(expect.objectContaining({ stage, phase: "start" }));
+        expect(events).toContainEqual(expect.objectContaining({ stage, phase: "done" }));
+      }
+      expect(
+        events.every((event) =>
+          Object.values(event).every(
+            (value) => typeof value !== "number" || Number.isFinite(value),
+          ),
+        ),
+      ).toBe(true);
+      expect(JSON.stringify(events)).not.toContain(state.root);
     }),
   );
 

@@ -56,7 +56,7 @@ vi.mock("../flows/bundled-health-checks.js", async (importOriginal) => {
 
 beforeEach(() => {
   clearHealthChecksForTest();
-  Object.assign(observed, { coreChecks: [], reports: 0 });
+  Object.assign(observed, { now: Date.UTC(2020, 0, 1), coreChecks: [], reports: 0 });
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -90,6 +90,7 @@ async function runLintFixture(
       OPENCLAW_COMPATIBILITY_HOST_VERSION: undefined,
       OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: undefined,
     };
+    vi.spyOn(Date, "now").mockImplementation(() => observed.now);
     const startedAt = Date.now();
     const run = createUpdateRun(
       { trigger: "cli", target: { kind: "package" }, before: { version: "2026.9.4" } },
@@ -114,7 +115,6 @@ async function runLintFixture(
       }
     }
     observed.now = startedAt + validationElapsedMs;
-    vi.spyOn(Date, "now").mockImplementation(() => observed.now);
     // This lint command's process started one second before it inspects.
     vi.spyOn(performance, "timeOrigin", "get").mockReturnValue(observed.now - 1_000);
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => {

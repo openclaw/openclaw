@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
@@ -82,7 +84,16 @@ internal fun CronJobManagementPanel(
         onDelete()
       },
       onDismiss = { showDeleteConfirmation = false },
-      text = { Text(nativeString("This permanently removes the automation and its schedule from the gateway.")) },
+      text = {
+        Column(
+          modifier = Modifier.verticalScroll(rememberScrollState()),
+          verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+          Text(job.name)
+          Text(job.id)
+          Text(nativeString("This permanently removes the automation and its schedule from the gateway."))
+        }
+      },
     )
   }
 

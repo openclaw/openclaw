@@ -21,10 +21,7 @@ export async function runBeforeAgentRunGate(
   }
   let result: Awaited<ReturnType<HookRunner["runBeforeAgentRun"]>>;
   try {
-    result = await runner.runBeforeAgentRun(
-      { ...event, messages: structuredClone(event.messages) },
-      context,
-    );
+    result = await runner.runBeforeAgentRun(structuredClone(event), context);
   } catch {
     result = {
       pluginId: "before_agent_run",

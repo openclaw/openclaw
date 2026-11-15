@@ -123,7 +123,8 @@ const realtimeExited = waitForAdoptedChildExit(realtimePid);
 // Signal listeners are unref'd; the fixture's parent keeps this stdin pipe open.
 process.stdin.resume();
 try {
-  process.kill(realtimePid, 34);
+  // Node/Linux can ignore SIGRTMIN (34); SIGRTMIN+1 must actually terminate this child.
+  process.kill(realtimePid, 35);
   await realtimeExited;
 } finally {
   process.stdin.pause();
@@ -131,7 +132,7 @@ try {
 assert.equal(realtimeOwner.drain(), true);
 assert.equal(existsSync("/proc/" + realtimePid), false);
 assert.deepEqual(await realtimeRootClosed, [0, null]);
-receipts.push({ label: "realtime-signal", signalNumber: 34, extinct: true });
+receipts.push({ label: "realtime-signal", signalNumber: 35, extinct: true });
 
 // A nested process owner can wait for its orphan's extinction before exiting.
 // Reap the adopted child while retaining libuv's wait ownership of the live root.

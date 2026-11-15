@@ -109,16 +109,23 @@ extension AgentProTab {
 
     func agentAvatar(_ agent: AgentSummary, state: AgentRosterState) -> some View {
         ZStack(alignment: .bottomTrailing) {
-            Text(self.agentBadge(for: agent))
-                .font(OpenClawType.avatar(size: self.agentBadge(for: agent).count > 2 ? 14 : 18))
-                .foregroundStyle(.white)
-                .minimumScaleFactor(0.62)
-                .lineLimit(1)
-                .frame(width: 36, height: 36)
-                .background(
-                    Circle()
-                        .fill(self.agentTint(for: agent, state: state).gradient))
-                .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
+            Group {
+                if let image = self.appModel.agentAvatarImage(for: agent.id) {
+                    Image(uiImage: image).resizable().scaledToFill()
+                } else {
+                    Text(self.agentBadge(for: agent))
+                        .font(OpenClawType.avatar(size: self.agentBadge(for: agent).count > 2 ? 14 : 18))
+                }
+            }
+            .foregroundStyle(.white)
+            .minimumScaleFactor(0.62)
+            .lineLimit(1)
+            .frame(width: 36, height: 36)
+            .background(
+                Circle()
+                    .fill(self.agentTint(for: agent, state: state).gradient))
+            .clipShape(Circle())
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.18), lineWidth: 1))
 
             Circle()
                 .fill(state.color)
@@ -168,14 +175,13 @@ extension AgentProTab {
             ?? "main"
     }
 
+    /// The roster comes from the operator session, so the tab follows its state.
     var gatewayConnected: Bool {
-        GatewayStatusBuilder.build(appModel: appModel) == .connected
+        GatewayStatusBuilder.buildChat(appModel: appModel) == .connected
     }
 
     var liveGatewayConnected: Bool {
-        !appModel.isLocalGatewayFixtureEnabled &&
-            self.gatewayConnected &&
-            appModel.isOperatorGatewayConnected
+        !appModel.isLocalGatewayFixtureEnabled && self.gatewayConnected
     }
 
     var emptyAgentsTitle: String {
@@ -209,7 +215,6 @@ extension AgentProTab {
     var rosterTaskID: String {
         [
             self.gatewayConnected ? "connected" : "offline",
-            appModel.isOperatorGatewayConnected ? "operator" : "no-operator",
             appModel.connectedGatewayID ?? "no-gateway",
             self.activeAgentID,
             scenePhase == .active ? "active" : "inactive",

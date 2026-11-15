@@ -12,6 +12,7 @@ import {
   isCandidateAdmissionContextCovered,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
+import { readUpdateChannelConfig } from "./update-command-config.js";
 import {
   formatUpdateAncestryBlockMessage,
   resolveForegroundUpdateAdmission,
@@ -21,11 +22,12 @@ import {
   resolveOwnedManagedUpdatePreflightEnv,
 } from "./update-command-managed-context.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-context-types.js";
+import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   collectServiceInspectionFailureFacts,
   GatewayServiceUpdateOwnershipError,
 } from "./update-command-service-plan.js";
-import { assertUnavailableGatewayPackageConsumerStopped } from "./update-command-service-revalidation.js";
+import { inspectGatewayArtifactConsumer } from "./update-command-service-revalidation.js";
 import {
   maybeStopManagedServiceBeforeMutableUpdate,
   type PreManagedServiceStop,
@@ -106,7 +108,7 @@ async function inspectUpdateManagedServicesInScope(params: UpdateManagedServiceI
       !params.packageAlreadyCurrent &&
       inspected.serviceUpdateVerdict?.kind === "unavailable"
     ) {
-      await assertUnavailableGatewayPackageConsumerStopped({
+      await inspectGatewayArtifactConsumer({
         roots: params.roots,
         env: process.env,
         timeoutMs: params.timeoutMs,
@@ -163,11 +165,21 @@ export async function inspectUpdateDatabaseContexts(
     const configValidation = params.candidateAdmissionChecks?.includes("config")
       ? ("candidate" as const)
       : undefined;
+    // Already-current updates skip candidate admission. Preview Doctor's repair for
+    // the selected config so maintenance can persist it through the normal writer.
+    const legacyConfigPlan =
+      params.legacyConfigPlan ??
+      (params.packageAlreadyCurrent
+        ? await withOwnedManagedUpdateEnv(
+            inspected.managedEnv ?? process.env,
+            async () => (await readUpdateChannelConfig(true)).legacyConfigPlan,
+          )
+        : undefined);
     const managed = await captureOwnedManagedUpdatePreflightContext({
       stopState: inspected.service,
       processEnv: process.env,
       invocationCwd: params.invocationCwd,
-      legacyConfigPlan: params.legacyConfigPlan,
+      legacyConfigPlan,
       configValidation,
     });
     // Redirected package replacement does not own the invoking installation's stores.
@@ -178,7 +190,7 @@ export async function inspectUpdateDatabaseContexts(
             legacyConfigPlan:
               params.callerLegacyConfigPlan?.snapshot.path === resolveConfigPath()
                 ? params.callerLegacyConfigPlan
-                : params.legacyConfigPlan,
+                : legacyConfigPlan,
             configValidation,
           }),
         ];

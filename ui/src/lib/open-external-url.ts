@@ -49,12 +49,14 @@ export function resolveSafeExternalUrl(
   return parsed && ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
 }
 
+/** Reserves an opener-isolated window during user activation for later navigation. */
 export function reserveExternalWindowForDeferredNavigation(
-  opts: { popup?: boolean } = {},
+  opts: { popup?: boolean | string } = {},
 ): WindowProxy | null {
+  const features = typeof opts.popup === "string" ? opts.popup : opts.popup ? "popup" : undefined;
   // Reserve while user activation is live, then detach the opener before any
   // caller-controlled URL can be loaded into the new browsing context.
-  const opened = window.open("about:blank", "_blank", opts.popup ? "popup" : undefined);
+  const opened = window.open("about:blank", "_blank", features);
   if (opened) {
     opened.opener = null;
   }

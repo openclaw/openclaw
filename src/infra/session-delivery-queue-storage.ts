@@ -24,9 +24,23 @@ import {
   type QueuedSessionDelivery,
   type QueuedSessionDeliveryPayload,
   type SessionDeliverySettledOutcome,
+  type SessionDeliveryCandidateMedia,
+  type SessionDeliveryRequesterBinding,
 } from "./session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "./session-delivery-queue.worker.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+
+/** Configured locator only; incarnation and actor admission remain separate checks. */
+export function sessionDeliveryRequesterMatchesConfiguredStore(
+  binding: Pick<SessionDeliveryRequesterBinding, "agentId" | "storePath">,
+  env: NodeJS.ProcessEnv,
+  cfg = getRuntimeConfig(),
+): boolean {
+  return (
+    path.resolve(binding.storePath) ===
+    path.resolve(resolveSessionStorePathCore(cfg.session?.store, { agentId: binding.agentId, env }))
+  );
+}
 
 /** Queue publication and continuation deletion share the existing session lifecycle owner. */
 export async function withSessionDeliveryEnqueueAdmission<T>(
@@ -35,23 +49,14 @@ export async function withSessionDeliveryEnqueueAdmission<T>(
   run: (assertCurrent: () => void) => T | Promise<T>,
 ): Promise<T> {
   const binding =
-    payload.kind === "agentTurn" && payload.requesterBinding
+    payload.kind !== "systemEvent" && payload.requesterBinding
       ? { ...payload.requesterBinding }
       : undefined;
   const sessionKey = payload.sessionKey;
   const unavailable = "session delivery original requester is no longer available";
   const assertQueueCurrent = () => {
     context.admission.assertCurrent();
-    if (
-      binding &&
-      path.resolve(binding.storePath) !==
-        path.resolve(
-          resolveSessionStorePathCore(getRuntimeConfig().session?.store, {
-            agentId: binding.agentId,
-            env: context.environment,
-          }),
-        )
-    ) {
+    if (binding && !sessionDeliveryRequesterMatchesConfiguredStore(binding, context.environment)) {
       throw new SessionDeliveryDeadLetteredError(unavailable);
     }
   };
@@ -161,14 +166,19 @@ function publishSessionDelivery<
   context: OpenClawStateWorkerContext,
 ): Promise<SessionDeliveryWorkerOperations[Key]["output"]> {
   const input = prepareEntry(entry, "insert");
-  return withSessionDeliveryEnqueueAdmission(entry, context, (assertCurrent) =>
+  const publish = (assertCurrent: () => void) =>
     runOpenClawStateWorkerOperation(context, (scope) => scope.execute<Key>({ type, input }), {
       assertCurrent,
       createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
         context.admission.databasePath,
       ]),
-    }),
-  );
+    });
+  // Retaining already-produced bytes grants no wake or delivery authority. A reset
+  // may remove the requester while accepted work still owes its original result.
+  if (entry.kind === "mediaCandidate") {
+    return publish(() => context.admission.assertCurrent());
+  }
+  return withSessionDeliveryEnqueueAdmission(entry, context, publish);
 }
 
 export async function enqueueClaimedSessionDelivery(
@@ -188,6 +198,34 @@ export async function releaseSessionDeliveryClaim(
   context: OpenClawStateWorkerContext,
 ): Promise<void> {
   return executeSessionDelivery(context, { type: "sessionDelivery.releaseClaim", input: { id } });
+}
+
+export async function setSessionDeliveryMediaReview(
+  entry: QueuedSessionDelivery,
+  taskId: string,
+  disposition: "approved" | "superseded",
+  context: OpenClawStateWorkerContext,
+  media?: SessionDeliveryCandidateMedia,
+) {
+  const write = (assertCurrent: () => void) =>
+    runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({
+          type: "sessionDelivery.setMediaReview",
+          input: { id: entry.id, sessionKey: entry.sessionKey, taskId, disposition, media },
+        }),
+      {
+        assertCurrent,
+        createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+          context.admission.databasePath,
+        ]),
+      },
+    );
+  // Suppression retains data only; approval still needs the original requester.
+  return disposition === "superseded"
+    ? write(() => context.admission.assertCurrent())
+    : withSessionDeliveryEnqueueAdmission(entry, context, write);
 }
 
 export async function deferSessionDelivery(

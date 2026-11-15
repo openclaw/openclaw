@@ -298,7 +298,7 @@ it.each([
       let config: OpenClawConfig = withModelPolicy
         ? {
             agents: { defaults: { model: defaultModel } },
-            gateway: { roles: { definitions: { writer } } },
+            gateway: { roles: { default: "writer", definitions: { writer } } },
           }
         : {};
       const context = { getRuntimeConfig: () => config };

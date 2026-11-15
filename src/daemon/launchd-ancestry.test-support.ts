@@ -7,11 +7,9 @@ import {
   defaultProgramArguments,
 } from "./launchd-install.test-support.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
+import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
 import { launchdTestState as state } from "./launchd-state.test-support.js";
-import {
-  installLaunchAgent as installLaunchAgentImpl,
-  resolveLaunchAgentPlistPath,
-} from "./launchd.js";
+import { installLaunchAgent as installLaunchAgentImpl } from "./launchd.js";
 
 type ScheduleHandoff = (
   _params: unknown,
@@ -178,6 +176,7 @@ function executeLaunchctlMock(file: string, args: string[]) {
     }
     if (!state.bootoutLeavesLoaded) {
       Object.assign(state, { serviceLoaded: false, serviceRunning: false });
+      state.serviceStates.delete(call[1] ?? "");
     }
     return commandResult();
   }
@@ -262,7 +261,11 @@ vi.mock("./launchd-system.js", () => ({
 // mock-isolation: Process ancestry and cleanup use the suite's synthetic service processes.
 vi.mock("../infra/restart-stale-pids.js", () => ({
   getSelfAndAncestorPidsSync,
-  cleanStaleGatewayProcessesSync,
+  cleanStaleGatewayProcessesSync: () => {
+    throw new Error("LaunchAgent lifecycle must await stale-process cleanup");
+  },
+  cleanStaleGatewayProcesses: async (...args: Parameters<typeof cleanStaleGatewayProcessesSync>) =>
+    cleanStaleGatewayProcessesSync(...args),
 }));
 
 // mock-isolation: Port diagnostics must match the synthetic listener state.

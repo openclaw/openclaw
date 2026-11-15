@@ -137,6 +137,9 @@ async function runAgentSpawnBridge(params: {
     ...(label ? { label } : {}),
     ...(model ? { model } : {}),
     ...(thinking ? { thinking } : {}),
+    ...(options.cyberAccessProgram != null
+      ? { cyberAccessProgram: options.cyberAccessProgram }
+      : {}),
     ...(agentId ? { agentId } : {}),
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(schema ? { outputSchema: schema } : {}),

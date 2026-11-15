@@ -32,7 +32,11 @@ import {
   setTranscriptViewport,
   transcriptContainer,
 } from "./chat-transcript-fixture.test-support.tsx";
-import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
+import {
+  isTranscriptRangeCommitted,
+  measureTranscriptRow,
+  readConnectedTranscriptRows,
+} from "./chat-transcript-geometry.ts";
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
@@ -72,13 +76,19 @@ it("reserves only the matching width and appearance, including text scale, width
     chatMessageMaxWidth: "48rem",
   };
   const theme = { ...context.theme, settings, resolvedMode: "light" as const };
-  let cachedKey: string | undefined;
-  const widgetLayout: ChatWidgetLayout = {
-    read: (key) => {
-      cachedKey ??= key;
-      return key === cachedKey ? 300 : undefined;
+  let cachedKey: PropertyKey | undefined;
+  const heights = new Proxy<Record<string, number>>(
+    {},
+    {
+      get: (_target, key) => {
+        cachedKey ??= key;
+        return key === cachedKey ? 300 : undefined;
+      },
     },
-    readRows: () => undefined,
+  );
+  const widgetLayout: ChatWidgetLayout = {
+    read: (key) => heights[key],
+    readRows: () => heights,
     write: vi.fn(),
     writeRows: vi.fn(),
     invalidateRow: vi.fn(),
@@ -136,6 +146,39 @@ it("reserves only the matching width and appearance, including text scale, width
   // A repeated expansion counter cannot admit a footprint from another recovered message.
   cachedKey = undefined;
   expect(reserve(2)).toBe(0);
+});
+
+it("does not read viewport geometry without admitted row footprints", () => {
+  const cache: ChatMessageCache = new Map();
+  const target = { sessionKey: "agent:main:no-footprints" };
+  cacheChatSessionSnapshot(cache, {}, target, {
+    messages: [],
+    sessionId: "one",
+    pagination: { hasMore: false },
+  });
+  const layout = new TranscriptLayoutOwner(() => {});
+  layout.configureRows(
+    threadProps("no-footprints", target.sessionKey, [], {
+      widgetLayout: createChatWidgetLayout()(cache, {}, target),
+    }),
+    "gutter",
+    false,
+  );
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
+  layout.rowWidth = 768;
+  layout.paneWidth = 1100;
+  const originalHeight = Object.getOwnPropertyDescriptor(window, "innerHeight")!;
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    get: () => {
+      throw new Error("Unneeded viewport geometry read");
+    },
+  });
+  try {
+    expect(layout.rowMinimum(0)).toBe(0);
+  } finally {
+    Object.defineProperty(window, "innerHeight", originalHeight);
+  }
 });
 
 it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "raw-output"])(
@@ -282,14 +325,21 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
 it("measures newly committed rows before observer registration using fractional layout height", () => {
   const container = transcriptContainer();
   container.innerHTML =
-    '<div class="chat-virtual-row" data-index="0" data-virtual-row-key="fractional" style="height: 100.375px"></div>';
+    '<div class="chat-virtual-row" data-index="0" data-virtual-row-key="fractional" style="height: 100.375px"></div>' +
+    '<div class="chat-virtual-row" data-index="1" data-virtual-row-key="prepared" data-prepared-row="true" style="height: 999px"></div>';
   const row = requireElement(container, ".chat-virtual-row");
+  const prepared = requireElement(container, '[data-virtual-row-key="prepared"]');
+  const getStyle = globalThis.getComputedStyle;
+  vi.spyOn(globalThis, "getComputedStyle").mockImplementation((element, pseudo) => {
+    expect(element).not.toBe(prepared);
+    return getStyle(element, pseudo);
+  });
   vi.spyOn(row, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 400, 50.1875));
   const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
-    count: 1,
+    count: 2,
     estimateSize: () => 100,
     getScrollElement: () => container,
-    getItemKey: () => "fractional",
+    getItemKey: (index) => (index === 0 ? "fractional" : "prepared"),
     measureElement: () => 100,
     observeElementRect: (_, callback) => {
       callback({ width: 800, height: 600 });
@@ -306,6 +356,7 @@ it("measures newly committed rows before observer registration using fractional 
   // eslint-disable-next-line no-underscore-dangle -- TanStack requires adapter updates to bind observed elements.
   virtualizer._willUpdate();
   virtualizer.getVirtualItems();
+  virtualizer.resizeItem(1, 87.625);
   const rowRefs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: () => true,
     beforeMeasure: () => {},
@@ -313,15 +364,54 @@ it("measures newly committed rows before observer registration using fractional 
   });
   try {
     rowRefs.forKey("fractional")(row);
+    rowRefs.forKey("prepared")(prepared);
     const commit = readConnectedTranscriptRows(container, virtualizer, rowRefs.elements);
     expect(virtualizer.elementsCache.size).toBe(0);
     expect(virtualizer.itemSizeCache.has("fractional")).toBe(false);
     expect([commit?.(), virtualizer.itemSizeCache.get("fractional")]).toEqual([true, 100.375]);
+    expect(virtualizer.itemSizeCache.get("prepared")).toBe(87.625);
+    const box = { blockSize: 120.375, inlineSize: 800 };
+    const receipt: ResizeObserverEntry = {
+      target: prepared,
+      borderBoxSize: [box],
+      contentBoxSize: [box],
+      devicePixelContentBoxSize: [box],
+      contentRect: new DOMRect(0, 0, 800, 120.375),
+    };
+    expect(measureTranscriptRow(prepared, undefined, virtualizer)).toBe(87.625);
+    expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(87.625);
+    prepared.setAttribute("data-preparing-row", "true");
+    expect(measureTranscriptRow(prepared, receipt, virtualizer)).toBe(120.375);
     expect(readConnectedTranscriptRows(container, virtualizer, rowRefs.elements)?.()).toBe(false);
   } finally {
     rowRefs.clear();
     dispose();
   }
+});
+
+it("settles retained rows only after their measured size commits", () => {
+  const container = transcriptContainer();
+  const row = document.createElement("div");
+  row.dataset.rowSize = "258.5625";
+  row.dataset.preparedRow = "true";
+  container.append(row);
+  const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+    count: 1,
+    estimateSize: () => 258.5625,
+    getScrollElement: () => container,
+    getItemKey: () => "fractional",
+    initialRect: { width: 800, height: 600 },
+    scrollToFn: () => {},
+    observeElementRect: () => {},
+    observeElementOffset: () => {},
+  });
+  virtualizer.elementsCache.set("fractional", row);
+
+  expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(true);
+  row.dataset.rowSize = "256";
+  expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
+  row.remove();
+  expect(isTranscriptRangeCommitted(container, virtualizer)).toBe(false);
 });
 
 it("keeps fractional observer sizes as the sole skipped-row sizing input", async () => {
@@ -333,10 +423,11 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
   const { container, transcript, renderRows } = await mountTestTranscript("fractional-rows", rows);
   try {
     measureRows(container, 100.375);
+    await flushDeferredRowPrune();
     renderRows(rows);
     expect(transcriptSize(container)).toBe(401.5);
     for (const row of transcriptRows(container)) {
-      expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
+      expect(row.dataset.rowSize).toBe("100.375");
     }
   } finally {
     transcript.dispose();
@@ -384,6 +475,8 @@ it.each([false, true])(
       if (disconnect) {
         transcript.dispose();
       }
+      flushFrames();
+      await flushDeferredRowPrune();
       flushFrames();
       expect(readHeight).toHaveBeenCalledTimes(disconnect ? 0 : 1);
     } finally {

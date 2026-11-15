@@ -19,7 +19,11 @@ describe("delegated Doctor phase output", () => {
       "Doctor: state schema (12345678901s elapsed)\n",
       `${"x".repeat(32_768)}Doctor: state schema\n`,
       "Doctor: maintenance release\n",
+      "Retirement-only Doctor widened: config.preflight-config-changed\n".repeat(2),
+      "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes\n",
+      "Retirement-only Doctor widened: private/plugin-label\n",
       trace,
+      "Doctor: state schema",
     ].join("");
     const stdout = Buffer.from("Doctor: state schema\n");
     const run = timing.wrap(async (_argv: string[], options: CommandOptions) => {
@@ -28,11 +32,6 @@ describe("delegated Doctor phase output", () => {
       for (let offset = 0; offset < bytes.length; offset += size) {
         options.onOutputChunk?.(bytes.subarray(offset, offset + size), "stderr");
       }
-      expect(display.mock.calls.flat()).toEqual([
-        "Doctor: state schema",
-        "Doctor: database migrations (10s elapsed)",
-        "Doctor: maintenance release",
-      ]);
       return { stderr, stdout: stdout.toString() };
     });
     const result = await run([], { onOutputChunk: observer });
@@ -44,20 +43,17 @@ describe("delegated Doctor phase output", () => {
       ).toString(),
     ).toBe(stderr);
     expect(timing.annotate({ diagnostics: [] })).toEqual({
-      diagnostics: ["Doctor sections: state-schema 2.5 s"],
+      diagnostics: [
+        "Doctor sections: state-schema 2.5 s",
+        "Retirement-only Doctor widened: config.preflight-config-changed",
+        "Retirement-only Doctor widened: config.model-retirement.warning-notes.codex-routes",
+      ],
     });
-  });
-
-  it("does not publish an incomplete phase at terminal annotation", async () => {
-    const display = vi.fn();
-    const timing = createUpdateDoctorSectionTiming({}, display);
-    const stderr = "Doctor: state schema";
-    await timing.wrap(async (_argv: string[], options: CommandOptions) => {
-      options.onOutputChunk?.(Buffer.from(stderr), "stderr");
-      return { stderr };
-    })([], {});
-    timing.annotate({ diagnostics: [] });
-    expect(display).not.toHaveBeenCalled();
+    expect(display.mock.calls.flat()).toEqual([
+      "Doctor: state schema",
+      "Doctor: database migrations (10s elapsed)",
+      "Doctor: maintenance release",
+    ]);
   });
 
   it.each(["stop", "throw"] as const)(

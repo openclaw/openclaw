@@ -655,7 +655,8 @@ private fun VoiceSettingsScreen(
   val voiceWakeLastCommand by viewModel.voiceWakeLastTriggeredCommand.collectAsState()
   val voiceWakeWordsSaving by viewModel.voiceWakeWordsSaving.collectAsState()
   val voiceWakeWordsNoticeText by viewModel.voiceWakeWordsNoticeText.collectAsState()
-  var wakeWordDrafts by remember(voiceWakeWords) {
+  val activeGatewayStableId by viewModel.activeGatewayStableId.collectAsState()
+  var wakeWordDrafts by remember(activeGatewayStableId, voiceWakeWords) {
     mutableStateOf(voiceWakeWords)
   }
   var audioInputDevices by remember { mutableStateOf<List<AudioInputDeviceOption>>(emptyList()) }
@@ -696,7 +697,7 @@ private fun VoiceSettingsScreen(
               title = nativeString("Listen for wake words"),
               subtitle =
                 if (voiceWakeAvailable) {
-                  nativeString("Runs on-device while OpenClaw is visible.")
+                  nativeString("Runs on-device, including in the background while the node service has microphone access.")
                 } else {
                   nativeString("On-device speech recognition is unavailable.")
                 },
@@ -2311,7 +2312,7 @@ private val aboutLinks =
     AboutLink("Website", "openclaw.ai", "https://openclaw.ai"),
     AboutLink("Docs", "docs.openclaw.ai", "https://docs.openclaw.ai"),
     AboutLink("GitHub", "github.com/openclaw/openclaw", "https://github.com/openclaw/openclaw"),
-    AboutLink("Discord", "discord.gg/clawd", "https://discord.gg/clawd"),
+    AboutLink("Discord", "discord.gg/clawd", "https://openclaw.ai/discord?from=openclaw-app-android-about"),
   )
 
 @Composable

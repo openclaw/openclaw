@@ -359,7 +359,7 @@ describe("Full Access delegated chat", () => {
         fixture.runConfigSet.mockRejectedValue(new Error("fixture correction failed"));
       }
       const reply = await fixture.callChat("config set gateway.port banana", {
-        fullPermission: true,
+        assertAutoApproveChangesCurrent: () => {},
       });
       expect(fixture.runConfigSet).toHaveBeenCalledTimes(2);
       expect(await fixture.manager.listPendingRecords()).toEqual([]);
@@ -420,7 +420,8 @@ describe("Full Access delegated chat", () => {
       const pending = fixture
         .callChat(
           "config set logging.level debug",
-          { approvalSignals: [controller.signal] },
+          // A posture boolean without host-held authority still requires approval.
+          { approvalSignals: [controller.signal], fullPermission: true },
           observation,
         )
         .then((result) => {
@@ -568,7 +569,7 @@ describe("Full Access delegated chat", () => {
 
       const call = await fixture.callChat(
         source === "typed" ? "config set logging.level debug" : "Change the logging level.",
-        { fullPermission: true },
+        { assertAutoApproveChangesCurrent: () => {} },
       );
 
       expect(call.error).toBeUndefined();
@@ -608,7 +609,8 @@ describe("Full Access delegated chat", () => {
         });
       }
       const proposalCall = fixture.callChat("config set logging.level info", {
-        fullPermission: previousRun === "unregistered-closed",
+        assertAutoApproveChangesCurrent:
+          previousRun === "unregistered-closed" ? () => {} : undefined,
       });
       if (previousRun === "unregistered-closed" || previousRun === "registration-failure") {
         await expect(proposalCall).rejects.toThrow(
@@ -641,7 +643,7 @@ describe("Full Access delegated chat", () => {
       const readOnly = () =>
         fixture.callChat("config get logging.level", {
           operationalRunInstance: replacementRun,
-          fullPermission: previousRun !== "live-restricted",
+          assertAutoApproveChangesCurrent: previousRun !== "live-restricted" ? () => {} : undefined,
         });
       if (previousRun === "storage-failure") {
         const forceDeny = fixture.manager.forceDenyIfRuntimeAuthorityClosed.bind(fixture.manager);

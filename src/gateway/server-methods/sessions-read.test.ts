@@ -200,6 +200,7 @@ function avatarRosterConfig(agents: string[]): OpenClawConfig {
     },
     gateway: {
       roles: {
+        default: "reader",
         definitions: {
           reader: { agents, scopes: ["operator.read"], sessions: { others: "none" } },
         },
@@ -467,27 +468,81 @@ test.each([
   },
 );
 
-test("sessions.search accepts an ACP allowlist owner absent from the agent roster", async () => {
-  const agentId = "codex";
-  const sessionKey = `agent:${agentId}:acp:search-owner`;
+test.each(["acp:search-owner", "ordinary"])(
+  "sessions.search accepts an ACP allowlist owner absent from the agent roster: %s",
+  async (rest) => {
+    const agentId = "codex";
+    const sessionKey = `agent:${agentId}:${rest}`;
+    const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+    const cfg = await setAgentsConfig({ entries: { main: {} } });
+    cfg.acp = { allowedAgents: [agentId] };
+    await seedReadableSession(
+      sessionScope(sessionKey, agentId, storePath),
+      "ACP owner search needle",
+    );
+    await expectRead(
+      "sessions.search",
+      { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
+      { results: [expect.objectContaining({ sessionKey })] },
+    );
+    await expectInvalidRead("sessions.search", {
+      agentId,
+      query: "ACP owner search needle",
+      sessionKeys: [`agent:claude:${rest}`],
+    });
+    expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+  },
+);
+
+test.each(["per-sender", "global"] as const)(
+  "sessions.search keeps configured store owners from bypassing fixed-store main aliases in %s scope",
+  async (scope) => {
+    const agentId = "codex";
+    await configureFixedSessionStore("acp-main-aliases");
+    testState.sessionConfig = { scope, mainKey: "primary" };
+    const cfg = await setAgentsConfig({
+      entries: { main: {} },
+      defaults: { sessionStore: { agentId: "main" } },
+    });
+    cfg.acp = { allowedAgents: [agentId] };
+    for (const key of [`agent:${agentId}:main`, `agent:${agentId}:primary`]) {
+      await expectInvalidRead("sessions.search", {
+        agentId,
+        query: "main alias needle",
+        sessionKeys: [key],
+      });
+    }
+  },
+);
+
+test("sessions history reads a configured ACP owner without an explicit agent id", async () => {
+  const agentId = "gemini";
+  const sessionKey = `agent:${agentId}:acp:history-owner`;
+  const sessionId = "session-acp-owner-history";
   const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
-  const cfg = await setAgentsConfig({ entries: { main: {} } });
-  cfg.acp = { allowedAgents: [agentId] };
-  await seedReadableSession(
-    sessionScope(sessionKey, agentId, storePath),
-    "ACP owner search needle",
-  );
-  await expectRead(
-    "sessions.search",
-    { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
-    { results: [expect.objectContaining({ sessionKey })] },
-  );
-  await expectInvalidRead("sessions.search", {
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
     agentId,
-    query: "ACP owner search needle",
-    sessionKeys: [`agent:claude:acp:search-owner`],
+    contents: ["ACP owner history needle"],
+    sessionId,
+    sessionKey,
+    storePath,
   });
-  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
+
+  const history = await directSessionReq<{ messages: Array<{ content: unknown }> }>(
+    "chat.history",
+    { sessionKey, limit: 10 },
+  );
+  expect(history).toMatchObject({ ok: true });
+  expect(
+    history.payload?.messages.some((message) => message.content === "ACP owner history needle"),
+  ).toBe(true);
+  // The explicit roster-gated id stays rejected so redundant callers keep failing loudly.
+  const rejected = await directSessionReq("chat.history", { sessionKey, agentId, limit: 10 });
+  expect(rejected).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
 });
 
 test("searches rich displayed fields before selecting a page across visible agent stores", async () => {

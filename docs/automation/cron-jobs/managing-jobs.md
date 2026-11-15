@@ -11,7 +11,9 @@ sidebarTitle: "Manage jobs"
 
 Day-to-day operation of stored jobs: copy-ready CLI examples, the management commands, run history semantics, and the `cron.*` configuration keys. Part of the [Automations](/automation/cron-jobs) guide.
 
-Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all runs** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
+In the Control UI, **Start now** starts an automation immediately. Open **Activity history** to review its activity. **Delete** removes the automation and stops future activity; the confirmation explains that this can’t be undone. An automation’s owner needs automation access to edit it. Admins can also edit it.
+
+Run links from automation messages and notifications open the exact recorded run, even when newer runs fill the first history page. Choose **Show all activity** to return to that automation's full history. Links with a reused session or start-time identity do not select an ambiguous run.
 
 ## CLI examples
 
@@ -103,9 +105,12 @@ An explicit permission edit still requires matching owner authority. Jobs whose
 stored identity cannot prove an account need authenticated administrator recovery;
 Doctor does not infer ownership from delivery settings or the current caller.
 
-Automations created before owner attribution have no recorded owner. Chat can
-still enable, disable, reschedule or remove them, but only a Gateway owner or an
-operator can change their prompt or tools.
+Automations created before owner attribution have no recorded owner. An
+authenticated administrator or configured channel owner can edit them through
+chat, including their prompt, model, and tool cap. Management keeps an
+operator automation’s execution authority and attribution; it does not adopt
+the administrator’s conversation as a new owner. Ordinary caller-scoped turns
+cannot edit ownerless operator automations.
 
 Operator-created automations that name an owner conversation run with operator
 authority. That conversation can list, enable, disable, reschedule, run
@@ -114,7 +119,7 @@ schedule or timing changes keep operator authority. Any other change
 from the owner conversation, such as the name, prompt, tools, trigger, delivery,
 failure alerts or session target, drops the job to that conversation's own authority. If its owner record has no account, those
 changes need a Gateway owner or an operator, or a new automation. Only a Gateway
-owner or an operator can write its scratch.
+owner, an operator or the automation's own runs can write its scratch.
 
 ```bash
 # List enabled jobs
@@ -179,13 +184,27 @@ Once a successful one-shot consumes its scheduled occurrence, its finished event
 
 Control UI run history shows `OK · Error` or `OK · Unknown` when execution succeeded but whole-run completion failed or remains unknown. Its status filter still selects the execution status.
 
+A scheduled run can use the automations tool with `action: "runs"`, its own
+`jobId`, and optional `limit`, `offset`, or `runId` to read its job's recorded
+outcomes. This includes `deliveryStatus`, the recorded channel and target, and
+`delivery.receipts` with message IDs for confirmed scheduler announcements.
+Older records and providers that did not return message IDs may have only the
+status and target. The current run's automatic announcement happens after the
+agent finishes, so its receipt becomes available to later runs.
+
+This access follows the job identity bound to the active scheduled admission,
+including a scheduler-admitted restart continuation. It does not grant another
+job's history, channel history, or transcript access. A different delivery account
+does not change the job's identity. An admitted paced job or one-shot session
+continuation also retains `next_check`; a session key alone cannot restore it.
+
 Run-history search matches summaries, task names, and execution or delivery errors. You can search the delivery error shown on a run even when its execution status is `ok`.
 
 Run history shows a loading indicator while the selected history is unavailable. A failed request shows an error and a **Retry** button; previously loaded runs for the same selection remain visible. Empty-history guidance appears only after a successful request confirms there are no runs for the current selection and filters.
 
-After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all runs** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
+After a temporary Gateway reconnect, Automations reopens the current selected job and run using fresh job data. Closing the panel or choosing another automation replaces that selection; reconnect does not replay a superseded link. **Show all activity** clears the linked-run selection across reconnects. Changing the Gateway identity or agent scope clears the selection.
 
-Choose **View transcript** on a run to read that run’s recorded conversation, including earlier pages. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
+Choose **View transcript** on a run to read its recorded conversation, including earlier pages. The panel shows the selected automation and its run time when available. Shared conversations can include messages from before and after that run. Transcript selection stays bound to the recorded run when the scheduler reuses its session alias. Gateway clients use `cron.history` with a job `id` and an exact `runId` or `runAtMs`; the response contains `messages`, optional `activity`, and an opaque `nextCursor`. Missing or ambiguous run records remain unavailable rather than opening a different run. The selected run identifies its recorded conversation generation: isolated runs have a fresh generation, while custom sessions retain their shared conversation history across runs. Current job and session permissions apply to every page. Unavailable or inaccessible transcripts return a generic error without disclosing the selected session key.
 
 Intentional silence (`NO_REPLY`), heartbeat acknowledgments, and channel reply transforms record `deliverySuppressionReason` without claiming delivery or triggering delivery-failure alerts. These successful non-outcomes and successful executions with explicit `delivery.bestEffort: true` delete one-shots normally. An empty model final is not intentional silence; exhausted recovery records a failed run rather than a synthetic successful `NO_REPLY`. A transport hook veto instead records a delivery error without an intentional-suppression reason. Active descendants without a final reply, stale interim output, and output emptied by TTS instead record a delivery error. Retained one-shot jobs do not automatically rerun; inspect their history and delivery outcome before retrying or removing them.
 

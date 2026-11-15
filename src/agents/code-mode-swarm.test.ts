@@ -224,6 +224,20 @@ function expectCollectAdvertised(tool: { parameters: unknown }, advertised: bool
   }
 }
 
+describe("Code Mode Access", () => {
+  // Positive Access proof lives in subagent-spawn.production-boundary.test.ts, through final I/O.
+  it("rejects invalid Access before creating a child", async () => {
+    const harness = createSwarmHarness();
+    const result = await runSwarmCode(
+      harness,
+      'return await agents.run("Research", { cyberAccessProgram: "invalid" });',
+    );
+    expect(result).toMatchObject({ status: "failed", code: "invalid_input" });
+    expect(JSON.stringify(result)).toContain("cyberAccessProgram");
+    expect(swarmMocks.spawnSubagentDirect).not.toHaveBeenCalled();
+  });
+});
+
 describe("Code Mode swarm guest", () => {
   it("maps agents.run schema options through spawn and returns structured completion", async () => {
     const first = await workerExec(

@@ -34,10 +34,13 @@ it.each(["manifest", "config"] as const)(
       id: "semantic-retention",
       configSchema: { type: "object" },
       body: `module.exports = { id: 'semantic-retention', register(api) {
-        api.registerGatewayMethod('semantic-retention.probe', ({respond}) => respond(true, 'available'));
+        api.registerGatewayMethod('semantic-retention.probe', ({respond, assertHandlerCurrent}) => {
+          assertHandlerCurrent();
+          respond(true, 'available');
+        });
       } };`,
     });
-    const policy = { enabled: true, hooks: { allowPromptInjection: false } };
+    const policy = { enabled: true, hooks: { allowPromptModification: false } };
     const settings = { outer: { first: "one", second: "two" }, order: ["one", "two"] };
     const install = { source: "path" as const, sourcePath: plugin.dir, installPath: plugin.dir };
     const options: PluginLoadOptions = {

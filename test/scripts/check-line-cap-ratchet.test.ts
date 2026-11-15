@@ -13,6 +13,7 @@ import {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const errors = vi.fn<typeof console.error>();
 beforeEach(() => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "main");
   vi.stubEnv("GITHUB_ACTIONS", "");
   errors.mockClear();
   vi.spyOn(console, "error").mockImplementation(errors);
@@ -79,6 +80,16 @@ it("warns for CI growth, writes the summary, and still rejects broken source", (
   );
   expect(fs.readFileSync(summary, "utf8")).toContain("5 -&gt; 6 counted lines");
   expectSource(root, "export const = broken;", 1);
+});
+
+it("skips line-cap growth on release branches but not main", () => {
+  vi.stubEnv("OPENCLAW_RELEASE_CONTEXT_REF", "");
+  const root = fixture();
+  write(root, 6);
+  git(root, "branch", "-m", "release/2026.11.4");
+  expect(check(root)).toBe(0);
+  git(root, "branch", "-m", "main");
+  expect(check(root)).toBe(1);
 });
 
 it("measures ignored repository-contained scratch while preserving explicit exclusions", () => {

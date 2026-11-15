@@ -27,9 +27,9 @@ describe("update-cli", () => {
   const f = createUpdateCliFixture();
 
   it("checks original Git version before a dry-run package downgrade", async () => {
-    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(
-      f.createCaseDir("openclaw-git-downgrade"),
-    );
+    const root = f.createCaseDir("openclaw-git-downgrade");
+    await fs.mkdir(root, { recursive: true });
+    vi.mocked(update.resolveOpenClawPackageRoot).mockResolvedValue(root);
     mocks.readPackageVersion.mockResolvedValue("2026.9.3-beta.1");
     f.primeNpmChannelTag("latest", "2026.9.1");
     await update.updateCommand({ channel: "stable", json: true, dryRun: true });
@@ -83,7 +83,10 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
-    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue(true);
+    vi.spyOn(update.doctorChild, "inspectUpdateDoctorChildSupport").mockResolvedValue({
+      doctorConfigWrites: true,
+      doctorRetirementOnly: true,
+    });
     mocks.readPackageVersion.mockResolvedValue(VERSION);
     vi.mocked(update.updateGitCheckout).mockResolvedValue(
       runtimeRecovery.currentGitCoreFixture(process.cwd(), VERSION).outcome,
@@ -134,10 +137,14 @@ describe("update-cli", () => {
       status: "warning",
       reason: "post-plugin-doctor-execution-failed",
     });
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor process failed");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).toContain("doctor diagnostic output");
-    expect(result.pluginUpdate.warnings?.at(-1)?.message).not.toContain("long-argv-prefix");
+    const message = result.pluginUpdate.warnings?.at(-1)?.message;
+    expect(message).toMatch(/^[^\n]*update repair`[^]*process failed[^]*diagnostic output/u);
+    expect(message).not.toContain("long-argv-prefix");
   });
+});
+
+describe("update-cli", () => {
+  const f = createUpdateCliFixture({ databaseEngines: ["sqlite", "postgres"] });
 
   registerForegroundFailureRecoveryTests({
     setupUpdatedRootRefresh: f.setupUpdatedRootRefresh,
@@ -169,7 +176,7 @@ describe("update-cli", () => {
     mocks.serviceDefinitionMutationCapability.mockResolvedValue({ kind, reason });
   };
 
-  it("preserves split-root package updates when the service definition is writable-overridden", async () => {
+  it("preserves split-root package updates when service environment overrides cannot be inspected", async () => {
     const oldInstall = await f.setupServicePackageAtPrefix({
       prefix: f.tempDirs.make("sealed-node-a-"),
     });
@@ -184,7 +191,7 @@ describe("update-cli", () => {
       programArguments: originalCommand,
       environment: { NODE_OPTIONS: "--max-old-space-size=4096" },
       managedDefinition: { programArguments: originalCommand },
-      managedOverrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      managedOverrides: { environment: true },
     };
     mocks.serviceReadCommand.mockResolvedValue(overriddenCommand);
     f.primeNpmChannelTag("latest", "2026.5.20");
@@ -220,17 +227,7 @@ describe("update-cli", () => {
     const installCalls = commandCalls().filter(
       ([argv]) => argv[2] === "gateway" && argv[3] === "install",
     );
-    expect(installCalls).toHaveLength(1);
-    expect(installCalls[0]?.[0].slice(0, 4)).toEqual([
-      oldInstall.serviceNode,
-      oldInstall.entrypoint,
-      "gateway",
-      "install",
-    ]);
-    expect(installCalls[0]?.[1]).toMatchObject({
-      cwd: oldInstall.root,
-      input: expect.stringContaining('"targetRoot":' + JSON.stringify(oldInstall.root)),
-    });
+    expect(installCalls).toHaveLength(0);
     expect(mocks.serviceStop).toHaveBeenCalledOnce();
     expect(getLogOutput()).toContain("Gateway: restarted and verified");
   });
@@ -274,7 +271,17 @@ describe("update-cli", () => {
         reason: "preflight-node-runtime-incompatible",
       });
       expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-      expectNoSideEffects(recoverNode, mocks.serviceStop);
+      expectNoSideEffects(mocks.serviceStop);
+      if (capability === "writable") {
+        expect(recoverNode).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            engine: ">=26.12.1",
+            recovery: { env: expect.any(Object) },
+          }),
+        );
+      } else {
+        expect(recoverNode).not.toHaveBeenCalled();
+      }
       expect((await mocks.serviceReadCommand(process.env)).programArguments[0]).toBe(serviceNode);
       expect(await installedVersion(fixture.root)).toBe("2026.5.18");
     },

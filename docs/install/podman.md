@@ -110,6 +110,26 @@ Podman-specific notes:
 
 See [Tailscale](/gateway/tailscale) and [Control UI](/web/control-ui).
 
+## Reaching model servers on the host
+
+Inside the container, `127.0.0.1` is the container itself. To use a model server running on the host (llama.cpp, LM Studio, Ollama, vLLM, or any OpenAI-compatible endpoint), map the host-gateway alias:
+
+```bash
+--add-host=host.docker.internal:host-gateway   # manual podman run
+AddHost=host.docker.internal:host-gateway      # Quadlet
+```
+
+Recent Podman versions also provide `host.containers.internal` automatically. Reference the host server as `http://host.docker.internal:<port>/v1` (or `http://host.containers.internal:<port>/v1`) in the provider `baseUrl`.
+
+<Note>
+With rootless Podman's default pasta networking, the host-gateway alias normally resolves to the **link-local** address `169.254.1.2`. Check its address inside the container: other network backends and custom Podman settings can map it to a different range. Custom/local model providers trust their exact configured `baseUrl` origin, but link-local origins are excluded from that trust. If the alias resolves to a link-local address, model requests through it are rejected by the SSRF guard (`Blocked: resolves to private/internal/special-use IP address`). Two fixes:
+
+- Prefer the host's LAN or tailnet IP as the provider `baseUrl` (for example `http://192.168.1.10:8080/v1`). That origin is trusted as configured. Base URLs outside loopback/LAN/`.local`/bare-hostname shape (for example a tailnet `100.x` IP literal) still need a credential: set a non-secret placeholder such as `apiKey: "local"`.
+- Or keep the alias and opt in per provider with `models.providers.<id>.request.allowPrivateNetwork: true`.
+</Note>
+
+See [Local models](/gateway/local-models) for provider configuration and [Docker networking, providers, and storage](/install/docker/networking-and-storage) for the Docker equivalent.
+
 ## Systemd (Quadlet, optional)
 
 If you ran `./scripts/podman/setup.sh --quadlet`, setup installs a Quadlet file at `~/.config/containers/systemd/openclaw.container`.
@@ -135,6 +155,10 @@ sudo loginctl enable-linger "$(whoami)"
 ```
 
 The generated Quadlet service keeps a fixed, hardened default shape: `127.0.0.1` published ports (`18789` gateway, `18790` bridge), `--bind lan` inside the container, `keep-id` user namespace, `OPENCLAW_NO_RESPAWN=1`, `Restart=on-failure`, and `TimeoutStartSec=300`. It reads `~/.openclaw/.env` as a runtime `EnvironmentFile` for values such as `OPENCLAW_GATEWAY_TOKEN`, but does not consume the manual launcher's Podman-specific override allowlist. For custom publish ports, publish host, or other container-run flags, use the manual launcher instead, or edit `~/.config/containers/systemd/openclaw.container` directly and then reload and restart the service.
+
+<Note>
+Keep the generated `--bind lan`. Bind modes `loopback` and `tailnet` select host interfaces and don't work as intended inside a container network namespace: a container has no Tailscale interface, and `tailnet` silently falls back to loopback-only, so published ports cannot reach the gateway even though startup logs report ready. Scope exposure with the Quadlet's published ports instead; if you need a raw address, use `gateway.bind: "custom"` with `gateway.customBindHost: "0.0.0.0"`.
+</Note>
 
 ## Config, env, and storage
 
@@ -208,8 +232,11 @@ openclaw doctor --json
 
 - **Token generation fails:** Setup and launch stop before saving a generated token or starting the container when the selected random source (`openssl`, Python, or `od`) fails. Repair that command and retry.
 - **Init executable missing (`lookup init binary` / `container-init binary not found on the host`):** Install `catatonit` on the Podman engine host or repair its configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Installing the helper inside the Gateway or sandbox image does not repair the engine host. Keep `--init` enabled; see [Host init prerequisite](/gateway/sandboxing/podman-backend#host-init-prerequisite).
-- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Check that the host config/workspace paths are owned by your current user.
+- **Permission denied (EACCES) on config or workspace:** The container runs with `--userns=keep-id` and `--user <your uid>:<your gid>` by default. Check that the host config/workspace paths are owned by your current user. One-off `podman run` commands that touch the same state need the same mapping (`--userns=keep-id`) — without it the container uid doesn't match files the gateway created, even when the host paths are owned by you.
 - **Gateway start blocked (missing `gateway.mode=local`):** Check that `~/.openclaw/openclaw.json` exists and sets `gateway.mode="local"`. `scripts/podman/setup.sh` creates this if missing.
+- **Published port unreachable but startup logs report `ready`:** The gateway bound to loopback only. `gateway.bind: "tailnet"` and `"loopback"` are host-centric (see the Quadlet note above); inside a container there is no Tailscale interface, and `tailnet` falls back to loopback-only. Use the Quadlet default (`--bind lan`) or `gateway.bind: "custom"` + `gateway.customBindHost: "0.0.0.0"`, and control exposure with published ports.
+- **Config changes rejected with `cannot verify Gateway ownership from this process`:** The running gateway locks `openclaw.json` and only admits writes from its own container/PID namespace. Run config-mutating commands through the container-aware host CLI (`openclaw --container openclaw config ...`) or `podman exec openclaw ...`; the same command from a fresh one-off container is rejected. On versions with `gateway recover-lock`, stop the gateway, then run `openclaw gateway recover-lock` to inspect and clear the stale ownership record before mutating config from outside the container. On those versions, heartbeat expiry alone does not prove the previous holder has stopped.
+- **SELinux relabel fails on a bind mount (`failed to change selinux label: insufficient permissions`):** Rootless Podman applies `:Z`/`:z` relabels as your user and cannot relabel host directories owned by root (for example a read-only `/var/log/journal` mount). Use a plain `ro` mount without a relabel suffix for system directories you don't own; reserve `:Z` for state directories your user owns. Note that dropping the relabel only avoids the relabel operation — it doesn't grant access by itself. The files keep their original SELinux labels, and reading them still fails if the container domain isn't permitted to that label. In that case give the container an appropriate policy or remove the mount entirely.
 - **Container restarts after an image update:** Run the one-off `openclaw doctor --fix` command in [Upgrading images](#upgrading-images), then start the gateway again.
 - **Container CLI commands hit the wrong target:** Use `openclaw --container <name> ...` explicitly, or export `OPENCLAW_CONTAINER=<name>` in your shell.
 - **`openclaw update` fails with `--container`:** Expected. Rebuild/pull the image, then restart the container or the Quadlet service.

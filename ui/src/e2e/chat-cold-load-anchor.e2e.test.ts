@@ -8,6 +8,7 @@ import {
   installMockGateway,
 } from "./chat-flow.test-support.ts";
 import { installColdLoadTitleTrace } from "./cold-load-title.test-support.ts";
+import { captureTopVisibleVirtualRow } from "./virtual-row-anchor.test-support.ts";
 
 type ColdLoadFrame = {
   title?: string | null;
@@ -222,7 +223,13 @@ suite.define(() => {
             runId,
             content: "Synthetic final reply: the report is ready.",
             timestamp: 1_800_000_040_000,
-            __openclaw: { id: "cold-40", seq: 41, runId, replyToId: "cold-38" },
+            __openclaw: {
+              id: "cold-40",
+              seq: 41,
+              runId,
+              replyToId: "cold-38",
+              recordTimestampMs: 1_800_000_218_000,
+            },
           },
         ];
         const gateway = await installMockGateway(page, {
@@ -250,6 +257,9 @@ suite.define(() => {
             "progressCard.get": { card: progressCard },
           },
         });
+        await page.addInitScript(() => {
+          localStorage.setItem("openclaw:sidebar:sessions:sort-mode", "created");
+        });
         await page.addInitScript(installColdLoadTitleTrace, {
           sessionKey,
           expectedTitle: session.label,
@@ -260,7 +270,7 @@ suite.define(() => {
         await page
           .getByText("Synthetic final reply: the report is ready.", { exact: true })
           .waitFor();
-        await page.getByText("Worked for 3 minutes", { exact: true }).waitFor();
+        await page.getByRole("button", { name: "Worked for 3m", exact: true }).waitFor();
         await page.locator(".chat-reply-attribution__name").filter({ hasText: "Avery" }).waitFor();
         const progress = await openChatTaskProgress(page);
         await progress
@@ -305,7 +315,7 @@ suite.define(() => {
                 pane?.querySelector(".chat-pane__session-title-text")?.textContent?.trim() ?? null,
               top: thread.scrollTop,
               max: thread.scrollHeight - thread.clientHeight,
-              duration: thread.textContent.includes("Worked for 3 minutes"),
+              duration: thread.textContent.includes("Worked for 3m"),
               reply: Array.from(thread.querySelectorAll(".chat-reply-attribution__name")).some(
                 (element) => element.textContent?.trim() === "Avery",
               ),
@@ -446,7 +456,7 @@ suite.define(() => {
           );
           return thread && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 200;
         });
-        const reader = await scroller.evaluate((element) => element.scrollTop);
+        const reader = await captureTopVisibleVirtualRow(scroller);
         const previousThread = await scroller.evaluateHandle((element) => element);
         for (let index = 0; index < 3; index++) {
           await page
@@ -472,9 +482,9 @@ suite.define(() => {
           const inner = pane?.querySelector<HTMLElement>(".chat-thread-inner");
           return inner && getComputedStyle(inner).visibility !== "hidden";
         });
-        expect(
-          Math.abs((await scroller.evaluate((element) => element.scrollTop)) - reader),
-        ).toBeLessThanOrEqual(1);
+        const restored = await captureTopVisibleVirtualRow(scroller);
+        expect(restored.key).toBe(reader.key);
+        expect(Math.abs(restored.viewportTop - reader.viewportTop)).toBeLessThanOrEqual(1);
       },
     );
   });

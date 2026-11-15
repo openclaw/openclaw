@@ -1,17 +1,20 @@
 import { Errored, Loading, onSettled, Repeat, type ParentProps } from "solid-js";
+import { finishBootFrame } from "../app/boot-composer.ts";
 import {
   isStaleChunkImportError,
   retryStaleChunkReloadWhenReachable,
 } from "../app/stale-chunk-reload.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { InlineAlert } from "./solid/inline-alert.tsx";
 
 function SidebarViewError(props: { error: unknown; reset: () => void }) {
+  onSettled(() => finishBootFrame());
   let active = true;
   onSettled(() => () => {
     active = false;
   });
   return (
-    <div class="sidebar-view-loading sidebar-session-error callout danger" role="alert">
+    <InlineAlert tone="danger" class="sidebar-view-loading sidebar-session-error" role="alert">
       <span>{t("lazyView.errorTitle")}</span>
       <button
         class="btn btn--sm"
@@ -24,7 +27,7 @@ function SidebarViewError(props: { error: unknown; reset: () => void }) {
       >
         {t(isStaleChunkImportError(props.error) ? "common.reload" : "common.retry")}
       </button>
-    </div>
+    </InlineAlert>
   );
 }
 

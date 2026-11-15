@@ -55,8 +55,9 @@ runs required Doctor migrations, and verifies the activated Gateway. A raw
 workflow; use `openclaw update` or [create a backup first](#before-updating-create-a-verified-backup).
 
 The updater retains the previous package during activation and keeps it when
-failed recovery cannot prove a working installation. Migration recovery originals
-and original-state update captures remain until explicit
+failed recovery cannot prove a working installation. A verified healthy update
+retires its own migration recovery originals and original-state update capture;
+other copies remain until a later update or explicit
 [update cleanup](/cli/update#update-cleanup). These are
 separate recovery mechanisms: cleanup does not manage package or Git runtime
 backups, and retained migration originals are not a full pre-update backup.

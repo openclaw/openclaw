@@ -171,7 +171,9 @@ it.skipIf(typeof connection !== "string")(
               )
               .selectAll(),
           );
-        expect(native()).toEqual(legacy);
+        // Native rows never fall back to the JavaScript projection owner.
+        const nativeLegacy = legacy.map((row) => ({ ...row, exceptional_json: null }));
+        expect(native()).toEqual(nativeLegacy);
         // Existing stored envelopes bypass canonical JSON parsing even when its text is unavailable.
         setEnvelope(
           JSON.stringify({
@@ -182,7 +184,7 @@ it.skipIf(typeof connection !== "string")(
           "{ unavailable",
         );
         try {
-          expect(native()).toEqual(legacy);
+          expect(native()).toEqual(nativeLegacy);
         } finally {
           setEnvelope(null, JSON.stringify(fixtures[0]));
         }

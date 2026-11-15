@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 const fixture = vi.hoisted(() => ({
   gateway: true,
   versions: { user: "2026.10.5", system: "2026.10.8" } as Record<string, string>,
@@ -6,7 +7,6 @@ const fixture = vi.hoisted(() => ({
   readRuntime: vi.fn(),
   readLocation: vi.fn(),
   readFile: vi.fn(),
-  readFullState: vi.fn(),
   isEnabled: vi.fn(),
 }));
 vi.mock("node:fs/promises", () => ({ default: { readFile: fixture.readFile } }));
@@ -14,16 +14,12 @@ vi.mock("./gateway-run-argv.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-run-argv.js")>()),
   isGatewayRunInvocationArgv: () => fixture.gateway,
 }));
-vi.mock("../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../daemon/service.js")>()),
-  resolveGatewayService: () => fixture,
-  readGatewayServiceState: fixture.readFullState,
-}));
 vi.mock("../daemon/systemd-service-files.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-service-files.js")>()),
   resolveSystemdUnitPathForName: (_env: unknown, name: string) =>
     "/home/example/.config/systemd/user/" + name + ".service",
   readSystemdServiceCommandLocation: fixture.readLocation,
+  readSystemdServiceExecStart: fixture.readCommand,
 }));
 vi.mock("../daemon/systemd-runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../daemon/systemd-runtime.js")>()),
@@ -74,7 +70,9 @@ function runtime(
 }
 const older = () =>
   expect(inspectCliGatewayServiceInstallation({})).resolves.toMatchObject({ version: "2026.10.5" });
+afterEach(() => vi.restoreAllMocks());
 beforeEach(() => {
+  mockProcessPlatform("linux");
   vi.clearAllMocks();
   fixture.gateway = true;
   fixture.versions = { user: "2026.10.5", system: "2026.10.8" };
@@ -86,9 +84,6 @@ beforeEach(() => {
   });
   fixture.readLocation.mockResolvedValue({ kind: "command", command });
   fixture.readRuntime.mockResolvedValue(runtime());
-  fixture.readFullState.mockRejectedValue(
-    Object.assign(new Error("root-only EnvironmentFile"), { code: "EACCES" }),
-  );
   fixture.isEnabled.mockRejectedValue(new Error("unrelated user manager unavailable"));
   fixture.readCommand.mockResolvedValue({
     fixtureScope: "user",
@@ -96,33 +91,35 @@ beforeEach(() => {
     environment: {},
   });
 });
-describe.skipIf(process.platform !== "linux")("worker policy own-service selection", () => {
-  it("uses loaded location and native runtime for self despite root-only EnvironmentFile", async () => {
-    await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
-    expect(fixture.readFullState).not.toHaveBeenCalled();
-    expect(fixture.readFile).toHaveBeenCalledTimes(1);
-    expect(fixture.readCommand).not.toHaveBeenCalled();
-    expect(fixture.readRuntime).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        requireEffective: true,
-        requireLoaded: true,
-        systemdReadTarget: expect.objectContaining({
-          scope: "system",
-          unitName: "openclaw-gateway.service",
+describe.skipIf(process.platform === "win32")("worker policy own-service selection", () => {
+  it.each(["", "/gateway"])(
+    "uses loaded location and native runtime for self in %s despite root-only EnvironmentFile",
+    async (leaf) => {
+      fixture.readFile.mockResolvedValue(`0::/system.slice/openclaw-gateway.service${leaf}\n`);
+      await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
+      expect(fixture.readFile).toHaveBeenCalledTimes(1);
+      expect(fixture.readCommand).not.toHaveBeenCalled();
+      expect(fixture.readRuntime).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({
+          requireEffective: true,
+          requireLoaded: true,
+          systemdReadTarget: expect.objectContaining({
+            scope: "system",
+            unitName: "openclaw-gateway.service",
+          }),
         }),
-      }),
-    );
-    expect(fixture.readLocation).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({ scope: "system", unitName: "openclaw-gateway.service" }),
-    );
-  });
+      );
+      expect(fixture.readLocation).toHaveBeenCalledWith(
+        {},
+        expect.objectContaining({ scope: "system", unitName: "openclaw-gateway.service" }),
+      );
+    },
+  );
   it("accepts active but disabled own service without querying enablement or another manager", async () => {
     fixture.isEnabled.mockResolvedValue(false);
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.isEnabled).not.toHaveBeenCalled();
-    expect(fixture.readFullState).not.toHaveBeenCalled();
   });
   it("ordinary CLI retains older installed-service guard without manager probes", async () => {
     fixture.gateway = false;
@@ -135,23 +132,31 @@ describe.skipIf(process.platform !== "linux")("worker policy own-service selecti
     fixture.readRuntime.mockResolvedValue({ ...runtime(), status: "stopped", state: "inactive" });
     await older();
   });
-  it("does not trust a child process in the same cgroup", async () => {
-    fixture.readRuntime.mockResolvedValue({ ...runtime(), pid: process.pid + 1 });
-    await older();
-  });
-  it("preserves protection for a genuinely older own effective package", async () => {
-    fixture.versions.system = "2026.10.6";
-    await expect(
-      inspectCliGatewayServiceInstallation({ OPENCLAW_STATE_DIR: "/service-state" }),
-    ).resolves.toMatchObject({
-      root: "/system",
-      version: "2026.10.6",
-      databasePath: "/service-state/state/openclaw.sqlite",
-    });
-  });
-  it("uses exact custom user unit from cgroup", async () => {
+  it.each(["", "/gateway"])(
+    "does not trust a child process in the same cgroup %s",
+    async (leaf) => {
+      fixture.readFile.mockResolvedValue(`0::/system.slice/openclaw-gateway.service${leaf}\n`);
+      fixture.readRuntime.mockResolvedValue({ ...runtime(), pid: process.pid + 1 });
+      await older();
+    },
+  );
+  it.each(["", "/gateway"])(
+    "preserves protection for a genuinely older own effective package in %s",
+    async (leaf) => {
+      fixture.readFile.mockResolvedValue(`0::/system.slice/openclaw-gateway.service${leaf}\n`);
+      fixture.versions.system = "2026.10.6";
+      await expect(
+        inspectCliGatewayServiceInstallation({ OPENCLAW_STATE_DIR: "/service-state" }),
+      ).resolves.toMatchObject({
+        root: "/system",
+        version: "2026.10.6",
+        databasePath: "/service-state/state/openclaw.sqlite",
+      });
+    },
+  );
+  it.each(["", "/gateway"])("uses exact custom user unit from cgroup %s", async (leaf) => {
     const group = "/user.slice/user-1000.slice/user@1000.service/app.slice/custom-gateway.service";
-    fixture.readFile.mockResolvedValue("0::" + group + "\n");
+    fixture.readFile.mockResolvedValue("0::" + group + leaf + "\n");
     fixture.readRuntime.mockResolvedValue(runtime("user", "custom-gateway.service", group));
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.readLocation).toHaveBeenCalledWith(
@@ -167,6 +172,13 @@ describe.skipIf(process.platform !== "linux")("worker policy own-service selecti
     fixture.readRuntime.mockResolvedValue(runtime("system", "custom-gateway.service", group));
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
   });
+  it.each(["agent-exec", "other", "gateway/nested", "other/gateway"])(
+    "retains the installed-service guard for an unrelated subgroup %s",
+    async (leaf) => {
+      fixture.readFile.mockResolvedValue(`0::/system.slice/openclaw-gateway.service/${leaf}\n`);
+      await older();
+    },
+  );
   it("retains old facts if location inspection is denied", async () => {
     fixture.readLocation.mockRejectedValueOnce(new Error("AccessDenied"));
     await older();
@@ -207,20 +219,5 @@ describe("worker policy installed-service fallbacks", () => {
     fixture.versions.user = "2026.10.8";
     await expect(inspectCliGatewayServiceInstallation({})).resolves.toBeUndefined();
     expect(fixture.readRuntime).not.toHaveBeenCalled();
-  });
-  it.each(["darwin", "win32"])("preserves the installed-service guard on %s", async (platform) => {
-    const descriptor = Object.getOwnPropertyDescriptor(process, "platform");
-    if (!descriptor) {
-      throw new Error("missing platform descriptor");
-    }
-    try {
-      Object.defineProperty(process, "platform", { ...descriptor, value: platform });
-      await older();
-      expect(fixture.readFile).not.toHaveBeenCalled();
-      expect(fixture.readRuntime).not.toHaveBeenCalled();
-      expect(fixture.readLocation).not.toHaveBeenCalled();
-    } finally {
-      Object.defineProperty(process, "platform", descriptor);
-    }
   });
 });

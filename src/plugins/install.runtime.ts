@@ -7,7 +7,8 @@ export {
   resolveTimedInstallModeOptions,
 } from "../infra/install-mode-options.js";
 export { installPackageDir } from "../infra/install-package-dir.js";
-export { type NpmSpecResolution, resolveArchiveSourcePath } from "../infra/install-source-utils.js";
+export { resolveArchiveSourcePath } from "../infra/install-source-utils.js";
+export type { NpmSpecResolution } from "../infra/npm-registry-spec.js";
 export {
   ensureInstallTargetAvailable,
   resolveCanonicalInstallTarget,
@@ -25,5 +26,4 @@ export {
   loadPluginManifest,
   resolvePackageExtensionEntries,
 } from "./manifest.js";
-export { checkMinHostVersion } from "./min-host-version.js";
 export { isPathInside } from "./path-safety.js";

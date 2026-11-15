@@ -1,15 +1,14 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createEffect, createSignal } from "solid-js";
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 
@@ -101,32 +100,13 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
   };
 }
 
-export function previews(page: TestActivityPage) {
-  const entries = page.container.querySelectorAll(".activity-entry__preview");
-  return Array.from(entries, (entry) => entry.textContent);
-}
-
-export async function expandFirst(page: TestActivityPage) {
-  await waitForSolid(() => expect(page.container.querySelector(".activity-entry")).not.toBeNull());
-  const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
-  row.open = true;
-  row.dispatchEvent(new Event("toggle"));
-  flush();
-  return row;
-}
-
-export function toolEvent(id: string, sessionKey = "main", name = "read", runId = `run-${id}`) {
-  const data = { toolCallId: id, name, phase: "result", result: { text: `${id} output` } };
-  return createGatewayEvent("session.tool", { stream: "tool", runId, sessionKey, data });
-}
-
 export const activityHello = (recoveryScope = "activity-owner-a"): GatewayHelloOk => ({
   type: "hello-ok",
   protocol: 1,
   auth: { role: "operator", scopes: ["operator.read"], recoveryScope },
 });
 
-export function createActivityGatewayStub(): ApplicationContext["gateway"] {
+function createActivityGatewayStub(): ApplicationContext["gateway"] {
   const snapshot = { ...createApplicationGateway().gateway.snapshot, sessionKey: "main" };
   // SAFETY: Static route tests only read the snapshot and register these observers.
   return {

@@ -57,6 +57,8 @@ const TRUNCATED_SUPPORT_FIELD = "<truncated>";
 export type SupportRedactionContext = {
   env: NodeJS.ProcessEnv;
   stateDir: string;
+  /** Compact diagnostics can require relative paths to stay private too. */
+  redactRelativePaths?: boolean;
   /** Shared only within one export; raw identifiers and their mapping never leave memory. */
   identifierKeys?: Map<string, string>;
   /** Exporters supply schema classification without adding it to shared logging's closure. */
@@ -302,9 +304,6 @@ const WINDOWS_NAMESPACE_MARKER_LENGTH = 4;
 
 function namespaceMarkerLengthBefore(value: string, endIndex: number): number {
   const start = endIndex - WINDOWS_NAMESPACE_MARKER_LENGTH;
-  if (start < 0) {
-    return 0;
-  }
   return WINDOWS_NAMESPACE_MARKER_RE.test(value.slice(start, endIndex))
     ? WINDOWS_NAMESPACE_MARKER_LENGTH
     : 0;
@@ -403,25 +402,31 @@ export function redactSupportDiagnosticLine(
   );
   const redacted = redactSupportString(first, context, { maxLength: Number.MAX_SAFE_INTEGER });
   // Paths may contain spaces and quotes; neither can safely mark the end of private text.
-  // Retain the diagnostic prefix and redact the rest rather than guess.
+  // Relative paths require dropping the prefix too; closed causes survive below.
   const paths = redacted.replace(
-    /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
+    context.redactRelativePaths
+      ? /^.*[\\/].*/u
+      : /["'`]?(?:file:\/\/|\$OPENCLAW_STATE_DIR|(?:^|(?<=[\s=(:["'`]))(?:~[\\/]|[A-Za-z]:[\\/]|\/+|\\+)).*/gu,
     "[redacted-path]",
   );
   const commandRedacted = paths.replace(
     /\b(?:Command failed:|command (?:sh|cmd|powershell|bash)\b).*/giu,
     "[redacted-command]",
   );
-  // Loader errors lead with a library path, and can arrive as a later worker cause.
-  // Retain only the numeric ABI requirement before either boundary removes it.
+  // Causes can follow a path, URL, or progress banner (git prints "Cloning into" first),
+  // or arrive as a later worker cause. Retain closed causes before either boundary removes them.
   const missingGlibc = /\bversion [`'"](GLIBC_\d{1,3}(?:\.\d{1,3}){1,2})['"] not found\b/u.exec(
     value,
   )?.[1];
-  const diagnostic =
-    missingGlibc && !commandRedacted.includes(`${missingGlibc} not found`)
-      ? `${missingGlibc} not found; ${commandRedacted.trim()}`
-      : commandRedacted.trim();
-  return truncateUtf16Safe(diagnostic, maxLength);
+  const kept = commandRedacted.trim();
+  const causes = [
+    ...(missingGlibc ? [`${missingGlibc} not found`] : []),
+    ...readPublicSupportCauses(stripAnsi(value)),
+  ].filter(
+    (cause, index, all) =>
+      all.indexOf(cause) === index && !kept.toLowerCase().includes(cause.toLowerCase()),
+  );
+  return truncateUtf16Safe([...causes, kept].filter(Boolean).join("; "), maxLength);
 }
 
 const PUBLIC_ERROR_CODES = new Set([
@@ -514,12 +519,11 @@ export function publicConfigIssueMessage(issue: { path: string; message: string 
     return issue.message;
   }
   if (/^(?:Unrecognized keys?: |unrecognized key )/u.test(issue.message)) {
+    // Retired schema keys are public vocabulary; naming them tells the user which repair runs.
     const retired =
-      issue.path === "skills.workshop" &&
-      /^(?:Unrecognized key: "approvalPolicy"|unrecognized key approvalPolicy)$/u.test(
-        issue.message,
-      );
-    return `unrecognized key ${retired ? "approvalPolicy" : "<key>"}`;
+      issue.path === "skills" &&
+      /^(?:Unrecognized key: "workshop"|unrecognized key workshop)$/u.test(issue.message);
+    return `unrecognized key ${retired ? "workshop" : "<key>"}`;
   }
   return "Invalid configuration field";
 }
@@ -613,6 +617,7 @@ export function redactPublicSupportDiagnosticLine(
       "managed update handoff control input closed",
       "managed update ownership transfer failed",
       "requester-revoked",
+      "interrupted",
       "Doctor could not enter maintenance. An agent database is in use. Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.",
     ].includes(line)
   ) {

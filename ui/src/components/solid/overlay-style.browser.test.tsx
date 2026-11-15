@@ -52,6 +52,8 @@ function color(value: string) {
 }
 
 function expectWithinViewport(element: HTMLElement) {
+  // Measure settled geometry, not WebKit's in-flight entry scale.
+  finishElementAnimations(element);
   const box = element.getBoundingClientRect();
   expect(box.width).toBeGreaterThan(0);
   expect(box.height).toBeGreaterThan(0);
@@ -78,11 +80,11 @@ function positionTrigger(style: Partial<CSSStyleDeclaration>) {
 }
 
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
-  const box = expectWithinViewport(menu);
+  // The menu's scrollport clips rows: a menu inside the viewport can still cut one off.
+  const top = expectWithinViewport(menu).top + menu.clientTop;
   const itemBox = element.getBoundingClientRect();
-  expect(box.height).toBeLessThanOrEqual(420);
-  expect(itemBox.bottom).toBeLessThanOrEqual(box.bottom);
-  expect(itemBox.top).toBeGreaterThanOrEqual(box.top);
+  expect(itemBox.top, element.textContent ?? "").toBeGreaterThanOrEqual(top);
+  expect(itemBox.bottom, element.textContent ?? "").toBeLessThanOrEqual(top + menu.clientHeight);
 }
 
 describe("native overlay presentation", () => {
@@ -118,13 +120,17 @@ describe("native overlay presentation", () => {
       }
       document.getAnimations().forEach((animation) => animation.finish());
       const colors: [Element, "color" | "backgroundColor", string][] = [
-        [surface(), "backgroundColor", "popover"],
+        [surface(), "backgroundColor", "menu-surface"],
         [item("Open"), "color", "text"],
-        [details("Open"), "color", "muted"],
-        [trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!, "color", "muted"],
+        [details("Open"), "color", "text-tertiary"],
+        [
+          trigger("people-group").querySelector(".oc-menu-item__submenu-icon")!,
+          "color",
+          "text-tertiary",
+        ],
         [item("Delete"), "color", "danger"],
         [details("Delete"), "color", "danger"],
-        [trigger("people-group"), "backgroundColor", "surface-selected"],
+        [trigger("people-group"), "backgroundColor", "surface-hover"],
       ];
       for (const [element, property, token] of colors) {
         expect(getComputedStyle(element)[property], theme).toBe(color(`var(--${token})`));
@@ -153,8 +159,6 @@ describe("native overlay presentation", () => {
       });
       positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
-      // Measure the consumer budget, not WebKit's in-flight entry scale.
-      finishElementAnimations(surface());
       expect(expectWithinViewport(surface()).height).toBe(500);
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(item("Action 24"));
@@ -216,6 +220,71 @@ describe("native overlay presentation", () => {
       expectItemVisible(last, child);
     },
   );
+
+  it.each(["bottom-end", "top-start"] as const)(
+    "keeps %s when it fits, flips before clipping, and scrolls when neither side fits",
+    async (placement) => {
+      await page.viewport(800, 600);
+      mountMenu({ placement, items: entries("Action", 24) });
+      surface().style.setProperty("--oc-overlay-max-height", "126px");
+      positionTrigger({ left: "350px", top: "280px" });
+      await openMenu();
+      const preferred = expectWithinViewport(surface());
+      const anchor = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(preferred.top).toBeGreaterThanOrEqual(anchor.bottom);
+      } else {
+        expect(preferred.bottom).toBeLessThanOrEqual(anchor.top);
+      }
+      await userEvent.keyboard("{Escape}");
+      positionTrigger({ top: placement === "bottom-end" ? "550px" : "20px" });
+      await openMenu();
+      const flipped = expectWithinViewport(surface());
+      expect(flipped.height).toBe(preferred.height);
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      const edge = trigger().getBoundingClientRect();
+      if (placement === "bottom-end") {
+        expect(flipped.bottom).toBeLessThanOrEqual(edge.top);
+      } else {
+        expect(flipped.top).toBeGreaterThanOrEqual(edge.bottom);
+      }
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      expectItemVisible(item("Action 24"), surface());
+
+      await userEvent.keyboard("{Escape}");
+      surface().style.removeProperty("--oc-overlay-max-height");
+      await page.viewport(390, 200);
+      positionTrigger({ left: "150px", top: "80px" });
+      await openMenu();
+      expectWithinViewport(surface());
+      expect(surface().scrollHeight).toBeGreaterThan(surface().clientHeight);
+      await userEvent.keyboard("{End}");
+      expectItemVisible(item("Action 24"), surface());
+      await userEvent.keyboard("{Home}");
+      expectItemVisible(item("Action 1"), surface());
+    },
+  );
+
+  it("flips a short row menu at the window edge with every action whole", async () => {
+    await page.viewport(800, 600);
+    mountMenu({
+      placement: "bottom-end",
+      items: [
+        { id: "edit", label: "Edit" },
+        { id: "delete", label: "Delete", variant: "danger" },
+      ],
+    });
+    // Like the last Secrets row: less room below the trigger than the menu needs.
+    positionTrigger({ right: "16px", bottom: "40px" });
+    await openMenu();
+    const rows = [...surface().querySelectorAll<HTMLElement>('[role="menuitem"]')];
+    expect(rows).toHaveLength(2);
+    rows.forEach((row) => expectItemVisible(row, surface()));
+    expect(surface().getBoundingClientRect().bottom).toBeLessThanOrEqual(
+      trigger().getBoundingClientRect().top,
+    );
+  });
 
   it("uses high-contrast borders and focus in forced colors", async () => {
     await emulateOverlayMedia({ forcedColors: "active" });

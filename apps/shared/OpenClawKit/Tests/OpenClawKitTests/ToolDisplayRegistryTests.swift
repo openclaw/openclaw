@@ -52,6 +52,27 @@ struct ToolDisplayRegistryTests {
         }
     }
 
+    @Test func `command purpose titles are bounded display text and preserve command identity`() {
+        for name in ["exec", "bash", "shell", "run_command", "run_terminal_cmd", "mcp__openclaw__exec"] {
+            let summary = ToolDisplayRegistry.resolve(
+                name: name, args: AnyCodable(["title": "  Check\n local\treadiness  ", "command": "printf ready"]))
+            #expect(summary.title == "Check local readiness")
+            #expect(summary.detail == "printf ready")
+        }
+        let dispatched = ToolDisplayRegistry.resolve(name: "tool_call", args: AnyCodable([
+            "id": "openclaw:core:exec", "args": ["title": "Check readiness", "command": "printf ready"],
+        ]))
+        #expect(dispatched.title == "Check readiness")
+        #expect(dispatched.name == "exec")
+        #expect(ToolDisplayRegistry.resolve(
+            name: "exec", args: AnyCodable(["title": String(repeating: "a", count: 140)])).title.count == 120)
+        for title in [AnyCodable(" \n "), AnyCodable(3), AnyCodable("\u{0000}"), AnyCodable("\u{0000} \u{0000}")] {
+            #expect(ToolDisplayRegistry.resolve(name: "exec", args: AnyCodable(["title": title])).title == "Exec")
+        }
+        #expect(ToolDisplayRegistry.resolve(
+            name: "read", args: AnyCodable(["title": "Not a command", "path": "sample.txt"])).title == "Read")
+    }
+
     @Test func `resolves known tool from config`() {
         let summary = ToolDisplayRegistry.resolve(name: "exec", args: nil)
         #expect(summary.icon == "squareTerminal")
@@ -74,6 +95,22 @@ struct ToolDisplayRegistryTests {
                 "path": "fixture.txt", "offset": offset, "limit": limit,
             ]))
             #expect(summary.detail == expected)
+        }
+    }
+
+    @Test func `tools bridged over MCP present the tool and keep invalid names raw`() {
+        let bridged = ToolDisplayRegistry.resolve(
+            name: "mcp__openclaw__exec",
+            args: AnyCodable(["command": "printf ready"]))
+        #expect(bridged.name == "exec")
+        #expect(bridged.title == ToolDisplayRegistry.resolve(name: "exec", args: nil).title)
+        #expect(bridged.detail == ToolDisplayRegistry.resolve(
+            name: "exec",
+            args: AnyCodable(["command": "printf ready"])).detail)
+
+        #expect(ToolDisplayRegistry.resolve(name: "mcp__github__search_issues", args: nil).name == "search_issues")
+        for raw in ["mcp__", "mcp__server", "mcp__server__"] {
+            #expect(ToolDisplayRegistry.resolve(name: raw, args: nil).name == raw)
         }
     }
 }

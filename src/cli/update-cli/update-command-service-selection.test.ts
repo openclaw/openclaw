@@ -31,7 +31,14 @@ type Scenario = {
   platform: NodeJS.Platform;
   fault?: string;
   runtime?: "node" | "bun";
-  definition?: "plain" | "empty" | "managedDefinition" | "managedOverrides";
+  definition?:
+    | "plain"
+    | "empty"
+    | "managedDefinition"
+    | "managedOverrides"
+    | "launcher"
+    | "reset"
+    | "opaque";
   sameRoot?: boolean;
 };
 const cases: Scenario[] = [
@@ -46,6 +53,9 @@ const cases: Scenario[] = [
   { platform: "win32", sameRoot: true },
   { platform: "linux", definition: "managedOverrides" },
   { platform: "linux", definition: "managedDefinition" },
+  { platform: "linux", definition: "launcher" },
+  { platform: "linux", definition: "reset" },
+  { platform: "linux", definition: "opaque" },
   { platform: "linux", definition: "empty" },
   { platform: "linux", definition: "empty", runtime: "bun" },
   { platform: "linux", fault: "app owner" },
@@ -103,10 +113,15 @@ it.each(cases)(
         isLoaded: async () => true,
         readCommand: vi.fn(async () => ({
           ...command,
-          ...(definition === "empty" || definition === "managedDefinition"
-            ? { managedDefinition: command }
-            : {}),
+          ...(definition !== "plain" ? { managedDefinition: command } : {}),
           ...(definition === "empty" ? { managedOverrides: {} } : {}),
+          ...(definition === "launcher"
+            ? { managedOverrides: { launcher: "command" as const } }
+            : {}),
+          ...(definition === "reset"
+            ? { managedOverrides: { environment: { resetInline: true as const } } }
+            : {}),
+          ...(definition === "opaque" ? { managedOverrides: { environment: true as const } } : {}),
           ...(definition === "managedOverrides"
             ? { managedOverrides: { environment: { keys: ["OPENCLAW_PROFILE"] } } }
             : {}),
@@ -158,7 +173,7 @@ it.each(cases)(
         runtime === "node" &&
         platform !== "win32" &&
         fault !== "sealed definition" &&
-        (definition === "plain" || definition === "empty");
+        (definition === "plain" || definition === "empty" || definition === "managedOverrides");
       const redirect = selected && !sameRoot && !rebind;
       const state = selected ? recordedState : path.join(home, ".openclaw");
       expect({

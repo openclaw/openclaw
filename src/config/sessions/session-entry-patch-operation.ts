@@ -69,6 +69,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       initial?: SessionEntry;
       next: SessionEntry;
+      /** Final run accounting supersedes its own provider-boundary snapshots. */
+      contextTotalsAccounted?: true;
       creation: ReturnType<typeof buildSessionCreationStamp>;
     }
   | {
@@ -76,6 +78,8 @@ type SessionEntryPatchStep = (
       sessionKey: string;
       source: SessionEntry;
       continuation: NonNullable<SessionEntry["cronRunContinuation"]>;
+      /** The occurrence's admitted parent; absence clears a row's earlier receipt. */
+      scheduledMemoryParent?: SessionEntry["scheduledMemoryParent"];
       create: boolean;
       creation: ReturnType<typeof buildSessionCreationStamp>;
       thinkingLevel?: string;
@@ -133,9 +137,18 @@ export function projectCronSessionEntry(
   ) {
     throw createSessionWorkStartChangedError(operation.sessionKey);
   }
-  return current && initial
-    ? mergeSessionSnapshotChanges({ initial, next, current })
-    : { ...next, ...(!current ? operation.creation : {}) };
+  const merged =
+    current && initial
+      ? mergeSessionSnapshotChanges({ initial, next, current })
+      : { ...next, ...(!current ? operation.creation : {}) };
+  return operation.contextTotalsAccounted
+    ? {
+        ...merged,
+        totalTokens: next.totalTokens,
+        totalTokensFresh: next.totalTokensFresh,
+        totalTokensVersion: next.totalTokensVersion,
+      }
+    : merged;
 }
 
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
@@ -279,6 +292,8 @@ export function reduceSessionEntryPatch(
         claudeCliSessionId: source.claudeCliSessionId,
         ...(!existingEntry ? operation.creation : {}),
         ...(operation.thinkingLevel ? { thinkingLevel: operation.thinkingLevel } : {}),
+        // Only this cron-owned write sets the receipt; the copied source row never carries one.
+        scheduledMemoryParent: operation.scheduledMemoryParent,
         cronRunContinuation: continuation,
       };
     }

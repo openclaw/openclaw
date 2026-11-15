@@ -76,6 +76,61 @@ function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
 }
 
 describe("Models page catalog publication", () => {
+  it("shows and refreshes presentation for a configured provider without models", async () => {
+    const { context, request, publishEvent } = createHarness("main");
+    const originalRequest = request.getMockImplementation()!;
+    let providerName = "Research Lab";
+    let iconName = "server";
+    const config = {
+      models: {
+        providers: {
+          workstation: {
+            baseUrl: "https://models.example.com/v1",
+            models: [],
+            name: "Raw config is not the catalog presentation",
+          },
+        },
+      },
+    };
+    request.mockImplementation(async (method: string, params?: { view?: string }) => {
+      if (method === "config.get") {
+        return { config, hash: "model-less-provider" };
+      }
+      if (method === "models.list") {
+        expect(params?.view).toBe("configured");
+        return {
+          models: [],
+          providerPresentations: {
+            workstation: {
+              providerName,
+              providerIcon: { source: "builtin", name: iconName },
+            },
+          },
+        };
+      }
+      return originalRequest(method);
+    });
+    const page = appendPage(context);
+    await waitForProviders(page, config);
+    const row = () => page.querySelector('[data-provider-id="workstation"]');
+    await waitForSolid(() => expect(row()?.textContent).toContain("Research Lab"));
+    await vi.dynamicImportSettled();
+    await waitForSolid(() =>
+      expect(row()?.querySelector(".provider-brand-icon svg")).not.toBeNull(),
+    );
+    expect(displayedCatalog(page)?.models).toEqual([]);
+    expect(row()?.textContent).not.toContain("Raw config");
+    const initialGeometry = row()?.querySelector(".provider-brand-icon svg")?.innerHTML;
+    providerName = "Studio";
+    iconName = "cloud";
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => {
+      expect(row()?.textContent).toContain("Studio");
+      expect(row()?.textContent).not.toContain("Research Lab");
+      expect(row()?.querySelector(".provider-brand-icon svg")?.innerHTML).not.toBe(initialGeometry);
+    });
+  });
+
   it("adopts a ready catalog published while the initial auth read is pending", async () => {
     const { context, request, readPublished, publishEvent, catalogRequest } =
       createCatalogHarness();
@@ -111,7 +166,7 @@ describe("Models page catalog publication", () => {
       expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain("Ready"),
     );
     expect(page.querySelector(".model-providers__checking")).toBeNull();
-    expect(displayedCatalog(page)?.pendingProviders).toBeUndefined();
+    await waitForSolid(() => expect(displayedCatalog(page)?.pendingProviders).toBeUndefined());
     expect(readPublished).toHaveBeenCalledTimes(2);
   });
 
@@ -342,7 +397,7 @@ describe("Models page catalog publication", () => {
 
     const warnings = page.querySelectorAll('.model-providers__catalog-progress[role="alert"]');
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.textContent).toContain("More models could not be discovered.");
+    expect(warnings[0]?.textContent).toContain("Couldn’t load more models. Try again.");
     expect(page.querySelector(".model-providers__provider-list .provider-usage__error")).toBeNull();
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
     expect(currentConfigObject(page.context.runtimeConfig.state)).toEqual(savedModelConfig);
@@ -363,6 +418,57 @@ describe("Models page catalog publication", () => {
     expect(page.view.props.catalogDiscoveryError).toBeNull();
   });
 
+  it("clears a prior catalog warning when background publication succeeds", async () => {
+    const { context, request, discover, readPublished, publishEvent, catalogRequest } =
+      createCatalogHarness(preparedCatalog);
+    const failed = { ...preparedCatalog, refreshFailed: true };
+    readPublished.mockReturnValue(failed);
+    discover.mockResolvedValue(failed);
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    await retryCatalog(page);
+    const warning = () => page.querySelector('.model-providers__catalog-progress[role="alert"]');
+    await waitForSolid(() => expect(warning()).not.toBeNull());
+
+    const publication = deferred<ModelCatalogResult>();
+    let publicationStarted = false;
+    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+      if (method === "models.list" && !params?.refresh) {
+        publicationStarted = true;
+        return publication.promise;
+      }
+      return catalogRequest(method, params);
+    });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    await waitForSolid(() => expect(publicationStarted).toBe(true));
+    await drainPageUpdates(page);
+    expect(warning()).not.toBeNull();
+
+    publication.resolve(preparedCatalog);
+    await waitForSolid(() => expect(warning()).toBeNull());
+    expect(page.view.props.catalogDiscoveryError).toBeNull();
+    expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("keeps saved defaults usable while discovery continues in the background", async () => {
+    const { context, readPublished, runtimeConfig } = createCatalogHarness();
+    readPublished.mockReturnValue({ ...preparedCatalog, pendingProviders: ["openai"] });
+    const page = appendPage(context);
+    await waitForProviders(page, savedModelConfig);
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
+
+    page.view.props.onPrimaryChange("openai/prepared-utility");
+    await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+    await drainPageUpdates(page);
+
+    expect(
+      modelPicker(page, "primary").querySelector<HTMLButtonElement>(".picker-select__trigger")
+        ?.disabled,
+    ).toBe(false);
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
+  });
+
   it.each(["utility"] as const)(
     "Models page %s picker opens without a request and preserves saved choices as publication completes",
     async (role) => {
@@ -381,9 +487,7 @@ describe("Models page catalog publication", () => {
         requestsAfterLoad,
       );
       expect(discover).not.toHaveBeenCalled();
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="status"]'),
-      ).not.toBeNull();
+      expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
       expect(
         chatModelPickers(page).map(
           (picker) => picker.querySelector<HTMLButtonElement>(".picker-select__trigger")?.disabled,
@@ -454,6 +558,7 @@ describe("Models page catalog publication", () => {
         page.querySelector('[role="option"][data-value="openai/published-later"]'),
       ).not.toBeNull();
       const utility = modelPicker(page, "utility");
+      await utility.updateComplete;
       const search = utility.querySelector<HTMLInputElement>('input[type="search"]');
       expect(search).not.toBeNull();
       search!.value = "Discovered";
@@ -486,13 +591,17 @@ describe("Models page catalog publication", () => {
       pendingProviders: ["openai"],
     });
 
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
+    publishEvent({
+      type: "event",
+      event: "chat.metadata.changed",
+      payload: { modelCatalogChanged: true },
+    });
     await waitForSolid(() =>
       expect(
         page.querySelector('.model-providers__catalog-progress[role="alert"]')?.textContent,
-      ).toContain("More models could not be discovered."),
+      ).toContain("Couldn’t load more models. Try again."),
     );
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     await openModelPicker(page);
     expect(displayedCatalog(page)?.models).toEqual([]);
     const selected: (string | null | undefined)[] = [];
@@ -551,9 +660,7 @@ describe("Models page catalog publication", () => {
     await retryCatalog(page);
     expect(discover).toHaveBeenCalledTimes(2);
     await waitForSolid(() =>
-      expect(
-        page.querySelector('.model-providers__catalog-progress[role="status"]'),
-      ).not.toBeNull(),
+      expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull(),
     );
     expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
     expect(modelPicker(page, "primary")).toBe(retainedPicker);
@@ -695,7 +802,7 @@ describe("Models page catalog publication", () => {
 
     await drainPageUpdates(page);
     expect(displayedCatalog(page)?.models).toEqual(preparedCatalog.models);
-    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).not.toBeNull();
+    expect(page.querySelector('.model-providers__catalog-progress[role="status"]')).toBeNull();
     expect(page.querySelector('.model-providers__catalog-progress[role="alert"]')).toBeNull();
     await openModelPicker(page, "fallback");
     expect(discover).toHaveBeenCalledTimes(2);

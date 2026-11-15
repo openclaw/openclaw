@@ -159,21 +159,21 @@ it("preserves source and reports copy failure", async () => {
   const imageUrl = await waitForImage(element!);
 
   expect(renderSvg).toHaveBeenCalledWith(original, expect.objectContaining({ darkMode: false }));
-  expect(action(element!, "Expand diagram").disabled).toBe(false);
+  expect(element!.querySelector("button.preview[title]")).toBeNull();
   await selectAction(element!, "Show source");
   await expectCopyableSource(element, original, false);
   expect(mountMermaidBlocks(container)).toBe(false);
   expect(container.querySelector("openclaw-mermaid")).toBe(element);
-  await waitForSolid(() => expect(action(element, "Copy failed")).toBeDefined());
+  await waitForSolid(() => expect(action(element, "Couldn’t copy. Try again.")).toBeDefined());
 
   await selectAction(element!, "Show diagram");
   expect(imageSource(element!)).toBe(imageUrl);
 });
 
 it.each([
-  { failure: "layout", message: "Check the source or simplify the diagram" },
+  { failure: "layout", message: "Check the source or simplify it." },
   { failure: "renderer", message: "check proxy or authentication rules" },
-  { failure: "image", message: "The diagram image could not be displayed" },
+  { failure: "image", message: "Couldn’t display the diagram image" },
 ])("keeps $failure failures actionable and recovers", async ({ failure, message }) => {
   if (failure === "layout") {
     renderSvg.mockRejectedValueOnce(new Error("<script>internal parser detail</script>"));
@@ -331,7 +331,7 @@ it("keeps escaped metadata as text and replaces expanded alternatives with their
   );
   const { element } = await mount("Escaped metadata");
   await waitForImage(element);
-  await selectAction(element, "Expand diagram");
+  element.querySelector<HTMLButtonElement>("button.preview")!.click();
   const viewer = await expanded(element, title);
   const expandedDescription = () =>
     document.getElementById(viewer.querySelector("img")?.getAttribute("aria-describedby") ?? "");

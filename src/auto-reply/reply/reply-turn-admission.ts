@@ -8,6 +8,7 @@ import { resolveSessionWorkStartBlock } from "../../config/sessions/session-work
 import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import {
   bindGatewayContextResolver,
   getGatewayContextResolver,
@@ -26,7 +27,6 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
   runAfterReplyOperationClear,
   type ReplyOperation,
-  waitForReplyRunFollowupAdmission,
   waitForSessionRunIdle,
 } from "../../sessions/session-controller.js";
 import {
@@ -455,11 +455,11 @@ export async function admitReplyTurn(
           continue;
         }
         if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
-          const followupAdmission = await waitForReplyRunFollowupAdmission(
-            controllerKey,
-            waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
-            { signal: params.upstreamAbortSignal },
-          );
+          const followupAdmission = await waits.barrier({
+            phase: "followup-barrier",
+            timeoutMs: waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
+            sessionId,
+          });
           if (!followupAdmission.settled) {
             return {
               status: "skipped",
@@ -485,6 +485,7 @@ export async function admitReplyTurn(
         const activeDatabaseIdentity = activeOperation
           ? lifecycleAdmissionByOperation.get(activeOperation)?.databaseIdentity
           : undefined;
+        using _ = observeDiagnosticsTimelinePhases("reply.admission.active_run_wait");
         const ended = await waitForSessionRunIdle(controllerKey, activeWaitTimeoutMs, {
           signal: params.upstreamAbortSignal,
         });

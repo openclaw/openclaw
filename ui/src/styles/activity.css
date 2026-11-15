@@ -1,6 +1,4 @@
-/* The route host must hand the bounded shell height to the fill-height
-   workspace; otherwise a populated stream expands the main page and defeats
-   its own scroll/auto-follow owner. */
+/* Keep the Activity workspace within the shell; its session list owns scrolling. */
 main.content:where(.content--activity-page) {
   overflow: hidden;
 }
@@ -26,36 +24,12 @@ main.content:where(.content--activity-page) .content-header {
   flex: 0 0 auto;
 }
 
-/* Fill-height chain: the section, group, and stream absorb the remaining
-   viewport height inside .settings-workspace--fill-height (settings.css). */
-.settings-workspace--fill-height .activity-page {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
-}
-
-.settings-workspace--fill-height .activity-group {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.settings-workspace--fill-height .activity-stream {
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-}
-
 .activity-current-work {
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: var(--space-2);
   min-height: 0;
-  max-height: min(240px, 35vh);
   margin-bottom: var(--space-3);
 }
 
@@ -68,12 +42,9 @@ main.content:where(.content--activity-page) .content-header {
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  padding: var(--space-2) var(--space-4);
+  padding: var(--list-row-padding);
   color: var(--text);
-}
-
-.activity-current-work__row + .activity-current-work__row {
-  border-top: 1px solid var(--border);
+  min-height: var(--list-row-min-height);
 }
 
 a.activity-current-work__row:hover {
@@ -97,10 +68,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-current-work__agent,
-.activity-current-work__feedback,
-.activity-entry__text,
-.activity-entry__facts,
-.activity-entry__note {
+.activity-current-work__feedback {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
 }
@@ -112,18 +80,21 @@ a.activity-current-work__row:hover {
   padding: var(--space-3) var(--space-4);
 }
 
+/* The toolbar and feed sit on the page edge; the extra clip room keeps focus rings whole. */
 .activity-feed {
   overflow: hidden;
+  width: calc(100% + 2 * var(--space-1));
+  margin-inline: calc(-1 * var(--space-1));
+  padding-inline: var(--space-1);
 }
 
-.activity-feed__toolbar,
-.activity-live-toolbar {
+.activity-feed__toolbar {
   display: flex;
   flex: 0 0 auto;
   flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
-  padding: var(--space-3) var(--space-4);
+  padding: var(--space-3) 0;
 }
 
 /* Reserve feedback outside the scroll content so errors and retries never shift results. */
@@ -296,22 +267,11 @@ a.activity-current-work__row:hover {
   color: var(--text-strong);
 }
 
-.activity-feed__people-count,
-.activity-feed__people-group-label {
+.activity-feed__people-count {
   color: var(--muted);
   font-size: var(--control-ui-text-xs);
-}
-
-.activity-feed__people-count {
   margin-left: auto;
   font-variant-numeric: tabular-nums;
-}
-
-.activity-feed__people-group-label {
-  padding: var(--space-1) var(--space-2);
-  font-weight: 650;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 .activity-feed__main {
@@ -319,7 +279,7 @@ a.activity-current-work__row:hover {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--space-5);
+  padding-block: var(--space-5);
 }
 
 .activity-feed__identity h2,
@@ -345,8 +305,13 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
+.activity-feed__loading {
+  --skeleton-base: var(--skeleton-base-raised);
+}
+
 .activity-pulse--loading {
-  height: 108px;
+  background: var(--skeleton-base);
+  height: 128px;
 }
 
 .activity-pulse__header,
@@ -363,7 +328,6 @@ a.activity-current-work__row:hover {
 }
 
 .activity-pulse__heading svg,
-.activity-live-filter-trigger svg,
 .activity-run-inspector-back svg {
   width: 16px;
   height: 16px;
@@ -386,20 +350,43 @@ a.activity-current-work__row:hover {
   height: 7px;
   margin-right: var(--space-1);
   border-radius: 50%;
-  background: var(--ok);
+  background: var(--status-running);
 }
 
 .activity-pulse__bars {
+  position: relative;
   display: flex;
   align-items: flex-end;
   gap: 3px;
-  height: 34px;
+  height: 54px;
+  padding-top: 20px;
   margin-top: var(--space-2);
 }
 
 .activity-pulse__bar {
+  position: relative;
   flex: 1;
   border-radius: 2px 2px 0 0;
+}
+
+.activity-pulse__count {
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  translate: -50%;
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-xs);
+  font-variant-numeric: tabular-nums;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.activity-pulse__empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  font-size: var(--control-ui-text-xs);
 }
 
 .activity-pulse__bar[data-bucket="past"] {
@@ -449,18 +436,14 @@ a.activity-current-work__row:hover {
 
 .activity-feed__day > h3 {
   margin: 0 0 var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-xs);
-  font-weight: 650;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
 }
 
 .activity-feed__sessions,
 .activity-feed__viewing-list {
   overflow: hidden;
+  background: var(--card);
   border: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
 }
 
 .activity-feed__session {
@@ -468,8 +451,8 @@ a.activity-current-work__row:hover {
   grid-template-columns: 28px minmax(0, 1fr) auto;
   gap: var(--space-3);
   align-items: center;
-  min-height: 54px;
-  padding: var(--space-3) var(--space-4);
+  min-height: var(--list-row-min-height);
+  padding: var(--list-row-padding);
   color: var(--text);
 }
 
@@ -489,14 +472,10 @@ a.activity-current-work__row:hover {
 .activity-feed__recap-text {
   max-width: 88ch;
   margin: 0;
-}
-
-.activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-  background: linear-gradient(90deg, var(--text) 35%, var(--muted) 50%, var(--text) 65%);
-  background-size: 200% 100%;
-  background-clip: text;
-  color: transparent;
-  animation: text-shimmer 2.4s ease-in-out infinite;
+  /* Recap prose keeps macOS stem darkening so it does not read thin; the recap
+     note, retry action and other app chrome keep the body's antialiased smoothing. */
+  -webkit-font-smoothing: auto;
+  -moz-osx-font-smoothing: auto;
 }
 
 .activity-feed__recap-skeleton {
@@ -515,14 +494,6 @@ a.activity-current-work__row:hover {
   width: 30%;
   height: 11px;
   margin-top: var(--space-1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .activity-feed__recap[aria-busy="true"] .activity-feed__recap-text {
-    animation: none;
-    background: none;
-    color: var(--text);
-  }
 }
 
 .activity-feed__note,
@@ -613,11 +584,6 @@ a.activity-current-work__row:hover {
   color: var(--danger);
 }
 
-.activity-feed__diff {
-  display: inline-flex;
-  gap: 6px;
-}
-
 .activity-feed__additions,
 .activity-feed__deletions {
   flex: none;
@@ -626,12 +592,6 @@ a.activity-current-work__row:hover {
 
 .activity-feed__git-stale {
   color: var(--warn);
-}
-
-.activity-feed__session-row + .activity-feed__session-row,
-.activity-feed__automation-group + .activity-feed__session-row,
-.activity-feed__session-row + .activity-feed__automation-group {
-  border-top: 1px solid color-mix(in srgb, var(--border) 62%, transparent);
 }
 
 .activity-feed__automation-group {
@@ -731,7 +691,7 @@ a.activity-current-work__row:hover {
   bottom: auto;
   left: -2px;
   border-color: var(--card);
-  background: var(--accent);
+  background: var(--status-running);
   animation: pulse-subtle 1.8s ease-in-out infinite;
 }
 
@@ -744,7 +704,7 @@ a.activity-current-work__row:hover {
 .activity-feed__session-title {
   overflow: hidden;
   color: var(--text-strong);
-  font-weight: 600;
+  font-weight: var(--list-row-title-weight);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -899,11 +859,6 @@ a.activity-current-work__row:hover {
   font-size: var(--control-ui-text-sm);
 }
 
-.activity-feed__viewing-list .activity-feed__session {
-  min-height: 46px;
-  padding-block: var(--space-2);
-}
-
 .activity-feed__empty,
 .activity-feed__not-found {
   padding: var(--space-8) var(--space-4);
@@ -911,165 +866,10 @@ a.activity-current-work__row:hover {
   text-align: center;
 }
 
-.activity-count {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-
-.activity-live-autofollow {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-.activity-live-filter-trigger {
-  width: var(--settings-control-height);
-  min-width: var(--settings-control-height);
-  height: var(--settings-control-height);
-  padding: 0;
-}
-
-.activity-live-filter-trigger.active {
+.activity-feed__people-trigger.active {
   border-color: var(--accent);
   color: var(--accent);
   background: var(--accent-subtle);
-}
-
-.activity-live-filter-popover {
-  --oc-overlay-max-width: min(280px, calc(100vw - 32px));
-  --oc-popover-padding: 0;
-}
-
-.activity-live-filter-popover__panel {
-  width: min(260px, calc(100vw - 32px));
-  padding: var(--space-3);
-}
-
-.activity-live-filter-popover__panel .settings-select {
-  width: 100%;
-}
-
-.activity-status-filters {
-  display: inline-flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-}
-
-.activity-status-filter {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-  color: var(--text);
-  font-size: var(--control-ui-text-sm);
-  cursor: var(--cursor-action);
-}
-
-.activity-status-filter input {
-  margin: 0;
-}
-
-.activity-status-filter:focus-within,
-.activity-entry__summary:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
-}
-
-.activity-stream {
-  min-height: 260px;
-  max-height: calc(100vh - 310px);
-  overflow: auto;
-  border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.activity-empty {
-  display: grid;
-  place-items: center;
-  min-height: 220px;
-  padding: var(--space-5);
-  color: var(--muted);
-  text-align: center;
-}
-
-.activity-entry {
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-
-.activity-entry:last-child {
-  border-bottom: 0;
-}
-
-.activity-entry[open] {
-  background: color-mix(in srgb, var(--bg-elevated) 48%, transparent);
-}
-
-.activity-entry__summary {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  gap: var(--space-2);
-  align-items: center;
-  padding: var(--space-3) var(--space-4);
-  list-style: none;
-}
-
-.activity-entry__summary::-webkit-details-marker {
-  display: none;
-}
-
-.activity-entry__summary::marker {
-  content: "";
-}
-
-.activity-entry__summary:hover {
-  background: var(--surface-hover);
-}
-
-.activity-entry__chevron {
-  display: inline-flex;
-  width: 18px;
-  height: 18px;
-  color: var(--muted);
-  transition: transform var(--duration-fast) ease;
-}
-
-.activity-entry[open] .activity-entry__chevron {
-  transform: rotate(90deg);
-}
-
-.activity-entry__chevron svg {
-  width: 18px;
-  height: 18px;
-}
-
-.activity-entry__main {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.activity-entry__title,
-.activity-entry__meta,
-.activity-entry__facts {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-}
-
-.activity-entry__tool,
-.activity-entry__text,
-.activity-entry__facts span,
-.activity-entry__facts a {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
-.activity-entry__run-link {
-  color: inherit;
 }
 
 .activity-run-inspector-back {
@@ -1087,54 +887,20 @@ a.activity-current-work__row:hover {
   color: var(--text);
 }
 
-.activity-entry__meta {
-  justify-content: flex-end;
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  white-space: nowrap;
-}
-
-.activity-entry__body {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0 var(--space-4) var(--space-4) 42px;
-}
-
-.activity-entry__preview {
-  max-height: 280px;
-  margin: 0;
-  overflow: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--space-2);
-  color: var(--text);
-  background: var(--bg);
-  font-family: var(--mono);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.5;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-}
-
 @media (max-width: 768px) {
   .activity-feed {
     height: auto;
     overflow: visible;
   }
 
-  .activity-feed__search,
-  .activity-live-search {
+  .activity-feed__search {
     flex-basis: 100%;
     order: -1;
   }
 
-  .activity-live-filter-trigger {
-    margin-left: auto;
-  }
-
   .activity-feed__main {
     overflow: visible;
-    padding: var(--space-4);
+    padding-block: var(--space-4);
   }
 
   .activity-feed__session {
@@ -1147,20 +913,6 @@ a.activity-current-work__row:hover {
 
   .activity-feed__session-time {
     grid-column: 2;
-  }
-
-  .activity-entry__meta {
-    white-space: normal;
-    grid-column: 2;
-    justify-content: flex-start;
-  }
-
-  .activity-entry__summary {
-    grid-template-columns: 18px minmax(0, 1fr);
-  }
-
-  .activity-stream {
-    max-height: calc(100vh - 360px);
   }
 }
 
@@ -1180,5 +932,161 @@ a.activity-current-work__row:hover {
     display: block;
     width: auto;
     height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Search and person share a row; the time range takes the full row below. */
+  .activity-feed__search {
+    flex: 1 1 0;
+    min-width: 0;
+  }
+
+  .activity-feed__search input {
+    text-overflow: ellipsis;
+  }
+
+  .activity-feed__people-control {
+    margin-left: 0;
+  }
+
+  .activity-feed__time-filter {
+    display: flex;
+    flex: 1 0 100%;
+    order: 1;
+  }
+
+  .activity-feed__time-filter > .settings-segmented__btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger {
+    width: var(--settings-control-height);
+    min-width: 0;
+    max-width: none;
+    height: var(--settings-control-height);
+    padding: 0;
+    justify-content: center;
+  }
+
+  .activity-feed__people-trigger svg {
+    width: 16px;
+    height: 16px;
+  }
+
+  /* The page scrolls here, so Active sessions takes the height it needs instead of
+     clipping a row inside a second scroller. */
+  .activity-current-work__rows {
+    overflow: clip;
+  }
+
+  /* Live rows separate by spacing, not hairlines. */
+
+  /* Feedback keeps its reserved box but no longer holds a gap open: it floats over
+     the content when there is something to say, so results still never shift. */
+  .activity-feed__feedback {
+    position: relative;
+    z-index: 1;
+    margin: 0 0 calc(-1 * var(--settings-control-height));
+    pointer-events: none;
+  }
+
+  .activity-feed__feedback:has(> span:not(:empty), > button) {
+    padding-inline: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--card);
+    pointer-events: auto;
+  }
+
+  .activity-feed__toolbar {
+    padding-block: var(--space-3);
+  }
+
+  .activity-feed__main {
+    padding-top: 0;
+  }
+
+  /* Rows: title, one meta line, recap, with Inspect run closing the last line. */
+  .activity-feed__session {
+    align-items: start;
+  }
+
+  .activity-feed__automation-group {
+    align-items: center;
+  }
+
+  .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
+    padding-right: var(--space-4);
+  }
+
+  .activity-feed__session-headline {
+    color: var(--muted);
+    font-size: var(--control-ui-text-sm);
+  }
+
+  .activity-feed__session-meta--line {
+    align-items: baseline;
+    gap: var(--space-1);
+    white-space: nowrap;
+  }
+
+  .activity-feed__session-meta--line > * + *::before {
+    margin-inline-end: var(--space-1);
+    content: "\00b7";
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-owner {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-scope {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  .activity-feed__session-meta--line > .activity-feed__session-source,
+  .activity-feed__session-meta--line > .activity-feed__session-time {
+    display: block;
+    flex: none;
+    max-width: none;
+  }
+
+  .activity-feed__session-meta--line .agent-row-chip__avatar {
+    display: none;
+  }
+
+  .activity-feed__session-meta--line openclaw-agent-row-chip {
+    vertical-align: baseline;
+  }
+
+  /* Inspect run shares a short recap's line; otherwise it wraps below at one fixed gap,
+     so text, loading and note states all place it the same way. */
+  .activity-feed__recap:not(.activity-feed__recap-skeleton) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .activity-feed__recap-text {
+    min-width: 0;
+  }
+
+  .activity-feed__recap > .activity-feed__recap-skeleton {
+    flex: 1 0 100%;
+  }
+
+  .activity-feed__inspect-run {
+    position: static;
+    flex: none;
+    margin-inline-start: auto;
+    opacity: 1;
+    pointer-events: auto;
+    translate: none;
   }
 }

@@ -2,15 +2,18 @@ import type { APIEmbed, APIMessageTopLevelComponent } from "discord-api-types/v1
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { renderPresentationForDelivery } from "openclaw/plugin-sdk/interactive-runtime";
+import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import {
+  appendReplyMediaFailures,
   hasOutboundReplyContent,
+  type ReplyMediaFailure,
   resolveSendableOutboundReplyParts,
   resolveTextChunksWithFallback,
 } from "openclaw/plugin-sdk/reply-payload";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
+import { LocalMediaAccessError, loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { resolveDiscordMaxLinesPerMessage } from "../accounts.js";
 import { chunkDiscordTextWithMode } from "../chunk.js";
 import { registerDiscordComponentEntries } from "../components-registry.js";
@@ -245,27 +248,42 @@ export async function deliverDiscordInteractionReply(params: {
     }
   };
 
-  const files = reply.hasMedia
-    ? await Promise.all(
-        reply.mediaUrls.map(async (url) => {
-          const loaded = await loadWebMedia(url, {
-            localRoots: params.mediaLocalRoots,
-          });
-          return {
-            name: loaded.fileName ?? "upload",
-            data: loaded.buffer,
-            contentType: loaded.contentType,
-          };
-        }),
-      )
-    : undefined;
+  const mediaFailures: ReplyMediaFailure[] = [];
+  const loadedFiles = await Promise.all(
+    reply.mediaUrls.map(async (url, index) => {
+      try {
+        const loaded = await loadWebMedia(url, { localRoots: params.mediaLocalRoots });
+        return {
+          name: loaded.fileName ?? "upload",
+          data: loaded.buffer,
+          contentType: loaded.contentType,
+        };
+      } catch (error) {
+        // Nothing of this reply is sent yet; keep its text with a receipt for this file.
+        if (!(error instanceof MediaFetchError || error instanceof LocalMediaAccessError)) {
+          throw error;
+        }
+        logVerbose(`discord: interaction media not attached: ${String(error)}`);
+        mediaFailures[index] = {
+          code: "delivery-failed",
+          kind: "document",
+          label:
+            (URL.canParse(url) ? new URL(url).pathname : url).split(/[\\/]/).findLast(Boolean) ??
+            `Attachment ${index + 1}`,
+        };
+        return undefined;
+      }
+    }),
+  );
+  const files = loadedFiles.filter((file) => file !== undefined);
+  const text = appendReplyMediaFailures(reply.text, mediaFailures.filter(Boolean)) ?? "";
 
-  if (!files && !reply.hasText && !hasFirstMessageParts) {
+  if (files.length === 0 && !text.trim() && !hasFirstMessageParts) {
     return false;
   }
   const chunks = resolveTextChunksWithFallback(
-    reply.text,
-    chunkDiscordTextWithMode(reply.text, {
+    text,
+    chunkDiscordTextWithMode(text, {
       maxChars: textLimit,
       maxLines: maxLinesPerMessage,
       chunkMode,
@@ -275,7 +293,7 @@ export async function deliverDiscordInteractionReply(params: {
     chunks.push("");
   }
   for (const [index, chunk] of chunks.entries()) {
-    const chunkFiles = index === 0 ? files : undefined;
+    const chunkFiles = index === 0 && files.length > 0 ? files : undefined;
     if (!chunk.trim() && !chunkFiles && (payloadDelivered || !hasFirstMessageParts)) {
       continue;
     }

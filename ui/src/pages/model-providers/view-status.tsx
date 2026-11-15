@@ -1,4 +1,6 @@
 import type { ModelAuthStatusProfile } from "../../api/types.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
+import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -16,15 +18,26 @@ export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
   );
 }
 
+/** For OAuth, the auth owner reports `expired` only while a refresh claim may still settle. */
+export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean {
+  return profile.type === "oauth" && profile.reasonCode === "expired";
+}
+
+/** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
+export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
+  return (
+    profile.type === "oauth" &&
+    (profile.reasonCode === "refresh_failed" || profile.reasonCode === "missing_credential")
+  );
+}
+
 export function profileAuthProblem(profile: ModelAuthStatusProfile): string | undefined {
-  if (profile.type !== "oauth") {
+  if (!needsOAuthSignIn(profile)) {
     return undefined;
   }
-  if (profile.reasonCode === "missing_credential") {
-    return "modelProviders.status.signInAgain";
-  }
-  // The existing reason covers both pending and failed refresh markers, not just rejection.
-  return profile.reasonCode === "expired" ? "modelProviders.status.signInUnavailable" : undefined;
+  return profile.reasonCode === "refresh_failed"
+    ? "modelProviders.status.signInExpired"
+    : "modelProviders.status.missing";
 }
 
 const AUTH_STATUS: Record<
@@ -71,6 +84,20 @@ export function isProviderUsable(card: ModelProviderCard): boolean {
   );
 }
 
+/** Setup owns the page until a usable model exists; its call to action is the only one. */
+export function needsModelSetup(props: {
+  connected: boolean;
+  loading: boolean;
+  catalogDiscovering?: boolean;
+  configuredModels: readonly { available?: boolean }[];
+}): boolean {
+  return (
+    (props.connected || !props.loading) &&
+    !props.catalogDiscovering &&
+    !props.configuredModels.some((model) => model.available !== false)
+  );
+}
+
 export function needsAuthAttention(card: ModelProviderCard): boolean {
   if (card.auth?.kind === "missing") {
     return true;
@@ -79,8 +106,25 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
     return false;
   }
   // A rollup has no credential type. Unknown or mixed expiry retains its warning.
+  // A refresh in progress is routine too; it settles without the operator.
   const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return expiring.length === 0 || !expiring.every(isAccessTokenExpiry);
+  return (
+    expiring.length === 0 ||
+    !expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
+  );
+}
+
+/**
+ * The row's status already speaks for an account that is the provider's only credential.
+ * With other credentials the row can't say which one failed, so a failing account keeps its word.
+ */
+export function providerStatusCoversAccount(card: ModelProviderCard): boolean {
+  return (
+    card.profiles.length === 1 &&
+    !card.apiKey &&
+    card.configApiKeys.length === 0 &&
+    (card.catalogStatus === "auth-rejected" || needsAuthAttention(card))
+  );
 }
 
 export function hasVerifiedProvider(card: ModelProviderCard): boolean {
@@ -88,20 +132,6 @@ export function hasVerifiedProvider(card: ModelProviderCard): boolean {
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
-  if (card.checkingModels) {
-    return (
-      <SettingsStatus
-        kind="muted"
-        dot={false}
-        label={
-          <span class="model-providers__checking" role="status">
-            <span class="btn__spinner" aria-hidden="true" />
-            <span>{t("modelProviders.status.checking")}</span>
-          </span>
-        }
-      />
-    );
-  }
   if (card.catalogStatus === "auth-rejected") {
     // The card-wide outcome does not identify which saved credential was rejected.
     return <SettingsStatus kind="danger" label={t("modelProviders.status.denied")} />;
@@ -115,18 +145,19 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (!isProviderUsable(card)) {
     return renderAuthStatus(card.auth);
   }
-  const verified = hasVerifiedProvider(card);
-  const ready = verified && card.availableModelCount > 0;
+  const attention = providerUsageAttention(card.usage);
+  if (attention) {
+    return <SettingsStatus kind={attention.kind} label={attention.label} />;
+  }
+  // Unverified credentials have nothing to report; the row already names them.
+  if (!hasVerifiedProvider(card)) {
+    return undefined;
+  }
+  const ready = card.availableModelCount > 0;
   return (
     <SettingsStatus
       kind={ready ? "ok" : "muted"}
-      label={t(
-        ready
-          ? "modelProviders.status.ready"
-          : verified
-            ? "modelProviders.status.ok"
-            : "modelProviders.status.configured",
-      )}
+      label={t(ready ? "modelProviders.status.ready" : "modelProviders.status.ok")}
     />
   );
 }
@@ -137,13 +168,17 @@ export function renderMutationMessage(message: ModelProviderRowMessage | undefin
   }
   return (
     <>
-      <div class={["callout", message.kind]} role={message.kind === "error" ? "alert" : "status"}>
+      <InlineAlert
+        tone={
+          message.kind === "error" ? "danger" : message.kind === "warning" ? "warning" : "success"
+        }
+      >
         {message.text}
-      </div>
+      </InlineAlert>
       {message.warning ? (
-        <div class="callout warning" role="status">
+        <InlineAlert tone="warning" role="status">
           {message.warning}
-        </div>
+        </InlineAlert>
       ) : undefined}
     </>
   );

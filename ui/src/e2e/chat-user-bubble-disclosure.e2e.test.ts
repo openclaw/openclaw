@@ -578,10 +578,10 @@ suite.define(() => {
         await tail.scrollIntoViewIfNeeded();
         expect(await tail.textContent()).toBe(paragraphs.at(-1));
         const code = markdown.locator("pre").last();
-        await page.keyboard.press("Shift+Tab");
-        expect(await code.evaluate((element) => element === document.activeElement)).toBe(true);
-        await page.keyboard.press("ArrowRight");
-        await expect.poll(() => code.evaluate((element) => element.scrollLeft)).toBeGreaterThan(0);
+        expect(
+          await code.evaluate((element) => element.scrollWidth - element.clientWidth),
+        ).toBeLessThanOrEqual(1);
+        expect(await code.textContent()).toBe(paragraphs[0] + "\n");
         if (captureUiProofEnabled) {
           await page.screenshot({
             path: path.join(
@@ -597,10 +597,6 @@ suite.define(() => {
         expect(await content.evaluate((element) => element.clientHeight)).toBe(
           initialCollapsedHeight,
         );
-        const scrollTop = await content.evaluate((element) => element.scrollTop);
-        await page.keyboard.press("Shift+Tab");
-        expect(await code.evaluate((element) => element === document.activeElement)).toBe(false);
-        expect(await content.evaluate((element) => element.scrollTop)).toBe(scrollTop);
         const siblings = page.locator(".chat-group .chat-bubble");
         expect(await siblings.nth(1).textContent()).toContain("Short follow-up request.");
         expect(await siblings.nth(2).textContent()).toContain("The sample review is complete.");

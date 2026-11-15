@@ -207,6 +207,7 @@ export function projectModelCatalogEntryForRoute(params: {
         : {}),
       ...(thinkingPolicy !== undefined ? { [PREPARED_THINKING_POLICY]: thinkingPolicy } : {}),
       ...(donor?.input !== undefined ? { input: donor.input } : {}),
+      ...(donor?.inference ? { inference: donor.inference } : {}),
     },
     params.overrides,
   );

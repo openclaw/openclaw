@@ -259,6 +259,11 @@ test.each([
     });
     const key = "agent:main:dashboard:worktree-allocation-outcome";
     const owner = { ownerKind: "session" as const, ownerId: key, name: "allocation-outcome" };
+    const { storePath } = await createSessionStoreDir();
+    testState.agentConfig = { workspace };
+    testState.sessionConfig = { sharing: { drafts: true } };
+    const cfg = loadGatewayTestConfig();
+    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(cfg);
     const worktree =
       source === "empty"
         ? await managedWorktrees.createEmpty(owner)
@@ -267,11 +272,6 @@ test.each([
     if (change === "restore") {
       await managedWorktrees.remove({ id: worktree.id, reason: "manual-delete" });
     }
-    const { storePath } = await createSessionStoreDir();
-    testState.agentConfig = { workspace };
-    testState.sessionConfig = { sharing: { drafts: true } };
-    const cfg = loadGatewayTestConfig();
-    (await getGatewayConfigModule()).setRuntimeConfigSnapshot(cfg);
     const entered = createDeferredCore();
     const proceed = createDeferredCore();
     const beforeAllocation = async () => {

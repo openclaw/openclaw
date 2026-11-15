@@ -66,6 +66,7 @@ type RenderContext =
   | { kind: "pre"; parts: string[] };
 
 type RenderState = {
+  extractMode?: ExtractMode;
   linksAsText?: boolean;
   title?: string;
   preBlocks: string[];
@@ -86,6 +87,26 @@ function escapePreMarkerText(value: string): string {
   // Internal pre markers use single NULs. Double NULs in fetched text so even
   // entity-decoded marker-like prose cannot be mistaken for a placeholder.
   return value.replaceAll("\u0000", "\u0000\u0000");
+}
+
+function escapeMarkdownLinkLabel(value: string): string {
+  // Brackets in fetched text must stay inside this anchor's label.
+  return value.replace(/[\\[\]]/g, "\\$&");
+}
+
+function escapeMarkdownLinkDestination(href: string): string {
+  let depth = 0;
+  for (const character of href) {
+    depth += character === "(" ? 1 : character === ")" ? -1 : 0;
+    if (depth < 0) {
+      break;
+    }
+  }
+  // Protect URL whitespace from prose normalization; angle form permits unmatched parentheses.
+  const destination = escapePreMarkerText(href)
+    .replace(/[\\<>]/g, "\\$&")
+    .replace(/\s/g, encodeURIComponent);
+  return depth === 0 && !/\s/.test(href) ? destination : `<${destination}>`;
 }
 
 function appendText(stack: RenderContext[], value: string): void {
@@ -114,8 +135,11 @@ function breakLineBeforeBlock(stack: RenderContext[]): void {
   }
 }
 
-function formatPreformattedMarkdown(value: string): string {
+function formatPreformattedBlock(value: string, extractMode?: ExtractMode): string {
   const code = value.replace(/\r\n?/g, "\n");
+  if (extractMode === "text") {
+    return code;
+  }
   let longestBacktickRun = 0;
   let currentBacktickRun = 0;
   for (const character of code) {
@@ -130,9 +154,11 @@ function formatPreformattedMarkdown(value: string): string {
   return `${fence}\n${code}${code.endsWith("\n") ? "" : "\n"}${fence}`;
 }
 
-function restorePreformattedMarkdown(value: string, state: RenderState): string {
+function restorePreformattedBlocks(value: string, state: RenderState): string {
   return value.replace(/\0(?:\0|openclaw-pre-(\d+)\0)/g, (_match, index: string | undefined) =>
-    index === undefined ? "\0" : formatPreformattedMarkdown(state.preBlocks[Number(index)]!),
+    index === undefined
+      ? "\0"
+      : formatPreformattedBlock(state.preBlocks[Number(index)]!, state.extractMode),
   );
 }
 
@@ -164,8 +190,8 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
       return;
     case "anchor":
       parent.parts.push(
-        !state.linksAsText && context.href && label
-          ? `[${label}](${escapePreMarkerText(context.href)})`
+        state.extractMode !== "text" && !state.linksAsText && context.href && label
+          ? `[${escapeMarkdownLinkLabel(label)}](${escapeMarkdownLinkDestination(context.href)})`
           : label || escapePreMarkerText(context.href || ""),
       );
       return;
@@ -174,14 +200,15 @@ function closeContext(context: RenderContext, parent: RenderContext, state: Rend
         parent.parts.push(label);
         parent.hasText ||= Boolean(label);
       } else {
-        parent.parts.push(`\n${"#".repeat(context.level)} ${label}\n`);
+        const prefix = state.extractMode === "text" ? "" : `${"#".repeat(context.level)} `;
+        parent.parts.push(`\n${prefix}${label}\n`);
       }
       return;
     case "list-item":
       if (parent.kind === "anchor") {
         parent.hasText ||= Boolean(label);
       }
-      parent.parts.push(`\n- ${label}`);
+      parent.parts.push(`\n${state.extractMode === "text" ? "" : "- "}${label}`);
   }
 }
 
@@ -224,11 +251,15 @@ function pushContext(
 
 export function htmlToMarkdown(
   html: string,
-  options?: { linksAsText?: boolean },
+  options?: { linksAsText?: boolean; extractMode?: ExtractMode },
 ): { text: string; title?: string } {
   const root: RenderContext = { kind: "root", parts: [] };
   const stack: RenderContext[] = [root];
-  const state: RenderState = { preBlocks: [], linksAsText: options?.linksAsText };
+  const state: RenderState = {
+    preBlocks: [],
+    linksAsText: options?.linksAsText,
+    extractMode: options?.extractMode,
+  };
   const tableRowCellCounts: number[] = [];
 
   for (let i = 0; i < html.length;) {
@@ -350,8 +381,8 @@ export function htmlToMarkdown(
   }
 
   return {
-    text: restorePreformattedMarkdown(normalizeWhitespace(root.parts.join("")), state),
-    title: state.title ? restorePreformattedMarkdown(state.title, state) : state.title,
+    text: restorePreformattedBlocks(normalizeWhitespace(root.parts.join("")), state),
+    title: state.title ? restorePreformattedBlocks(state.title, state) : state.title,
   };
 }
 
@@ -513,6 +544,11 @@ export function markdownToText(markdown: string): string {
   text = text.replace(/^#{1,6}\s+/gm, "");
   text = text.replace(/^[^\S\n]*[-*+]\s+/gm, "");
   text = text.replace(/^[^\S\n]*\d+\.\s+/gm, "");
+  // Resolve CommonMark backslash escapes only after the structure strips: the
+  // strips above must see the escapes so literal punctuation is not
+  // reinterpreted as headings, lists, or links; hidden code content stays raw
+  // because the final replacement output is not rescanned.
+  text = text.replace(/\\([!-/:-@[-`{-~])/g, "$1");
   // Escaped input NUL pairs stay paired through prose formatting, so only our
   // single-NUL markers can restore code. Replacement output is not rescanned.
   return normalizeWhitespace(text).replace(
@@ -537,14 +573,8 @@ export async function extractBasicHtmlContent(params: {
   extractMode: ExtractMode;
 }): Promise<{ text: string; title?: string } | null> {
   const cleanHtml = await sanitizeHtml(params.html);
-  // HTML labels are literal text, not authored Markdown. Do not serialize destinations
-  // only to parse them back out in text mode. Keep Markdown rendering unchanged.
-  const rendered = htmlToMarkdown(cleanHtml, { linksAsText: params.extractMode === "text" });
-  const text =
-    stripInvisibleUnicode(
-      params.extractMode === "text" ? markdownToText(rendered.text) : rendered.text,
-    ) ||
-    stripInvisibleUnicode(rendered.title ?? "") ||
-    stripInvisibleUnicode(rendered.text);
+  // HTML source text is literal, so select the output before adding Markdown syntax.
+  const rendered = htmlToMarkdown(cleanHtml, { extractMode: params.extractMode });
+  const text = stripInvisibleUnicode(rendered.text) || stripInvisibleUnicode(rendered.title ?? "");
   return text ? { text, title: rendered.title } : null;
 }

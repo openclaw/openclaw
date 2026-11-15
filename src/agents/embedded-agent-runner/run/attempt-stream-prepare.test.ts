@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { Agent } from "../../../../packages/agent-core/src/agent.js";
 import { createMessageInjectionAuthority } from "../../../auto-reply/reply/message-injection-authority.js";
 import type { Context } from "../../../llm/types.js";
 import { createReplyOperation } from "../../../sessions/session-controller.js";
@@ -105,6 +106,62 @@ async function useRealSubscription() {
 }
 
 describe("prepareEmbeddedAttemptStream", () => {
+  it.each(["accepted", "revise", "cancel", "unsubscribe"])(
+    "retains presentation only for the current accepted candidate (%s)",
+    async (outcome) => {
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      const presentation = { blocks: [{ type: "text" as const, text: "Summary" }] };
+      mocks.runBeforeFinalizeHook.mockImplementation(async () => {
+        entered.resolve();
+        await release.promise;
+        return outcome === "revise"
+          ? { action: "revise", reason: "Correct the answer" }
+          : { action: "continue", finalPresentation: presentation };
+      });
+      const controller = new AbortController();
+      const prepared = prepareCatalogExecutor({
+        runAbortController: controller,
+        hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
+      });
+      const event = {
+        ...createBeforeFinalizeEvent(),
+        lastAssistant: makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Draft answer" }],
+          stopReason: "stop",
+          errorMessage: undefined,
+        }),
+      };
+      const subscription = mocks.subscribe.mock.calls.at(-1)?.[0] as {
+        onBeforeTerminalDelivery: (event: unknown) => Promise<unknown>;
+      };
+      const decision = subscription.onBeforeTerminalDelivery(event);
+      try {
+        await entered.promise;
+        expect(mocks.runBeforeFinalizeHook.mock.calls[0]?.[0].event).toMatchObject({
+          supportsFinalPresentation: true,
+        });
+        if (outcome === "cancel") {
+          controller.abort();
+        } else if (outcome === "unsubscribe") {
+          prepared.subscription.unsubscribe();
+        }
+        release.resolve();
+        await decision;
+        expect(prepared.getFinalPresentation(event.lastAssistant)).toEqual(
+          outcome === "accepted" ? presentation : undefined,
+        );
+        expect(prepared.getFinalPresentation({ ...event.lastAssistant })).toBeUndefined();
+        await subscription.onBeforeTerminalDelivery({ ...event, isError: true });
+        expect(prepared.getFinalPresentation(event.lastAssistant)).toBeUndefined();
+      } finally {
+        release.resolve();
+        await decision;
+        prepared.subscription.unsubscribe();
+      }
+    },
+  );
+
   afterEach(async () => {
     const { testing } = await import("../runs.test-support.js");
     testing.resetActiveEmbeddedRuns();
@@ -207,6 +264,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       messageChannel: projected.messageChannel,
       hookRunner: projected.hookRunner,
       reasoningMode: projected.reasoningMode,
+      getUserTranscriptContexts: projected.getUserTranscriptContexts,
       thinkingLevel: projected.thinkingLevel,
       hasDeliveredMessageToolOnlySourceReply: projected.hasDeliveredMessageToolOnlySourceReply,
       onDeliveredMessageToolOnlySourceReply: projected.onDeliveredMessageToolOnlySourceReply,
@@ -400,7 +458,7 @@ describe("prepareEmbeddedAttemptStream", () => {
     expect(prepared.queueHandle.readSessionForkContext?.()?.messages).toBe(session.messages);
 
     const { prepareEmbeddedSessionForkContext } = await import("../session-fork-context.js");
-    const context = await prepareEmbeddedSessionForkContext({
+    const { context } = await prepareEmbeddedSessionForkContext({
       target: {
         agentId: "main",
         sessionId: "session-output-schema",
@@ -590,6 +648,7 @@ describe("prepareEmbeddedAttemptStream", () => {
             execute: async () => ({ content: [{ type: "text", text: "clean" }] }),
           } as never,
           toolName: "exec",
+          toolId: "openclaw:core:exec",
           source: "openclaw",
           toolCallId: "progress-detail-exec",
           input: { command: "git status" },
@@ -636,7 +695,7 @@ describe("prepareEmbeddedAttemptStream", () => {
           beforeAgentFinalizeRevisionAttempts: 0,
         },
         activeSession: {
-          agent: { hasQueuedMessages: () => false },
+          agent: new Agent({ streamFn: streamMocks.streamSimple }),
           isStreaming: false,
           messages,
           pendingMessageCount: 0,
@@ -688,7 +747,7 @@ describe("prepareEmbeddedAttemptStream", () => {
   it("keeps already-started steering authoritative over finalization", async () => {
     let resolveSteer: (() => void) | undefined;
     const activeSession = {
-      agent: { hasQueuedMessages: () => false },
+      agent: new Agent({ streamFn: streamMocks.streamSimple }),
       isStreaming: false,
       messages: [],
       pendingMessageCount: 0,

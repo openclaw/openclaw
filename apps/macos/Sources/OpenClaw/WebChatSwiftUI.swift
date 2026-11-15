@@ -190,6 +190,20 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
             agentID: target.agentID)
     }
 
+    func requestHistory(
+        sessionKey: String,
+        cursor: String) async throws -> OpenClawChatHistoryPayload
+    {
+        guard let route = await self.connection.captureRoute() else { throw CancellationError() }
+        let target = self.sessionTarget(for: sessionKey)
+        return try await self.connection.chatHistory(
+            sessionKey: target.sessionKey,
+            agentID: target.agentID,
+            cursor: cursor,
+            maxBytes: 256 * 1024,
+            ifCurrentRoute: route)
+    }
+
     func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
         guard let lease = await self.connection.captureServerLease() else { return nil }
         return await self.connection.supportsServerMethod(method, ifCurrentServerLease: lease)
@@ -719,7 +733,8 @@ struct MacGatewayChatTransport: OpenClawChatGatewayTransport {
                     webChatSwiftLogger.error("gateway refresh failed \(error.localizedDescription, privacy: .public)")
                 }
 
-                let stream = await self.connection.subscribe()
+                let stream = await self.connection.subscribe(
+                    matching: { OpenClawChatGatewayPayloadCodec.acceptsEvent($0) })
                 var previousLease: GatewayConnection.ServerLease?
                 for await delivery in stream {
                     if Task.isCancelled {
@@ -776,7 +791,7 @@ private enum MacChatMessageSpeechError: LocalizedError {
 }
 
 @MainActor
-private struct MacChatSurface: View {
+struct MacChatSurface: View {
     let windowCommands: OpenClawChatWindowCommands
     let sidebarPresence: MacGatewaySidebarPresence?
     let gatewayTarget: DashboardGatewayTarget?
@@ -828,7 +843,12 @@ private struct MacChatSurface: View {
             displayOptions: self.displayOptions,
             emptyAssistantIntro: Self.emptyAssistantIntro,
             emptyAssistantPrompts: Self.emptyAssistantPrompts,
-            talkControl: self.talkControl,
+            talkControl: Self.talkControl(
+                usesPrimaryAppRuntime: self.usesPrimaryAppRuntime,
+                appState: self.appState,
+                talkController: self.talkController,
+                audioInputCatalog: self.audioInputCatalog,
+                isGatewayConnected: self.viewModel.healthOK),
             voiceNoteControl: self.voiceNoteControl,
             speech: self.speech,
             mediaPlaybackAllowed: {
@@ -855,24 +875,42 @@ private struct MacChatSurface: View {
             .onDisappear { self.audioInputCatalog.stop() }
     }
 
-    private var talkControl: OpenClawChatTalkControl? {
-        guard self.usesPrimaryAppRuntime else { return nil }
+    static func talkControl(
+        usesPrimaryAppRuntime: Bool,
+        appState: AppState,
+        talkController: TalkModeController,
+        audioInputCatalog: MacChatAudioInputCatalog,
+        isGatewayConnected: Bool) -> OpenClawChatTalkControl?
+    {
+        guard usesPrimaryAppRuntime else { return nil }
+        let statusText: String = if !appState.talkEnabled {
+            String(localized: "Talk mode off")
+        } else if talkController.isPaused {
+            String(localized: "Talk mode paused")
+        } else {
+            switch talkController.phase {
+            case .idle: String(localized: "Talk mode ready")
+            case .listening: String(localized: "Listening")
+            case .thinking: String(localized: "Thinking")
+            case .speaking: String(localized: "Speaking")
+            }
+        }
         return OpenClawChatTalkControl(
-            isEnabled: self.appState.talkEnabled,
-            isListening: !self.talkController.isPaused && self.talkController.phase == .listening,
-            isSpeaking: !self.talkController.isPaused && self.talkController.phase == .speaking,
-            isGatewayConnected: self.viewModel.healthOK,
-            statusText: self.talkStatusText,
+            isEnabled: appState.talkEnabled,
+            isListening: !talkController.isPaused && talkController.phase == .listening,
+            isSpeaking: !talkController.isPaused && talkController.phase == .speaking,
+            isGatewayConnected: isGatewayConnected,
+            statusText: statusText,
             // macOS exposes live phase but not the runtime's resolved TTS provider.
             // An empty label avoids presenting stale config as current state.
             providerLabel: "",
-            level: self.talkController.level,
-            partialTranscript: self.talkController.partialTranscript,
-            recentTranscript: self.talkController.recentTranscripts,
-            inputDevices: self.audioInputCatalog.chatDevices,
-            selectedInputDeviceID: self.appState.voiceWakeMicID.isEmpty ? nil : self.appState.voiceWakeMicID,
+            levelProvider: { talkController.level },
+            partialTranscript: talkController.partialTranscript,
+            recentTranscript: talkController.recentTranscripts,
+            inputDevices: audioInputCatalog.chatDevices,
+            selectedInputDeviceID: appState.voiceWakeMicID.isEmpty ? nil : appState.voiceWakeMicID,
             selectInputDevice: { deviceID in
-                self.audioInputCatalog.select(deviceID, state: self.appState)
+                audioInputCatalog.select(deviceID, state: appState)
             },
             toggle: { sessionKey in
                 WebChatManager.shared.recordActiveSessionKey(sessionKey)
@@ -899,22 +937,6 @@ private struct MacChatSurface: View {
             // Enabled Talk Mode owns microphone admission through teardown,
             // even while its visible phase is thinking or speaking.
             isTalkActive: self.appState.talkEnabled)
-    }
-
-    private var talkStatusText: String {
-        guard self.usesPrimaryAppRuntime else {
-            return String(localized: "Talk mode uses the primary Gateway window")
-        }
-        guard self.appState.talkEnabled else { return String(localized: "Talk mode off") }
-        if self.talkController.isPaused {
-            return String(localized: "Talk mode paused")
-        }
-        return switch self.talkController.phase {
-        case .idle: String(localized: "Talk mode ready")
-        case .listening: String(localized: "Listening")
-        case .thinking: String(localized: "Thinking")
-        case .speaking: String(localized: "Speaking")
-        }
     }
 
     private static let emptyAssistantIntro = String(localized: "What would you like to work on?")
@@ -955,6 +977,10 @@ final class WebChatSwiftUIWindowController: NSObject, NSWindowDelegate {
     func showCommandPalette() {
         guard self.isKeyChatWindow, self.window?.attachedSheet == nil else { return }
         self.windowCommands.isCommandPalettePresented = true
+    }
+
+    func persistComposerDraft() async {
+        await self.viewModel.persistComposerDraft()
     }
 
     private let conversationController: NativeConversationController?

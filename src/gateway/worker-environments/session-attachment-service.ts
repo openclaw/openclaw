@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../../config/types.js";
 import { hasLiveAgentRunContext, listAgentRunsForSession } from "../../infra/agent-run-registry.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { createWorkerEnvironmentAccess } from "./environment-access.js";
+import { CONVERSATION_CLEANUP_PARKED } from "./environment-errors.js";
 import type { NodeWorkerTunnelManager } from "./node-worker-tunnel.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
@@ -88,7 +89,6 @@ export function createWorkerEnvironmentSessionAttachments(
       attempts: number;
       nextAttemptAtMs: number;
       lastError: string;
-      parked?: string;
     }
   >();
   const cleanupRetry = (record: WorkerEnvironmentRecord) => {
@@ -104,17 +104,32 @@ export function createWorkerEnvironmentSessionAttachments(
     }
     return retry;
   };
-  const parkCleanup = (
+  const isCleanupParked = (record: WorkerEnvironmentRecord) =>
+    record.lastError?.startsWith(CONVERSATION_CLEANUP_PARKED) === true;
+  const parkCleanup = async (
     record: WorkerEnvironmentRecord,
     retry: NonNullable<ReturnType<typeof cleanupRetry>>,
   ) => {
-    if (!retry.parked) {
+    if (!isCleanupParked(record)) {
       const nextStep =
         record.providerId === "crabbox"
-          ? `Run crabbox stop ${record.leaseId ?? "<lease>"} or crabbox inspect --id ${record.leaseId ?? "<lease>"} --json, then retry Stop.`
+          ? `Check the original provider account and Crabbox state with crabbox inspect --provider <backend> --id ${record.leaseId ?? "<lease>"} --json, then retry Stop.`
           : "Check the provider lease, then retry Stop.";
-      retry.parked = `Conversation environment cleanup parked (${record.leaseId ?? record.environmentId}) after ${retry.attempts} attempts: ${retry.lastError}. ${nextStep}`;
-      options.warn(retry.parked);
+      const original =
+        record.teardownTerminalState === "failed" ? `\n${record.lastError ?? ""}` : "";
+      const error = `${CONVERSATION_CLEANUP_PARKED} (${record.leaseId ?? record.environmentId}): ${boundedWorkerError(retry.lastError, 512)}. ${nextStep}${original}`;
+      await store.recordError({
+        environmentId: record.environmentId,
+        state: record.state,
+        error,
+        assertCurrent: () => {
+          if (store.get(record.environmentId) !== record) {
+            throw new Error("Conversation environment changed before cleanup parked");
+          }
+        },
+      });
+      cleanupRetries.delete(record.environmentId);
+      options.warn(boundedWorkerError(error));
     }
   };
   const destroyEnvironment = (environmentId: string, explicit = false) =>
@@ -128,13 +143,8 @@ export function createWorkerEnvironmentSessionAttachments(
       const previous = cleanupRetry(record);
       if (explicit) {
         cleanupRetries.delete(environmentId);
-      } else if (previous) {
-        if (options.now() - previous.startedAtMs >= 3_600_000) {
-          parkCleanup(record, previous);
-        }
-        if (previous.parked || options.now() < previous.nextAttemptAtMs) {
-          return undefined;
-        }
+      } else if (isCleanupParked(record)) {
+        return undefined;
       }
       const retry = (!explicit && previous) || {
         ownerEpoch: record.ownerEpoch,
@@ -144,6 +154,13 @@ export function createWorkerEnvironmentSessionAttachments(
         nextAttemptAtMs: 0,
         lastError: "",
       };
+      if (!explicit && retry.lastError && options.now() - retry.startedAtMs >= 3_600_000) {
+        await parkCleanup(record, retry);
+        return undefined;
+      }
+      if (!explicit && options.now() < retry.nextAttemptAtMs) {
+        return undefined;
+      }
       retry.attempts += 1;
       try {
         const stopped = await providerLifecycle.destroy(environmentId, { requireUnattached: true });
@@ -166,7 +183,7 @@ export function createWorkerEnvironmentSessionAttachments(
           options.now() + Math.min(30_000 * 2 ** (retry.attempts - 1), 300_000);
         cleanupRetries.set(environmentId, retry);
         if (retry.attempts >= 10 || options.now() - retry.startedAtMs >= 3_600_000) {
-          parkCleanup(current, retry);
+          await parkCleanup(current, retry);
         } else if (!explicit) {
           options.warn(
             `Conversation environment cleanup will retry (${environmentId}): ${retry.lastError}`,
@@ -287,8 +304,6 @@ export function createWorkerEnvironmentSessionAttachments(
     }
   };
   const attachments = {
-    getCleanupError: (record: WorkerEnvironmentRecord): string | undefined =>
-      cleanupRetry(record)?.parked,
     captureSessionAttachment(identity: WorkerEnvironmentSessionIdentity) {
       // Admission already read the canonical session. Its identity plus synchronous
       // retirement fences avoid repeating that SQLite read on each proxy connection.
@@ -567,7 +582,11 @@ export function createWorkerEnvironmentSessionAttachments(
           return;
         }
         const environment = store.get(record.environmentId);
-        if (!environment || environment.state === "destroyed" || environment.state === "failed") {
+        if (
+          !environment ||
+          ["destroyed", "failed"].includes(environment.state) ||
+          isCleanupParked(environment)
+        ) {
           releaseSessionFacts(record.sessionId);
           continue;
         }

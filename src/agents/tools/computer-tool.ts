@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { imageMimeFromFormat } from "@openclaw/media-core/mime";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerAgentRunDelegatedAuthorityClosedHandler } from "../../infra/agent-run-registry.js";
@@ -20,7 +19,7 @@ import {
   resolveImageSanitizationLimits,
 } from "../image-sanitization.js";
 import { readNodePermissionError } from "../node-permission-error.js";
-import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
+import type { AgentToolResult } from "../runtime/index.js";
 import { markToolExecutionRefused } from "../tool-effect-receipt.js";
 import { sanitizeContentBlocksImages } from "../tool-images.js";
 import { type AnyAgentTool, readFiniteNumberParam, readToolStringParam } from "./common.js";
@@ -42,6 +41,7 @@ import type {
 import {
   AFTER_ACTION_SCREENSHOT_DELAY_MS,
   COMPUTER_REF_WIDTH,
+  computerFrameImageIdentity,
   computerTargetDetails,
   isComputerObservationAction,
   MAX_WAIT_SECONDS,
@@ -221,57 +221,6 @@ function projectComputerActResultMetadata(result: ComputerActResult) {
 
 function computerActResultText(action: ComputerToolAction, result: ComputerActResult): string {
   return JSON.stringify({ action, ...projectComputerActResultMetadata(result) });
-}
-
-function computerFrameImageIdentity(
-  content: AgentToolResult<unknown>["content"],
-): string | undefined {
-  const [image, duplicate] = content.filter((block) => block.type === "image");
-  if (!image || duplicate) {
-    return undefined;
-  }
-  return sha256Hex(JSON.stringify([image.mimeType, image.data]));
-}
-
-function invalidateComputerFrame(contextEpoch: ComputerContextEpoch): boolean {
-  if (contextEpoch.frameToolCallId === undefined && contextEpoch.frameImageIdentity === undefined) {
-    return false;
-  }
-  contextEpoch.value += 1;
-  delete contextEpoch.frameToolCallId;
-  delete contextEpoch.frameImageIdentity;
-  return true;
-}
-
-/**
- * Invalidate screenshot coordinates when the final model context no longer
- * contains the image produced by the tracked computer tool result.
- */
-export function invalidateComputerFrameIfMissing(params: {
-  contextEpoch: ComputerContextEpoch;
-  messages: AgentMessage[];
-  imagesBlocked?: boolean;
-}): boolean {
-  const frameToolCallId = params.contextEpoch.frameToolCallId;
-  if (frameToolCallId === undefined || params.imagesBlocked) {
-    return invalidateComputerFrame(params.contextEpoch);
-  }
-  const frameMessage = params.messages.findLast(
-    (message): message is Extract<AgentMessage, { role: "toolResult" }> =>
-      message?.role === "toolResult" &&
-      message.toolName === "computer" &&
-      message.toolCallId === frameToolCallId,
-  );
-  const frameImageIdentity = frameMessage
-    ? computerFrameImageIdentity(frameMessage.content)
-    : undefined;
-  if (
-    frameImageIdentity !== undefined &&
-    frameImageIdentity === params.contextEpoch.frameImageIdentity
-  ) {
-    return false;
-  }
-  return invalidateComputerFrame(params.contextEpoch);
 }
 
 async function projectComputerImage(params: {

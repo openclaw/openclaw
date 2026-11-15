@@ -103,6 +103,8 @@ it.each([
   (provider, kind, destination) => {
     const automatic = sourceContext(provider, kind);
     const privateReply = sourceContext(provider, kind, true);
+    expect(automatic).toMatch(/^### Conversation Behavior\nYou are in a /);
+    expect(privateReply).toMatch(/^### Conversation Behavior\nYou are in a /);
     expect(automatic).toContain(`automatically sent to this ${destination}`);
     expect(privateReply).toContain(`not automatically sent to this ${destination}`);
     expect(privateReply).toContain("Normal final replies are private");
@@ -110,8 +112,8 @@ it.each([
     expect(privateReply).toContain("do not call message(action=send)");
     expect(privateReply).not.toContain("Your replies are automatically sent");
     if (kind === "direct") {
-      expect(automatic).not.toContain("NO_REPLY");
-      expect(privateReply).not.toContain("NO_REPLY");
+      expect(automatic).toContain('reply with exactly "NO_REPLY"');
+      expect(privateReply).toContain('reply with exactly "NO_REPLY"');
     } else {
       expect(privateReply).toContain("send confirmations before ending silently");
     }
@@ -128,6 +130,7 @@ it.each([
 );
 
 it("reads markdown table guidance from channel metadata", () => {
+  expect(sourceContext("discord", "unknown")).toBe("");
   setChannels([
     { id: "table-chat", messaging: { defaultMarkdownTableMode: "off" } },
     { id: "telegram", messaging: { defaultMarkdownTableMode: "block" } },

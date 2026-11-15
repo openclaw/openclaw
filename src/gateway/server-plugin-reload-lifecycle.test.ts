@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
-import { PluginHostCleanupTimeoutError } from "../plugins/host-hook-cleanup-timeout.js";
 import {
   PluginRuntimeApplicationError,
   projectPluginRuntimeFailure,
@@ -17,7 +16,7 @@ import {
   flushReload,
   closeTestConfigReloaders,
 } from "./config-reload.test-support.js";
-import { PluginAdmittedWorkTimeoutError } from "./server-plugin-reload-cleanup.js";
+import { PluginAdmittedWorkDeferredError } from "./server-plugin-reload-cleanup.js";
 import { createPluginReloadLifecycle } from "./server-plugin-reload-lifecycle.js";
 
 type Ports = Parameters<ReturnType<typeof createPluginReloadLifecycle>["run"]>[0];
@@ -267,11 +266,9 @@ it.for([false, true])(
           committed: false,
         },
         {
-          cause: new PluginAdmittedWorkTimeoutError(
-            new Set(["codex"]),
+          cause: new PluginAdmittedWorkDeferredError(
+            "plugin codex has retained work; the previous plugin generation stays active",
             [instance],
-            new PluginHostCleanupTimeoutError("fixture drain"),
-            60000,
           ),
         },
       );

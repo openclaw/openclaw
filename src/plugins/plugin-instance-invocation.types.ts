@@ -25,5 +25,6 @@ export type PluginExecutionScopes = {
 export interface PluginExecutionFrame extends PluginExecutionScopes {
   /** Runtime provenance for diagnostics, never authorization. */
   readonly runtimePluginId?: string | undefined;
+  readonly canUseInteractiveStateReadCapacity?: boolean;
   withScopes(scopes: PluginExecutionScopes): PluginExecutionFrame;
 }

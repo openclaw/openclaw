@@ -16,7 +16,10 @@ import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor
 import { readRecentUserAssistantTextForSession } from "../../config/sessions/transcript.js";
 import { runInitialConfigWriteHealth } from "../../flows/doctor-health-contribution-runners.config.js";
 import { createSqliteReadOnlyWorkerScope } from "../../infra/sqlite-readonly-worker.js";
+import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
+import { withAgentDatabaseStartupAdmission } from "../../state/agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db.js";
+import { assertOpenClawDatabasesReady } from "../../state/openclaw-database-preflight.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { getUserPreferences } from "../../state/user-preferences.test-support.js";
 import { readAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
@@ -64,6 +67,11 @@ it.for([true, false])(
   "upgrades v2026.9.9 with a pending phase-less deletion (deleteFiles=%s) and preserves the keeper",
   { timeout: 90_000 },
   async (deleteFiles, { signal }) => {
+    let phase = "fixture setup";
+    const onAbort = () => {
+      console.error(`Agent deletion upgrade interrupted during ${phase}`);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
     await (scenarioWork = withOpenClawTestState(
       {
         label: "agent-delete-stable-upgrade",
@@ -129,6 +137,7 @@ it.for([true, false])(
         try {
           await readScope.run(async () => {
             signal.throwIfAborted();
+            phase = "Doctor maintenance admission";
             const maintenance = await beginDoctorMaintenance({
               root: null,
               options: { repair: true, nonInteractive: true },
@@ -145,6 +154,7 @@ it.for([true, false])(
             }
             try {
               await maintenance.run(async () => {
+                phase = "Doctor database preflight";
                 const schemas = await prepareDoctorDatabasePreflight();
                 expect(schemas.pendingMigrations).toEqual(
                   expect.arrayContaining([
@@ -153,6 +163,7 @@ it.for([true, false])(
                   ]),
                 );
                 const pendingPaths = schemas.pendingMigrations?.map((target) => target.path) ?? [];
+                phase = "Doctor migration backup";
                 await backupDoctorMigrationDatabases({
                   env: state.env,
                   databasePaths: pendingPaths,
@@ -167,6 +178,7 @@ it.for([true, false])(
                   expect(backups).toHaveLength(1);
                   expectHealthySchema(path.join(path.dirname(file), backups[0]!), 24);
                 }
+                phase = "Doctor config repair";
                 const doctor = await runDoctorConfigPreflight({
                   observe: false,
                   repairPrefixedConfig: true,
@@ -192,6 +204,7 @@ it.for([true, false])(
               { user_version: OPENCLAW_AGENT_SCHEMA_VERSION },
             ]);
             signal.throwIfAborted();
+            phase = "startup configuration";
             const io = createConfigIO({
               configPath: state.configPath,
               env: state.env,
@@ -206,6 +219,7 @@ it.for([true, false])(
               log: { info: vi.fn(), warn: vi.fn() },
             });
             setRuntimeConfigSnapshot(startup.snapshot.config);
+            phase = "startup maintenance and keeper checks";
             await runStartupSessionMaintenanceForTest({
               cfg: startup.snapshot.config,
               log: { info: vi.fn(), warn: vi.fn() },
@@ -216,6 +230,35 @@ it.for([true, false])(
             });
             await assertKeeper();
 
+            phase = "startup database admission";
+            await withAgentDatabaseStartupAdmission(async (admission) => {
+              await assertOpenClawDatabasesReady({
+                env: state.env,
+                operation: "gateway-startup",
+                config: getRuntimeConfig(),
+              });
+              const prepare = vi.fn(async () => {});
+              const startupOwner = admission.adopt();
+              try {
+                admission.activate({
+                  isCurrent: () => true,
+                  preparationReady: Promise.resolve(),
+                  openAgent: prepare,
+                  migrateAgent: prepare,
+                  publishAgent: prepare,
+                });
+                await admission.pendingPreparation;
+                expect(readAgentDatabaseAdmissionRefusal("doomed")).toMatchObject({
+                  reason: expect.stringContaining("deleted during startup inspection"),
+                });
+                expect(prepare.mock.calls).not.toContainEqual([
+                  expect.objectContaining({ agentId: "doomed" }),
+                ]);
+              } finally {
+                await startupOwner.stop();
+              }
+            });
+            phase = "deletion recovery and keeper checks";
             await resumeDeletion();
             signal.throwIfAborted();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({
@@ -236,6 +279,7 @@ it.for([true, false])(
               }
             }
             await assertKeeper();
+            phase = "owner cleanup";
             await closeOwners();
             assertClosedStorage();
             if (!deleteFiles) {
@@ -244,20 +288,23 @@ it.for([true, false])(
               );
             }
 
+            phase = "repeated deletion recovery and keeper checks";
             await resumeDeletion();
             expect(readAgentDeletionJournal("doomed")).toMatchObject({ cleanupCompleted: true });
             await assertKeeper();
+            phase = "owner cleanup";
             await closeOwners();
             assertClosedStorage();
           });
         } finally {
           try {
+            phase = "final owner cleanup";
             await closeOwners();
           } finally {
             await readScope.close();
           }
         }
       },
-    ));
+    ).finally(() => signal.removeEventListener("abort", onAbort)));
   },
 );

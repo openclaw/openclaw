@@ -33,7 +33,10 @@ import {
 import { completeTurn, localResult } from "./worker-turn-launcher-flow.test-support.js";
 import * as worker from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
-import { createWorkerWorkspaceRecoveryFixture } from "./workspace-recovery.test-support.js";
+import {
+  createWorkerWorkspaceRecoveryFixture,
+  gitInit,
+} from "./workspace-recovery.test-support.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -139,6 +142,8 @@ async function createBuildRecoveryHarness(
     duringRetryPreparation?: () => void;
   } = {},
 ) {
+  // Recovery reads durable Git refs; this fixture must own its repository root.
+  await gitInit(worker.root);
   await worker.seedActivePlacement();
   const rejection = options.rejection ?? "admission";
   const gate = createWorkerSessionPlacementGate(worker.placements);
@@ -182,8 +187,10 @@ async function createBuildRecoveryHarness(
     Parameters<typeof createProviderReplayDispatch>[0]["environments"] = {
     ...worker.unusedEnvironments(),
     prepareProjectIntent: unexpected("prepared intent"),
+    ensureRetainedRunning: unexpected("retained wake"),
     assertPreparedIntentCurrent: vi.fn(),
     getPreparedCandidates: () => [],
+    refreshPreparedEnvironment: unexpected("prepared refresh"),
     schedulePreparedRefill: vi.fn(),
     bindPreparedWorkspace: unexpected("prepared binding"),
     recordError: vi.fn(() => {
@@ -233,6 +240,7 @@ async function createBuildRecoveryHarness(
     reconcileEnvironment: vi.fn(),
   };
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
+  const reportFailure = vi.fn();
   const dispatch = createProviderReplayDispatch({
     initialPlacements: await worker.placements.listAsync(),
     placements: worker.placements,
@@ -242,6 +250,7 @@ async function createBuildRecoveryHarness(
     workspaceOperations,
     ...createWorkerWorkspaceRecoveryFixture({
       resolveWorkspace: async () => ({ kind: "local", path: worker.root }),
+      reportFailure,
     }),
   });
   if (rejection === "interrupted") {
@@ -314,6 +323,7 @@ async function createBuildRecoveryHarness(
     environments,
     launchTurn,
     redispatchPlacement,
+    reportFailure,
     onAdmitted,
     originalClaimIds,
     runLocal,
@@ -354,6 +364,9 @@ it("waits for reconnect and settles the exact interrupted claim before the next 
   const harness = await createBuildRecoveryHarness({
     rejection: "interrupted",
   });
+  expect(harness.reportFailure).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ error: disconnected().message }),
+  );
   const waiting = createDeferred();
   const waitForClaimRelease = worker.placements.waitForTurnClaimRelease.bind(worker.placements);
   const waitForRelease = vi
@@ -370,6 +383,7 @@ it("waits for reconnect and settles the exact interrupted claim before the next 
     expect(harness.launchTurn).not.toHaveBeenCalled();
     // File custody settles independently of the next turn's admission on reconnect.
     await harness.reconnect();
+    expect(harness.reportFailure).toHaveBeenCalledTimes(1);
     await expect(execution).resolves.toMatchObject({
       payloads: [{ text: replacementReply }],
     });
@@ -390,7 +404,7 @@ async function createRefreshWaitHarness(fence = false) {
   const listeners = new Set<() => void>();
   let environment = worker.attachedEnvironment();
   let inFlight = true;
-  let reads = 0;
+  let claimStarted = false;
   const refresh: WorkerRuntimeRefreshInFlight = {
     settled: settled.promise,
     onProgress(listener) {
@@ -411,12 +425,16 @@ async function createRefreshWaitHarness(fence = false) {
   const environments: worker.WorkerTurnEnvironmentService = {
     ...worker.unusedEnvironments(),
     get: () => environment,
-    readRuntimeRefresh: () => (inFlight && (!fence || ++reads > 1) ? refresh : undefined),
+    readRuntimeRefresh: () => (inFlight && (!fence || claimStarted) ? refresh : undefined),
     acquireTurnCredential,
     acknowledgeCredentialDelivery: vi.fn(async () => true),
     startTunnel: async () => completedTunnel(launchTurn),
   };
-  const claimTurn = vi.spyOn(worker.placements, "claimTurn");
+  const claim = worker.placements.claimTurn.bind(worker.placements);
+  const claimTurn = vi.spyOn(worker.placements, "claimTurn").mockImplementation((...args) => {
+    claimStarted = true;
+    return claim(...args);
+  });
   const provider = worker.createWorkerSessionTurnPlacementProvider({
     placements: worker.placements,
     environments,

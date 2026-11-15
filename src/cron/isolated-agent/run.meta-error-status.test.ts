@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+import { captureAgentTerminalSnapshot } from "../../agents/embedded-agent-runner/run/attempt-terminal-snapshot.js";
+import { resolveEmbeddedRunTerminal } from "../../agents/embedded-agent-runner/run/terminal-resolution.js";
+import {
+  makeTerminalInput,
+  emptyAssistant,
+  expectComplete,
+} from "../../agents/embedded-agent-runner/run/terminal-resolution.test-support.js";
+import { toPluginCronChangedEvent } from "../../gateway/server-cron-plugin-job.js";
 import { expectObjectFields } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -32,11 +40,14 @@ function mockAgentRun({
     attempts: [],
   });
 }
-function mockChildRun(payloads: unknown[] = []) {
+function mockChildRun(payloads: unknown[] = [], collector = true, meta = {}) {
   mockAgentRun({
     payloads,
     usage: { input: 10, output: 1 },
-    acceptedSessionSpawns: [{ runId: "run-child", childSessionKey: "agent:default:child" }],
+    meta,
+    acceptedSessionSpawns: [
+      { runId: "run-child", childSessionKey: "agent:default:child", collector },
+    ],
   });
 }
 const failedDeliveryState = (error: string) => ({
@@ -61,6 +72,66 @@ async function useRealOutcome() {
 
 describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
   setupRunCronIsolatedAgentTurnSuite();
+
+  it.each([false, true])(
+    "carries native-selected observations to the hook unless delivery replaces the failure (%s)",
+    async (deliveryReplacesFailure) => {
+      await useRealOutcome();
+      const assistant = emptyAssistant({
+        stopReason: "error",
+        errorMessage: "synthetic selected failure",
+      });
+      const agentTerminal = captureAgentTerminalSnapshot({
+        terminalMessage: assistant,
+        reachedPromptBoundary: true,
+        success: false,
+        hasHookError: true,
+      });
+      const native = await resolveEmbeddedRunTerminal(
+        makeTerminalInput({
+          assistant,
+          attemptOverrides: {
+            agentTerminal,
+            terminal: {
+              kind: "failed",
+              source: "prompt",
+              error: new Error("synthetic selected failure"),
+            },
+            replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+          },
+        }),
+      );
+      expectComplete(native);
+      expect(native.result.payloads).toHaveLength(1);
+      expect(native.result.payloads?.[0]?.isError).toBe(true);
+      const selectedErrorText = native.result.payloads?.[0]?.text;
+      expect(selectedErrorText).toBeTruthy();
+      expect(selectedErrorText).not.toBe(assistant.errorMessage);
+      mockAgentRun(native.result);
+      mockDelivery(
+        deliveryReplacesFailure
+          ? { disposition: { kind: "error", error: "different selected delivery failure" } }
+          : { disposition: { kind: "pending" } },
+      );
+      const result = await runTurn();
+      const hook = toPluginCronChangedEvent(
+        {
+          ...result,
+          action: "finished",
+          jobId: "synthetic-job",
+          runId: "synthetic-run",
+          runAtMs: 1,
+        },
+        undefined,
+      );
+      expect(result.status).toBe("error");
+      expect(result.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
+      expect(hook.agentTerminal).toBe(deliveryReplacesFailure ? undefined : agentTerminal);
+      expect(hook.error).toBe(
+        deliveryReplacesFailure ? "different selected delivery failure" : selectedErrorText,
+      );
+    },
+  );
 
   it.each([false, true])(
     "keeps delivery target failure separate from execution (agent failed: %s)",
@@ -136,17 +207,14 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     },
   );
 
-  it("preserves an empty accepted child handoff failure as a cron error", async () => {
+  it.each([true, false])("hands off a silent run only to a collector (%s)", async (collect) => {
     await useRealOutcome();
-    const error = "cron child-session handoff timed out before producing a final assistant payload";
-    mockChildRun();
-    mockDelivery({
-      disposition: { kind: "error", error },
-    });
+    mockChildRun([{ text: "NO_REPLY" }], collect, { terminalReply: { disposition: "silent" } });
+    mockDelivery(collect ? { disposition: { kind: "error", error: "child timed out" } } : {});
     const result = await runTurn();
-    expectObjectFields(result, { status: "error", error, delivered: false });
-    expect(harness.dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({ spawnOnlyHandoff: true }),
+    expectObjectFields(result, { status: collect ? "error" : "ok" });
+    expect(harness.dispatchCronDeliveryMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ spawnOnlyHandoff: collect }),
     );
   });
 

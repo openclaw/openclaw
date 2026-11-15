@@ -1,17 +1,12 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  isFutureDateTimestampMs,
-  parseFiniteNumber,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
+import type { ConsoleMessage, Dialog, Frame, Page } from "playwright-core";
 import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
-  MAX_NETWORK_REQUESTS,
   MAX_PAGE_ERRORS,
   MAX_RECENT_DIALOGS,
   OBSERVED_DIALOG_TIMEOUT_MS,
@@ -144,9 +139,6 @@ export function ensurePageState(page: Page): PageState {
   const state: PageState = {
     console: [],
     errors: [],
-    requests: new Map(),
-    requestIds: new WeakMap(),
-    nextRequestId: 0,
     armIdUpload: 0,
     armIdDownload: 0,
     downloadWaiterDepth: 0,
@@ -169,6 +161,10 @@ export function ensurePageState(page: Page): PageState {
     if (state.console.length > MAX_CONSOLE_MESSAGES) {
       state.console.shift();
     }
+    // The text log owns no remote values; Playwright retains every argument handle otherwise.
+    for (const arg of msg.args()) {
+      void arg.dispose().catch(() => {});
+    }
   });
   page.on("pageerror", (err: Error) => {
     state.errors.push({
@@ -180,38 +176,6 @@ export function ensurePageState(page: Page): PageState {
     if (state.errors.length > MAX_PAGE_ERRORS) {
       state.errors.shift();
     }
-  });
-  page.on("request", (req: Request) => {
-    state.nextRequestId += 1;
-    const id = `r${state.nextRequestId}`;
-    state.requestIds.set(req, id);
-    state.requests.set(id, {
-      id,
-      timestamp: new Date().toISOString(),
-      method: req.method(),
-      url: truncateObservedPageText(req.url()),
-      resourceType: req.resourceType(),
-    });
-    pruneMapToMaxSize(state.requests, MAX_NETWORK_REQUESTS);
-  });
-  page.on("response", (resp: Response) => {
-    const id = state.requestIds.get(resp.request());
-    const rec = id ? state.requests.get(id) : undefined;
-    if (!rec) {
-      return;
-    }
-    rec.status = resp.status();
-    rec.ok = resp.ok();
-  });
-  page.on("requestfailed", (req: Request) => {
-    const id = state.requestIds.get(req);
-    const rec = id ? state.requests.get(id) : undefined;
-    if (!rec) {
-      return;
-    }
-    const failureText = req.failure()?.errorText;
-    rec.failureText = failureText ? truncateObservedPageText(failureText) : undefined;
-    rec.ok = false;
   });
   page.on("dialog", (dialog: Dialog) => {
     state.nextObservedDialogId += 1;
@@ -228,7 +192,7 @@ export function ensurePageState(page: Page): PageState {
     state.pendingDialogs.push(pending);
 
     const armed = state.armedDialogResponse;
-    if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
+    if (armed && performance.now() < armed.expiresAtMonotonicMs) {
       clearArmedDialogResponse(state);
       void settleObservedDialog({
         state,
@@ -343,13 +307,12 @@ export function armObservedDialogResponseOnPage(opts: {
   clearArmedDialogResponse(state);
   const parsed = parseFiniteNumber(opts.timeoutMs);
   const timeoutMs = Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
-  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
-  if (expiresAt === undefined) {
+  if (!Number.isSafeInteger(timeoutMs)) {
     return;
   }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt,
+    expiresAtMonotonicMs: performance.now() + timeoutMs,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {

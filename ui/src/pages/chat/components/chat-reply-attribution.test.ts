@@ -202,6 +202,7 @@ function draw(
             },
             options: {
               streamOptions: {},
+              partDependencies: (part) => [part],
               renderGroupOptions: () => options,
               isWorkExpanded: () => false,
               onToggleWork: () => undefined,

@@ -294,13 +294,13 @@ describe("sidebar session feedback", () => {
     );
     await selectFilter(sidebar, "status:all");
     sidebar.activeRouteId = "chat";
-    sidebar.sessionKey = keys[0]!;
+    sidebar.sessionKey = keys.at(-1)!;
     await settleLitElement(sidebar);
     await vi.waitFor(() => expect(sidebar.querySelector(pagination)).not.toBeNull());
     const button = () => sidebar.querySelector<HTMLButtonElement>(pagination)!;
     const focusedButton = button();
     focusedButton.focus();
-    sidebar.sessionKey = keys[1]!;
+    sidebar.sessionKey = keys.at(-2)!;
     await settleLitElement(sidebar);
     expect(button()).toBe(focusedButton);
     expect(document.activeElement).toBe(focusedButton);
@@ -356,10 +356,12 @@ describe("sidebar session feedback", () => {
       harness.sessions,
     );
     await selectFilter(sidebar, "status:all");
-    setSessionsGrouping(sidebar.sessionOrganizer, "none");
-    await settleLitElement(sidebar);
+    // Flat view may auto-load the visible page before the click; either path
+    // must wait on this pending page.
     const pending = createDeferred<typeof harness.sessions.state.result>();
     harness.list.mockImplementation(async () => (await pending.promise)!);
+    setSessionsGrouping(sidebar.sessionOrganizer, "none");
+    await settleLitElement(sidebar);
     sidebar.querySelector<HTMLButtonElement>(pagination)!.click();
     setSessionsGrouping(sidebar.sessionOrganizer, "category");
     await settleLitElement(sidebar);

@@ -11,7 +11,7 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../cli/outbound-send-deps.js";
-import { agentCommandFromIngress } from "../commands/agent.js";
+import { agentCommandFromGatewayIngress } from "../commands/agent.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { updatePairedDevicePresence } from "../infra/device-pairing.js";
@@ -48,6 +48,7 @@ import {
   parseNodeEventPayload,
   type NodeEventSessionSource,
 } from "./server-node-event-source.js";
+import { admitNodeAgentRequest } from "./server-node-events-agent-admission.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
 import { handleNodeExecEvent } from "./server-node-events-exec-notice.js";
 import { handleNodeNotificationEvent } from "./server-node-events-notifications.js";
@@ -82,7 +83,7 @@ type VoiceTranscriptReservation = {
 const pendingVoiceTranscriptReservations = new Map<string, VoiceTranscriptReservation[]>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
-type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+type NodeAgentCommandInput = Parameters<typeof agentCommandFromGatewayIngress>[0];
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -370,8 +371,9 @@ async function handlePreparedNodeEvent(
             sessionKey: canonicalKey,
             clientRunId: runId,
           });
-          return agentCommandFromIngress(
+          return agentCommandFromGatewayIngress(
             {
+              assertTurnAdmissionCurrent: opts?.assertAgentTurnCurrent,
               runId,
               message: text,
               sessionId,
@@ -405,7 +407,7 @@ async function handlePreparedNodeEvent(
     }
     case "agent.request": {
       if (!evt.payloadJSON) {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
       type AgentDeepLink = {
         message?: string;
@@ -430,7 +432,7 @@ async function handlePreparedNodeEvent(
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "invalid_payload" };
       }
 
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
@@ -444,7 +446,7 @@ async function handlePreparedNodeEvent(
           excludeInternalEffects: true,
         }));
       if (resolveAgentHarnessSessionContextError(canonicalKey, entry)) {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "session_unavailable" };
       }
 
       let message = (link?.message ?? "").trim();
@@ -457,10 +459,10 @@ async function handlePreparedNodeEvent(
       let offloadedRefs: Awaited<ReturnType<typeof parseMessageWithAttachments>>["offloadedRefs"] =
         [];
       if (!message && normalizedAttachments.length === 0) {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "empty_message" };
       }
       if (message.length > 20_000) {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "message_too_large" };
       }
       if (normalizedAttachments.length > 0) {
         const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
@@ -480,7 +482,7 @@ async function handlePreparedNodeEvent(
             maxBytes: resolveChatAttachmentMaxBytes(cfg),
             log: ctx.logGateway,
             supportsInlineImages,
-            // server-node-events dispatches via agentCommandFromIngress which
+            // server-node-events dispatches via agentCommandFromGatewayIngress which
             // has no structured media wiring; reject non-image attachments
             // explicitly rather than saving them where the agent cannot reach them.
             acceptNonImage: false,
@@ -500,16 +502,16 @@ async function handlePreparedNodeEvent(
             if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
               await cleanupNodeEventMedia(parsed.offloadedRefs, ctx);
             }
-            return undefined;
+            return { ok: true, event: evt.event, handled: false, reason: "message_too_large" };
           }
         } catch (err) {
           ctx.logGateway.warn(`agent.request attachment parse failed: ${formatErrorMessage(err)}`);
-          return undefined;
+          return { ok: true, event: evt.event, handled: false, reason: "invalid_attachments" };
         }
       }
 
       if (!message && images.length === 0) {
-        return undefined;
+        return { ok: true, event: evt.event, handled: false, reason: "empty_message" };
       }
 
       const channelRaw = normalizeOptionalString(link?.channel) ?? "";
@@ -628,6 +630,7 @@ async function handlePreparedNodeEvent(
 
       source?.assertCurrent();
       const nodeAgentInput: NodeAgentCommandInput = {
+        assertTurnAdmissionCurrent: opts?.assertAgentTurnCurrent,
         runId: sessionId,
         message,
         images,
@@ -647,23 +650,14 @@ async function handlePreparedNodeEvent(
         messageChannel: "node",
         allowModelOverride: false,
       };
-      const nodeAdmissionConnectionCurrent = opts?.isConnectionCurrent;
-      const onNodeAdmissionRejected = () =>
-        cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx);
-      // The node RPC can finish before the agent starts its own session admission.
-      // Reserve a root now so suspension cannot acknowledge and then strand the turn,
-      // but recheck the admitted connection before agent work actually starts.
-      const agentWork = runWithGatewayIndependentRootWorkContinuation(async () => {
-        if (nodeAdmissionConnectionCurrent && !(await nodeAdmissionConnectionCurrent())) {
-          await onNodeAdmissionRejected();
-          return;
-        }
-        await agentCommandFromIngress(nodeAgentInput, defaultRuntime, ctx.deps);
-      }, "node-events:agent-turn").catch((err: unknown) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      return admitNodeAgentRequest({
+        ctx,
+        nodeId,
+        input: nodeAgentInput,
+        isConnectionCurrent: opts?.isConnectionCurrent,
+        pending: source?.pending,
+        onRejected: () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
       });
-      source?.pending.push(agentWork);
-      return undefined;
     }
     case "notifications.changed":
       return handleNodeNotificationEvent(ctx, nodeId, evt, opts, source);

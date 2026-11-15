@@ -52,6 +52,12 @@ export function rethrowTelegramSendError(err: unknown): never {
   ) {
     throw new PlatformMessageNotDispatchedError(formatErrorMessage(err), { cause: err });
   }
+  // A 429 is a flood-control refusal of this request: Telegram did not deliver it.
+  // The account limiter already spent its wait budget, so hand the delivery back
+  // to the queue as retryable instead of leaving it ambiguous and never resent.
+  if (isRecord(err) && err.error_code === 429) {
+    throw new PlatformMessageNotDispatchedError(formatErrorMessage(err), { cause: err });
+  }
   throw err;
 }
 

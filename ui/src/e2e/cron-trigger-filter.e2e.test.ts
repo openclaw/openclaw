@@ -77,7 +77,7 @@ suite.define(() => {
       expect(await conditionalRow.count()).toBe(1);
 
       await conditionalRow.click();
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
+      await page.getByRole("tab", { name: "Activity history", exact: true }).click();
       const activity = page.locator('[data-test-id="cron-condition-activity"]');
       await activity.waitFor();
       await expect.poll(() => activity.textContent()).toContain("42");
@@ -85,7 +85,7 @@ suite.define(() => {
       await expect.poll(() => activity.textContent()).toContain("Never");
       await expect
         .poll(() => page.locator(".cron-empty-state").textContent())
-        .toContain("No payload runs yet");
+        .toContain("No run history to show");
     });
   });
 });

@@ -11,7 +11,16 @@ import deepseekPlugin from "./index.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
 import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
 
-it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
+it.each([
+  ["none", undefined],
+  ["off", undefined],
+  ["minimal", "low"],
+  ["low", "low"],
+  ["medium", "high"],
+  ["high", "high"],
+  ["xhigh", "high"],
+  ["max", "max"],
+] as const)("maps DeepSeek %s effort and reasoning replay", async (thinkingLevel, effort) => {
   expect.hasAssertions();
   const provider = buildDeepSeekProvider();
   const model = {
@@ -54,16 +63,20 @@ it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", as
       reasoning: "high",
     } as never);
     options?.onPayload?.(payload, streamModel);
-    expect(payload.thinking).toMatchObject({ type: "disabled" });
-    expect(payload).not.toHaveProperty("reasoning_effort");
-    expect((payload.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
-      "reasoning_content",
-    );
+    expect(payload.thinking).toMatchObject({ type: effort ? "enabled" : "disabled" });
+    const assistant = (payload.messages as Array<Record<string, unknown>>)[1];
+    if (effort) {
+      expect(payload.reasoning_effort).toBe(effort);
+      expect(assistant?.reasoning_content).toBe("call reasoning");
+    } else {
+      expect(payload).not.toHaveProperty("reasoning_effort");
+      expect(assistant).not.toHaveProperty("reasoning_content");
+    }
     const stream = createAssistantMessageEventStream();
     queueMicrotask(() => stream.end());
     return stream;
   };
-  const wrapped = createDeepSeekV4ThinkingWrapper(streamFn as never, "none" as never);
+  const wrapped = createDeepSeekV4ThinkingWrapper(streamFn as never, thinkingLevel as never);
   await expectDefined(wrapped, "DeepSeek thinking wrapper")(model, context, {});
 });
 

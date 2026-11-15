@@ -7,6 +7,7 @@ import type {
   SessionVisibility,
   SessionVisibilitySetResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
+import type { ModelCatalogEntry } from "../api/types.ts";
 
 export type ControlUiSessionFixture = {
   key: string;
@@ -46,6 +47,7 @@ export function createControlUiSessionRow(
       modelProvider: "openai",
       status: "done",
       totalTokens: 0,
+      workspaceReadDisabledReason: null,
       updatedAt,
     },
     options,
@@ -60,39 +62,11 @@ export function createControlUiSessionRow(
   );
 }
 
-export function createControlUiMockSessionRow(
-  key: string,
-  label: string,
-  updatedAt: number,
-  options?: { model?: string; modelProvider?: string } & Record<string, unknown>,
-) {
-  return createControlUiSessionRow(
-    key,
-    label,
-    updatedAt,
-    Object.assign({ contextTokens: 200_000 }, options, {
-      model: options?.model ?? "gpt-5-mini",
-      modelProvider: options?.modelProvider ?? "openai",
-    }),
-  );
-}
-
-export function createControlUiChatHistoryMessage(
-  role: "assistant" | "user",
-  text: string,
-  timestamp: number,
-) {
-  return {
-    content: [{ text, type: "text" }],
-    role,
-    timestamp,
-  };
-}
-
 export function createControlUiSessionFixtures(
   input: {
     rows: ControlUiSessionFixture[];
     mainKey: string;
+    models?: ModelCatalogEntry[];
   },
   isRecord: (value: unknown) => value is Record<string, unknown>,
 ) {
@@ -129,6 +103,7 @@ export function createControlUiSessionFixtures(
     records.set(key, {
       row: {
         sessionId: `session:${key}`,
+        workspaceReadDisabledReason: null,
         ...fixture,
         key,
         archivedAt,
@@ -159,10 +134,9 @@ export function createControlUiSessionFixtures(
         },
       };
     }
-    const changed = new Set<string>();
     const set = (field: string, fieldValue: unknown) => {
       next[field] = fieldValue;
-      changed.add(field);
+      value.changed.add(field);
     };
     for (const field of [
       "model",
@@ -188,6 +162,22 @@ export function createControlUiSessionFixtures(
     }
     if (Object.hasOwn(fields, "model")) {
       set("modelOverrideSource", fields.model == null ? null : "user");
+    }
+    if (fields.agentRuntime !== undefined) {
+      const model = input.models?.find(
+        (candidate) =>
+          `${candidate.provider}/${candidate.id}` === next.model ||
+          (candidate.id === next.model && candidate.provider === next.modelProvider),
+      );
+      const runtime = fields.agentRuntime;
+      const selected = model?.runtimeChoices?.find((choice) => choice.agentRuntime.id === runtime);
+      set("agentRuntimeOverride", runtime ?? undefined);
+      set(
+        "agentRuntime",
+        runtime === null
+          ? (model?.agentRuntime ?? { id: "openclaw", source: "implicit" })
+          : { ...selected?.agentRuntime, id: runtime, source: "session" },
+      );
     }
     if (Object.hasOwn(fields, "unread")) {
       if (fields.unread === true) {
@@ -233,10 +223,12 @@ export function createControlUiSessionFixtures(
     );
     set("updatedAt", latestUpdatedAt + 1);
     value.row = next;
-    for (const field of changed) {
-      value.changed.add(field);
-    }
-    return { ok: true, key: next.key, entry: read(key) };
+    return {
+      ok: true,
+      key: next.key,
+      entry: read(key),
+      resolved: fields.agentRuntime !== undefined ? { agentRuntime: next.agentRuntime } : undefined,
+    };
   };
   type RunStatus = Extract<SessionRunStatus, "running" | "done" | "failed" | "killed">;
   let runEventSequence = 0;
@@ -420,7 +412,14 @@ export function createControlUiSessionFixtures(
     }
     return undefined;
   };
-  const materializeResponse = (params: unknown, response: unknown) => {
+  const materializeResponse = (method: string, params: unknown, response: unknown) => {
+    if (
+      method !== "sessions.create" &&
+      method !== "sessions.catalog.continue" &&
+      method !== "beam.owned.continue"
+    ) {
+      return;
+    }
     if (!isRecord(response)) {
       return;
     }
@@ -628,6 +627,13 @@ export function createControlUiSessionFixtures(
     read,
     resolve,
     sessionInfo,
+    requireSessionInfo(this: void, key: string) {
+      const row = sessionInfo(key);
+      if (!row) {
+        throw new Error(`Mock Gateway did not return session ${key}`);
+      }
+      return row;
+    },
     readResponse(
       method: string,
       params: unknown,
@@ -699,6 +705,15 @@ export function createControlUiSessionFixtures(
     list,
     listResponse,
     materializedCount: () => materializedSequence,
+    replaceCanonicalRow(this: void, row: ControlUiSessionFixture) {
+      const value = record(row.key);
+      // Published snapshots and mutation replies share the same canonical row.
+      for (const field of [...Object.keys(value.row), ...Object.keys(row)]) {
+        value.changed.add(field);
+      }
+      value.row = { ...row, key: canonicalKey(row.key) };
+      listed.add(value.row.key);
+    },
     replaceCanonicalList(rows: unknown[]) {
       const replacements: ControlUiSessionFixture[] = [];
       for (const row of rows) {

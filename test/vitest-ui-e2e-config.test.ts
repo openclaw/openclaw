@@ -34,14 +34,21 @@ const qaLabFiles = [
   "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
 ] as const;
 const serialGatewayFiles =
-  `chat-daybreak chat-html-csp chat-session-companion-private chat-steer-deferred-custody
-  deepseek-search desktop-resize plugin-inline-view quiet-automations`
+  `browser-pair-code chat-github-tool-surface chat-provider-failure-cause chat-steer-deferred-custody chat-steer-send-now deepseek-search desktop-resize gateway-fresh-visit guest-owner-filter plugin-inline-view session-management.new-nested`
     .split(/\s+/u)
+    .concat("required-human-action")
     .map((name) => `ui/src/e2e/${name}.real-gateway.e2e.test.ts`)
     .concat("ui/src/e2e/mcp-app-conformance.e2e.test.ts");
-const sharedSerialGatewayFile = "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts";
+const sharedSerialGatewayFiles = [
+  "ui/src/e2e/home-readonly.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-personal-groups.real-gateway.e2e.test.ts",
+  "ui/src/e2e/guest-typing.real-gateway.e2e.test.ts",
+  "ui/src/e2e/slack-inline-identity.e2e.test.ts",
+];
 const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecycle.real-gateway
   background-work.real-gateway chat-collaborator-scroll.real-gateway chat-html-publication.real-gateway
+  chat-completed-assistant.real-gateway chat-daybreak.real-gateway chat-html-csp.real-gateway
+  chat-session-companion-private.real-gateway config-form.real-gateway quiet-automations.real-gateway
   chat-agent-avatar.real-gateway chat-composer-websearch-kill-switch.real-gateway
   chat-flow.catalog-bootstrap chat-loading-performance.real-gateway chat-project-media.real-gateway
   chat-managed-media-order.real-gateway chat-session-diff-folding.real-gateway
@@ -49,18 +56,26 @@ const realGatewayFiles = `activity-run-inspector.real-gateway agent-file-lifecyc
   chat-reconnect-continuity.real-gateway chat-stop-finished-run.real-gateway
   chat-stop-long-turn.real-gateway
   chat-thinking-metadata.real-gateway chat-widget-sandbox.real-gateway
+  chat-incognito-send.real-gateway
   chat-stop-owned-exec.real-gateway chat-wait-clock.real-gateway
   command-palette-catalog.real-gateway command-palette-search.real-gateway
-  control-ui-auth-transports cron-duration-save.real-gateway
+  control-ui-auth-transports cron-duration-save.real-gateway cron-human-owner.real-gateway
   device-alias-rename.real-gateway device-platform-family.real-gateway logs-lifecycle model-api-keys.real-gateway
-  model-catalog-partial-refresh.real-gateway model-picker-search.real-gateway profile-page.real-gateway
+  model-catalog-partial-refresh.real-gateway model-connection-check.real-gateway
+  model-add-provider-to-chat.real-gateway
+  model-key-save-check.real-gateway
+  model-provider-remove-in-use.real-gateway
+  model-picker-search.real-gateway
+  model-setup-provider-errors.real-gateway profile-page.real-gateway
   provider-browser-login.real-gateway quota-reset-status.real-gateway
   session-progress-hovercard.real-gateway session-roster-request-rate.real-gateway
   session-pr-reader-lifetime.real-gateway sidebar-running-counts.real-gateway task-pull-requests.real-gateway
+  skill-workshop-plugin-enable.real-gateway
+  stale-build-recovery.production
   usage-sessions-owner-attribution worker-initial-setup.real-gateway`
   .split(/\s+/u)
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFile, workboardFile);
+  .concat(qaLabFiles, serialGatewayFiles, sharedSerialGatewayFiles, workboardFile);
 const mcpFile = "ui/src/e2e/mcp-app-conformance.e2e.test.ts";
 const builtGatewayFile = "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts";
 const prebuiltBuildInfo = { buildId: "prepared-ui-build", version: "2026.9.23" };
@@ -85,6 +100,7 @@ type OwnershipProbe = {
     nativePluginBuilds?: PreparedNativeControlUiPluginBuild[];
     bridge: boolean;
     productionRoot?: string;
+    deploymentRoot?: string;
   }>;
   leases: Array<{ outDir: string; closed: boolean; removed: boolean }>;
   shards: string[][];
@@ -108,6 +124,7 @@ function probeOwnership(
   options: {
     prebuilt?: boolean;
     productionArtifact?: boolean;
+    reuseProductionArtifact?: boolean;
     skipProductionArtifact?: boolean;
     filters?: string[];
     cli?: string[];
@@ -130,14 +147,25 @@ function probeOwnership(
   fs.writeFileSync(
     resourceFile,
     `
+    import { EventEmitter } from "node:events";
     import fs from "node:fs";
     export const resolvePlaywrightChromiumExecutablePath = () => "/fixture/chromium";
     export const canRunPlaywrightChromium = () => ${options.available !== false};
     export const chromium = {
+      // Discovery initializes the observer but does not execute renderer scenarios.
+      connect: async () => ({
+        newBrowserCDPSession: async () => Object.assign(new EventEmitter(), { send: async () => {} }),
+        close: async () => {},
+      }),
       executablePath: () => "/fixture/chromium",
       launchServer: async () => {
         if (!canRunPlaywrightChromium()) throw new Error("fixture Chromium is unavailable");
-        return { wsEndpoint: () => "ws://fixture/chromium", close: async () => {} };
+        const browserProcess = Object.assign(new EventEmitter(), { stderr: null });
+        return {
+          process: () => browserProcess,
+          wsEndpoint: () => "ws://fixture/chromium",
+          close: async () => { browserProcess.emit("exit", 0, null); },
+        };
       },
     };
     export const assertUiE2ePreflight = async () => {
@@ -264,6 +292,7 @@ function probeOwnership(
           buildInfo: project.getProvidedContext().controlUiE2eServerBuildInfo,
           nativePluginBuilds: project.getProvidedContext().controlUiE2eNativePluginBuilds,
           productionRoot: project.getProvidedContext().controlUiE2ePrebuiltAssets?.root,
+          deploymentRoot: project.getProvidedContext().controlUiE2eDeploymentAssets?.root,
           bridge: project.config.setupFiles.some(file => file.endsWith("/vitest.ui-e2e.setup.ts")),
         })), shards, steps, setupError, rootWorkers: ctx.config.maxWorkers,
         passWithNoTests: ctx.config.passWithNoTests,
@@ -292,6 +321,9 @@ function probeOwnership(
         OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: options.skipRealGateway ? "1" : "",
         OPENCLAW_UI_E2E_SKIP_PRODUCTION_ARTIFACT: options.skipProductionArtifact ? "1" : "",
         OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: options.productionArtifact ? canonicalRoot : "",
+        OPENCLAW_UI_E2E_DEPLOYMENT_ARTIFACT_ROOT: options.reuseProductionArtifact
+          ? canonicalRoot
+          : "",
       },
     },
   );
@@ -370,9 +402,28 @@ describe("Control UI E2E resource ownership", () => {
     );
     const result = probeOwnership();
     const inventory = fs
-      .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
+      .globSync(
+        [
+          "ui/src/**/*.e2e.test.{ts,tsx}",
+          "extensions/*/browser/**/*.e2e.test.{ts,tsx}",
+          ...qaLabFiles,
+        ],
+        { cwd: repoRoot },
+      )
       .toSorted();
     expectInventory(result, inventory);
+    const reused = probeOwnership({ reuseProductionArtifact: true });
+    expect(reused.files).toEqual(result.files);
+    expect(reused.shards).toEqual(result.shards);
+    expect(reused.contexts.every((context) => context.productionRoot === undefined)).toBe(true);
+    expect(
+      reused.contexts.every((context) => context.deploymentRoot?.endsWith("/canonical-ui")),
+    ).toBe(true);
+    expect(reused.leases).toEqual(lease(true));
+    expect(reused.canonicalAssetsIntact).toBe(true);
+    expect(reused.contexts.map((context) => context.nativePluginBuilds)).toEqual(
+      result.contexts.map((context) => context.nativePluginBuilds),
+    );
     expect(result.setupError).toBeUndefined();
     for (const entry of result.files) {
       const serial = uiE2eSerialTestFiles.includes(entry.file);
@@ -410,6 +461,15 @@ describe("Control UI E2E resource ownership", () => {
     expect(skipped.admissions).toEqual([]);
   });
 
+  it("isolates native paste from parallel browser clipboard writers", () => {
+    const file = "ui/src/e2e/chat-pasted-text-show-in-text-field.e2e.test.ts";
+    const result = probeOwnership({ filters: [file] });
+    expectInventory(result, [file]);
+    expect(result.files).toEqual([
+      expect.objectContaining({ file, project: "ui-e2e-serial", phase: 1, workers: 1 }),
+    ]);
+  });
+
   it("routes production deployment fixtures exactly once with or without artifact reuse", async () => {
     const { uiE2eProductionArtifactTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const files = uiE2eProductionArtifactTestFiles.toSorted();
@@ -423,6 +483,7 @@ describe("Control UI E2E resource ownership", () => {
     const skipped = probeOwnership({ filters: files, skipProductionArtifact: true });
     const artifact = probeOwnership({ productionArtifact: true });
     expect(skipped.files).toEqual([]);
+    expect(skipped.shards.flat()).toEqual([]);
     expect(skipped.passWithNoTests).toBe(true);
     expectInventory(artifact, files);
     expect(artifact.setupError).toBeUndefined();
@@ -431,14 +492,6 @@ describe("Control UI E2E resource ownership", () => {
     ).toBe(true);
     expect(artifact.leases).toEqual([]);
     expect(artifact.canonicalAssetsIntact).toBe(true);
-    expectInventory(
-      {
-        ...artifact,
-        files: [...skipped.files, ...artifact.files],
-        shards: [...skipped.shards, ...artifact.shards],
-      },
-      files,
-    );
 
     const partial = probeOwnership({ productionArtifact: true, filters: [files[0]!] });
     expectInventory(partial, [files[0]!]);
@@ -466,17 +519,17 @@ describe("Control UI E2E resource ownership", () => {
             workers: 1,
             fileParallelism: false,
           })),
-          {
-            file: sharedSerialGatewayFile,
+          ...sharedSerialGatewayFiles.map((file) => ({
+            file,
             project: "ui-e2e-serial",
             phase: 1,
             workers: 1,
             fileParallelism: false,
-          },
+          })),
         ].toSorted((left, right) => left.file.localeCompare(right.file)),
       );
       const parallel = result.files.filter((entry) => entry.phase === 2);
-      expect(parallel).toHaveLength(45);
+      expect(parallel).toHaveLength(60);
       expect(parallel.every((entry) => entry.fileParallelism)).toBe(true);
       expect(parallel.every((entry) => entry.workers === result.rootWorkers)).toBe(true);
       for (const entry of parallel) {

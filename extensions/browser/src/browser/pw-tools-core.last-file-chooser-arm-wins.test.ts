@@ -167,11 +167,12 @@ describe("pw-tools-core", () => {
     });
   });
   it("waits for selector, url, load state, and function", async () => {
+    const resultHandle = { dispose: vi.fn(async () => {}) };
     const waits = {
       selector: vi.fn(async () => {}),
       url: vi.fn(async () => {}),
       load: vi.fn(async () => {}),
-      predicate: vi.fn(async (_fn: unknown, _state: unknown, _options: unknown) => {}),
+      predicate: vi.fn(async (_fn: unknown, _state: unknown, _options: unknown) => resultHandle),
       delay: vi.fn(async () => {}),
     };
     const documentHandle = { dispose: vi.fn(async () => {}) };
@@ -215,6 +216,7 @@ describe("pw-tools-core", () => {
       ],
     });
     expect(documentHandle.dispose).toHaveBeenCalledOnce();
+    expect(resultHandle.dispose).toHaveBeenCalledOnce();
   });
 
   it("clamps passive wait deadlines without running an executable predicate", async () => {

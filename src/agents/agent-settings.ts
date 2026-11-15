@@ -5,6 +5,7 @@ import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
 import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { SettingsManager } from "./sessions/settings-manager.js";
 
@@ -14,6 +15,7 @@ export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 export function applyAgentCompactionSettingsFromConfig(params: {
   settingsManager: SettingsManager;
   cfg?: OpenClawConfig;
+  agentId?: string;
   /** When known, the resolved context window budget for the current model. */
   contextTokenBudget?: number;
 }): void {
@@ -24,6 +26,10 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
   const configuredEnabled = compactionCfg?.enabled;
 
+  const maxSummaryChars =
+    (params.cfg && params.agentId
+      ? resolveAgentConfig(params.cfg, params.agentId)?.compaction?.maxSummaryChars
+      : undefined) ?? compactionCfg?.maxSummaryChars;
   const configuredKeepRecentTokens = compactionCfg?.keepRecentTokens;
   const contextTokenBudget = floorPositiveFiniteNumber(params.contextTokenBudget);
   const requestedReserveTokens = Math.max(
@@ -40,7 +46,11 @@ export function applyAgentCompactionSettingsFromConfig(params: {
         });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
-  const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
+  const overrides: { reserveTokens?: number; keepRecentTokens?: number; maxSummaryChars?: number } =
+    {};
+  if (maxSummaryChars !== undefined) {
+    overrides.maxSummaryChars = maxSummaryChars;
+  }
   if (targetReserveTokens !== currentReserveTokens) {
     overrides.reserveTokens = targetReserveTokens;
   }

@@ -10,7 +10,7 @@ import type {
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
-import { targetDiscoveryLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../config/sessions/session-transcript-worker-resources.js";
 import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
@@ -27,11 +27,8 @@ import {
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { assertAgentDatabaseReadAdmitted } from "../state/agent-database-admission.js";
 import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
-import {
-  resolveOpenClawAgentSqlitePath,
-  withOpenClawAgentDatabaseRuntime,
-} from "../state/openclaw-agent-db.js";
-import { openOpenClawAgentSqliteWorkerStore } from "../state/openclaw-agent-worker-store.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { openOpenClawAgentSqliteWorkerStoreV2 } from "../state/openclaw-agent-worker-store.js";
 import {
   runOpenClawAgentBoardReadAdmission,
   runOpenClawAgentWriteAdmission,
@@ -150,7 +147,7 @@ export class SqliteBoardStore implements BoardStore {
               snapshotFields: [],
               expectedIdentity: identity,
             }),
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
         assertDatabaseCurrent();
         assertCurrent();
@@ -169,77 +166,69 @@ export class SqliteBoardStore implements BoardStore {
           assertDatabaseCurrent();
           assertCurrent();
         };
-        return withOpenClawAgentDatabaseRuntime(
+        options?.assertCurrent?.();
+        if (prepare) {
+          await prepare();
+        }
+        assertPreparedCurrent();
+        const publication = await openOpenClawAgentSqliteWorkerStoreV2<BoardWriteOperations>(
           databaseOptions,
-          async (database) => {
-            if (prepare) {
-              await prepare();
-            }
-            assertPreparedCurrent();
-            const publication = await openOpenClawAgentSqliteWorkerStore<BoardWriteOperations>(
-              databaseOptions,
-              database.db,
-              {
-                moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
-                input: {
-                  agentId: databaseOptions.agentId,
-                  sessionKey: resolved.sessionKey,
-                  expectedSession,
-                } satisfies BoardWorkerInput,
-              },
-            );
-            let outcome: Result<T, unknown>;
-            try {
-              const value = await publication.run(async (scope) => {
-                // Source revocation blocks new admissions; admitted writes may finish their commit.
-                options?.assertCurrent?.();
-                let committed: BoardWriteOutcome<T>;
-                try {
-                  committed = await worker(scope, resolved.sessionKey);
-                } catch (error) {
-                  if (hasUnknownBoardWriteOutcome(error)) {
-                    sessionChanges.emit({
-                      sessionKey: resolved.sessionKey,
-                      storePath: database.path,
-                    });
-                  }
-                  throw error;
-                }
-                // Committed invalidation belongs to the original store, even after caller revocation.
-                sessionChanges.emitBatch(committed.changes);
-                return committed.value;
-              }, assertPreparedCurrent);
-              outcome = { ok: true, value };
-            } catch (error) {
-              outcome = { ok: false, error: restoreBoardError(error) };
-            }
-            let cleanup: Result<void, unknown>;
-            try {
-              await publication.close();
-              cleanup = { ok: true, value: undefined };
-            } catch (error) {
-              cleanup = { ok: false, error };
-            }
-            if (!outcome.ok) {
-              if (!cleanup.ok) {
-                throw new AggregateError(
-                  [outcome.error, cleanup.error],
-                  "Board publication and cleanup failed",
-                  { cause: outcome.error },
-                );
-              }
-              throw outcome.error;
-            }
-            if (!cleanup.ok) {
-              reportBoardCleanupFailure(cleanup.error);
-            }
-            return outcome.value;
-          },
-          () => {
-            options?.assertCurrent?.();
-            assertPreparedCurrent();
+          { version: 2, assertCurrent: assertPreparedCurrent },
+          {
+            moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.boardStore),
+            input: {
+              agentId: databaseOptions.agentId,
+              sessionKey: resolved.sessionKey,
+              expectedSession,
+            } satisfies BoardWorkerInput,
           },
         );
+        let outcome: Result<T, unknown>;
+        try {
+          const value = await publication.run(async (scope) => {
+            // Source revocation blocks new admissions; admitted writes may finish their commit.
+            options?.assertCurrent?.();
+            let committed: BoardWriteOutcome<T>;
+            try {
+              committed = await worker(scope, resolved.sessionKey);
+            } catch (error) {
+              if (hasUnknownBoardWriteOutcome(error)) {
+                sessionChanges.emit({
+                  sessionKey: resolved.sessionKey,
+                  storePath: identity.canonicalPath,
+                });
+              }
+              throw error;
+            }
+            // Committed invalidation belongs to the original store, even after caller revocation.
+            sessionChanges.emitBatch(committed.changes);
+            return committed.value;
+          }, assertPreparedCurrent);
+          outcome = { ok: true, value };
+        } catch (error) {
+          outcome = { ok: false, error: restoreBoardError(error) };
+        }
+        let cleanup: Result<void, unknown>;
+        try {
+          await publication.close();
+          cleanup = { ok: true, value: undefined };
+        } catch (error) {
+          cleanup = { ok: false, error };
+        }
+        if (!outcome.ok) {
+          if (!cleanup.ok) {
+            throw new AggregateError(
+              [outcome.error, cleanup.error],
+              "Board publication and cleanup failed",
+              { cause: outcome.error },
+            );
+          }
+          throw outcome.error;
+        }
+        if (!cleanup.ok) {
+          reportBoardCleanupFailure(cleanup.error);
+        }
+        return outcome.value;
       },
       true,
     );
@@ -325,7 +314,7 @@ export class SqliteBoardStore implements BoardStore {
           },
           snapshotOnly,
         ),
-      targetDiscoveryLane,
+      sessionStoreLane,
     ).catch((error: unknown) => {
       throw restoreBoardError(error);
     });

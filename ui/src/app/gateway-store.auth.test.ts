@@ -7,6 +7,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import type { GatewayHelloOk } from "../api/gateway.ts";
+import { i18n } from "../i18n/lib/translate.ts";
 import { goalOperationScopePrefix } from "../lib/chat/goal-operation-storage.ts";
 import {
   readAvatarGatewayContext,
@@ -81,6 +82,19 @@ describe("createApplicationGateway authentication diagnostics", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("localizes disconnections without translating the Gateway close reason", () => {
+    gateway.connect();
+    accept();
+    const translate = vi.spyOn(i18n, "t").mockReturnValue("localized disconnect");
+    current().testOptions.onClose?.({
+      code: 4001,
+      reason: "external Gateway reason",
+      willRetry: false,
+    });
+    expect(gateway.snapshot.lastError).toBe("localized disconnect external Gateway reason");
+    expect(translate).toHaveBeenCalledWith("connection.interrupted", { code: "4001" });
   });
 
   it("rejects a different development target before accepting its credentials or opening a client", () => {
@@ -255,7 +269,9 @@ describe("createApplicationGateway authentication diagnostics", () => {
         rejectStaleBuild();
       }
       expect(fetchMock).toHaveBeenCalledOnce();
-      expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("HEAD");
+      expect(
+        new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("X-OpenClaw-Reachability-Probe"),
+      ).toBe("1");
       probe.resolve(new Response(null, { status: 200 }));
       if (handoff === "retired") {
         await nextTurn();

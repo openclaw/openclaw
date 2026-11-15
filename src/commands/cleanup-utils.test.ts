@@ -36,7 +36,8 @@ async function attemptGatewayLockInChild(env: NodeJS.ProcessEnv): Promise<string
       report("blocked");
     }
   `;
-  const childEnv = { ...env };
+  // The lock-only probe must not recreate state with diagnostic log files during cleanup.
+  const childEnv: NodeJS.ProcessEnv = { ...env, OPENCLAW_LOG_LEVEL: "silent" };
   delete childEnv.NODE_ENV;
   delete childEnv.VITEST;
   delete childEnv.VITEST_POOL_ID;
@@ -278,7 +279,12 @@ describe("cleanup path removals", () => {
   it.each(["shared", "separate"] as const)(
     "retains current and published Gateway exclusion through linked-path cleanup (%s lock directory)",
     async (layout) => {
-      const { stateDir, configPath, env, remove } = await cleanupFixture(true, "{}\n");
+      const { tmpRoot, stateDir, configPath, env, remove } = await cleanupFixture(true);
+      // The real startup probe must not recreate the state tree just to write a refusal log.
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ logging: { file: path.join(tmpRoot, "gateway-probe.log") } }),
+      );
       const markerPath = path.join(stateDir, "marker.txt");
       const lockDir =
         layout === "shared" ? resolveGatewayLockDir(stateDir) : path.join(stateDir, "custom-locks");
@@ -512,6 +518,23 @@ describe("cleanup path removals", () => {
     await expect(fs.stat(configPath)).rejects.toThrow();
     await expect(fs.stat(cacheFile)).rejects.toThrow();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves a workspace spelled through a state-dir alias",
+    async () => {
+      // Config names ~/.openclaw/workspace while OPENCLAW_STATE_DIR is the real directory.
+      const { tmpRoot, stateDir, remove } = await cleanupFixture();
+      const alias = path.join(tmpRoot, "state-alias");
+      await fs.symlink(stateDir, alias);
+      const workspaceFile = path.join(stateDir, "workspace", "project.txt");
+      await fs.mkdir(path.dirname(workspaceFile));
+      await fs.writeFile(workspaceFile, "keep me");
+      await fs.writeFile(path.join(stateDir, "cache.json"), "remove me");
+      await remove({}, { preservePaths: [path.join(alias, "workspace")] });
+      await expect(fs.readFile(workspaceFile, "utf8")).resolves.toBe("keep me");
+      await expect(fs.stat(path.join(stateDir, "cache.json"))).rejects.toThrow();
+    },
+  );
 
   it.each(["remove", "preview", "failure"] as const)(
     "settles workspace rows after filesystem %s",

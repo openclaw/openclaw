@@ -42,4 +42,19 @@ describe("limitHistoryTurns", () => {
     ];
     expect(limitHistoryTurns(messages, 2)).toBe(messages);
   });
+
+  it("counts pending consecutive inputs as one turn only on merging routes", () => {
+    const completed = makeTurns(3);
+    const orphan = { role: "user" as const, content: "orphan", timestamp: 4 };
+    const current = { role: "user" as const, content: "current", timestamp: 5 };
+    const messages = [...completed, orphan, current];
+    const options = { groupConsecutiveUserTurns: true };
+    expect(limitHistoryTurns(messages, 3, options)).toBe(messages);
+    expect(limitHistoryTurns(messages, 1, options)).toEqual([
+      ...completed.slice(-2),
+      orphan,
+      current,
+    ]);
+    expect(limitHistoryTurns(messages, 1)).toEqual([current]);
+  });
 });

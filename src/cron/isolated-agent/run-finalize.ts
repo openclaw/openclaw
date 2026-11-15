@@ -1,7 +1,7 @@
 /** Final persistence, telemetry, and delivery for an isolated cron run. */
 import { asPositiveFiniteNumber as resolvePositiveContextTokens } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { hasAcceptedSessionSpawn } from "../../agents/accepted-session-spawn.js";
+import { hasOwedSessionSpawn } from "../../agents/accepted-session-spawn.js";
 import {
   CODE_MODE_MCP_CATALOG_MISS_MESSAGE,
   isEmbeddedRunTerminalToolFailure,
@@ -14,6 +14,7 @@ import {
 } from "../../config/sessions/context-token-provenance.js";
 import type { AutomationResult } from "../../infra/agent-run-registry.types.js";
 import { resolveSourceDeliveryOutcome } from "../../infra/outbound/source-delivery-plan.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { hasPendingAutomationContinuation } from "../automation-result.js";
 import {
@@ -21,7 +22,11 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
-import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
+import type {
+  CronDeliveryTrace,
+  CronFailureNotificationDetail,
+  CronRunTelemetry,
+} from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
 import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
@@ -43,6 +48,19 @@ import { cleanupCronRunSessionAfterRun } from "./session-cleanup.js";
 
 const cronContextRuntimeLoader = createLazyImportLoader(() => import("./run-context.runtime.js"));
 
+/**
+ * Resolves the semantic stall cause worth projecting into cron history and alerts.
+ * A stop during provider rate-limit backoff keeps the rate-limit recovery text that
+ * `describeStop()` produced, so the mechanical watchdog reason must not replace it.
+ */
+export function resolveCronRecoveryClassification(
+  operation?: Pick<ReplyOperation, "staleExpiryReason" | "recoveryClassification">,
+): string | undefined {
+  return operation?.staleExpiryReason === "rate_limited"
+    ? undefined
+    : operation?.recoveryClassification;
+}
+
 export async function finalizeCronRun(params: {
   prepared: PreparedCronRunContext;
   automationResult?: AutomationResult;
@@ -52,8 +70,14 @@ export async function finalizeCronRun(params: {
   settleUsage: (contextTokens: number) => Promise<CronRunTelemetry["usage"]>;
   markCronRunSessionCleanupHandled: () => void;
   beforeSessionDelete: () => void;
+  /**
+   * Semantic cause a stuck-session recovery acted on (e.g. `blocked_tool_call`),
+   * recorded on the operation. Surfaced in the run history when the embedded run
+   * was aborted without a descriptive error message. Optional.
+   */
+  recoveryClassification?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const { prepared, execution } = params;
+  const { prepared, execution, recoveryClassification } = params;
   const finalRunResult = execution.runResult;
   const replyDisposition = finalRunResult.meta?.terminalReply?.disposition ?? "empty";
   const pendingContinuation = hasPendingAutomationContinuation(finalRunResult.meta);
@@ -148,13 +172,15 @@ export async function finalizeCronRun(params: {
     prepared.cronSession.sessionEntry.contextTokens = contextTokens;
     prepared.cronSession.sessionEntry.contextTokensSource = contextTokensSource;
   }
-  if (hasNonzeroUsage(usage) || hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)) {
-    const totalTokens = deriveSessionTotalTokens({
-      usage: lastCallUsage,
-      contextTokens,
-      promptTokens,
-    });
-    if (typeof totalTokens === "number" && Number.isFinite(totalTokens) && totalTokens > 0) {
+  if (
+    execution.currentContextSnapshot ||
+    hasNonzeroUsage(usage) ||
+    hasNonzeroUsage(finalRunResult.meta?.agentMeta?.usage)
+  ) {
+    const totalTokens = execution.currentContextSnapshot
+      ? execution.currentContextSnapshot.tokens
+      : deriveSessionTotalTokens({ lastCallUsage, contextTokens, promptTokens });
+    if (totalTokens !== undefined) {
       prepared.cronSession.sessionEntry.totalTokens = totalTokens;
       prepared.cronSession.sessionEntry.totalTokensFresh = true;
       prepared.cronSession.sessionEntry.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
@@ -162,6 +188,9 @@ export async function finalizeCronRun(params: {
       prepared.cronSession.sessionEntry.totalTokens = undefined;
       prepared.cronSession.sessionEntry.totalTokensFresh = false;
       prepared.cronSession.sessionEntry.totalTokensVersion = undefined;
+    }
+    if (prepared.runSessionKey === prepared.agentSessionKey) {
+      prepared.cronSession.contextTotalsAccounted = true;
     }
   }
   const telemetry: CronRunTelemetry = {
@@ -198,11 +227,28 @@ export async function finalizeCronRun(params: {
   });
   if (finalRunResult.meta?.aborted === true && !cronPayloadOutcome.hasFatalErrorPayload) {
     const metaErrorMessage = normalizeOptionalString(finalRunResult.meta.error?.message);
-    const error = metaErrorMessage ?? "cron isolated agent run aborted";
+    // Prefer a descriptive cause: the embedded run's error message, else the
+    // semantic recovery classification (e.g. blocked_tool_call) recorded when the
+    // run was killed for a stuck session, else a cause-free literal.
+    const error =
+      metaErrorMessage ||
+      (recoveryClassification && recoveryClassification.trim().length > 0
+        ? recoveryClassification
+        : "cron isolated agent run aborted");
     await cleanupRunSession("cron-delete-after-run-aborted");
     return prepared.withRunSession({
       status: "error",
       error,
+      // Project the closed recovery fact into the operator-facing notification
+      // contract so the chat alert shows the cause instead of a generic line.
+      ...(recoveryClassification && recoveryClassification.trim().length > 0
+        ? {
+            failureNotificationDetail: {
+              kind: "agent-stall",
+              classification: recoveryClassification,
+            } satisfies CronFailureNotificationDetail,
+          }
+        : {}),
       replyDisposition,
       diagnostics: mergeCronRunDiagnostics(
         prepared.preflightDiagnostics,
@@ -257,6 +303,18 @@ export async function finalizeCronRun(params: {
         : { summary, outputText };
     return prepared.withRunSession({
       status: failure || hasFatalErrorPayload ? "error" : "ok",
+      ...(useRunFailure &&
+      !hasTerminalToolFailure &&
+      !pendingPresentationWarningError &&
+      finalRunResult.meta?.aborted !== true
+        ? {
+            agentTerminal: hasFatalStructuredErrorPayload
+              ? cronPayloadOutcome.agentTerminal
+              : finalRunResult.meta?.failureSignal === undefined && finalRunResult.meta?.error
+                ? finalRunResult.meta.agentTerminal
+                : undefined,
+          }
+        : {}),
       ...(failure
         ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
         : hasFatalErrorPayload
@@ -303,7 +361,8 @@ export async function finalizeCronRun(params: {
       ...telemetry,
     });
   };
-  const acceptedSessionSpawn = hasAcceptedSessionSpawn(finalRunResult.acceptedSessionSpawns);
+  // Only a child that owes this run a completion or awaits collection makes it a handoff.
+  const acceptedSessionSpawn = hasOwedSessionSpawn(finalRunResult.acceptedSessionSpawns);
   const quietResponse = !hasFatalErrorPayload && deliveryDisposition.kind !== "visible";
   const spawnOnlyHandoff =
     acceptedSessionSpawn &&
@@ -401,6 +460,7 @@ export async function finalizeCronRun(params: {
       deliveryResult.deliveryAttempted &&
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
+    receipts: deliveryResult.deliveryReceipts,
   });
   if (!deliveryResult.disposition) {
     summary = deliveryResult.summary;

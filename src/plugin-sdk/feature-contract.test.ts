@@ -32,6 +32,36 @@ const browserContract = {
   operations: { inspect: { kind: "query" }, update: { kind: "action" } },
 } satisfies FeatureClientContract<typeof contract>;
 
+it("accepts more than 64 operations without imposing a tool limit", () => {
+  const operations = Object.fromEntries(
+    Array.from({ length: 80 }, (_, index) => [
+      `operation-${index}`,
+      { ...contract.operations.inspect, tool: { name: `feature_tool_${index}` } },
+    ]),
+  );
+  expect(defineFeatureContract({ ...contract, operations }).operations).toBe(operations);
+});
+
+it("accepts more than 64 declared event types", () => {
+  const events = Object.fromEntries(
+    Array.from({ length: 80 }, (_, index) => [
+      `event-${index}`,
+      Type.Object({ value: Type.String() }),
+    ]),
+  );
+  expect(defineFeatureContract({ ...contract, events }).events).toBe(events);
+});
+
+it("retains plugin, operation, and event validation", () => {
+  for (const invalid of [
+    { ...contract, pluginId: " " },
+    { ...contract, operations: { "Invalid id": contract.operations.inspect } },
+    { ...contract, events: { "invalid.event": Type.Object({}) } },
+  ]) {
+    expect(() => defineFeatureContract(invalid)).toThrow();
+  }
+});
+
 function watchFixture(clientContract: FeatureClientContract<typeof contract>, sessionKey?: string) {
   const controller = new AbortController();
   const events = new Map<string, (payload: unknown) => void>();

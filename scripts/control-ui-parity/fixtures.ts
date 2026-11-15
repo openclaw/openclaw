@@ -5,10 +5,8 @@ import { computeBaseConfigSchemaResponse } from "../../src/config/schema-base.ts
 import type { UsageSummary } from "../../src/infra/provider-usage.types.ts";
 import type { ControlUiLinkReaderDocument } from "../../src/shared/control-ui-link-reader.ts";
 import type { SessionsUsageResult } from "../../src/shared/usage-types.ts";
-import {
-  defaultControlUiFeatureMethods,
-  type ControlUiMockGatewayScenario,
-} from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import { defaultControlUiFeatureMethods } from "../../ui/src/test-helpers/control-ui-e2e.ts";
+import type { NativeControlUiMockGatewayScenario } from "../../ui/src/test-helpers/control-ui-plugin-e2e.ts";
 import { createControlUiSessionRow } from "../../ui/src/test-helpers/control-ui-session-fixtures.ts";
 import { workboardUi } from "../../ui/src/test-helpers/control-ui-workboard-fixture.ts";
 import { buildWorkboardMocks } from "../../ui/src/test-helpers/control-ui-workboard-fixtures.ts";
@@ -130,7 +128,7 @@ const providerUsage = {
   ],
 } satisfies UsageSummary;
 
-export const settingsControlsScenario: ControlUiMockGatewayScenario = {
+export const settingsControlsScenario: NativeControlUiMockGatewayScenario = {
   methodResponses: {
     "config.schema": {
       generatedAt: new Date(fixedTime).toISOString(),
@@ -153,7 +151,7 @@ export const settingsControlsScenario: ControlUiMockGatewayScenario = {
   },
 };
 
-export const parityBaseScenario: ControlUiMockGatewayScenario = {
+export const parityBaseScenario: NativeControlUiMockGatewayScenario = {
   sessionKey,
   sessions: [session],
   // Bootstrap reads must retain the same principal when users.self resolves.
@@ -363,7 +361,7 @@ export const parityBaseScenario: ControlUiMockGatewayScenario = {
 };
 
 const workboard = buildWorkboardMocks(fixedTime, actor);
-export const parityWorkboardScenario: ControlUiMockGatewayScenario = {
+export const parityWorkboardScenario: NativeControlUiMockGatewayScenario = {
   ...workboardUi,
   sessions: [session, ...workboard.cardSessions],
   sessionTranscripts: workboard.cardSessionHistories,
@@ -420,7 +418,7 @@ const readerResponses = {
     })),
   },
 };
-export const parityHovercardScenario: ControlUiMockGatewayScenario = {
+export const parityHovercardScenario: NativeControlUiMockGatewayScenario = {
   controlUiLinkReaders: [TEST_LINK_READER],
   historyMessages: [
     {
@@ -436,7 +434,7 @@ export const parityHovercardScenario: ControlUiMockGatewayScenario = {
   ],
   methodResponses: readerResponses,
 };
-export const parityTabOverflowScenario: ControlUiMockGatewayScenario = {
+export const parityTabOverflowScenario: NativeControlUiMockGatewayScenario = {
   ...parityHovercardScenario,
   historyMessages: [
     {
@@ -468,7 +466,7 @@ const approval: PendingApprovalSnapshot = {
     allowedDecisions: ["allow-once", "deny"],
   },
 };
-export const standaloneApprovalScenario: ControlUiMockGatewayScenario = {
+export const standaloneApprovalScenario: NativeControlUiMockGatewayScenario = {
   featureMethods: ["approval.get", "approval.resolve"],
   operatorScopes: ["operator.read", "operator.approvals"],
   methodResponses: { "approval.get": { approval } },
@@ -493,7 +491,7 @@ const question: QuestionRecord = {
     },
   ],
 };
-export const standaloneQuestionScenario: ControlUiMockGatewayScenario = {
+export const standaloneQuestionScenario: NativeControlUiMockGatewayScenario = {
   featureMethods: ["question.get", "question.list", "question.resolve"],
   methodResponses: { "question.get": { question }, "question.list": { questions: [question] } },
 };

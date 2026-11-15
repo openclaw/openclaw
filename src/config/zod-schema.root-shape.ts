@@ -1,10 +1,19 @@
 import path from "node:path";
 import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
+import { UI_PREFERENCE_DEFAULTS } from "../../packages/gateway-protocol/src/schema/ui-appearance-preferences.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isValidCronExpression } from "../cron/expression.js";
+import { REPOSITORY_BRANCH_PREFIX_PATTERN } from "./repository-branch-prefix.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
-import { AgentsSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
+import {
+  addDuplicateAgentIdKeyIssues,
+  AgentIdKeySchema,
+  AgentsSchema,
+  BindingsSchema,
+  BroadcastSchema,
+} from "./zod-schema.agents.js";
 import { ApprovalsSchema } from "./zod-schema.approvals.js";
 import { ChannelsSchema } from "./zod-schema.channels-config.js";
 import { CloudWorkersConfigSchema } from "./zod-schema.cloud-workers.js";
@@ -38,6 +47,26 @@ import { CommandsSchema, MessagesSchema, SessionSchema } from "./zod-schema.sess
 import { StorageConfigSchema } from "./zod-schema.storage.js";
 import { TelemetryConfigSchema } from "./zod-schema.telemetry.js";
 
+const CronDefaultDeliveryDestinationSchema = z.strictObject({
+  channel: z.string().optional(),
+  to: z.string().trim().min(1),
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  accountId: z.string().optional(),
+});
+
+const CronFailureAlertRouteSchema = z.strictObject({
+  threadId: z.union([z.string().trim().min(1), z.number().int()]).optional(),
+  mode: z.enum(["announce", "webhook"]).optional(),
+  accountId: z.string().optional(),
+  channel: z.string().optional(),
+  to: z.string().optional(),
+});
+
+const CronScopedDefaultsSchema = z.strictObject({
+  delivery: CronDefaultDeliveryDestinationSchema.optional(),
+  failureAlert: CronFailureAlertRouteSchema.optional(),
+});
+
 export const OpenClawSchemaShape = {
   $schema: z.string().optional(),
   meta: z
@@ -47,6 +76,8 @@ export const OpenClawSchemaShape = {
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
           utilityModelSeparation: z.literal(true).optional(),
+          skillWorkshopPlugin: z.literal(true).optional(),
+          skillLibraryToolSplit: z.literal(true).optional(),
           webhookListeners: z
             .union([z.literal(true), z.record(z.string(), z.array(z.array(z.string())))])
             .optional(),
@@ -62,7 +93,7 @@ export const OpenClawSchemaShape = {
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
-      vars: z.record(z.string(), z.string()).optional(),
+      vars: z.record(z.string(), z.string().register(sensitive)).optional(),
     })
     .optional(),
   wizard: z
@@ -93,6 +124,11 @@ export const OpenClawSchemaShape = {
       auto: z
         .strictObject({
           enabled: z.boolean().optional(),
+          schedule: z
+            .string()
+            .trim()
+            .refine((value) => isValidCronExpression(value), "Invalid cron expression")
+            .optional(),
         })
         .optional(),
     })
@@ -126,8 +162,8 @@ export const OpenClawSchemaShape = {
           z.string().regex(/^[a-z0-9-]+$/, "Profile names must be alphanumeric with hyphens only"),
           z
             .strictObject({
-              /** Browser engine capability preset. Lightpanda is an external, semantic-only CDP service. */
-              engine: z.enum(["chromium", "lightpanda"]).optional(),
+              /** Browser engine capability preset. Lightpanda and Kitesurf are external CDP services. */
+              engine: z.enum(["chromium", "lightpanda", "kitesurf"]).optional(),
               /** CDP port for this profile. Allocated once at creation, persisted permanently. */
               cdpPort: z.number().int().min(1).max(65535).optional(),
               /** CDP/DevTools endpoint URL for this profile (remote CDP or existing-session endpoint attach). */
@@ -175,29 +211,30 @@ export const OpenClawSchemaShape = {
                 'Profile cdpUrl is not supported with driver="extension" (the relay owns the endpoint)',
             })
             .superRefine((value, ctx) => {
-              if (value.engine !== "lightpanda") {
+              if (value.engine !== "lightpanda" && value.engine !== "kitesurf") {
                 return;
               }
+              const label = value.engine === "kitesurf" ? "Kitesurf" : "Lightpanda";
               const endpoint = value.cdpUrl ? URL.parse(value.cdpUrl) : null;
               if (!endpoint || !["ws:", "wss:"].includes(endpoint.protocol)) {
                 ctx.addIssue({
                   code: "custom",
                   path: ["cdpUrl"],
-                  message: "Lightpanda requires an explicit ws:// or wss:// CDP endpoint",
+                  message: `${label} requires an explicit ws:// or wss:// CDP endpoint`,
                 });
               }
               if (value.attachOnly !== true) {
                 ctx.addIssue({
                   code: "custom",
                   path: ["attachOnly"],
-                  message: "Lightpanda requires attachOnly: true; OpenClaw does not launch it",
+                  message: `${label} requires attachOnly: true; OpenClaw does not launch it`,
                 });
               }
               if (value.driver !== undefined && value.driver !== "openclaw") {
                 ctx.addIssue({
                   code: "custom",
                   path: ["driver"],
-                  message: 'Lightpanda requires the default "openclaw" CDP driver',
+                  message: `${label} requires the default "openclaw" CDP driver`,
                 });
               }
               for (const key of [
@@ -212,7 +249,7 @@ export const OpenClawSchemaShape = {
                   ctx.addIssue({
                     code: "custom",
                     path: [key],
-                    message: `Lightpanda does not support the profile ${key} setting`,
+                    message: `${label} does not support the profile ${key} setting`,
                   });
                 }
               }
@@ -249,11 +286,17 @@ export const OpenClawSchemaShape = {
         }
         const key = endpoint.toString().replace(/\/$/, "");
         const previous = endpoints.get(key);
-        if (previous && (previous.engine === "lightpanda" || profile.engine === "lightpanda")) {
+        if (
+          previous &&
+          (previous.engine === "lightpanda" ||
+            profile.engine === "lightpanda" ||
+            previous.engine === "kitesurf" ||
+            profile.engine === "kitesurf")
+        ) {
           ctx.addIssue({
             code: "custom",
             path: ["profiles", name, "cdpUrl"],
-            message: `Lightpanda requires a dedicated CDP endpoint; also used by profile "${previous.name}"`,
+            message: `External browser engines require a dedicated CDP endpoint; also used by profile "${previous.name}"`,
           });
         }
         endpoints.set(key, { name, engine: profile.engine });
@@ -283,16 +326,30 @@ export const OpenClawSchemaShape = {
               z.literal("miami"),
               z.literal("custom"),
             ])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.theme }),
           themeMode: z
             .union([z.literal("light"), z.literal("dark"), z.literal("system")])
-            .optional(),
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.themeMode }),
           accent: z.union([z.literal("theme"), HexColorSchema.startsWith("#")]).optional(),
           locale: z.string().max(20).optional(),
-          chatShowThinking: z.boolean().optional(),
-          chatShowToolCalls: z.boolean().optional(),
-          chatPersistCommentary: z.boolean().optional(),
-          chatSendShortcut: z.union([z.literal("enter"), z.literal("modifier-enter")]).optional(),
+          chatShowThinking: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowThinking }),
+          chatShowToolCalls: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatShowToolCalls }),
+          chatPersistCommentary: z
+            .boolean()
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatPersistCommentary }),
+          chatSendShortcut: z
+            .union([z.literal("enter"), z.literal("modifier-enter")])
+            .optional()
+            .meta({ default: UI_PREFERENCE_DEFAULTS.chatSendShortcut }),
           chatFollowUpMode: z.union([z.literal("steer"), z.literal("queue")]).optional(),
           sidebarEntries: z.array(z.string()).optional(),
         })
@@ -364,6 +421,7 @@ export const OpenClawSchemaShape = {
       "worktreeRoot must be an absolute path or a path starting with ~",
     )
     .optional(),
+  repositoryBranchPrefix: z.string().regex(REPOSITORY_BRANCH_PREFIX_PATTERN).optional(),
   worktreeAcceleration: z.boolean().optional(),
   worktreeMaxCount: z.number().int().positive().optional(),
   tools: ToolsSchema,
@@ -408,20 +466,27 @@ export const OpenClawSchemaShape = {
        * Default: "24h".
        */
       sessionRetention: z.union([z.string(), z.literal(false)]).optional(),
-      failureAlert: z
-        .strictObject({
-          enabled: z.boolean().optional(),
-          after: z.number().int().min(1).optional(),
-          cooldownMs: z.number().int().min(0).optional(),
-          includeSkipped: z.boolean().optional(),
-          mode: z.enum(["announce", "webhook"]).optional(),
-          accountId: z.string().optional(),
-          channel: z.string().optional(),
-          to: z.string().optional(),
-        })
-        .optional(),
+      /** Default announce destination for jobs that do not name their own route. */
+      delivery: CronDefaultDeliveryDestinationSchema.optional(),
+      failureAlert: CronFailureAlertRouteSchema.extend({
+        enabled: z.boolean().optional(),
+        after: z.number().int().min(1).optional(),
+        cooldownMs: z.number().int().min(0).optional(),
+        includeSkipped: z.boolean().optional(),
+      }).optional(),
+      /** Per-agent destinations that replace the Gateway-wide ones for that agent's jobs. */
+      agents: z.record(AgentIdKeySchema, CronScopedDefaultsSchema).optional(),
+      /**
+       * Per-creator destinations keyed by the Gateway profile id of the human who
+       * created the job; they replace agent and Gateway-wide defaults for those jobs.
+       */
+      creators: z.record(z.string().trim().min(1), CronScopedDefaultsSchema).optional(),
     })
     .superRefine((val, ctx) => {
+      addDuplicateAgentIdKeyIssues(Object.keys(val.agents ?? {}), ctx, {
+        label: "cron.agents",
+        path: ["agents"],
+      });
       if (val.sessionRetention !== undefined && val.sessionRetention !== false) {
         try {
           parseDurationMs(normalizeStringifiedOptionalString(val.sessionRetention) ?? "", {
@@ -559,21 +624,6 @@ export const OpenClawSchemaShape = {
           maxSkillsPromptChars: z.number().int().min(0).optional(),
           /** Max size (bytes) allowed for a SKILL.md file to be considered. */
           maxSkillFileBytes: z.number().int().min(0).optional(),
-        })
-        .optional(),
-      workshop: z
-        .strictObject({
-          /** Autonomous Skill Workshop learning. */
-          autonomous: z
-            .strictObject({
-              /** "auto" lets background reviews change Workshop skills; "propose" saves their changes as drafts for review; "off" disables background learning. */
-              mode: z.union([z.literal("off"), z.literal("propose"), z.literal("auto")]).optional(),
-              /** Post background review notices to supported channels. Default: false. */
-              channelNotices: z.boolean().optional(),
-            })
-            .optional(),
-          /** Maximum Workshop skill file size in bytes. */
-          maxSkillBytes: z.number().int().min(1).optional(),
         })
         .optional(),
       entries: z.record(z.string(), SkillEntrySchema).optional(),

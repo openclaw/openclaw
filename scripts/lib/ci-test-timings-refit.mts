@@ -3,11 +3,14 @@ import { decodeNodeTestGroups } from "./ci-node-test-groups-codec.mts";
 import type { NodeTestShardGroup } from "./ci-node-test-plan.mts";
 import {
   NATIVE_SOLO_TIMING_PROFILE,
+  CI_TIMING_PROFILES,
+  ciTimingRunnerProfile,
   createNativeSoloTimingKey,
   isRuntimePlacementTiming,
   isRuntimePlacementIncludePatterns,
   runtimePlacementTimingIdentity,
   type CiTestTimings,
+  type CiTimingProfile,
   type RuntimePlacementTiming,
 } from "./ci-test-timings-schema.mts";
 import {
@@ -297,6 +300,19 @@ function readWorkerResources(text: string) {
   };
 }
 
+function isQualifiedBoatTimingLog(text: string): boolean {
+  const resources = readWorkerResources(text);
+  // Only the observed xlarge cohort is qualified; a label alone proves no capacity.
+  return (
+    resources?.logicalCpuCount === 16 &&
+    resources.requestedPlans === 1 &&
+    resources.admittedPlans === 1 &&
+    resources.totalMemoryBytes >= 28 * 1024 ** 3 &&
+    resources.totalMemoryBytes <= 32 * 1024 ** 3 &&
+    typeof readJobWorkerCeiling(text) === "number"
+  );
+}
+
 function readE2eLog(text: string, samples: Samples, overhead?: number[]) {
   const files = new Map<string, number>();
   let hasParallelFiles = false;
@@ -475,8 +491,7 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
   const descriptors = readRuntimeTimingGroups(text);
   const jobWorkers = readJobWorkerCeiling(text);
   if (
-    !labels.includes("ubuntu-24.04") ||
-    labels.some((label) => label === "self-hosted" || /^(?:blacksmith-|runson)/u.test(label)) ||
+    ciTimingRunnerProfile(labels) !== "github" ||
     readLogEnv(text, "OPENCLAW_CI_TEST_RUNTIME_POLICY") !== "dual-all" ||
     resources?.requestedPlans !== 1 ||
     resources.admittedPlans !== 1 ||
@@ -580,13 +595,13 @@ function readPackedReleaseLog(text: string, labels: string[], samples: Samples) 
 function readCompactLog(
   text: string,
   labels: string[],
-  samples: { blacksmith: Samples; github: Samples },
-  runtimeSamples: { blacksmith: Samples; github: Samples },
+  profile: CiTimingProfile,
+  samples: Record<CiTimingProfile, Samples>,
+  runtimeSamples: Record<CiTimingProfile, Samples>,
   runtimeDescriptors: Map<string, RuntimePlacementTiming>,
-  workerCeilings: { blacksmith: WorkerCeilings; github: WorkerCeilings },
+  workerCeilings: Record<CiTimingProfile, WorkerCeilings>,
   exactInventoryOnly: boolean,
 ) {
-  const profile = labels.some((label) => label.startsWith("blacksmith-")) ? "blacksmith" : "github";
   const starts = new Map<string, number>();
   const ambiguousStarts = new Set<string>();
   const descriptors = readRuntimeTimingGroups(text);
@@ -770,7 +785,12 @@ function readCompactLog(
         }
       }
       let exactKey: string | undefined;
-      if (group && !splitTiming && typeof workerCeiling === "number" && hasExactSelection) {
+      if (
+        group &&
+        (!splitTiming || (extensionGroup && matchesSplitSelection)) &&
+        typeof workerCeiling === "number" &&
+        hasExactSelection
+      ) {
         const env = sampledEnv;
         if (
           extensionGroup &&
@@ -886,7 +906,8 @@ function readCompactLog(
   }
 }
 
-function readToolingLog(text: string, samples: Samples) {
+function readToolingLog(text: string, samples: Samples, workerCeilings?: WorkerCeilings) {
+  const jobWorkers = workerCeilings ? readJobWorkerCeiling(text) : undefined;
   const descriptors = readRuntimeTimingGroups(text);
   const active = new Map<
     string,
@@ -900,20 +921,26 @@ function readToolingLog(text: string, samples: Samples) {
       singletonSummary: boolean;
       durationCount: number;
       durationSeconds: number | undefined;
+      started: number;
+      processConfigs: string[];
+      completedProcesses: number[];
+      workers: number | null | undefined;
     }
   >();
   for (const line of text.split("\n")) {
-    const event = /\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
+    const event =
+      /^(\d{4}-\d\d-\d\dT[\d:.]+Z)\s+\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))$/u.exec(line);
     if (event) {
+      const timestamp = Date.parse(event[1]!);
       const matches = descriptors.filter(
-        (group) => (group.timing_key ?? group.shard_name) === event[1],
+        (group) => (group.timing_key ?? group.shard_name) === event[2],
       );
       const descriptor = matches.length === 1 ? matches[0] : undefined;
       if (!descriptor || !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(descriptor.shard_name)) {
         continue;
       }
       const shard = descriptor.shard_name;
-      if (event[2] === "begin") {
+      if (event[3] === "begin") {
         active.set(shard, {
           cases: new Map(),
           files: new Map(),
@@ -930,32 +957,59 @@ function readToolingLog(text: string, samples: Samples) {
           singletonSummary: false,
           durationCount: 0,
           durationSeconds: undefined,
+          started: timestamp,
+          processConfigs: [],
+          completedProcesses: [],
+          workers: intersectWorkerCeilings(
+            jobWorkers,
+            parseWorkerCeiling(descriptor.env?.OPENCLAW_VITEST_MAX_WORKERS),
+          ),
         });
       } else {
         const invocation = active.get(shard);
-        if (event[3] === "0" && invocation?.complete) {
+        if (event[4] === "0" && invocation?.complete) {
           const files = new Map([...invocation.cases, ...invocation.files]);
           const singletonFile = invocation.singletonFile;
+          const elapsed = (timestamp - invocation.started) / 1000;
+          const completeProcess =
+            invocation.processConfigs.length === 1 &&
+            invocation.processConfigs[0] === "test/vitest/vitest.tooling.config.ts" &&
+            invocation.completedProcesses.length === 1 &&
+            invocation.completedProcesses[0] === 1 &&
+            Number.isFinite(elapsed) &&
+            elapsed > 0;
+          const singletonSeconds = completeProcess
+            ? elapsed
+            : invocation.fileSummaryCount === 1 &&
+                invocation.singletonSummary &&
+                invocation.durationCount === 1
+              ? invocation.durationSeconds
+              : undefined;
           if (
             singletonFile !== undefined &&
             files.size === 1 &&
             files.has(singletonFile) &&
             !invocation.files.has(singletonFile) &&
-            invocation.fileSummaryCount === 1 &&
-            invocation.singletonSummary &&
-            invocation.durationCount === 1 &&
-            invocation.durationSeconds !== undefined &&
-            Number.isFinite(invocation.durationSeconds) &&
-            invocation.durationSeconds > 0
+            singletonSeconds !== undefined &&
+            Number.isFinite(singletonSeconds) &&
+            singletonSeconds > 0
           ) {
             // A complete one-file invocation includes startup and suite hooks;
-            // concurrent case sums can overstate its wall. Native file time wins.
-            files.set(singletonFile, invocation.durationSeconds);
+            // concurrent case sums and duplicate reporters can overstate its wall.
+            // Native file time wins; older logs can use an unambiguous summary.
+            files.set(singletonFile, singletonSeconds);
           }
           for (const [file, duration] of files) {
             // Tooling fixtures print nested reporters. Only this shard's
             // declared inventory can supply measurements for its real files.
             if (invocation.declaredFiles.has(file)) {
+              if (workerCeilings) {
+                const ceilings = workerCeilings.get(file) ?? new Set();
+                ceilings.add(
+                  typeof invocation.workers === "number" ? invocation.workers : "ambiguous",
+                );
+                workerCeilings.set(file, ceilings);
+              }
               recordSample(samples, file, Math.max(0.001, duration));
             }
           }
@@ -968,6 +1022,16 @@ function readToolingLog(text: string, samples: Samples) {
     const invocation = row && active.get(row[1]!);
     if (!invocation) {
       continue;
+    }
+    const processStart = /^\[test\] starting (\S+)$/u.exec(row[2]!);
+    if (processStart) {
+      invocation.processConfigs.push(processStart[1]!);
+    }
+    const processEnd = /^\[test\] passed (\d+) Vitest shards? in [\d.]+s$/u.exec(row[2]!);
+    if (processEnd) {
+      invocation.completedProcesses.push(
+        invocation.processConfigs.length === 1 ? Number(processEnd[1]) : 0,
+      );
     }
     const file =
       /^✓\s+(?:\|tooling\||tooling)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\(\d+ tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
@@ -1102,35 +1166,48 @@ export function refitTestTimings(
     repoE2e: new Map<string, number[]>(),
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
+    boat: new Map<string, number[]>(),
     toolingBlacksmith: new Map<string, number[]>(),
     toolingGithub: new Map<string, number[]>(),
+    toolingBoat: new Map<string, number[]>(),
   };
   const contributingRuns = {
     uiE2e: new Set<number>(),
     repoE2e: new Set<number>(),
     blacksmith: new Set<number>(),
     github: new Set<number>(),
+    boat: new Set<number>(),
     toolingBlacksmith: new Set<number>(),
     toolingGithub: new Set<number>(),
+    toolingBoat: new Set<number>(),
   };
   const pruningNamespaces = {
     uiE2e: new Map<number, Set<string>>(),
     repoE2e: new Map<number, Set<string>>(),
     blacksmith: new Map<number, Set<string>>(),
     github: new Map<number, Set<string>>(),
+    boat: new Map<number, Set<string>>(),
     toolingBlacksmith: new Map<number, Set<string>>(),
     toolingGithub: new Map<number, Set<string>>(),
+    toolingBoat: new Map<number, Set<string>>(),
   };
+  const toolingBoatWorkers: WorkerCeilings = new Map();
   const overhead: number[] = [];
   const changedUiFiles = new Set<string>();
-  const observedParents = { blacksmith: new Set<string>(), github: new Set<string>() };
+  const observedParents = {
+    blacksmith: new Set<string>(),
+    github: new Set<string>(),
+    boat: new Set<string>(),
+  };
   const runtimeSamples = {
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
+    boat: new Map<string, number[]>(),
   };
   const workerCeilings = {
     blacksmith: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
     github: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
+    boat: new Map<string, Set<number | "unspecified" | "ambiguous">>(),
   };
   const runtimeDescriptors = new Map<string, RuntimePlacementTiming>(
     Object.values(previous?.runtimePlacementTimings ?? {})
@@ -1158,39 +1235,47 @@ export function refitTestTimings(
       repoE2e: new Map<string, number[]>(),
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
+      boat: new Map<string, number[]>(),
       toolingBlacksmith: new Map<string, number[]>(),
       toolingGithub: new Map<string, number[]>(),
+      toolingBoat: new Map<string, number[]>(),
     };
     const currentRuntime = {
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
+      boat: new Map<string, number[]>(),
     };
     for (const log of run.logs) {
       const text = normalizeTimingLog(log.text);
       if (log.kind === "release-packed") {
         readPackedReleaseLog(text, log.labels, current.github);
       } else if (log.kind === "compact" || log.kind === "tooling") {
+        const profile = ciTimingRunnerProfile(log.labels);
+        if (!profile || (profile === "boat" && !isQualifiedBoatTimingLog(text))) {
+          continue;
+        }
         for (const runtimeLog of splitRuntimeTimingLogs(text)) {
-          const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
-            ? "blacksmith"
-            : "github";
           const compact = {
             blacksmith: new Map<string, number[]>(),
             github: new Map<string, number[]>(),
+            boat: new Map<string, number[]>(),
           };
           const runtime = {
             blacksmith: new Map<string, number[]>(),
             github: new Map<string, number[]>(),
+            boat: new Map<string, number[]>(),
           };
-          const ceilings: { blacksmith: WorkerCeilings; github: WorkerCeilings } = {
+          const ceilings: Record<CiTimingProfile, WorkerCeilings> = {
             blacksmith: new Map(),
             github: new Map(),
+            boat: new Map(),
           };
           const descriptors = new Map<string, RuntimePlacementTiming>();
           if (log.kind === "compact") {
             readCompactLog(
               runtimeLog.text,
               log.labels,
+              profile,
               compact,
               runtime,
               descriptors,
@@ -1227,9 +1312,26 @@ export function refitTestTimings(
             (log.kind === "tooling" || run.pullRequestMergeRef)
           ) {
             const tooling = new Map<string, number[]>();
-            readToolingLog(runtimeLog.text, tooling);
+            const toolingWorkers: WorkerCeilings = new Map();
+            readToolingLog(
+              runtimeLog.text,
+              tooling,
+              profile === "boat" ? toolingWorkers : undefined,
+            );
             const destination =
-              profile === "blacksmith" ? current.toolingBlacksmith : current.toolingGithub;
+              profile === "blacksmith"
+                ? current.toolingBlacksmith
+                : profile === "github"
+                  ? current.toolingGithub
+                  : current.toolingBoat;
+            for (const [key, observedWorkerCeilings] of toolingWorkers) {
+              const identity = runtimeLog.prefix + key;
+              const observed = toolingBoatWorkers.get(identity) ?? new Set();
+              for (const ceiling of observedWorkerCeilings) {
+                observed.add(ceiling);
+              }
+              toolingBoatWorkers.set(identity, observed);
+            }
             for (const [key, values] of tooling) {
               for (const value of values) {
                 recordSample(destination, runtimeLog.prefix + key, value);
@@ -1245,7 +1347,7 @@ export function refitTestTimings(
       current.uiE2e.delete(file);
       changedUiFiles.add(file);
     }
-    for (const profile of ["blacksmith", "github"] as const) {
+    for (const profile of CI_TIMING_PROFILES) {
       recordCompleteParentSamples(
         current[profile],
         observedParents[profile],
@@ -1261,8 +1363,10 @@ export function refitTestTimings(
       "repoE2e",
       "blacksmith",
       "github",
+      "boat",
       "toolingBlacksmith",
       "toolingGithub",
+      "toolingBoat",
     ] as const) {
       // Missing or unparseable profile logs are not evidence that its keys disappeared.
       if (current[profile].size > 0) {
@@ -1278,8 +1382,12 @@ export function refitTestTimings(
     }
   }
 
-  const rejectedWorkerKeys = { blacksmith: [] as string[], github: [] as string[] };
-  for (const profile of ["blacksmith", "github"] as const) {
+  const rejectedWorkerKeys = {
+    blacksmith: [] as string[],
+    github: [] as string[],
+    boat: [] as string[],
+  };
+  for (const profile of CI_TIMING_PROFILES) {
     for (const [key, ceilings] of workerCeilings[profile]) {
       if (ceilings.size > 1 || ceilings.has("ambiguous")) {
         // Historical keys can omit inherited job caps. Do not average unlike
@@ -1292,10 +1400,27 @@ export function refitTestTimings(
     rejectedWorkerKeys[profile].sort();
   }
 
+  for (const [key, ceilings] of toolingBoatWorkers) {
+    if (ceilings.size > 1 || ceilings.has("ambiguous")) {
+      samples.toolingBoat.delete(key);
+    }
+  }
+
   const pruningRunCount = (profile: keyof typeof contributingRuns) => {
     const counts = new Map<string, number>();
     for (const run of acceptedRuns) {
-      if (!run.completeInventory || run.logs.some((log) => log.kind === "release-packed")) {
+      if (
+        !run.completeInventory ||
+        run.logs.some(
+          (log) =>
+            log.kind === "release-packed" ||
+            (log.kind === "compact" &&
+              (!ciTimingRunnerProfile(log.labels) ||
+                (profile === "boat" &&
+                  ciTimingRunnerProfile(log.labels) === "boat" &&
+                  !isQualifiedBoatTimingLog(normalizeTimingLog(log.text))))),
+        )
+      ) {
         continue;
       }
       const namespaces = pruningNamespaces[profile].get(run.id);
@@ -1316,7 +1441,7 @@ export function refitTestTimings(
   const pullRequestRunIds = acceptedRuns
     .filter((run) => run.pullRequestMergeRef)
     .map((run) => run.id);
-  function refitRuntime(profile: "blacksmith" | "github"): RuntimePlacementTiming[] {
+  function refitRuntime(profile: CiTimingProfile): RuntimePlacementTiming[] {
     return Object.entries(
       refitMap(
         runtimeSamples[profile],
@@ -1329,6 +1454,12 @@ export function refitTestTimings(
   }
   const timings: CiTestTimings = {
     compactGroupSeconds: {
+      boat: refitMap(
+        samples.boat,
+        previous?.compactGroupSeconds.boat,
+        pruningRunCount("boat"),
+        observedParents.boat,
+      ),
       blacksmith: refitMap(
         samples.blacksmith,
         previous?.compactGroupSeconds.blacksmith,
@@ -1350,6 +1481,7 @@ export function refitTestTimings(
       pruningRunCount("repoE2e"),
     ),
     runtimePlacementTimings: {
+      boat: refitRuntime("boat"),
       blacksmith: refitRuntime("blacksmith"),
       github: refitRuntime("github"),
     },
@@ -1359,6 +1491,13 @@ export function refitTestTimings(
     // PR plans may select only part of tooling. Absence is not evidence that
     // a file disappeared; preserve unobserved measurements across those windows.
     toolingFileSeconds: {
+      boat: refitMap(
+        samples.toolingBoat,
+        previous?.toolingFileSeconds.boat,
+        0,
+        undefined,
+        options.seedTooling ? 1 : 2,
+      ),
       blacksmith: refitMap(
         samples.toolingBlacksmith,
         previous?.toolingFileSeconds.blacksmith,
@@ -1396,7 +1535,7 @@ export function refitTestTimings(
   };
   const changes: { key: string; old: number | undefined; next: number | undefined }[] = [];
   const comparedMaps: [string, Record<string, number>, Record<string, number> | undefined][] = [
-    ...(["blacksmith", "github"] as const).map(
+    ...CI_TIMING_PROFILES.map(
       (profile): [string, Record<string, number>, Record<string, number>] => [
         `runtimePlacementTimings.${profile}`,
         runtimePlacementSecondsMap(timings.runtimePlacementTimings[profile]),
@@ -1413,6 +1552,12 @@ export function refitTestTimings(
       timings.compactGroupSeconds.github,
       previous?.compactGroupSeconds.github,
     ],
+    [
+      "compactGroupSeconds.boat",
+      timings.compactGroupSeconds.boat,
+      previous?.compactGroupSeconds.boat,
+    ],
+    ["toolingFileSeconds.boat", timings.toolingFileSeconds.boat, previous?.toolingFileSeconds.boat],
     ["uiE2e.fileSeconds", timings.uiE2e.fileSeconds, previous?.uiE2e.fileSeconds],
     ["repoE2eFileSeconds", timings.repoE2eFileSeconds, previous?.repoE2eFileSeconds],
     [
@@ -1452,10 +1597,12 @@ export function refitTestTimings(
     contributingRunIds: {
       blacksmith: [...contributingRuns.blacksmith].toSorted((a, b) => a - b),
       github: [...contributingRuns.github].toSorted((a, b) => a - b),
+      boat: [...contributingRuns.boat].toSorted((a, b) => a - b),
       repoE2e: [...contributingRuns.repoE2e].toSorted((a, b) => a - b),
       uiE2e: [...contributingRuns.uiE2e].toSorted((a, b) => a - b),
       toolingBlacksmith: [...contributingRuns.toolingBlacksmith].toSorted((a, b) => a - b),
       toolingGithub: [...contributingRuns.toolingGithub].toSorted((a, b) => a - b),
+      toolingBoat: [...contributingRuns.toolingBoat].toSorted((a, b) => a - b),
     },
   };
 }

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import {
   collectErrorGraphCandidates,
@@ -5,7 +6,9 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
+import { isUsageCountedSessionTranscriptFileName } from "../config/sessions/artifacts.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import {
   resolveSqliteReadScope,
   toDatabaseOptions,
@@ -27,7 +30,8 @@ import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
 } from "../state/openclaw-state-worker-error.js";
-import type { SessionCostUsageRollupSnapshot } from "./session-cost-usage-cache.kernel.js";
+import { getDatabaseEngineInput } from "./database-engine/context.js";
+import { ignoreMissingPath } from "./errno.js";
 import { prepareSessionCostUsageRefreshLock } from "./session-cost-usage-cache.sqlite.js";
 import { runSessionActorUsage } from "./session-cost-usage-memory.js";
 import {
@@ -48,6 +52,7 @@ import {
 } from "./session-cost-usage-worker.types.js";
 import type { UsageDailyBucket } from "./session-cost-usage.types.js";
 import { withSqliteWorkerCleanupFailure } from "./sqlite-worker-broker-reply.js";
+import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const USAGE_COST_WORKER_TIMEOUT_MS = 5 * 60_000;
 const logger = createSubsystemLogger("usage-cost-cache");
@@ -243,10 +248,11 @@ export async function runUsageCostWorker(
       operation.kind === "refresh"
         ? { ...operation, pricingFingerprint: pricing!.fingerprint() }
         : operation;
+    let resolver: Promise<UsageCostResolver> | undefined;
     return runSessionActorUsage(
       prepared.memory,
       request,
-      createUsageCostResolver(prepared, pricing),
+      () => (resolver ??= createUsageCostResolver(prepared, pricing)),
       waitForRefresh,
     );
   }
@@ -266,7 +272,34 @@ async function runPreparedUsageCostWorker(
       scope.assertCurrent();
       signal?.throwIfAborted();
     };
-    const pruneRows: SessionCostUsageRollupSnapshot[] = [];
+    if (
+      capturedOperation.kind === "refresh" &&
+      !capturedOperation.sessionFiles &&
+      !capturedOperation.rebuildRows?.length &&
+      !getDatabaseEngineInput("agent") &&
+      prepared.databases.every((database) =>
+        readDatabasePathIdentitySync(database.path).key.startsWith("path:"),
+      )
+    ) {
+      // An absent database has neither rollups to prune nor SQLite transcripts to scan.
+      // File-backed archives still need the normal refresh even without a database.
+      const entries = await fs
+        .readdir(
+          capturedOperation.sessionsDir ?? resolveSessionArtifactDirectory(location.storePath),
+          {
+            withFileTypes: true,
+          },
+        )
+        .catch(ignoreMissingPath);
+      assertCurrent();
+      if (
+        !entries?.some(
+          (entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name),
+        )
+      ) {
+        return { kind: "refresh", changed: false };
+      }
+    }
     const lock =
       capturedOperation.kind === "refresh"
         ? prepareSessionCostUsageRefreshLock(location.agentId, location.databasePath, {
@@ -290,14 +323,13 @@ async function runPreparedUsageCostWorker(
     }
     assertCurrent();
     let workerOperation: UsageCostWorkerOperation;
-    let resolveCost: UsageCostResolver;
+    let resolveCost: UsageCostResolver | undefined;
     if (capturedOperation.kind === "refresh") {
       const pricing = await prepareUsageCostPricing(prepared.config, prepared.agentDir);
       workerOperation = { ...capturedOperation, pricingFingerprint: pricing.fingerprint() };
-      resolveCost = createUsageCostResolver(prepared, pricing);
+      resolveCost = await createUsageCostResolver(prepared, pricing);
     } else {
       workerOperation = capturedOperation;
-      resolveCost = createUsageCostResolver(prepared);
     }
     const failures = openUsageCostRefreshFailures(location.env);
     const failureKey = (sessionFile: string) =>
@@ -346,20 +378,18 @@ async function runPreparedUsageCostWorker(
                   uncommittedSessionFiles.add(request.input.sessionFile);
                   break;
                 case "pricing":
+                  resolveCost ??= await createUsageCostResolver(prepared);
                   output = request.input.map(resolveCost);
                   break;
                 case "prune-rows":
-                  for (const row of request.input) {
-                    pruneRows.push({
+                  await requireLock("prune cache rows").pruneRows(
+                    request.input.map((row) => ({
                       key: row.key,
                       valueJson: row.value,
                       updatedAt: row.updatedAt,
-                    });
-                  }
-                  break;
-                case "prune":
-                  await requireLock("prune cache rows").pruneRows(pruneRows, context.signal);
-                  pruneRows.length = 0;
+                    })),
+                    context.signal,
+                  );
                   break;
                 case "write":
                   output = await requireLock("write cache rows").writeRollup(

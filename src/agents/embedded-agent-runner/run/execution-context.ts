@@ -2,9 +2,9 @@ import type { prepareCronRootSessionGeneration } from "../../../config/sessions/
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { createStageTimingTracker } from "../../../shared/stage-timing.js";
-import type { ToolOutcomeObserver } from "../../agent-tools.before-tool-call.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { SessionSuspensionParams } from "../../session-suspension.js";
+import type { ToolOutcomeObserver } from "../../tool-outcome-observation.js";
 import type { resolveRunWorkspaceDir } from "../../workspace-run.js";
 import type { EmbeddedRunReplayState } from "../replay-state.js";
 import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";

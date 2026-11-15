@@ -170,7 +170,9 @@ it.each(["bio", "cyber", "misalignment", "retryable"])(
       const allTurnStarts = allEntries.filter((entry) => entry.method === "turn/start");
       const proof = {
         visibleReplies: assistantTexts,
-        failureNotices: (history.messages ?? []).map(readRunFailureNotice).filter(Boolean),
+        failureNotices: (history.messages ?? [])
+          .map((message) => readRunFailureNotice(message))
+          .filter(Boolean),
         laterStatus,
         totalTurnStartCount: allTurnStarts.length,
         threadStartCount: allEntries.filter((entry) => entry.method === "thread/start").length,

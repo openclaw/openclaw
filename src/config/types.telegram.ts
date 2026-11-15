@@ -98,6 +98,11 @@ export type TelegramAccountConfig = CommonChannelMessagingConfig<
      * Default: false.
      */
     richMessages?: boolean;
+    /**
+     * Opt into Bot API 10.4 message widgets in private chats (show_widget).
+     * Older Telegram clients cannot render widgets. Default: false.
+     */
+    widgets?: boolean;
     network?: TelegramNetworkConfig;
     proxy?: string;
     webhookUrl?: string;

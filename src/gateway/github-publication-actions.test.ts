@@ -18,6 +18,8 @@ import {
   ensureCanonicalUserProfileForEmail,
   setCanonicalUserProfileRole,
 } from "../state/user-profile-writes.js";
+import { currentGitHubPublicationConfig } from "./github-publication-availability.js";
+import { withPublicationGuestRole } from "./github-publication-requester.test-support.js";
 import {
   commandResult,
   githubPublicationTestMocks,
@@ -50,6 +52,30 @@ describe("session PR actions through the agent tool and registered Gateway metho
     sandbox: "required",
     realWorktree: true,
   });
+
+  it.each(["local", "repository"] as const)(
+    "lets a guest manage its %s task PR from the unbound parent while preserving merge authority",
+    async (backend) => {
+      const parent = "agent:main:dashboard:publication-parent";
+      const f = await createPublicationActionFixture(backend, parent);
+      const invoke = (action: string, extra: Record<string, unknown> = {}, raw = false) =>
+        f.invoke("guest", { action, ...f.expected, ...extra }, parent, { raw });
+      await invoke("edit", { title: "Task PR title", expectedTitle: f.state.title });
+      expect(f.state.title).toBe("Task PR title");
+      expect((await invoke("ready", {}, true)).details).toMatchObject({ state: "open" });
+      expect((await invoke("request_review")).details).toMatchObject({
+        reviewRequest: { status: "posted" },
+      });
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+      expect(
+        loadSessionEntryReadOnly({ agentId: "main", sessionKey: parent })?.worktree,
+      ).toBeUndefined();
+      await expect(invoke("merge", { mergeMethod: "squash" })).rejects.toThrow(
+        /scope|permission/iu,
+      );
+      expect(f.writes.map((write) => write.action)).toEqual(["edit", "ready", "request_review"]);
+    },
+  );
 
   it.each(["local", "repository"] as const)(
     "posts only the fixed re-review command for the guest's current %s PR",
@@ -94,7 +120,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
                 String.raw`^invalid sessions\.github\.action params:.*unexpected property '${Object.keys(extra)[0]}'`,
                 "u",
               )
-            : "request_review only posts the fixed ClawSweeper command on the current session PR.",
+            : /request_review only posts the fixed ClawSweeper command/u,
         );
       }
     }
@@ -218,6 +244,33 @@ describe("session PR actions through the agent tool and registered Gateway metho
         }
       });
       await expect(f.action(actor, action, args)).rejects.toThrow("Your operator role changed");
+      expect(f.writes).toEqual([]);
+    },
+  );
+
+  it.each(["policy", "lifecycle"] as const)(
+    "refuses an edit when %s changes during the awaited PR read",
+    async (change) => {
+      const f = await fixture();
+      f.onRead(async () => {
+        if (change === "policy") {
+          setRuntimeConfigSnapshot(
+            withPublicationGuestRole(currentGitHubPublicationConfig(), { scopes: [] }),
+          );
+        } else {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey: SESSION_KEY },
+            {
+              lifecycleRevision: randomUUID(),
+            },
+          );
+        }
+      });
+      await expect(
+        f.action("guest", "edit", { title: "Unauthorized edit", expectedTitle: f.state.title }),
+      ).rejects.toThrow(
+        change === "policy" ? /role changed|permission|authority/iu : /changed|lifecycle/iu,
+      );
       expect(f.writes).toEqual([]);
     },
   );

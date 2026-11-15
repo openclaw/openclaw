@@ -68,6 +68,18 @@ export type RepositoryCreationParams = CreateManagedWorktreeParams &
     gitInventory: Awaited<ReturnType<typeof readWorktreeGitInventory>>;
   };
 
+export async function prepareWorktreeRepository(
+  params: Pick<CreateManagedWorktreeParams, "repoRoot" | "signal">,
+  env: NodeJS.ProcessEnv,
+): Promise<ResolvedRepository> {
+  params.signal?.throwIfAborted();
+  const repository = await resolveRepository(params.repoRoot);
+  const { warnIfProjectCloneShallow } =
+    await import("../../projects/project-clone-preparation.runtime.js");
+  await warnIfProjectCloneShallow(repository.repoRoot, { env, commonDir: repository.commonDir });
+  return repository;
+}
+
 export async function readWorktreeGitInventory(repoRoot: string, suppliedName?: string) {
   const [branches, worktrees] = await Promise.all([
     requireGit(repoRoot, ["for-each-ref", "--format=%(refname)", "refs/heads/openclaw/"]),

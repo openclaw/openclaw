@@ -36,7 +36,7 @@ import {
   applySessionEntryCanonicalReplacements,
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
-import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
+import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-publication.js";
 import { captureSessionEntryMetadataReceipts } from "./session-entry-metadata-receipt.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
 import { readPreparedSessionParticipants } from "./session-participant-prepared-read.js";

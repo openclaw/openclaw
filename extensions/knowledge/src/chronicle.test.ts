@@ -93,12 +93,18 @@ async function fixture() {
 const ids = (r: any) => r.items.map((x: any) => x.record.id);
 const event = (occurred_at: any, more = {}) => ({ kind: "claim", occurred_at, ...more });
 
-it("date validation, inclusive UTC days and date-only precision", () => {
+it("temporal input guidance, UTC bounds and date-only precision", () => {
   expect(() => dateInterval("2025-02-29")).toThrow(/real/);
   expect(() => dateInterval("2026-10-04T12:00:00")).toThrow(/timezone/);
   expect(() => timeBounds({ since: "2026-10-05", until: "2026-10-04" })).toThrow(/since/);
   expect(dateInterval("2026-10-04").end).toBe(Date.parse("2026-10-04T23:59:59.999Z"));
   expect(dateInterval("2026-10-04T12:00:00-07:00").start).toBe(Date.parse("2026-10-04T19:00:00Z"));
+  for (const name of ["timeline", "chronicle_day", "chronicle_since"] as const) {
+    expect(contract.operations[name].input).toHaveProperty(
+      "properties.kind.description",
+      expect.stringMatching(/record\.type/),
+    );
+  }
 });
 
 it("late imports distinguish occurrence, recording, update and due dates before search/list pagination", async () => {
@@ -141,13 +147,14 @@ it("late imports distinguish occurrence, recording, update and due dates before 
   expect(search.total).toBe(3);
   expect(search.hits.length).toBe(1);
   expect(
-    (await f.service.records({ timeField: "recorded_at", since: "2026-10-04" }, f.owner)).total,
+    (await f.service.records_detail({ timeField: "recorded_at", since: "2026-10-04" }, f.owner))
+      .total,
   ).toBe(4);
   expect(
-    (await f.service.records({ timeField: "due_at", until: "2026-10-05" }, f.owner)).total,
+    (await f.service.records_detail({ timeField: "due_at", until: "2026-10-05" }, f.owner)).total,
   ).toBe(1);
   await expect(f.service.grep({ query: "launch", since: "nonsense" }, f.owner)).rejects.toThrow();
-  await expect(f.service.records({ since: "2026-02-30" }, f.owner)).rejects.toThrow();
+  await expect(f.service.records_detail({ since: "2026-02-30" }, f.owner)).rejects.toThrow();
 });
 
 it("day/week queries honor IANA zones and retain literal date-only dates", async () => {
@@ -155,19 +162,13 @@ it("day/week queries honor IANA zones and retain literal date-only dates", async
   await f.put("event_instant", event("2026-10-04T01:30:00Z"));
   await f.put("event_calendar", event("2026-10-04"));
   await f.put("event_monday", event("2026-09-28"));
-  const west = await f.service.chronicle_day(
-    { date: "2026-10-03", timezone: "America/Los_Angeles" },
-    f.owner,
-  );
-  expect(ids(west)).toStrictEqual(["event_instant"]);
-  expect(
-    ids(
-      await f.service.chronicle_day(
-        { date: "2026-10-04", timezone: "America/Los_Angeles" },
-        f.owner,
-      ),
-    ),
-  ).toStrictEqual(["event_calendar"]);
+  for (const [date, expected] of [
+    ["2026-10-03", ["event_instant"]],
+    ["2026-10-04", ["event_calendar"]],
+  ] as const) {
+    const day = await f.service.chronicle_day({ date, timezone: "America/Los_Angeles" }, f.owner);
+    expect(ids(day)).toStrictEqual(expected);
+  }
   const week = await f.service.chronicle_day({ date: "2026-10-04", week: true }, f.owner);
   expect(week.total).toBe(3);
   expect(Check(contract.operations.chronicle_day.output, week)).toBeTruthy();
@@ -488,7 +489,9 @@ it("high precision storage dates remain queryable and equivalent source instants
   });
   for (const timeField of ["recorded_at", "updated_at"] as const) {
     expect((await f.service.timeline({ timeField, since: "2026-10-04" }, f.owner)).total).toBe(1);
-    expect((await f.service.records({ timeField, since: "2026-10-04" }, f.owner)).total).toBe(1);
+    expect(
+      (await f.service.records_detail({ timeField, since: "2026-10-04" }, f.owner)).total,
+    ).toBe(1);
     expect(
       (await f.service.grep({ query: "launch", timeField, since: "2026-10-04" }, f.owner)).total,
     ).toBe(1);

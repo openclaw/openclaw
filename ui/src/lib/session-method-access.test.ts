@@ -128,6 +128,49 @@ describe("readSessionMethodAccess", () => {
     ).toEqual({ allowed: true, requiredScope: "operator.sessions.write" });
   });
 
+  it("lets a session writer send the first turn only to a session proven absent", () => {
+    const scoped = snapshot({
+      methods: ["chat.send", "sessions.patch"],
+      scopes: ["operator.sessions.write"],
+    });
+    const send = {
+      method: "chat.send",
+      requiredScope: "operator.write",
+      sessionScope: true,
+    } as const;
+    expect(readSessionMethodAccess(scoped, { ...send, sessionAbsent: true })).toEqual({
+      allowed: true,
+      requiredScope: "operator.sessions.write",
+    });
+    // Unproven absence and another creator's row keep the ownership requirement.
+    for (const request of [
+      send,
+      { ...send, sessionAbsent: true, session: { sharingRole: "member" } },
+      {
+        method: "sessions.patch",
+        params: { key: "agent:main:main", label: "Renamed" },
+        sessionScope: true,
+        sessionAbsent: true,
+      },
+    ] as const) {
+      expect(readSessionMethodAccess(scoped, request)).toMatchObject({
+        allowed: false,
+        cause: "session-not-owned",
+      });
+    }
+    // Absence never lends a session writer broad or administrative scope.
+    expect(
+      readSessionMethodAccess(scoped, { ...send, sessionScope: false, sessionAbsent: true }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.write" });
+    expect(
+      access(["operator.sessions.write"], {
+        method: "chat.send",
+        requiredScope: "operator.admin",
+        sessionAbsent: true,
+      }),
+    ).toMatchObject({ allowed: false, cause: "missing-scope", requiredScope: "operator.admin" });
+  });
+
   it("keeps context-window changes separate from write-scoped effort access", () => {
     expect(
       access(["operator.write"], {

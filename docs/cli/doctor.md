@@ -18,10 +18,11 @@ When Gateway status reports degraded SecretRef owners, doctor prints a **Secret 
 
 When channel ingress events are dead-lettered, doctor names each affected channel account and points to [`openclaw channels dead-letters list`](/cli/channels#inbound-dead-letters) for inspection and recovery.
 
-Doctor warns when a registry-owned project clone is partial or shallow. It names
-the clone, shallow state, and partial-clone config keys, including URL-keyed
-remote twins. It prints manual repair commands; `--fix` does not fetch or repack
-these clones. Agent workspaces and manually registered checkouts are excluded.
+Doctor warns when a registry-owned project clone has shallow history. With
+`--fix`, it fetches full history while retaining `blob:none` under the project
+checkout lifecycle lease. Busy clones are skipped; failed or incomplete fetches
+are reported per clone. Doctor does not repack or prune. Agent workspaces and
+manually registered checkouts are excluded.
 
 When the Gateway has exporter health facts, doctor reports the latest trusted
 per-signal state and transport under **Telemetry exporters**. The summary is

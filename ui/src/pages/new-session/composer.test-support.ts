@@ -6,12 +6,13 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
+import type { NewSessionComposerOptions } from "./composer-options.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import {
   createNewSessionComposerTextarea,
   type NewSessionComposerTextarea,
 } from "./composer-textarea.ts";
-import { NewSessionComposer, type NewSessionComposerOptions } from "./composer.tsx";
+import { NewSessionComposer } from "./composer.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
 
 const attachmentDrafts: NewSessionAttachmentDraft[] = [];
@@ -62,9 +63,11 @@ export function renderComposer(
   let message = overrides.message ?? "";
   let agentId = overrides.agentId ?? "main";
   let draftOwnerKey = overrides.draftOwnerKey ?? "draft:one";
+  let commandProjectId = overrides.commandProjectId;
   const currentOptions = (): NewSessionComposerOptions => ({
     ...overrides,
     agentId,
+    commandProjectId,
     attachmentDraft,
     canSubmit: overrides.canSubmit ?? true,
     context: overrides.context,
@@ -101,6 +104,10 @@ export function renderComposer(
     },
     rerenderForAgent: (nextAgentId: string) => {
       agentId = nextAgentId;
+      renderCurrent();
+    },
+    rerenderForProject: (nextProjectId: string | undefined) => {
+      commandProjectId = nextProjectId;
       renderCurrent();
     },
     rerenderForDraftRoute: (nextDraftOwnerKey: string, nextMessage: string) => {

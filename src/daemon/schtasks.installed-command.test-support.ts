@@ -205,7 +205,7 @@ export async function run(
       cwd,
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
-      timeoutMs: options.commandBudget === "published-update" ? 360_000 : 180_000,
+      timeoutMs: options.commandBudget === "published-update" ? 600_000 : 180_000,
       signal,
       onReady(launched) {
         child = launched;

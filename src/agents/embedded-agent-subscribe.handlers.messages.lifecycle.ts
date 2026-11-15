@@ -68,6 +68,7 @@ function isRegisteredToolName(
 export function handleMessageStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: AgentEvent & { message: AgentMessage },
+  sourceMessageId?: string,
 ) {
   const msg = evt.message;
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
@@ -79,6 +80,7 @@ export function handleMessageStart(
   // Only message_start opens another message's stream and block replies.
   ctx.resetAssistantMessageState(ctx.state.assistantTexts.length);
   ctx.state.assistantMessageStartIndex = ctx.state.assistantMessageIndex;
+  ctx.state.assistantReplyToId = sourceMessageId;
   // Use assistant message_start as the earliest "writing" signal for typing.
   emitAssistantMessageStart(ctx);
 }
@@ -113,6 +115,7 @@ export function handleMessageEnd(
     return;
   }
 
+  ctx.state.commentaryTextProjection = undefined;
   // Transcript-only messages never reach the provider, so this counts exactly
   // the completed model round trips consumers see as `assistantTurns`.
   ctx.state.assistantTurnCount += 1;

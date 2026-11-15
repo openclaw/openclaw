@@ -226,7 +226,7 @@ it("allows the owner and rejects foreign or replaced backing runs before termina
         }),
       );
       const acpxService = acpxServices.at(0);
-      if (!acpxService) {
+      if (!acpxService || acpxService.apiVersion === 2 || acpxService.apiVersion === 3) {
         throw new Error("ACPX plugin did not register its runtime service");
       }
       const scheduler = createTestPluginServiceScheduler();

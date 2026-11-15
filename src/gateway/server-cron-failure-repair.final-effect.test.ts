@@ -1,6 +1,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
+import * as sessionEventHandoff from "../auto-reply/reply/session-event-handoff.js";
 import { openEventToolHost } from "../auto-reply/reply/session-event.test-support.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -14,6 +16,7 @@ import {
   pairedOperator,
 } from "./operator-run-recovery.test-support.js";
 import { createGatewayCronFailureRepair } from "./server-cron-notifications.js";
+import { createGatewayCronTargetResolver } from "./server-cron-targets.js";
 import {
   cfg,
   createCronFixture,
@@ -34,7 +37,7 @@ await Promise.all([
 ]);
 installRequesterCronAuthorityTestHooks();
 
-// The stored job after its repair turn tried `automations update`, by the job's requester.
+// Real persisted mutation authority for both scheduler entry points; not channel delivery proof.
 const outcomes = {
   owner: { update: "ok", description: "fixed by repair" },
   "non-owner": { update: "gated", description: "original" },
@@ -48,9 +51,16 @@ const outcomes = {
   },
 } as const;
 
-it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
-  "persists a failure repair's job update only for a current owner requester: %s",
-  async (requester) => {
+it.for(
+  (["failure-repair", "auto-disabled"] as const).flatMap((source) =>
+    (Object.keys(outcomes) as Array<keyof typeof outcomes>).map((requester) => ({
+      source,
+      requester,
+    })),
+  ),
+)(
+  "persists the $source job update only for a current owner requester: $requester",
+  async ({ source, requester }) => {
     const config = {
       ...cfg,
       plugins: { enabled: false },
@@ -99,6 +109,7 @@ it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
 
     expect(context.cron.getJob(job.id)?.toolsAllowProvenance?.channelRequester).toBeDefined();
     let update = "not run";
+    let admissionFailure: unknown;
     runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
       const admission = params.preparedRunAdmission!;
       const admit = admission.admit.bind(admission);
@@ -108,7 +119,10 @@ it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
           if (requester === "revoked-while-queued") {
             revoke();
           }
-          const run = await admit(...args);
+          const run = await admit(...args).catch((error: unknown) => {
+            admissionFailure = error;
+            throw error;
+          });
           bindGatewayContextResolver(run, () => context);
           return run;
         },
@@ -136,18 +150,39 @@ it.for(Object.keys(outcomes) as Array<keyof typeof outcomes>)(
       return { payloads: [{ text: "Repaired." }], meta: { durationMs: 1 } };
     });
 
-    const repaired = createGatewayCronFailureRepair(config, () => context).runCronFailureRepair({
-      jobId: job.id,
-      repairId: `repair-${requester}`,
-      timeoutMs: 60_000,
-      agentId: "main",
-      sessionKey: SESSION,
-      message: "Automation repair request from the scheduler, not a user message.",
-    });
-    if (requester === "revoked-while-queued") {
-      await expect(repaired).rejects.toThrow("Cron failure repair did not run");
+    const message = "Automation request from the scheduler, not a user message.";
+    if (source === "auto-disabled") {
+      // Observe the receipt without replacing the real Gateway handoff or its admission.
+      const handoff = vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost");
+      try {
+        await createGatewayCronTargetResolver(
+          process.env,
+          { warn: vi.fn() },
+          () => context,
+        ).enqueueSessionEvent(message, { agentId: "main", sessionKey: SESSION, jobId: job.id });
+        const receipt = expectDefined(handoff.mock.results[0]?.value, "auto-disable receipt");
+        const outcome = await receipt.settled;
+        if (requester === "revoked-while-queued") {
+          expect(outcome).toMatchObject({ executionStarted: false, delivered: false });
+          expect(String(admissionFailure)).toContain("is no longer an owner");
+        }
+      } finally {
+        handoff.mockRestore();
+      }
     } else {
-      await repaired;
+      const repaired = createGatewayCronFailureRepair(config, () => context).runCronFailureRepair({
+        jobId: job.id,
+        repairId: `repair-${requester}`,
+        timeoutMs: 60_000,
+        agentId: "main",
+        sessionKey: SESSION,
+        message,
+      });
+      if (requester === "revoked-while-queued") {
+        await expect(repaired).rejects.toThrow("Cron failure repair did not run");
+      } else {
+        await repaired;
+      }
     }
 
     const stored = (await read()).find((candidate) => candidate.id === job.id);

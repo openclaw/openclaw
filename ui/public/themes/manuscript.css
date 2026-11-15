@@ -22,7 +22,6 @@
   --card-foreground: #1d1a12;
   --card-highlight: rgba(50, 40, 20, 0.02);
   --popover-foreground: #1d1a12;
-  --session-hovercard-surface: var(--card);
 
   --text: #322d22;
   --text-strong: #1d1a12;

@@ -167,14 +167,17 @@ export function isExecApprovalPolicySnapshotCurrent(
   );
 }
 
-export function resolveAllowAlwaysPatternCoverage(
+export async function resolveAllowAlwaysPatternCoverage(
   params: Parameters<typeof resolveAllowAlwaysPatternEntries>[0],
 ) {
-  const byKey = new Map<string, ReturnType<typeof resolveAllowAlwaysPatternEntries>[number]>();
+  const byKey = new Map<
+    string,
+    Awaited<ReturnType<typeof resolveAllowAlwaysPatternEntries>>[number]
+  >();
   let representedSegmentCount = 0;
   for (const segment of params.segments) {
     const shellWrapper = isShellWrapperInvocation(segment.argv);
-    const segmentPatterns = resolveAllowAlwaysPatternEntries({
+    const segmentPatterns = await resolveAllowAlwaysPatternEntries({
       segments: [segment],
       cwd: params.cwd,
       env: params.env,
@@ -249,14 +252,14 @@ function resolvePlanPersistenceState(plan: ExecAuthorizationPlan | undefined): {
   };
 }
 
-export function resolveAllowAlwaysPersistenceDecision(
+export async function resolveAllowAlwaysPersistenceDecision(
   params: Parameters<typeof resolveAllowAlwaysPatternCoverage>[0] & {
     commandText?: string | null;
     authorizationPlan?: ExecAuthorizationPlan;
     runtimePayload?: boolean;
-    preparedCoverage?: ReturnType<typeof resolveAllowAlwaysPatternCoverage> | null;
+    preparedCoverage?: Awaited<ReturnType<typeof resolveAllowAlwaysPatternCoverage>> | null;
   },
-): AllowAlwaysPersistenceDecision {
+): Promise<AllowAlwaysPersistenceDecision> {
   const planPersistence = resolvePlanPersistenceState(params.authorizationPlan);
   const reasons = new Set<AllowAlwaysPersistenceReason>(planPersistence.reasons);
   if (params.runtimePayload === true) {
@@ -277,7 +280,7 @@ export function resolveAllowAlwaysPersistenceDecision(
   }
 
   if (planPersistence.reusablePatternsAllowed) {
-    const coverage = resolveAllowAlwaysPatternCoverage({
+    const coverage = await resolveAllowAlwaysPatternCoverage({
       segments: params.segments,
       cwd: params.cwd,
       env: params.env,

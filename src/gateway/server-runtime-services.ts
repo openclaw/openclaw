@@ -10,6 +10,7 @@ import {
 } from "../infra/delivery-queue-sqlite.js";
 import { computeBackoffMs } from "../infra/delivery-recovery.shared.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
+import { isConstrainedProcessLowOnMemory } from "../infra/host-memory.js";
 import type { DeliverOutboundPayloadsParams } from "../infra/outbound/deliver.js";
 import {
   schedulePendingSessionDeliveries,
@@ -40,7 +41,9 @@ import {
 } from "./server-maintenance-lifecycle.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayRuntimeServiceLogger } from "./server-runtime-service-shared.js";
+import type { GatewaySessionFactsBackfillScheduler } from "./server-startup-session-migration.js";
 import { measureStartup } from "./server-startup-trace.js";
+import { reportSessionAutomationSourceLoadFailed } from "./session-automation-index.js";
 export { scheduleGatewayIdleTask, type GatewayIdleTaskHandle } from "./server-idle-task.js";
 export { startGatewayChannelHealthMonitor } from "./server-runtime-startup-services.js";
 
@@ -76,6 +79,7 @@ export function startGatewayCronWithLogging(params: {
         await reconciliation.complete();
       } catch (err) {
         params.logCron.error(`failed to start: ${String(err)}`);
+        reportSessionAutomationSourceLoadFailed(err);
         if (err instanceof CronStoreSelectionRequiredError) {
           return;
         }
@@ -98,6 +102,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
   delayMs: number;
   isClosing: () => boolean;
   waitForPostReadyWork: () => Promise<void>;
+  scheduleSessionFactsBackfill?: GatewaySessionFactsBackfillScheduler;
   startupMaintenance: GatewayStartupMaintenance;
   startMaintenance: () => Promise<GatewayMaintenanceHandles | null>;
   applyMaintenance: (maintenance: GatewayMaintenanceHandles) => Promise<void> | void;
@@ -119,7 +124,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
     delayMs: params.delayMs,
     retryDelayMs: Math.max(1_000, params.delayMs),
     isClosing: () => params.signal.aborted || params.isClosing(),
-    isBusy: isRecovering,
+    isBusy: () => isRecovering() || isConstrainedProcessLowOnMemory(),
     waitForReady: params.waitForPostReadyWork,
     log: params.log,
   };
@@ -182,10 +187,14 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       return runWithGatewayIndependentRootWorkAdmission(
         async () => {
           await params.waitForPostReadyWork();
-          if (params.isClosing()) {
+          if (params.isClosing() || params.signal.aborted) {
             return;
           }
           try {
+            // Registration must not wait for optional globally idle maintenance.
+            params.scheduleSessionFactsBackfill?.(
+              params.startupMaintenance.startupSessionDatabases,
+            );
             if (!params.isClosing()) {
               const maintenance = await params.startMaintenance();
               if (params.isClosing()) {

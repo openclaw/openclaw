@@ -4,8 +4,8 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
 import { asSource, seedFile } from "./agent-tools.mutation.test-support.js";
-import { wrapToolMemoryFlushAppendOnlyWrite } from "./agent-tools.read.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { createWriteTool } from "./sessions/tools/index.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -18,8 +18,8 @@ let baseTool: AnyAgentTool;
 const absolute = () => path.join(root, RELATIVE_PATH);
 const read = () => fs.readFile(absolute(), "utf8");
 const seed = (content: string) => seedFile(absolute(), content);
-function wrap(options: Partial<Parameters<typeof wrapToolMemoryFlushAppendOnlyWrite>[1]> = {}) {
-  return wrapToolMemoryFlushAppendOnlyWrite(baseTool, {
+function wrap(options: Partial<Parameters<typeof projectMemoryFlushWriteTool>[1]> = {}) {
+  return projectMemoryFlushWriteTool(baseTool, {
     root,
     relativePath: RELATIVE_PATH,
     ...options,

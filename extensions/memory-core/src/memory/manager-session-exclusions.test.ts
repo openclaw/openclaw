@@ -5,9 +5,9 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { expect, it } from "vitest";
+import { searchKeywordWithFallback } from "./manager-search-keyword.js";
 import { runVectorKnnQuery, vectorToBlob } from "./manager-search-knn.test-support.js";
 import { searchChunksByEmbedding } from "./manager-search-vector.js";
-import { searchKeywordWithFallback, searchPathKeyword } from "./manager-search.js";
 import { insertKeywordFixture } from "./manager-search.test-support.js";
 import { buildMemorySourceFilter } from "./source-filter.js";
 
@@ -48,20 +48,14 @@ it.each(["body", "body-fallback", "path", "vector-scan", "vector-knn"] as const)
       queryVec: [1, 0],
     };
     let results: Array<{ id: string }>;
-    if (mode === "path") {
-      results = await searchPathKeyword({
-        db,
-        ...keyword,
-        pathFtsTable: "memory_index_paths_fts",
-      });
-    } else if (mode === "body" || mode === "body-fallback") {
+    if (mode === "body" || mode === "body-fallback" || mode === "path") {
       const result = await searchKeywordWithFallback({
         db,
         body: { ...keyword, ftsTable: "memory_index_chunks_fts" },
         path: { ...keyword, pathFtsTable: "memory_index_paths_fts" },
       });
       expect(result).toMatchObject({ body: { error: undefined }, path: { error: undefined } });
-      results = result.body.rows;
+      results = mode === "path" ? result.path.rows : result.body.rows;
     } else if (mode === "vector-scan") {
       results = await searchChunksByEmbedding(vector);
     } else {

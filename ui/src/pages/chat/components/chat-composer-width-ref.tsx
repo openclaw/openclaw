@@ -1,5 +1,4 @@
 import { createSignal, lazy, onSettled, Show } from "solid-js";
-import { warmWhenIdle } from "../../../lib/idle-warmup.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 
@@ -21,14 +20,13 @@ try {
   // A module reload finds it already registered.
 }
 
-/** The transcript's reading column: no Details track, scrollbar gutters, or reading inset. */
+/** The transcript's reading column: no Details reservation, scrollbar gutters, or reading inset. */
 export function transcriptColumnWidth(transcript: HTMLElement) {
   const style = getComputedStyle(transcript);
-  // Desktop CSS reserves Details in the second track; the first is the reading column.
+  // The scrollport spans Details; its reading column reserves that space.
   const column =
-    style.display === "grid"
-      ? Number.parseFloat(style.gridTemplateColumns)
-      : transcript.clientWidth;
+    transcript.clientWidth -
+    (Number.parseFloat(style.getPropertyValue("--chat-details-space")) || 0);
   return column - 2 * Number.parseFloat(style.getPropertyValue("--chat-thread-inline-inset"));
 }
 
@@ -71,18 +69,15 @@ function ColumnCap(props: {
 }
 
 // Saved widths apply through --chat-thread-max-width from the first frame. The
-// edge's gestures and geometry stay outside chat boot: idle warmup loads them.
+// edge's gestures and geometry load on composer pointer or keyboard intent.
 const ResizeEdge = lazy(() => import("./chat-composer-width-edge.tsx"), { export: "ResizeEdge" });
 const [ready, setReady] = createSignal(false);
-export const loadComposerWidthEdge = () =>
+/** Composer shell pointer/key intent loads the edge. */
+export const prepareComposerWidthEdge = () =>
   ResizeEdge.preload().then(
     () => setReady(true),
     () => undefined,
   );
-warmWhenIdle(loadComposerWidthEdge);
-
-/** Composer shell pointer/key intent loads the edge when idle warmup is skipped (Save-Data). */
-export const prepareComposerWidthEdge = () => void loadComposerWidthEdge();
 
 /**
  * Render directly after the composer input. Saved widths on writable surfaces with a

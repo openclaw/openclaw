@@ -1,10 +1,20 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
-import { createUpdateRun } from "./update-run-ledger.js";
+import {
+  closeUpdateFixtureDatabases,
+  resetUpdateFixtureModules,
+} from "./update-fixture.test-support.js";
+
+let { createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js");
+let { createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js");
+let { createUpdateRun } = await import("./update-run-ledger.js");
+
+async function importUpdateFixtureModules() {
+  ({ createTestGatewayScheduler } = await import("../test-utils/gateway-scheduler-clock.js"));
+  ({ createOpenClawTestState } = await import("../test-utils/openclaw-test-state.js"));
+  ({ createUpdateRun } = await import("./update-run-ledger.js"));
+}
 
 const checkUpdateStatus = vi.hoisted(() =>
   vi.fn<typeof import("./update-check.js").checkUpdateStatus>(),
@@ -21,15 +31,17 @@ vi.mock("./update-check.js", async (original) => ({
 it.each(["complete", "attached-close", "before-ready-close"])(
   "preserves early discovery through scheduler adoption: %s",
   async (outcome) => {
+    await resetUpdateFixtureModules();
+    await importUpdateFixtureModules();
     const state = await createOpenClawTestState({ label: "update-request-adoption" });
     const startup = await import("./update-startup.js");
+    const updateScheduler = await import("./update-startup-scheduler.js");
     const { createGatewayUpdateLifecycle } = await import("./update-check-lifecycle.js");
     const { createDeferredGatewayUpdateCheck } =
       await import("../gateway/server-startup-update-check.js");
     const { resolveGatewayUpdateAdmission } =
       await import("../gateway/server-methods/update-admission.js");
     const scheduler = createTestGatewayScheduler();
-    startup.resetUpdateAvailableStateForTest(scheduler);
     const ready = createDeferred();
     const started = createDeferred<AbortSignal | undefined>();
     const probe = createDeferred<UpdateCheckResult>();
@@ -40,7 +52,7 @@ it.each(["complete", "attached-close", "before-ready-close"])(
     });
     const deferred = outcome === "before-ready-close";
     const lifecycle = createGatewayUpdateLifecycle(scheduler);
-    const factory = vi.spyOn(startup, "createGatewayUpdateCheck");
+    const factory = vi.spyOn(updateScheduler, "createGatewayUpdateCheck");
     let owner: { stop(): Promise<void> } | undefined;
     if (deferred) {
       const waiting = createDeferredGatewayUpdateCheck({
@@ -60,12 +72,12 @@ it.each(["complete", "attached-close", "before-ready-close"])(
       startup.getUpdateEffectiveChannel(),
       deferred
         ? resolveGatewayUpdateAdmission(createUpdateRun({ trigger: "api" }).runId)
-        : startup.initializeGatewayUpdateStatus(),
+        : lifecycle.initialize(),
     ];
     try {
       const signal = await started.promise;
       if (!deferred) {
-        const attached = startup.createGatewayUpdateCheck({
+        const attached = updateScheduler.createGatewayUpdateCheck({
           lifecycle,
           getConfig: () => ({}),
           applyRemoteCatalogUpdate: async () => "unchanged",
@@ -111,8 +123,9 @@ it.each(["complete", "attached-close", "before-ready-close"])(
       await Promise.allSettled([...requests, owner?.stop()]);
       factory.mockRestore();
       ready.resolve();
-      startup.resetUpdateAvailableStateForTest(scheduler);
-      closeOpenClawStateDatabaseForTest();
+      await lifecycle.stop();
+      await scheduler.stop();
+      await closeUpdateFixtureDatabases();
       await state.cleanup();
     }
   },

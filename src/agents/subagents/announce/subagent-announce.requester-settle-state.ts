@@ -145,6 +145,7 @@ export function readSharedBatchState(
     ...(source?.progressOperationId ? { progressOperationId: source.progressOperationId } : {}),
     ...(source?.pauseNotice ? { pauseNotice: source.pauseNotice } : {}),
     ...(source?.batchRunIds ? { batchRunIds: [...source.batchRunIds] } : {}),
+    ...(source?.requesterRunId ? { requesterRunId: source.requesterRunId } : {}),
     ...(states.some((state) => state.requesterYieldBatch === true)
       ? { requesterYieldBatch: true }
       : {}),

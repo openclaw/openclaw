@@ -19,7 +19,6 @@ import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
 import { removeTempDirectory } from "./sqlite-readonly-location-cleanup.js";
-import { isSqliteSnapshotStagingName } from "./sqlite-snapshot-retirement.js";
 import { SQLITE_STAGING_TOKEN_FILES } from "./sqlite-staging-token.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 import { measureUpdateStateFiles } from "./update-candidate-io.js";
@@ -272,7 +271,11 @@ it.skipIf(process.platform === "win32").for(["complete", "cancel"] as const)(
           throw error;
         });
       for (const entry of remaining) {
-        if (!entry.isDirectory() || !isSqliteSnapshotStagingName(entry.name)) {
+        if (entry.isFile() && entry.name === "schema-discovery-ownership.json") {
+          await fs.unlink(path.join(stagingRoot, entry.name));
+          continue;
+        }
+        if (!entry.isDirectory() || !entry.name.startsWith("openclaw-sqlite-readonly-")) {
           throw unexpectedEntry("staging", entry);
         }
         retireSnapshot(path.join(stagingRoot, entry.name));
@@ -368,7 +371,6 @@ fs.writeSync = function(...args) {
   }
   return Reflect.apply(originalWrite, this, args);
 };
-require("node:module").syncBuiltinESMExports();
 `,
       );
       const entered = createDeferred();
@@ -395,7 +397,9 @@ require("node:module").syncBuiltinESMExports();
       expect(await fs.readdir(directory)).toEqual(["operator.txt"]);
 
       const retained = (await fs.readdir(stagingRoot, { withFileTypes: true }))
-        .filter((entry) => entry.isDirectory() && isSqliteSnapshotStagingName(entry.name))
+        .filter(
+          (entry) => entry.isDirectory() && entry.name.startsWith("openclaw-sqlite-readonly-"),
+        )
         .map((entry) => path.join(stagingRoot, entry.name));
       expect(retained).toHaveLength(2);
       const identities = new Set<string>();
@@ -480,7 +484,8 @@ require("node:module").syncBuiltinESMExports();
           expect(backup.sourceGenerations[file]).toEqual(expect.any(String));
         }
       }
-      expect(await fs.readdir(stagingRoot)).toEqual([]);
+      // Schema publication metadata outlives backup image settlement in this shared staging root.
+      expect(await fs.readdir(stagingRoot)).toEqual(["schema-discovery-ownership.json"]);
       await assertWorkerCacheEmpty();
       expect(await fs.readFile(sentinel, "utf8")).toBe("preserved");
       for (const [index, file] of sources.entries()) {

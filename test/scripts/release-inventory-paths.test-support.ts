@@ -1,8 +1,7 @@
 import { publicationSourceToolingPaths } from "../../scripts/lib/publication-source-paths.mjs";
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 
-// Fixture inputs, not expected inventory results. Retain the separately verified
-// producer bootstrap, type module, child runner and non-imported policy file.
+// Fixture inputs, not expected results: retain explicit entrypoints and non-imported files.
 export const INVENTORY_PRODUCER_PATHS = collectRuntimeImportClosure(process.cwd(), [
   "scripts/release-plan-producer.mts",
   "scripts/release-plan-producer.types.mts",
@@ -16,6 +15,7 @@ export const INVENTORY_PRODUCER_PATHS = collectRuntimeImportClosure(process.cwd(
 
 export const PUBLICATION_TRANSPORT_PATHS = collectRuntimeImportClosure(process.cwd(), [
   "scripts/full-release-publication-contract.mjs",
+  "scripts/release-tooling-identity.mjs",
   "scripts/lib/npm-core-release-packages.json",
 ]);
 

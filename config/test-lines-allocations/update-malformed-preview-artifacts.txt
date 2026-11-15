@@ -1,3 +1,0 @@
-39
-# Built CLI text/JSON previews with absent/native DBs: full profile/cache/scratch
-# equality, no report/support artifacts, and no file-backed SQL inspection.

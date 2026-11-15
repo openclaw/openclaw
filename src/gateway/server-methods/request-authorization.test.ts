@@ -31,6 +31,7 @@ function createSend(agentId: string, pending: boolean, idempotencyKey = "agent-o
   const startup = {
     hasPendingAgents: pending,
     isAgentInputRecoveryPending: () => false,
+    registerInputRecovery: () => {},
     waitForAgentPreparation: () => {
       throw new Error("Send must not wait for startup preparation");
     },

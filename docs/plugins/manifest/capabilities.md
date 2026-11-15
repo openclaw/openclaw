@@ -165,6 +165,14 @@ Each entry requires a provider ID, model ID, and display name. The selector uses
 `example-decisions/fast`. Disabled plugins are excluded from the decision picker;
 saved unavailable selections remain visible for the operator to repair.
 
+The hosted model catalog publishes only canonical `modelCatalog` rows. A bundled
+plugin with a fixed Decision model list declares it under `modelCatalog.providers`
+with `inference.chat: false` and an `inference.decision` block (see
+[task-specific inference metadata](/plugins/manifest/models#task-specific-inference-metadata)),
+and leaves `modelCatalog.discovery` unset for that provider: the Gateway lists
+`runtime` and `refreshable` providers from their runtime listing, not hosted rows.
+`decisionModels` entries stay local to the installed manifest.
+
 `capabilities` is optional static metadata. It describes provider support for
 discovery and guidance; it does not prove that credentials or the runtime are
 ready, and its limits do not raise OpenClaw's host admission bounds.

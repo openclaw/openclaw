@@ -9,13 +9,16 @@ export type CronScheduleMaintenanceOptions = {
   recomputeExpired?: boolean;
   nowMs?: number;
   repairFutureCronNextRunAtMs?: boolean;
-  preserveExpiredPacedNextRunJobId?: string;
+  /** Manual force runs retain the disabled job's pending schedule. */
+  preserveDisabledJobId?: string;
   skipScheduleErrorHandling?: boolean;
 };
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
   preparingAgentIds?: string[];
+  /** See `cron.drainQueue`. */
+  busyConversationJobIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
@@ -56,6 +59,8 @@ export type CronSchedulerOperations = {
       snapshot: CronSchedulerSnapshot;
       skipJobIds?: string[];
       deferAgentWork?: boolean;
+      /** Slots due at or after this process went live are late, not downtime catch-up. */
+      liveSinceMs?: number;
     };
     output: CronSchedulerResult;
   };

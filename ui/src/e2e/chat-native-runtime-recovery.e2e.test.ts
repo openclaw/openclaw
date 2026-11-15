@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { selectChatModelOption } from "../test-helpers/select-picker-e2e.ts";
 import { showText } from "./activity-assertions.test-support.ts";
 import {
   exactButton,
@@ -120,7 +119,7 @@ suite.define(() => {
           expect(await page.locator(".chat-group.user").textContent()).toContain(message);
           return;
         }
-        await exactButton(modal, "Continue for this chat").click();
+        await exactButton(modal, "Continue for this session").click();
         await expectRequest(gateway, "sessions.patch", {
           key,
           expectedSessionId: sessionId,
@@ -196,7 +195,9 @@ suite.define(() => {
           await gateway.waitForRequest("chat.send");
         } else {
           await trigger.click();
-          await selectChatModelOption(picker, "fixture/synthetic-model", { runtime: "opencode" });
+          await picker
+            .locator('.chat-controls__runtime-option[data-chat-model-runtime="opencode"]')
+            .click();
           await expectRequest(gateway, "sessions.patch", {
             key,
             model: "fixture/synthetic-model",
@@ -232,15 +233,15 @@ suite.define(() => {
         await page.locator("openclaw-modal-dialog, .chat-error").first().waitFor();
         if (blocked) {
           await polledText(error).toContain("Choose another model");
-          expect(await exactButton(page, "Continue for this chat").count()).toBe(0);
+          expect(await exactButton(page, "Continue for this session").count()).toBe(0);
         } else {
           const modal = page.locator("openclaw-modal-dialog");
           await modal.waitFor();
           expect(await modal.textContent()).toContain("own permissions");
-          expect(await modal.textContent()).toContain("Gateway host");
-          expect(await modal.textContent()).toContain("Only this chat");
+          expect(await modal.textContent()).toContain("Gateway device");
+          expect(await modal.textContent()).toContain("Only this session");
           expect(await modal.textContent()).toContain(
-            "other chats and global configuration stay unchanged",
+            "other sessions and global configuration stay unchanged",
           );
           expect(await gateway.getRequests("sessions.patch")).toHaveLength(initialPatchCount);
           if (action === "confirm") {
@@ -248,7 +249,7 @@ suite.define(() => {
           }
           await exactButton(
             modal,
-            action === "confirm" ? "Continue for this chat" : "Cancel",
+            action === "confirm" ? "Continue for this session" : "Cancel",
           ).click();
           if (action === "confirm") {
             const retry = await gateway.waitForRequest("sessions.patch", {

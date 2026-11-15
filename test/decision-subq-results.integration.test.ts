@@ -58,14 +58,14 @@ it.each(
     expect(validateDecisionBatch(batch)).toBe(true);
     const fetch = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
       Response.json({
-        model: "subq-snap-preview",
+        model: "synthetic-decision-model",
         answers: Object.fromEntries([[id, answer]]),
         usage: { input_tokens: 10, output_tokens: 0 },
       }),
     );
     vi.stubGlobal("fetch", fetch);
     const context: Parameters<DecisionProviderV1["evaluate"]>[1] = {
-      model: "subq-snap-preview",
+      model: "synthetic-decision-model",
       signal: new AbortController().signal,
       deadlineMonotonicMs: performance.now() + 30_000,
     };

@@ -574,6 +574,9 @@ it("keeps a delayed source off the catalog RPC path", async () => {
     },
   });
   sessionSharePlugin.register(api);
+  if (service?.apiVersion !== 2) {
+    throw new Error("Expected catalog service API version 2");
+  }
   const scheduler = createTestPluginServiceScheduler();
   const context = { config, logger: api.logger, stateDir: "/unused", invokeNode, scheduler };
   await service?.start(context);

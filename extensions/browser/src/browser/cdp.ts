@@ -19,6 +19,7 @@ import {
   withCdpSocket,
 } from "./cdp.helpers.js";
 import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import { redactSensitiveAXNodeValues } from "./sensitive-field-values.js";
 
 export { appendCdpPath, normalizeCdpWsUrl } from "./cdp.helpers.js";
 export type { AriaSnapshotNode, RawAXNode } from "./cdp-ax.js";
@@ -89,11 +90,14 @@ export async function createTargetViaCdp(opts: {
   signal?: AbortSignal;
   /** Wait for the created document to finish navigation and return its authoritative URL. */
   waitForNavigationResult?: boolean;
+  allowOperatorPages?: true;
 }): Promise<{ targetId: string; finalUrl?: string }> {
   opts.signal?.throwIfAborted();
   await assertBrowserNavigationAllowed({
     url: opts.url,
-    ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    ...withBrowserNavigationPolicy(opts.ssrfPolicy, {
+      allowOperatorPages: opts.allowOperatorPages,
+    }),
   });
   const configuredCdpPin = await assertCdpEndpointAllowed(opts.cdpUrl, opts.ssrfPolicy);
   const cdpControlPolicy = scopeCdpPolicyToConfiguredEndpoint(opts.cdpUrl, opts.ssrfPolicy);
@@ -248,6 +252,7 @@ export async function snapshotAria(opts: {
         nodes?: RawAXNode[];
       };
       const nodes = Array.isArray(res?.nodes) ? res.nodes : [];
+      await redactSensitiveAXNodeValues(send, nodes);
       return { nodes: formatAriaSnapshot(nodes, limit) };
     },
     { commandTimeoutMs: opts.timeoutMs ?? 5000, lookup: opts.lookup },

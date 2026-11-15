@@ -19,6 +19,23 @@ successor to `healthState`. Existing plugins may keep publishing `healthState`
 during adoption, and core-derived policy writes remain supported. There is no
 removal date; removal waits for external channel-plugin adoption.
 
+For a transport reconnect after a successful connection, publish
+`connected: false`, `lifecycle: "recovering"`, and `lastDisconnect: { at }`.
+Record `at` at the first disconnect of that outage, retain it across failed
+retries, and clear `lastDisconnect` when READY/resume succeeds. Do not manufacture
+a disconnect timestamp for an account that has never connected. Publish
+`lastConnectedAt` on successful connection and preserve terminal/blocked failures.
+The shared health policy allows two minutes of reconnect grace and projects
+`healthState: "reconnect-grace"` into status; detailed Gateway readiness reports
+the affected channel in `degraded` while keeping `ready: true` if its other checks
+pass. Active work does not extend an explicitly recovering transport's window.
+Log transport failures and recovery so a ready response cannot hide an outage.
+Transport reconnects belong to the transport owner; a lifecycle failure settles
+that run so the Gateway can apply its existing restart policy. Reserve
+`terminalDisconnect` and `lifecycle: "blocked"` for failures requiring operator
+repair, such as invalid credentials or disallowed intents, not restartable
+protocol errors or exhaustion of one transport's reconnect attempts.
+
 ## Typing indicators
 
 If your channel supports typing indicators outside inbound replies, expose

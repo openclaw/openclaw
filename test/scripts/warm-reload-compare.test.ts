@@ -122,6 +122,18 @@ it("pairs warm samples, preserves missing paint evidence, and writes time-aligne
     sheet.free();
   }
   expect(await readFile(path.join(directory, "comparison.md"), "utf8")).toContain("unavailable");
+  const timing = (arm: typeof base) => ({
+    ...arm,
+    runs: arm.runs.map(({ visual: _visual, ...capture }) => capture),
+  });
+  const timed = await createWarmReloadComparison([timing(base), timing(candidate)], directory);
+  expect(timed.comparisons[0]?.pairs.map((pair) => pair.deltas.helloHandledMs)).toEqual([-10, 30]);
+  expect(timed.comparisons[0]?.pairs.map((pair) => pair.contactSheets)).toEqual([[], []]);
+  expect(timed.comparisons[0]?.summary.pixelStates).toMatchObject({
+    base: null,
+    candidate: null,
+    pairedDelta: null,
+  });
   await expect(
     createWarmReloadComparison([base, { ...candidate, runs: [] }], directory),
   ).rejects.toThrow("sample counts must match");

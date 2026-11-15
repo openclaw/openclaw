@@ -38,6 +38,7 @@ type ToolActionState = Readonly<{
   descriptor?: AgentToolActionDescriptor;
   executionLocation?: AgentToolExecutionLocation;
   gatewayPolicyControl?: true;
+  listingScope?: string;
 }>;
 
 // Rebuilt tools retain prepared classification without adding weak-table edges.
@@ -60,6 +61,15 @@ class ToolActionMetadata extends PluginHostObject {
       void new ToolActionMetadata(tool, state);
     }
   }
+}
+
+/** Configuration/support variant, never live discovery or execution authority. */
+export function bindAgentToolListingScope(tool: AnyAgentTool, scope: string): void {
+  ToolActionMetadata.set(tool, { listingScope: scope });
+}
+
+export function getAgentToolListingScope(tool: AnyAgentTool): string | undefined {
+  return ToolActionMetadata.get(tool)?.listingScope;
 }
 
 /** Only host-owned catalog dispatchers bypass the target-tool allowlist. */

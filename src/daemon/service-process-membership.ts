@@ -95,7 +95,7 @@ function readResourceCoalition(pid: number): ResourceCoalition | null | undefine
   }
   const headers = result.stdout.match(/^\s*resource coalition\s*=/gm);
   if (!headers) {
-    return /resource coalition/i.test(result.stdout) ? undefined : null;
+    return /resource coalition/i.test(result.stdout) ? undefined : readNativeResourceCoalition(pid);
   }
   const body = /^\s*resource coalition\s*=\s*\{([^{}]*)^\s*\}/m.exec(result.stdout)?.[1];
   if (headers.length !== 1 || !body) {

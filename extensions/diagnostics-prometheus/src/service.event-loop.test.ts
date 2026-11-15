@@ -246,7 +246,22 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
       : worker;
     const sample = memorySample({
       workerCount: retired ? 0 : 1,
-      workerTaskMetrics: [current],
+      workerTaskMetrics: [
+        current,
+        {
+          workerClass: "writer",
+          script: "sqlite-store.worker.js",
+          heapUsedHighWaterBytes: 6000,
+          gc: [{ kind: "mark_sweep_compact", count: 2, durationMs: 40, reclaimedBytes: 8000 }],
+        },
+      ],
+      sqliteReaderMetrics: [
+        {
+          operation: "sessions.usage.refresh",
+          count: retired ? 4 : 2,
+          readBytes: retired ? 8192 : 4096,
+        },
+      ],
       workerMessages: [
         {
           kind: "sqlite_reply" as const,
@@ -293,6 +308,7 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
         metrics.render(),
         "openclaw_worker_messages_total",
         "openclaw_session_row_selections_total",
+        "openclaw_sqlite_reader_read_bytes_total",
       );
     }
     metrics.record(sample);
@@ -302,6 +318,12 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
     }
     const labels = 'script="provider-prompt-state.worker.js",worker_class="compute"';
     const rendered = metrics.render();
+    const sqliteLabels = 'script="sqlite-store.worker.js",worker_class="writer"';
+    expect(rendered).not.toContain(`openclaw_worker_tasks_completed_total{${sqliteLabels}}`);
+    expectMetrics(rendered)(`openclaw_worker_heap_used_high_water_bytes{${sqliteLabels}} 6000
+openclaw_worker_gc_collections_total{kind="mark_sweep_compact",${sqliteLabels}} 2
+openclaw_worker_gc_duration_seconds_total{kind="mark_sweep_compact",${sqliteLabels}} 0.04
+openclaw_worker_gc_reclaimed_bytes_total{kind="mark_sweep_compact",${sqliteLabels}} 8000`);
     expectMetrics(
       rendered,
     )(`openclaw_worker_tasks_completed_total{${labels}} ${current.tasksCompleted}
@@ -325,7 +347,9 @@ openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
 openclaw_session_row_selection_resets_total 2
 openclaw_session_row_partition_cache_total{outcome="hit",task="sessions.list"} 63
 openclaw_session_row_partition_cache_total{outcome="miss",task="sessions.list"} 1
-openclaw_session_row_partition_revisions_total{reason="metadata"} 3`);
+openclaw_session_row_partition_revisions_total{reason="metadata"} 3
+openclaw_sqlite_reader_operations_total{reader_operation="sessions.usage.refresh"} 4
+openclaw_sqlite_reader_read_bytes_total{reader_operation="sessions.usage.refresh"} 8192`);
 });
 
 it("exports native memory, missing workers, lifecycle totals and attributed spawns", () => {
@@ -507,6 +531,12 @@ it("exports completed SQLite request phases without inventing missing or invalid
       posted: 2_000,
       postFinished: 9_000,
       received: 4_000,
+      backendLoadStarted: 4_000,
+      backendLoadFinished: 5_000,
+      openGrantStarted: 5_000,
+      openGrantFinished: 6_000,
+      factoryStarted: 6_000,
+      factoryFinished: 7_000,
       inputReady: 7_000,
       executeStarted: 11_000,
       executeFinished: 16_000,
@@ -547,6 +577,9 @@ it("exports completed SQLite request phases without inventing missing or invalid
   for (const [phase, seconds, count] of [
     ["dispatch", 1, 2],
     ["delivery", 2, 1],
+    ["backend-load", 1, 1],
+    ["open-grant", 1, 1],
+    ["factory", 1, 1],
     ["input", 3, 1],
     ["prepare", 4, 1],
     ["execute", 5, 1],
@@ -560,10 +593,10 @@ it("exports completed SQLite request phases without inventing missing or invalid
   expectMetrics(
     rendered,
   )(`openclaw_worker_request_seconds_sum{kind="sqlite_writer",request_class="transcripts"} 28
-openclaw_worker_request_phase_seconds_bucket{kind="sqlite_writer",le="0.005",phase="dispatch",request_class="transcripts"} 1`);
+openclaw_worker_request_seconds_count{kind="sqlite_writer",request_class="transcripts"} 1`);
   expect(
     rendered
       .split("\n")
-      .filter((line) => line.startsWith("openclaw_worker_request_phase_seconds_count")),
-  ).toHaveLength(7);
+      .filter((line) => /^openclaw_worker_request(?:_phase)?_seconds_bucket/.test(line)),
+  ).toEqual(Array.from({ length: 11 }, () => expect.stringContaining('le="+Inf"')));
 });

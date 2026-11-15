@@ -4,6 +4,7 @@ import { createServer } from "node:http";
 import { connect, type AddressInfo, type Socket } from "node:net";
 import { afterEach, expect, it, vi } from "vitest";
 import { WebSocketServer } from "../../../../packages/gateway-client/src/websocket.js";
+import { runCleanups } from "../../../../test/helpers/qa-gateway-cleanup.js";
 import type { RealtimeVoiceProviderPlugin } from "../../../plugins/capability-provider.types.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { rawDataToString } from "../../ws.js";
@@ -21,13 +22,11 @@ const { buildOpenAIRealtimeVoiceProvider } = await loadBundledPluginFacade<{
   buildOpenAIRealtimeVoiceProvider: () => RealtimeVoiceProviderPlugin;
 }>({ pluginId: "openai", artifactBasename: "api.js" });
 
-const closers: Array<() => Promise<void> | void> = [];
+const closers: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
   try {
-    for (const close of closers.splice(0).toReversed()) {
-      await close();
-    }
+    await runCleanups(closers, "Realtime proxy fixture cleanup failed");
   } finally {
     vi.unstubAllEnvs();
   }
@@ -50,7 +49,7 @@ it.each([true, false])(
       onAudio: vi.fn(),
       onClearAudio: vi.fn(),
     });
-    closers.push(() => bridge.close());
+    closers.push(async () => bridge.close());
     if (admit) {
       await bridge.connect();
       expect(bridge.isConnected()).toBe(true);

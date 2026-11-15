@@ -371,16 +371,22 @@ describe("recovery cancellation through the public run owner", () => {
       });
 
       expect(result.payloads).toEqual([{ text: "Done." }]);
-      expect(facts).toHaveBeenCalledExactlyOnceWith({
-        kind: "durable",
-        count: 1,
-        currentContextSnapshot: { tokens: currentContextTokens },
-        target: {
-          ...runParams.sessionTarget,
-          lifecycleRevision: undefined,
-          activeWriterRunId: runParams.runId,
-        },
-      });
+      const target = {
+        ...runParams.sessionTarget,
+        lifecycleRevision: undefined,
+        activeWriterRunId: runParams.runId,
+      };
+      expect(facts.mock.calls).toEqual([
+        [{ kind: "durable", count: 0, target }],
+        [
+          {
+            kind: "durable",
+            count: 1,
+            currentContextSnapshot: { tokens: currentContextTokens },
+            target,
+          },
+        ],
+      ]);
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedCompactDirect).not.toHaveBeenCalled();
     },
@@ -489,7 +495,7 @@ describe("recovery cancellation through the public run owner", () => {
         expect(persisted).toMatchObject({ activeWriterRunId: "replacement-writer" });
       } else {
         expect(persisted).toMatchObject({
-          totalTokens: 13_357,
+          totalTokens: 13_375,
           activeWriterRunId: runParams.runId,
           inputTokens: 3,
           outputTokens: 18,
@@ -505,7 +511,7 @@ describe("recovery cancellation through the public run owner", () => {
           target: { ...sessionTarget, activeWriterRunId: runParams.runId },
         });
       }
-      expect(accounting.fact?.currentContextSnapshot).toBeUndefined();
+      expect(accounting.fact?.currentContextSnapshot).toEqual({ tokens: 13_375 });
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledOnce();
       expect(mockedCompactDirect).not.toHaveBeenCalled();
     },

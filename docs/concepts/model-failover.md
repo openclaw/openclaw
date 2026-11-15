@@ -13,6 +13,12 @@ OpenClaw handles failures in two stages:
 1. **Auth-profile rotation** within the current provider.
 2. **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
+When an assistant failure explicitly identifies an unknown, missing, or retired
+model, OpenClaw skips other credentials and advances to the configured fallback.
+Without a fallback, it surfaces the error. Account-access and plan restrictions,
+authentication failures, quota errors, and ambiguous not-found responses still
+allow profile rotation.
+
 Turn usage includes completed model candidates even when their answer is discarded
 during fallback. Costs retain each candidate's price; if any completed candidate's
 price is unavailable, the total cost stays unknown. The final selected model and
@@ -32,6 +38,17 @@ the provider's retry floor before being sent. This includes streamed rate-limit
 errors. `Retry-After` and exhausted quota reset headers are honored by the provider
 error parser. A full-refill reset is not a minimum wait when the bucket still has
 tokens and the provider supplies a shorter retry hint.
+
+A timed 429 with a retry delay longer than one minute also uses this shared
+route/account gate, even without organization-TPM wording. When the remaining
+wait exceeds `retry.provider.maxRetryDelayMs`, later turns fail fast without
+sending another request to that route. The terminal notice names the limited
+model, gives the provider's reset time as a relative wait and an absolute date,
+and points to the model picker or `agents.defaults.model.fallbacks` in Settings.
+Dates use the configured UI locale and `agents.defaults.userTimezone` when
+available, otherwise the host's locale and timezone. Short or unknown waits
+retain the brief retry notice. These in-memory gates do not survive a Gateway
+restart; saved auth-profile cooldowns retain their existing persistence.
 
 During recovery, interactive turns take priority over subagents and background
 work such as reviews and titles. Queued requests resume one at a time with
@@ -166,6 +183,8 @@ existing run deadline and cost limits still apply.
 Local session-coordination errors also stop fallback. For example, when prepared
 session capability metadata changes, OpenClaw surfaces that error without trying
 another model. Changing providers cannot repair stale session authority.
+The `model-fallback/decision` logger records `local_runtime_coordination` for
+these stops and `transcript_not_continuable` when the transcript cannot continue.
 
 Fallback requests reuse the original user turn and its attachments exactly once.
 Fresh plugin context for the fallback model is added separately, preserving the
@@ -357,7 +376,7 @@ A provider plugin can declare `managesOwnAvailability: true` in `openclaw.plugin
 
 CLI-backed runtimes settle profile health only after their resume, fork, and fresh-session recovery attempts finish. A terminal credential failure cools down the exact selected profile before model fallback. A successful run clears stale failure state. Transcript, format, context, pre-provider timeout, and ambient CLI failures without a selected profile do not change shared profile health.
 
-A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
+A successful authenticated ChatGPT quota check replaces the saved subscription reset with the provider's current reset, including an earlier one. The profile stays blocked until that reset; an unavailable or invalid quota response leaves the saved block intact. A delayed WHAM failure check cannot reinstate an exhaustion block after a newer successful request with the same credential.
 
 <AccordionGroup>
   <Accordion title="What lands in the rate-limit / timeout bucket">

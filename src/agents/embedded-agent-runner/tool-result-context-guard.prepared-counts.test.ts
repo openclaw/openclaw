@@ -3,8 +3,9 @@ import { estimateStringCharsWithMinimumRawWeight } from "@openclaw/normalization
 import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
-import { cloneSessionModelContextEntries } from "../sessions/session-manager-codec.js";
+import { projectSessionModelContextEntries } from "../sessions/session-manager-codec.js";
 import { toolResult } from "../sessions/session-message-fixtures.test-support.js";
+import { createToolResultPromptProjectionState } from "./session-prompt-state.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
 import {
   truncateOversizedToolResultsInMessages as truncate,
@@ -54,7 +55,7 @@ it.each(["frozen", "initial-context"])("reuses %s history budgets", async (kind)
   const text = "historical 漢字🙂\n".repeat(128);
   let source: AgentMessage = freezeTrustedJsonSnapshot(toolResult(text));
   if (kind === "initial-context") {
-    const [entry] = cloneSessionModelContextEntries([
+    const [entry] = projectSessionModelContextEntries([
       {
         type: "message",
         id: "history",
@@ -67,7 +68,7 @@ it.each(["frozen", "initial-context"])("reuses %s history budgets", async (kind)
       throw new Error("Missing model history");
     }
     source = entry.message;
-    expect(Object.isFrozen(source.content)).toBe(false);
+    expect(Object.isFrozen(source.content)).toBe(true);
   }
   const history = [source];
   expect(truncate(history, 128_000).messages).toBe(history);
@@ -100,4 +101,28 @@ it("does not rescan cold oversized text before truncating it", () => {
   countChars.mockClear();
   expect(truncate([source], 128_000, 1_000).truncatedCount).toBe(1);
   expect(fullTextScans(text)).toBe(0);
+});
+
+it("retains old projection estimates when a new result needs truncation", () => {
+  const state = createToolResultPromptProjectionState();
+  const history: AgentMessage[] = [];
+  let previous: AgentMessage | undefined;
+  for (let index = 0; index < 3; index++) {
+    history.push(
+      freezeTrustedJsonSnapshot({
+        ...toolResult(`result ${index} 漢字\n`.repeat(2_048)),
+        toolCallId: `call-${index}`,
+      }),
+    );
+    const result = truncate(history, 128_000, 1_000, 100_000, state);
+    expect(result.truncatedCount).toBe(1);
+    if (previous) {
+      expect(result.messages[0]).toBe(previous);
+    }
+    const replay = truncate(history, 128_000, 1_000, 100_000, state);
+    if (previous) {
+      expect(replay.messages[0]).toBe(previous);
+    }
+    previous = replay.messages[0];
+  }
 });

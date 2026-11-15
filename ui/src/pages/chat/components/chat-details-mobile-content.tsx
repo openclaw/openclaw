@@ -58,7 +58,6 @@ import {
   type SessionAutomationInventory,
 } from "./chat-summary-automations.tsx";
 import "../../../styles/chat/details.css";
-import { SessionAutomationResult } from "./session-automation-result.tsx";
 import { createSessionAutomationSchedule } from "./session-automation-schedule-loader.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -100,7 +99,7 @@ type ChatDetailsMobileRootContent = {
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
   publicationEntry?: ChatDetailsMobileEntry;
   processes: ChatDetailsMobileProcessesProps["data"] | undefined;
-  /** Keep every native child; the host routes unlisted children through onSessionSelect. */
+  /** The root shows the native subagent collection; ordinary subsessions stay in the sidebar. */
   subagents: Omit<NonNullable<ChatDetailsMobileRootProps["subagents"]>, "rows">;
   /** One session-owned inventory, shared with desktop; never construct it in the opener. */
   automations?: { inventory: SessionAutomationInventory; summary: ChatDetailsMobileEntry };
@@ -234,7 +233,6 @@ function MobileRoot(
       items: inventory.jobs().map((job) => ({
         value: job.id,
         label: job.name.trim() || job.id,
-        status: <SessionAutomationResult job={job} />,
         // Keep asynchronous schedule reads inside the rendered automations section.
         get description() {
           return job.autoDisabled

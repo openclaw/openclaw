@@ -62,7 +62,9 @@ export function resolveCompletionInputReplyExpectation(
 ): ReplyExpectation {
   // Available child findings do not create a reply obligation for their parent.
   const isSubagentCompletion =
-    sourceTool === "subagent_announce" || sourceTool === "subagent_settle";
+    sourceTool === "subagent_announce" ||
+    sourceTool === "subagent_settle" ||
+    sourceTool === "agent_harness_completion";
   return params.requireVisibleReply || (params.expectsCompletionMessage && !isSubagentCompletion)
     ? "required"
     : "optional";
@@ -102,6 +104,14 @@ export function resolveCommandReplyExpectation(params: {
   // The wake prompt offers NO_REPLY, so silence stays valid on internal surfaces too.
   if (isExecCompletionInputProvenance(params.opts.inputProvenance)) {
     return "optional";
+  }
+  // WebChat also names the internal routing sentinel. Human conversations accept
+  // explicit silence, while internal work still owes its caller a result.
+  if (
+    params.messageChannel === INTERNAL_MESSAGE_CHANNEL &&
+    (!provenance || provenance.kind === "external_user")
+  ) {
+    return "required";
   }
   if (
     !params.messageChannel ||

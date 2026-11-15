@@ -1,10 +1,13 @@
+import { isWorkerIdleForPressure } from "@openclaw/worker-runtime";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SpawnBrokerHost } from "../process/spawn-broker/host.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { createStateWorkerMemoryPressureSubscription } from "../state/openclaw-state-worker-memory-pressure.js";
 import { racePromiseWithAbortSignal } from "./abort-signal.js";
 import { getSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
 import { throwSettledAggregate } from "./error-graph-internal.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-lifecycle-errors.js";
+import { sqliteReadOnlyOperationRequiresProcessRetirement } from "./sqlite-readonly-operation-lifecycle.js";
 import {
   readOnlyWorkerScope,
   type SqliteReadOnlyWorkerScope,
@@ -45,6 +48,7 @@ export function createSqliteReadOnlyWorkerPool(
     tail: Promise<void>;
     queued: number;
     idle?: ReturnType<typeof setTimeout>;
+    idleSince?: number;
     leased?: { started: boolean };
     quarantined?: { error: unknown };
   }> = [];
@@ -56,6 +60,23 @@ export function createSqliteReadOnlyWorkerPool(
   >();
   const readWorkerReleaseWaiters = new Set<() => void>();
   const closingBrokers = new WeakSet<SpawnBrokerHost>();
+  const refreshPressureSubscription = createStateWorkerMemoryPressureSubscription(
+    () =>
+      scopedReadWorkers.some((slot) => slot.idleSince !== undefined && !slot.session?.isRetired()),
+    (critical) => {
+      for (const slot of scopedReadWorkers) {
+        if (
+          slot.session &&
+          !slot.leased &&
+          !slot.quarantined &&
+          slot.queued === 0 &&
+          isWorkerIdleForPressure(slot.idleSince, critical)
+        ) {
+          void retireIdleSlot(slot);
+        }
+      }
+    },
+  );
   const assertBrokerOpen = (launch: SqliteReadOnlyWorkerLaunch) => {
     if (launch.transport.kind === "broker" && closingBrokers.has(launch.transport.owner)) {
       throw new Error("SQLite read-only worker broker is closing");
@@ -183,6 +204,8 @@ export function createSqliteReadOnlyWorkerPool(
 
   function retireIdleSlot(slot: (typeof scopedReadWorkers)[number]): Promise<void> {
     clearTimeout(slot.idle);
+    slot.idleSince = undefined;
+    refreshPressureSubscription();
     // Leave the retiring session in the slot until its native close has joined.
     const closing = runInDetachedAsyncContext(() => closeSlot(slot));
     slot.tail = closing.catch(() => {
@@ -199,6 +222,8 @@ export function createSqliteReadOnlyWorkerPool(
       void retireIdleSlot(slot);
       return;
     }
+    slot.idleSince = performance.now();
+    refreshPressureSubscription();
     slot.idle = runInDetachedAsyncContext(() =>
       setTimeout(() => {
         void retireIdleSlot(slot);
@@ -225,6 +250,8 @@ export function createSqliteReadOnlyWorkerPool(
       throw error;
     }
     clearTimeout(selected.idle);
+    selected.idleSince = undefined;
+    refreshPressureSubscription();
     selected.queued++;
     const previous = selected.tail;
     const operation = runInDetachedAsyncContext(() =>
@@ -251,17 +278,23 @@ export function createSqliteReadOnlyWorkerPool(
         }
         options.signal?.throwIfAborted();
         selected.launch = launch;
-        const worker = (selected.session ??= createSession({
-          ...launch,
-          pooledRead: true,
-        }));
+        if (!selected.session) {
+          selected.session = createSession({ ...launch, pooledRead: true });
+          const { closed } = selected.session;
+          void runInDetachedAsyncContext(() =>
+            closed.then(refreshPressureSubscription, refreshPressureSubscription),
+          );
+        }
+        const worker = selected.session;
         worker.setIdle(false);
         try {
           const value = await worker.run(pathname, options);
           options.signal?.throwIfAborted();
           if (
             !stateful &&
-            !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources
+            ((options.mode === "operation" &&
+              sqliteReadOnlyOperationRequiresProcessRetirement(options.command.type)) ||
+              !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources)
           ) {
             await closeSlot(selected);
           }

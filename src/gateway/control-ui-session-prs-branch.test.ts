@@ -144,18 +144,15 @@ describe("session branch diff stats", () => {
     await initializeRepo();
     await trackRemote("main");
     await connectGithub();
-    const fetchImpl = routedFetch([]);
-    vi.stubGlobal("fetch", fetchImpl);
+    vi.stubGlobal("fetch", routedFetch([]));
     const load = () => loadCheckout("discovery", true);
-    const expected = {
+    const initial = {
       pullRequests: [],
       rateLimited: false,
       repository: { owner: "openclaw", repo: "openclaw" },
     };
-    await expect(load()).resolves.toEqual(expected);
+    expect(await load()).toEqual(initial);
     const reads = vi.spyOn(worktreeGit, "runGitBytes");
-    const initial = await load();
-    reads.mockClear();
     await writeCommit("a.txt", "next commit\n", "advance main", true);
     await trackRemote("main");
     expect(await load()).toEqual(initial);
@@ -165,8 +162,8 @@ describe("session branch diff stats", () => {
     await expect(load()).resolves.toEqual({ pullRequests: [], rateLimited: false });
     await git("remote", "set-url", "origin", "https://github.com/openclaw/openclaw.git");
     await git("checkout", "--detach");
-    await expect(load()).resolves.toEqual(expected);
-    expect(fetchImpl.mock.calls).toHaveLength(0);
+    await expect(load()).resolves.toEqual(initial);
+    expect(vi.mocked(globalThis.fetch).mock.calls).toHaveLength(0);
   });
 
   it("counts committed and uncommitted changes vs the origin default merge base", async () => {
@@ -332,6 +329,43 @@ describe("session branch diff stats", () => {
     expect(result.branch).toEqual(expectedBranch(1, 0, 1));
   });
 
+  it("ignores pull requests opened before a reused branch name was created", async () => {
+    // Managed worktrees create their branch from the default branch.
+    await initializeRepo();
+    await trackRemote("main");
+    await git("checkout", "-b", "feature", "refs/remotes/origin/main");
+    await writeCommit("a.txt", "two\n", "feature work", true);
+    await connectGithub();
+    const earlier = pullListItem({
+      number: 154218,
+      html_url: "https://github.com/openclaw/openclaw/pull/154218",
+      created_at: "2026-09-21T00:44:17Z",
+      head: { sha: "b".repeat(40), ref: "feature" },
+    });
+    const current = pullListItem({
+      created_at: new Date(Date.now() + 60_000).toISOString(),
+      head: { sha: "a".repeat(40), ref: "feature" },
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch([
+        { match: "/pulls?head=", response: () => githubJson([earlier, current]) },
+        { match: "/pulls/103469", response: () => githubJson({ additions: 1, deletions: 0 }) },
+        { match: "/commits/", response: () => githubJson({ total_count: 0, check_runs: [] }) },
+      ]),
+    );
+
+    const result = await loadCheckout("reused-branch-name");
+    expect(result.pullRequests.map((pull) => pull.number)).toEqual([103469]);
+
+    // Other start points, such as a remote branch, may adopt an existing PR.
+    await trackRemote("adopted");
+    await git("checkout", "-b", "adopted", "refs/remotes/origin/adopted");
+    const adopted = await runGitReadOperation({ type: "checkout.context", input: { root } });
+    expect(adopted).toMatchObject({ branch: "adopted" });
+    expect(adopted).not.toHaveProperty("branchStartedAt");
+  });
+
   describe("fork head discovery", () => {
     const forkOwner = "PratikRai0101";
     const forkContext = () => runGitReadOperation({ type: "checkout.context", input: { root } });
@@ -385,6 +419,8 @@ describe("session branch diff stats", () => {
         await expect(git("config", "--get", key)).rejects.toThrow();
       }
 
+      await git("tag", "feature");
+      await git("tag", "origin/main");
       expect(await forkContext()).toMatchObject({
         owner: "openclaw",
         repo: "openclaw",
@@ -397,6 +433,7 @@ describe("session branch diff stats", () => {
         ],
       });
 
+      await git("tag", "-d", "feature", "origin/main");
       await git("remote", "set-url", "fork", "https://github.com/lonexreb/paloa-claw.git");
       expect((await forkContext())?.forkHeadCandidates?.[0]).toEqual({
         owner: "lonexreb",

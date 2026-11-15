@@ -13,8 +13,9 @@ const { createTempDir } = createScriptTestHarness();
 it.each([
   { name: "installed assets", workerChunks: false },
   { name: "sealed worker chunks", workerChunks: true },
-])("loads diagnostic catalogs lazily from relocated $name", async ({ workerChunks }) => {
+])("retains cold diagnostic catalogs from relocated $name", async ({ workerChunks }) => {
   const root = fs.realpathSync(createTempDir("sqlite-schema-assets-"));
+  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
   const entry = path.join(root, "entry.ts");
   fs.writeFileSync(
     entry,
@@ -25,6 +26,7 @@ import { DAEMON_RUNTIME_PIN_SCHEMA_SQL } from ${JSON.stringify(path.resolve("src
 const schemas = [OPENCLAW_STATE_SCHEMA_SQL, OPENCLAW_AGENT_SCHEMA_SQL, DAEMON_RUNTIME_PIN_SCHEMA_SQL];
 export const fingerprints = () => schemas.map(readGeneratedSqliteFingerprint);
 export const catalogs = () => schemas.map(readGeneratedSqliteCatalog);
+export { retainUpdateRuntimeImports } from ${JSON.stringify(path.resolve("src/infra/update-retained-runtime-imports.ts"))};
 `,
   );
   const outDir = path.join(root, "build");
@@ -58,12 +60,29 @@ export const catalogs = () => schemas.map(readGeneratedSqliteCatalog);
         "--input-type=module",
         "-e",
         `import fs from 'node:fs';
+import path from 'node:path';
 const files = ${workerChunks ? "fs.readdirSync('.').filter(name => name.startsWith('worker-chunk-sqlite-'))" : "['assets']"};
 if (files.length === 0) throw new Error('No diagnostic files were emitted');
 for (const file of files) fs.renameSync(file, file + '.held');
 const owner = await import(${JSON.stringify(workerChunks ? "./worker.mjs" : "./entry.mjs")});
 const fingerprints = owner.fingerprints();
 for (const file of files) fs.renameSync(file + '.held', file);
+const root = process.cwd();
+const retained = root + '.retained';
+const inventory = fs.readdirSync(root, { recursive: true, withFileTypes: true })
+  .filter(entry => entry.isFile()).map(entry => path.join(entry.parentPath, entry.name));
+fs.cpSync(root, retained, { recursive: true });
+owner.retainUpdateRuntimeImports([{ sourceRoot: root, destinationRoot: retained }], inventory);
+const replacement = JSON.stringify({ tables: [], catalogs: {} });
+for (const file of files) {
+  if (fs.statSync(file).isDirectory()) {
+    for (const entry of fs.readdirSync(file, { recursive: true, withFileTypes: true })) {
+      if (entry.isFile()) fs.writeFileSync(path.join(entry.parentPath, entry.name), replacement);
+    }
+  } else {
+    fs.writeFileSync(file, 'export default ' + JSON.stringify(replacement) + ';');
+  }
+}
 const catalogs = owner.catalogs();
 console.log(JSON.stringify(fingerprints.map((fingerprint, index) => ({
   fingerprint: fingerprint.fingerprint,

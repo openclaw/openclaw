@@ -41,6 +41,13 @@ public enum ToolDisplayRegistry {
 
     /// Presentation only; invocation identity and stored tool names stay raw.
     public static func displayCall(name: String?, args: AnyCodable?) -> (name: String?, args: AnyCodable?) {
+        // A tool bridged over MCP arrives as mcp__<server>__<tool>; show the tool, not the bridge.
+        if let name, name.hasPrefix("mcp__"),
+           let separator = name.range(of: "__", range: name.index(name.startIndex, offsetBy: 5)..<name.endIndex),
+           separator.upperBound < name.endIndex
+        {
+            return (String(name[separator.upperBound...]), args)
+        }
         guard let key = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               ["dispatch_action", "tool_call"].contains(key),
               let arguments = args?.dictionaryValue,
@@ -64,7 +71,7 @@ public enum ToolDisplayRegistry {
         let fallback = self.config.fallback
 
         let icon = spec?.icon ?? fallback?.icon ?? "puzzle"
-        let title = spec?.title ?? self.titleFromName(trimmedName)
+        let title = self.commandPurpose(key: key, args: args) ?? spec?.title ?? self.titleFromName(trimmedName)
         let label = spec?.label ?? trimmedName
 
         let actionRaw = self.valueForKeyPath(args, path: "action") as? String
@@ -171,6 +178,16 @@ public enum ToolDisplayRegistry {
                 ],
                 actions: nil),
             tools: nil)
+    }
+
+    private static func commandPurpose(key: String, args: AnyCodable?) -> String? {
+        guard ["bash", "exec", "shell", "run_command", "run_terminal_cmd"].contains(key),
+              let title = self.valueForKeyPath(args, path: "title") as? String
+        else { return nil }
+        let line = title.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        let filtered = String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+        let text = filtered.split(whereSeparator: \.isWhitespace).joined(separator: " ")
+        return text.isEmpty ? nil : String(text.prefix(120))
     }
 
     private static func titleFromName(_ name: String) -> String {

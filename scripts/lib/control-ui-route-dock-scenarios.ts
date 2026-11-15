@@ -403,10 +403,7 @@ async function coldReady(page: Page, id: DockScenarioId) {
           }),
       sessionKey,
     );
-    assert.equal(
-      await page.locator("openclaw-browser-panel, openclaw-browser-tab-card").count(),
-      0,
-    );
+    assert.equal(await page.locator("openclaw-browser-panel").count(), 0);
     return;
   }
   await routeReady(page, "activity");

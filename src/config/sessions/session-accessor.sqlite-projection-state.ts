@@ -1,7 +1,7 @@
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import {
   sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
@@ -34,6 +34,7 @@ import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owne
 import { appendSessionResetBoundary } from "./session-accessor.sqlite-reset-boundary.js";
 import type { ResolvedSqliteReadScope } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
+import { commitSessionCreationReceipt } from "./session-creation-receipts.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionEntry } from "./types.js";
@@ -223,6 +224,10 @@ export function commitProjectedSessionEntryLifecycleMutationInDatabase(
     }
   }
   options.afterUpsertsInTransaction?.(database);
+  if (options.creation?.receipt) {
+    const { operation, sessionKey, entry } = options.creation.receipt;
+    commitSessionCreationReceipt(database, operation, sessionKey, entry);
+  }
   if (options.creation?.preparedTranscript) {
     const { sessionKey, sessionId, events } = options.creation.preparedTranscript;
     appendTranscriptEventsInTransaction(

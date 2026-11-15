@@ -54,6 +54,7 @@ import {
   settleDurableDelivery,
 } from "./delivery-completion.js";
 import { prepareOutboundDeliveryGeneration } from "./delivery-generation.js";
+import { settleFailedQueuedDeliveryCompletion } from "./delivery-queue-failure-completion.js";
 import { collectEntrySpoolPaths, releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import {
   cancelDeliveryQueueMediaRetention,
@@ -291,11 +292,9 @@ async function settleQueuedFailure(
     // Failed custody forbids sends even after a restart. Keep the completion
     // payload until its idempotent owner projection succeeds, then compact once.
     if (entry.deliveryCompletion) {
-      await settleDurableDelivery(
+      await settleFailedQueuedDeliveryCompletion(
         entry.deliveryCompletion,
-        settlement.outcome === "failed" && settlement.rejectionError !== undefined
-          ? { rejectionError: settlement.rejectionError }
-          : { platformSendStarted: true },
+        settlement,
         params.stateDir,
         stateContext,
       );

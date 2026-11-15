@@ -47,7 +47,7 @@ import type {
   PreparedModelRuntimePluginGeneration,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
-import { AuthStorage } from "./sessions/auth-storage.js";
+import { AuthStorage } from "./sessions/auth-storage.core.js";
 
 const fullModelCatalogSnapshots = new WeakSet<ModelCatalogSnapshot>();
 
@@ -64,7 +64,11 @@ export async function prepareFullCatalogFacts(
   >,
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
-  options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
+  options: {
+    includeNative?: boolean;
+    providerIds?: readonly string[];
+    assertCurrent?: () => void;
+  } = {},
 ): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
   const prepare = async () => {
     const { env, input, templateAuthStorage } = agentFacts;
@@ -154,10 +158,11 @@ export async function prepareFullCatalogFacts(
         { providerMetadataOwners: pluginMetadataSnapshot.owners },
       ).map((model) => completeInlineProviderModel(model, providerConfig)),
     );
-    const configuredRuntimeModels = completeConfiguredRuntimeModels(
+    const configuredRuntimeModels = await completeConfiguredRuntimeModels(
       agentFacts,
       pluginGeneration,
       templateModelRegistry,
+      options.assertCurrent,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
     const normalizeProvider = createPreparedModelCatalogProviderNormalizer(

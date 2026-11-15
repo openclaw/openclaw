@@ -10,19 +10,24 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-error.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
 import {
   AgentDatabaseAdmissionError,
   captureAgentDatabaseAdmission as captureAdmission,
+  createAgentDatabaseHeldRefusal as heldRefusal,
   createAgentDatabaseInspectionRefusal as inspectionRefusal,
   evaluateAgentDatabaseAdmissions,
   preparePendingAgentDatabase as preparePending,
   readAgentDatabaseAdmissionRefusal as readRefusal,
   recordAgentDatabaseAdmissions as recordAdmissions,
+  releaseAgentDatabaseHeldAdmission,
 } from "./agent-database-admission.js";
 import { withAgentDatabaseStartupAdmission as withStartupAdmission } from "./agent-database-startup.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -49,6 +54,63 @@ import { captureOpenClawStateWorkerContext as workerContext } from "./openclaw-s
 const tempDirs = createTempDirTracker();
 const makeEnv = () => ({ OPENCLAW_STATE_DIR: tempDirs.make("agent-admission-") });
 
+it("borrows only the creator's held admission and releases only restored paths", async () => {
+  const env = makeEnv();
+  const paths = [
+    path.join(env.OPENCLAW_STATE_DIR, "first.sqlite"),
+    path.join(env.OPENCLAW_STATE_DIR, "second.sqlite"),
+  ];
+  const held = heldRefusal("retired", paths);
+  const broken = inspectionRefusal({
+    agentId: "broken",
+    paths: ["broken.sqlite"],
+    reason: "unreadable",
+  });
+  recordAdmissions([held, broken], { env, source: "startup" });
+  const admitted = captureAdmission("retired", { env });
+  expect(admitted).toThrow("held for explicit restoration");
+  expect(Value.Check(AgentDatabaseAdmissionRefusalSchema, held)).toBe(true);
+  await runWithAgentCreationClaim({ agentId: "retired", env }, async () => {
+    expect(admitted).not.toThrow();
+    expect(captureAdmission("broken", { env })).toThrow("unreadable");
+  });
+  await runWithAgentCreationClaim({ agentId: "broken", env }, async () => {
+    expect(captureAdmission("broken", { env })).toThrow("unreadable");
+    expect(admitted).toThrow("held for explicit restoration");
+  });
+  expect(admitted).toThrow("held for explicit restoration");
+  releaseAgentDatabaseHeldAdmission([paths[0]!], { env });
+  expect(readRefusal("retired", { env })?.paths).toEqual([paths[1]]);
+  releaseAgentDatabaseHeldAdmission([paths[1]!], { env });
+  expect(admitted).not.toThrow();
+  expect(readRefusal("broken", { env })).toBe(broken);
+  const pending = inspectionRefusal({
+    agentId: "retired",
+    paths: ["pending.sqlite"],
+    pending: true,
+    reason: "pending",
+  });
+  const mismatch = {
+    agentId: "retired",
+    paths: ["foreign.sqlite"],
+    code: "agent-database-ownership-mismatch" as const,
+    embeddedOwnerId: "foreign",
+    reason: "foreign owner",
+    repairHint: "repair ownership",
+  };
+  for (const unrelated of [pending, mismatch]) {
+    recordAdmissions([held, unrelated], { env, source: "startup" });
+    expect(readRefusal("retired", { env })?.code).toBe(
+      unrelated === pending ? "agent-database-held" : "agent-database-ownership-mismatch",
+    );
+    await runWithAgentCreationClaim({ agentId: "retired", env }, async () => {
+      expect(admitted).toThrow();
+    });
+    releaseAgentDatabaseHeldAdmission(paths, { env });
+    expect(readRefusal("retired", { env })).toBe(unrelated);
+  }
+});
+
 it.each(["settled", "pending"] as const)(
   "prepares missing storage after an existing-only miss (%s)",
   async (timing) => {
@@ -68,16 +130,19 @@ it.each(["settled", "pending"] as const)(
   },
 );
 
-it("reports exhausted lock admission without recommending database repair", () => {
+it.each([
+  Object.assign(new Error("database is locked"), { errcode: 5 }),
+  new WorkerTaskError("worker task capacity reached", "overloaded"),
+  new SqliteWorkerError("worker capacity reached", "overloaded"),
+])("reports exhausted contention without recommending database repair: %s", (cause) => {
   const refusal = inspectionRefusal({
     agentId: "worker",
     paths: ["/synthetic/openclaw-agent.sqlite"],
-    reason: "database is locked",
-    cause: Object.assign(new Error("database is locked"), { errcode: 5 }),
+    reason: cause.message,
+    cause,
   });
   expect(refusal).toMatchObject({
     code: "agent-database-inspection-failed",
-    reason: "database locked by another process",
     repairHint: expect.stringContaining("restart the Gateway to retry admission"),
   });
   expect(refusal.repairHint).not.toContain("doctor --fix");
@@ -264,27 +329,30 @@ it("retains merged inspection causes without changing public refusals", () => {
   );
 });
 
-it("retains its selected agent and state while observing current refusal publications", () => {
-  const env = makeEnv();
-  const stateDir = env.OPENCLAW_STATE_DIR;
-  const assertAdmitted = captureAdmission("  MAIN  ", { env });
-  expect(assertAdmitted).not.toThrow();
-  env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
-  const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
-  const refusal = inspectionRefusal({
-    agentId: "main",
-    paths: [],
-    reason: "Original admission refused",
-  });
-  recordAdmissions([refusal], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
-  expect(readRefusal("main", { env })).toBeUndefined();
-  const replacement = { ...refusal, reason: "Replacement admission refused" };
-  recordAdmissions([replacement], options);
-  expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
-  recordAdmissions([], options);
-  expect(assertAdmitted).not.toThrow();
-});
+it.each(["read", "write"] as const)(
+  "retains its selected agent and state while observing current %s refusal publications",
+  (access) => {
+    const env = makeEnv();
+    const stateDir = env.OPENCLAW_STATE_DIR;
+    const assertAdmitted = captureAdmission("  MAIN  ", { env, access });
+    expect(assertAdmitted).not.toThrow();
+    env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-other-admission-");
+    const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
+    const refusal = inspectionRefusal({
+      agentId: "main",
+      paths: [],
+      reason: "Original admission refused",
+    });
+    recordAdmissions([refusal], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal }));
+    expect(readRefusal("main", { env })).toBeUndefined();
+    const replacement = { ...refusal, reason: "Replacement admission refused" };
+    recordAdmissions([replacement], options);
+    expect(assertAdmitted).toThrow(expect.objectContaining({ refusal: replacement }));
+    recordAdmissions([], options);
+    expect(assertAdmitted).not.toThrow();
+  },
+);
 
 it("uses the current preparation scope and refuses an escaped scope after preparation ends", async () => {
   const env = makeEnv();

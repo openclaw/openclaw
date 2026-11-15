@@ -15,6 +15,7 @@ import type {
   ProviderModelRouteCandidate,
 } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderAuthScope } from "../plugins/provider-auth-scope.js";
+import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import {
   listExternalCliSyncProviderIds,
@@ -48,6 +49,8 @@ import {
 } from "./auth-profiles/usage-state.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { createCliRuntimeModelAuthEvaluator } from "./model-auth-availability.cli-runtime.js";
+import { createOAuthRefreshAuthority } from "./model-auth-availability.oauth-refresh.js";
+import { projectOpenAIModelAuth } from "./model-auth-availability.openai.js";
 import { createRuntimeCredentialOverlay } from "./model-auth-availability.runtime-overlay.js";
 import type {
   ModelAuthAvailability,
@@ -183,21 +186,12 @@ export function createModelAuthAvailabilityResolver(
     : params.authStore;
   const runtimeStore =
     params.preparedRuntimeAuthStore ?? getRuntimeAuthProfileStoreSnapshotCore(params.agentDir);
-  const { overlay: runtimeCredentialOverlay, hydratedProfileIds } = createRuntimeCredentialOverlay({
+  const runtimeCredentials = createRuntimeCredentialOverlay({
     cfg: params.cfg,
+    authStore: store,
     runtimeStore,
     now,
   });
-  const orderProfiles = runtimeStore
-    ? Object.fromEntries(
-        Object.entries(store.profiles).map(([profileId, credential]) => [
-          profileId,
-          runtimeCredentialOverlay(profileId, credential),
-        ]),
-      )
-    : store.profiles;
-  const orderStore =
-    orderProfiles === store.profiles ? store : { ...store, profiles: orderProfiles };
   const { aliasMap, envCandidateMap, authEvidenceMap } = resolveProviderEnvAuthLookupMaps({
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -212,31 +206,35 @@ export function createModelAuthAvailabilityResolver(
   ) {
     synthetic.add("codex");
   }
-  const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
-    config: params.cfg,
-    agentId: params.agentId,
-    primaryModel: resolveDefaultModelForAgent({
-      cfg: params.cfg,
+  const resolveOpenAIProviderRoutes =
+    params.resolveOpenAIProviderRoutes ??
+    createProviderModelRoutesResolver({ provider: OPENAI_PROVIDER_ID, config: params.cfg, env });
+  const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)(
+    {
+      config: params.cfg,
       agentId: params.agentId,
-      allowManifestNormalization: false,
-      allowPluginNormalization: false,
-    }),
-    resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
-    resolveProfileAuthFlow: (profileId) => {
-      const credential = orderStore.profiles[profileId];
-      return credential?.type === "oauth" ? credential.authFlow : undefined;
+      primaryModel: resolveDefaultModelForAgent({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        allowManifestNormalization: false,
+        allowPluginNormalization: false,
+      }),
+      resolveProfileAuthMode: (profileId) => store.profiles[profileId]?.type,
+      resolveProfileAuthFlow: (profileId) => {
+        const credential = runtimeCredentials.orderStore.profiles[profileId];
+        return credential?.type === "oauth" ? credential.authFlow : undefined;
+      },
+      env,
     },
-    env,
-  });
+    resolveOpenAIProviderRoutes,
+  );
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
     const normalized = normalizeProviderIdForAuth(provider);
     return aliasMap[normalized] ?? normalized;
   };
-  // Refresh authority follows exact profiles marked by the external-auth
-  // lifecycle. Provider-wide authority could bless an unrelated stale profile.
-  const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
+  const canRefreshOAuth = createOAuthRefreshAuthority(external, params.canRefreshProviderOAuth);
   const providerInput = (provider: string) =>
     resolveProviderConfigSecretInput(params.cfg, provider, sourceConfig);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
@@ -292,7 +290,7 @@ export function createModelAuthAvailabilityResolver(
     const resolution = prependAuthProfilePin(
       resolveAuthProfileOrderWithMetadata({
         cfg: params.cfg,
-        store: orderStore,
+        store: runtimeCredentials.orderStore,
         provider: normalized,
         preferredProfile: preferredProfileId,
         forModel,
@@ -314,7 +312,7 @@ export function createModelAuthAvailabilityResolver(
     if (cached) {
       return cached;
     }
-    const credential = orderStore.profiles[profileId];
+    const credential = runtimeCredentials.orderStore.profiles[profileId];
     const authFlow = credential?.type === "oauth" ? credential.authFlow : undefined;
     const facts = authFlow
       ? {
@@ -360,7 +358,7 @@ export function createModelAuthAvailabilityResolver(
       profileId !== undefined &&
       !resolveAuthProfileEligibility({
         cfg: params.cfg,
-        store: orderStore,
+        store: runtimeCredentials.orderStore,
         provider: normalizeProvider(provider),
         profileId,
         now,
@@ -383,7 +381,7 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return false;
     }
-    if (hydratedProfileIds.has(profileId)) {
+    if (runtimeCredentials.hydratedProfileIds.has(profileId)) {
       return (
         credential.type !== "token" || credential.expires === undefined || credential.expires > now
       );
@@ -393,8 +391,7 @@ export function createModelAuthAvailabilityResolver(
       cfg: params.cfg,
       env,
       now,
-      canRefreshOAuth:
-        provider === OPENAI_PROVIDER_ID || externalCliRefreshProfileIds.has(profileId),
+      canRefreshOAuth: canRefreshOAuth(provider, profileId),
     });
   };
   const profileInCooldown = (profileId: string, target: AuthTarget) => {
@@ -421,7 +418,7 @@ export function createModelAuthAvailabilityResolver(
     if (!storedCredential) {
       return false;
     }
-    const credential = runtimeCredentialOverlay(profileId, storedCredential);
+    const credential = runtimeCredentials.overlay(profileId, storedCredential);
     if (!profileEligibleForReadOnlyAvailability(provider, profileId, credential)) {
       return false;
     }
@@ -477,7 +474,7 @@ export function createModelAuthAvailabilityResolver(
     }
     const binding = target.pinnedProfileId ? { kind: "none" as const } : providerBinding(provider);
     if (binding.kind === "profile") {
-      const credential = runtimeCredentialOverlay(binding.profileId, binding.credential);
+      const credential = runtimeCredentials.overlay(binding.profileId, binding.credential);
       const availability =
         !profileInCooldown(binding.profileId, target) &&
         profileEligibleForReadOnlyAvailability(
@@ -525,7 +522,7 @@ export function createModelAuthAvailabilityResolver(
       if (!modeAllowed(provider, target, configuredBearerMode)) {
         return withMode(configuredBearerMode, binding.evidence, false);
       }
-      if (hasUsableCustomProviderApiKey(params.cfg, provider, env)) {
+      if (hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig)) {
         return withMode(configuredBearerMode, binding.evidence, true);
       }
       const managed = typeof apiKey === "string" && isSecretRefHeaderValueMarker(apiKey);
@@ -712,7 +709,8 @@ export function createModelAuthAvailabilityResolver(
     const configuredAuth = pinned ? undefined : configured?.auth;
     const binding = pinned ? { kind: "none" as const } : providerBinding(provider);
     const markerUsable =
-      binding.kind === "marker" && hasUsableCustomProviderApiKey(params.cfg, provider, env);
+      binding.kind === "marker" &&
+      hasUsableCustomProviderApiKey(params.cfg, provider, env, sourceConfig);
     const hasDirectMaterial = binding.kind === "literal" || markerUsable || apiKeyRef !== null;
     const required =
       configuredAuth === "aws-sdk" ||
@@ -738,13 +736,12 @@ export function createModelAuthAvailabilityResolver(
       authorization:
         evaluation.evidence === "environment" && !hasDirectMaterial ? "ambient" : "declared",
     });
-    const hasDirectFallback = hasDirectMaterial || (!pinned && direct.evidence !== "none");
     return {
       binding,
       direct,
       evaluation,
       hasDirectMaterial,
-      hasDirectFallback,
+      hasDirectFallback: hasDirectMaterial || (!pinned && direct.evidence !== "none"),
       markerUsable,
       required,
     };
@@ -831,7 +828,12 @@ export function createModelAuthAvailabilityResolver(
     const target = prepareAuthTarget(provider, ref);
     const profileLock = ref.requiredProfileId?.trim();
     if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", evidence: "profile" };
+      return {
+        availability: false,
+        unavailableReason: "auth-failed",
+        selectedProfileId: ref.pinnedProfileId?.trim(),
+        evidence: "profile",
+      };
     }
     const policy = directPolicy(provider, target);
     if (!profileLock && policy.binding.kind === "profile-incompatible") {
@@ -889,21 +891,13 @@ export function createModelAuthAvailabilityResolver(
         ...(available ? { runtimeAuth: { id: "codex", source: "native" } as const } : {}),
       };
     }
-    if (isPluginAuthProvider(provider)) {
+    const pluginAuth = isPluginAuthProvider(provider);
+    if (pluginAuth || provider !== OPENAI_PROVIDER_ID || invalidProfilePin(provider, ref)) {
       return {
         ...resolveProviderEvaluation(provider, ref),
         routeResolution: null,
-        availabilityAuthoritative: true,
+        ...(pluginAuth ? { availabilityAuthoritative: true as const } : {}),
       };
-    }
-    if (provider !== OPENAI_PROVIDER_ID) {
-      return {
-        ...resolveProviderEvaluation(provider, ref),
-        routeResolution: null,
-      };
-    }
-    if (invalidProfilePin(provider, ref)) {
-      return { availability: false, unavailableReason: "auth-failed", routeResolution: null };
     }
     const modelLock = ref.requiredProfileId?.trim();
     const configuredAuthMode = ref.pinnedProfileId
@@ -1183,82 +1177,19 @@ export function createModelAuthAvailabilityResolver(
         evidence: "synthetic",
       };
     }
-    if (routeAuthDecision.kind !== "selected") {
-      const rejectedSource =
-        routeAuthDecision.kind === "rejected" ? routeAuthDecision.source : undefined;
-      const projectRejectedSource =
-        routeAuthDecision.kind === "rejected" &&
-        rejectedSource &&
-        (routeAuthDecision.reason === "all-cooldown" || rejectedSource.readiness === "unavailable")
-          ? rejectedSource
-          : undefined;
-      const rejectedRequirement = resolveProviderModelRouteAuthRequirement(
-        rejectedSource?.mode,
-        rejectedSource?.authRequirement,
-      );
-      const rejectedRoute =
-        routeAuthDecision.kind === "rejected" ? routeAuthDecision.route : undefined;
-      const rejectedSourceRoute = rejectedRequirement
-        ? routeResolution.routes.find(
-            (candidate) => candidate.authRequirement === rejectedRequirement,
-          )
-        : undefined;
-      const selectedRoute =
-        rejectedRoute ??
-        rejectedSourceRoute ??
-        (routeResolution.routes.length === 1 ? routeResolution.routes[0] : undefined);
-      return {
-        ...(routeAuthDecision.kind === "rejected"
-          ? rejectedSourceEvaluation(routeAuthDecision.reason, sourcePlan, {
-              ...ref,
-              authRequirement:
-                rejectedRoute?.authRequirement ??
-                (routeResolution.routes.length === 1 ? selectedRoute?.authRequirement : undefined),
-            })
-          : { availability: false }),
-        ...(sourcePlan.kind === "automatic" &&
-        sourcePlan.profiles.kind === "empty" &&
-        !sourcePlan.profiles.explicitOrder &&
-        !policy.hasDirectFallback
-          ? { unavailableReason: policy.evaluation.unavailableReason }
-          : {}),
-        routeResolution,
-        ...(routeAuthDecision.kind === "rejected" && routeAuthDecision.authModeIncompatible
-          ? { availabilityAuthoritative: true as const }
-          : {}),
-        ...(projectRejectedSource
-          ? {
-              selectedProfileId: projectRejectedSource.profileId,
-              selectedAuthMode: projectRejectedSource.mode,
-              evidence: "profile" as const,
-            }
-          : {}),
-        ...(selectedRoute ? { selectedRoute } : {}),
-      };
-    }
-    const selectedRoute = routeAuthDecision.selection.route;
-    const evaluation = sourceEvaluation(
-      routeAuthDecision.selection,
-      provider,
-      { ...ref, ...selectedRoute },
-      policy.evaluation,
-    );
-    const syntheticSubscriptionRoute = routeResolution.routes.find(
-      (route) => route.authRequirement === "subscription",
-    );
-    if (syntheticCodexOwnsAuth && evaluation.availability !== true && syntheticSubscriptionRoute) {
-      return {
-        availability: undefined,
-        routeResolution,
-        evidence: "synthetic",
-      };
-    }
-    return {
-      ...evaluation,
-      availability: evaluation.availability ?? (evaluation.evidence ? undefined : false),
+    return projectOpenAIModelAuth({
+      routeAuthDecision,
       routeResolution,
-      selectedRoute,
-    };
+      sourcePlan,
+      ref,
+      directUnavailableReason: policy.evaluation.unavailableReason,
+      hasDirectFallback: policy.hasDirectFallback,
+      syntheticCodexOwnsAuth,
+      evaluateSource: (selection, target) =>
+        sourceEvaluation(selection, provider, target, policy.evaluation),
+      evaluateRejectedSource: (reason, target) =>
+        rejectedSourceEvaluation(reason, sourcePlan, target),
+    });
   };
   const withSelectedCredential = (
     provider: string,
@@ -1315,7 +1246,7 @@ export function createModelAuthAvailabilityResolver(
     addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
   }
   const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(
-    { ...params, authStore: orderStore },
+    { ...params, authStore: runtimeCredentials.orderStore },
     evaluateModelAuth,
   );
   return {
@@ -1335,6 +1266,7 @@ export function createModelAuthAvailabilityResolver(
           modelApi: ref.api,
           modelBaseUrl: ref.baseUrl,
           env: params.env,
+          resolveOpenAIProviderRoutes,
         };
         configuredRuntimePolicy = resolveModelRuntimePolicy(policyParams);
         runtimeId = resolveAgentHarnessPolicy(policyParams, configuredRuntimePolicy).runtime;

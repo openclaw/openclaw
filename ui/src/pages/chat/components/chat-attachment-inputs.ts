@@ -43,12 +43,24 @@ export function createChatAttachmentInputHandle() {
         }
       };
     },
-    open(kind: AttachmentInputKind) {
+    open(kind: AttachmentInputKind, dismiss?: () => boolean) {
+      if (kind !== "camera") {
+        const input = bindings?.inputs[kind];
+        if (!input || !input.isConnected || input.disabled) {
+          return false;
+        }
+      } else if (!bindings?.camera) {
+        return false;
+      }
+      if (dismiss && !dismiss()) {
+        return false;
+      }
       if (kind === "camera") {
         bindings?.camera?.show();
       } else {
         openNative(kind);
       }
+      return true;
     },
     openNative,
   };

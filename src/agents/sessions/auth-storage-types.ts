@@ -1,11 +1,12 @@
 import type { OAuthCredentials } from "../../llm/utils/oauth/types.js";
+import type { ProviderSyntheticAuthResult } from "../../plugins/provider-external-auth.types.js";
 import type { AuthProfileCredentialSource } from "../auth-profiles/types.js";
 
 export type ApiKeyCredential = {
   type: "api_key";
   key: string;
   /** Secret-free native presence carried only by in-memory discovery credentials. */
-  nativeAuth?: { runtime: string; mode: "api-key" | "oauth" | "token" };
+  nativeAuth?: ProviderSyntheticAuthResult["nativeAuth"];
 };
 
 export type OAuthCredential = {

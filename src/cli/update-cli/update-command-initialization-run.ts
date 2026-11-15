@@ -52,6 +52,7 @@ import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-co
 import { recordUpdateCommandTarget, type prepareUpdateCommand } from "./update-command-run.js";
 import { preflightUpdateCommandSchemas, previewUpdateCommand } from "./update-command-schema.js";
 import {
+  resolveServiceRefreshEnv,
   resolveUpdateTargetEnv,
   withOwnedManagedUpdateEnv,
   withUpdateInProgressEnv,
@@ -91,6 +92,8 @@ export async function initializeAndRunUpdate(
   },
   executorOptions?: UpdateCommandExecutorOptions,
 ): Promise<void> {
+  // Repair uses the invoking operator, even when run registration enters the service environment.
+  const operatorEnv = resolveServiceRefreshEnv(process.env, invocationCwd);
   const targetEnv = resolveUpdateTargetEnv({ baseEnv: env, nodeRunner: process.execPath });
   const runId = env.OPENCLAW_UPDATE_RUN_ID?.trim() || randomUUID();
   let handleFailure: Awaited<ReturnType<typeof prepareUpdateCommandFailureTriage>> | undefined;
@@ -193,7 +196,7 @@ export async function initializeAndRunUpdate(
                     recordCompletedStep(`warning:original-state-capture:${index + 1}`, detail);
                   }
                   handleFailure = await prepareUpdateCommandFailureTriage(
-                    { ...opts, invocationCwd, run },
+                    { ...opts, invocationCwd, operatorEnv, run },
                     recoveryState.triageTarget,
                   );
                 },
@@ -267,7 +270,7 @@ export async function initializeAndRunUpdate(
                   warn(
                     space
                       ? `NO ORIGINAL-STATE SNAPSHOT: insufficient disk space. Needed ${space.requiredBytes} bytes (${formatDiskSpaceBytes(space.requiredBytes)}); available ${space.availableBytes} bytes (${formatDiskSpaceBytes(space.availableBytes)}). The update continues without a complete pre-update recovery copy. Free space before a future update to allow original-state capture.`
-                      : `Original state capture is unavailable; the update continues without it. A running Gateway or another active writer changing state during capture is expected to cause this. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
+                      : `NO ORIGINAL-STATE SNAPSHOT: original state capture is unavailable. The update continues without a complete pre-update recovery copy. Database rollback uses the pre-migration snapshots taken after the Gateway stops. A completed update does not need to be restarted because of this warning. Cause: ${formatErrorMessage(error)}`,
                   );
                 }
                 assertCurrent();
@@ -298,78 +301,81 @@ export async function initializeAndRunUpdate(
                   }),
                 );
               }
-              const artifact =
-                target.updateInstallKind === "package" &&
-                !canResolveRegistryVersionForPackageTarget(target.packageInstallSpec ?? target.tag);
-              const stageParams = (presentation: ReturnType<typeof createUpdateProgress>) => ({
-                reapplyLocalOverrides: opts.reapplyLocalOverrides,
-                root: target.root,
-                installKind: prepared.installKind,
-                tag: target.tag,
-                installSpec: target.packageInstallSpec ?? undefined,
-                timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                workTimeoutMs: prepared.timeoutMs ?? null,
-                startedAt: prepared.startedAt,
-                progress: presentation.progress,
-                managedServiceEnv: env,
-                invocationCwd,
-                honorPackageRoot:
-                  target.managedServiceRootRedirect !== null ||
-                  target.managedServiceNodeRunner !== undefined,
-                nodeRunner: target.packageUpdateNodeRunner,
-                installEnv: resolveUpdateTargetEnv({
-                  baseEnv: target.packageInstallEnv,
-                  serviceEnv: env,
-                  invocationCwd,
-                }),
-                installTarget: target.packageInstallTarget,
-                requirePackageReplacement: target.managedServiceRoot !== undefined,
-                ...(candidateAdmissionEnabled
-                  ? {
-                      resolveLifecycleNodeRunner: () => target.packageUpdateNodeRunner,
-                      beforeVerifyCandidate: async (candidateRoot: string) => {
-                        const fence = await executor.enter(target.root, {
-                          preflight: true,
-                          serviceRoot: target.managedServiceRoot,
-                        });
-                        const assertCurrent = () => {
-                          fence.assertCurrent();
-                          assertUpdatePackageActivationAdmission(target.root, packageAdmission);
-                        };
-                        try {
-                          initialization.candidateAdmission =
-                            await inspectStagedUpdateCandidateAdmission({
-                              target,
-                              prepared,
-                              opts,
-                              timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
-                              invocationCwd,
-                              presentation,
-                              candidateRoot,
-                              runId,
-                              env,
-                              assertCurrent,
+              const installTarget = target.packageInstallTarget;
+              const stageParams = installTarget
+                ? (presentation: ReturnType<typeof createUpdateProgress>) => ({
+                    reapplyLocalOverrides: opts.reapplyLocalOverrides,
+                    root: target.root,
+                    installKind: prepared.installKind,
+                    tag: target.tag,
+                    installSpec: target.packageInstallSpec ?? undefined,
+                    timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                    workTimeoutMs: prepared.timeoutMs ?? null,
+                    startedAt: prepared.startedAt,
+                    progress: presentation.progress,
+                    managedServiceEnv: env,
+                    invocationCwd,
+                    nodeRunner: target.packageUpdateNodeRunner,
+                    installEnv: resolveUpdateTargetEnv({
+                      baseEnv: target.packageInstallEnv,
+                      serviceEnv: env,
+                      invocationCwd,
+                    }),
+                    installTarget,
+                    requirePackageReplacement: target.managedServiceRoot !== undefined,
+                    ...(candidateAdmissionEnabled
+                      ? {
+                          resolveLifecycleNodeRunner: () => target.packageUpdateNodeRunner,
+                          beforeVerifyCandidate: async (candidateRoot: string) => {
+                            const fence = await executor.enter(target.root, {
+                              preflight: true,
+                              serviceRoot: target.managedServiceRoot,
                             });
-                          applyUpdateCandidateAdmission({
-                            target,
-                            opts,
-                            result: initialization.candidateAdmission,
-                          });
-                        } catch (error) {
-                          if (!(error instanceof UpdatePreMutationError)) {
-                            throw error;
-                          }
-                          throw new UnreportedUpdateAdmissionOutcome(
-                            createUpdateCandidateAdmissionReport({ target, opts, prepared }, error),
-                          );
+                            const assertCurrent = () => {
+                              fence.assertCurrent();
+                              assertUpdatePackageActivationAdmission(target.root, packageAdmission);
+                            };
+                            try {
+                              initialization.candidateAdmission =
+                                await inspectStagedUpdateCandidateAdmission({
+                                  target,
+                                  prepared,
+                                  opts,
+                                  timeoutMs: prepared.timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,
+                                  invocationCwd,
+                                  presentation,
+                                  candidateRoot,
+                                  runId,
+                                  env,
+                                  assertCurrent,
+                                });
+                              applyUpdateCandidateAdmission({
+                                target,
+                                opts,
+                                result: initialization.candidateAdmission,
+                              });
+                            } catch (error) {
+                              if (!(error instanceof UpdatePreMutationError)) {
+                                throw error;
+                              }
+                              throw new UnreportedUpdateAdmissionOutcome(
+                                createUpdateCandidateAdmissionReport(
+                                  { target, opts, prepared },
+                                  error,
+                                ),
+                              );
+                            }
+                          },
                         }
-                      },
-                    }
-                  : {}),
-              });
+                      : {}),
+                  })
+                : undefined;
+              const artifact = !canResolveRegistryVersionForPackageTarget(
+                target.packageInstallSpec ?? target.tag,
+              );
               const runSelectedTarget = async () => {
                 assertUpdatePackageActivationAdmission(target.root, packageAdmission);
-                if (target.updateInstallKind !== "package") {
+                if (!stageParams) {
                   return await runCapturedInitialization();
                 }
                 const metadata = await resolveFreshUpdateMetadata(target);
@@ -499,7 +505,7 @@ export async function initializeAndRunUpdate(
                 if (!policy.needsInitialization) {
                   return await runCapturedInitialization();
                 }
-                if (artifact) {
+                if (artifact && stageParams) {
                   const { runFreshUpdateArtifact } = await import("./update-command-artifact.js");
                   return await runFreshUpdateArtifact(
                     { initialization, stageParams, json: Boolean(opts.json) },
@@ -508,6 +514,7 @@ export async function initializeAndRunUpdate(
                 }
                 if (
                   candidateAdmissionEnabled &&
+                  stageParams &&
                   target.packageTargetSchemaVersions &&
                   target.packageTargetSchemaVersions.state < OPENCLAW_STATE_SCHEMA_VERSION
                 ) {

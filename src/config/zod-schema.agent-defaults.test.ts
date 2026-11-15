@@ -18,6 +18,21 @@ function expectSchemaFailurePath(result: SchemaParseResult, prefix: string): voi
 const validateAgents = (agents: OpenClawConfig["agents"]) => validateConfigObject({ agents });
 
 describe("agent defaults schema", () => {
+  it("accepts only a Boolean opt-in for the usage-ranked tool index without adding defaults", () => {
+    expect(AgentDefaultsSchema.parse({})?.experimental).toBeUndefined();
+    for (const usageRankedToolIndex of [true, false]) {
+      expect(AgentDefaultsSchema.parse({ experimental: { usageRankedToolIndex } })).toMatchObject({
+        experimental: { usageRankedToolIndex },
+      });
+    }
+    for (const usageRankedToolIndex of ["true", { enabled: true }, null]) {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({ experimental: { usageRankedToolIndex } }),
+        "experimental.usageRankedToolIndex",
+      );
+    }
+  });
+
   it("accepts bounded explicit picker runtimes only on exact model refs", () => {
     const models = {
       "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" }, pickerRuntimes: ["codex"] },
@@ -89,6 +104,27 @@ describe("agent defaults schema", () => {
     expect(result.issues).toContainEqual(
       expect.objectContaining({ path: "agents.entries.runner.modelPolicy.allow.0" }),
     );
+  });
+
+  it("accepts bounded summary limits at both scopes without adding defaults", () => {
+    for (const [schema, entry] of [
+      [AgentDefaultsSchema, {}],
+      [AgentEntrySchema, { id: "ops" }],
+    ] as const) {
+      for (const maxSummaryChars of [1_000, 48_000, 200_000]) {
+        expect(schema.parse({ ...entry, compaction: { maxSummaryChars } })).toMatchObject({
+          compaction: { maxSummaryChars },
+        });
+      }
+      for (const maxSummaryChars of [0, 999, 200_001, 16_000.5]) {
+        expectSchemaFailurePath(
+          schema.safeParse({ ...entry, compaction: { maxSummaryChars } }),
+          "compaction.maxSummaryChars",
+        );
+      }
+    }
+    expect(AgentDefaultsSchema.parse({})?.compaction).toBeUndefined();
+    expect(AgentEntrySchema.parse({ id: "ops" }).compaction).toBeUndefined();
   });
 
   it("rejects unsafe byte-size strings in compaction defaults", () => {

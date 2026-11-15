@@ -1,4 +1,8 @@
 export * from "./error-details.js";
+export {
+  validateDiagnosticsCpuProfileParams,
+  type DiagnosticsCpuProfileParams,
+} from "./schema/diagnostics.js";
 export * from "./node-permissions.js";
 export * from "./github-publication-api.js";
 export * from "./session-agent-status.js";

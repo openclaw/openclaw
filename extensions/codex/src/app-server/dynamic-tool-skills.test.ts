@@ -23,7 +23,7 @@ beforeEach(async () => {
 afterEach(() => cleanupDynamicToolBuildFixture(tempDir, hostCapabilityClosers));
 
 it.each(["allowed", "denied", "oversized"])(
-  "delivers whole skills or refuses %s reads",
+  "preserves the %s skill-read result through the dynamic tool bridge",
   async (mode) => {
     const denied = mode === "denied";
     const oversized = mode === "oversized";
@@ -85,11 +85,13 @@ it.each(["allowed", "denied", "oversized"])(
     if (!denied) {
       expect(JSON.stringify(result)).toContain("release-guide");
       const read = await call("skills_read", { name: "release-guide" });
-      expect(read.success).toBe(!oversized);
+      expect(read.success).toBe(true);
       if (oversized) {
-        expect(read.diagnosticTerminalType).toBe("error");
-        expect(JSON.stringify(read.contentItems)).toContain("cannot deliver the whole skill");
-        expect(JSON.stringify(read.contentItems)).not.toContain("Complete instructions.");
+        expect(read.diagnosticTerminalType).toBe("completed");
+        const text = JSON.stringify(read.contentItems);
+        expect(text).toContain("Skill instructions incomplete:");
+        expect(text).toContain("read the rest");
+        expect(text).not.toContain("END OF SKILL");
       } else {
         const text = `Skill location: ${skill.filePath}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${skill.readContent}`;
         expect(read.contentItems).toEqual([{ type: "inputText", text }]);

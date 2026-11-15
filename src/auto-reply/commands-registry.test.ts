@@ -386,6 +386,21 @@ describe("commands registry", () => {
 });
 
 describe("commands registry args", () => {
+  it("leaves bare ACP to its help handler instead of offering incomplete actions", () => {
+    const command = chatCommand("acp");
+    expect(resolveCommandArgMenu({ command, cfg: {} })).toBeNull();
+    expect(buildCommandTextFromArgs(command, parseCommandArgs(command, "spawn claude"))).toBe(
+      "/acp spawn claude",
+    );
+    const action = expectDefined(
+      command.args?.find((arg) => arg.name === "action"),
+      "ACP action",
+    );
+    expect(resolveCommandArgChoices({ command, arg: action })).toContainEqual({
+      value: "spawn",
+      label: "spawn",
+    });
+  });
   it("parses positional args and captureRemaining", () => {
     const command = commandFixture("debug", [
       commandArg("action"),

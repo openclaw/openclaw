@@ -52,12 +52,16 @@ export type NodeEventHandleResult = {
 };
 
 export type NodeEventHandlerOptions = {
+  /** Publish the decided result before an actor source drains its accepted work. */
+  onResult?: (result: NodeEventHandleResult) => void;
   connId?: string;
   deviceId?: string;
   pairingGeneration?: NodePairingGeneration;
   presenceAllowed?: boolean;
   isConnectionCurrent?: () => boolean | Promise<boolean>;
   assertSessionEventCurrent?: () => void;
+  /** Retained pairing authority, independent of transport lifetime, checked at turn selection. */
+  assertAgentTurnCurrent?: () => void;
   resolveApnsRegistrationGeneration?: () => string | null | Promise<string | null>;
   assertApnsRegistrationCurrent?: () => void;
 };

@@ -5,6 +5,7 @@ import {
   AutomationOutcomeSchema,
   AutomationResultSummarySchema,
 } from "../../../packages/gateway-protocol/src/schema/cron-automation-result.js";
+import { CyberAccessProgramSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseCronPacingBounds } from "../../cron/pacing.js";
 import type { CronPacing } from "../../cron/types.js";
 import { CRON_MANAGEMENT_METHODS } from "../../gateway/cron-creator-authority-grant.js";
@@ -431,7 +432,18 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
             Type.Null(),
           ]),
         ),
-        idleOnly: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+        cyberAccessProgram: Type.Optional(
+          Type.Union([CyberAccessProgramSchema, Type.Null()], {
+            description:
+              "Access for this scheduled agent turn: standard, daybreak_blue, or daybreak_red. Subject to current role and account grants at execution. Null clears the override.",
+          }),
+        ),
+        idleOnly: Type.Optional(
+          Type.Union([Type.Boolean(), Type.Null()], {
+            description:
+              "True waits for agent-wide quiet, including other cron jobs and foreground sessions, not just the target session; continuations may defer indefinitely on busy shared agents. False/unset uses normal admission; null clears.",
+          }),
+        ),
         ...(triggersEnabled ? { trigger: createCronTriggerSchema() } : {}),
         sessionTarget: Type.Optional(
           Type.String({
@@ -492,10 +504,11 @@ function buildCronToolSchema(options?: CronToolSchemaOptions): TSchema {
       ),
       limit: optionalPositiveIntegerSchema({
         maximum: CRON_TOOL_LIST_MAX_LIMIT,
-        description: 'Maximum jobs returned by action="list"',
+        description: 'Maximum jobs or runs returned by action="list" or action="runs"',
       }),
       offset: optionalNonNegativeIntegerSchema({
-        description: 'Job offset for action="list"; use nextOffset to load the next page',
+        description:
+          'Offset for action="list" or action="runs"; use nextOffset to load the next page',
       }),
       job: managementOnly ? Type.Optional(Type.Omit(job, ["declarationKey", "owner"])) : job,
       toolsAllowMode: Type.Optional(

@@ -128,9 +128,7 @@ export async function readGitHubPublicationReadiness(
     observation = unavailable(source.cause);
   }
   const remedies: SessionGitHubReadinessResult["remedies"] = [];
-  if (observation.custody.kind === "unbound_workspace") {
-    remedies.push({ kind: "select_bound_session" });
-  } else if (
+  if (
     observation.custody.kind === "changed" ||
     observation.custody.kind === "archived" ||
     observation.target.kind === "unsupported"

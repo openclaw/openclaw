@@ -7,6 +7,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { readTemplatePackageRefsForAdd } from "../templates/add-state-write.js";
 import { readTemplateInventory } from "../templates/inventory-read.js";
 import type { PersistedTemplatePackageRef } from "../templates/package-extension-provenance.js";
 import {
@@ -14,6 +15,7 @@ import {
   seedLegacyTemplateInstall,
   stateEnv,
 } from "../templates/provenance.test-helpers.js";
+import { withoutMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -97,5 +99,19 @@ it("preserves installed Template and plugin extension facts through the read-onl
     ...emptyInventory,
     installs: [install],
     packages: [pkg],
+  });
+  await withoutMainThreadSql(async () => {
+    await expect(readTemplatePackageRefsForAdd({ env, ref: pkg.ref })).resolves.toEqual([pkg]);
+    let admitted = true;
+    const pending = readTemplatePackageRefsForAdd({
+      env,
+      assertCurrent() {
+        if (!admitted) {
+          throw new Error("Add admission ended");
+        }
+      },
+    });
+    admitted = false;
+    await expect(pending).rejects.toThrow("Add admission ended");
   });
 });

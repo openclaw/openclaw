@@ -1,16 +1,12 @@
 import { createMemo, onSettled, Show } from "solid-js";
-import {
-  templateCatalogPackageNameFromPath,
-  pathForTemplateCatalogEntry,
-  pathForRoute,
-} from "../../app-route-paths.ts";
+import { templateCatalogPackageNameFromPath, pathForRoute } from "../../app-route-paths.ts";
+import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { TemplatesCatalogDialog } from "../agents-home/templates-catalog-dialog.tsx";
-import { TemplatesExplore } from "../agents-home/templates-explore.tsx";
 import { PluginDetailLoadingHero } from "../plugins/detail-loading-hero.tsx";
 import { isTemplatesAvailable } from "./availability.ts";
 import { templateCreatorFlow } from "./creator-flow.ts";
@@ -57,13 +53,23 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
     gateway.revision();
     return context.gateway.snapshot.client ? draftTarget() : null;
   };
-  const packageName = () =>
-    props.routeData
-      ? templateCatalogPackageNameFromPath(
-          props.routeData.location.pathname,
-          props.routeData.basePath,
-        )
-      : null;
+  const source = createMemo(
+    () => {
+      const data = props.routeData;
+      const packageName = data
+        ? templateCatalogPackageNameFromPath(data.location.pathname, data.basePath)
+        : null;
+      if (!packageName) {
+        return null;
+      }
+      const version = new URLSearchParams(data?.location.search).get("version");
+      return { packageName, ...(version ? { version } : {}) };
+    },
+    {
+      equals: (left, right) =>
+        left?.packageName === right?.packageName && left?.version === right?.version,
+    },
+  );
 
   return (
     <Show when={props.routeData && available() !== null} fallback={<TemplatesLoading />}>
@@ -71,9 +77,9 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
         when={available()}
         fallback={
           <SettingsPage wide carapace>
-            <div class="callout warn" role="status">
+            <InlineAlert tone="warning" role="status">
               {t("templatesCatalog.disabled")}
-            </div>
+            </InlineAlert>
           </SettingsPage>
         }
       >
@@ -81,28 +87,16 @@ export function TemplatesPage(props: { routeData: TemplatesRouteData | undefined
           when={connectedDraftTarget()}
           keyed
           fallback={
-            <Show
-              when={packageName()}
-              keyed
-              fallback={
-                <TemplatesExplore
-                  onSelect={(entry) =>
-                    context.navigate("templates", {
-                      pathname: pathForTemplateCatalogEntry(entry.packageName, context.basePath),
-                    })
-                  }
-                />
-              }
-            >
-              {(selectedPackage) => (
+            <Show when={source()} keyed fallback={<TemplatesCatalogDialog />}>
+              {(selectedSource) => (
                 <TemplatesCatalogDialog
-                  initialPackageName={selectedPackage}
+                  initialPackageName={selectedSource.packageName}
+                  initialVersion={selectedSource.version}
                   onClose={() =>
                     context.navigate("templates", {
                       pathname: pathForRoute("templates", context.basePath),
                     })
                   }
-                  onAdded={() => void context.agents.refreshList()}
                 />
               )}
             </Show>

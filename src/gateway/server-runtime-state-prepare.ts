@@ -4,6 +4,7 @@ import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registr
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { readDevicePairingNodeSnapshot } from "../infra/device-pairing-store-readonly.js";
@@ -30,6 +31,7 @@ import { publishHooksTokenEnvKey } from "./hooks.js";
 import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-method-policy.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
+import { createOpenClawIdService } from "./openclaw-id/service.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js";
@@ -185,6 +187,18 @@ export async function prepareGatewayKernelState(params: {
     workerEnvironmentStartup && workerPlacementModule
       ? workerPlacementModule.createGatewayGitHubPublicationRuntime({
           placements: workerEnvironmentStartup.placementStore,
+          prepareRepositoryIntegration: async (
+            identity,
+            input,
+          ): ReturnType<
+            import("./repository-publication-integration.js").PrepareRepositoryPublicationIntegration
+          > => {
+            if (!workerPlacement) {
+              throw new Error("Repository publication worker is unavailable");
+            }
+            return await workerPlacement.prepareRepositoryPublication(identity, input);
+          },
+          ...(workerEnvironmentService ? { environments: workerEnvironmentService } : {}),
           getCommittedRuntimeConfig,
           warn: (message) => log.warn(message),
         })
@@ -484,7 +498,8 @@ export async function prepareGatewayKernelState(params: {
     getAgentDatabaseAdmissionRefusals: () => {
       const cfg = getRuntimeConfig();
       return listAgentDatabaseAdmissionRefusals().filter(
-        (refusal) => !canIsolateAgentDatabase(cfg, refusal.agentId),
+        (refusal) =>
+          refusal.code === "agent-deletion" || !canIsolateAgentDatabase(cfg, refusal.agentId),
       );
     },
     getPluginReloadStatus: params.getPluginReloadStatus,
@@ -506,6 +521,16 @@ export async function prepareGatewayKernelState(params: {
     }),
   );
   const transportBridge = createGatewayTransportBridge();
+  // Inert until the Labs switch is on; the switch is reconciled after ready. Saved
+  // device-token bindings are read now, before any listener admits a connection.
+  const openclawIdService = createOpenClawIdService({
+    memberRolePresets: bootstrap.memberRolePresets,
+    getConfig: () => getRuntimeConfig().gateway?.openclawId,
+    getStateDir: () => resolveStateDir(),
+    getGatewayServer: () => transportBridge.current()?.httpServer,
+    log: log.child("openclaw-id"),
+  });
+  void openclawIdService.loadTokenBindings();
   const presencePublisher = createPresencePublisher({
     scheduler,
     broadcast: connectionState.broadcast,
@@ -539,6 +564,7 @@ export async function prepareGatewayKernelState(params: {
       runtimeStateRef.current?.hookClientIpConfig ?? initialHookClientIpConfig,
     pluginRegistry: pluginRuntime.registry,
     getPluginRouteRegistry: () => pluginRuntime.registry,
+    isRequestRuntimeReady: () => startupState.dispatchReady,
     isStartupPluginRuntimeReady: () => startupState.sidecarsReady,
     getGatewayRequestContext: resolvePluginGatewayContext,
     deps,
@@ -576,6 +602,7 @@ export async function prepareGatewayKernelState(params: {
     desktopSessionRegistry,
     nodeDesktopStreamBroker,
     hostDesktopService,
+    openclawIdService,
     gatewayComputerService,
     channelLogs,
     channelRuntimeEnvs,

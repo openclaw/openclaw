@@ -121,6 +121,7 @@ Config keys:
 - DM allowlist (DM sender access): `channels.irc.allowFrom`
 - Group sender allowlist (channel sender access): `channels.irc.groupAllowFrom`
 - Per-channel controls (channel + sender + mention rules): `channels.irc.groups["#channel"]` with `requireMention`, `allowFrom`, `enabled`, `tools`, `toolsBySender`, `skills`, and `systemPrompt`
+- An explicit empty per-channel `allowFrom` denies all senders in that channel, even if a wildcard channel or global group sender list allows them.
 - `channels.irc.groupPolicy="open"` allows unconfigured channels (**still mention-gated by default**)
 
 Allowlist entries should use stable sender identities (`nick!user@host`).

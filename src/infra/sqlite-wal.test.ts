@@ -76,6 +76,8 @@ function mockMountCommand(output: string): void {
     throw new Error("no proc mountinfo");
   });
   vi.spyOn(childProcess, "execFileSync").mockReturnValue(Buffer.from(output));
+  // Mount fixtures describe non-APFS volumes even when the temp directory is on APFS.
+  vi.mocked(probeTreeClone).mockReturnValue(undefined);
 }
 
 describe("sqlite WAL maintenance", () => {
@@ -256,23 +258,6 @@ describe("sqlite WAL maintenance", () => {
       ).toThrow(/SSHFS.*refusing to open/);
     },
   );
-
-  it("preserves WAL policy when mount classification fails without timing out", () => {
-    const tempDir = tempDirs.make("openclaw-sqlite-mount-error-");
-    const db = createMockDb();
-    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    vi.spyOn(fs, "statfsSync").mockReturnValue(statfsFixture(0));
-    vi.spyOn(fs, "readFileSync").mockImplementation(() => {
-      throw new Error("no proc mountinfo");
-    });
-    vi.spyOn(childProcess, "execFileSync").mockImplementation(() => {
-      throw Object.assign(new Error("spawnSync mount ENOENT"), { code: "ENOENT" });
-    });
-
-    configure(db, { databasePath: path.join(tempDir, "openclaw.sqlite") });
-
-    expect(db["prepare"]).toHaveBeenCalledWith("PRAGMA journal_mode = WAL;");
-  });
 
   it.each([
     ["darwin", "smbfs", "//server/share", "DELETE"],

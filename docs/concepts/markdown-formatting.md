@@ -33,6 +33,11 @@ HTML-aware renderers interpret those tags; other renderers keep them literal or
 escape them. HTML block parsing stays disabled so Markdown inside containers
 still works, and bare URLs in their bodies retain normal linkification.
 
+Generated inline code uses CommonMark padding to preserve meaningful edge spaces,
+including values containing tabs or non-breaking spaces. All-space values stay
+unpadded. Workspace filenames continue escaping carriage returns and line feeds
+instead of creating Markdown block boundaries.
+
 Examples of shared IR renderers:
 
 | Channel  | Renderer                                                                             | Notes                                                                                    |
@@ -42,6 +47,11 @@ Examples of shared IR renderers:
 | Slack    | mrkdwn tokens (`*bold*`, `_italic_`, `` `code` ``, code fences)                      | Links become `<url\|label>`; autolink disabled during parse to avoid double-linking      |
 | Telegram | HTML tags (`<b>`, `<i>`, `<s>`, `<code>`, `<pre><code>`, `<a href>`, `<tg-spoiler>`) | Also supports rich-message tables and headings (`<h1>`-`<h6>`) when `richMessages` is on |
 | WhatsApp | WhatsApp style markers                                                               | Uses shared IR; styled chunks are measured after rendering                               |
+
+Slack and WhatsApp emit `>` followed by a space on each nonempty blockquote line, including lines
+continued into later message chunks. Prefixes are added while rendering, so they
+count toward each channel's message limit without changing IR span offsets.
+Fenced code contents keep their literal lines rather than receiving quote markers.
 
 ## IR example
 
@@ -116,6 +126,10 @@ delivery behavior across channels.
 - **Telegram:** `[label](url)` -> `<a href="url">label</a>` (HTML parse mode).
 - **Signal:** `[label](url)` -> `label (url)` unless the label already
   matches the URL.
+- **Google Chat:** `[label](url)` -> `<url|label>`. A styled label renders as
+  `label (url)` instead. A label that matches the URL, or the address of a
+  `mailto:` link, is not repeated: when it is styled or holds Google Chat
+  markup characters, it renders once as plain text.
 
 ## Spoilers
 
