@@ -51,6 +51,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
+import { decodeQueuedOperatorRecoverySource } from "./operator-run-recovery-source.codec.js";
 import { restoreGatewayQueuedOperatorRecovery } from "./operator-run-recovery.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 
@@ -323,6 +324,13 @@ export async function runPluginCommandScheduledTurn(params: {
       });
       assertParent();
       const operatorAuthority = restored.authority;
+      // Fail closed: a channel occurrence must never run without a re-checkable requester.
+      if (
+        !restored.requester &&
+        decodeQueuedOperatorRecoverySource(schedule.operatorSource).kind === "channel"
+      ) {
+        throw new Error("Queued channel operator authority changed; submit a new request.");
+      }
       // Only commands.allowFrom is re-derivable here; channel reachability keeps its admission.
       const commandAuthorized = isScheduledOccurrenceCommandAuthorized(
         cfg,

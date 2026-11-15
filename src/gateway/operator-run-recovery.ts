@@ -490,7 +490,7 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
   assertCurrent: () => void;
 }): Promise<
   Pick<RestoredGatewayOperatorAuthority, "authority" | "controlUiAdmin" | "release"> & {
-    /** Absent when the occurrence cannot be re-checked, so it keeps its original admission. */
+    /** Absent when not re-derivable; a scheduled channel occurrence then fails closed. */
     requester?: {
       channel: string;
       accountId?: string;
@@ -604,19 +604,20 @@ export async function restoreGatewayQueuedOperatorRecovery(params: {
       },
     });
     authority.assertCurrent();
-    // Fail closed: a channel occurrence must never run without a re-checkable requester.
-    if (!prepared.requesterIdentity) {
-      throw new Error("Queued channel operator authority changed; submit a new request.");
-    }
+    const identity = prepared.requesterIdentity;
     return {
       authority,
       controlUiAdmin: false,
       release,
-      requester: {
-        channel: prepared.requesterIdentity.channelId,
-        accountId: prepared.requesterIdentity.accountId,
-        senderId: prepared.requesterIdentity.senderId,
-      },
+      ...(identity
+        ? {
+            requester: {
+              channel: identity.channelId,
+              accountId: identity.accountId,
+              senderId: identity.senderId,
+            },
+          }
+        : {}),
     };
   } catch (error) {
     release();
