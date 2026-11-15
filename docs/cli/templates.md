@@ -29,7 +29,8 @@ local package directory, or `CLAW.md` with YAML frontmatter. The reference uses 
 publisher's ClawHub handle, as skill references do, including for a Template whose
 package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
-path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
+[project commands](/cli/templates#author-locally) require `CLAW.md` at the package root. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
 `CLAW.md` and `package.json` must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
@@ -91,9 +92,12 @@ openclaw templates build ./incident-triage --out ./incident-triage-1.0.0.tgz
 ```
 
 A package contains `package.json`, `CLAW.md`, and any files selected by its
-manifest. `create` writes only `package.json` and `CLAW.md` and refuses to merge
-into a nonempty directory. Project validation rejects package scripts and
-lifecycle hooks. `dev` builds the same package artifact and checks its Add
+manifest. `validate`, `dev` and `build` require a project whose `CLAW.md` sits
+beside `package.json`, with `openclaw.template` set to `"CLAW.md"`; move a nested
+`CLAW.md` to the package root before validating or building. `inspect` and `add`
+also read a package whose selector names a nested `CLAW.md`. `create` writes
+only `package.json` and `CLAW.md` and refuses to merge into a nonempty directory.
+Project validation rejects package scripts and lifecycle hooks. `dev` builds the same package artifact and checks its Add
 requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
@@ -200,6 +204,9 @@ folders are not installed or counted as dependencies. Bundled contents show thei
 name and package-relative path; they have no invented registry version or
 standalone ClawHub verification claim.
 
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
+
 Bundled skill and plugin folders use the same bounded selection: regular files
 only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
 per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
@@ -221,8 +228,10 @@ target; change those in the automation's settings if needed.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
-reports the conflict without replacing them. Plugin and skill trust warnings
-require explicit consent. Automations are assigned to the new agent.
+reports the conflict without replacing them. An MCP server's `timeout` and
+`connectTimeout` are in seconds; Add stores and compares them as
+`requestTimeoutMs` and `connectionTimeoutMs` in milliseconds. Plugin and skill
+trust warnings require explicit consent. Automations are assigned to the new agent.
 If a declared plugin still needs setup, a referenced environment variable is
 missing, or an OAuth MCP server is not authorized, Add creates the declared
 automations disabled. Their schedules, prompts, and imported scratch stay intact.
@@ -337,6 +346,9 @@ the same agent. Successful skill and MCP setup, absent optional files, and empty
 categories stay silent. There is no final setup receipt or second model recap.
 Declared package bootstrap still follows shared setup; MCP configuration alone does
 not prove a working connection.
+When offline Add keeps an agent after a later step fails, the agent gets the default
+`AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
+back because its setup did not finish.
 
 ### Add from the Control UI
 
