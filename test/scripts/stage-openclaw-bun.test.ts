@@ -238,6 +238,20 @@ cp "$fixture_downloads/$name" "$output"
         return;
       }
       expect(result.status, result.stderr).toBe(0);
+      const expectTimings = (stderr: string, downloads: boolean) => {
+        const timings = stderr.split("\n").filter((line) => line.startsWith("bun-stage "));
+        for (const line of timings) {
+          expect(line).toMatch(/^bun-stage phase=[a-z]+ seconds=\d+\.\d{3}$/);
+        }
+        const phases = timings.map((line) => line.split(" ")[1].slice("phase=".length));
+        expect(phases.includes("download")).toBe(downloads);
+        expect(phases.filter((phase) => phase !== "download")).toEqual([
+          "metadata",
+          ...arches.flatMap(() => ["archive", "extract", "executable", "revision"]),
+          "install",
+        ]);
+      };
+      expectTimings(result.stderr, true);
       expect((await stat(bun)).mode & 0o777).toBe(0o755);
       if (process.platform === "darwin") {
         const stagedArches = await run("/usr/bin/lipo", ["-archs", bun]);
@@ -270,6 +284,7 @@ cp "$fixture_downloads/$name" "$output"
           },
         );
         expect(repeated.status, repeated.stderr).toBe(0);
+        expectTimings(repeated.stderr, false);
         expect(await readFile(curlLog, "utf8")).toBe(downloadsMade);
       }
     }),
