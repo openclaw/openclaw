@@ -121,6 +121,96 @@ test("passes resolved TLS identity and waits for Gateway hello before completing
   await expect(started).resolves.toBeUndefined();
 });
 
+test("rejects startup when a retryable Gateway connect error never recovers", async () => {
+  vi.useFakeTimers();
+  try {
+    const bridge = makeBridge();
+    const started = bridge.start();
+    const handled = started.catch(() => "failed" as const);
+    await vi.waitFor(() => expect(startup.options).not.toBeNull());
+    const onConnectError = startup.options?.onConnectError;
+    if (typeof onConnectError !== "function") {
+      throw new Error("Expected Gateway connect-error callback");
+    }
+    // Retryable failures are absorbed for reconnect resilience; readiness must
+    // still settle once the deadline passes instead of pending forever.
+    const retryable = new Error("gateway request timeout for connect");
+    retryable.name = "GatewayClientRequestError";
+    Object.assign(retryable, { retryable: true });
+    onConnectError(retryable);
+    await vi.advanceTimersByTimeAsync(60 * 1_000 + 10);
+    await expect(handled).resolves.toBe("failed");
+    await expect(started).rejects.toThrow("gateway did not become ready within 60000ms");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test("extends the readiness deadline with a configured handshake budget", async () => {
+  vi.useFakeTimers();
+  // Drive the production timeout owner itself: an operator's
+  // OPENCLAW_HANDSHAKE_TIMEOUT_MS=120000 must not be cut short by a fixed
+  // one-minute deadline. (The test-run variable takes precedence in vitest,
+  // so stub both.)
+  vi.stubEnv("OPENCLAW_HANDSHAKE_TIMEOUT_MS", "120000");
+  vi.stubEnv("OPENCLAW_TEST_HANDSHAKE_TIMEOUT_MS", "120000");
+  try {
+    const bridge = makeBridge();
+    const started = bridge.start();
+    const handled = started.catch(() => "failed" as const);
+    await vi.waitFor(() => expect(startup.options).not.toBeNull());
+    const onConnectError = startup.options?.onConnectError;
+    if (typeof onConnectError !== "function") {
+      throw new Error("Expected Gateway connect-error callback");
+    }
+    const retryable = new Error("gateway request timeout for connect");
+    retryable.name = "GatewayClientRequestError";
+    Object.assign(retryable, { retryable: true });
+    onConnectError(retryable);
+    // 90s: past the old fixed deadline, still inside the extended budget.
+    await vi.advanceTimersByTimeAsync(90 * 1_000);
+    await expect(Promise.race([started, "pending"])).resolves.not.toBe("failed");
+    // 150s: handshake budget (120s) + grace (30s) has elapsed.
+    await vi.advanceTimersByTimeAsync(60 * 1_000 + 10);
+    await expect(handled).resolves.toBe("failed");
+    await expect(started).rejects.toThrow("gateway did not become ready within 150000ms");
+  } finally {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  }
+});
+
+test("honors an extended connect-challenge watchdog in the readiness deadline", async () => {
+  vi.useFakeTimers();
+  // Only the challenge watchdog is raised: the client deliberately allows
+  // 120s for the post-upgrade challenge, so the deadline must not fire at 60s.
+  vi.stubEnv("OPENCLAW_CONNECT_CHALLENGE_TIMEOUT_MS", "120000");
+  try {
+    const bridge = makeBridge();
+    const started = bridge.start();
+    const handled = started.catch(() => "failed" as const);
+    await vi.waitFor(() => expect(startup.options).not.toBeNull());
+    const onConnectError = startup.options?.onConnectError;
+    if (typeof onConnectError !== "function") {
+      throw new Error("Expected Gateway connect-error callback");
+    }
+    const retryable = new Error("gateway request timeout for connect");
+    retryable.name = "GatewayClientRequestError";
+    Object.assign(retryable, { retryable: true });
+    onConnectError(retryable);
+    // 90s: past the preauth-only deadline, inside the challenge budget.
+    await vi.advanceTimersByTimeAsync(90 * 1_000);
+    await expect(Promise.race([started, "pending"])).resolves.not.toBe("failed");
+    // 150s: challenge budget (120s) + grace (30s).
+    await vi.advanceTimersByTimeAsync(60 * 1_000 + 10);
+    await expect(handled).resolves.toBe("failed");
+    await expect(started).rejects.toThrow("gateway did not become ready within 150000ms");
+  } finally {
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  }
+});
+
 describe("OpenClawChannelBridge", () => {
   beforeEach(() => {
     vi.useFakeTimers();

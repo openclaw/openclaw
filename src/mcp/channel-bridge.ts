@@ -5,6 +5,10 @@ import {
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import {
+  resolveConnectChallengeTimeoutMs,
+  resolvePreauthHandshakeTimeoutMs,
+} from "../../packages/gateway-client/src/timeouts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayClient } from "../gateway/client.js";
 import type { ChannelApprovalKind } from "../infra/approval-types.js";
@@ -47,6 +51,10 @@ type NotificationDeliveryOutcome = "delivered" | "unavailable" | "failed";
 
 const CLAUDE_PERMISSION_REPLY_RE = /^(yes|no)\s+([a-km-z]{5})$/i;
 const QUEUE_LIMIT = 1_000;
+// One extra retry window on top of the configured handshake budget when
+// bounding the initial Gateway readiness wait; retryable connect errors
+// otherwise extend the wait indefinitely and every MCP tools/call blocks.
+const INITIAL_GATEWAY_READINESS_GRACE_MS = 30 * 1_000;
 const PENDING_CLAUDE_PERMISSION_TTL_MS = 60 * 60 * 1_000;
 const PENDING_APPROVAL_DEFAULT_TTL_MS = 30 * 60 * 1_000;
 const PENDING_SWEEP_INTERVAL_MS = 5 * 60 * 1_000;
@@ -68,6 +76,7 @@ export class OpenClawChannelBridge {
   private started = false;
   private retryingInitialConnect = false;
   private readonly readiness = createDeferredCore();
+  private readinessDeadlineTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly cfg: OpenClawConfig,
@@ -163,7 +172,32 @@ export class OpenClawChannelBridge {
     if (!readiness.ready) {
       this.readiness.reject(new Error("gateway event loop readiness timeout"));
     }
-    await this.readiness.promise;
+    // Retryable connect errors are absorbed so a briefly unavailable Gateway
+    // can still come up, but an endpoint that never answers must not leave
+    // every tools/call pending forever. Bound the wait after the effective
+    // connect budget — whichever of the preauth handshake or the connect
+    // challenge watchdog an operator extended via env — plus one retry
+    // window, so a slow-but-succeeding connection is never cut short; a late
+    // hello after the deadline still resolves the shared readiness promise
+    // harmlessly. The bootstrap's optional preauthHandshakeTimeoutMs is not
+    // populated in production, so resolve budgets through the timeout owner.
+    const connectBudgetMs = Math.max(
+      resolvePreauthHandshakeTimeoutMs({ env: process.env }),
+      resolveConnectChallengeTimeoutMs(undefined, { env: process.env }),
+    );
+    const deadlineMs = connectBudgetMs + INITIAL_GATEWAY_READINESS_GRACE_MS;
+    const deadline = new Promise<never>((_, reject) => {
+      this.readinessDeadlineTimer = setTimeout(
+        () => reject(new Error(`gateway did not become ready within ${deadlineMs}ms`)),
+        deadlineMs,
+      );
+    });
+    try {
+      await Promise.race([this.readiness.promise, deadline]);
+    } finally {
+      clearTimeout(this.readinessDeadlineTimer);
+      this.readinessDeadlineTimer = null;
+    }
   }
 
   /** Wait until the bridge has subscribed to Gateway session events. */
@@ -178,6 +212,10 @@ export class OpenClawChannelBridge {
     }
     this.closed = true;
     this.readiness.resolve();
+    if (this.readinessDeadlineTimer) {
+      clearTimeout(this.readinessDeadlineTimer);
+      this.readinessDeadlineTimer = null;
+    }
     if (this.pendingSweepInterval) {
       clearInterval(this.pendingSweepInterval);
       this.pendingSweepInterval = null;
