@@ -4,10 +4,10 @@ import { render } from "@solidjs/web";
 import type * as UI from "openclaw/plugin-sdk/control-ui";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { InviteForm } from "./invite-form.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { PeoplePage } from "./people-page.js";
-import { button, linked, pendingInvite } from "./people-page.test-support.js";
-import { InviteForm } from "./people-sections.js";
+import { button, hostFor, linked, pendingInvite, rolePicker } from "./people-page.test-support.js";
 import type { StatusResult } from "./types.js";
 
 // Signing needs this browser's owner key from IndexedDB; the tests stand in for it.
@@ -22,96 +22,6 @@ vi.mock("./owner-signing.js", () => ({
 
 const { default: plugin } = await import("./index.js");
 const disposers: Array<() => void> = [];
-
-// The host owns picker behavior; this adapter exposes its public selection contract here.
-const mountSelectPicker: UI.ControlUiHost["components"]["mountSelectPicker"] = (
-  container,
-  initial,
-) => {
-  const select = document.createElement("select");
-  select.setAttribute("aria-label", initial.accessibleLabel);
-  let current = initial;
-  const update = (next: typeof initial) => {
-    current = next;
-    select.replaceChildren(
-      ...next.options.map((option) => {
-        const element = document.createElement("option");
-        element.value = option.value;
-        element.textContent = `${option.label} · ${option.description}`;
-        return element;
-      }),
-    );
-    select.value = next.value;
-    select.disabled = next.disabled ?? false;
-  };
-  select.addEventListener("change", () => current.onSelect(select.value));
-  container.append(select);
-  update(initial);
-  return { update, dispose: () => select.remove() };
-};
-
-// Activates the plugin, mounts its page and returns the host's request spy.
-// Activation reads the status once (the flag gate) before the page reads its own.
-function hostFor(statuses: StatusResult[], submitResult: unknown = {}) {
-  // openclawId.people answers with the link of the status last read (owner only).
-  let last: StatusResult | undefined;
-  const request = vi.fn(async (method: string) => {
-    if (method === "openclawId.status") {
-      last = statuses.length > 1 ? statuses.shift() : statuses[0];
-      return { ...last, link: { linked: last!.link.linked, hostname: last!.link.hostname } };
-    }
-    if (method === "openclawId.people") {
-      return { link: last!.link };
-    }
-    return submitResult;
-  });
-  const disposePage = vi.fn();
-  const disposeNavigation = vi.fn();
-  const registerPage = vi.fn<(page: UI.ControlUiPage) => () => void>(() => disposePage);
-  const registerNavigation = vi.fn(() => disposeNavigation);
-  const subscribers = new Set<() => void>();
-  const events = new Map<string, Set<(payload: unknown) => void>>();
-  const controller = new AbortController();
-  const host = {
-    locale: "en-US",
-    redact: (text: string) => text.replace(/Bearer \S+/g, "Bearer [redacted]"),
-    signal: controller.signal,
-    connection: { connected: true, canRead: true, canWrite: true, canAdmin: true },
-    request,
-    subscribe: (listener: () => void) => {
-      subscribers.add(listener);
-      return () => subscribers.delete(listener);
-    },
-    onEvent: (event: string, listener: (payload: unknown) => void) => {
-      const listeners = events.get(event) ?? new Set();
-      events.set(event, listeners);
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    sessions: {
-      rows: [{ key: "agent:main:trip", derivedTitle: "Trip ideas" }],
-      normalizeKey: (key: string) => key,
-    },
-    ui: { registerPage, registerNavigation },
-    components: { mountSelectPicker },
-  } as unknown as UI.ControlUiHost;
-  return {
-    host,
-    request,
-    registerPage,
-    registerNavigation,
-    disposePage,
-    disposeNavigation,
-    controller,
-    subscribers,
-    events,
-    emit: () => events.get("openclawId.people.changed")?.forEach((listener) => listener({})),
-    connect: (connected: boolean) => {
-      host.connection.connected = connected;
-      subscribers.forEach((listener) => listener());
-    },
-  };
-}
 
 async function mountPage(statuses: StatusResult[], submitResult?: unknown) {
   const harness = hostFor([statuses[0]!, ...statuses], submitResult);
@@ -200,7 +110,7 @@ describe("Access page", () => {
       "Operator · Read and change other people's sessions · Sandbox follows agent settings · No administrator access",
     );
     expect(container.querySelector('option[value="owner"]')).toBeNull();
-    const picker = container.querySelector<HTMLSelectElement>('select[aria-label="Role"]')!;
+    const picker = rolePicker(container)!;
     picker.value = "viewer";
     picker.dispatchEvent(new Event("change"));
     flush();
@@ -216,9 +126,7 @@ describe("Access page", () => {
     flush();
     expect(container.querySelector("input")?.value).toBe("");
     expect(document.activeElement).toBe(container.querySelector("input"));
-    expect(container.querySelector<HTMLSelectElement>('select[aria-label="Role"]')?.value).toBe(
-      "operator",
-    );
+    expect(rolePicker(container)?.value).toBe("operator");
     expect(container.textContent).not.toContain("https://example.test/#synthetic-invite");
   });
 
@@ -328,8 +236,8 @@ describe("Access page", () => {
         ],
       }),
     ]);
-    await vi.waitFor(() => expect(container.querySelector("select")).not.toBeNull());
-    const picker = container.querySelector("select")!;
+    await vi.waitFor(() => expect(rolePicker(container)).not.toBeNull());
+    const picker = rolePicker(container)!;
     expect([...picker.options].map((o) => o.value)).toEqual([
       "operator",
       "isolated",
@@ -371,7 +279,7 @@ describe("Access page", () => {
     async ({ roles }) => {
       const { container } = await mountPage([linked({ roles: [...roles] })]);
       await vi.waitFor(() => expect(button(container, "Create invite link")).toBeDefined());
-      expect(container.querySelector("select")?.value ?? "").toBe(roles[0]?.name ?? "");
+      expect(rolePicker(container)?.value ?? "").toBe(roles[0]?.name ?? "");
       if (roles.length === 0) {
         expect(container.textContent).toContain("No roles are defined on this claw");
         expect(button(container, "Create invite link")?.disabled).toBe(true);
@@ -427,7 +335,7 @@ describe("Access page", () => {
       const member = { accountId: "blocked", role: "deleted", roleDefined: false, peerKeys: [] };
       const initial = linked({ rootPub: pendingInvite.pending!.devicePub, members: [member] });
       const { container, request } = await mountPage([initial]);
-      await vi.waitFor(() => expect(container.querySelector("select")?.value).toBe("operator"));
+      await vi.waitFor(() => expect(rolePicker(container)?.value).toBe("operator"));
       const fresh = linked({
         ...initial.link,
         roles: initial.link.roles!.map((role) =>
@@ -557,7 +465,7 @@ describe("Access page", () => {
     expect(create.getAttribute("aria-busy")).toBe("true");
     expect(create.querySelector(".btn__spinner")).not.toBeNull();
     expect(input.disabled).toBe(true);
-    expect(container.querySelector("select")?.disabled).toBe(true);
+    expect(rolePicker(container)?.disabled).toBe(true);
     for (const label of ["Add node", "Remove node", "Review node", "Approve", "Deny"]) {
       expect(button(container, label)?.disabled, label).toBe(false);
     }

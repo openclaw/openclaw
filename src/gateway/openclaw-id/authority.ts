@@ -433,7 +433,6 @@ export function createOpenClawIdAuthority(
           }
           return { ok: false, code: result.code, detail: result.detail };
         }
-        const assertRoleCurrent = prepareMemberRoleChangeAssertion(input);
         const resolved = resolvedInvite(input);
         await commit(
           {
@@ -450,7 +449,7 @@ export function createOpenClawIdAuthority(
                 }
               : {}),
           },
-          assertRoleCurrent,
+          prepareMemberRoleChangeAssertion(input),
         );
         const reconnect = roleChangeDisconnects(current.authority, result.state);
         return {

@@ -16,6 +16,7 @@ import {
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
 import { createSignal, latest, onSettled, Show, untrack } from "solid-js";
 import { roleText } from "./i18n.js";
+import { InviteForm } from "./invite-form.js";
 import {
   createInvite,
   decideInvite,
@@ -36,12 +37,7 @@ import { memberName, removalNote, roleName } from "./people-format.js";
 import { createPeopleMotion } from "./people-motion.js";
 import { OperationError } from "./people-operation-error.js";
 import { observePeople } from "./people-refresh.js";
-import {
-  InviteForm,
-  Members,
-  PendingRequests,
-  type RemovedMemberNotice,
-} from "./people-sections.js";
+import { Members, PendingRequests, type RemovedMemberNotice } from "./people-sections.js";
 import type { Invite, Link, Member, MemberDevice, RemovalSummary, StatusResult } from "./types.js";
 
 // Canonical device fingerprints stay available in the request's details disclosure.
@@ -325,7 +321,14 @@ export function PeoplePage(props: { host: ControlUiHost }) {
                       existingProfiles={current().link.existingProfiles ?? []}
                       onCreate={(email, role: MemberRole, confirmedAdmin, existingProfileId) =>
                         run("invite", (link) =>
-                          createInvite(host.request, link, email, role, confirmedAdmin, existingProfileId),
+                          createInvite(
+                            host.request,
+                            link,
+                            email,
+                            role,
+                            confirmedAdmin,
+                            existingProfileId,
+                          ),
                         )
                       }
                     />
