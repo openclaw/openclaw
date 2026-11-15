@@ -300,6 +300,16 @@ describe("own PR inspection through the admitted agent tool and Gateway", () => 
     expect(f.requests).toEqual([]);
   });
 
+  it("keeps reading across a config reload that leaves the API base unchanged", async () => {
+    const f = await fixture();
+    f.onRead(async (endpoint) => {
+      if (endpoint.endsWith("/pulls/7")) {
+        setRuntimeConfigSnapshot({ ...f.config });
+      }
+    });
+    expect(await f.invoke()).toMatchObject({ author: { accountId: 101 } });
+  });
+
   it.each(["role", "linked identity", "publisher", "API base", "session"])(
     "rejects %s revocation during the PR read",
     async (change) => {
