@@ -228,7 +228,12 @@ const ACTIVATION_CHECK_STEPS = new Set([
 ]);
 
 function activationFailureSignature(run: UpdateRunRecord): string | undefined {
-  if (run.trigger !== "campaign" || run.status !== "failed" || !run.reason) {
+  // A failed activation usually restores the previous release, which records `rolled-back`.
+  if (
+    run.trigger !== "campaign" ||
+    (run.status !== "failed" && run.status !== "rolled-back") ||
+    !run.reason
+  ) {
     return undefined;
   }
   const failed = run.steps.filter(

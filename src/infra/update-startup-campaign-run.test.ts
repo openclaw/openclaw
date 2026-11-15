@@ -191,6 +191,7 @@ describe("automatic campaign handoff failure", () => {
     "different check",
     "different detail",
     "transient metadata",
+    "rolled back",
   ] as const)("backs off only identical activation failures across restart: %s", async (resume) => {
     const log = { info: vi.fn() };
     const step: UpdateStepResult = {
@@ -206,7 +207,17 @@ describe("automatic campaign handoff failure", () => {
       message: "Doctor failed after activation.",
       result: updateResult({ reason: "doctor-failed", steps: [step], durationMs: 10 }),
     };
-    const runAuto = vi.fn<AutoUpdateRunner>(async () => structuredClone(outcome));
+    const runAuto = vi.fn<AutoUpdateRunner>(async ({ runId }) => {
+      if (resume === "rolled back") {
+        // The updater's terminal owner records a restored previous release as rolled-back.
+        finishUpdateRun(runId, {
+          status: "rolled-back",
+          reason: outcome.result.reason,
+          diagnostics: outcome.result,
+        });
+      }
+      return structuredClone(outcome);
+    });
     const attempt = async (version = "2.0.0-beta.1") => {
       const campaign = createApplyingCampaign(version);
       try {
