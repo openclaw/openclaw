@@ -23,6 +23,7 @@ import {
 import { describeSystemAgentPersistentOperation } from "../../system-agent/operations.js";
 import { SYSTEM_AGENT_APPROVAL_TERMINAL_MESSAGES } from "../../system-agent/operator-approval.js";
 import { createSystemAgentTranscriptStore } from "../../system-agent/transcript-store.js";
+import { readAgentRuntimeAutomaticChangePolicyAssertion } from "../agent-runtime-automatic-change-policy.js";
 import type {
   AgentRuntimeDelegatedAuthority,
   AgentRuntimeIdentity,
@@ -133,6 +134,15 @@ export async function prepareDelegatedSystemAgentApproval(params: {
 }): Promise<DelegatedProposalResolver> {
   const callerIdentity = getGatewayToolCallerIdentity();
   const trustedAgentRuntime = callerIdentity ? undefined : params.trustedAgentRuntime;
+  // Automatic application must re-assert live policy at decision time. An in-process
+  // caller carries the closure on its admitted run identity; a signed wire Full Access
+  // grant redeems the host-owned closure attached during verification. Neither one is
+  // derived from client input, and a missing closure keeps the human decision.
+  const assertAutomaticChangePolicyCurrent =
+    callerIdentity?.assertAutoApproveChangesCurrent ??
+    (trustedAgentRuntime
+      ? readAgentRuntimeAutomaticChangePolicyAssertion(trustedAgentRuntime)
+      : undefined);
   const approvalAuthority =
     callerIdentity?.approvalAuthority ??
     (callerIdentity?.operationalRunInstance
@@ -242,7 +252,12 @@ export async function prepareDelegatedSystemAgentApproval(params: {
           () => {
             assertLiveApprovalAuthority();
             if (automatic) {
-              callerIdentity!.assertAutoApproveChangesCurrent!();
+              if (!assertAutomaticChangePolicyCurrent) {
+                throw new DelegatedChangeApprovalRequiredError(
+                  "OpenClaw can no longer verify current policy for this change.",
+                );
+              }
+              assertAutomaticChangePolicyCurrent();
             }
           },
           terminalStatus,
@@ -290,13 +305,9 @@ export async function prepareDelegatedSystemAgentApproval(params: {
         proposal.operation,
         selectLiveRuntimeConfig(),
       );
-      if (
-        !approvalReason &&
-        signedFullPermission &&
-        callerIdentity?.assertAutoApproveChangesCurrent
-      ) {
+      if (!approvalReason && signedFullPermission && assertAutomaticChangePolicyCurrent) {
         try {
-          callerIdentity.assertAutoApproveChangesCurrent();
+          assertAutomaticChangePolicyCurrent();
           automatic = true;
         } catch (error) {
           if (error instanceof DelegatedChangeApprovalRequiredError) {

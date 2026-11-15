@@ -1,4 +1,5 @@
 import { setImmediate as yieldToScheduler } from "node:timers/promises";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -15,6 +16,7 @@ import * as caches from "../../plugins/plugin-cache.js";
 import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata-empty.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
+import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
@@ -152,7 +154,7 @@ it("cancels a delegated Gateway wait while its handler remains unsettled", async
 });
 
 it.each<[string, Options, boolean]>([
-  ["default full", {}, true],
+  ["unestablished exec authority", {}, false],
   ["guarded", { execSession: { permissionMode: "guarded" } }, false],
   ["workspace", { execSession: { permissionMode: "workspace" } }, false],
   ["restricted default", { config: { tools: { exec: { mode: "ask" } } } }, false],

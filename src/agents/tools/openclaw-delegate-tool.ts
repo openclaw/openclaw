@@ -265,7 +265,7 @@ export function createOpenClawDelegateToolsForRun(
               },
               // Match the established human-interaction budget. The outer CLI owner
               // retains its separate grace for post-decision completion.
-              {{ signal, timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 }},
+              { signal, timeoutMs: DEFAULT_ASK_USER_TIMEOUT_SECONDS * 1_000 },
             ),
           ),
         ),

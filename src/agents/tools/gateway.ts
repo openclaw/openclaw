@@ -8,6 +8,7 @@ import {
 import { SYSTEM_RUN_EXECUTION_CONTEXT_CAPABILITY } from "../../../packages/gateway-protocol/src/system-run-execution-context.js";
 import { getRuntimeConfig, resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createAgentRuntimeAutomaticChangePolicyHandoff } from "../../gateway/agent-runtime-automatic-change-policy.js";
 import {
   createAgentRuntimeExecutionLineageHandoff,
   readAgentRuntimeExecutionLineage,
@@ -406,6 +407,9 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     throw new Error("trusted operational run instance required for this gateway call");
   }
   let lineageHandoff: ReturnType<typeof createAgentRuntimeExecutionLineageHandoff>;
+  let automaticChangePolicyHandoff: ReturnType<
+    typeof createAgentRuntimeAutomaticChangePolicyHandoff
+  >;
   try {
     const sessionSpawnContext = getGatewaySessionSpawnContext();
     const parentExecutionIdentityToken = getGatewaySessionSpawnParentExecutionIdentityToken();
@@ -443,12 +447,31 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
       activeAuthority && approvalSignals?.length
         ? claimAgentRunApprovalAuthority(activeAuthority, approvalSignals)
         : activeAuthority;
+    // Hand the current-policy closure to the target Gateway for a signed wire Full Access
+    // grant. The token carries only this opaque id; the closure itself never leaves the
+    // process as data, and a missing closure still routes the change to a human.
+    automaticChangePolicyHandoff =
+      params.method === "openclaw.chat" &&
+      identity.fullPermission === true &&
+      identity.assertAutoApproveChangesCurrent &&
+      approvalAuthority
+        ? createAgentRuntimeAutomaticChangePolicyHandoff({
+            agentId: identity.agentId,
+            sessionKey: identity.sessionKey,
+            operationalRunInstance: identity.operationalRunInstance,
+            delegatedAuthority: approvalAuthority,
+            assertion: identity.assertAutoApproveChangesCurrent,
+          })
+        : undefined;
     const prepared: AgentRuntimeIdentityTokenParams = {
       ...identity,
       operationalRunInstance: identity.operationalRunInstance,
       approvalAuthority,
       fullPermission: params.method === "openclaw.chat" && identity.fullPermission === true,
       ...(lineageHandoff ? { executionIdentityToken: undefined } : {}),
+      ...(automaticChangePolicyHandoff
+        ? { automaticChangePolicyHandoffId: automaticChangePolicyHandoff.id }
+        : {}),
       ...(lineageHandoff
         ? { executionLineageHandoffId: lineageHandoff.id }
         : sessionSpawnContext
@@ -465,6 +488,7 @@ async function resolveAgentRuntimeIdentityForGatewayTool(params: {
     return runtimeIdentity;
   } catch (error) {
     lineageHandoff?.revoke();
+    automaticChangePolicyHandoff?.revoke();
     if (optionalLocalIdentity && !params.required) {
       return undefined;
     }

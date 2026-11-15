@@ -185,6 +185,7 @@ export const agentRuntimeIdentityTokenPayloadSchema = z.object({
   cronManagementGrant: cronCreatorAuthorityGrantSchema.optional(),
   sessionSpawnContext: sessionSpawnContextSchema.optional(),
   executionLineageHandoffId: normalizedRequiredStringSchema.optional(),
+  automaticChangePolicyHandoffId: normalizedRequiredStringSchema.optional(),
 });
 
 /** Shape-validated payload; authority and expiry checks remain with the token owner. */

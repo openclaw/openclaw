@@ -4,6 +4,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
   claimAgentRunApprovalAuthority,
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -12,12 +17,9 @@ import {
 } from "../../infra/agent-run-registry.js";
 import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
 import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent-approvals.js";
-import {
-  clearRuntimeConfigSnapshot,
-  setRuntimeConfigSnapshot,
-} from "../../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { DelegatedChangeApprovalRequiredError } from "../../system-agent/delegated-change-policy.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
+import { withAgentRuntimeAutomaticChangePolicyAssertion } from "../agent-runtime-automatic-change-policy.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import type { WorkerSessionTurnClaim } from "../worker-environments/placement-record.js";
@@ -309,6 +311,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
           sessionKey: "agent:main:main",
           operationalRunInstance,
           approvalAuthority: authority,
+          fullPermission: true,
           assertAutoApproveChangesCurrent: () => {
             if (!grantActive) {
               throw new Error("delegation grant revoked");
@@ -353,7 +356,16 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     },
   );
 
-  it.each(["active", "run", "tool", "gateway", "worker", "session"] as const)(
+  it.each([
+    "active",
+    "run",
+    "tool",
+    "gateway",
+    "worker",
+    "session",
+    "global-policy",
+    "agent-policy",
+  ] as const)(
     "uses source-bound wire Full Access and fences the final effect after %s closure",
     async (owner) => {
       const started = createDeferred();
@@ -382,6 +394,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       } as unknown as SystemAgentChatSession;
       const sessions = new Map([["delegate-wire", session]]);
       let gatewayActive = true;
+      let policyCurrent = true;
       const context = {
         systemAgentSessions: sessions,
         validateAgentRuntimeApprovalAuthority: () => gatewayActive,
@@ -394,17 +407,28 @@ describe("prepareDelegatedSystemAgentApproval", () => {
           ? claimAgentRunApprovalAuthority(authority, [controller.signal])
           : authority;
       const turnClaim = workerTurnClaim("wire-full-turn");
-      const trustedAgentRuntime = {
-        kind: "agentRuntime",
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        operationalRunInstance,
-        delegatedAuthority:
-          owner === "worker"
-            ? { kind: "worker", ...approvalAuthority, turnClaim }
-            : { kind: "local", ...approvalAuthority },
-        fullPermission: true,
-      } as AgentRuntimeIdentity;
+      const trustedAgentRuntime = withAgentRuntimeAutomaticChangePolicyAssertion(
+        {
+          kind: "agentRuntime",
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          operationalRunInstance,
+          delegatedAuthority:
+            owner === "worker"
+              ? { kind: "worker", ...approvalAuthority, turnClaim }
+              : { kind: "local", ...approvalAuthority },
+          fullPermission: true,
+        } as AgentRuntimeIdentity,
+        () => {
+          // Stand-in for the host-owned delegate-tool closure, which re-reads live
+          // auto-approval policy, agent overrides and execution containment.
+          if (!policyCurrent) {
+            throw new DelegatedChangeApprovalRequiredError(
+              "OpenClaw requires human approval for this change.",
+            );
+          }
+        },
+      );
 
       const pending = resolveTestProposal({
         context,
@@ -431,6 +455,15 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         gatewayActive = false;
       } else if (owner === "session") {
         sessions.set("delegate-wire", { ...session });
+      } else if (owner === "global-policy") {
+        policyCurrent = false;
+        setRuntimeConfigSnapshot({ tools: { openclaw: { autoApproveChanges: false } } });
+      } else if (owner === "agent-policy") {
+        policyCurrent = false;
+        setRuntimeConfigSnapshot({
+          tools: { openclaw: { autoApproveChanges: true } },
+          agents: { entries: { main: { tools: { openclaw: { autoApproveChanges: false } } } } },
+        });
       }
       release.resolve();
 
@@ -439,7 +472,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
         expect(effect).toHaveBeenCalledOnce();
       } else {
         await expect(pending).rejects.toThrow(
-          "system-agent approval authority is no longer active",
+          owner === "global-policy" || owner === "agent-policy"
+            ? "requires human approval"
+            : "system-agent approval authority is no longer active",
         );
         expect(effect).not.toHaveBeenCalled();
       }
@@ -704,6 +739,7 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       expect.any(Function),
       undefined,
     );
+  });
 
   it("reuses the exact worker approval with Full Access", async (testContext) => {
     const { session, manager, queue } = delegatedApproval(
