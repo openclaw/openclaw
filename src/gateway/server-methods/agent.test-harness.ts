@@ -44,7 +44,6 @@ import { agentHandlers } from "./agent.js";
 import { resetSubagentRegistryMocks } from "./agent.subagent-registry.mocks.test-support.js";
 import { getAgentTestStorePath } from "./agent.user-turn-recorder.test-support.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 export {
   flushScheduledDispatchStep,
@@ -318,32 +317,6 @@ export function cronMediaCompletionEvent(): AgentInternalEvent {
     result: "MEDIA:/tmp/header.png",
     replyInstruction: "Continue the original cron task.",
   };
-}
-
-export async function invokeGatewaySuspendPrepare(
-  context: GatewayRequestContext,
-  requestId: string,
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    suspendHandlers["gateway.suspend.prepare"],
-    'suspendHandlers["gateway.suspend.prepare"] test invariant',
-  )({
-    params: { requestId },
-    respond: respond as never,
-    context: {
-      ...context,
-      cron: {
-        pauseScheduling: vi.fn(),
-        resumeScheduling: vi.fn(),
-        getSuspensionBlockerCount: () => 0,
-      },
-    } as unknown as GatewayRequestContext,
-    req: { type: "req", id: requestId, method: "gateway.suspend.prepare" },
-    client: null,
-    isWebchatConnect: () => false,
-  });
-  return respond;
 }
 
 // Operator-write client that is NOT the in-process backend ACP spawn caller:
