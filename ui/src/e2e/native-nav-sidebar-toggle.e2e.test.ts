@@ -128,12 +128,14 @@ suite.define(() => {
         ].map((file) => controlUiE2eBuiltModuleRequest(`ui/src/${file}`).source),
       ),
     ).toEqual({ titlebarRegistered: false, requested: [false, false] });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // The active view's rail item collapses its panel; Sessions reopens it.
+    const pages = page.locator('[data-navigation-view="pages"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     await visible(sidebarPanel);
-    await toggle.click();
+    await pages.click();
+    await pages.click();
     await visible(sidebarPanel, false);
-    await toggle.click();
+    await page.locator('[data-navigation-view="sessions"]').click();
     await visible(sidebarPanel);
 
     await page.locator(".sidebar-issues-button").click();
@@ -232,7 +234,12 @@ suite.define(() => {
                 : [...document.querySelectorAll<HTMLElement>('[aria-label="Expand sidebar"]')].find(
                     (element) => element.checkVisibility(),
                   )!
-              : document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!;
+              : // Sessions reopens a collapsed panel; while open it opens the agent menu.
+                shell.classList.contains("shell--nav-collapsed")
+                ? document.querySelector<HTMLElement>('[data-navigation-view="sessions"]')!
+                : document.querySelector<HTMLElement>(
+                    'openclaw-app-sidebar [aria-label="Collapse sidebar"]',
+                  )!;
             toggle.click();
           }
           await new Promise<void>((resolve) => {
@@ -359,10 +366,12 @@ suite.define(() => {
 
   it("keeps restored sidebar focus from opening its tooltip", async () => {
     const page = await openPage({ hasTouch: true, nativeNav: false });
-    const toggle = page.locator('[data-navigation-view="sessions"]');
+    // A view button with a tooltip: the Sessions avatar carries its name in its label.
+    const toggle = page.locator('[data-navigation-view="pages"]');
     const sidebarPanel = page.locator(".sidebar-shell");
     const openTooltip = page.locator("openclaw-tooltip[open]");
     await visible(sidebarPanel);
+    await toggle.click();
 
     // Safari tap leaves post-collapse focus restoration to the shell.
     await toggle.evaluate((element) => {
@@ -391,7 +400,7 @@ suite.define(() => {
       .poll(() =>
         openTooltip.evaluate((tooltip) => (tooltip as HTMLElement & { content: string }).content),
       )
-      .toBe("Sessions");
+      .toBe("Pages");
     await page.keyboard.press("Enter");
     await visible(sidebarPanel);
     expect(await openTooltip.count()).toBe(0);
@@ -675,7 +684,7 @@ suite.define(() => {
       }),
     ).toBe(false);
 
-    await navigation.locator('[data-navigation-view="sessions"]').click();
+    // The drawer opens on Sessions.
     const row = navigation.locator(".sidebar-recent-session").first();
     await row.hover();
     await row.click({ button: "right" });

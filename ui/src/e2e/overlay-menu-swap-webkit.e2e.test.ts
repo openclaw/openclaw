@@ -60,7 +60,10 @@ suite.define(() => {
             );
             (target as HTMLElement).click();
           };
-          press(document.querySelector("button.sidebar-agent-card__main")!);
+          // Outside Sessions a click opens Sessions; the context menu opens the agent menu.
+          document
+            .querySelector("button.sidebar-agent-card__main")!
+            .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
           while (!document.querySelector("[id^='sidebar-menu-'][id$=':content']:popover-open")) {
             await new Promise((resolve) => {
               setTimeout(resolve, 5);

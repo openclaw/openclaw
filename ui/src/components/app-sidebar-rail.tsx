@@ -52,13 +52,10 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       (entry) => !entry.startsWith("session:"),
     ),
   );
-  const views = ["pages", "sessions", "online"] as const;
+  // The agent avatar above is the Sessions item.
+  const views = ["pages", "online"] as const;
   const viewLabel = (view: (typeof views)[number]) =>
-    view === "pages"
-      ? t("nav.pages")
-      : view === "sessions"
-        ? titleForRoute("sessions")
-        : t("presence.usersTitle");
+    view === "pages" ? t("nav.pages") : t("presence.usersTitle");
   const viewPressed = (view: (typeof views)[number]) =>
     host.navigationVisible &&
     !host.onExitSettings &&
@@ -122,13 +119,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                   }}
                 >
                   <Icon
-                    name={
-                      view === "pages"
-                        ? "layoutGrid"
-                        : view === "sessions"
-                          ? "messageCircle"
-                          : "users"
-                    }
+                    name={view === "pages" ? "layoutGrid" : "users"}
                     filled={viewPressed(view)}
                   />
                 </button>
