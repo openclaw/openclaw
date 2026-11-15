@@ -1,7 +1,11 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -75,6 +79,37 @@ const defaultsRow = (section: Locator) =>
   section.locator("summary").getByText("Defaults", { exact: true });
 
 suite.define(() => {
+  it("keeps a dirty policy after discard confirmation fails to load", async () =>
+    suite.withPage(
+      { ...createControlUiE2eContextOptions(), viewport: { width: 1280, height: 1200 } },
+      async ({ page }) => {
+        const { gateway, section, hostSelect } = await openApprovals(page);
+        await defaultsRow(section).click();
+        const security = section.getByRole("combobox", { name: "Security" }).first();
+        const save = section.getByRole("button", { name: "Save", exact: true });
+        await security.selectOption("full");
+        await expect.poll(() => save.isEnabled()).toBe(true);
+        const module = controlUiE2eBuiltModuleRequest("ui/src/components/confirm-dialog-view.tsx");
+        await page.route(module, (route) => route.abort("failed"));
+        const failedModule = page.waitForEvent("requestfailed", (request) =>
+          module.test(request.url()),
+        );
+        await hostSelect.selectOption("node-alpha");
+        await failedModule;
+        await expect
+          .poll(() => page.getByRole("alert").textContent())
+          .toContain("Failed to fetch dynamically imported module");
+        const image = await takeControlUiViewportScreenshot(page, section, [security, save]);
+        await writeFile(path.join(suite.artifactDir, "discard-confirmation-error.png"), image);
+        expect(await hostSelect.inputValue()).toBe("__gateway__");
+        expect(await security.inputValue()).toBe("full");
+        expect(await save.isEnabled()).toBe(true);
+        expect(await gateway.getRequests("exec.approvals.node.get")).toHaveLength(0);
+        expect(await gateway.getRequests("exec.approvals.set")).toHaveLength(0);
+        expect(await gateway.getRequests("exec.approvals.node.set")).toHaveLength(0);
+      },
+    ));
+
   it("confirms before discarding a dirty draft and loads the next host", async () =>
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const { gateway, section, hostSelect } = await openApprovals(page);
