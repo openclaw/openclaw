@@ -7,12 +7,12 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGitSource } from "../../infra/git-source.js";
+import { expandHomePrefix } from "../../infra/home-dir.js";
 import { sanitizeHostExecEnv } from "../../infra/host-env-security.js";
 import { withInstallWorkspace } from "../../infra/install-source-utils.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isImmutableGitCommitRef, parseGitPluginSpec } from "../../plugins/git-install.js";
 import type { InstallSafetyOverrides } from "../../plugins/install-security-scan.types.js";
-import { resolveUserPath } from "../../utils.js";
 import {
   loadSingleSkillDirectory,
   type LocalSkillLoadDiagnostic,
@@ -236,12 +236,14 @@ export async function installSkillFromSource(
   if (spec.toLowerCase().startsWith("git:")) {
     return await installGitSkill({ ...params, spec });
   }
-  const sourceDir = resolveUserPath(spec);
+  const sourcePath = expandHomePrefix(params.spec);
+  let sourceDir: string;
   let stat;
   try {
+    sourceDir = await fs.realpath(sourcePath);
     stat = await fs.stat(sourceDir);
   } catch (error) {
-    throw new Error(`Skill path not found: ${sourceDir}`, { cause: error });
+    throw new Error(`Skill path not found: ${sourcePath}`, { cause: error });
   }
   if (!stat.isDirectory()) {
     throw new Error(`Skill path is not a directory: ${sourceDir}`);
@@ -249,7 +251,7 @@ export async function installSkillFromSource(
   return await installLocalSkillDir({
     ...params,
     sourceDir,
-    sourceSpec: spec,
+    sourceSpec: params.spec,
     source: "path",
     fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
   });
