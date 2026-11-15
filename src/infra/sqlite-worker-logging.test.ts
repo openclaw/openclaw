@@ -13,7 +13,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("keeps worker diagnostics off JSON stdout through backend close", async () => {
+it("persists worker diagnostics through backend close without contaminating JSON stdout", async () => {
   const root = tempDirs.make("openclaw-worker-logging-");
   const databasePath = path.join(root, "fixture.sqlite");
   await fs.writeFile(databasePath, "");
@@ -51,4 +51,14 @@ it("keeps worker diagnostics off JSON stdout through backend close", async () =>
   for (const phase of ["open", "execute", "close"]) {
     expect(stderr.join("")).toContain(`worker fixture ${phase}`);
   }
+  const records = (await fs.readFile(path.join(root, "worker.log"), "utf8"))
+    .trim()
+    .split("\n")
+    .map((line): { message: string } => JSON.parse(line));
+  expect(records.map((record) => record.message)).toEqual([
+    "worker fixture open",
+    "worker fixture execute",
+    ...Array.from({ length: 128 }, (_, index) => `worker teardown diagnostic ${index}`),
+    "worker fixture close",
+  ]);
 });

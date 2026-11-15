@@ -98,18 +98,8 @@ final class HealthStore {
         var lastError: String?
     }
 
-    private final class Refresh {
-        let revision: UInt64?
-        var lease: GatewayConnection.ServerLease?
-        var task: Task<Void, Never>?
-
-        init(revision: UInt64?) {
-            self.revision = revision
-        }
-    }
-
     private var output: Output
-    private var activeRefresh: Refresh?
+    private var activeRefresh: GatewayStoreRefresh?
     var snapshot: HealthSnapshot? {
         self.sourceIsCurrent ? self.output.snapshot : nil
     }
@@ -176,7 +166,7 @@ final class HealthStore {
         self.clearReplacedSource()
         if let refresh = self.activeRefresh, self.refreshIsCurrent(refresh) { return nil }
         self.cancelRefresh()
-        let refresh = Refresh(revision: self.gateway.selectedEndpointRevision)
+        let refresh = GatewayStoreRefresh(revision: self.gateway.selectedEndpointRevision)
         self.activeRefresh = refresh
         let task = Task<Void, Never> { [weak self] in
             await self?.performRefresh(onDemand: onDemand, refresh: refresh)
@@ -190,12 +180,11 @@ final class HealthStore {
         self.activeRefresh = nil
     }
 
-    private func refreshIsCurrent(_ refresh: Refresh) -> Bool {
-        self.ownsRefresh(refresh) &&
-            refresh.lease.map(self.gateway.serverLeaseMatchesCurrentState) != false
+    private func refreshIsCurrent(_ refresh: GatewayStoreRefresh) -> Bool {
+        self.activeRefresh === refresh && refresh.isCurrent(on: self.gateway)
     }
 
-    private func ownsRefresh(_ refresh: Refresh) -> Bool {
+    private func ownsRefresh(_ refresh: GatewayStoreRefresh) -> Bool {
         self.activeRefresh === refresh && refresh.task?.isCancelled != true &&
             refresh.revision == self.gateway.selectedEndpointRevision
     }
@@ -236,7 +225,7 @@ final class HealthStore {
         }
     }
 
-    private func performRefresh(onDemand: Bool, refresh: Refresh) async {
+    private func performRefresh(onDemand: Bool, refresh: GatewayStoreRefresh) async {
         defer {
             if self.activeRefresh === refresh { self.activeRefresh = nil }
         }
@@ -291,7 +280,7 @@ final class HealthStore {
             return "Health check timed out"
         }
         let code = probe.status.map { "status \($0)" } ?? "status unknown"
-        let reason = probe.error?.isEmpty == false ? probe.error! : "health probe failed"
+        let reason = probe.error?.isEmpty == false ? probe.error! : "health check failed"
         if let elapsed { return "\(reason) (\(code), \(elapsed))" }
         return "\(reason) (\(code))"
     }
@@ -358,7 +347,7 @@ final class HealthStore {
         let auth = link.summary.authAgeMs.map { msToAge($0) } ?? "unknown"
         if let probe = link.summary.probe, probe.ok == false {
             let status = probe.status.map(String.init) ?? "?"
-            let suffix = probe.status == nil ? "probe degraded" : "probe degraded · status \(status)"
+            let suffix = probe.status == nil ? "check degraded" : "check degraded · status \(status)"
             return (state, "linked · auth \(auth) · \(suffix)")
         }
         return (state, "linked · auth \(auth)" + (failure.map { " · \($0)" } ?? ""))
@@ -398,7 +387,7 @@ final class HealthStore {
         if let fallback, !fallback.isEmpty {
             return fallback
         }
-        return "health probe failed"
+        return "health check failed"
     }
 
     var degradedSummary: String? {
@@ -422,16 +411,6 @@ func msToAge(_ ms: Double) -> String {
     return "\(days)d"
 }
 
-/// Decode a health snapshot, tolerating stray log lines before/after the JSON blob.
 func decodeHealthSnapshot(from data: Data) -> HealthSnapshot? {
-    let decoder = JSONDecoder()
-    if let snap = try? decoder.decode(HealthSnapshot.self, from: data) {
-        return snap
-    }
-    guard let text = String(data: data, encoding: .utf8),
-          let extracted = JSONObjectExtractionSupport.extract(from: text)
-    else {
-        return nil
-    }
-    return try? decoder.decode(HealthSnapshot.self, from: Data(extracted.text.utf8))
+    try? JSONDecoder().decode(HealthSnapshot.self, from: data)
 }

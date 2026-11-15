@@ -25,7 +25,7 @@ struct DashboardAppLinkBridgeTests {
         let server = try await DashboardHTTPFixture.start(
             html: "<html><body><a id='launch' href='openclaw://dashboard' target='\(target)'>Open</a></body></html>")
         defer { server.stop() }
-        let auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        let auth = DashboardWindowAuth.unauthenticated
         let controller = DashboardWindowController(
             url: server.url(), auth: auth, websiteDataStore: .nonPersistent(),
             windowAutosaveName: "", requestBrowserProfileImportOffer: { _ in false })

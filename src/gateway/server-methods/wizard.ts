@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -21,11 +20,7 @@ import {
 } from "../../wizard/session.js";
 import { canAccessWizardSession } from "../server-wizard-sessions.js";
 import { formatForLog } from "../ws-log.js";
-import {
-  createAdmittedWizardSession,
-  respondSetupAdmissionBusy,
-  whenAdmittedWizardSessionSettled,
-} from "./setup-admission.js";
+import { startGatewayWizard, whenAdmittedWizardSessionSettled } from "./setup-admission.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler, type Validator } from "./validation.js";
 
@@ -108,19 +103,20 @@ function wizardSessionHandler<T extends { sessionId: string }>(
 }
 
 export const wizardHandlers: GatewayRequestHandlers = {
-  "wizard.start": async ({ params, respond, context }) => {
+  "wizard.start": async (request) => {
+    const { params, respond, context } = request;
     if (!assertValidParams(params, validateWizardStartParams, "wizard.start", respond)) {
       return;
     }
     const sessionId = randomUUID();
     const flow = params.flow ?? "setup";
     const createSession = () =>
-      flow === "channels"
-        ? new WizardSession((prompter, _signal, wizardSession) =>
-            runHostedWizard((runtime) =>
-              context.channelWizardRunner(
+      new WizardSession((prompter, _signal, wizardSession) =>
+        runHostedWizard((runtime) =>
+          flow === "channels"
+            ? context.channelWizardRunner(
                 {
-                  channel: readStringValue(params.channel),
+                  channel: params.channel,
                   onConfigured: (accounts) => wizardSession.setConfiguredAccounts(accounts),
                   // Durable effects (plugin installs, config commit) must finish
                   // even if the client cancels mid-write.
@@ -130,36 +126,34 @@ export const wizardHandlers: GatewayRequestHandlers = {
                 },
                 runtime,
                 prompter,
-              ),
-            ),
-          )
-        : new WizardSession((prompter) =>
-            runHostedWizard((runtime) =>
-              context.wizardRunner(
+              )
+            : context.wizardRunner(
                 {
                   mode: params.mode,
-                  workspace: readStringValue(params.workspace),
+                  workspace: params.workspace,
                   installDaemon: params.installDaemon,
                 },
                 runtime,
                 prompter,
               ),
-            ),
-          );
-    const session = await createAdmittedWizardSession(createSession, flow === "setup");
-    if (!session) {
-      respondSetupAdmissionBusy(respond);
-      return;
-    }
-    context.wizardSessions.set(sessionId, session);
-    const result = await session.next();
-    if (result.done) {
-      // Let the runner release setup admission before the terminal response,
-      // so an immediate replacement wizard is not rejected as still busy.
-      await whenAdmittedWizardSessionSettled(session);
-      context.purgeWizardSession(sessionId);
-    }
-    respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+        ),
+      );
+    await startGatewayWizard({
+      request,
+      sessionId,
+      lockSetupTarget: flow === "setup",
+      createSession,
+      respondStarted: async (session) => {
+        const result = await session.next();
+        if (result.done) {
+          // Let the runner release setup admission before the terminal response,
+          // so an immediate replacement wizard is not rejected as still busy.
+          await whenAdmittedWizardSessionSettled(session);
+          context.purgeWizardSession(sessionId);
+        }
+        respond(true, { sessionId, ...sanitizeWizardResultForClient(result) }, undefined);
+      },
+    });
   },
   "wizard.next": wizardSessionHandler(
     "wizard.next",
@@ -173,7 +167,7 @@ export const wizardHandlers: GatewayRequestHandlers = {
           return;
         }
         try {
-          const validationError = await session.answer(answer.stepId ?? "", answer.value);
+          const validationError = await session.answer(answer.stepId, answer.value);
           if (validationError) {
             respond(
               true,

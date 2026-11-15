@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildFileEntry,
@@ -12,7 +12,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   sqliteStringSet,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type MemorySourceFileStateRow = {
   path: string;
@@ -62,7 +62,7 @@ export async function resolveMemorySourceFileEntries(params: {
 }
 
 export async function inspectMemorySourceState(params: {
-  db: DatabaseSync;
+  readIndexedRows: () => Promise<MemorySourceFileStateRow[]>;
   workspaceDir: string;
   settings: Pick<ResolvedMemorySearchConfig, "extraPaths" | "multimodal">;
   concurrency: number;
@@ -73,31 +73,33 @@ export async function inspectMemorySourceState(params: {
     ...params,
     onSkippedSymlinkRoot: (root) => skippedRoots.add(root),
   });
-  const indexedByPath = new Map(
-    loadMemorySourceFileState({ db: params.db, source: "memory" }).map((row) => [
-      row.path,
-      row.hash,
-    ]),
-  );
+  const indexedByPath = new Map((await params.readIndexedRows()).map((row) => [row.path, row]));
   return {
     source: "memory",
     dirty:
       indexedByPath.size !== entries.length ||
-      entries.some((entry) => indexedByPath.get(entry.path) !== entry.hash),
+      entries.some((entry) => {
+        const indexed = indexedByPath.get(entry.path);
+        return (
+          indexed?.hash !== entry.hash ||
+          indexed.mtime !== entry.mtimeMs ||
+          indexed.size !== entry.size
+        );
+      }),
     eligible: entries.length,
     issues: [
       ...(entries.length === 0 ? ["no eligible memory files found"] : []),
       ...Array.from(
         skippedRoots,
         (root) =>
-          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its canonical absolute directory instead`,
+          `extra path "${root}" is a symlink root; symlinked roots are not traversed, so configure its resolved absolute directory instead`,
       ),
     ],
   };
 }
 
 export function loadMemorySourceFileState(params: {
-  db: DatabaseSync;
+  db: EngineConnection;
   source: MemorySource;
   paths?: readonly string[];
 }): MemorySourceFileStateRow[] {
@@ -109,4 +111,23 @@ export function loadMemorySourceFileState(params: {
     query = query.where("path", "in", sqliteStringSet(params.paths));
   }
   return executeSqliteQuerySync(params.db, query).rows;
+}
+
+export function refreshMemorySessionSourceState(
+  db: EngineConnection,
+  input: { path: string; hash: string; mtime: number; size: number; expectedHash: string },
+): boolean {
+  return (
+    Number(
+      executeSqliteQuerySync(
+        db,
+        getNodeSqliteKysely<MemorySourceDatabase>(db)
+          .updateTable("memory_index_sources")
+          .set({ hash: input.hash, mtime: input.mtime, size: input.size })
+          .where("path", "=", input.path)
+          .where("source", "=", "sessions")
+          .where("hash", "=", input.expectedHash),
+      ).numAffectedRows,
+    ) === 1
+  );
 }

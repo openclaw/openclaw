@@ -1,10 +1,17 @@
+import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 /** Parent task continuation with one completion owner across execution turns. */
 import { readAcpSessionEntryAsync } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { bindInProcessSubagentResume } from "../../gateway/in-process-subagent-resume.js";
+import { readAgentSelfHeldRefusal } from "../../gateway/agent-turn/agent-admission-refusal.js";
+import {
+  bindInProcessSubagentResume,
+  type TrustedSubagentResume,
+} from "../../gateway/in-process-subagent-resume.js";
 import type { TrustedAgentToolCaller } from "../../gateway/server-methods/types.js";
-import { bindParentSubagentResume } from "../../gateway/session-subagent-resume.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  bindParentSubagentResume,
+  assertParentSubagentResumeCurrent,
+} from "../../gateway/session-subagent-resume.js";
 import { jsonResult } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -18,9 +25,13 @@ type SessionsSendResumeCaller = TrustedAgentToolCaller & {
 };
 
 /** Retain the admitted caller before asynchronous session resolution. */
-export function captureSessionsSendResumeCaller(): SessionsSendResumeCaller | undefined {
+export function captureSessionsSendResumeCaller(
+  retainedSourceAssertion?: () => void,
+): SessionsSendResumeCaller | undefined {
   const caller = getGatewayToolCallerIdentity();
-  const assertCurrent = captureGatewayToolCallerAssertion();
+  // A host-retained replay has no live model turn. Its existing handoff supplies
+  // the independently retained source + original conversation fence instead.
+  const assertCurrent = captureGatewayToolCallerAssertion() ?? retainedSourceAssertion;
   return caller && assertCurrent
     ? { agentId: caller.agentId, sessionKey: caller.sessionKey, assertCurrent }
     : undefined;
@@ -30,22 +41,30 @@ export function captureSessionsSendResumeCaller(): SessionsSendResumeCaller | un
 export async function resumeSessionsSendTask(params: {
   cfg: OpenClawConfig;
   caller: SessionsSendResumeCaller;
+  assertCurrent?: () => void;
   targetAgentId: string;
   sessionKey: string;
   displayKey: string;
   runId: string;
   expectedSessionId?: string;
+  expectedTask?: Omit<TrustedSubagentResume, "caller">;
   sendParams: Record<string, unknown>;
   callGateway: AgentToolGatewayRequestCaller;
-}): Promise<ReturnType<typeof jsonResult>> {
+}) {
+  let targetTask: Omit<TrustedSubagentResume, "caller"> | undefined;
   try {
+    const assertCurrent = () => {
+      params.caller.assertCurrent();
+      params.assertCurrent?.();
+    };
+    assertCurrent();
     const session = await readAcpSessionEntryAsync({
       cfg: params.cfg,
       agentId: params.targetAgentId,
       sessionKey: params.sessionKey,
-      assertCurrent: params.caller.assertCurrent,
+      assertCurrent,
     });
-    params.caller.assertCurrent();
+    assertCurrent();
     const entry = session?.entry;
     if (
       !entry ||
@@ -55,12 +74,24 @@ export async function resumeSessionsSendTask(params: {
     ) {
       throw new Error("Task resume requires the existing, unarchived native child session.");
     }
-    const subagentResume = bindParentSubagentResume({
+    const subagentResume = params.expectedTask
+      ? { ...params.expectedTask, caller: params.caller }
+      : bindParentSubagentResume({
+          cfg: params.cfg,
+          caller: params.caller,
+          childSessionKey: params.sessionKey,
+          childSessionId: entry.sessionId,
+          childLifecycleRevision: entry.lifecycleRevision,
+        });
+    assertParentSubagentResumeCurrent({
       cfg: params.cfg,
-      caller: params.caller,
-      childSessionKey: params.sessionKey,
-      childSessionId: entry.sessionId,
+      resume: subagentResume,
+      sessionKey: params.sessionKey,
+      sessionId: entry.sessionId,
+      sessionLifecycleRevision: entry.lifecycleRevision,
     });
+    const { caller: _caller, ...pins } = subagentResume;
+    targetTask = pins;
     const accepted = await params.callGateway<{
       runId: string;
       taskRunId: string;
@@ -74,6 +105,7 @@ export async function resumeSessionsSendTask(params: {
             expectedExistingSessionId: subagentResume.childSessionId,
           },
           assertDispatchCurrent: params.caller.assertCurrent,
+          sessionMutationCommitGuard: params.assertCurrent,
           timeoutMs: 10_000,
         },
         subagentResume,
@@ -91,20 +123,26 @@ export async function resumeSessionsSendTask(params: {
       targetSessionKey: params.sessionKey,
     });
     // No agent.wait, watch registration, or A2A flow may compete with task completion.
-    return jsonResult({
-      status: "accepted",
-      mode: "resume",
-      runId: accepted.runId,
-      taskRunId: accepted.taskRunId,
-      sessionKey: params.displayKey,
-      completion: "task",
-    });
+    return {
+      result: jsonResult({
+        status: "accepted",
+        mode: "resume",
+        runId: accepted.runId,
+        taskRunId: accepted.taskRunId,
+        sessionKey: params.displayKey,
+        completion: "task",
+      }),
+    };
   } catch (error) {
-    return jsonResult({
-      status: "error",
-      runId: params.runId,
-      sessionKey: params.displayKey,
-      error: formatErrorMessage(error),
-    });
+    return {
+      selfHeld: readAgentSelfHeldRefusal(error),
+      targetTask,
+      result: jsonResult({
+        status: "error",
+        runId: params.runId,
+        sessionKey: params.displayKey,
+        error: formatErrorMessage(error),
+      }),
+    };
   }
 }

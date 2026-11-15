@@ -6,7 +6,9 @@ import { getRegisteredAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessAttemptParams } from "../agents/harness/types.js";
 import { AuthStorage } from "../agents/sessions/auth-storage.js";
 import { ModelRegistry } from "../agents/sessions/model-registry.js";
+import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { disposeLoaderFixtures } from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -85,30 +87,31 @@ it("retains a running harness package through unrelated reload and fenced retire
     timeoutMs: 5_000,
     provider: "fixture",
     modelId: "fixture",
-    model: {
+    model: makeProviderModelFixture({
       id: "fixture",
       name: "Fixture",
       provider: "fixture",
       api: "openai-responses",
       baseUrl: "https://example.invalid",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       maxTokens: 128,
-    },
+    }),
     authStorage,
     authProfileStore: { version: 1, profiles: {} },
     modelRegistry: ModelRegistry.inMemory(authStorage),
     thinkLevel: "off",
   };
   const registries: PluginRegistry[] = [];
+  const load = (overrides: Partial<Parameters<typeof loadOpenClawPlugins>[0]> = {}) => {
+    const registry = loadOpenClawPlugins({ ...options, ...overrides });
+    registries.push(registry);
+    return registry;
+  };
   const resolve = (registry: PluginRegistry) =>
     withPluginRuntimeRegistryScope(registry, () => getRegisteredAgentHarness("custody-harness"));
   let running: Promise<unknown> | undefined;
   let settlement: Promise<void> | undefined;
   try {
-    const first = loadOpenClawPlugins(options);
-    registries.push(first);
+    const first = load();
     const original = expectDefined(resolve(first), "registered fixture harness").harness;
     running = original.runAttempt(params);
     void running.catch(() => {});
@@ -116,12 +119,10 @@ it("retains a running harness package through unrelated reload and fenced retire
     expect(directory).not.toBe(plugin.dir);
     const capturedPackage = path.join(directory, "package.json");
 
-    const reloaded = loadOpenClawPlugins({
-      ...options,
+    const reloaded = load({
       previousRegistry: first,
       replacePluginIds: [unrelated.id],
     });
-    registries.push(reloaded);
     await disposePluginRegistryInstances(first, reloaded);
     expect(resolve(reloaded)?.harness).toBe(original);
     expect(fs.existsSync(capturedPackage)).toBe(true);
@@ -157,8 +158,7 @@ it("retains a running harness package through unrelated reload and fenced retire
     vi.useRealTimers();
 
     writeVersion("2.0.0");
-    const current = loadOpenClawPlugins(options);
-    registries.push(current);
+    const current = load();
     const replacement = expectDefined(resolve(current), "replacement fixture harness").harness;
     expect(replacement).not.toBe(original);
     await expect(replacement.runAttempt({ ...params, prompt: "fresh" })).resolves.toMatchObject({
@@ -170,9 +170,7 @@ it("retains a running harness package through unrelated reload and fenced retire
     await running?.catch(() => {});
     await settlement;
     vi.useRealTimers();
-    for (const registry of registries.toReversed()) {
-      await disposePluginRegistryInstances(registry);
-    }
+    await disposeLoaderFixtures(registries);
     process.off(`${event}:entered`, onEntered);
     process.off(`${event}:read`, onRead);
     resetPluginLoaderTestStateForTest();

@@ -6,7 +6,12 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
-import { appendNarrativeEntry, clampDreamDiaryContextEntry } from "./dreaming-dreams-file.js";
+import {
+  appendNarrativeEntry,
+  clampDreamDiaryContextEntry,
+  FALLBACK_NARRATIVE,
+} from "./dreaming-dreams-file.js";
+import type { WorkspaceFileMode } from "./workspace-file-mode.js";
 
 export type DreamingCompletion = Pick<PluginRuntime["subagent"], "complete">;
 
@@ -56,8 +61,6 @@ const NARRATIVE_SYSTEM_PROMPT = [
   "- Output ONLY the diary entry. No preamble, no sign-off, no commentary.",
 ].join("\n");
 
-// Bound best-effort diary inference independently from the parent sweep.
-const NARRATIVE_TIMEOUT_MS = 60_000;
 const RECENT_DIARY_CONTEXT_LIMIT = 3;
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
@@ -76,11 +79,9 @@ function formatFallbackWriteFailure(err: unknown): string {
   );
 }
 
-const REQUEST_SCOPED_FALLBACK_NARRATIVE =
-  "A memory trace surfaced, but details were unavailable in this run.";
-
 export async function appendFallbackNarrativeEntry(params: {
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs: number;
   timezone?: string;
@@ -90,9 +91,10 @@ export async function appendFallbackNarrativeEntry(params: {
   try {
     await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       // Raw snippets and promotions are pre-processing memory staging fragments.
       // Keep fallback diary text generic so DREAMS.md never leaks staging content.
-      narrative: REQUEST_SCOPED_FALLBACK_NARRATIVE,
+      narrative: FALLBACK_NARRATIVE,
       nowMs: params.nowMs,
       timezone: params.timezone,
     });
@@ -182,18 +184,23 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
 export type DreamNarrativeRequest = {
   /** Agent whose configured model and credentials own the completion. */
   agentId: string;
+  timeoutMs: number;
   subagent: DreamingCompletion;
   workspaceDir: string;
+  workspaceFileMode?: WorkspaceFileMode;
   data: NarrativePhaseData;
   nowMs?: number;
   timezone?: string;
   model?: string;
   logger: Logger;
+  runInBackground?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
-export type DreamNarrativeOutcome =
-  | { status: "completed" | "pending" | "skipped" }
-  | { status: "degraded"; error: string };
+export type DreamNarrativeOutcome = {
+  status: "completed" | "pending" | "skipped" | "degraded";
+};
+
+export type PreparedDreamNarrative = Pick<DreamNarrativeRequest, "data" | "model" | "timezone">;
 
 async function generateAndAppendDreamNarrative(
   params: DreamNarrativeRequest,
@@ -211,7 +218,7 @@ async function generateAndAppendDreamNarrative(
           message,
           extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
           ...(model ? { model } : {}),
-          timeoutMs: NARRATIVE_TIMEOUT_MS,
+          timeoutMs: params.timeoutMs,
         });
         narrative = result.text.trim();
         break;
@@ -233,10 +240,11 @@ async function generateAndAppendDreamNarrative(
         nowMs,
         reason: "the narrative run produced no text",
       });
-      return { status: "degraded", error: "the narrative run produced no text" };
+      return { status: "degraded" };
     }
     const dreamsPath = await appendNarrativeEntry({
       workspaceDir: params.workspaceDir,
+      workspaceFileMode: params.workspaceFileMode,
       narrative,
       nowMs,
       timezone: params.timezone,
@@ -266,20 +274,19 @@ async function generateAndAppendDreamNarrative(
         ? "subagent runtime is request-scoped"
         : `the narrative run failed (${formatErrorMessage(error)})`,
     });
-    return { status: "degraded", error: formatErrorMessage(error) };
+    return { status: "degraded" };
   }
   return { status: "completed" };
 }
 
 /**
- * Single entry point for every dreaming phase. Cron sweeps detach so a stalled diary run
- * cannot hold the sweep open; heartbeat sweeps await so the phase reports the outcome.
- * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
+ * Cron sweeps return before inference, but their service retains completion and
+ * publication until settlement. Heartbeat callers await the same work.
  */
 export async function runDreamNarrative(
-  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
+  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string },
 ): Promise<DreamNarrativeOutcome> {
-  const { agentId, detached, ...rest } = params;
+  const { agentId, runInBackground, ...rest } = params;
   // Nothing to narrate is a no-op on every path; checking ownership first would let an
   // ownerless empty sweep append a diary entry for material that never existed.
   if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
@@ -299,14 +306,12 @@ export async function runDreamNarrative(
         });
         return { status: "completed" as const };
       };
-  if (detached) {
-    // The shared runtime queue bounds inference; the sweep never waits for diary publication.
-    queueMicrotask(() => {
-      void job().catch((error: unknown) => {
-        rest.logger.warn(
-          `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
-        );
-      });
+  if (runInBackground) {
+    // Keep completion and publication in the owning instance after the sweep returns.
+    void runInBackground(job).catch((error: unknown) => {
+      rest.logger.warn(
+        `memory-core: detached dreaming narrative failed for ${rest.data.phase} phase: ${formatErrorMessage(error)}`,
+      );
     });
     return { status: "pending" };
   }

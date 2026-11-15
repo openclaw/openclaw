@@ -68,7 +68,7 @@ export function resolveOptionFromCommand<T>(
     if (opts[key] !== undefined) {
       return opts[key];
     }
-    current = current.parent ?? undefined;
+    current = current.parent;
   }
   return undefined;
 }

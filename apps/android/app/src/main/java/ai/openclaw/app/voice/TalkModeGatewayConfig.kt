@@ -98,10 +98,7 @@ internal object TalkModeGatewayConfigParser {
   }
 }
 
-private fun JsonElement?.asBooleanOrNull(): Boolean? {
-  val primitive = this as? JsonPrimitive ?: return null
-  return primitive.booleanOrNull
-}
+private fun JsonElement?.asBooleanOrNull(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
 
 internal fun normalizeSpeechLocaleTag(value: String?): String? {
   val candidate =

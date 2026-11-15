@@ -27,57 +27,31 @@ export function hasLegacyContextBudgetConfig(root: unknown): boolean {
   ) {
     return true;
   }
-  const agents = root.agents;
-  if (!isRecord(agents)) {
-    return false;
-  }
-  if (isRecord(agents.defaults) && Object.hasOwn(agents.defaults, "contextTokens")) {
-    return true;
-  }
-  if (
-    isRecord(agents.entries) &&
-    Object.values(agents.entries).some(
-      (entry) => isRecord(entry) && Object.hasOwn(entry, "contextTokens"),
-    )
-  ) {
-    return true;
-  }
-  return (
-    Array.isArray(agents.list) &&
-    agents.list.some((entry) => isRecord(entry) && Object.hasOwn(entry, "contextTokens"))
-  );
+  return !legacyAgentContextBudgets(root).next().done;
 }
 
-function removeAgentContextTokens(
-  root: JsonRecord,
-  changes: ConfigValidationIssue[],
-  warnings: ConfigValidationIssue[],
-): void {
+function* legacyAgentContextBudgets(root: JsonRecord) {
   const agents = root.agents;
   if (!isRecord(agents)) {
     return;
   }
-  const removeContextTokens = (record: unknown, path: string): void => {
-    if (!isRecord(record) || !Object.hasOwn(record, "contextTokens")) {
-      return;
-    }
-    delete record.contextTokens;
-    changes.push({ path, message: `Removed ${path}.` });
-    warnings.push({
-      path,
-      message: `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
-    });
-  };
-  removeContextTokens(agents.defaults, "agents.defaults.contextTokens");
-  const entries = agents.entries;
-  if (isRecord(entries)) {
-    for (const [agentId, entry] of Object.entries(entries)) {
-      removeContextTokens(entry, `agents.entries.${agentId}.contextTokens`);
-    }
+  const scopes: Array<[unknown, string]> = [[agents.defaults, "agents.defaults.contextTokens"]];
+  if (isRecord(agents.entries)) {
+    scopes.push(
+      ...Object.entries(agents.entries).map(([id, entry]): [unknown, string] => [
+        entry,
+        `agents.entries.${id}.contextTokens`,
+      ]),
+    );
   }
   if (Array.isArray(agents.list)) {
     for (const [index, entry] of agents.list.entries()) {
-      removeContextTokens(entry, `agents.list[${index}].contextTokens`);
+      scopes.push([entry, `agents.list[${index}].contextTokens`]);
+    }
+  }
+  for (const [record, path] of scopes) {
+    if (isRecord(record) && Object.hasOwn(record, "contextTokens")) {
+      yield { record, path };
     }
   }
 }
@@ -137,8 +111,13 @@ export function migrateLegacyContextBudgetConfig(raw: JsonRecord): ContextBudget
   const changes: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
   migrateProviderContextBudgets(next, changes, warnings);
-  removeAgentContextTokens(next, changes, warnings);
-  return changes.length > 0
-    ? { config: next, changed: true, changes, warnings }
-    : { config: raw, changed: false, changes, warnings };
+  for (const { record, path } of legacyAgentContextBudgets(next)) {
+    delete record.contextTokens;
+    changes.push({ path, message: `Removed ${path}.` });
+    warnings.push({
+      path,
+      message: `${path} cannot be represented per model; use ${MODEL_CONTEXT_TOKENS_REPLACEMENT} instead.`,
+    });
+  }
+  return { config: next, changed: true, changes, warnings };
 }

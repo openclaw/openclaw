@@ -8,7 +8,6 @@ struct VoiceWakeOverlayControllerTests {
     @Test func `overlay controller lifecycle without UI`() async {
         let controller = VoiceWakeOverlayController(enableUI: false)
         let token = controller.startSession(
-            source: .wakeWord,
             transcript: "hello",
             attributed: nil,
             forwardEnabled: true,
@@ -35,7 +34,6 @@ struct VoiceWakeOverlayControllerTests {
         let coordinator = VoiceSessionCoordinator.shared
         let controller = VoiceWakeOverlayController.shared
         let token = coordinator.startSession(
-            source: .wakeWord,
             text: "recognized words",
             forwardEnabled: true)
         defer { coordinator.dismiss(token: token, reason: .explicit, outcome: .empty) }
@@ -63,7 +61,6 @@ struct VoiceWakeOverlayControllerTests {
     @Test func `update level throttles rapid changes`() async {
         let controller = VoiceWakeOverlayController(enableUI: false)
         let token = controller.startSession(
-            source: .wakeWord,
             transcript: "level test",
             attributed: nil,
             forwardEnabled: false,

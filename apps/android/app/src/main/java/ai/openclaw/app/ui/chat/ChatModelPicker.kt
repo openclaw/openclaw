@@ -181,12 +181,5 @@ internal fun chatModelPickerChoices(
 ): List<GatewayModelSummary> {
   val choices = catalog.filter { it.manualSelectionAllowed != false }
   val modelsByRef = choices.associateBy { it.providerQualifiedRef() }
-  val includedRefs = mutableSetOf<String>()
-  return buildList {
-    for (ref in favorites + recents) {
-      val model = modelsByRef[ref] ?: continue
-      if (includedRefs.add(ref)) add(model)
-    }
-    addAll(choices.filter { includedRefs.add(it.providerQualifiedRef()) })
-  }
+  return ((favorites + recents).mapNotNull(modelsByRef::get) + choices).distinctBy { it.providerQualifiedRef() }
 }

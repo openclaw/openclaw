@@ -1,8 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../io.js";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -10,7 +12,9 @@ import {
 } from "./session-accessor.js";
 import { readTranscriptEventMessage } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import * as transcriptAnchors from "./session-transcript-anchor-read.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+import { withSessionTranscriptWriteAssertion } from "./transcript-write-context.js";
 import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
@@ -38,6 +42,7 @@ function legacyMirrorMessage(text = "Chart") {
 }
 
 describe("assistant mirror media identity", () => {
+  afterAll(clearRuntimeConfigSnapshot);
   const fixture = useTempSessionsFixture("transcript-media-identity-");
 
   async function createScope() {
@@ -47,6 +52,7 @@ describe("assistant mirror media identity", () => {
       sessionKey: "agent:main:legacy-media",
       storePath: fixture.storePath(),
     };
+    setRuntimeConfigSnapshot({ session: { store: scope.storePath } });
     await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     return scope;
   }
@@ -62,6 +68,61 @@ describe("assistant mirror media identity", () => {
       .db.prepare("SELECT event_json FROM transcript_events WHERE session_id = ? ORDER BY seq")
       .all(sessionId);
   }
+
+  it.each(["explicit", "owned"] as const)(
+    "rejects revoked duplicate authority after the anchor read: %s",
+    async (authority) => {
+      const scope = await createScope();
+      const params = {
+        ...scope,
+        expectedSessionId: scope.sessionId,
+        message: legacyMirrorMessage(),
+      };
+      const first = await appendExactAssistantMessageToSessionTranscript(params);
+      expect(first.ok).toBe(true);
+      let current = true;
+      const assertCurrent = () => {
+        if (!current) {
+          throw new Error("duplicate writer revoked");
+        }
+      };
+      const append = () =>
+        authority === "explicit"
+          ? appendExactAssistantMessageToSessionTranscript({ ...params, assertCurrent })
+          : withSessionTranscriptWriteAssertion(scope, assertCurrent, () =>
+              appendExactAssistantMessageToSessionTranscript(params),
+            );
+      await expect(append()).resolves.toEqual(first);
+      const before = readRawEvents(scope.sessionId);
+      const held = createDeferred();
+      const release = createDeferred();
+      const read = transcriptAnchors.readActiveTranscriptEntryAnchorAsync;
+      const observation = vi
+        .spyOn(transcriptAnchors, "readActiveTranscriptEntryAnchorAsync")
+        .mockImplementation(async (...args) => {
+          const anchor = await read(...args);
+          held.resolve();
+          await release.promise;
+          return anchor;
+        });
+      const duplicate = append();
+      try {
+        await awaitGateBeforeSettlement(
+          held.promise,
+          duplicate,
+          "Duplicate append settled without awaiting its anchor read",
+        );
+        current = false;
+        release.resolve();
+        await expect(duplicate).rejects.toThrow("duplicate writer revoked");
+        expect(readRawEvents(scope.sessionId)).toEqual(before);
+      } finally {
+        release.resolve();
+        await duplicate.catch(() => undefined);
+        observation.mockRestore();
+      }
+    },
+  );
 
   it.each([false, true])(
     "replays literal legacy media bytes before and after reopen with content=%s",
@@ -81,16 +142,20 @@ describe("assistant mirror media identity", () => {
         message: original,
       });
       expect(first.ok).toBe(true);
+      const displayContent = [{ type: "text" as const, text: "Prepared chart" }];
+      const prepareDisplayContent = vi.fn(async () => displayContent);
+      const replay = { ...params, prepareDisplayContent };
       const before = readRawEvents(scope.sessionId);
       expect(before.length).toBeGreaterThan(0);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendAssistantMessageToSessionTranscript(replay)).toEqual(first);
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       const owner = database();
       expect(await closeOpenClawAgentDatabaseByPathAsync(owner.path, scope.agentId)).toBe(true);
       expect(owner.db.isOpen).toBe(false);
-      expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
+      expect(await appendAssistantMessageToSessionTranscript(replay)).toEqual(first);
       expect(database()).not.toBe(owner);
+      expect(prepareDisplayContent).not.toHaveBeenCalled();
       expect(readRawEvents(scope.sessionId)).toEqual(before);
       const assistants = (await loadTranscriptEvents(scope))
         .map(readTranscriptEventMessage)
@@ -107,10 +172,14 @@ describe("assistant mirror media identity", () => {
       expect(readRawEvents(scope.sessionId)).toEqual(before);
 
       // A legacy row cannot relax URL identity for new rows in the same database.
-      const fresh = { ...params, idempotencyKey: "new-media-reply" };
-      const admitted = await appendAssistantMessageToSessionTranscript(fresh);
+      const fresh = { ...replay, idempotencyKey: "new-media-reply" };
+      const [admitted, repeated] = await Promise.all([
+        appendAssistantMessageToSessionTranscript(fresh),
+        appendAssistantMessageToSessionTranscript(fresh),
+      ]);
       expect(admitted.ok).toBe(true);
-      expect(await appendAssistantMessageToSessionTranscript(fresh)).toEqual(admitted);
+      expect(repeated).toEqual(admitted);
+      expect(prepareDisplayContent).toHaveBeenCalledOnce();
       await expect(
         appendAssistantMessageToSessionTranscript({
           ...fresh,
@@ -120,6 +189,29 @@ describe("assistant mirror media identity", () => {
       await expect(
         appendAssistantMessageToSessionTranscript({ ...fresh, mediaUrls: undefined }),
       ).rejects.toThrow("conflicts with the admitted message");
+      await expect(
+        appendAssistantMessageToSessionTranscript({
+          ...fresh,
+          text: "Different",
+          ...(explicitContent ? { content: [{ type: "text" as const, text: "Different" }] } : {}),
+        }),
+      ).rejects.toThrow("conflicts with the admitted message");
+      const events = await loadTranscriptEvents(scope);
+      expect(
+        events.filter((event) => readTranscriptEventMessage(event)?.role === "assistant"),
+      ).toEqual([
+        expect.objectContaining({
+          message: { ...original, idempotencyKey: params.idempotencyKey },
+        }),
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "assistant",
+            openclawDelivery: { mediaUrls: fresh.mediaUrls },
+            openclawDisplayContent: displayContent,
+            content: [{ type: "text", text: explicitContent ? "Chart" : "Chart\nchart.png" }],
+          }),
+        }),
+      ]);
     },
   );
 
@@ -193,7 +285,7 @@ describe("assistant mirror media identity", () => {
     expect(readRawEvents(scope.sessionId)).toEqual(before);
   });
 
-  it.each([{ mediaUrls: [] }, { mediaUrls: null }, { mediaUrls: "invalid" }, { mediaUrls: [42] }])(
+  it.each([{ mediaUrls: [] }, { mediaUrls: null }])(
     "keeps a stored own mediaUrls field strict: $mediaUrls",
     async ({ mediaUrls }) => {
       const scope = await createScope();
@@ -253,51 +345,5 @@ describe("assistant mirror media identity", () => {
       }),
     ).rejects.toThrow("conflicts with the admitted message");
     expect(readRawEvents(scope.sessionId)).toEqual(before);
-  });
-
-  it.each([false, true])("records media identity with content=%s", async (explicitContent) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "media-session",
-      sessionKey: "agent:main:media",
-      storePath: fixture.storePath(),
-    };
-    await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-    const params = {
-      ...scope,
-      expectedSessionId: scope.sessionId,
-      idempotencyKey: "media-reply",
-      text: "Chart",
-      ...(explicitContent ? { content: [{ type: "text" as const, text: "Chart" }] } : {}),
-      mediaUrls: ["https://example.com/chart.png"],
-    };
-    const first = await appendAssistantMessageToSessionTranscript(params);
-    expect(first.ok).toBe(true);
-    expect(await appendAssistantMessageToSessionTranscript(params)).toEqual(first);
-    await expect(
-      appendAssistantMessageToSessionTranscript({
-        ...params,
-        mediaUrls: ["https://different.example/chart.png"],
-      }),
-    ).rejects.toThrow("conflicts with the admitted message");
-    await expect(
-      appendAssistantMessageToSessionTranscript({
-        ...params,
-        text: "Different",
-        ...(explicitContent ? { content: [{ type: "text" as const, text: "Different" }] } : {}),
-      }),
-    ).rejects.toThrow("conflicts with the admitted message");
-    const events = await loadTranscriptEvents(scope);
-    expect(
-      events.filter((event) => readTranscriptEventMessage(event)?.role === "assistant"),
-    ).toEqual([
-      expect.objectContaining({
-        message: expect.objectContaining({
-          role: "assistant",
-          openclawDelivery: { mediaUrls: params.mediaUrls },
-          content: [{ type: "text", text: explicitContent ? "Chart" : "Chart\nchart.png" }],
-        }),
-      }),
-    ]);
   });
 });

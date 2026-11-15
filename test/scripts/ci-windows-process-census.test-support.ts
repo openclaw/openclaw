@@ -6,6 +6,21 @@ import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { withCiCheckoutFixture } from "./ci-checkout.test-support.js";
 import { fixturePreloadEnv } from "./fixtures/ci-fixture-runtime.cjs";
 
+const jsonLinesSource = String.raw`
+const jsonLines = onFrame => {
+  let buffered = "";
+  return chunk => {
+    buffered += String(chunk);
+    for (;;) {
+      const newline = buffered.indexOf("\n");
+      if (newline < 0) break;
+      const frame = JSON.parse(buffered.slice(0, newline));
+      buffered = buffered.slice(newline + 1);
+      onFrame(frame);
+    }
+  };
+};`;
+
 export function censusPreload(root: string, extra = "", delayed = false) {
   const preload = path.join(root, "census-preload.mjs");
   writeFileSync(
@@ -15,6 +30,7 @@ import cp from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/ci-fixture-runtime.cjs", import.meta.url).href)};
+${jsonLinesSource}
 const root = process.argv[3];
 const delayed = ` +
       JSON.stringify(delayed) +
@@ -23,8 +39,19 @@ const censusArgs = args => delayed && args?.[2]?.endsWith("ci-windows-process-ce
   ? ["-I", "-S", "-c", "import runpy,sys,time; time.sleep(1.1); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')", ...args.slice(2)]
   : args;
 const spawn = cp.spawn, spawnSync = cp.spawnSync;
+// POSIX has no census interpreter to delay; its first native query instead
+// spends as long as a loaded host can, on the supervisor's clock.
+let slowNativeQuery = delayed && process.argv[2] === "supervise";
 // Delay the actual interpreter entry point, including the pre-fix synchronous path.
-cp.spawnSync = (command, args, options) => spawnSync(command, censusArgs(args), options);
+cp.spawnSync = (command, args, options) => {
+  const result = spawnSync(command, censusArgs(args), options);
+  if (slowNativeQuery && command === "/bin/ps") {
+    slowNativeQuery = false;
+    const now = Date.now;
+    Date.now = () => now() + 1_100;
+  }
+  return result;
+};
 cp.spawn = (command, args, options) => {
   const child = spawn(command, censusArgs(args), options);
   if (command === "python" && process.argv[2] === "supervise") {
@@ -120,6 +147,7 @@ import { syncFixtureBuiltinExports } from ${JSON.stringify(new URL("./fixtures/c
 import { tmpdir } from "node:os";
 import path from "node:path";
 const [moduleUrl, fault, sampler, deadlineText] = process.argv.slice(1);
+${jsonLinesSource}
 const deadline = Number(deadlineText);
 const succeeds = fault === "ready" || fault === "delayed";
 let now = Date.now(), clockAdvanced = false;
@@ -161,20 +189,12 @@ cp.spawn = (command, args, options) => {
     };
   }
   if (fault === "stderr-reply") {
-    let buffered = "";
-    child.stdout.on("data", chunk => {
-      buffered += String(chunk);
-      for (;;) {
-        const newline = buffered.indexOf("\n");
-        if (newline < 0) break;
-        const frame = JSON.parse(buffered.slice(0, newline));
-        buffered = buffered.slice(newline + 1);
-        if (frame.observations) {
-          assert(stderrObserved, "mixed reply preceded owner-observed stderr");
-          mixedReply = frame;
-        }
+    child.stdout.on("data", jsonLines(frame => {
+      if (frame.observations) {
+        assert(stderrObserved, "mixed reply preceded owner-observed stderr");
+        mixedReply = frame;
       }
-    });
+    }));
   }
   if (fault === "delayed" || fault === "late") child.stdout.prependListener("data", chunk => {
     if (clockAdvanced || !String(chunk).includes('"id"')) return;
@@ -203,20 +223,25 @@ syncFixtureBuiltinExports();
 const { createWindowsProcessCensus, requestWindowsProcessCensus } = await import(moduleUrl);
 const failures = [];
 const owner = createWindowsProcessCensus({ root, token: "owned", onFailure: error => failures.push(String(error)) });
-let accepted = false, rejected;
+let accepted = false, rejected, reads = [];
 try {
   if (fault === "retire") await owner.close();
   await owner.ready;
   // A sibling's ingress rejection must not hide stale success from an already
   // admitted lease or stderr-fault request.
   const pids = ["lease", "query", "stderr-reply"].includes(fault) ? [101] : [101, 202];
-  const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline)));
+  reads = pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid], deadline));
+  const results = await Promise.all(reads);
   assert.deepEqual(results.map(result => [...result.values()]), pids.map(pid => [
     { pid, alive: true, creationTime: pid === 101 ? "5001" : "6002" },
   ]));
   accepted = true;
 } catch (error) { rejected = String(error); }
-finally { await owner.close(); }
+finally {
+  await owner.close();
+  // A rejected sibling does not settle the remaining client socket or its timer.
+  await Promise.allSettled(reads);
+}
 assert.equal(children.length, 1);
 assert.equal(closes.length, 1, "retirement must join actual child/stdio close");
 assert.equal(closes[0].endpoint, fault !== "startup" && fault !== "retire", "endpoint retired before sampler close");
@@ -274,11 +299,13 @@ fs.rmSync(root, { recursive: true });
     censusTestTimeoutMs,
   );
 
-  it.each(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
+  it.for(["sentinel", ...(process.platform === "win32" ? ["startup", "query", "lease"] : [])])(
     "retains startup errors and joins census before registration (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (root) => {
           writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
           const sampler = String.raw`
@@ -304,22 +331,14 @@ for line in sys.stdin:
     const child = censusSpawn(command, command === "python"
       ? ["-I", "-S", "-c", ${JSON.stringify(sampler)}, root, args[2], ${JSON.stringify(fault)}] : args, options);
     if (command === "python" && ${JSON.stringify(fault)} === "lease") {
-      let buffered = "", retired = false;
-      child.stdout.on("data", chunk => {
-        buffered += String(chunk);
-        for (;;) {
-          const newline = buffered.indexOf("\\n");
-          if (newline < 0) break;
-          const reply = JSON.parse(buffered.slice(0, newline));
-          buffered = buffered.slice(newline + 1);
-          if (!retired && reply.observations) {
-            retired = true;
-            // This listener precedes the broker's reply handler. The supervisor's
-            // synchronous writer closes before its teardown can unlink the lease.
-            fs.writeFileSync(path.join(root, "lease"), "replacement");
-          }
+      let retired = false;
+      child.stdout.on("data", jsonLines(reply => {
+        if (!retired && reply.observations) {
+          retired = true;
+          // This listener precedes the broker's reply handler and teardown.
+          fs.writeFileSync(path.join(root, "lease"), "replacement");
         }
-      });
+      }));
     }
     return child;
   };
@@ -345,18 +364,16 @@ for line in sys.stdin:
                 : "injected native query failure",
             );
           }
-          expect(report.ownedProcesses).toEqual([]);
-          expect(report.cleanupRemaining).toEqual([]);
-          expect(report.commands).toEqual([]);
+          expect(report).toMatchObject({ ownedProcesses: [], cleanupRemaining: [], commands: [] });
         },
       );
     },
-    55_000,
   );
 
-  it("joins an unregistered sentinel before supervisor close on disconnect", async () => {
+  it("joins an unregistered sentinel before supervisor close on disconnect", async ({ signal }) => {
     await withCiCheckoutFixture(
       "early-leader-exit",
+      signal,
       (root) => {
         writeFileSync(path.join(root, "checkout.sh"), "exit 99\n");
         // Fault only the asynchronous startup boundary; keep the real safe preflight.
@@ -395,28 +412,29 @@ if (mode === "supervise") {
           root,
           report.ownedProcesses.map((entry) => entry.pid),
         );
-        const spawnedPid = path.join(root, "spawned-pid");
-        const sentinelClose = path.join(root, "sentinel-close.json");
         expect(report.error, stderr).toBe("test parent disconnected");
-        const pid = Number(readFileSync(spawnedPid, "utf8"));
-        expect(JSON.parse(readFileSync(sentinelClose, "utf8"))).toEqual({
+        const pid = Number(readFileSync(path.join(root, "spawned-pid"), "utf8"));
+        expect(JSON.parse(readFileSync(path.join(root, "sentinel-close.json"), "utf8"))).toEqual({
           pid,
           code: null,
           signal: "SIGKILL",
           reportExists: false,
         });
         expect(result, stderr).toEqual({ code: 1, signal: null });
-        expect(report.ownedProcesses).toEqual([]);
-        expect(report.cleanupRemaining).toEqual([]);
-        expect(report.boundaries).toEqual([]);
-        expect(report.commands).toEqual([]);
+        expect(report).toMatchObject({
+          ownedProcesses: [],
+          cleanupRemaining: [],
+          boundaries: [],
+          commands: [],
+        });
       },
     );
   }, 55_000);
 
-  it.each(["direct-child-close", "truthful-final-census"])(
+  it.for(["direct-child-close", "truthful-final-census"])(
     "rejects expired supervisor cleanup and joins census (%s)",
-    async (fault) => {
+    { timeout: 55_000 },
+    async (fault, { signal }) => {
       type BoundaryEvent = {
         event: string;
         role?: string;
@@ -436,6 +454,7 @@ if (mode === "supervise") {
       let failure: unknown;
       await withCiCheckoutFixture(
         "early-leader-exit",
+        signal,
         (directory) => {
           root = directory;
           writeFileSync(path.join(root, "checkout.sh"), "exit 0\n");
@@ -483,24 +502,19 @@ if (mode === "supervise") {
       };
       if (cleanupFault === "truthful-final-census") {
         const on = child.stdout.on;
-        let buffered = "";
+        const observe = jsonLines(message => {
+          if (!advanced && !fs.existsSync(lease) && message.observations) {
+            assert(message.observations.length > 0, "final census must observe registered actor births");
+            recordBoundary({ event: "census-validated" });
+            advanceClock();
+          }
+        });
         child.stdout.on = function(event, listener) {
           if (event !== "data") return on.call(this, event, listener);
           return on.call(this, event, function(chunk) {
             // Validate with the actual broker callback before moving the cleanup clock.
             const result = listener.call(this, chunk);
-            buffered += String(chunk);
-            for (;;) {
-              const newline = buffered.indexOf("\n");
-              if (newline < 0) break;
-              const message = JSON.parse(buffered.slice(0, newline));
-              buffered = buffered.slice(newline + 1);
-              if (!advanced && !fs.existsSync(lease) && message.observations) {
-                assert(message.observations.length > 0, "final census must observe registered actor births");
-                recordBoundary({ event: "census-validated" });
-                advanceClock();
-              }
-            }
+            observe(chunk);
             return result;
           });
         };
@@ -547,15 +561,6 @@ if (mode === "supervise") {
       if (existsSync(directory)) {
         events = readEvents(directory);
       }
-      console.log(
-        JSON.stringify({
-          fault,
-          root: directory,
-          completedReport,
-          events,
-          failure: String(failure),
-        }),
-      );
       expect(events.filter((event) => event.event === "clock-advanced")).toHaveLength(1);
       expect(events.filter((event) => event.event === "census-validated")).toHaveLength(
         fault === "truthful-final-census" ? 1 : 0,
@@ -593,6 +598,5 @@ if (mode === "supervise") {
       // Every spawned writer above also has a creator-held close; failures retain evidence.
       rmSync(directory, { recursive: true });
     },
-    55_000,
   );
 }

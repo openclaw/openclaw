@@ -32,7 +32,7 @@ const BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED = [
     introLine:
       "Bootstrap is still pending for this workspace, but this run cannot safely complete the full BOOTSTRAP.md workflow here.",
     nextStepLine:
-      "Typical next steps include switching to a primary interactive run with normal workspace access or having the user complete the canonical BOOTSTRAP.md deletion afterward.",
+      "Typical next steps include switching to a primary interactive run with normal workspace access or having the user delete the workspace BOOTSTRAP.md afterward.",
   }).slice(1),
   "If the runtime model differs from default_model in the system prompt, mention the default model only after you have handled this limitation.",
   "Do not mention internal steps, files, tools, or reasoning.",
@@ -50,22 +50,19 @@ export async function resolveBareResetBootstrapFileAccess(params: {
   if (!cfg) {
     return false;
   }
-  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
+  const runtimeModelParams = {
     cfg,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
-  });
+  };
+  const acquired = await acquireEffectiveToolInventoryRuntimeModelContext(runtimeModelParams);
   try {
-    return acquired.run((runtimeModelContext) => {
-      const inventory = resolveEffectiveToolInventory({
-        cfg,
-        agentId: params.agentId,
+    return await acquired.run(async (runtimeModelContext) => {
+      const inventory = await resolveEffectiveToolInventory({
+        ...runtimeModelParams,
         sessionKey: params.sessionKey,
-        workspaceDir: params.workspaceDir,
-        modelProvider: params.modelProvider,
-        modelId: params.modelId,
         modelApi: runtimeModelContext.modelApi,
         runtimeModel: runtimeModelContext.runtimeModel,
       });
@@ -79,7 +76,6 @@ export async function resolveBareResetBootstrapFileAccess(params: {
 export async function resolveBareSessionResetPromptState(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  nowMs?: number;
   isPrimaryRun?: boolean;
   isCanonicalWorkspace?: boolean;
   hasBootstrapFileAccess?: boolean | (() => boolean | Promise<boolean>);
@@ -114,7 +110,7 @@ export async function resolveBareSessionResetPromptState(params: {
           ? BARE_SESSION_RESET_PROMPT_BOOTSTRAP_LIMITED
           : BARE_SESSION_RESET_PROMPT_BASE,
       params.cfg ?? {},
-      params.nowMs ?? Date.now(),
+      Date.now(),
     ),
     shouldPrependStartupContext: bootstrapMode === "none",
   };

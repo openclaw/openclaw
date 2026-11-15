@@ -26,8 +26,18 @@ function toCodexImageInput(media: PluginHookMediaFact): CodexUserInput | undefin
   }
   const localPath = media.path ?? readLocalMediaPath(media.url);
   if (localPath) {
-    const normalized = normalizeFileUrl(localPath);
-    return normalized ? { type: "localImage", path: normalized } : undefined;
+    if (!/^file:\/\//iu.test(localPath)) {
+      return { type: "localImage", path: localPath };
+    }
+    try {
+      const fileUrl = new URL(localPath);
+      // Validate encoding explicitly because fileURLToPath validation differs by runtime.
+      decodeURIComponent(fileUrl.pathname);
+      const normalized = fileURLToPath(fileUrl);
+      return normalized ? { type: "localImage", path: normalized } : undefined;
+    } catch {
+      return undefined;
+    }
   }
   return media.url ? { type: "image", url: media.url } : undefined;
 }
@@ -41,20 +51,6 @@ function isImageMedia(media: PluginHookMediaFact): boolean {
     return false;
   }
   return IMAGE_EXTENSIONS.has(path.extname(candidate.split(/[?#]/, 1)[0] ?? "").toLowerCase());
-}
-
-function normalizeFileUrl(value: string): string | undefined {
-  if (!/^file:\/\//iu.test(value)) {
-    return value;
-  }
-  try {
-    const fileUrl = new URL(value);
-    // Validate encoding explicitly because fileURLToPath validation differs by runtime.
-    decodeURIComponent(fileUrl.pathname);
-    return fileURLToPath(fileUrl);
-  } catch {
-    return undefined;
-  }
 }
 
 function readLocalMediaPath(value: string | undefined): string | undefined {

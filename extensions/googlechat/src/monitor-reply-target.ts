@@ -1,4 +1,3 @@
-// Googlechat plugin module implements monitor reply target behavior.
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 
 /**

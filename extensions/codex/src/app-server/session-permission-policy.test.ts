@@ -13,7 +13,6 @@ function appServer(): CodexAppServerRuntimeOptions {
   return {
     start: { transport: "stdio", command: "codex", args: ["app-server"], headers: {} },
     connectionClass: "local-loopback",
-    remoteAppsSubstrate: "preconfigured",
     codeModeOnly: false,
     loopDetectionPreToolUseRelay: true,
     requestTimeoutMs: 60_000,

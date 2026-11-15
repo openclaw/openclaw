@@ -1,30 +1,19 @@
-import { html, nothing } from "lit";
-import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
-import { icons } from "../../../components/icons.ts";
-import { renderKbd } from "../../../components/kbd.ts";
+import type { ModelCatalogEntry } from "../../../api/types.ts";
+import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import {
   formatRawProviderLabel,
   providerDisplayLabel,
-  renderProviderBrandIcon,
-} from "../../../components/provider-icon.ts";
-import "../../../components/tooltip.ts";
+} from "../../../components/provider-icon-data.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
 import { formatContextTokenCapacity } from "../../../lib/format.ts";
-import type { ModelRuntimeEntry } from "../../../lib/model-runtime-choice.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import type { ChatContextWindowControlParams } from "./chat-context-window-control.tsx";
 
 registerModelControlsEnglish();
 
-function renderModelShortcut() {
-  return renderKbd("", {
-    ariaHidden: true,
-    hidden: true,
-    ref: (element) => element?.setAttribute("data-chat-model-shortcut", "true"),
-  });
-}
-
 export type ChatModelPickerOption = {
+  /** Configured provider branding from the admitted catalog row. */
+  presentation?: ProviderPresentation;
   agentRuntimeId?: string;
   /** Null is an unknown configured base; undefined is an ordinary model-only row. Both clear a prior pin. */
   agentRuntime?: string | null;
@@ -34,17 +23,33 @@ export type ChatModelPickerOption = {
   contextTokens?: number;
   contextWindow?: number;
   disabled?: boolean;
-  unavailableReason?: ModelRuntimeEntry["unavailableReason"];
+  unavailableReason?: ModelCatalogEntry["unavailableReason"];
+  unavailableUntil?: number;
   isDefault: boolean;
   label: string;
   provider: string;
+  /** Hosted-catalog recommendation; the rest of its provider collapses under "All models". */
+  recommended?: boolean;
   supportsTools?: boolean;
   value: string;
 };
 
+export function modelCooldownDeadline(
+  options: readonly ChatModelPickerOption[],
+): number | undefined {
+  return options.reduce<number | undefined>((soonest, option) => {
+    const until = option.unavailableUntil;
+    return until === undefined ? soonest : Math.min(soonest ?? until, until);
+  }, undefined);
+}
+
 export function modelPickerOptionKey(option: ChatModelPickerOption): string {
   return JSON.stringify([option.value, option.agentRuntime ?? null]);
 }
+
+export const FAVORITES_GROUP = "$favorites";
+export const modelRowKey = (option: ChatModelPickerOption, provider: string) =>
+  `${provider === FAVORITES_GROUP ? "favorite:" : ""}${modelPickerOptionKey(option)}`;
 
 export function isModelPickerOptionSelected(
   option: ChatModelPickerOption,
@@ -57,48 +62,39 @@ export function isModelPickerOptionSelected(
   );
 }
 
-function formatModelContextMeta(option: ChatModelPickerOption): string {
+export function formatModelContextMeta(
+  option: ChatModelPickerOption,
+  translate: typeof t = t,
+): string {
   const active = option.contextTokens;
   const maximum = option.contextWindow;
-  if (active && maximum && active !== maximum) {
-    return t("chat.modelControls.contextActiveAndMax", {
-      active: formatContextTokenCapacity(active),
-      maximum: formatContextTokenCapacity(maximum),
+  if (active && maximum && active < maximum) {
+    return translate("chat.modelControls.contextActiveAndMax", {
+      active: formatContextTokenCapacity(active, 0),
+      maximum: formatContextTokenCapacity(maximum, 0),
     });
   }
-  return maximum ? formatContextTokenCapacity(maximum) : "";
+  const capacity = active || maximum;
+  return capacity ? formatContextTokenCapacity(capacity, 0) : "";
 }
 
+/** Owners omit completed empty groups; a published group has rows or an active receipt. */
 export type ChatModelPickerTargetGroup = {
   errorLabel: string;
   id: string;
   label: string;
+  /** Accepted rows stay synchronous for search, shortcuts, and account offsets. */
   options: readonly { label: string; value: string }[];
-  status: "loading" | "ready" | "error";
+  /** The box keys the boundary without unwrapping its promise outside Loading. */
+  completion: { promise: Promise<ChatModelPickerTargetGroup["options"]> };
 };
 
-// Known models.list runtime ids; mirrors src/status/agent-runtime-label.ts,
-// which cannot be imported here (it drags terminal sanitizers into the bundle).
-const AGENT_RUNTIME_LABELS: Readonly<Record<string, string>> = {
-  "claude-cli": "Claude CLI",
-  codex: "Codex",
-  "codex-cli": "Codex",
-  "google-gemini-cli": "Gemini CLI",
-  openclaw: "OpenClaw",
-};
-
-function formatAgentRuntimeLabel(id: string): string {
-  const normalized = id.trim().toLowerCase();
-  return (
-    AGENT_RUNTIME_LABELS[normalized] ??
-    `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}`
-  );
-}
-
-function formatModelLabel(option: ChatModelPickerOption): string {
+export function formatModelLabel(
+  option: Pick<ChatModelPickerOption, "label" | "provider" | "presentation">,
+): string {
   const prefixes = [
     formatRawProviderLabel(option.provider),
-    providerDisplayLabel(option.provider),
+    providerDisplayLabel(option.provider, option.presentation),
   ].toSorted((left, right) => right.length - left.length);
   for (const prefix of prefixes) {
     if (option.label.toLowerCase().startsWith(`${prefix.toLowerCase()} `)) {
@@ -114,11 +110,12 @@ function formatModelLabel(option: ChatModelPickerOption): string {
   return option.label;
 }
 
-export function renderChatModelProviderIcon(provider: string) {
-  return renderProviderBrandIcon(provider, { className: "chat-controls__provider-icon" });
-}
-
-export function renderChatModelPickerOption(params: {
+export type ChatModelPickerOptionProps = {
+  rowKey?: string;
+  favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
+  contextWindow?: ChatContextWindowControlParams;
+  hideCooldown?: boolean;
+  sessionKey?: string;
   disabled: boolean;
   entry: ChatModelPickerOption;
   index: number;
@@ -126,172 +123,127 @@ export function renderChatModelPickerOption(params: {
   selectedAgentRuntime?: string;
   sessionModelPinned: boolean;
   onSelect: (entry: ChatModelPickerOption, event: MouseEvent) => void;
-  onModelSetup?: () => void;
-}) {
-  const selected = isModelPickerOptionSelected(
-    params.entry,
-    params.selectedModelValue,
-    params.selectedAgentRuntime,
-  );
-  const modelLabel = formatModelLabel(params.entry);
-  const route = resolveModelRuntimeRoute(params.entry.provider, params.entry.agentRuntimeId);
-  const runtimeLabel = route
-    ? t(`chat.modelControls.routes.${route}.label`)
-    : params.entry.agentRuntimeId
-      ? formatAgentRuntimeLabel(params.entry.agentRuntimeId)
-      : "";
-  const routeDetail = route ? t(`chat.modelControls.routes.${route}.detail`) : "";
-  const chatOnlyHelp =
-    params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "";
-  const detail = [routeDetail, chatOnlyHelp].filter(Boolean).join(" ");
-  // A session with a recorded pin (even one pinned to the default's own value)
-  // can always return to Default when the default model is unavailable: the row
-  // commits the reset, not that model. Otherwise an unavailable default routes
-  // to sign-in like any other unavailable row.
-  const resetsPin = params.entry.isDefault && params.sessionModelPinned;
-  const needsAuth =
-    params.entry.disabled &&
-    (params.entry.unavailableReason === "missing-auth" ||
-      params.entry.unavailableReason === "auth-failed");
-  const onModelSetup = needsAuth ? params.onModelSetup : undefined;
-  const modelMeta = needsAuth
-    ? route
-      ? runtimeLabel
-      : ""
-    : [formatModelContextMeta(params.entry), runtimeLabel].filter(Boolean).join(" · ");
-  const accessibleStatus = needsAuth
-    ? t("modelSetup.candidates.signInNeeded")
-    : params.entry.unavailableReason === "unsupported-runtime"
-      ? t("chat.modelControls.runtimeUnavailable")
-      : "";
-  const option = html`<button
-    class="chat-controls__inline-select-option chat-controls__model-option ${
-      selected ? "chat-controls__inline-select-option--selected" : ""
-    }"
-    data-chat-model-option=${params.entry.value}
-    data-chat-model-runtime=${params.entry.agentRuntime ?? nothing}
-    data-chat-model-default=${params.entry.isDefault ? "true" : nothing}
-    data-chat-model-index=${params.index}
-    data-chat-model-keywords=${[
-      params.entry.isDefault ? t("chat.modelControls.default") : "",
-      runtimeLabel,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLocaleLowerCase()}
-    data-chat-model-name=${modelLabel.toLocaleLowerCase()}
-    data-chat-model-provider-label=${providerDisplayLabel(
-      params.entry.provider,
-    ).toLocaleLowerCase()}
-    role="option"
-    hidden
-    aria-selected=${selected ? "true" : "false"}
-    title=${accessibleStatus || nothing}
-    aria-label=${[modelLabel, runtimeLabel, accessibleStatus, chatOnlyHelp]
-      .filter(Boolean)
-      .join(". ")}
-    type="button"
-    ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup && !resetsPin)}
-    data-chat-model-setup=${onModelSetup ? "true" : nothing}
-    @mouseenter=${handleModelOptionMouseEnter}
-    @click=${(event: MouseEvent) => {
-      // A sign-in-gated model must not dead-end: the row routes to Model
-      // Setup instead of silently ignoring the click on a disabled button.
-      if (params.entry.disabled && !resetsPin) {
-        event.stopPropagation();
-        onModelSetup?.();
-        return;
-      }
-      params.onSelect(params.entry, event);
-    }}
-  >
-    <span class="chat-controls__model-option-provider">
-      ${renderChatModelProviderIcon(params.entry.provider)}
-    </span>
-    <span class="chat-controls__model-option-copy">
-      <span class="chat-controls__model-option-title">
-        <span class="chat-controls__model-option-name">${modelLabel}</span>
-        ${
-          params.entry.isDefault
-            ? html`<span
-                class="chat-controls__model-state-label chat-controls__model-state-label--default"
-                >${t("chat.modelControls.default")}</span
-              >`
-            : nothing
-        }
-        ${
-          modelMeta
-            ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
-            : nothing
-        }
-        ${
-          needsAuth
-            ? html`<span
-                class="chat-controls__model-option-auth-warning"
-                data-chat-model-auth-warning
-              >
-                ${icons.alertTriangle}<span>${accessibleStatus}</span>
-              </span>`
-            : nothing
-        }
-        ${
-          params.entry.supportsTools === false
-            ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"
-                >${icons.info}</span
-              >`
-            : nothing
-        }
-      </span>
-    </span>
-    <span class="chat-controls__model-option-action">
-      ${
-        selected
-          ? html`<span class="chat-controls__inline-select-check" aria-hidden="true"
-              >${icons.check}</span
-            >`
-          : renderModelShortcut()
-      }
-    </span>
-  </button>`;
-  return detail
-    ? html`<openclaw-tooltip .content=${detail}> ${option} </openclaw-tooltip>`
-    : option;
-}
+};
 
-export function renderChatModelPickerTargetOption(params: {
+export type ChatModelPickerTargetOptionProps = {
   disabled: boolean;
   entry: ChatModelPickerTargetGroup["options"][number];
   groupId: string;
   groupLabel: string;
   index: number;
   onSelect: (groupId: string, value: string, event: MouseEvent) => void;
-}) {
-  return html`
-    <button
-      class="chat-controls__inline-select-option chat-controls__model-option"
-      data-chat-model-option=${`target:${params.groupId}:${params.entry.value}`}
-      data-chat-model-target=${params.entry.value}
-      data-chat-model-index=${params.index}
-      data-chat-model-name=${params.entry.label.toLocaleLowerCase()}
-      data-chat-model-provider-label=${params.groupLabel.toLocaleLowerCase()}
-      role="option"
-      aria-selected="false"
-      type="button"
-      ?disabled=${params.disabled}
-      @mouseenter=${handleModelOptionMouseEnter}
-      @click=${(event: MouseEvent) => params.onSelect(params.groupId, params.entry.value, event)}
-    >
-      <span
-        class="chat-controls__model-option-provider chat-controls__target-icon"
-        aria-hidden="true"
-        >${icons.terminal}</span
-      >
-      <span class="chat-controls__model-option-copy">
-        <span class="chat-controls__model-option-title">
-          <span class="chat-controls__model-option-name">${params.entry.label}</span>
-        </span>
-      </span>
-      <span class="chat-controls__model-option-action"> ${renderModelShortcut()} </span>
-    </button>
-  `;
+};
+
+export const modelProviderId = (option: ChatModelPickerOption) =>
+  option.provider === "claude-cli" ? "anthropic" : option.provider;
+
+export function prepareChatModelPickerPanel(
+  params: {
+    modelOptions: ChatModelPickerOption[];
+    selectedModelValue: string;
+    selectedAgentRuntime?: string;
+    targetGroups?: readonly ChatModelPickerTargetGroup[];
+  },
+  favorites?: {
+    keys: readonly string[];
+    /** A remembered Favorites tab opens only while it holds the selected model. */
+    opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
+  },
+) {
+  const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
+  const activeModelOption = params.modelOptions.find((option) =>
+    isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
+  );
+  const leadingModelOption = activeModelOption ?? defaultModelOption;
+  const groupProvider = modelProviderId;
+  // Default restores inheritance; it stays ahead of ranked model choices. When a
+  // provider recommends models, they follow, and the rest collapse under "All models".
+  const recommendingProviders = new Set(
+    params.modelOptions.filter((option) => option.recommended).map(groupProvider),
+  );
+  const providerGroups = new Map<
+    string,
+    { lead: ChatModelPickerOption[]; more: ChatModelPickerOption[] }
+  >();
+  for (const option of params.modelOptions) {
+    const provider = groupProvider(option);
+    const group = providerGroups.get(provider) ?? { lead: [], more: [] };
+    if (option.isDefault) {
+      group.lead.unshift(option);
+    } else if (option === leadingModelOption) {
+      group.lead.splice(group.lead[0]?.isDefault ? 1 : 0, 0, option);
+    } else if (option.recommended || !recommendingProviders.has(provider)) {
+      group.lead.push(option);
+    } else {
+      group.more.push(option);
+    }
+    providerGroups.set(provider, group);
+  }
+  // Small provider lists need no disclosure, whether ranked or not.
+  for (const [provider, group] of providerGroups) {
+    if (group.lead.length + group.more.length < 10) {
+      group.lead.push(...group.more);
+      group.more = [];
+    } else if (!recommendingProviders.has(provider)) {
+      group.more = group.lead.splice(9);
+    }
+  }
+  const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
+  const favoriteOptions = (favorites?.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
+  // Keep provider rows steady under the pointer; the Favorites group stays live.
+  const openingFavorites = (favorites?.opening.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
+  for (const [provider, group] of providerGroups) {
+    const first = [...group.lead, ...group.more].filter(
+      (option) => option.isDefault || option.value === favorites?.opening.selected,
+    );
+    const promoted = new Set([
+      ...first,
+      ...openingFavorites.filter((option) => groupProvider(option) === provider),
+    ]);
+    group.lead = [...promoted, ...group.lead.filter((option) => !promoted.has(option))];
+    group.more = group.more.filter((option) => !promoted.has(option));
+  }
+  const orderedProviderGroups = [...providerGroups];
+  const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
+  const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let openingProvider = activeProvider;
+
+  if (favoriteOptions.length && orderedProviderGroups.length > 1) {
+    orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
+    // Opening keys keep the tab steady while stars change; an emptied group falls back.
+    if (
+      favorites?.opening.favoritesTab &&
+      activeModelOption &&
+      openingFavorites.includes(activeModelOption)
+    ) {
+      openingProvider = FAVORITES_GROUP;
+    }
+  }
+  const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
+  const optionIndex = new Map(
+    orderedProviderGroups
+      .flatMap(([provider, group]) =>
+        [...group.lead, ...group.more].map((option) => modelRowKey(option, provider)),
+      )
+      .map((key, index) => [key, index]),
+  );
+  const targetGroups = params.targetGroups ?? [];
+  const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
+  const hasOptions = params.modelOptions.length > 0 || targetGroups.length > 0;
+  const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
+  return {
+    orderedProviderGroups,
+    activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    openingProvider: openingProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    orderedOptions,
+    optionIndex,
+    targetGroups,
+    targetOptionCount,
+    hasOptions,
+    hasSelectableModelOptions,
+  };
 }

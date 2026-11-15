@@ -45,30 +45,16 @@ describe("fileToAvatarDataUrl", () => {
     vi.restoreAllMocks();
   });
 
-  it("reports unscaled fallback encodings over the identity budget as too detailed", async () => {
+  it.each([3, 20_000])("bounds a %i-byte unscaled fallback", async (bytes) => {
     vi.stubGlobal("createImageBitmap", vi.fn().mockRejectedValue(new Error("unsupported")));
-    const file = new File([new Uint8Array(20_000)], "avatar.png", { type: "image/png" });
-
-    await expect(fileToAvatarDataUrl(file)).resolves.toEqual({
-      ok: false,
-      reason: "too-detailed",
-    });
-  });
-
-  it("keeps small fallback encodings", async () => {
-    vi.stubGlobal("createImageBitmap", vi.fn().mockRejectedValue(new Error("unsupported")));
-
-    const result = await fileToAvatarDataUrl(pngFile());
-
-    expect(result.ok && result.dataUrl).toMatch(/^data:image\/png;base64,/u);
-  });
-
-  it("keeps WebP encodings when the canvas supports them", async () => {
-    stubCanvas({ opaque: false, pngCharsPerEdgePixel: 1_000, webp: true });
-
-    const result = await fileToAvatarDataUrl(pngFile());
-
-    expect(result.ok && result.dataUrl).toMatch(/^data:image\/webp;base64,/u);
+    const result = await fileToAvatarDataUrl(
+      new File([new Uint8Array(bytes)], "avatar.png", { type: "image/png" }),
+    );
+    if (bytes === 3) {
+      expect(result.ok && result.dataUrl).toMatch(/^data:image\/png;base64,/u);
+    } else {
+      expect(result).toEqual({ ok: false, reason: "too-detailed" });
+    }
   });
 
   it("rejects non-image files as unusable", async () => {
@@ -77,31 +63,26 @@ describe("fileToAvatarDataUrl", () => {
     await expect(fileToAvatarDataUrl(file)).resolves.toEqual({ ok: false, reason: "unusable" });
   });
 
-  it("steps transparent images down in size when only PNG encoding is available", async () => {
-    // 96px and 64px PNGs exceed the 16K budget at this density; 48px fits.
-    const encodings = stubCanvas({ opaque: false, pngCharsPerEdgePixel: 300 });
-
-    const result = await fileToAvatarDataUrl(pngFile());
-
-    expect(result.ok && result.dataUrl).toMatch(/^data:image\/png;base64,/u);
-    expect(encodings.some(({ mime }) => mime === "image/jpeg")).toBe(false);
-    expect(encodings.at(-1)).toEqual({ mime: "image/png", width: 48 });
-  });
-
-  it("uses JPEG for opaque images when WebP encoding is unavailable", async () => {
-    stubCanvas({ opaque: true, pngCharsPerEdgePixel: 1_000 });
-
-    const result = await fileToAvatarDataUrl(pngFile());
-
-    expect(result.ok && result.dataUrl).toMatch(/^data:image\/jpeg;base64,/u);
-  });
-
-  it("reports images that stay too large at every fallback size as too detailed", async () => {
-    stubCanvas({ opaque: false, pngCharsPerEdgePixel: 1_000 });
-
-    await expect(fileToAvatarDataUrl(pngFile())).resolves.toEqual({
-      ok: false,
-      reason: "too-detailed",
-    });
-  });
+  it.each([
+    ["WebP", false, 1_000, true, "webp"],
+    ["opaque JPEG fallback", true, 1_000, false, "jpeg"],
+    ["transparent PNG downscaling", false, 300, false, "png"],
+    ["oversized PNG fallback", false, 1_000, false, null],
+  ] as const)(
+    "bounds %s without flattening transparency",
+    async (_, opaque, density, webp, mime) => {
+      const encodings = stubCanvas({ opaque, pngCharsPerEdgePixel: density, webp });
+      const result = await fileToAvatarDataUrl(pngFile());
+      if (mime === null) {
+        expect(result).toEqual({ ok: false, reason: "too-detailed" });
+      } else {
+        expect(result.ok && result.dataUrl).toMatch(new RegExp(`^data:image/${mime};base64,`, "u"));
+      }
+      if (mime === "png") {
+        // 96px and 64px exceed the identity budget; 48px fits without losing alpha.
+        expect(encodings.some((encoding) => encoding.mime === "image/jpeg")).toBe(false);
+        expect(encodings.at(-1)).toEqual({ mime: "image/png", width: 48 });
+      }
+    },
+  );
 });

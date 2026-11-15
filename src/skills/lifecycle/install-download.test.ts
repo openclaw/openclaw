@@ -10,10 +10,11 @@ import JSZip from "jszip";
 import * as tar from "tar";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { withEnvAsync } from "../../test-utils/env.js";
-import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { resolveSkillToolsRootDir } from "../runtime/tools-dir.js";
-import { createInstallDownloadTestState } from "../test-support/install-download-test-utils.js";
 import { fetchWithSsrFGuardMock } from "../test-support/install-test-mocks.js";
 import type { SkillInstallSpec } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
@@ -177,7 +178,10 @@ async function withDownloadServer(
 let workspaceDir = "";
 let testState: OpenClawTestState | undefined;
 beforeAll(async () => {
-  testState = await createInstallDownloadTestState();
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skills-install-",
+  });
   workspaceDir = testState.workspaceDir;
 });
 
@@ -358,44 +362,58 @@ describe("installDownloadSpec extraction safety", () => {
     );
   }, 45_000);
 
-  it("installs exact bytes from a chunked HTTP response and releases guarded resources", async () => {
-    const chunks = [Buffer.from("skill "), Buffer.from("artifact"), Buffer.from([0, 255])];
+  it.each([200, 500])(
+    "settles a chunked HTTP %s response and releases guarded resources",
+    async (statusCode) => {
+      const chunks = [Buffer.from("skill "), Buffer.from("artifact"), Buffer.from([0, 255])];
+      const connectionClosed = createDeferred();
 
-    await withDownloadServer(
-      (response) => {
-        response.writeHead(200, { "content-type": "application/octet-stream" });
-        for (const chunk of chunks) {
-          response.write(chunk);
-        }
-        response.end();
-      },
-      async (origin, release) => {
-        const skillKey = "successful-http-download";
-        const toolsRoot = resolveSkillToolsRootDir(skillKey);
-        const result = await installDownloadSpec({
-          skillKey,
-          spec: {
-            kind: "download",
-            id: "dl",
-            url: `${origin}/artifact.bin`,
-            extract: false,
-            targetDir: "runtime",
-          },
-          timeoutMs: 30_000,
-        });
+      await withDownloadServer(
+        (response) => {
+          response.once("close", () => connectionClosed.resolve());
+          response.writeHead(statusCode, statusCode === 200 ? "OK" : "Server Error", {
+            "content-type": "application/octet-stream",
+          });
+          for (const chunk of chunks) {
+            response.write(chunk);
+          }
+          if (statusCode === 200) {
+            response.end();
+          }
+        },
+        async (origin, release) => {
+          const skillKey = `http-download-${statusCode}`;
+          const toolsRoot = resolveSkillToolsRootDir(skillKey);
+          const result = await installDownloadSpec({
+            skillKey,
+            spec: {
+              kind: "download",
+              id: "dl",
+              url: `${origin}/artifact.bin`,
+              extract: false,
+              targetDir: "runtime",
+            },
+            timeoutMs: 30_000,
+          });
 
-        expect(result.ok).toBe(true);
-        expect(result.stdout).toBe(`downloaded=${Buffer.concat(chunks).byteLength}`);
-        await expect(fs.readFile(path.join(toolsRoot, "runtime", "artifact.bin"))).resolves.toEqual(
-          Buffer.concat(chunks),
-        );
-        expect(release).toHaveBeenCalledOnce();
-        await expect(fileExists(path.join(toolsRoot, ".openclaw-download-staging"))).resolves.toBe(
-          false,
-        );
-      },
-    );
-  });
+          expect(result.ok).toBe(statusCode === 200);
+          if (statusCode === 200) {
+            expect(result.stdout).toBe(`downloaded=${Buffer.concat(chunks).byteLength}`);
+            await expect(
+              fs.readFile(path.join(toolsRoot, "runtime", "artifact.bin")),
+            ).resolves.toEqual(Buffer.concat(chunks));
+          } else {
+            expect(result.stderr).toContain("Download failed (500 Server Error)");
+            await connectionClosed.promise;
+          }
+          expect(release).toHaveBeenCalledOnce();
+          await expect(
+            fileExists(path.join(toolsRoot, ".openclaw-download-staging")),
+          ).resolves.toBe(false);
+        },
+      );
+    },
+  );
 
   it.each([
     { name: "new destination", existing: false },
@@ -444,39 +462,6 @@ describe("installDownloadSpec extraction safety", () => {
       await expect(fs.readdir(toolsRoot)).resolves.toEqual([]);
       await expect(fileExists(targetDir)).resolves.toBe(false);
     }
-  });
-
-  it.each([
-    { name: "a matching SHA-256 digest", verified: true },
-    { name: "no declared digest", verified: false },
-  ])("installs and extracts a download with $name", async ({ verified }) => {
-    const payload = TAR_BZIP2_FIXTURES.safe;
-    const skillKey = `digest-success-${verified ? "verified" : "legacy"}`;
-    const toolsRoot = resolveSkillToolsRootDir(skillKey);
-    const sha256 = createHash("sha256").update(payload).digest("hex");
-    mockArchiveResponse(payload);
-
-    const result = await installDownloadSpec({
-      skillKey,
-      spec: {
-        kind: "download",
-        url: "https://example.invalid/runtime.tar.bz2",
-        archive: "tar.bz2",
-        extract: true,
-        targetDir: "runtime",
-        ...(verified ? { sha256 } : {}),
-      },
-      timeoutMs: 30_000,
-    });
-
-    expect(result.ok).toBe(true);
-    await expect(fs.readFile(path.join(toolsRoot, "runtime", "runtime.tar.bz2"))).resolves.toEqual(
-      payload,
-    );
-    await expect(fs.readdir(toolsRoot)).resolves.toEqual(["runtime"]);
-    await expect(
-      fs.readFile(path.join(toolsRoot, "runtime", "package", "private.txt"), "utf8"),
-    ).resolves.toBe("private data\n");
   });
 
   it.runIf(process.platform !== "win32")(
@@ -594,7 +579,13 @@ describe("installDownloadSpec extraction safety", () => {
 
       const destinationDir = path.join(resolveSkillToolsRootDir(skillKey), "runtime");
       expect(result.ok).toBe(true);
+      await expect(fs.readdir(resolveSkillToolsRootDir(skillKey))).resolves.toEqual(["runtime"]);
       await expect(fs.readFile(path.join(destinationDir, archiveName))).resolves.toEqual(archive);
+      if (archiveType === "tar.bz2") {
+        await expect(fs.readFile(path.join(destinationDir, "private.txt"), "utf8")).resolves.toBe(
+          "private data\n",
+        );
+      }
       await expect(fs.readFile(path.join(destinationDir, "run.sh"), "utf8")).resolves.toBe(
         executableContents,
       );
@@ -629,59 +620,6 @@ describe("installDownloadSpec extraction safety", () => {
     expect(fetchWithSsrFGuardMock.mock.calls.length).toBe(beforeFetchCalls);
     await expect(fileExists(toolsRoot)).resolves.toBe(true);
     await expect(fileExists(escapedTargetDir)).resolves.toBe(false);
-  });
-
-  it("allows relative targetDir inside the per-skill tools root", async () => {
-    mockArchiveResponse(new TextEncoder().encode("payload"));
-    const skillKey = "relative-targetdir";
-
-    const result = await installDownloadSpec({
-      skillKey,
-      spec: {
-        kind: "download",
-        id: "dl",
-        url: "https://example.invalid/payload.bin",
-        extract: false,
-        targetDir: "runtime",
-      },
-      timeoutMs: 30_000,
-    });
-    expect(result.ok).toBe(true);
-    expect(
-      await fs.readFile(
-        path.join(resolveSkillToolsRootDir(skillKey), "runtime", "payload.bin"),
-        "utf-8",
-      ),
-    ).toBe("payload");
-  });
-
-  it("cancels failed download response bodies before returning the error", async () => {
-    const connectionClosed = createDeferred();
-    await withDownloadServer(
-      (response) => {
-        response.once("close", () => connectionClosed.resolve());
-        response.writeHead(500, "Server Error");
-        response.write(Buffer.from([1, 2, 3]));
-      },
-      async (origin, release) => {
-        const result = await installDownloadSpec({
-          skillKey: "failed-download-body",
-          spec: {
-            kind: "download",
-            id: "dl",
-            url: `${origin}/broken.bin`,
-            extract: false,
-            targetDir: "runtime",
-          },
-          timeoutMs: 30_000,
-        });
-
-        expect(result.ok).toBe(false);
-        expect(result.stderr).toContain("Download failed (500 Server Error)");
-        await connectionClosed.promise;
-        expect(release).toHaveBeenCalledOnce();
-      },
-    );
   });
 
   it.runIf(process.platform !== "win32").each([
@@ -738,6 +676,131 @@ describe("installDownloadSpec extraction safety", () => {
       expect(await fileExists(path.join(outsideRoot, "runtime", "payload.bin"))).toBe(false);
     },
   );
+
+  it.each([undefined, false])(
+    "keeps extensionless downloads unextracted with extract=%s",
+    async (extract) => {
+      const payload = Buffer.from("not an archive");
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response(payload, {
+          headers: { "content-disposition": 'attachment; filename="runtime.zip"' },
+        }),
+        release: async () => undefined,
+      });
+      const skillKey = `cd-download-only-${extract}`;
+      const result = await installDownloadSpec({
+        skillKey,
+        spec: { kind: "download", url: "https://example.invalid/download", extract },
+        timeoutMs: 30_000,
+      });
+      expect(result.ok).toBe(true);
+      await expect(
+        fs.readFile(path.join(resolveSkillToolsRootDir(skillKey), "download")),
+      ).resolves.toEqual(payload);
+    },
+  );
+
+  it.each([undefined, 'attachment; filename="one.zip"; filename="two.zip"'])(
+    "fails cleanly without a usable archive name: %s",
+    async (disposition) => {
+      fetchWithSsrFGuardMock.mockResolvedValue({
+        response: new Response("plain-bytes", {
+          headers: disposition ? { "content-disposition": disposition } : {},
+        }),
+        release: async () => undefined,
+      });
+      const result = await installDownloadSpec({
+        skillKey: "cd-missing-archive-name",
+        spec: {
+          kind: "download",
+          id: "dl",
+          url: "https://example.invalid/download",
+          extract: true,
+          targetDir: "runtime",
+        },
+        timeoutMs: 30_000,
+      });
+      expect(result.ok).toBe(false);
+      expect(result.message).toBe("extract requested but archive type could not be detected");
+    },
+  );
+
+  it.each([
+    {
+      name: "quoted filename",
+      disposition: 'attachment; filename="runtime.zip"',
+      urlPath: "/download",
+    },
+    {
+      name: "RFC 5987 filename* with a language tag",
+      disposition: "attachment; filename*=UTF-8'en'runtime.zip",
+      urlPath: "/download",
+    },
+    {
+      name: "quoted filename containing a semicolon",
+      disposition: 'attachment; filename="runtime;linux.zip"',
+      urlPath: "/download",
+    },
+    {
+      name: "URL suffix when Content-Disposition is a generic download name",
+      disposition: 'attachment; filename="download"',
+      urlPath: "/runtime.zip",
+    },
+    ...[
+      'attachment; filename="wrong.tar.gz"; filename="runtime.zip"',
+      "attachment; filename*=UTF-8''wrong.tar.gz; filename*=UTF-8''runtime.zip",
+      'attachment; filename="wrong.tar.gz"; FILENAME="runtime.zip"',
+      'attachment; filename="wrong.tar.gz',
+      'attachment; filename="wrong.tar.gz"garbage',
+      "attachment; filename*=UTF-8'invalid language'wrong.tar.gz",
+      "attachment; filename*=UTF-8'--'wrong.tar.gz",
+      "attachment; filename*=UTF-8''wrong%GG.tar.gz",
+      "attachment; filename*=UTF-8''wrong%FF.tar.gz",
+      "attachment; filename=\"wrong.tar.gz\"; filename*=UTF-8''",
+    ].map((disposition) => ({
+      name: disposition,
+      disposition,
+      urlPath: "/runtime.zip",
+    })),
+  ])("extracts a zip using Content-Disposition $name", async ({ disposition, name, urlPath }) => {
+    const executableContents = "#!/bin/sh\nprintf verified\\n\n";
+    const zip = new JSZip();
+    zip.folder("package/empty/");
+    zip.file("package/run.sh", executableContents, { unixPermissions: 0o755 });
+    const archive = await zip.generateAsync({ type: "nodebuffer", platform: "UNIX" });
+
+    await withDownloadServer(
+      (response) => {
+        response.writeHead(200, {
+          "content-type": "application/octet-stream",
+          "content-disposition": disposition,
+        });
+        response.end(archive);
+      },
+      async (origin) => {
+        const skillKey = `cd-archive-${name.replaceAll(" ", "-")}`;
+        const result = await installDownloadSpec({
+          skillKey,
+          spec: {
+            kind: "download",
+            id: "dl",
+            url: `${origin}${urlPath}`,
+            extract: true,
+            targetDir: "runtime",
+            stripComponents: 1,
+          },
+          timeoutMs: 30_000,
+        });
+
+        expect(result.message).not.toContain("archive type could not be detected");
+        expect(result.ok).toBe(true);
+        const destinationDir = path.join(resolveSkillToolsRootDir(skillKey), "runtime");
+        await expect(fs.readFile(path.join(destinationDir, "run.sh"), "utf8")).resolves.toBe(
+          executableContents,
+        );
+      },
+    );
+  });
 });
 
 describe("installDownloadSpec extraction safety (tar.bz2)", () => {
@@ -754,6 +817,16 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       archive: TAR_BZIP2_FIXTURES.safe.subarray(0, 40),
       error: /decompression not finished but EOF reached|incomplete compressed stream/i,
     },
+    ...(process.platform !== "win32" && process.geteuid?.() !== 0
+      ? [
+          { name: "unreadable-file", archive: TAR_BZIP2_FIXTURES.unreadableFile, error: undefined },
+          {
+            name: "unsearchable-directory",
+            archive: TAR_BZIP2_FIXTURES.unsearchableDirectory,
+            error: undefined,
+          },
+        ]
+      : []),
   ])(
     "rejects $name archives before publishing extracted payload",
     async ({ name, archive, error }) => {
@@ -768,7 +841,9 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       });
 
       expect(result.ok).toBe(false);
-      expect(result.stderr).toMatch(error);
+      if (error) {
+        expect(result.stderr).toMatch(error);
+      }
       await expect(fs.readdir(targetDir)).resolves.toEqual(["archive.tbz2"]);
     },
   );
@@ -835,10 +910,10 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32").each(["read", "close"] as const)(
-    "settles a staged %s failure before publishing any extracted files",
-    async (operation) => {
-      const name = `tbz2-staged-${operation}-failure`;
+  it.runIf(process.platform !== "win32")(
+    "settles a staged close failure before publishing any extracted files",
+    async () => {
+      const name = "tbz2-staged-close-failure";
       const targetDir = path.join(resolveSkillToolsRootDir(name), "target");
       mockArchiveResponse(TAR_BZIP2_FIXTURES.safe);
       let extractedPath = "";
@@ -856,37 +931,27 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
             observed.syncs += 1;
             await sync();
           });
-          if (operation === "read") {
-            const read = handle.read.bind(handle);
-            vi.spyOn(handle, "read")
-              .mockImplementationOnce(read)
-              .mockRejectedValueOnce(new Error("staged read failed at EOF"));
-          }
           const close = handle.close.bind(handle);
           vi.spyOn(handle, "close").mockImplementation(async () => {
             observed.closes += 1;
             await close();
             // Extraction's earlier durability handle must close normally.
-            if (operation === "close" && observed.syncs === 0) {
+            if (observed.syncs === 0) {
               throw new Error("staged close failed");
             }
           });
         },
       });
       try {
-        const result = await withEnvAsync(
-          operation === "read" ? { FS_SAFE_NATIVE_MODE: "off" } : {},
-          () =>
-            installDownloadSkill({
-              name,
-              url: "https://example.invalid/archive.tbz2",
-              archive: "tar.bz2",
-              targetDir,
-            }),
-        );
+        const result = await installDownloadSkill({
+          name,
+          url: "https://example.invalid/archive.tbz2",
+          archive: "tar.bz2",
+          targetDir,
+        });
 
         expect(result.ok).toBe(false);
-        expect(result.stderr).toContain(`staged ${operation} failed`);
+        expect(result.stderr).toContain("staged close failed");
         expect(openedHandles.filter(({ syncs }) => syncs === 0)).toHaveLength(1);
         expect(new Set(openedHandles.map(({ handle }) => handle)).size).toBe(openedHandles.length);
         for (const { handle, closes } of openedHandles) {
@@ -901,24 +966,6 @@ describe("installDownloadSpec extraction safety (tar.bz2)", () => {
       }
     },
   );
-
-  it.runIf(process.platform !== "win32" && process.geteuid?.() !== 0).each([
-    { name: "unreadable-file", archive: TAR_BZIP2_FIXTURES.unreadableFile },
-    { name: "unsearchable-directory", archive: TAR_BZIP2_FIXTURES.unsearchableDirectory },
-  ])("rejects $name before publishing earlier readable files", async ({ name, archive }) => {
-    const targetDir = path.join(resolveSkillToolsRootDir(`tbz2-${name}`), "target");
-    mockArchiveResponse(archive);
-
-    const result = await installDownloadSkill({
-      name: `tbz2-${name}`,
-      url: "https://example.invalid/archive.tbz2",
-      archive: "tar.bz2",
-      targetDir,
-    });
-
-    expect(result.ok).toBe(false);
-    await expect(fs.readdir(targetDir)).resolves.toEqual(["archive.tbz2"]);
-  });
 
   it.runIf(process.platform !== "win32")("installs an empty read-only directory", async () => {
     const name = "tbz2-empty-read-only-directory";

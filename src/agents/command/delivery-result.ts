@@ -60,9 +60,7 @@ export function buildDeliveryResult(params: {
 }): AgentCommandDeliveryResult {
   const successfulCronAdds = params.result.successfulCronAdds;
   const hasSuccessfulCronAdds =
-    typeof successfulCronAdds === "number" &&
-    Number.isFinite(successfulCronAdds) &&
-    successfulCronAdds > 0;
+    Number.isFinite(successfulCronAdds) && (successfulCronAdds ?? 0) > 0;
   return {
     payloads: params.payloads,
     meta: params.meta,
@@ -116,37 +114,26 @@ export function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCom
   } as const;
   switch (send.status) {
     case "sent":
-      return {
-        ...status,
-        succeeded: true,
-        resultCount: send.results.length,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
     case "suppressed":
       return {
         ...status,
         succeeded: true,
-        reason: send.reason,
-        resultCount: 0,
+        ...(send.status === "suppressed" ? { reason: send.reason } : {}),
+        resultCount: send.status === "sent" ? send.results.length : 0,
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
     case "partial_failed":
-      return {
-        ...status,
-        succeeded: "partial",
-        error: true,
-        errorMessage: formatErrorMessage(send.error),
-        resultCount: send.results.length,
-        sentBeforeError: true,
-        ...(payloadOutcomes ? { payloadOutcomes } : {}),
-      };
     case "failed":
       return {
         ...status,
-        succeeded: false,
+        succeeded: send.status === "partial_failed" ? "partial" : false,
         error: true,
         errorMessage: formatErrorMessage(send.error),
-        ...(send.stage ? { reason: send.stage } : {}),
+        ...(send.status === "partial_failed"
+          ? { resultCount: send.results.length, sentBeforeError: true as const }
+          : send.stage
+            ? { reason: send.stage }
+            : {}),
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
   }

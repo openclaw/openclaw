@@ -20,25 +20,24 @@ it.each([
       "checks-node-compat",
       "checks-fast-core",
     ],
+    "true",
   ],
-  ["vitest-cache-warm.yml", ["warm"]],
-  ["ci-check-testbox.yml", ["check"]],
-] as const)("opts semantic CI jobs into kernel containment in %s", (file, jobs) => {
-  const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8")) as Workflow;
-  for (const job of jobs) {
-    const setup = workflow.jobs[job]!.steps.find((step) => step.uses?.endsWith("/setup-node-env"));
-    expect(setup?.with?.["semantic-checks"], job).toBe("true");
-  }
-});
-
-it("leaves ordinary Linux setup outside privileged semantic provisioning", () => {
-  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as Workflow;
-  for (const job of ["control-ui-performance", "check-docs"]) {
-    const setup = workflow.jobs[job]!.steps.find((step) => step.uses?.endsWith("/setup-node-env"));
-    expect(setup, job).toBeDefined();
-    expect(setup?.with?.["semantic-checks"], job).toBeUndefined();
-  }
-});
+  ["vitest-cache-warm.yml", ["warm"], "true"],
+  ["ci-check-testbox.yml", ["check"], "true"],
+  ["ci.yml", ["control-ui-performance", "check-docs"], undefined],
+] as const)(
+  "limits kernel containment to semantic CI jobs in %s: %j",
+  (file, jobs, semanticChecks) => {
+    const workflow = parse(readFileSync(`.github/workflows/${file}`, "utf8")) as Workflow;
+    for (const job of jobs) {
+      const setup = workflow.jobs[job]!.steps.find((step) =>
+        step.uses?.endsWith("/setup-node-env"),
+      );
+      expect(setup, job).toBeDefined();
+      expect(setup?.with?.["semantic-checks"], job).toBe(semanticChecks);
+    }
+  },
+);
 
 it("keeps privileged provisioning in opted-in Linux CI setup", () => {
   const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));

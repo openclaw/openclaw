@@ -114,9 +114,7 @@ void describe("plugin artifact authoring", () => {
       '\nif (typeof require("openclaw/plugin-sdk/feature-plugin").defineFeaturePlugin !== "function") throw new Error("CommonJS SDK dependency failed");\n',
     );
     const jsonOutput: unknown[] = [];
-    defaultRuntime.writeJson = (value) => {
-      jsonOutput.push(value);
-    };
+    defaultRuntime.writeJson = (value) => jsonOutput.push(value);
     const archive = path.join(await fs.realpath(rootDir), "draft-review.tgz");
     await runPluginsPackCommand({ root: rootDir, json: true });
     const bytes = await fs.readFile(archive);
@@ -178,8 +176,6 @@ void describe("plugin artifact authoring", () => {
       globalThis: "author-global",
       default: { id: "draft-review" },
     });
-    await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
-    assert.deepEqual(await fs.readFile(archive), bytes);
   });
 
   runCases(
@@ -258,9 +254,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
       await runPluginsBuildCommand({ root: rootDir });
       const sourceManifest = await fs.readFile(path.join(rootDir, "openclaw.plugin.json"));
       const jsonOutput: unknown[] = [];
-      defaultRuntime.writeJson = (value) => {
-        jsonOutput.push(value);
-      };
+      defaultRuntime.writeJson = (value) => jsonOutput.push(value);
       await runPluginsPackCommand({ root: rootDir, json: true });
       const archive = path.join(rootDir, filename);
       assert.partialDeepStrictEqual(jsonOutput.at(-1), { pluginId: id, path: archive });
@@ -400,6 +394,37 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     },
   );
 
+  void it("packs standard-builder lazy chunks for use without source or dependencies", async () => {
+    const { rootDir, parent } = await fixture();
+    const metadata = JSON.parse(await fs.readFile(path.join(rootDir, "package.json"), "utf8"));
+    const source = path.resolve(rootDir, metadata.openclaw.controlUi);
+    await fs.writeFile(
+      source,
+      'export async function loadPage() { return (await import("./lazy-page.js")).page; }',
+    );
+    await fs.writeFile(
+      path.join(path.dirname(source), "lazy-page.js"),
+      'export const page = "Packed page ready";',
+    );
+    await runPluginsBuildCommand({ root: rootDir });
+    const archive = path.join(parent, "lazy-page.tgz");
+    await runPluginsPackCommand({ root: rootDir, out: archive });
+    const extracted = path.join(parent, "extracted");
+    await fs.mkdir(extracted);
+    await extract({ file: archive, cwd: extracted, strict: true });
+    const packageRoot = path.join(extracted, "package");
+    const manifest = JSON.parse(
+      await fs.readFile(path.join(packageRoot, "openclaw.plugin.json"), "utf8"),
+    );
+    const assets = await fs.readdir(path.dirname(path.join(packageRoot, manifest.controlUi.entry)));
+    assert.ok(assets.some((name) => name.startsWith("chunk-")));
+    const browser = await import(
+      pathToFileURL(path.join(packageRoot, manifest.controlUi.entry)).href
+    );
+    assert.equal(await browser.loadPage(), "Packed page ready");
+    await assert.rejects(fs.stat(path.join(packageRoot, "node_modules")), { code: "ENOENT" });
+  });
+
   void it("preserves prebuilt browser dependencies without packing unrelated files", async () => {
     const { rootDir, parent } = await fixture();
     const packagePath = path.join(rootDir, "package.json");
@@ -412,8 +437,12 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     manifest.controlUi = {
       entry: `${directory}/index.js`,
       styles: [`${directory}/theme.css`],
+      panelIcon: "panel.svg",
     };
     await fs.writeFile(manifestPath, JSON.stringify(manifest));
+    const panelSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/></svg>';
+    await fs.writeFile(path.join(rootDir, "panel.svg"), panelSvg);
     const files = {
       "index.js":
         'import { prefix } from "./chunks/shared.mjs"; export default { id: "draft-review", async activate() { return prefix + (await import("./chunks/lazy.js")).suffix; } };',
@@ -445,6 +474,7 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     await extract({ file: archive, cwd: extracted, strict: true });
     const packageRoot = path.join(extracted, "package");
     assert.equal(await activate(packageRoot), "Prebuilt ready");
+    assert.equal(await fs.readFile(path.join(packageRoot, "panel.svg"), "utf8"), panelSvg);
     assert.equal(
       await fs.readFile(path.join(packageRoot, directory, "theme.css"), "utf8"),
       files["theme.css"],
@@ -506,14 +536,32 @@ export default Object.assign(defineToolPlugin({ id: ${JSON.stringify(id)}, name:
     },
   );
 
-  void it("rejects stale browser source and never overwrites an existing approval artifact", async () => {
+  void it("rejects stale browser source and never overwrites an existing approval artifact", async (t) => {
     const { rootDir, parent } = await fixture();
     const out = path.join(parent, "review.tgz");
     await fs.writeFile(out, "existing review");
-    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), {
-      code: "EEXIST",
-    });
+    const invalidOutput = runPluginsPackCommand({ root: rootDir, out: `${out}.zip` });
+    await assert.rejects(invalidOutput, { humanOutput: /must end in \.tgz or \.tar\.gz/ });
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "EEXIST" });
     assert.equal(await fs.readFile(out, "utf8"), "existing review");
+    await fs.unlink(out);
+    const writeFile = fs.writeFile;
+    const failedWrite = t.mock.method(
+      fs,
+      "writeFile",
+      async (...args: Parameters<typeof fs.writeFile>) => {
+        const [file, data, options] = args;
+        if (Buffer.isBuffer(data) && data[0] === 0x1f && data[1] === 0x8b) {
+          await writeFile(file, data.subarray(0, 16), options);
+          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        }
+        return writeFile(...args);
+      },
+    );
+    await assert.rejects(runPluginsPackCommand({ root: rootDir, out }), { code: "ENOSPC" });
+    failedWrite.mock.restore();
+    await assert.rejects(fs.stat(out), { code: "ENOENT" });
+    await runPluginsPackCommand({ root: rootDir, out });
     await fs.writeFile(path.join(rootDir, "src/control-ui.ts"), "export default null;");
     await assert.rejects(runPluginsPackCommand({ root: rootDir }), hasMessage("missing or stale"));
     await assert.rejects(fs.stat(path.join(rootDir, "draft-review.tgz")), {

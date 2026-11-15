@@ -5,7 +5,7 @@
   "description": "OpenClaw Telegram channel plugin.",
   "doctorContract": {
     "configRepair": true,
-    "stateMigrations": [{ "id": "telegram-legacy-state" }, { "id": "telegram-json-ingress-spool" }]
+    "stateMigrations": [{ "id": "telegram-update-offsets", "phase": "after-session-repair" }, { "id": "telegram-json-ingress-spool" }]
   },
   "activation": {
     "onStartup": false
@@ -15,5 +15,9 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
-  }
+  },
+  "recommendedPrompts": [
+    "Help me plan a Telegram bot connection and choose who can access it.",
+    "Draft a Telegram poll for my chosen chat or topic without sending it."
+  ]
 }

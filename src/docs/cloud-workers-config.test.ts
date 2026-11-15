@@ -4,11 +4,6 @@ import JSON5 from "json5";
 import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "../config/zod-schema.js";
 
-const CLOUD_WORKER_DOCS = [
-  "docs/gateway/cloud-workers.md",
-  "docs/gateway/config-cloud-workers.md",
-] as const;
-
 function cloudWorkerConfigExamples(filePath: string): unknown[] {
   const markdown = fs.readFileSync(path.join(process.cwd(), filePath), "utf8");
   return Array.from(markdown.matchAll(/```(?:json5|json)\n([\s\S]*?)```/gu))
@@ -18,8 +13,16 @@ function cloudWorkerConfigExamples(filePath: string): unknown[] {
 }
 
 describe("Cloud Workers documentation contract", () => {
-  it.each(CLOUD_WORKER_DOCS)("keeps %s config examples schema-valid", (filePath) => {
-    const examples = cloudWorkerConfigExamples(filePath);
+  it("links the overview to the canonical config examples", () => {
+    const overview = fs.readFileSync(
+      path.join(process.cwd(), "docs/gateway/cloud-workers.md"),
+      "utf8",
+    );
+    expect(overview).toMatch(/\]\(\/gateway\/config-cloud-workers(?:#[^)]*)?\)/u);
+  });
+
+  it("keeps docs/gateway/config-cloud-workers.md config examples schema-valid", () => {
+    const examples = cloudWorkerConfigExamples("docs/gateway/config-cloud-workers.md");
     expect(examples.length).toBeGreaterThan(0);
     for (const example of examples) {
       expect(OpenClawSchema.safeParse(example).success).toBe(true);

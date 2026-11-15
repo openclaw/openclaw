@@ -187,141 +187,6 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   return `${candidate.slice(0, MAX_LEN - ts.length)}${ts}`;
 }
 
-function createOccurrenceAwareResolver(
-  mode: ToolCallIdMode,
-  options?: {
-    preserveNativeAnthropicToolUseIds?: boolean;
-    duplicateToolCallIdStyle?: "openai";
-    reservedIds?: Iterable<string>;
-  },
-): {
-  resolveAssistantId: (id: string) => string;
-  resolveToolResultId: (id: string) => string;
-  preserveAssistantId: (id: string) => string;
-} {
-  const used = new Set<string>(options?.reservedIds ?? []);
-  const assistantOccurrences = new Map<string, number>();
-  const orphanToolResultOccurrences = new Map<string, number>();
-  const pendingByRawId = createToolCallOccurrenceQueue<string>();
-  const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
-  const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
-
-  const allocate = (seed: string): string => {
-    const next = makeUniqueToolId({ id: seed, used, mode });
-    used.add(next);
-    return next;
-  };
-
-  const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
-    for (let attempt = 0; ; attempt += 1) {
-      const candidate = `call_${sha256HexPrefixCore(`${id}:${occurrence}:${attempt}`, 24)}`;
-      if (!used.has(candidate)) {
-        used.add(candidate);
-        return candidate;
-      }
-    }
-  };
-
-  const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
-    if (
-      duplicateToolCallIdStyle === "openai" &&
-      occurrence === 1 &&
-      OPENAI_TOOL_CALL_ID_RE.test(id) &&
-      !used.has(id)
-    ) {
-      used.add(id);
-      return id;
-    }
-    if (
-      preserveNativeAnthropicToolUseIds &&
-      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
-      occurrence === 1 &&
-      !used.has(id)
-    ) {
-      used.add(id);
-      return id;
-    }
-    return allocate(occurrence === 1 ? id : `${id}:${occurrence}`);
-  };
-
-  const resolveAssistantId = (id: string): string => {
-    const occurrence = (assistantOccurrences.get(id) ?? 0) + 1;
-    assistantOccurrences.set(id, occurrence);
-    const next =
-      duplicateToolCallIdStyle === "openai" && occurrence > 1
-        ? allocateOpenAIStyleId(id, occurrence)
-        : allocatePreservingNativeAnthropicId(id, occurrence);
-    pendingByRawId.add(id, next);
-    return next;
-  };
-
-  const resolveToolResultId = (id: string): string => {
-    const next = pendingByRawId.claim(id);
-    if (next !== undefined) {
-      return next;
-    }
-
-    const occurrence = (orphanToolResultOccurrences.get(id) ?? 0) + 1;
-    orphanToolResultOccurrences.set(id, occurrence);
-    if (
-      preserveNativeAnthropicToolUseIds &&
-      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
-      occurrence === 1 &&
-      !used.has(id)
-    ) {
-      used.add(id);
-      return id;
-    }
-    return allocate(`${id}:tool_result:${occurrence}`);
-  };
-
-  const preserveAssistantId = (id: string): string => {
-    used.add(id);
-    pendingByRawId.add(id, id);
-    return id;
-  };
-
-  return { resolveAssistantId, resolveToolResultId, preserveAssistantId };
-}
-
-function rewriteAssistantToolCallIds(params: {
-  message: Extract<AgentMessage, { role: "assistant" }>;
-  resolveId: (id: string) => string;
-}): Extract<AgentMessage, { role: "assistant" }> {
-  const content = params.message.content;
-  if (!Array.isArray(content)) {
-    return params.message;
-  }
-
-  let changed = false;
-  const next = content.map((block) => {
-    if (!block || typeof block !== "object") {
-      return block;
-    }
-    const rec = block as { type?: unknown; id?: unknown };
-    const type = rec.type;
-    const id = rec.id;
-    if (
-      (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
-      typeof id !== "string" ||
-      !id
-    ) {
-      return block;
-    }
-    const nextId = params.resolveId(id);
-    if (nextId === id) {
-      return block;
-    }
-    changed = true;
-    return Object.assign({}, block, { id: nextId });
-  });
-
-  if (!changed) {
-    return params.message;
-  }
-  return { ...params.message, content: next as typeof params.message.content };
-}
-
 /** Keeps every persisted tool-result ID alias aligned with its canonical call. */
 export function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
@@ -397,8 +262,6 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
     allowedToolNames?: Iterable<string>;
   },
 ): AgentMessage[] {
-  // Strict mode: only [a-zA-Z0-9]
-  // Strict9 mode: only [a-zA-Z0-9], length 9 (Mistral tool call requirement)
   // Sanitization can introduce collisions, and some providers also reject raw
   // duplicate tool-call IDs. Track assistant occurrences in-order so repeated
   // raw IDs receive distinct rewritten IDs, while matching tool results consume
@@ -409,11 +272,77 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const replaySafeThinking = preserveReplaySafeThinkingToolCallIds
     ? collectReplaySafeThinkingToolIds(messages, allowedToolNames)
     : undefined;
-  const { resolveAssistantId, resolveToolResultId, preserveAssistantId } =
-    createOccurrenceAwareResolver(mode, {
-      ...options,
-      reservedIds: replaySafeThinking?.reservedIds,
-    });
+  const used = new Set<string>(replaySafeThinking?.reservedIds ?? []);
+  const assistantOccurrences = new Map<string, number>();
+  const orphanToolResultOccurrences = new Map<string, number>();
+  const pendingByRawId = createToolCallOccurrenceQueue<string>();
+  const preserveNativeAnthropicToolUseIds = options?.preserveNativeAnthropicToolUseIds === true;
+  const duplicateToolCallIdStyle = options?.duplicateToolCallIdStyle;
+
+  const allocate = (seed: string): string => {
+    const next = makeUniqueToolId({ id: seed, used, mode });
+    used.add(next);
+    return next;
+  };
+
+  const allocateOpenAIStyleId = (id: string, occurrence: number): string => {
+    for (let attempt = 0; ; attempt += 1) {
+      const candidate = `call_${sha256HexPrefixCore(`${id}:${occurrence}:${attempt}`, 24)}`;
+      if (!used.has(candidate)) {
+        used.add(candidate);
+        return candidate;
+      }
+    }
+  };
+
+  const allocatePreservingNativeAnthropicId = (id: string, occurrence: number): string => {
+    if (
+      occurrence === 1 &&
+      !used.has(id) &&
+      ((duplicateToolCallIdStyle === "openai" && OPENAI_TOOL_CALL_ID_RE.test(id)) ||
+        (preserveNativeAnthropicToolUseIds && NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id)))
+    ) {
+      used.add(id);
+      return id;
+    }
+    return allocate(occurrence === 1 ? id : `${id}:${occurrence}`);
+  };
+
+  const resolveAssistantId = (id: string): string => {
+    const occurrence = (assistantOccurrences.get(id) ?? 0) + 1;
+    assistantOccurrences.set(id, occurrence);
+    const next =
+      duplicateToolCallIdStyle === "openai" && occurrence > 1
+        ? allocateOpenAIStyleId(id, occurrence)
+        : allocatePreservingNativeAnthropicId(id, occurrence);
+    pendingByRawId.add(id, next);
+    return next;
+  };
+
+  const resolveToolResultId = (id: string): string => {
+    const next = pendingByRawId.claim(id);
+    if (next !== undefined) {
+      return next;
+    }
+    const occurrence = (orphanToolResultOccurrences.get(id) ?? 0) + 1;
+    orphanToolResultOccurrences.set(id, occurrence);
+    if (
+      preserveNativeAnthropicToolUseIds &&
+      NATIVE_ANTHROPIC_TOOL_USE_ID_RE.test(id) &&
+      occurrence === 1 &&
+      !used.has(id)
+    ) {
+      used.add(id);
+      return id;
+    }
+    return allocate(`${id}:tool_result:${occurrence}`);
+  };
+
+  const preserveAssistantId = (id: string): string => {
+    used.add(id);
+    pendingByRawId.add(id, id);
+    return id;
+  };
 
   let changed = false;
   const out = messages.map((msg, index) => {
@@ -421,6 +350,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
       return msg;
     }
     const role = (msg as { role?: unknown }).role;
+    let next = msg;
     if (role === "assistant") {
       const assistant = msg as Extract<AgentMessage, { role: "assistant" }>;
       if (replaySafeThinking?.preservedIndexes.has(index)) {
@@ -429,26 +359,43 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
         }
         return msg;
       }
-      const next = rewriteAssistantToolCallIds({
-        message: assistant,
-        resolveId: resolveAssistantId,
-      });
-      if (next !== msg) {
-        changed = true;
+      const content = assistant.content;
+      if (!Array.isArray(content)) {
+        return msg;
       }
-      return next;
-    }
-    if (role === "toolResult") {
-      const next = rewriteToolResultIds({
+      let assistantChanged = false;
+      const nextContent = content.map((block) => {
+        if (!block || typeof block !== "object") {
+          return block;
+        }
+        const rec = block as { type?: unknown; id?: unknown };
+        const type = rec.type;
+        const id = rec.id;
+        if (
+          (type !== "functionCall" && type !== "toolUse" && type !== "toolCall") ||
+          typeof id !== "string" ||
+          !id
+        ) {
+          return block;
+        }
+        const nextId = resolveAssistantId(id);
+        if (nextId === id) {
+          return block;
+        }
+        assistantChanged = true;
+        return Object.assign({}, block, { id: nextId });
+      });
+      if (assistantChanged) {
+        next = { ...assistant, content: nextContent };
+      }
+    } else if (role === "toolResult") {
+      next = rewriteToolResultIds({
         message: msg as Extract<AgentMessage, { role: "toolResult" }>,
         resolveId: resolveToolResultId,
       });
-      if (next !== msg) {
-        changed = true;
-      }
-      return next;
     }
-    return msg;
+    changed ||= next !== msg;
+    return next;
   });
 
   return changed ? out : messages;

@@ -1,4 +1,5 @@
 .sidebar-zone-entry {
+  position: relative;
   display: flex;
   align-items: center;
 }
@@ -9,41 +10,9 @@
   min-width: 0;
 }
 
-.sidebar-reorder-menu {
-  flex: 0 0 auto;
-}
-
-.sidebar-reorder-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 3px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--muted);
-}
-
-.sidebar-reorder-trigger:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
-.sidebar-reorder-trigger svg {
-  width: 16px;
-  height: 16px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .sidebar-reorder-trigger {
-    opacity: 0;
-  }
-
-  .sidebar-zone-entry:where(:hover, :focus-within) .sidebar-reorder-trigger,
-  .sidebar-recent-sessions__head:where(:hover, :focus-within) .sidebar-reorder-trigger,
-  .sidebar-reorder-menu[open] .sidebar-reorder-trigger {
-    opacity: 1;
-  }
+/* A nested plugin section stacks its parent link and children inside the flex row. */
+.nav-item-group {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
 }

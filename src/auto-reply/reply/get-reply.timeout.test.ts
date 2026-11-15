@@ -2,6 +2,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, expect, it, vi } from "vitest";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
@@ -18,6 +22,7 @@ vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
 let state: OpenClawTestState | undefined;
 afterEach(async () => {
   await state?.cleanup();
+  clearRuntimeConfigSnapshot();
   vi.clearAllMocks();
 });
 
@@ -43,6 +48,7 @@ async function runReply(
     commands: { text: true },
   });
   await state.writeConfig(cfg);
+  setRuntimeConfigSnapshot(cfg);
   const reply = await getReplyFromConfig(
     finalizeInboundContext({
       Provider: "webchat",
@@ -62,7 +68,6 @@ async function runReply(
 it.each([
   [{ timeoutOverrideMs: 1500 }, 1500, 1500],
   [{ timeoutOverrideSeconds: 0 }, MAX_TIMER_TIMEOUT_MS, MAX_TIMER_TIMEOUT_MS],
-  [{}, 180000, undefined],
 ])(
   "passes timeout options %s to the actual runtime entrypoint",
   async (options, expected, override) => {

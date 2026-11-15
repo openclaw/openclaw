@@ -11,40 +11,39 @@ type TestMessageGroupOverrides = Omit<Partial<MessageGroup>, "messages"> & {
 };
 
 function messageTimestamp(message: unknown): number {
-  return typeof message === "object" &&
-    message !== null &&
-    typeof (message as { timestamp?: unknown }).timestamp === "number"
-    ? (message as { timestamp: number }).timestamp
-    : Date.now();
+  const timestamp =
+    typeof message === "object" && message !== null && "timestamp" in message
+      ? message.timestamp
+      : undefined;
+  return typeof timestamp === "number" ? timestamp : Date.now();
 }
 
-export function createAssistantMessage(content: unknown, overrides: TestMessage = {}): TestMessage {
-  const timestamp = typeof overrides.timestamp === "number" ? overrides.timestamp : Date.now();
-  return { role: "assistant", content, timestamp, ...overrides };
-}
+const createMessage = (role: string, content: unknown, overrides: TestMessage): TestMessage => ({
+  role,
+  content,
+  timestamp: messageTimestamp(overrides),
+  ...overrides,
+});
 
-export function createUserMessage(content: unknown, overrides: TestMessage = {}): TestMessage {
-  const timestamp = typeof overrides.timestamp === "number" ? overrides.timestamp : Date.now();
-  return { role: "user", content, timestamp, ...overrides };
-}
+export const createAssistantMessage = (content: unknown, overrides: TestMessage = {}) =>
+  createMessage("assistant", content, overrides);
 
-export function createToolCall(
+export const createUserMessage = (content: unknown, overrides: TestMessage = {}) =>
+  createMessage("user", content, overrides);
+
+export const createToolCall = (
   id: string,
   name: string,
   args: unknown,
   overrides: TestMessage = {},
-) {
-  return { type: "toolcall", id, name, arguments: args, ...overrides };
-}
+) => ({ type: "toolcall", id, name, arguments: args, ...overrides });
 
-export function createToolResultBlock(
+export const createToolResultBlock = (
   id: string,
   name: string,
   text: string,
   overrides: TestMessage = {},
-) {
-  return { type: "tool_result", id, name, text, ...overrides };
-}
+) => ({ type: "tool_result", id, name, text, ...overrides });
 
 export function createToolResultMessage(
   toolCallId: string,
@@ -52,15 +51,7 @@ export function createToolResultMessage(
   content: unknown,
   overrides: TestMessage = {},
 ): TestMessage {
-  const timestamp = typeof overrides.timestamp === "number" ? overrides.timestamp : Date.now();
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName,
-    content,
-    timestamp,
-    ...overrides,
-  };
+  return createMessage("toolResult", content, { toolCallId, toolName, ...overrides });
 }
 
 export function prepareHistoryGroups(groups: MessageGroup[]): MessageGroup[] {
@@ -79,42 +70,28 @@ export function prepareHistoryGroups(groups: MessageGroup[]): MessageGroup[] {
   }));
 }
 
-export function createMediaBlock(overrides: TestMessage) {
-  return { type: "image", ...overrides };
-}
+export const createMediaBlock = (overrides: TestMessage) => ({ type: "image", ...overrides });
 
-export function createAssistantImageMessage(
+export const createAssistantImageMessage = (
   url: string,
   alt: string,
   imageOverrides: TestMessage = {},
   messageOverrides: TestMessage = {},
-) {
-  return createAssistantMessage(
-    [createMediaBlock({ url, alt, ...imageOverrides })],
-    messageOverrides,
-  );
-}
+) => createAssistantMessage([createMediaBlock({ url, alt, ...imageOverrides })], messageOverrides);
 
-export function createAssistantAudioMessage(
+export const createAssistantAudioMessage = (
   url: string,
   audioOverrides: TestMessage = {},
   messageOverrides: TestMessage = {},
-) {
-  return createAssistantMessage([{ type: "audio", url, ...audioOverrides }], messageOverrides);
-}
+) => createAssistantMessage([{ type: "audio", url, ...audioOverrides }], messageOverrides);
 
-export function createAttachmentBlock(
+export const createAttachmentBlock = (
   url: string,
   kind: "audio" | "video" | "document",
   label: string,
   mimeType: string,
   attachmentOverrides: TestMessage = {},
-) {
-  return {
-    type: "attachment",
-    attachment: { url, kind, label, mimeType, ...attachmentOverrides },
-  };
-}
+) => ({ type: "attachment", attachment: { url, kind, label, mimeType, ...attachmentOverrides } });
 
 export function createMessageGroup(
   message: unknown,
@@ -153,37 +130,32 @@ export function prepareMessageGroup(entry: TestMessageEntry): MessageGroup {
   return group;
 }
 
-export function createMessageEntry(
+export const createMessageEntry = (
   key: string,
   message: unknown,
-): MessageGroup["messages"][number] {
-  return prepareMessageGroup({ key, message }).messages[0]!;
-}
+): MessageGroup["messages"][number] => prepareMessageGroup({ key, message }).messages[0]!;
 
-export function createToolGroup(
+export const createToolGroup = (
   key: string,
   messages: TestMessageEntry[],
   overrides: TestMessageGroupOverrides = {},
-): MessageGroup {
-  return createMessageGroup(messages[0]?.message, "tool", { key, messages, ...overrides });
-}
+): MessageGroup =>
+  createMessageGroup(messages[0]?.message, "tool", { key, messages, ...overrides });
 
-export function createCanvasPreview(params: {
+export const createCanvasPreview = (params: {
   viewId: string;
   title?: string;
   url?: string;
   preferredHeight?: number;
-}) {
-  return {
-    kind: "canvas",
-    surface: "assistant_message",
-    render: "url",
-    viewId: params.viewId,
-    title: params.title ?? "Inline demo",
-    url: params.url ?? `/__openclaw__/canvas/documents/${params.viewId}/index.html`,
-    preferredHeight: params.preferredHeight ?? 360,
-  };
-}
+}) => ({
+  kind: "canvas",
+  surface: "assistant_message",
+  render: "url",
+  viewId: params.viewId,
+  title: params.title ?? "Inline demo",
+  url: params.url ?? `/__openclaw__/canvas/documents/${params.viewId}/index.html`,
+  preferredHeight: params.preferredHeight ?? 360,
+});
 
 export function createAssistantCanvasBlock(params: {
   suffix: string;
@@ -206,9 +178,7 @@ export function createAssistantCanvasBlock(params: {
         title: preview.title,
         preferred_height: preview.preferredHeight,
       },
-      presentation: {
-        target: params.presentationTarget ?? "assistant_message",
-      },
+      presentation: { target: params.presentationTarget ?? "assistant_message" },
     }),
   };
 }

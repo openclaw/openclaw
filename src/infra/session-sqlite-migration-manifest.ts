@@ -6,6 +6,7 @@ import { assertNoSymlinkParentsSync } from "@openclaw/fs-safe/advanced";
 import * as replaceFile from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
+import { classifyDoctorMigrationBackupPath } from "../commands/doctor-migration-backup-names.js";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
 import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
@@ -46,7 +47,13 @@ const MigrationMoveSchema = z
   .object({
     archivePath: AbsolutePathSchema,
     artifact: MigrationArtifactSchema.optional(),
-    kind: z.enum(["legacy-store", "transcript", "trajectory", "unreferenced-jsonl"]),
+    kind: z.enum([
+      "legacy-store",
+      "transcript",
+      "trajectory",
+      "unreferenced-jsonl",
+      "database-backup",
+    ]),
     sessionKey: z.string().optional(),
     sourcePath: AbsolutePathSchema,
   })
@@ -82,6 +89,16 @@ const MigrationGithubIssueSchema = z.object({
 const MigrationTargetSchema = z
   .object({
     agentId: z.string().min(1),
+    databaseIdentity: z
+      .object({
+        dev: z.string(),
+        ino: z.string(),
+        sha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/u)
+          .optional(),
+      })
+      .optional(),
     completedMoves: z.array(MigrationMoveSchema),
     issues: z.array(MigrationIssueSchema),
     plannedMoves: z.array(MigrationMoveSchema),
@@ -90,6 +107,14 @@ const MigrationTargetSchema = z
     validationBeforeArchive: z.enum(["not_run", "passed", "failed"]),
   })
   .superRefine((target, context) => {
+    if (
+      (target.databaseIdentity && target.storePath !== target.sqlitePath) ||
+      [...target.plannedMoves, ...target.completedMoves].some(
+        (move) => (move.kind === "database-backup") !== Boolean(target.databaseIdentity),
+      )
+    ) {
+      context.addIssue({ code: "custom", message: "invalid database backup target" });
+    }
     const plannedMoveKeys = new Set<string>();
     for (const move of target.plannedMoves) {
       if (!isRestoreMoveWithinTarget(move, target)) {
@@ -403,8 +428,9 @@ export function filterRestoreManifestTargets(
   );
   return manifest.targets.filter(
     (target) =>
+      !target.databaseIdentity &&
       trustedSqlitePaths.get(sessionSqliteMigrationTargetKey(target)) ===
-      canonicalMigrationFilePath(target.sqlitePath),
+        canonicalMigrationFilePath(target.sqlitePath),
   );
 }
 
@@ -464,6 +490,12 @@ function isRestoreMoveWithinTarget(
     return false;
   }
   const storePath = path.resolve(target.storePath);
+  if (move.kind === "database-backup") {
+    // Manifests record only SQLite file originals; PostgreSQL directories and
+    // restart-recovery snapshots are never restore moves.
+    const format = classifyDoctorMigrationBackupPath(sourcePath, archivePath);
+    return sourcePath === storePath && (format === "full" || format === "scoped");
+  }
   const sessionsDir = path.dirname(storePath);
   const archiveDir = path.join(path.dirname(sessionsDir), "session-sqlite-import-archive");
   if (path.dirname(archivePath) !== archiveDir) {
@@ -509,11 +541,7 @@ function hasUnsupportedV1DirectorySymlink(manifest: SessionSqliteMigrationManife
   const directoryPaths = manifest.targets.flatMap((target) => [
     path.dirname(target.sqlitePath),
     path.dirname(target.storePath),
-    ...target.plannedMoves.flatMap((move) => [
-      path.dirname(move.archivePath),
-      path.dirname(move.sourcePath),
-    ]),
-    ...target.completedMoves.flatMap((move) => [
+    ...[...target.plannedMoves, ...target.completedMoves].flatMap((move) => [
       path.dirname(move.archivePath),
       path.dirname(move.sourcePath),
     ]),

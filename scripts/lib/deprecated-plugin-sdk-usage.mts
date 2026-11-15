@@ -1,8 +1,6 @@
 // Builds the list of deprecated public plugin SDK specifiers guarded by scripts.
 import deprecatedPublicPluginSdkSubpaths from "./plugin-sdk-deprecated-public-subpaths.json" with { type: "json" };
 
-const DEPRECATED_PLUGIN_SDK_EXTRA_SPECIFIERS: string[] = [];
-
 type BannedInternalPluginSdkFacadeModule = {
   modulePath: string;
   canonical: string;
@@ -13,10 +11,7 @@ type BannedInternalPluginSdkFacadeModule = {
 export function buildDeprecatedPluginSdkModuleSpecifiers(
   deprecatedSubpaths: string[] = deprecatedPublicPluginSdkSubpaths,
 ) {
-  const unscoped = [
-    ...DEPRECATED_PLUGIN_SDK_EXTRA_SPECIFIERS,
-    ...deprecatedSubpaths.map((subpath) => `openclaw/plugin-sdk/${subpath}`),
-  ];
+  const unscoped = deprecatedSubpaths.map((subpath) => `openclaw/plugin-sdk/${subpath}`);
   // tsconfig aliases the scoped @openclaw/plugin-sdk package to the same
   // src/plugin-sdk modules, so ban both spellings of every deprecated specifier.
   return [...new Set(unscoped.flatMap((specifier) => [specifier, `@${specifier}`]))].toSorted(

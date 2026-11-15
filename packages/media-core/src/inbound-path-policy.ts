@@ -42,30 +42,6 @@ function joinAbsolutePathSegments(candidatePath: string, segments: readonly stri
   return segments.length === 1 ? `${joined}/` : joined;
 }
 
-function resolveRootPatternMatch(params: {
-  candidatePath: string;
-  rootPattern: string;
-}): InboundPathRootMatch | undefined {
-  const candidateSegments = splitPathSegments(params.candidatePath);
-  const rootSegments = splitPathSegments(params.rootPattern);
-  if (
-    candidateSegments.length < rootSegments.length ||
-    rootSegments.some(
-      (expected, index) => expected !== WILDCARD_SEGMENT && expected !== candidateSegments[index],
-    )
-  ) {
-    return undefined;
-  }
-  const resolvedSegments = candidateSegments.slice(0, rootSegments.length);
-  const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
-  const anchorSegments =
-    firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
-  return {
-    anchorRoot: joinAbsolutePathSegments(params.candidatePath, anchorSegments),
-    matchedRoot: joinAbsolutePathSegments(params.candidatePath, resolvedSegments),
-  };
-}
-
 function normalizeInboundPathRootPattern(value: string): string | undefined {
   const normalized = normalizePosixAbsolutePath(value);
   if (!normalized) {
@@ -121,11 +97,25 @@ export function resolveInboundPathRoot(params: {
   const roots = normalizeInboundPathRoots(params.roots);
   const effectiveRoots =
     roots.length > 0 ? roots : normalizeInboundPathRoots(params.fallbackRoots ?? undefined);
+  const candidateSegments = splitPathSegments(candidatePath);
   for (const rootPattern of effectiveRoots) {
-    const resolved = resolveRootPatternMatch({ candidatePath, rootPattern });
-    if (resolved) {
-      return resolved;
+    const rootSegments = splitPathSegments(rootPattern);
+    if (
+      candidateSegments.length < rootSegments.length ||
+      rootSegments.some(
+        (expected, index) => expected !== WILDCARD_SEGMENT && expected !== candidateSegments[index],
+      )
+    ) {
+      continue;
     }
+    const resolvedSegments = candidateSegments.slice(0, rootSegments.length);
+    const firstWildcardIndex = rootSegments.indexOf(WILDCARD_SEGMENT);
+    const anchorSegments =
+      firstWildcardIndex === -1 ? resolvedSegments : rootSegments.slice(0, firstWildcardIndex);
+    return {
+      anchorRoot: joinAbsolutePathSegments(candidatePath, anchorSegments),
+      matchedRoot: joinAbsolutePathSegments(candidatePath, resolvedSegments),
+    };
   }
   return undefined;
 }

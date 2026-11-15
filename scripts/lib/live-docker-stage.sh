@@ -3,6 +3,10 @@
 live_docker_stage_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$live_docker_stage_dir/frozen-target-compat.sh"
 unset live_docker_stage_dir
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export COREPACK_HOME="${COREPACK_HOME:-$XDG_CACHE_HOME/node/corepack}"
+export NPM_CONFIG_CACHE="${NPM_CONFIG_CACHE:-$XDG_CACHE_HOME/npm}"
+export npm_config_cache="$NPM_CONFIG_CACHE"
 
 openclaw_live_stage_workspace() {
   local dest_dir="${1:?destination directory required}"
@@ -183,10 +187,6 @@ NODE
   )" || return $?
 
   if [[ "$capability" == "missing-export" ]]; then
-    if [[ "${OPENCLAW_FROZEN_TARGET_LIVE_CLI_BACKEND_PACKAGE_MODE:-current}" == "legacy" ]]; then
-      echo "Staged target does not export resolveCliBackendDockerPackages; preserving historical no-package-setup behavior."
-      return 0
-    fi
     echo "staged target does not export resolveCliBackendDockerPackages" >&2
     return 1
   fi

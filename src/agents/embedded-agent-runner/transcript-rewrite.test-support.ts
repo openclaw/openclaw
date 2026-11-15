@@ -1,9 +1,29 @@
+import path from "node:path";
+import type { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../../config/sessions/session-transcript-reconcile.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 
-export function useTranscriptRewriteTempDirs(
+type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
+
+export function asAppendMessage(message: unknown): AppendMessage {
+  return message as AppendMessage;
+}
+
+export function appendMessages(
+  sessionManager: SessionManager,
+  messages: AppendMessage[],
+): string[] {
+  return messages.map((message) => sessionManager.appendMessage(message));
+}
+
+export function createTextContent(text: string) {
+  return [{ type: "text" as const, text }];
+}
+
+export function useTranscriptRewriteTargets(
   registerCleanup: (cleanup: () => Promise<void>) => unknown,
 ) {
   const lifetime = createFixtureLifetime();
@@ -31,5 +51,15 @@ export function useTranscriptRewriteTempDirs(
       await lifetime.cleanup();
     });
   });
-  return tempDirs;
+  return async (sessionId: string) => {
+    const directory = tempDirs.make(`openclaw-${sessionId}-`);
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath: path.join(directory, "sessions.json"),
+    };
+    await replaceSessionEntry(target, { sessionId, updatedAt: 1 });
+    return { directory, target };
+  };
 }

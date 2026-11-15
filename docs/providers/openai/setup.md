@@ -121,7 +121,8 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
         openclaw models auth login --provider openai --device-code
         ```
       </Step>
-      <Step title="Use the canonical OpenAI model route">
+      <Step title="Use the standard OpenAI model route">
+        <a id="use-the-canonical-openai-model-route" />
         ```bash
         openclaw config set agents.defaults.model.primary openai/gpt-6-astra
         ```
@@ -256,6 +257,35 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     Run `openclaw doctor --fix` to migrate older legacy OpenAI Codex prefix
     profile ids and order entries before relying on profile ordering.
 
+    ### Advanced Account Security recovery
+
+    OpenAI's [Advanced Account Security](https://help.openai.com/en/articles/20001221-advanced-account-security)
+    enrollment signs you out of all devices and shortens active sessions.
+    If OpenClaw's OAuth credential stops working, sign in again with your
+    enrolled passkey or security key for the agent and profile that own the
+    failing route. Stop the Gateway through its service owner before these
+    commands, then restart it afterward:
+
+    ```bash
+    openclaw models auth login --agent <id> --provider openai --method oauth --profile-id <profileId>
+    openclaw models status --agent <id> --probe --probe-provider openai --probe-profile <profileId>
+    ```
+
+    Login's `--profile-id` requires offline login and bypasses importing an
+    existing native credential; the probe's selector is `--probe-profile`.
+    A standalone `codex login`
+    does not itself replace an OpenClaw-managed profile; see the
+    [Codex authentication reference](/plugins/codex-harness-reference/auth#auth-and-environment-isolation)
+    for the separate native user-home mode.
+
+    Verify the intended model with a real request. A model listing or completed
+    browser callback alone does not prove model access. If fresh sign-in still
+    fails, report the sanitized error and failure stage: browser/security key,
+    localhost callback, token exchange, refresh, or model request. Reauthentication
+    does not guarantee model authorization or a fixed token lifetime. Do not
+    disable Advanced Account Security, delete credential stores, share tokens,
+    or switch to API-key billing as a generic recovery step.
+
     ### Status indicator
 
     Chat `/status` shows which model runtime is active for the current
@@ -355,7 +385,7 @@ choose based on model access, hosted plugins, usage tracking, and permissions.
     `openai/gpt-5.6-sol` configuration. Dense turns reached `295098`, `586562`,
     and `863664` prompt tokens. Turn three emitted and persisted a first-class
     server compaction item; the next request replayed that exact opaque item,
-    pruned its prefix, and used `9602` prompt tokens. A deterministic long
+    pruned its prefix, and used `9602` prompt tokens. A long
     response produced `5480` output tokens, durable markers survived compaction
     and Gateway restart, restart latency was `12081` ms, every call reported
     `serviceTier: priority`, and the full suite took `220.03` seconds. These
@@ -456,16 +486,19 @@ Approve token sharing during sign-in to enable model calls. If you grant identit
 permissions only, OpenClaw saves the account but asks you to enable sharing or
 choose another credential before inference.
 
-The browser returns to `http://localhost:8080/auth/callback`. If your browser runs
-on another computer, forward its port 8080 to OpenClaw's IPv4 loopback before
-starting sign-in. For an SSH host, keep this command running on your browser's
-computer:
+The browser returns to `http://localhost:PORT/auth/callback`, where OpenClaw picks
+a free `PORT` for each sign-in, so an app already using a port cannot block it.
+If your browser runs on another computer, OpenClaw shows the port with the sign-in
+link. Forward that port to OpenClaw's IPv4 loopback before opening the link. For an
+SSH host, keep this command running on your browser's computer, with `PORT`
+replaced:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 user@gateway-host
+ssh -N -L PORT:127.0.0.1:PORT user@gateway-host
 ```
 
-Open the sign-in link on that computer.
+Open the sign-in link on that computer. The port changes on every sign-in, so a
+forward from an earlier attempt does not carry over.
 
 To reconnect an existing account, sign in with the same ChatGPT user and
 workspace. To switch either, choose **Connect a different ChatGPT account or

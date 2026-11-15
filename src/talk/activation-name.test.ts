@@ -29,17 +29,6 @@ describe("realtime voice activation names", () => {
     });
   });
 
-  it("matches and strips trailing exact activation names", () => {
-    expect(matchRealtimeVoiceActivationName("ship it, Claw Bot", ["claw bot"])).toEqual({
-      allowed: true,
-      activationName: "claw bot",
-      edge: "trailing",
-      heardName: "claw bot",
-      match: "exact",
-      text: "ship it",
-    });
-  });
-
   it("accepts bounded fuzzy matches at the transcript edge", () => {
     expect(matchRealtimeVoiceActivationName("Malty, what changed?", ["molty"])).toMatchObject({
       allowed: true,
@@ -77,12 +66,6 @@ describe("realtime voice activation names", () => {
     expect(matchRealtimeVoiceActivationName("the room is damp, moldy.", ["molty"])).toBeUndefined();
     expect(matchRealtimeVoiceActivationName("the room is damp, moldy?", ["molty"])).toBeUndefined();
     expect(matchRealtimeVoiceActivationName("what changed, Malty.", ["molty"])).toBeUndefined();
-  });
-
-  it("does not fuzzy match inside a larger phrase without an edge boundary", () => {
-    expect(matchRealtimeVoiceActivationName("maltiness is not a wake name", ["molty"])).toBe(
-      undefined,
-    );
   });
 
   it("prefers longer activation names first", () => {

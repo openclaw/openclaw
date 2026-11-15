@@ -1,4 +1,3 @@
-// Feishu helper module supports doc schema behavior.
 import { Type, type Static } from "typebox";
 
 const tableCreationProperties = {

@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { hasErrnoCode } from "../../infra/errno.js";
+import { findExistingAncestor, root as createWorkspaceRoot } from "../../infra/fs-safe.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { MATERIALIZED_SANDBOX_SKILLS_WORKSPACE_PARTS } from "../../shared/sandbox-workspace-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
@@ -14,6 +17,14 @@ export const SANDBOX_MOUNT_FORMAT_VERSION = 4;
 export type ReadOnlyWorkspaceSkillMount = {
   hostPath: string;
   containerPath: string;
+};
+
+type WorkspaceSkillMountParams = {
+  workspaceDir: string;
+  agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
+  workdir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
 };
 
 function containerJoin(root: string, ...parts: string[]): string {
@@ -53,13 +64,7 @@ function isExistingWorkspaceSkillMountSource(params: {
 }
 
 /** Protects managed skills inside writable shared or private sandbox workspaces. */
-export function resolveReadOnlyWorkspaceSkillMounts(params: {
-  workspaceDir: string;
-  agentWorkspaceDir: string;
-  skillsWorkspaceDir?: string;
-  workdir: string;
-  workspaceAccess: SandboxWorkspaceAccess;
-}): ReadOnlyWorkspaceSkillMount[] {
+function resolveReadOnlyWorkspaceSkillMountCandidates(params: WorkspaceSkillMountParams) {
   if (params.workspaceAccess === "ro") {
     return [];
   }
@@ -94,7 +99,65 @@ export function resolveReadOnlyWorkspaceSkillMounts(params: {
     });
   }
 
-  return mounts
+  return mounts;
+}
+
+/** Materialize protected sources and report whether preparation created a directory. */
+export async function ensureReadOnlyWorkspaceSkillMountSources(
+  params: WorkspaceSkillMountParams,
+  assertCurrent?: () => void,
+): Promise<boolean> {
+  let created = false;
+  for (const mount of resolveReadOnlyWorkspaceSkillMountCandidates(params)) {
+    const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir));
+    const canonicalSource = resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath));
+    if (!isPathInside(canonicalRoot, canonicalSource)) {
+      continue;
+    }
+    try {
+      fs.lstatSync(mount.hostPath);
+      continue;
+    } catch (error) {
+      if (hasErrnoCode(error, "ENOTDIR")) {
+        continue;
+      }
+      if (!isNotFoundPathError(error)) {
+        throw error;
+      }
+    }
+    const ancestor = await findExistingAncestor(canonicalSource);
+    if (!ancestor || !fs.lstatSync(ancestor).isDirectory()) {
+      continue;
+    }
+    // Create through the canonical source, with custody and alias checks at every
+    // mkdir, so a replaced workspace parent cannot redirect host preparation.
+    const directory = await createWorkspaceRoot(ancestor, {
+      mutationSymlinks: "reject",
+      assertBeforeMutation: () => {
+        assertCurrent?.();
+        if (
+          resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.rootDir)) !==
+            canonicalRoot ||
+          resolveSandboxHostPathViaExistingAncestor(path.resolve(mount.hostPath)) !==
+            canonicalSource
+        ) {
+          throw new Error(
+            `Sandbox skill mount source changed during preparation: ${mount.hostPath}`,
+          );
+        }
+      },
+    });
+    await directory.mkdir(path.relative(ancestor, canonicalSource));
+    assertCurrent?.();
+    created = true;
+  }
+  return created;
+}
+
+export function resolveReadOnlyWorkspaceSkillMounts(
+  params: WorkspaceSkillMountParams,
+): ReadOnlyWorkspaceSkillMount[] {
+  return resolveReadOnlyWorkspaceSkillMountCandidates(params)
     .filter(isExistingWorkspaceSkillMountSource)
     .map(({ hostPath, containerPath }) => ({ hostPath, containerPath }));
 }
@@ -218,6 +281,72 @@ export function resolveSandboxMountSelection(
     skippedBinds: (params.binds ?? []).filter((bind) => !allowed.includes(bind)),
     readOnlyWorkspaceSkillMounts,
   };
+}
+
+/** Writable self-bind keeping one directory between a managed root and a protected mount in place. */
+export type ProtectedMountAncestor = SandboxSelectedMount & {
+  /** Local root of the managed mount that owns this directory. */
+  ownerHostPath: string;
+  /** Path of the directory relative to ownerHostPath. */
+  relativePath: string;
+};
+
+/**
+ * Linux refuses to rename a mountpoint but not one of its ancestors. Binding each
+ * writable directory between a managed root and a nested protected mount onto
+ * itself makes those ancestors mountpoints too, so a sandboxed process cannot
+ * move the protected mount aside and recreate its pathname as ordinary files.
+ */
+export function resolveProtectedMountAncestors(
+  mounts: readonly SandboxSelectedMount[],
+): ProtectedMountAncestor[] {
+  const byTarget = new Map(
+    mounts.map((mount) => [normalizeMountContainerPath(mount.containerPath), mount] as const),
+  );
+  const ancestors = new Map<string, ProtectedMountAncestor>();
+  for (const mount of mounts) {
+    if (mount.source !== "protectedSkill") {
+      continue;
+    }
+    const chain: string[] = [];
+    let owner: SandboxSelectedMount | undefined;
+    let ownerTarget = "/";
+    for (
+      let current = path.posix.dirname(normalizeMountContainerPath(mount.containerPath));
+      ;
+      current = path.posix.dirname(current)
+    ) {
+      owner = byTarget.get(current);
+      if (owner || current === "/") {
+        ownerTarget = current;
+        break;
+      }
+      chain.push(current);
+    }
+    // Only managed writable roots have Gateway-local sources we can pin; read-only
+    // roots already refuse the rename and custom binds keep their daemon contract.
+    if (!owner || owner.readOnly || (owner.source !== "workspace" && owner.source !== "agent")) {
+      continue;
+    }
+    for (const ancestor of chain) {
+      if (ancestors.has(ancestor)) {
+        continue;
+      }
+      const relativePath = path.posix.relative(ownerTarget, ancestor);
+      ancestors.set(ancestor, {
+        hostPath: path.join(owner.hostPath, ...relativePath.split("/")),
+        containerPath: ancestor,
+        readOnly: false,
+        source: owner.source,
+        ownerHostPath: owner.hostPath,
+        relativePath,
+      });
+    }
+  }
+  // Parents first so engine creation order matches the directory hierarchy.
+  return [...ancestors.values()].toSorted(
+    (a, b) => a.containerPath.length - b.containerPath.length,
+  );
 }
 
 /** Docker keeps the final ro/rw flag; Podman rejects conflicting flags before creation. */

@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { bindResponsesInputMessage, responsesRequestLifecycle } from "@openclaw/ai/internal/openai";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasRuntimeContextMarker } from "../../../llm/types.js";
 import {
   acceptProviderReviewAcknowledgment,
   assertSessionProviderReviewWorkStart,
@@ -10,13 +12,10 @@ import {
 import type { StreamFn } from "../../runtime/index.js";
 
 function countUserInputSlots(input: readonly unknown[]): number {
-  let count = 0;
-  for (const item of input) {
-    if (isRecord(item) && item.role === "user") {
-      count += 1;
-    }
-  }
-  return count;
+  return input.reduce<number>(
+    (count, item) => count + (isRecord(item) && item.role === "user" ? 1 : 0),
+    0,
+  );
 }
 
 /** Acknowledgment decorates one request; later tool calls retain ordinary transport behavior. */
@@ -74,9 +73,7 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       throw new Error("Provider review continuation cannot be retried or change transport");
     }
     const message = snapshot.review.review?.continuation?.message;
-    const latestIndex = context.messages.findLastIndex(
-      (item) => item.role !== "user" || item.runtimeContextCarrier !== true,
-    );
+    const latestIndex = context.messages.findLastIndex((item) => !hasRuntimeContextMarker(item));
     const latest = context.messages[latestIndex];
     if (!message || latest?.role !== "user") {
       throw new Error("Provider review continuation requires its exact next user input");
@@ -120,22 +117,26 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         ) {
           throw new Error("Provider continuation payload changed the reviewed runtime or model");
         }
-        if (countUserInputSlots(finalPayload.input) > userInputSlots) {
-          throw new Error("Provider continuation payload added user input");
-        }
-        const lastInput = finalPayload.input.at(-1);
         const continuationInputs = finalPayload.input.filter(isContinuationInput);
         const nextInput = continuationInputs[0];
         const nextInputIndex = finalPayload.input.indexOf(nextInput);
+        const finalInputSuffix = finalPayload.input.slice(nextInputIndex + 1);
         if (
-          !isRecord(lastInput) ||
-          lastInput.role !== "user" ||
           continuationInputs.length !== 1 ||
           !isRecord(nextInput) ||
           nextInput.role !== "user" ||
-          !isDeepStrictEqual(finalPayload.input.slice(nextInputIndex + 1), inputSuffix)
+          !isDeepStrictEqual(finalInputSuffix, inputSuffix)
         ) {
+          if (
+            countUserInputSlots(finalPayload.input) > userInputSlots &&
+            finalInputSuffix.length > inputSuffix.length
+          ) {
+            throw new Error("Provider continuation payload added user input");
+          }
           throw new Error("Provider continuation payload changed its next user input");
+        }
+        if (countUserInputSlots(finalPayload.input) > userInputSlots) {
+          throw new Error("Provider continuation payload added user input");
         }
         const rawMetadata = finalPayload.client_metadata;
         if (rawMetadata !== undefined && !isRecord(rawMetadata)) {
@@ -145,16 +146,9 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
         const rawTurnMetadata = metadata["x-codex-turn-metadata"];
         let turnMetadata: Record<string, unknown> = {};
         if (rawTurnMetadata !== undefined) {
-          if (typeof rawTurnMetadata !== "string") {
-            throw new Error("Provider continuation turn metadata is malformed");
-          }
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(rawTurnMetadata);
-          } catch {
-            throw new Error("Provider continuation turn metadata is malformed");
-          }
-          if (!isRecord(parsed)) {
+          const parsed =
+            typeof rawTurnMetadata === "string" ? safeParseJsonRecord(rawTurnMetadata) : undefined;
+          if (!parsed) {
             throw new Error("Provider continuation turn metadata is malformed");
           }
           turnMetadata = parsed;
@@ -220,11 +214,7 @@ export function wrapStreamFnWithProviderReviewContinuation(params: {
       model,
       {
         ...context,
-        messages: [
-          ...context.messages.slice(0, latestIndex),
-          continuationInput,
-          ...context.messages.slice(latestIndex + 1),
-        ],
+        messages: context.messages.with(latestIndex, continuationInput),
       },
       requestOptions,
     );

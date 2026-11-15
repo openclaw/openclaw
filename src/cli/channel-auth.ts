@@ -12,7 +12,7 @@ import { resolveInstallableChannelPlugin } from "../commands/channel-setup/chann
 import { parseAccountSelector } from "../commands/channels/account-selector.js";
 import { parseChannelSelector } from "../commands/channels/channel-selector.js";
 import { requireValidConfigForWrite } from "../commands/config-validation.js";
-import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader, type OpenClawConfig } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { callGateway } from "../gateway/call.js";
 import type { ChannelAccountStartOutcome } from "../gateway/server-channel-runtime.types.js";
@@ -34,6 +34,16 @@ type ChannelAuthOptions = {
 
 type ChannelPlugin = NonNullable<ReturnType<typeof getChannelPlugin>>;
 type ChannelAuthMode = "login" | "logout";
+
+function unsupportedChannelAuth(channel: string, action: ChannelAuthMode): Error {
+  return new Error(
+    formatUnsupportedChannelActionMessage({
+      channel,
+      action,
+      inspectCommand: "openclaw channels status --channel " + channel,
+    }),
+  );
+}
 
 function supportsChannelAuthMode(plugin: ChannelPlugin, mode: ChannelAuthMode): boolean {
   return mode === "login" ? Boolean(plugin.auth?.login) : Boolean(plugin.gateway?.logoutAccount);
@@ -78,7 +88,10 @@ async function isConfiguredAuthPlugin(
 
 async function resolveConfiguredAuthChannelInput(mode: ChannelAuthMode): Promise<string> {
   // Account callbacks need runtime values; this auto-enabled view is never persisted.
-  const cfg = applyPluginAutoEnable({ config: getRuntimeConfig(), env: process.env }).config;
+  const cfg = applyPluginAutoEnable({
+    config: await captureRuntimeConfigAsyncReader()(),
+    env: process.env,
+  }).config;
   const configured: string[] = [];
   for (const plugin of listChannelPlugins()) {
     if (supportsChannelAuthMode(plugin, mode) && (await isConfiguredAuthPlugin(plugin, cfg))) {
@@ -104,24 +117,14 @@ async function resolveChannelPluginForMode(
   opts: ChannelAuthOptions,
   mode: ChannelAuthMode,
   runtime: RuntimeEnv,
-): Promise<{
-  cfg: OpenClawConfig;
-  channelInput: string;
-  channelId: string;
-  plugin: ChannelPlugin;
-} | null> {
+) {
   parseAccountSelector(opts.account);
   parseChannelSelector(opts.channel);
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return null;
   }
-  // Runtime defaults are not authored plugin enablement intent.
-  const autoEnabled = applyPluginAutoEnable({
-    config: writeSnapshot.snapshot.sourceConfig,
-    env: process.env,
-  });
-  const cfg = autoEnabled.config;
+  const cfg = writeSnapshot.snapshot.sourceConfig;
   const explicitChannel = opts.channel?.trim();
   const channelInput = explicitChannel || (await resolveConfiguredAuthChannelInput(mode));
   const normalizedChannelId = normalizeChannelId(channelInput);
@@ -143,15 +146,9 @@ async function resolveChannelPluginForMode(
   }
   const plugin = resolved.plugin;
   if (!plugin || !supportsChannelAuthMode(plugin, mode)) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelId,
-        action: mode,
-        inspectCommand: "openclaw channels status --channel " + channelId,
-      }),
-    );
+    throw unsupportedChannelAuth(channelId, mode);
   }
-  if (autoEnabled.changes.length > 0 || resolved.configChanged) {
+  if (resolved.configChanged) {
     await commitConfigWithPendingPluginInstalls({
       sourceConfig: resolved.cfg,
       baseHash: writeSnapshot.snapshot.hash,
@@ -160,7 +157,7 @@ async function resolveChannelPluginForMode(
   }
   return {
     // Execution needs resolved runtime values; successful writes refresh this snapshot.
-    cfg: getRuntimeConfig(),
+    cfg: await captureRuntimeConfigAsyncReader()(),
     channelInput,
     channelId,
     plugin,
@@ -177,97 +174,6 @@ function isChannelMissingFromGatewayRegistry(error: unknown): error is Error {
   );
 }
 
-async function reconcileGatewayRuntimeAfterLocalLogin(params: {
-  cfg: OpenClawConfig;
-  plugin: ChannelPlugin;
-  channelId: string;
-  accountId: string;
-  runtime: RuntimeEnv;
-}) {
-  // Local auth writes are durable even when the gateway restart hook is unavailable or remote.
-  if (!params.plugin.gateway?.startAccount) {
-    return;
-  }
-  if (params.cfg.gateway?.mode === "remote") {
-    params.runtime.log(
-      `Gateway is in remote mode; local login saved auth for ${params.channelId}/${params.accountId} but did not start the remote runtime.`,
-    );
-    return;
-  }
-  try {
-    const result = await callGateway<{ outcome?: ChannelAccountStartOutcome }>({
-      config: params.cfg,
-      method: "channels.start",
-      params: {
-        channel: params.channelId,
-        accountId: params.accountId,
-      },
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      deviceIdentity: null,
-    });
-    // Older Gateways return only the runtime snapshot, without a start decision.
-    if (result.outcome && result.outcome.status !== "handed-off") {
-      params.runtime.log(
-        `Local login saved auth for ${params.channelId}/${params.accountId}. Gateway start: ${result.outcome.reason}. Check ${formatCliCommand(`openclaw channels status --channel ${params.channelId} --probe`)}.`,
-      );
-    }
-  } catch (error) {
-    // A plugin installed or enabled after Gateway startup is absent from its
-    // process-stable registry. Restart only for that exact RPC rejection.
-    if (isChannelMissingFromGatewayRegistry(error)) {
-      try {
-        await callGateway({
-          config: params.cfg,
-          method: "gateway.restart.request",
-          params: { reason: `channel login: load ${params.channelId}` },
-          mode: GATEWAY_CLIENT_MODES.BACKEND,
-          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-          deviceIdentity: null,
-        });
-        params.runtime.log(
-          `Gateway restart requested to load ${params.channelId}; the channel will start after restart.`,
-        );
-        return;
-      } catch {
-        // Fall through to the generic warning if the restart request also fails.
-      }
-    }
-    params.runtime.log(
-      `Local login saved auth for ${params.channelId}/${params.accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
-    );
-  }
-}
-
-async function logoutViaGatewayRuntime(params: {
-  cfg: OpenClawConfig;
-  channelId: string;
-  accountId: string;
-  runtime: RuntimeEnv;
-}) {
-  try {
-    return await callGateway<{ cleared: boolean; loggedOut?: boolean }>({
-      config: params.cfg,
-      method: "channels.logout",
-      params: {
-        channel: params.channelId,
-        accountId: params.accountId,
-      },
-      mode: GATEWAY_CLIENT_MODES.BACKEND,
-      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-      deviceIdentity: null,
-    });
-  } catch (error) {
-    if (params.cfg.gateway?.mode === "remote") {
-      throw error;
-    }
-    params.runtime.log(
-      `Local logout will clear auth for ${params.channelId}/${params.accountId}, but the running gateway did not stop it: ${formatErrorMessage(error)}`,
-    );
-    return null;
-  }
-}
-
 export async function runChannelLogin(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -279,13 +185,7 @@ export async function runChannelLogin(
   const { cfg, channelInput, plugin } = resolvedChannel;
   const login = plugin.auth?.login;
   if (!login) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "login",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
+    throw unsupportedChannelAuth(channelInput, "login");
   }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
@@ -298,13 +198,60 @@ export async function runChannelLogin(
     verbose: Boolean(opts.verbose),
     channelInput,
   });
-  await reconcileGatewayRuntimeAfterLocalLogin({
-    cfg,
-    plugin,
-    channelId: plugin.id,
-    accountId,
-    runtime,
-  });
+  const channelId = plugin.id;
+  // Local auth writes are durable even when the gateway restart hook is unavailable or remote.
+  if (!plugin.gateway?.startAccount) {
+    return;
+  }
+  if (cfg.gateway?.mode === "remote") {
+    runtime.log(
+      `Gateway is in remote mode; local login saved auth for ${channelId}/${accountId} but did not start the remote runtime.`,
+    );
+    return;
+  }
+  try {
+    const result = await callGateway<{ outcome?: ChannelAccountStartOutcome }>({
+      config: cfg,
+      method: "channels.start",
+      params: {
+        channel: channelId,
+        accountId,
+      },
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceIdentity: null,
+    });
+    // Older Gateways return only the runtime snapshot, without a start decision.
+    if (result.outcome && result.outcome.status !== "handed-off") {
+      runtime.log(
+        `Local login saved auth for ${channelId}/${accountId}. Gateway start: ${result.outcome.reason}. Check ${formatCliCommand(`openclaw channels status --channel ${channelId} --probe`)}.`,
+      );
+    }
+  } catch (error) {
+    // A plugin installed or enabled after Gateway startup is absent from its
+    // process-stable registry. Restart only for that exact RPC rejection.
+    if (isChannelMissingFromGatewayRegistry(error)) {
+      try {
+        await callGateway({
+          config: cfg,
+          method: "gateway.restart.request",
+          params: { reason: `channel login: load ${channelId}` },
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          deviceIdentity: null,
+        });
+        runtime.log(
+          `Gateway restart requested to load ${channelId}; the channel will start after restart.`,
+        );
+        return;
+      } catch {
+        // Fall through to the generic warning if the restart request also fails.
+      }
+    }
+    runtime.log(
+      `Local login saved auth for ${channelId}/${accountId}, but the running gateway did not restart it: ${formatErrorMessage(error)}`,
+    );
+  }
 }
 
 export async function runChannelLogout(
@@ -318,23 +265,34 @@ export async function runChannelLogout(
   const { cfg, channelInput, plugin } = resolvedChannel;
   const logoutAccount = plugin.gateway?.logoutAccount;
   if (!logoutAccount) {
-    throw new Error(
-      formatUnsupportedChannelActionMessage({
-        channel: channelInput,
-        action: "logout",
-        inspectCommand: "openclaw channels status --channel " + channelInput,
-      }),
-    );
+    throw unsupportedChannelAuth(channelInput, "logout");
   }
   // Prefer the live gateway so logout also stops any active channel runtime.
   const accountId =
     normalizeOptionalString(opts.account) || resolveChannelDefaultAccountId({ plugin, cfg });
-  let result = await logoutViaGatewayRuntime({
-    cfg,
-    channelId: plugin.id,
-    accountId,
-    runtime,
-  });
+  let result: { cleared: boolean; loggedOut?: boolean } | null;
+  const channelId = plugin.id;
+  try {
+    result = await callGateway<{ cleared: boolean; loggedOut?: boolean }>({
+      config: cfg,
+      method: "channels.logout",
+      params: {
+        channel: channelId,
+        accountId,
+      },
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      deviceIdentity: null,
+    });
+  } catch (error) {
+    if (cfg.gateway?.mode === "remote") {
+      throw error;
+    }
+    runtime.log(
+      `Local logout will clear auth for ${channelId}/${accountId}, but the running gateway did not stop it: ${formatErrorMessage(error)}`,
+    );
+    result = null;
+  }
   if (!result) {
     const account = await resolveChannelAccount({ plugin, cfg, accountId });
     result = await logoutAccount({

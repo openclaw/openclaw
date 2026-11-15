@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { bundledModuleRegions } from "./lib/bundled-module-regions.mjs";
 import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import {
@@ -32,14 +33,6 @@ type PackageJson = {
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
 };
 
-type ParsedReleaseTag = {
-  version: string;
-  packageVersion: string;
-  baseVersion: string;
-  channel: "stable" | "alpha" | "beta";
-  correctionNumber?: number;
-};
-
 const EXPECTED_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const FS_SAFE_PACKAGE = "@openclaw/fs-safe";
 const REQUIRED_PACKED_PATHS = [
@@ -48,8 +41,9 @@ const REQUIRED_PACKED_PATHS = [
   ...WORKSPACE_TEMPLATE_PACK_PATHS,
 ];
 const CONTROL_UI_ASSET_PREFIX = "dist/control-ui/assets/";
+const PRIVATE_QA_SOURCE_PREFIX = "extensions/qa-lab/";
 const FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS = [
-  "//#region extensions/qa-lab/",
+  `//#region ${PRIVATE_QA_SOURCE_PREFIX}`,
   "qa-channel/runtime-api.js",
   "qa-channel.js",
   "qa-channel-protocol.js",
@@ -74,9 +68,6 @@ type ReleaseCheckCommandInvocation = {
   windowsVerbatimArguments?: boolean;
 };
 
-function normalizePackedPath(packedPath: string): string {
-  return packedPath.replace(/\\/g, "/");
-}
 function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
   const parent = segments[index - 1];
   if (parent === "node_modules") {
@@ -86,7 +77,7 @@ function isNodeModulesPackageRoot(segments: string[], index: number): boolean {
 }
 
 function pathContainsPackedTestCargo(packedPath: string): boolean {
-  const normalizedPath = normalizePackedPath(packedPath);
+  const normalizedPath = packedPath.replace(/\\/g, "/");
   // Root docs ship Markdown reference material; topic directories such as
   // "test" are not runtime test cargo. Dependency fixtures remain disallowed.
   if (normalizedPath.startsWith("docs/") && normalizedPath.endsWith(".md")) {
@@ -116,36 +107,12 @@ function normalizeRepoUrl(value: unknown): string {
     .replace(/\/+$/, "");
 }
 
-function isLocalDependencySpec(value: string | undefined): boolean {
-  return /^(?:file|link|workspace):/u.test(value ?? "");
-}
-
 function shouldSkipPackedTarballValidation(env = process.env): boolean {
   const raw = env[skipPackValidationEnv];
   if (!raw) {
     return false;
   }
   return !/^(0|false)$/i.test(raw);
-}
-
-function parseReleaseTagVersion(version: string): ParsedReleaseTag | null {
-  const trimmed = version.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsedVersion = parseReleaseVersion(trimmed);
-  if (parsedVersion !== null) {
-    return {
-      version: trimmed,
-      packageVersion: parsedVersion.version,
-      baseVersion: parsedVersion.baseVersion,
-      channel: parsedVersion.channel,
-      correctionNumber: parsedVersion.correctionNumber,
-    };
-  }
-
-  return null;
 }
 
 export function resolveNpmReleaseCheckCommandTimeoutMs(
@@ -217,7 +184,7 @@ export function collectReleasePackageMetadataErrors(pkg: PackageJson): string[] 
       `package.json bin.openclaw must be "openclaw.mjs"; found "${pkg.bin?.openclaw ?? ""}".`,
     );
   }
-  if (isLocalDependencySpec(pkg.dependencies?.[FS_SAFE_PACKAGE])) {
+  if (/^(?:file|link|workspace):/u.test(pkg.dependencies?.[FS_SAFE_PACKAGE] ?? "")) {
     errors.push(
       `package.json dependencies["${FS_SAFE_PACKAGE}"] must use a published semver range before npm release; found "${pkg.dependencies?.[FS_SAFE_PACKAGE]}".`,
     );
@@ -250,7 +217,7 @@ export function collectReleaseTagErrors(params: {
   }
 
   const tagVersion = releaseTag.startsWith("v") ? releaseTag.slice(1) : releaseTag;
-  const parsedTag = parseReleaseTagVersion(tagVersion);
+  const parsedTag = parseReleaseVersion(tagVersion);
   if (parsedTag === null) {
     errors.push(
       `Release tag must match vYYYY.M.PATCH, vYYYY.M.PATCH-beta.N, or fallback correction tag vYYYY.M.PATCH-N; found "${releaseTag || "<missing>"}".`,
@@ -266,7 +233,7 @@ export function collectReleaseTagErrors(params: {
     parsedTag !== null &&
     parsedVersion !== null &&
     parsedTag.channel === parsedVersion.channel &&
-    (parsedTag.packageVersion === parsedVersion.version ||
+    (parsedTag.version === parsedVersion.version ||
       (parsedVersion.channel === "stable" &&
         parsedVersion.correctionNumber === undefined &&
         parsedTag.correctionNumber !== undefined &&
@@ -302,10 +269,6 @@ export function collectReleaseTagErrors(params: {
   return errors;
 }
 
-function loadPackageJson(): PackageJson {
-  return JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
-}
-
 function isNpmExecPath(value: string): boolean {
   return /^npm(?:-cli)?(?:\.(?:c?js|cmd|exe))?$/.test(portableBasename(value).toLowerCase());
 }
@@ -313,12 +276,6 @@ function isNpmExecPath(value: string): boolean {
 function portableBasename(value: string): string {
   return value.split(/[/\\]/u).at(-1) ?? value;
 }
-
-type NpmCommandInvocation = {
-  command: string;
-  args: string[];
-  windowsVerbatimArguments?: boolean;
-};
 
 export function resolveNpmCommandInvocation(
   params: {
@@ -328,7 +285,7 @@ export function resolveNpmCommandInvocation(
     nodeExecPath?: string;
     platform?: NodeJS.Platform;
   } = {},
-): NpmCommandInvocation {
+): ReleaseCheckCommandInvocation {
   const npmArgs = params.npmArgs ?? [];
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
@@ -368,15 +325,6 @@ export function resolveNpmCommandInvocation(
   }
 
   return { command: "npm", args: npmArgs };
-}
-
-function runNpmCommand(args: string[]): string {
-  const invocation = resolveNpmCommandInvocation({ npmArgs: args });
-  return runNpmReleaseCheckCommand(invocation, {
-    encoding: "utf8",
-    maxBuffer: NPM_PACK_MAX_BUFFER_BYTES,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
 }
 
 export type NpmPackResult = {
@@ -463,7 +411,7 @@ export function collectControlUiPackErrors(paths: Iterable<string>): string[] {
   for (const requiredPath of REQUIRED_PACKED_PATHS) {
     if (!packedPaths.has(requiredPath)) {
       errors.push(
-        `npm package is missing required path "${requiredPath}". Ensure UI assets are built and included before publish.`,
+        `npm package is missing required path "${requiredPath}". Build and include UI assets before publishing.`,
       );
     }
   }
@@ -481,7 +429,10 @@ function collectPackedTarballErrors(): string[] {
   const errors: string[] = [];
   let stdout;
   try {
-    stdout = runNpmCommand(["pack", "--json", "--dry-run", "--ignore-scripts"]);
+    stdout = runNpmReleaseCheckCommand(
+      resolveNpmCommandInvocation({ npmArgs: ["pack", "--json", "--dry-run", "--ignore-scripts"] }),
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    );
   } catch (error) {
     const message = describeExecFailure(error);
     errors.push(
@@ -556,9 +507,11 @@ export function collectForbiddenPackedContentErrors(
     } catch {
       continue;
     }
-    const matchedMarker = FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) =>
-      content.includes(marker),
-    );
+    const matchedMarker =
+      FORBIDDEN_PRIVATE_QA_CONTENT_MARKERS.find((marker) => content.includes(marker)) ??
+      [...bundledModuleRegions(content)].find((match) =>
+        match[1]?.startsWith(PRIVATE_QA_SOURCE_PREFIX),
+      )?.[0];
     if (!matchedMarker) {
       continue;
     }
@@ -581,7 +534,7 @@ export function collectPackedTestCargoErrors(paths: Iterable<string>): string[] 
 }
 
 async function main(): Promise<number> {
-  const pkg = loadPackageJson();
+  const pkg = JSON.parse(readFileSync("package.json", "utf8")) as PackageJson;
   const skipPackValidation = shouldSkipPackedTarballValidation();
   const metadataErrors = collectReleasePackageMetadataErrors(pkg);
   const tagErrors = collectReleaseTagErrors({

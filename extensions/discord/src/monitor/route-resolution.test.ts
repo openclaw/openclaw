@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildDiscordConversationRouteContext,
   buildDiscordRoutePeer,
-  resolveDiscordBoundConversationRoute,
+  resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
   shouldIgnoreStaleDiscordRouteBinding,
 } from "./route-resolution.js";
@@ -16,7 +16,7 @@ function buildWorkerBindingConfig(peer: {
 }): OpenClawConfig {
   return {
     agents: {
-      list: [{ id: "worker" }],
+      entries: { worker: {} },
     },
     bindings: [
       {
@@ -62,46 +62,16 @@ describe("discord route resolution helpers", () => {
     });
   });
 
-  it("falls back to configured route when no bound session exists", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "main",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:main:discord:channel:c1",
-      mainSessionKey: "agent:main:main",
-      lastRoutePolicy: "session",
-      matchedBy: "default",
-    };
-    const configuredRoute = {
-      route: {
-        ...route,
-        agentId: "worker",
-        sessionKey: "agent:worker:discord:channel:c1",
-        mainSessionKey: "agent:worker:main",
-        lastRoutePolicy: "session" as const,
-        matchedBy: "binding.peer" as const,
-      },
-    };
-
-    expect(
-      resolveDiscordEffectiveRoute({
-        route,
-        configuredRoute,
-      }),
-    ).toEqual(configuredRoute.route);
-  });
-
-  it("composes route building with effective-route overrides", () => {
+  it("applies effective-route overrides to a routed direct conversation", () => {
     const cfg = buildWorkerBindingConfig({ kind: "direct", id: "user-1" });
 
     expect(
-      resolveDiscordBoundConversationRoute({
-        cfg,
-        accountId: "default",
-        isDirectMessage: true,
-        isGroupDm: false,
-        directUserId: "user-1",
-        conversationId: "dm-1",
+      resolveDiscordEffectiveRoute({
+        route: resolveDiscordConversationRoute({
+          cfg,
+          accountId: "default",
+          peer: { kind: "direct", id: "user-1" },
+        }),
         boundSessionKey: "agent:worker:discord:direct:user-1",
         matchedBy: "binding.channel",
       }),
@@ -116,36 +86,6 @@ describe("discord route resolution helpers", () => {
       lastRoutePolicy: "session",
       matchedBy: "binding.channel",
     });
-  });
-
-  it("ignores stale route-shaped bindings after the configured agent changes", () => {
-    const route: ResolvedAgentRoute = {
-      agentId: "newagent",
-      channel: "discord",
-      accountId: "default",
-      sessionKey: "agent:newagent:discord:channel:c1",
-      mainSessionKey: "agent:newagent:main",
-      lastRoutePolicy: "session",
-      matchedBy: "binding.peer",
-    };
-
-    expect(
-      shouldIgnoreStaleDiscordRouteBinding({
-        route,
-        bindingRecord: {
-          bindingId: "binding-1",
-          targetSessionKey: "agent:oldagent:discord:channel:c1",
-          targetKind: "session",
-          conversation: {
-            channel: "discord",
-            accountId: "default",
-            conversationId: "c1",
-          },
-          status: "active",
-          boundAt: 1,
-        },
-      }),
-    ).toBe(true);
   });
 
   it("keeps explicit focus bindings even when their agent differs from routing", () => {

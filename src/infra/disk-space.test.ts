@@ -4,23 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createLowDiskSpaceWarning, formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
-
-function statfsFixture(params: {
-  bavail: number;
-  bsize?: number;
-  blocks?: number;
-}): ReturnType<typeof fs.statfsSync> {
-  return {
-    type: 0,
-    bsize: params.bsize ?? 1024,
-    blocks: params.blocks ?? 2_000_000,
-    bfree: params.bavail,
-    bavail: params.bavail,
-    files: 0,
-    frsize: params.bsize ?? 1024,
-    ffree: 0,
-  };
-}
+import { createStatfsFixture as statfsFixture } from "./disk-space.test-support.js";
 
 describe("disk-space helpers", () => {
   afterEach(() => {
@@ -66,7 +50,6 @@ describe("disk-space helpers", () => {
         createLowDiskSpaceWarning({
           targetPath: tempDir,
           purpose: "test staging",
-          thresholdBytes: 512 * 1024 * 1024,
         }),
       ).toBe(`Low disk space near ${tempDir}: 256 MiB available; test staging may fail.`);
     } finally {

@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parseCodeModeMatrixOptions,
   runCodeModeModelMatrix,
-  validateQaEvidenceSummaryJson,
 } from "../../../scripts/code-mode-model-matrix.ts";
+import { validateQaEvidenceSummaryJson } from "../api.js";
 import { mockBunVersion } from "./runtime-version.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

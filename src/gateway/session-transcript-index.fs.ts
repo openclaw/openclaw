@@ -1,8 +1,10 @@
 import fs from "node:fs";
-import type { FileHandle } from "node:fs/promises";
-import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptDisplayPosition } from "../chat/transcript-display-position.js";
+import {
+  openSessionArchiveReader,
+  SESSION_ARCHIVE_ZSTD_SUFFIX,
+} from "../config/sessions/archive-compression.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
@@ -17,6 +19,11 @@ import {
   parseTranscriptRecord,
   type TranscriptRecord,
 } from "./session-transcript-record-parser.js";
+import {
+  SessionTranscriptSourceMessageTooLargeError,
+  SOURCE_PAGE_MAX_BYTES,
+  SOURCE_PAGE_MAX_MESSAGES,
+} from "./session-transcript-source-pages.js";
 
 export type IndexedTranscriptEntry = {
   id?: string;
@@ -32,14 +39,34 @@ export type IndexedTranscriptEntry = {
 export type MaterializedTranscriptEntry = TranscriptRecord & IndexedTranscriptEntry;
 
 export type SessionTranscriptIndex = {
+  byteSize: number;
   entries: IndexedTranscriptEntry[];
   byId: Map<string, IndexedTranscriptEntry>;
   displaySource: string;
 };
 
+type TranscriptIndexPreparation = {
+  offset: number;
+  lineOffset: number;
+  length: number;
+  afterCr: boolean;
+  fragments: Buffer[];
+  records: (TranscriptRecord & {
+    rawSeq: number;
+    offset: number;
+    length: number;
+    activity?: TranscriptDisplayActivity;
+  })[];
+  rawSeqById: Map<string, number>;
+};
+
 type CachedTranscriptIndex = {
   identity: string;
-  value: Promise<SessionTranscriptIndex>;
+  size: number;
+  largestLine: number;
+  preparation?: TranscriptIndexPreparation;
+  value?: SessionTranscriptIndex;
+  pending?: Promise<void>;
 };
 
 const transcriptIndexes = new Map<string, CachedTranscriptIndex>();
@@ -94,65 +121,6 @@ export function selectArchiveTranscriptEntries<T extends TranscriptRecord>(
   return [...kept, ...entries.slice(boundaryIndex)];
 }
 
-async function* readArchiveLines(filePath: string, handle: FileHandle) {
-  const stream = fs.createReadStream(filePath, {
-    fd: handle,
-    autoClose: false,
-    highWaterMark: ARCHIVE_READ_BYTES,
-  });
-  let offset = 0;
-  let length = 0;
-  let afterCr = false;
-  const fragments: Buffer[] = [];
-  try {
-    // SAFETY: This ReadStream emits raw Buffers; it has no encoding or setEncoding call.
-    for await (const chunk of stream as AsyncIterable<Buffer>) {
-      let start = 0;
-      // Match readline's CR, LF and CRLF semantics, even across read boundaries.
-      if (afterCr && chunk[0] === 10) {
-        start = 1;
-        offset++;
-      }
-      afterCr = false;
-      while (start < chunk.length) {
-        const lf = chunk.indexOf(10, start);
-        const cr = chunk.indexOf(13, start);
-        const end = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
-        if (end < 0) {
-          fragments.push(chunk.subarray(start));
-          length += chunk.length - start;
-          break;
-        }
-        const last = chunk.subarray(start, end);
-        length += last.length;
-        const line = fragments.length ? Buffer.concat([...fragments, last], length) : last;
-        yield { line: line.toString("utf8"), offset, length };
-        fragments.length = 0;
-        offset += length + 1;
-        length = 0;
-        start = end + 1;
-        if (chunk[end] === 13) {
-          if (chunk[start] === 10) {
-            start++;
-            offset++;
-          } else {
-            afterCr = start === chunk.length;
-          }
-        }
-      }
-    }
-    if (length > 0) {
-      yield { line: Buffer.concat(fragments, length).toString("utf8"), offset, length };
-    }
-  } finally {
-    // Destroy closes the descriptor even with autoClose:false. A completed scan
-    // leaves it with the outer owner for its final identity check and close.
-    if (!stream.readableEnded) {
-      stream.destroy();
-    }
-  }
-}
-
 function archiveNavigationRecord(record: Record<string, unknown>): Record<string, unknown> {
   const navigation: Record<string, unknown> = {};
   for (const key of [
@@ -181,59 +149,41 @@ function archiveNavigationRecord(record: Record<string, unknown>): Record<string
   return navigation;
 }
 
-async function buildSessionTranscriptIndex(
-  filePath: string,
-  displaySource: string,
-  sessionId: string,
-): Promise<SessionTranscriptIndex> {
-  const records: Array<
-    TranscriptRecord & {
-      rawSeq: number;
-      offset: number;
-      length: number;
-      activity?: TranscriptDisplayActivity;
-    }
-  > = [];
-  const rawSeqById = new Map<string, number>();
-  const handle = await fs.promises.open(filePath, "r");
-  try {
-    const stat = await handle.stat();
-    assertArchiveTranscriptSource(filePath, stat, displaySource, sessionId);
-    for await (const { line, offset, length } of readArchiveLines(filePath, handle)) {
-      if (!line.trim()) {
-        continue;
-      }
-      const record = parseTranscriptRecord(line);
-      if (record) {
-        const rawSeq = records.length + 1;
-        const activity = readNestedToolActivity(record.record.message)?.details;
-        records.push({
-          ...record,
-          record: archiveNavigationRecord(record.record),
-          rawSeq,
-          offset,
-          length,
-          ...(activity
-            ? {
-                activity: {
-                  afterEntryId: activity.afterEntryId,
-                  scopeId: activity.scopeId,
-                  startOrder: activity.startOrder,
-                },
-              }
-            : {}),
-        });
-        if (record.id) {
-          // Capture physical cuts before branch/reset selection removes their control rows.
-          rawSeqById.set(record.id, rawSeq);
-        }
-      }
-    }
-    const finalStat = await handle.stat();
-    assertArchiveTranscriptSource(filePath, finalStat, displaySource, sessionId);
-  } finally {
-    await handle.close();
+function appendArchiveNavigationRecord(state: TranscriptIndexPreparation) {
+  const line = Buffer.concat(state.fragments, state.length).toString("utf8");
+  const record = line.trim() ? parseTranscriptRecord(line) : null;
+  if (!record) {
+    return;
   }
+  const rawSeq = state.records.length + 1;
+  const activity = readNestedToolActivity(record.record.message)?.details;
+  state.records.push({
+    ...record,
+    record: archiveNavigationRecord(record.record),
+    rawSeq,
+    offset: state.lineOffset,
+    length: state.length,
+    ...(activity
+      ? {
+          activity: {
+            afterEntryId: activity.afterEntryId,
+            scopeId: activity.scopeId,
+            startOrder: activity.startOrder,
+          },
+        }
+      : {}),
+  });
+  if (record.id) {
+    // Capture physical cuts before branch/reset selection removes their control rows.
+    state.rawSeqById.set(record.id, rawSeq);
+  }
+}
+
+function finishSessionTranscriptIndex(
+  { records, rawSeqById }: TranscriptIndexPreparation,
+  displaySource: string,
+  byteSize: number,
+): SessionTranscriptIndex {
   const entries = selectArchiveTranscriptEntries(records)
     .filter((entry) => isVisibleTranscriptRecord(entry.record))
     .map((entry, index): IndexedTranscriptEntry => ({
@@ -250,10 +200,125 @@ async function buildSessionTranscriptIndex(
       ),
     }));
   return {
+    byteSize,
     entries,
     byId: new Map(entries.flatMap((entry) => (entry.id ? [[entry.id, entry] as const] : []))),
     displaySource,
   };
+}
+
+function assertSourceLineBound(length: number) {
+  if (length > SOURCE_PAGE_MAX_BYTES) {
+    throw new SessionTranscriptSourceMessageTooLargeError();
+  }
+}
+
+async function prepareTranscriptIndexStep(
+  filePath: string,
+  cached: CachedTranscriptIndex,
+  sessionId: string,
+  bounded: boolean,
+): Promise<void> {
+  const state = cached.preparation!;
+  const handle = await openSessionArchiveReader(filePath);
+  try {
+    assertArchiveTranscriptSource(filePath, await handle.stat(), cached.identity, sessionId);
+    // Count retained bytes too: finishing a partial line must not decode a second page's payload.
+    let bytes = bounded ? state.length : 0;
+    let lines = 0;
+    const lineLimit = bounded ? SOURCE_PAGE_MAX_MESSAGES : Infinity;
+    scan: while (state.offset < cached.size && lines < lineLimit) {
+      const remaining = bounded ? SOURCE_PAGE_MAX_BYTES - bytes : ARCHIVE_READ_BYTES;
+      if (remaining <= 0 && (!bounded || state.length < SOURCE_PAGE_MAX_BYTES)) {
+        break;
+      }
+      // At the line limit, inspect only its delimiter; another payload byte must fail closed.
+      const length = Math.min(
+        ARCHIVE_READ_BYTES,
+        Math.max(1, remaining),
+        cached.size - state.offset,
+      );
+      let chunk = Buffer.allocUnsafe(length);
+      const bytesRead = await handle.read(chunk, state.offset);
+      if (bytesRead !== length) {
+        if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+          throw new SessionTranscriptProjectionUnavailableError(sessionId);
+        }
+        cached.size = state.offset + bytesRead;
+        chunk = chunk.subarray(0, bytesRead);
+      }
+      bytes += length;
+      let start = 0;
+      if (state.afterCr) {
+        if (chunk[0] === 10) {
+          start++;
+          state.offset++;
+          state.lineOffset++;
+        }
+        state.afterCr = false;
+      }
+      while (start < chunk.length && lines < lineLimit) {
+        const lf = chunk.indexOf(10, start);
+        const cr = chunk.indexOf(13, start);
+        const end = lf < 0 ? cr : cr < 0 ? lf : Math.min(lf, cr);
+        const fragmentEnd = end < 0 ? chunk.length : end;
+        const fragment = chunk.subarray(start, fragmentEnd);
+        cached.largestLine = Math.max(cached.largestLine, state.length + fragment.length);
+        if (bounded && cached.largestLine > SOURCE_PAGE_MAX_BYTES) {
+          break scan;
+        }
+        state.fragments.push(fragment);
+        state.length += fragment.length;
+        state.offset += fragment.length;
+        if (end < 0) {
+          break;
+        }
+        appendArchiveNavigationRecord(state);
+        lines++;
+        state.fragments = [];
+        state.length = 0;
+        state.offset++;
+        start = end + 1;
+        state.afterCr = chunk[end] === 13;
+        if (state.afterCr && start < chunk.length) {
+          if (chunk[start] === 10) {
+            start++;
+            state.offset++;
+          }
+          state.afterCr = false;
+        }
+        state.lineOffset = state.offset;
+      }
+    }
+    if (state.offset === cached.size) {
+      if (state.length > 0) {
+        appendArchiveNavigationRecord(state);
+      }
+      cached.value = finishSessionTranscriptIndex(state, cached.identity, cached.size);
+      cached.preparation = undefined;
+    }
+    assertArchiveTranscriptSource(filePath, await handle.stat(), cached.identity, sessionId);
+  } finally {
+    await handle.close();
+  }
+}
+
+function advanceTranscriptIndex(
+  filePath: string,
+  cached: CachedTranscriptIndex,
+  sessionId: string,
+  bounded: boolean,
+): Promise<void> {
+  return (cached.pending ??= prepareTranscriptIndexStep(filePath, cached, sessionId, bounded)
+    .catch((error: unknown) => {
+      if (transcriptIndexes.get(filePath) === cached) {
+        transcriptIndexes.delete(filePath);
+      }
+      throw error;
+    })
+    .finally(() => {
+      cached.pending = undefined;
+    }));
 }
 
 /** Read selected payloads in bounded asynchronous batches; the cache owns no payload objects. */
@@ -263,7 +328,7 @@ export async function readIndexedTranscriptEntries(
   selected: readonly IndexedTranscriptEntry[],
   sessionId: string,
 ): Promise<MaterializedTranscriptEntry[]> {
-  const handle = await fs.promises.open(filePath, "r");
+  const handle = await openSessionArchiveReader(filePath);
   try {
     assertArchiveTranscriptSource(filePath, await handle.stat(), index.displaySource, sessionId);
     const physical = selected
@@ -284,7 +349,7 @@ export async function readIndexedTranscriptEntries(
       }
       // One oversized record still follows the existing parser's recovery contract.
       const buffer = Buffer.allocUnsafe(byteEnd - first.offset);
-      if ((await readFileWindowFully(handle, buffer, first.offset)) !== buffer.length) {
+      if ((await handle.read(buffer, first.offset)) !== buffer.length) {
         throw new SessionTranscriptProjectionUnavailableError(sessionId);
       }
       for (let position = start; position < end; position++) {
@@ -307,10 +372,7 @@ export async function readIndexedTranscriptEntries(
   }
 }
 
-export async function readSessionTranscriptIndex(
-  filePath: string,
-  sessionId: string,
-): Promise<SessionTranscriptIndex | null> {
+async function acquireTranscriptIndex(filePath: string): Promise<CachedTranscriptIndex | null> {
   const stat = await fs.promises.stat(filePath).catch(() => null);
   if (!stat?.isFile()) {
     transcriptIndexes.delete(filePath);
@@ -319,17 +381,70 @@ export async function readSessionTranscriptIndex(
   const identity = transcriptArtifactDisplaySource(filePath, stat);
   let cached = transcriptIndexes.get(filePath);
   if (cached?.identity !== identity) {
-    cached = { identity, value: buildSessionTranscriptIndex(filePath, identity, sessionId) };
+    cached = {
+      identity,
+      size: filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX) ? Infinity : stat.size,
+      largestLine: 0,
+      preparation: {
+        offset: 0,
+        lineOffset: 0,
+        length: 0,
+        afterCr: false,
+        fragments: [],
+        records: [],
+        rawSeqById: new Map(),
+      },
+    };
   }
   transcriptIndexes.delete(filePath);
   transcriptIndexes.set(filePath, cached);
+  // Preparation retains no descriptor; eviction drops partial bytes and navigation metadata together.
   pruneMapToMaxSize(transcriptIndexes, MAX_TRANSCRIPT_INDEXES);
+  return cached;
+}
+
+/** One source call prepares at most one page; pending callers never join an unbounded reader. */
+export async function prepareSessionTranscriptIndex(
+  filePath: string,
+  sessionId: string,
+  deferPreparation = false,
+): Promise<{ displaySource: string; index?: SessionTranscriptIndex } | null> {
+  const cached = await acquireTranscriptIndex(filePath);
+  if (!cached) {
+    return null;
+  }
   try {
-    return await cached.value;
+    assertSourceLineBound(cached.largestLine);
+    if (cached.pending || deferPreparation) {
+      return { displaySource: cached.identity };
+    }
+    if (cached.value) {
+      return { displaySource: cached.identity, index: cached.value };
+    }
+    await advanceTranscriptIndex(filePath, cached, sessionId, true);
+    assertSourceLineBound(cached.largestLine);
+    // Keep payload reads out of the preparation budget, including the final preparation step.
+    return { displaySource: cached.identity };
   } catch (error) {
-    if (transcriptIndexes.get(filePath) === cached) {
+    // Source policy cannot invalidate an index still usable by ordinary archive readers.
+    if (!cached.value && !cached.pending && transcriptIndexes.get(filePath) === cached) {
       transcriptIndexes.delete(filePath);
     }
     throw error;
   }
+}
+
+export async function readSessionTranscriptIndex(
+  filePath: string,
+  sessionId: string,
+): Promise<SessionTranscriptIndex | null> {
+  const cached = await acquireTranscriptIndex(filePath);
+  if (!cached) {
+    return null;
+  }
+  // By-ID/recent archive reads retain the parser's oversized multimodal recovery contract.
+  while (!cached.value || cached.pending) {
+    await advanceTranscriptIndex(filePath, cached, sessionId, false);
+  }
+  return cached.value;
 }

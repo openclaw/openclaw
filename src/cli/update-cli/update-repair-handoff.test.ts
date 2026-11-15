@@ -1,136 +1,95 @@
-import fs from "node:fs/promises";
+// Register shared mocks before importing the production CLI graph.
+import "./update-repair.test-support.js";
+import os from "node:os";
+import { ProcSafeError } from "@openclaw/proc-safe/errors";
+import * as nativeProcess from "@openclaw/proc-safe/identity";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { readConfigFileSnapshot } from "../../config/config.js";
-import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
-import { listUpdateRuns } from "../../infra/update-run-ledger.js";
-import { defaultRuntime } from "../../runtime.js";
-import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import { writeJsonFile } from "../../../test/helpers/temp-repo.js";
+import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import {
-  createOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+  createManagedHandoffLeaseDatabase,
+  leaseQueries,
+} from "../../infra/update-managed-service-handoff-database.js";
+import { createManagedHandoffRecoveryFixture } from "../../infra/update-managed-service-handoff-recovery.test-support.js";
+import * as handoffScope from "../../infra/update-managed-service-handoff-scope.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  listUpdateRuns,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
+import * as childTree from "../../process/child-process-tree.js";
+import { defaultRuntime } from "../../runtime.js";
+import * as pidAlive from "../../shared/pid-alive.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withCliProcessScope } from "../runtime-cleanup-scope.js";
 import { registerUpdateCli } from "../update-cli.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 
-const mocks = vi.hoisted(() => ({
-  root: vi.fn(),
-  doctor: vi.fn(),
-  plugins: vi.fn(),
-  convergence: vi.fn(),
-}));
-vi.mock("./shared.js", async (original) => ({
-  ...(await original<typeof import("./shared.js")>()),
-  resolveUpdateRoot: mocks.root,
-  tryWriteCompletionCache: async () => "skipped",
-}));
+const { createRepairState, mocks } = await import("./update-repair.test-support.js");
+
 vi.mock("../../infra/update-check.js", async (original) => ({
   ...(await original<typeof import("../../infra/update-check.js")>()),
   resolveUpdateInstallKind: async () => "package",
 }));
-vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mocks.plugins }));
-vi.mock("./update-command-fresh-doctor.js", async (original) => ({
-  ...(await original<typeof import("./update-command-fresh-doctor.js")>()),
-  runUpdateFinalizationDoctorInFreshProcess: mocks.doctor,
-  completePostCorePluginUpdate: mocks.convergence,
-}));
-// Keep the registered command, finalizer lifecycle, handoff owner, and ledger real.
-vi.mock("../../commands/doctor-maintenance.js", () => ({
-  beginDoctorMaintenance: async () => undefined,
-}));
-vi.mock("../../infra/update-triage.js", () => ({
-  prepareUpdateFailureTriage: async () => async () => ({ status: "completed", hint: "" }),
+vi.mock("@openclaw/proc-safe/identity", async (original) => ({
+  ...(await original<typeof import("@openclaw/proc-safe/identity")>()),
 }));
 
-const pluginResult: ProducedPluginUpdateResult = {
-  assessment: { kind: "no-payload-repair" },
-  status: "ok",
-  changed: false,
-  sync: { changed: false, switchedToBundled: [], switchedToNpm: [], warnings: [], errors: [] },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-};
 let state: OpenClawTestState;
 let fixture: ReturnType<typeof createManagedHandoffRecoveryFixture>;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
-  state = await createOpenClawTestState({
-    label: "repair-handoff",
-    env: {
-      OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
-      OPENCLAW_UPDATE_POST_CORE: undefined,
-    },
-  });
-  fixture = createManagedHandoffRecoveryFixture(state.root);
-  await state.writeConfig({ plugins: { enabled: false }, update: { channel: "stable" } });
-  await fs.writeFile(
-    state.path("package.json"),
-    JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+function repair(flags = ["--yes", "--json", "--timeout", "15"]) {
+  return withCliProcessScope(() =>
+    runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair", ...flags] }),
   );
-  mocks.root.mockResolvedValue(state.root);
-  mocks.doctor.mockReset().mockResolvedValue(undefined);
-  mocks.plugins.mockReset().mockResolvedValue(pluginResult);
-  mocks.convergence.mockReset().mockImplementation(async ({ pluginUpdate }) => ({
-    pluginUpdate,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-  }));
-  for (const method of ["log", "error", "writeJson"] as const) {
-    vi.spyOn(defaultRuntime, method).mockImplementation(() => undefined);
-  }
-  vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
-});
-afterEach(async () => {
-  vi.restoreAllMocks();
-  await state.cleanup();
-});
+}
 
-it("registered update repair settles a dead uncertain lease and admits the next updater", async () => {
-  fixture.seed();
-  mocks.doctor.mockImplementation(async () => {
-    expect(fixture.readMetadata(fixture.current())?.facts.runIds).toEqual([
-      "retained-update",
-      listUpdateRuns()[0]?.runId,
-    ]);
-  });
-  await expect(
-    withUpdateCommandExecutor("blocked-before-repair", async (executor) => {
-      await executor.enter(state.root);
-    }),
-  ).rejects.toThrow("Another update executor owns this installation");
-
-  await withCliProcessScope(() =>
-    runRegisteredCli({
-      register: registerUpdateCli,
-      argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
-    }),
+function handoffDatabase() {
+  return createManagedHandoffLeaseDatabase(
+    state.path("handoff-control/managed-update-handoffs.sqlite"),
   );
+}
 
-  expect(mocks.doctor).toHaveBeenCalledOnce();
-  expect(mocks.plugins).toHaveBeenCalledOnce();
-  expect(fixture.store.read(state.root)).toEqual({ kind: "absent" });
-  const runs = listUpdateRuns();
-  expect(runs).toHaveLength(1);
-  expect(runs[0]).toMatchObject({
-    status: "succeeded",
-    steps: expect.arrayContaining([
-      expect.objectContaining({
-        step: "finalize:handoff-settlement",
-        status: "completed",
-        detail: expect.stringContaining("legacy handoff lease reclaimed"),
-      }),
-    ]),
+function legacyPayload(helper: typeof fixture.helper, executor = helper) {
+  return JSON.stringify({ version: 2, executor, helper, action: { kind: "update" } });
+}
+
+function expectAbsent(...roots: string[]) {
+  roots.forEach((root) => expect(fixture.store.read(root)).toEqual({ kind: "absent" }));
+}
+
+function expectSettlement(detail: string) {
+  const run = listUpdateRuns()[0]!;
+  expect(run.status).toBe("succeeded");
+  expect(run.steps.find(({ step }) => step === "finalize:handoff-settlement")).toMatchObject({
+    status: "completed",
+    detail: expect.stringContaining(detail),
   });
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
+}
+
+async function expectAdmitted(owner: string) {
   await expect(
-    withUpdateCommandExecutor("next-update", async (executor) => {
+    withUpdateCommandExecutor(owner, async (executor) => {
       const fence = await executor.enter(state.root);
       fence.assertCurrent();
       return "admitted";
     }),
   ).resolves.toBe("admitted");
+}
+
+beforeEach(async () => {
+  state = await createRepairState("repair-handoff", {
+    OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+    OPENCLAW_UPDATE_POST_CORE: undefined,
+  });
+  fixture = createManagedHandoffRecoveryFixture(state.root);
+  writeJsonFile(state.path("package.json"), { name: "openclaw", version: "1.0.0" });
+});
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await state.cleanup();
 });
 
 it("does not reclaim a handoff from a programmatic call without CLI process ownership", async () => {
@@ -144,3 +103,256 @@ it("does not reclaim a handoff from a programmatic call without CLI process owne
     listUpdateRuns()[0]?.steps.some((step) => step.step === "finalize:handoff-settlement"),
   ).toBe(false);
 });
+
+it("registered update repair leaves a live current root owner alone", async () => {
+  const acquired = fixture.store.acquire(state.root, "current-update", { kind: "update" });
+  expect(acquired.kind).toBe("acquired");
+  const retained = fixture.store.read(state.root);
+
+  await repair(["--yes", "--no-restart", "--json"]);
+
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
+  expect(fixture.store.read(state.root)).toEqual(retained);
+});
+
+it.each([
+  ["foreground", "dead"],
+  ["native", "dead"],
+  ["foreground", "live helper"],
+  ["native", "live executor"],
+  ["foreground", "unknown helper"],
+  ["native", "unverified scope"],
+] as const)("repair settles or reports a closing %s lease with %s", async (lifetime, owners) => {
+  const previous = fixture.seed();
+  const nativeScope = handoffScope.createManagedHandoffScopeReader({});
+  vi.spyOn(handoffScope, "createManagedHandoffScopeReader").mockReturnValue({
+    ...nativeScope,
+    nativeClosed: () => owners !== "unverified scope",
+  });
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .updateTable("managed_update_handoffs")
+        .set({
+          payload_json: JSON.stringify({
+            version: 2,
+            helper: previous.helper,
+            executor: previous.executor,
+            action: {
+              kind: "triage",
+              phase: "closing",
+              lifetime:
+                lifetime === "foreground"
+                  ? { kind: "foreground", boot: fixture.store.bootIdentity() }
+                  : {
+                      kind: "native",
+                      unit: "openclaw-gateway.service",
+                      scope: "triage.scope",
+                      placement: { kind: "attached", invocation: "a".repeat(32) },
+                    },
+            },
+          }),
+        }),
+    ),
+  );
+  if (owners === "live executor") {
+    fixture.births.set(previous.executor.pid, Number(previous.executor.startIdentity));
+  } else if (owners === "live helper" || owners === "unknown helper") {
+    fixture.births.set(
+      previous.helper.pid,
+      owners === "live helper" ? Number(previous.helper.startIdentity) : null,
+    );
+  }
+  const retained = fixture.rows();
+  await repair();
+  if (owners === "dead") {
+    expectAbsent(state.root);
+    expectSettlement("legacy handoff lease reclaimed");
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Warning: Reclaiming"),
+    );
+    await expectAdmitted("after-closing-repair");
+  } else {
+    expect(fixture.rows()).toEqual(retained);
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`owner ${previous.owner}, lease version 2, phase closing`),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.doctor).not.toHaveBeenCalled();
+  }
+});
+
+function seedLegacyLineage(nested = false, bound = false) {
+  const previous = fixture.seed({ ageMs: 13 * 60 * 60_000 });
+  const key = `${state.root}/.openclaw-update-child-01234567-89ab-cdef-0123-456789abcdef-lineage-${"a".repeat(64)}`;
+  handoffDatabase()(true, (db) =>
+    executeSqliteQuerySync(
+      db,
+      leaseQueries(db)
+        .updateTable("managed_update_handoffs")
+        .set({
+          install_root: key,
+          payload_json: legacyPayload(previous.helper, bound ? previous.executor : previous.helper),
+        })
+        .where("install_root", "=", state.root),
+    ),
+  );
+  if (nested) {
+    const retained = fixture.store.read(key);
+    if (retained.kind !== "current") {
+      throw new Error("Missing lineage fixture");
+    }
+    fixture.insert([
+      {
+        install_root: `${key}/.openclaw-update-child-nested`,
+        owner: retained.lease.owner,
+        payload_json: retained.lease.payload,
+        updated_at: retained.lease.updatedAt,
+      },
+    ]);
+  }
+  // An unbound legacy reservation never had a detached executor. An unrelated group
+  // or an EPERM group probe must not turn its dead identity into live custody.
+  vi.spyOn(childTree, "isChildProcessTreeAlive").mockReturnValue(true);
+  fixture.repairFacts.mockRestore();
+  vi.spyOn(os, "tmpdir").mockReturnValue(state.root);
+  const original = createUpdateRun({
+    trigger: "cli",
+    origin: { driver: { ...previous.helper, host: os.hostname() } },
+  });
+  finishUpdateRun(original.runId, { status: "failed", reason: "update-failed" });
+  return key;
+}
+
+it.each(["root", "dead", "reused", "nested"] as const)(
+  "repair reclaims a %s handoff owner and admits the next update",
+  async (identity) => {
+    const root = identity === "root";
+    const key = root ? state.root : seedLegacyLineage(identity === "nested");
+    if (root) {
+      fixture.seed();
+      mocks.doctor.mockImplementation(async () => {
+        expect(fixture.readMetadata(fixture.current())?.facts.runIds).toEqual([
+          "retained-update",
+          listUpdateRuns()[0]?.runId,
+        ]);
+      });
+      await expect(
+        withUpdateCommandExecutor("blocked-before-repair", async (executor) => {
+          await executor.enter(state.root);
+        }),
+      ).rejects.toThrow("Another update executor owns this installation");
+    }
+    if (identity === "reused") {
+      fixture.births.set(fixture.helper.pid, 99);
+    }
+    await repair();
+    expectAbsent(key, `${key}/.openclaw-update-child-nested`);
+    if (root) {
+      expect(listUpdateRuns()).toHaveLength(1);
+    }
+    expectSettlement(root ? "legacy handoff lease reclaimed" : key);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ok" }),
+    );
+    await expectAdmitted("after-lineage-repair");
+  },
+);
+
+// Process-group survival is POSIX-only; Windows children have no detached group to inspect.
+const preservedOwnerCases: readonly ("live" | "uninspectable" | "EPERM" | "surviving group")[] =
+  process.platform === "win32"
+    ? ["live", "uninspectable", "EPERM"]
+    : ["live", "uninspectable", "EPERM", "surviving group"];
+
+it.each(preservedOwnerCases)(
+  "repair preserves a %s child-lineage owner with actionable guidance",
+  async (identity) => {
+    const key = seedLegacyLineage(false, identity === "surviving group");
+    if (identity !== "surviving group") {
+      fixture.births.set(
+        fixture.helper.pid,
+        identity === "live" ? Number(fixture.helper.startIdentity) : null,
+      );
+    }
+    if (identity === "EPERM") {
+      vi.mocked(pidAlive.isPidDefinitelyDead).mockRestore();
+      const kill = process.kill.bind(process);
+      vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
+        if (pid === fixture.helper.pid) {
+          throw Object.assign(new Error("permission denied"), { code: "EPERM" });
+        }
+        return kill(pid, signal);
+      });
+      // Both Windows probes must observe the synthetic owner's denied permissions.
+      const readIdentity = nativeProcess.readProcessIdentity;
+      vi.spyOn(nativeProcess, "readProcessIdentity").mockImplementation((pid) => {
+        if (pid === fixture.helper.pid) {
+          throw new ProcSafeError("access-denied", "permission denied");
+        }
+        return readIdentity(pid);
+      });
+    }
+    const retained = fixture.store.read(key);
+    await repair();
+    expect(defaultRuntime.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        identity === "surviving group"
+          ? /descendants remain live or unverified.*update repair/
+          : /live or unverified.*PID.*process-inspection permissions.*update repair/,
+      ),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(fixture.store.read(key)).toEqual(retained);
+    expect(mocks.doctor).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])(
+  "checks every retained child's recovery history (pending rollback: %s)",
+  async (pendingRollback) => {
+    const first = seedLegacyLineage();
+    const second = `${state.root}/.openclaw-update-child-z-other-run`;
+    const identity = { pid: 1_000_003, startIdentity: "13" };
+    const run = createUpdateRun({
+      trigger: "cli",
+      origin: { driver: { ...identity, host: os.hostname() } },
+    });
+    if (pendingRollback) {
+      recordUpdateRunStep(run.runId, { step: "package rollback", status: "in_progress" });
+    }
+    finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" });
+    fixture.insert([
+      {
+        install_root: second,
+        owner: run.runId,
+        payload_json: legacyPayload(identity),
+        updated_at: Date.now() - 13 * 60 * 60_000,
+      },
+    ]);
+    const retained = [fixture.store.read(first), fixture.store.read(second)];
+    if (!pendingRollback) {
+      mocks.doctor.mockImplementation(async () => {
+        expect(fixture.readMetadata(fixture.current())?.facts.runIds).toEqual(
+          expect.arrayContaining([run.runId]),
+        );
+      });
+    }
+    await repair();
+    if (pendingRollback) {
+      expect(defaultRuntime.error).toHaveBeenCalledWith(
+        expect.stringContaining("unverified rollback"),
+      );
+      expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+      expect([fixture.store.read(first), fixture.store.read(second)]).toEqual(retained);
+      expectAbsent(state.root);
+      expect(mocks.doctor).not.toHaveBeenCalled();
+    } else {
+      expectAbsent(first, second);
+      expect(listUpdateRuns()[0]?.status).toBe("succeeded");
+    }
+  },
+);

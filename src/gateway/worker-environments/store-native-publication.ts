@@ -1,4 +1,4 @@
-import type { DatabaseSync } from "node:sqlite";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import type { DatabasePathIdentity } from "../../infra/sqlite-worker-identity.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
@@ -26,7 +26,7 @@ export function reserveWorkerEnvironmentNativePublication(identity: DatabasePath
 
 /** Pairing and placement keep their atomic writes, then publish through the inventory owner. */
 export function publishWorkerEnvironmentNativeMutation(
-  db: DatabaseSync,
+  db: EngineConnection,
   environmentId: string,
   patch: WorkerEnvironmentNativePatch,
 ): void {
@@ -39,8 +39,6 @@ export function publishWorkerEnvironmentNativeMutation(
   const captured = structuredClone(patch);
   if (
     !stageSqliteTransactionState(db, {
-      stage() {},
-      rollback() {},
       commit() {
         publish(environmentId, captured);
       },

@@ -30,11 +30,7 @@ export function shouldOmitOllamaCompatResponseFormat(params: {
   if (params.hasTools()) {
     return true;
   }
-  try {
-    return new URL(params.baseUrl).origin === OLLAMA_CLOUD_ORIGIN;
-  } catch {
-    return false;
-  }
+  return URL.parse(params.baseUrl)?.origin === OLLAMA_CLOUD_ORIGIN;
 }
 
 /**

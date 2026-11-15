@@ -11,6 +11,7 @@ import {
   filterRestoreManifestTargets,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationGithubIssue,
+  type SessionSqliteMigrationManifest,
   type SessionSqliteMigrationTargetInput,
   type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
@@ -38,29 +39,14 @@ export function writeSessionSqliteMigrationFailureReports(
       ? filterRestoreManifestTargets(manifest, params.trustedTargets)
       : manifest.targets
     : [];
-  const payload = {
-    failedAt: manifest?.failedAt,
-    generatedAt: new Date().toISOString(),
-    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
-    reason: params.reason,
-    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
-    restoreStatus: manifest?.restore?.status ?? "not_attempted",
-    runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
-    targets: targets.map((target) => {
-      const { issues, recoveryIssues } = collectFailureReportIssues(target, params.recoveryTargets);
-      return {
-        agentId: sanitizeFailureReportText(target.agentId),
-        completedMoves: target.completedMoves.length,
-        issues,
-        recoveryIssues,
-        plannedMoves: target.plannedMoves.length,
-        sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-        storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
-        validationBeforeArchive: target.validationBeforeArchive,
-      };
-    }),
-    version: VERSION,
-  };
+  const payload = createFailureReportPayload(
+    manifestPath,
+    manifest,
+    params.reason,
+    targets.map((target) =>
+      createFailureReportTarget(target, collectFailureReportIssues(target, params.recoveryTargets)),
+    ),
+  );
   fs.writeFileSync(jsonPath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
   fs.writeFileSync(markdownPath, renderFailureMarkdown(payload), { mode: 0o600 });
   if (manifest) {
@@ -89,9 +75,10 @@ function collectFailureReportIssues(
   for (const issue of [...target.issues, ...(recoveryTarget?.issues ?? [])]) {
     issues.set(JSON.stringify([issue.code, issue.message, issue.sessionKey]), issue);
   }
+  const replacements = failureReportPathReplacements(target);
   const sanitize = (issue: DoctorSessionSqliteIssue): DoctorSessionSqliteIssue => ({
     code: issue.code,
-    message: sanitizeFailureIssueMessage(issue, target),
+    message: sanitizeFailureIssueMessage(issue, replacements),
     sessionKey: issue.sessionKey ? redactSessionKey(issue.sessionKey) : undefined,
   });
   return {
@@ -123,28 +110,22 @@ export function createSessionSqliteMigrationFailureIssue(
   }
   const reportBody =
     persistedBody ??
-    renderFailureMarkdown({
-      failedAt: manifest.failedAt,
-      generatedAt: new Date().toISOString(),
-      manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
-      reason: "session SQLite migration failed",
-      recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
-      restoreStatus: manifest.restore?.status ?? "not_attempted",
-      runId: manifest.runId,
-      targets: targets.map((target) => ({
-        agentId: sanitizeFailureReportText(target.agentId),
-        completedMoves: target.completedMoves.length,
-        issues: target.issues.map((issue) => ({
-          code: issue.code,
-          message: sanitizeFailureIssueMessage(issue, target),
-        })),
-        plannedMoves: target.plannedMoves.length,
-        sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
-        storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
-        validationBeforeArchive: target.validationBeforeArchive,
-      })),
-      version: VERSION,
-    });
+    renderFailureMarkdown(
+      createFailureReportPayload(
+        manifestPath,
+        manifest,
+        "session SQLite migration failed",
+        targets.map((target) => {
+          const replacements = failureReportPathReplacements(target);
+          return createFailureReportTarget(target, {
+            issues: target.issues.map((issue) => ({
+              code: issue.code,
+              message: sanitizeFailureIssueMessage(issue, replacements),
+            })),
+          });
+        }),
+      ),
+    );
   const body = [
     "OpenClaw doctor generated this sanitized report from a local session SQLite migration recovery.",
     "",
@@ -236,26 +217,44 @@ function resolveFailureReportPaths(manifestPath: string): {
   };
 }
 
-function renderFailureMarkdown(payload: {
-  failedAt?: string;
-  generatedAt: string;
-  manifestPath: string;
-  reason: string;
-  recoveryCommand: string;
-  restoreStatus: string;
-  runId: string;
-  targets: Array<{
-    agentId: string;
-    completedMoves: number;
+function createFailureReportTarget(
+  target: SessionSqliteMigrationTargetManifest,
+  evidence: {
     issues: DoctorSessionSqliteIssue[];
     recoveryIssues?: DoctorSessionSqliteIssue[];
-    plannedMoves: number;
-    sqlitePath: string;
-    storePath: string;
-    validationBeforeArchive: string;
-  }>;
-  version: string;
-}): string {
+  },
+) {
+  return {
+    agentId: sanitizeFailureReportText(target.agentId),
+    completedMoves: target.completedMoves.length,
+    ...evidence,
+    plannedMoves: target.plannedMoves.length,
+    sqlitePath: sanitizeFailureReportText(shortenFailureReportPath(target.sqlitePath)),
+    storePath: sanitizeFailureReportText(shortenFailureReportPath(target.storePath)),
+    validationBeforeArchive: target.validationBeforeArchive,
+  };
+}
+
+function createFailureReportPayload(
+  manifestPath: string,
+  manifest: SessionSqliteMigrationManifest | undefined,
+  reason: string,
+  targets: ReturnType<typeof createFailureReportTarget>[],
+) {
+  return {
+    failedAt: manifest?.failedAt,
+    generatedAt: new Date().toISOString(),
+    manifestPath: sanitizeFailureReportText(shortenFailureReportPath(manifestPath)),
+    reason,
+    recoveryCommand: "openclaw doctor --session-sqlite recover --github-issue",
+    restoreStatus: manifest?.restore?.status ?? "not_attempted",
+    runId: manifest?.runId ?? path.basename(manifestPath, ".json"),
+    targets,
+    version: VERSION,
+  };
+}
+
+function renderFailureMarkdown(payload: ReturnType<typeof createFailureReportPayload>): string {
   const lines = [
     "# Session SQLite Migration Failure",
     "",
@@ -317,18 +316,39 @@ function shortenFailureReportPath(filePath: string): string {
   return filePath;
 }
 
-function sanitizeFailureIssueMessage(
-  issue: DoctorSessionSqliteIssue,
+/**
+ * Resolves a target's path rewrites once. A target can carry one move per legacy file
+ * (tens of thousands), so rewriting every path inside every issue message was
+ * quadratic and could hold doctor recovery for hours (#194621). A plain home-prefix
+ * rewrite equals what redactAbsoluteHomePaths applies to every message anyway, so only
+ * rewrites that also normalize the path need a per-message pass.
+ */
+function failureReportPathReplacements(
   target: SessionSqliteMigrationTargetManifest,
-): string {
-  let message = issue.message;
+): ReadonlyArray<readonly [string, string]> {
+  const home = process.env.HOME;
+  const replacements = new Map<string, string>();
   for (const filePath of [
     target.storePath,
     target.sqlitePath,
     ...target.plannedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
     ...target.completedMoves.flatMap((move) => [move.sourcePath, move.archivePath]),
   ]) {
-    message = message.split(filePath).join(shortenFailureReportPath(filePath));
+    const shortened = shortenFailureReportPath(filePath);
+    if (shortened !== filePath && (!home || shortened !== `~${filePath.slice(home.length)}`)) {
+      replacements.set(filePath, shortened);
+    }
+  }
+  return [...replacements];
+}
+
+function sanitizeFailureIssueMessage(
+  issue: DoctorSessionSqliteIssue,
+  replacements: ReadonlyArray<readonly [string, string]>,
+): string {
+  let message = issue.message;
+  for (const [filePath, shortened] of replacements) {
+    message = message.split(filePath).join(shortened);
   }
   if (issue.sessionKey) {
     message = message.split(issue.sessionKey).join(redactSessionKey(issue.sessionKey));

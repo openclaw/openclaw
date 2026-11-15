@@ -10,7 +10,7 @@ import {
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
 import {
   attachPluginInstallTransaction,
-  resolvePluginInstallTransaction,
+  takePluginInstallTransaction,
   resolvePluginInstallTransactionRequest,
 } from "./install-transaction.js";
 import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
@@ -21,6 +21,7 @@ import {
 } from "./lifecycle.js";
 import type { ManagedPluginSourceInstallRequest } from "./management-install.js";
 import { recordPluginManifestInstallOwner } from "./manifest-install-owner.js";
+import { createEmptyPluginMetadataSnapshot } from "./plugin-metadata-empty.test-support.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
@@ -85,15 +86,19 @@ vi.mock("./manifest-registry.js", async (importOriginal) => {
 });
 vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
-  loadPluginMetadataSnapshot: () => ({ index: { plugins: [] }, byPluginId: new Map() }),
+  loadPluginMetadataSnapshot: () => createEmptyPluginMetadataSnapshot(),
 }));
 vi.mock("./slot-selection.js", () => ({
-  applySlotSelectionForPlugin: (config: unknown) => ({ config, warnings: [] }),
+  applySlotSelectionForPlugin: (config: unknown) => config,
 }));
 vi.mock("./registry-refresh.js", () => ({
   refreshPluginRegistryAfterConfigMutation: async () => undefined,
 }));
-vi.mock("./status.js", () => ({ buildPluginSnapshotReport: () => ({ plugins: [] }) }));
+// mock-isolation: Keep status discovery and its persistent state outside the install fixture.
+vi.mock("./status.js", () => ({
+  buildPluginSnapshotReport: () => ({ plugins: [] }),
+  buildPluginSnapshotReportAsync: async () => ({ plugins: [] }),
+}));
 const { installManagedPluginSource } = await import("./management-install.js");
 const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
 const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({
@@ -254,7 +259,11 @@ describe("managed plugin install transactions", () => {
           const transactionRequest = resolvePluginInstallTransactionRequest(params);
           const copied = await installPackageDir(
             transactionRequest
-              ? requestDeferredPackageDirInstall(copy, transactionRequest.assertOwned)
+              ? requestDeferredPackageDirInstall(
+                  copy,
+                  transactionRequest.assertOwned,
+                  transactionRequest.prepareSettlement,
+                )
               : copy,
           );
           if (!copied.ok) {
@@ -300,7 +309,7 @@ describe("managed plugin install transactions", () => {
       });
       if (failure === "none") {
         await expect(installed).resolves.toMatchObject({ ok: true });
-        expect(resolvePluginInstallTransaction({ ...(await installed) })).toBeUndefined();
+        expect(takePluginInstallTransaction({ ...(await installed) })).toBeUndefined();
       } else if (failure === "authority-closed") {
         await expect(installed).rejects.toThrow("authority-closed");
         expect(mocks.commit).not.toHaveBeenCalled();
@@ -373,6 +382,8 @@ describe("managed plugin install transactions", () => {
   it.each(["rollback", "commit"] as const)(
     "reports %s failure without reversing committed state",
     async (settlement) => {
+      const targetDir = await fs.realpath(tempDirs.make("openclaw-managed-settlement-"));
+      createColdPluginFixture({ rootDir: targetDir, pluginId: "demo" });
       const conflict = new Error("config write rejected");
       const settlementError = new Error(`${settlement} failed`);
       const transaction = { commit: vi.fn(), rollback: vi.fn() };
@@ -382,7 +393,7 @@ describe("managed plugin install transactions", () => {
           invokePluginArtifactInstallMock(
             async () =>
               attachPluginInstallTransaction(
-                { ok: true, pluginId: "demo", targetDir: "/managed/demo" },
+                { ok: true, pluginId: "demo", targetDir },
                 transaction,
               ),
             params,

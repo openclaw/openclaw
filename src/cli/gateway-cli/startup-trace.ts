@@ -21,7 +21,6 @@ export function createGatewayCliStartupTrace(log: Pick<SubsystemLogger, "info">)
   const startMeasure = <T>(name: string, run: () => Awaitable<T>) => {
     const before = performance.now();
     let completedAt = before;
-    let emitted = false;
     const result = withDiagnosticPhase(name, run).finally(() => {
       completedAt = performance.now();
     });
@@ -35,10 +34,6 @@ export function createGatewayCliStartupTrace(log: Pick<SubsystemLogger, "info">)
       result,
       settled,
       emit() {
-        if (emitted) {
-          return;
-        }
-        emitted = true;
         emit(name, completedAt - before, completedAt);
         last = completedAt;
       },

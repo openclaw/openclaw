@@ -1,4 +1,5 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { throwSettledAggregate } from "../../infra/error-graph-internal.js";
 import {
   createEnvironmentComputerTransportOwner,
   createWorkerComputerTransportOwner,
@@ -110,12 +111,7 @@ export function createWorkerComputerService(
             (await prepared.catch(() => undefined))?.close("environment-stopped"),
           ),
       );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Attached computer cleanup failed");
-      }
+      throwSettledAggregate(results, "Attached computer cleanup failed");
     },
     prepare: (claim: WorkerSessionTurnClaim) => {
       if (stopped || !options.placements.validateTurnClaim(claim)) {
@@ -222,12 +218,7 @@ export function createWorkerComputerService(
           (await prepared.catch(() => undefined))?.close("gateway-stop"),
         ),
       ]);
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Session computer cleanup failed");
-      }
+      throwSettledAggregate(results, "Session computer cleanup failed");
     },
   };
 }

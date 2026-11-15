@@ -50,6 +50,15 @@ extension GatewayProcessManager {
         return whenMissing
     }
 
+    struct ServiceRestoration: Sendable, Equatable {
+        let retained: GatewayLaunchAgentManager.InstalledServiceCLI
+        let installer: BundledRuntime
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.retained == rhs.retained && lhs.installer.root == rhs.installer.root
+        }
+    }
+
     struct LaunchAgentEnableRequest: Sendable {
         let port: Int
         let allowUnconfigured: Bool
@@ -57,7 +66,7 @@ extension GatewayProcessManager {
         let runtimeForUpdate: BundledRuntime?
         let runtimeEnvironment: [String: String]?
         let nodeMigration: ManagedNodeGatewayMigration.Candidate?
-        let serviceForRestoration: GatewayLaunchAgentManager.InstalledServiceCLI?
+        let serviceForRestoration: ServiceRestoration?
         let expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority?
         let mutationCheck: (@MainActor @Sendable () async throws -> Void)?
         var invocationIDs: [UInt64]
@@ -176,16 +185,13 @@ extension GatewayProcessManager {
         if let retainedServiceCLI {
             return try GatewayLaunchAgentManager.resumedServiceCLI(retainedServiceCLI)
         }
-        guard let stored = AppDefaults.standard.object(forKey: GatewayLaunchAgentManager.resumeCommandKey) else {
+        guard let cli = try self.retainedServiceIntent() else {
             guard !AppDefaults.standard.bool(forKey: pauseDefaultsKey),
                   try self.hasUnrecordedLegacyManagedService() else { return nil }
             return try GatewayLaunchAgentManager.legacyManagedNodeCLI(homeDirectory: LaunchAgentPlist.homeDirectoryURL)
         }
-        guard let data = stored as? Data else {
-            throw GatewayHostingError(message: "The retained Gateway command could not be read.")
-        }
-        return try GatewayLaunchAgentManager.resumeCLI(
-            from: data, stateDirectory: AppProfile.current.stateDirectoryURL())
+        return try GatewayLaunchAgentManager.resumedServiceCLI(
+            cli, stateDirectory: AppProfile.current.stateDirectoryURL())
     }
 
     func loadRetainedServiceForResume() throws {
@@ -198,13 +204,13 @@ extension GatewayProcessManager {
 
     func retainManagedServiceForResume(
         expectedServiceAuthority: GatewayLaunchAgentManager.ServiceAuthority? = nil) async throws
-        -> GatewayLaunchAgentManager.ServiceAuthority
+        -> (authority: GatewayLaunchAgentManager.ServiceAuthority, migrationPending: Bool)
     {
         let custody = try expectedServiceAuthority ?? GatewayLaunchAgentManager.gatewayServiceAuthority()
         // A missing plist is a known state; a present record that cannot be captured must survive Pause.
         if custody.definition.plist == nil {
             if let error = custody.currentError() { throw GatewayHostingError(message: error) }
-            return custody
+            return (custody, false)
         }
         guard self.installation == .managed,
               let snapshot = GatewayLaunchAgentManager.launchdConfigSnapshot(),
@@ -224,7 +230,7 @@ extension GatewayProcessManager {
         _ = try GatewayLaunchAgentManager.retainedServiceIntent(
             from: GatewayLaunchAgentManager.resumeData(for: cli), stateDirectory: state)
         self.retainedServiceCLI = cli
-        return custody
+        return (custody, pin?.status == .migrationPending)
     }
 
     struct PausedServiceUpdate {

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwSettledAggregate } from "../infra/error-graph-internal.js";
 import type { ActiveTranscriptsSession } from "./capture-types.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
@@ -7,7 +8,12 @@ export class TranscriptStartError extends Error {
     readonly code: "id-conflict" | "admitted-start-failed",
     cause: unknown,
     // Only failed provider startup retains an admission that its owning service may retry.
-    readonly retry?: { session: TranscriptSessionDescriptor; revision: string },
+    readonly retry?: {
+      session: TranscriptSessionDescriptor;
+      revision: string;
+      // Only an inserted, never accepted candidate can be discarded on abandonment.
+      discardOnAbandon: boolean;
+    },
   ) {
     super(cause instanceof Error ? cause.message : String(cause), { cause });
     this.name = "TranscriptStartError";
@@ -28,6 +34,7 @@ export function retainTranscriptStartRetry(
   return {
     session: retry.session,
     revision: retry.revision,
+    discardOnAbandon: retry.discardOnAbandon,
     assertCurrent: () => {
       if (!pendingStartRetries.has(owner)) {
         throw new TranscriptStartError(
@@ -39,6 +46,8 @@ export function retainTranscriptStartRetry(
     release: () => pendingStartRetries.delete(owner),
   };
 }
+
+export type TranscriptStartRetry = ReturnType<typeof retainTranscriptStartRetry>;
 
 export function revokeTranscriptStartRetries(
   stateDir: string,
@@ -103,12 +112,7 @@ export function prepareTranscriptCaptureDisable(stateDir: string) {
       const results = await Promise.allSettled(
         entries.map(async (entry) => entry.directCapture?.drain()),
       );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : [],
-      );
-      if (failures.length) {
-        throw new AggregateError(failures, "Transcript capture policy drainage failed");
-      }
+      throwSettledAggregate(results, "Transcript capture policy drainage failed");
     },
     resume: () => {
       if (capturePolicyTransitions.get(stateDir) === transition) {

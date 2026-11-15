@@ -17,10 +17,23 @@ export type ChannelIngressPressureHealth = {
   oldestReceivedAt: number;
 };
 
+export type ChannelIngressPressureSnapshot = {
+  pressure: ChannelIngressPressureHealth[];
+  nextClaimExpiryAtMs: number | null;
+};
+
+export type ChannelIngressHealthErrors = { failed?: string; pressure?: string };
+
+export type ChannelIngressHealthSnapshot = {
+  failed?: ChannelIngressFailedHealth[];
+  pressure?: ChannelIngressPressureSnapshot;
+  errors: ChannelIngressHealthErrors;
+};
+
 export type ChannelIngressReadCommand =
   | { type: "channelIngress.accounts"; input: { channelId: string } }
   | { type: "channelIngress.failedHealth"; input?: undefined }
-  | { type: "channelIngress.pressureHealth"; input: { now: number } };
+  | { type: "channelIngress.health"; input: { now: number; failed: boolean; pressure: boolean } };
 
 export function isChannelIngressReadCommand(value: unknown): value is ChannelIngressReadCommand {
   if (!isRecord(value)) {
@@ -33,9 +46,11 @@ export function isChannelIngressReadCommand(value: unknown): value is ChannelIng
     return isRecord(value.input) && typeof value.input.channelId === "string";
   }
   return (
-    value.type === "channelIngress.pressureHealth" &&
+    value.type === "channelIngress.health" &&
     isRecord(value.input) &&
-    typeof value.input.now === "number"
+    typeof value.input.now === "number" &&
+    typeof value.input.failed === "boolean" &&
+    typeof value.input.pressure === "boolean"
   );
 }
 
@@ -45,5 +60,5 @@ export type ChannelIngressReadReply = {
 } & (
   | { type: "channelIngress.accounts"; result: string[] }
   | { type: "channelIngress.failedHealth"; result: ChannelIngressFailedHealth[] }
-  | { type: "channelIngress.pressureHealth"; result: ChannelIngressPressureHealth[] }
+  | { type: "channelIngress.health"; result: ChannelIngressHealthSnapshot }
 );

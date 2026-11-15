@@ -5,22 +5,21 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 // Discovers and runs bundled plugin package asset hooks.
-import { runManagedCommand } from "./lib/managed-child-process.mts";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
+import { runPluginAssetCommand } from "./lib/plugin-asset-command.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
 const rootDir = resolveRepoRoot(import.meta.url);
 const VALID_PHASES = new Set(["build", "copy"]);
-// Each complete bundled-plugin asset generator gets the same 10-minute build ceiling.
-const BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS = 600_000;
 
 type AssetPhase = "build" | "copy";
 type AssetOptions = {
   phase?: AssetPhase;
   plugins?: string[];
   rootDir?: string;
-  timeoutMs?: number;
+  deferIsolated?: boolean;
 };
 
 function isAssetPhase(value: unknown): value is AssetPhase {
@@ -91,8 +90,27 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
   if (!isAssetPhase(phase)) {
     throw new Error(`Unsupported bundled plugin asset phase: ${String(phase)}`);
   }
+  if (options.deferIsolated && phase !== "build") {
+    throw new Error("--defer-isolated requires --phase build");
+  }
 
   const pluginFilters = new Set((options.plugins ?? []).filter(Boolean));
+  const generatedSources = new Set(
+    options.deferIsolated ? listGeneratedExtensionAssetSources({ rootDir: repoRoot }) : [],
+  );
+  // Their package builders generate and validate assets after compiling the
+  // isolated graph. Browser declarations fingerprint dependencies outside that
+  // graph; keep those hooks early, along with untracked source packages.
+  const deferredPluginIds = new Set(
+    options.deferIsolated
+      ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
+          .filter(
+            ({ id, isolated }) =>
+              isolated && !generatedSources.has(`extensions/${id}/dist/openclaw.plugin.json`),
+          )
+          .map(({ id }) => id)
+      : [],
+  );
   const extensionsDir = path.join(repoRoot, "extensions");
   let entries;
   try {
@@ -103,7 +121,7 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
 
   const hooks = [];
   for (const entry of entries) {
-    if (!entry.isDirectory()) {
+    if (!entry.isDirectory() || deferredPluginIds.has(entry.name)) {
       continue;
     }
     const pluginDir = path.join(extensionsDir, entry.name);
@@ -141,7 +159,6 @@ export async function readBundledPluginAssetHooks(options: AssetOptions = {}) {
  */
 export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
   const phase = options.phase;
-  const timeoutMs = options.timeoutMs ?? BUNDLED_PLUGIN_ASSET_HOOK_TIMEOUT_MS;
   const hooks = await readBundledPluginAssetHooks(options);
   if (hooks.length === 0) {
     const scope = options.plugins?.length ? ` for ${options.plugins.join(", ")}` : "";
@@ -152,32 +169,35 @@ export async function runBundledPluginAssetHooks(options: AssetOptions = {}) {
     assertRealOutputRoot(path.join(options.rootDir ?? rootDir, "dist"));
   }
 
-  for (const hook of hooks) {
-    console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
-    let status;
-    try {
-      status = await runManagedCommand({
-        bin: hook.command,
+  // Build hooks write only their own package's assets; each is a short compiler
+  // process, so run a few at once. Copy hooks stage into dist/ and stay serial.
+  const queue = [...hooks];
+  let failure = 0;
+  const worker = async () => {
+    for (let hook = queue.shift(); hook && !failure; hook = queue.shift()) {
+      console.log(`[${hook.pluginId}] ${phase}: ${hook.command}`);
+      const status = await runPluginAssetCommand({
+        command: hook.command,
         cwd: hook.pluginDir,
-        env: process.env,
-        shell: true,
-        stdio: "inherit",
-        timeoutMs,
+        pluginId: hook.pluginId,
+        phase: hook.phase,
+      }).catch((error: unknown) => {
+        failure ||= 1;
+        throw error;
       });
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ETIMEDOUT") {
-        throw Object.assign(
-          new Error(
-            `Bundled plugin asset ${phase} hook timed out after ${timeoutMs}ms: ${hook.pluginId}`,
-          ),
-          { code: "ETIMEDOUT" },
-        );
-      }
-      throw error;
+      failure ||= status;
     }
-    if (status !== 0) {
-      process.exit(status);
-    }
+  };
+  // Join every running hook before reporting, so no child outlives the step.
+  const settled = await Promise.allSettled(
+    Array.from({ length: phase === "build" ? 4 : 1 }, worker),
+  );
+  const rejected = settled.find((result) => result.status === "rejected");
+  if (rejected) {
+    throw rejected.reason;
+  }
+  if (failure !== 0) {
+    process.exit(failure);
   }
 }
 
@@ -218,6 +238,7 @@ export function parseBundledPluginAssetArgs(argv: string[]) {
   const plugins: string[] = [];
   let phase: string | null = null;
   let check = false;
+  let deferIsolated = false;
 
   while (args.length > 0) {
     const arg = args.shift();
@@ -244,6 +265,10 @@ export function parseBundledPluginAssetArgs(argv: string[]) {
       check = true;
       continue;
     }
+    if (arg === "--defer-isolated") {
+      deferIsolated = true;
+      continue;
+    }
     throw new Error(`Unknown bundled plugin asset argument: ${String(arg)}`);
   }
 
@@ -258,8 +283,11 @@ export function parseBundledPluginAssetArgs(argv: string[]) {
   if (check && plugins.length > 0) {
     throw new Error("--check cannot be combined with --plugin filters");
   }
+  if (deferIsolated && (check || phase !== "build")) {
+    throw new Error("--defer-isolated requires --phase build without --check");
+  }
 
-  return { check, phase, plugins };
+  return { check, phase, plugins, ...(deferIsolated ? { deferIsolated } : {}) };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

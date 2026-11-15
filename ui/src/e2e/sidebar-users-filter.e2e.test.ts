@@ -1,0 +1,322 @@
+import { expect, it } from "vitest";
+import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsListResponse } from "./session-management.test-support.ts";
+import { openSidebarPages } from "./sidebar-customization.test-support.ts";
+
+const suite = createControlUiE2eSuite({
+  name: "Sidebar user filter",
+  startServerBeforeBrowser: true,
+});
+
+function peopleGatewayOptions(): NonNullable<Parameters<typeof installMockGateway>[1]> {
+  return {
+    operatorScopes: ["operator.read", "operator.write"],
+    presenceUsers: ["Ada Chen", "Bob Rivera", "Jacqueline Henriksen"].map((name, index) => ({
+      id: ["ada", "bob", "jacqueline"][index]!,
+      identity: { type: "profile", id: ["ada", "bob", "jacqueline"][index]! },
+      name,
+      self: index === 0,
+    })),
+    methodResponses: {
+      "sessions.list": {
+        ...sessionsListResponse([]),
+        ownerSessionCounts: [
+          { profileId: "ada", open: 33, running: 11 },
+          { profileId: "bob", open: 1, running: 0 },
+          { profileId: "jacqueline", open: 0, running: 0 },
+        ],
+      },
+    },
+  };
+}
+
+suite.define(() => {
+  it("keeps people counts at the edge and personal actions in one accessible menu", () =>
+    suite.withPage(
+      {
+        colorScheme: "light",
+        locale: "en-US",
+        viewport: { width: 1280, height: 800 },
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
+        const person = page.locator('[data-online-user-id="ada"]');
+        const row = person.locator("..");
+        const counts = person.locator(".sidebar-online__counts");
+        await counts.waitFor();
+        await page.mouse.move(900, 600);
+        const rowBounds = (await row.boundingBox())!;
+        const rest = (await counts.boundingBox())!;
+        expect(rowBounds.x + rowBounds.width - rest.x - rest.width).toBeLessThanOrEqual(16);
+        const label = (await person.locator(".sidebar-online__person-label").boundingBox())!;
+        const more = row.getByRole("button", { name: "Actions for Ada Chen", exact: true });
+        expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("0");
+        // The revealed action trails the name, so aim at the row's lead instead of its center.
+        const lead = { x: 12, y: 12 };
+        await person.hover({ position: lead });
+        const action = (await more.boundingBox())!;
+        expect(action.x).toBeGreaterThanOrEqual(label.x + label.width);
+        expect(action.x + action.width).toBeLessThanOrEqual(rest.x);
+        await more.click();
+        const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
+        await menu.waitFor();
+        expect(await counts.boundingBox()).toEqual(rest);
+        expect(await page.locator(".person-activity-hovercard").count()).toBe(0);
+        await menu.getByRole("menuitem", { name: "Pin to sidebar", exact: true }).click();
+        const shortcut = page.locator('[data-sidebar-entry="person:ada"]');
+        await shortcut.waitFor();
+        await page.reload();
+        await page.locator('[data-navigation-view="online"]').click();
+        await person.waitFor();
+        await shortcut.waitFor();
+        await person.click({ button: "right", position: lead });
+        await menu.getByRole("menuitem", { name: "Unpin from sidebar", exact: true }).click();
+        await expect.poll(() => shortcut.count()).toBe(0);
+        await person.focus();
+        await page.keyboard.press("Shift+F10");
+        await menu.waitFor();
+        const href = await person.getAttribute("href");
+        const newTab = menu.getByRole("menuitem", {
+          name: "Open activity in new tab",
+          exact: true,
+        });
+        expect(await newTab.getAttribute("href")).toBe(href);
+        expect(await newTab.getAttribute("target")).toBe("_blank");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), newTab.click()]);
+        await expect.poll(() => new URL(popup.url()).pathname).toBe(href);
+        await popup.close();
+        await menu.getByRole("menuitem", { name: "Copy activity link", exact: true }).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(new URL(href!, page.url()).href);
+        await person.click({ button: "right", position: lead });
+        await menu.waitFor();
+        await page.keyboard.press("Escape");
+        await expect.poll(() => menu.isVisible()).toBe(false);
+        expect(await person.evaluate((el) => el === document.activeElement)).toBe(true);
+        await more.click();
+        await page.mouse.click(900, 600);
+        await expect.poll(() => menu.isVisible()).toBe(false);
+        await person.click({ button: "right", position: lead });
+        await menu.getByRole("menuitem", { name: "View activity", exact: true }).click();
+        await expect.poll(() => new URL(page.url()).pathname).toBe(href);
+        expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      },
+    ));
+
+  it("keeps a person card while the pointer crosses other people toward it", () =>
+    suite.withPage(
+      { colorScheme: "light", locale: "en-US", viewport: { width: 1280, height: 800 } },
+      async ({ page }) => {
+        await page.clock.install();
+        await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await page.locator('[data-navigation-view="online"]').click();
+        const person = (id: string) => page.locator(`[data-online-user-id="${id}"]`);
+        const card = page.locator('.person-activity-hovercard[data-open="true"]');
+        const cardText = async () => (await card.textContent()) ?? "";
+        const box = async (id: string) => (await person(id).boundingBox())!;
+        // Row centers hold the action menu, so hover each person's lead.
+        const hoverAda = async () => {
+          await person("ada").hover({ position: { x: 12, y: 12 } });
+          await page.clock.runFor(450);
+          await expect.poll(cardText).toContain("Ada Chen");
+        };
+        // Load the lazy hovercard runtime on running time, then pause the clock.
+        await person("ada").hover({ position: { x: 12, y: 12 } });
+        await card.waitFor();
+        await page.mouse.move(900, 600);
+        await expect.poll(() => card.count()).toBe(0);
+        await pauseVirtualClock(page);
+
+        await hoverAda();
+        const ada = await box("ada");
+        const bob = await box("bob");
+        const target = (await card.boundingBox())!;
+        // The card's lower half sits beside later rows, so the direct path to
+        // it crosses them; none of them may take the card over.
+        await page.mouse.move(target.x + 24, target.y + target.height - 24, { steps: 24 });
+        await page.clock.runFor(600);
+        expect(await card.count()).toBe(1);
+        expect(await cardText()).toContain("Ada Chen");
+
+        // A straight sweep leaves the corridor at once and switches normally.
+        await hoverAda();
+        await page.mouse.move(ada.x + 12, bob.y + bob.height / 2, { steps: 8 });
+        await page.clock.runFor(100);
+        await expect.poll(cardText).toContain("Bob Rivera");
+
+        // Resting on a crossed row inside the corridor hands the card to it.
+        await page.mouse.move(900, 600);
+        await page.clock.runFor(300);
+        await hoverAda();
+        await page.mouse.move(ada.x + ada.width - 8, bob.y + bob.height / 2, { steps: 8 });
+        await page.clock.runFor(100);
+        expect(await cardText()).toContain("Ada Chen");
+        await page.clock.runFor(200);
+        await expect.poll(cardText).toContain("Bob Rivera");
+      },
+    ));
+
+  it("aligns quiet person actions on mobile without opening the activity hovercard", () =>
+    suite.withPage(
+      {
+        colorScheme: "dark",
+        locale: "en-US",
+        hasTouch: true,
+        viewport: { width: 390, height: 844 },
+      },
+      async ({ page }) => {
+        await installMockGateway(page, peopleGatewayOptions());
+        await page.goto(suite.server.baseUrl + "chat");
+        await navigationDrawerToggle(page).tap();
+        await page.locator('[data-navigation-view="online"]').tap();
+        const person = page.locator('[data-online-user-id="ada"]');
+        const more = person
+          .locator("..")
+          .getByRole("button", { name: "Actions for Ada Chen", exact: true });
+        await more.waitFor();
+        expect(await more.evaluate((el) => getComputedStyle(el.parentElement!).opacity)).toBe("1");
+        expect((await more.boundingBox())!.height).toBeGreaterThanOrEqual(40);
+        await page.locator('[data-online-user-id="ada"] [data-session-count="running"]').waitFor();
+        const actions = await page.locator(".sidebar-online__row").evaluateAll((rows) =>
+          rows.map((row) => {
+            const button = row.querySelector<HTMLElement>(".sidebar-online__menu-trigger")!;
+            const name = row.querySelector<HTMLElement>(".sidebar-online__person-name")!;
+            return {
+              x: button.getBoundingClientRect().x,
+              nameRight: name.getBoundingClientRect().right,
+              background: getComputedStyle(button).backgroundColor,
+            };
+          }),
+        );
+        expect(actions).toHaveLength(3);
+        expect(
+          Math.max(...actions.map((action) => action.x)) -
+            Math.min(...actions.map((action) => action.x)),
+        ).toBeLessThan(1);
+        for (const action of actions) {
+          expect(action.nameRight).toBeLessThanOrEqual(action.x);
+          expect(action.background).toBe("rgba(0, 0, 0, 0)");
+        }
+        await more.tap();
+        const menu = page.getByRole("menu", { name: "Actions for Ada Chen", exact: true });
+        await menu.waitFor();
+        expect(await page.locator(".person-activity-hovercard").count()).toBe(0);
+        await menu.getByRole("menuitem", { name: "Pin to sidebar", exact: true }).tap();
+        await page.locator('[data-sidebar-entry="person:ada"]').waitFor();
+      },
+    ));
+
+  it("filters connected and offline profiles without collapsing the Users view", () =>
+    suite.withPage(
+      { colorScheme: "dark", locale: "en-US", serviceWorkers: "block" },
+      async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["users.list"],
+          operatorScopes: ["operator.read", "operator.write"],
+          presenceUsers: ["Ada Chen", "Bob Rivera"].map((name, index) => ({
+            id: index === 0 ? "ada" : "bob",
+            identity: { type: "profile", id: index === 0 ? "ada" : "bob" },
+            name,
+            self: index === 0 ? true : undefined,
+            lastInputSeconds: index === 0 ? 5 : 180,
+          })),
+          methodResponses: {
+            "users.list": {
+              profiles: ["Ada Chen", "Bob Rivera", "Carol Singh"].map((displayName, index) => ({
+                id: ["ada", "bob", "carol"][index],
+                displayName,
+                avatarMime: null,
+                mergedInto: null,
+                createdAt: 1,
+                updatedAt: 1,
+                emails: [],
+                githubIdentity: null,
+                hasAvatar: false,
+              })),
+            },
+          },
+        });
+        await page.goto(suite.server.baseUrl + "chat");
+        const rail = page.locator('[data-navigation-view="online"]');
+        await rail.click();
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+        const dismissHovercard = async () => {
+          await page.mouse.move(900, 400);
+          await expect.poll(() => page.locator(".person-activity-hovercard").count()).toBe(0);
+          await page
+            .locator(".sidebar-online__person-name")
+            .getByText("Ada Chen", { exact: true })
+            .waitFor();
+        };
+        await dismissHovercard();
+        expect(await rail.getAttribute("aria-label")).toBe("Users");
+        const header = page.locator("openclaw-app-sidebar:visible .sidebar-panel-header");
+        const usersTitle = header.locator(".sidebar-panel-header__title");
+        await usersTitle.getByText("Users", { exact: true }).waitFor();
+        const titleStyle = (title: typeof usersTitle) =>
+          title.evaluate((element) => {
+            const { color, fontSize, fontWeight, letterSpacing, textTransform } =
+              getComputedStyle(element);
+            return { color, fontSize, fontWeight, letterSpacing, textTransform };
+          });
+        const usersTitleStyle = await titleStyle(usersTitle);
+        await rail.click();
+        await expect.poll(() => rail.getAttribute("aria-pressed")).toBe("true");
+        const choosePresence = async (value: "all" | "online") => {
+          await page.locator(".sidebar-online__filter-toggle").click();
+          await page.locator("#sidebar-people-presence").click();
+          await page
+            .locator(`openclaw-select-picker:has(#sidebar-people-presence) [data-value="${value}"]`)
+            .click();
+        };
+        await choosePresence("all");
+        await gateway.waitForRequest("users.list");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
+        expect(
+          await page.locator('[data-online-user-id="carol"]').getAttribute("aria-description"),
+        ).toContain("Offline");
+        await dismissHovercard();
+        await choosePresence("online");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        await page.setViewportSize({ width: 390, height: 844 });
+        await navigationDrawerToggle(page).click();
+        await page.locator(".sidebar-panel-header #sidebar-people-presence").click();
+        await page
+          .locator('openclaw-select-picker:has(#sidebar-people-presence) [data-value="all"]')
+          .click();
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(3);
+        await page.setViewportSize({ width: 1280, height: 800 });
+        await choosePresence("online");
+        await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(2);
+
+        // Every panel shares the Sessions header geometry, including the collapse control,
+        // and a Pages list taller than the sidebar scrolls beneath its pinned header.
+        await page.setViewportSize({ width: 1280, height: 320 });
+        const headerGeometry = async () => ({
+          header: await header.boundingBox(),
+          collapse: await header.getByRole("button", { name: "Collapse sidebar" }).boundingBox(),
+        });
+        const usersGeometry = await headerGeometry();
+        await openSidebarPages(page);
+        await usersTitle.getByText("Pages", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
+        const body = page.locator("openclaw-app-sidebar:visible .sidebar-shell__body");
+        await body.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+        expect(await body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await page.locator('[data-navigation-view="sessions"]').click();
+        await header.locator(".sidebar-session-sort").waitFor();
+        expect(await headerGeometry()).toEqual(usersGeometry);
+        await usersTitle.getByText("Sessions", { exact: true }).waitFor();
+        expect(await titleStyle(usersTitle)).toEqual(usersTitleStyle);
+      },
+    ));
+});

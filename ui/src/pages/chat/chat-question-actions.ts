@@ -1,8 +1,13 @@
 import { cancelQuestionPrompt, submitQuestionPrompt } from "../../app/question-prompt.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { ChatProps } from "./chat-view.ts";
+import type { ChatProps } from "./chat-view.tsx";
 
-type QuestionActionOptions = {
+export function createChatQuestionActions({
+  state,
+  questionState,
+  canSend,
+  isCurrent,
+}: {
   state: Pick<
     ChatPageHost,
     "sessionKey" | "connectionEpoch" | "handleSendChat" | "lastError" | "chatQueue"
@@ -10,14 +15,7 @@ type QuestionActionOptions = {
   questionState: Parameters<typeof submitQuestionPrompt>[0];
   canSend: boolean;
   isCurrent: () => boolean;
-};
-
-export function createChatQuestionActions({
-  state,
-  questionState,
-  canSend,
-  isCurrent,
-}: QuestionActionOptions): Pick<
+}): Pick<
   ChatProps,
   | "onGatewayQuestionChange"
   | "onGatewayQuestionSubmit"

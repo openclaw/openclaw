@@ -1,51 +1,48 @@
 import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import type { AdmittedRunContext, AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
-import type { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
-import type { createAgentHarnessHostCapabilities } from "./host-capability.js";
+// Keep static: compiled-worker preparation belongs at collection, not in a hook or test deadline.
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+  type AdmittedRunContext,
+  type AdmittedRunOperatorAuthority,
+} from "../admitted-run-context.js";
+import { createAgentHarnessCompletionScope } from "../agent-harness-completion-scope.js";
+import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
-type AdmittedHostCapabilityTestFixture = Readonly<{
-  admittedRunContext: AdmittedRunContext;
-  hostCapabilities: ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"];
-  agentHarnessCompletionScope?: ReturnType<typeof createAgentHarnessCompletionScope>;
-  closeHost: () => void;
-  closeAdmission: () => void;
-  runWithGatewayScope: <T>(run: () => T) => T;
-  closeGateway: () => void;
-}>;
+export const harnessHostAdmissionsForTest = new WeakMap<
+  ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"],
+  { admittedRunContext: AdmittedRunContext; close: () => void }
+>();
 
 /** Creates the same admitted authority and closure-bound host used by a real harness attempt. */
 export async function createAdmittedHostCapabilityTestFixture(
   attempt: Omit<HostAttempt, "admittedRunContext">,
   options: {
     nativeModelPolicySupport?: "exact";
+    toolCalls?: "deny";
     gatewayContext?: true;
     operatorAuthority?: AdmittedRunOperatorAuthority;
   } = {},
-): Promise<AdmittedHostCapabilityTestFixture> {
-  const { createAgentHarnessCompletionScope } =
-    await import("../agent-harness-completion-scope.js");
-  const { createOperationalRunInstanceRef, prepareAgentRunAdmission } =
-    await import("../admitted-run-context.js");
-  const { createAgentHarnessHostCapabilities } = await import("./host-capability.js");
+) {
   let resolveGatewayContext: GatewayContextResolver | undefined;
+  let bindGateway: ((context: AdmittedRunContext) => void) | undefined;
   let runWithGatewayScope = <T>(run: () => T): T => run();
   let closeGateway = () => {};
   if (options.gatewayContext) {
     const { createContext } =
       await import("../../gateway/server-plugin-in-process-dispatch.test-support.js");
-    const { getGatewayContextLifetime, withPluginRuntimeGatewayRequestScope } =
-      await import("../../plugins/runtime/gateway-request-scope.js");
-    const context = createContext();
+    const gateway = await import("../../plugins/runtime/gateway-request-scope.js");
+    const context = createContext([], () => attempt.config ?? {});
     const resolver = () => context;
     context.resolveGatewayContext = resolver;
-    context.getRuntimeConfig = () => attempt.config ?? {};
     resolveGatewayContext = resolver;
-    const lifetime = getGatewayContextLifetime(resolver);
+    bindGateway = (admitted) => gateway.bindGatewayContextResolver(admitted, resolver);
+    const lifetime = gateway.getGatewayContextLifetime(resolver);
     runWithGatewayScope = <T>(run: () => T): T => {
       lifetime.signal.throwIfAborted();
-      return withPluginRuntimeGatewayRequestScope(
+      return gateway.withPluginRuntimeGatewayRequestScope(
         { context, resolveGatewayContext: resolver, isWebchatConnect: () => false },
         run,
       );
@@ -63,30 +60,31 @@ export async function createAdmittedHostCapabilityTestFixture(
     operatorAuthority: options.operatorAuthority,
   });
   const admittedRunContext = await admission.admit("plugin-harness", `harness-${attempt.runId}`);
-  if (resolveGatewayContext) {
-    const { bindGatewayContextResolver } =
-      await import("../../plugins/runtime/gateway-request-scope.js");
-    bindGatewayContextResolver(admittedRunContext, resolveGatewayContext);
-  }
+  bindGateway?.(admittedRunContext);
+  const hostAttempt = { ...attempt, admittedRunContext };
   const host = runWithGatewayScope(() =>
     createAgentHarnessHostCapabilities({
-      attempt: { ...attempt, admittedRunContext },
+      attempt: hostAttempt,
       pluginId: "codex",
       nativeModelPolicySupport: options.nativeModelPolicySupport,
+      toolCalls: options.toolCalls,
     }),
   );
+  harnessHostAdmissionsForTest.set(host.capabilities, {
+    admittedRunContext,
+    close: admission.close,
+  });
   return {
+    attempt: hostAttempt,
     admittedRunContext,
     hostCapabilities: host.capabilities,
-    ...(attempt.sessionKey
-      ? {
-          agentHarnessCompletionScope: createAgentHarnessCompletionScope({
-            requesterSessionKey: attempt.sessionKey,
-            requesterAgentId: attempt.agentId ?? "main",
-            gatewayContextResolver: resolveGatewayContext,
-          }),
-        }
-      : {}),
+    ...(attempt.sessionKey && {
+      agentHarnessCompletionScope: createAgentHarnessCompletionScope({
+        requesterSessionKey: attempt.sessionKey,
+        requesterAgentId: attempt.agentId ?? "main",
+        gatewayContextResolver: resolveGatewayContext,
+      }),
+    }),
     closeHost: host.close,
     closeAdmission: admission.close,
     runWithGatewayScope,

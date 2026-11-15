@@ -1,4 +1,3 @@
-import { hasMultipleSessionSharingIdentities } from "../state/user-profile-list.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
@@ -12,6 +11,8 @@ export function createHostedGatewayTools(
   embedded: boolean,
   sessionAgentId: string,
   options?: OpenClawToolsOptions,
+  preparedDelegateTools?: AnyAgentTool[],
+  personalInstructionsEnabled = false,
 ): AnyAgentTool[] {
   if (embedded) {
     return [];
@@ -21,12 +22,16 @@ export function createHostedGatewayTools(
     createGatewayTool({
       allowConfigReads: options?.gatewayConfigReadAllowed === true,
       senderIsOwner: options?.senderIsOwner,
+      operatorAuthority: options?.pluginExecutionAuthority,
       requesterSenderId: options?.requesterSenderId,
     }),
-    createPluginsTool(),
-    ...createOpenClawDelegateToolsForRun({ ...options, sessionAgentId }),
-    ...(hasMultipleSessionSharingIdentities()
-      ? [createPersonalInstructionsTool(sessionAgentId)]
-      : []),
+    createPluginsTool({
+      sessionId: options?.sessionId,
+      runId: options?.runId,
+      onYield: options?.onYield,
+      senderIsOwner: options?.senderIsOwner,
+    }),
+    ...(preparedDelegateTools ?? createOpenClawDelegateToolsForRun({ ...options, sessionAgentId })),
+    ...(personalInstructionsEnabled ? [createPersonalInstructionsTool(sessionAgentId)] : []),
   ];
 }

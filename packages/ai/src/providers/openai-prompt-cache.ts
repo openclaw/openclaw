@@ -1,6 +1,6 @@
 import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { isNativeOpenAIEndpoint } from "../transports/openai-completions-compat.js";
-import type { CacheRetention, Model, OpenAICompletionsCompat } from "../types.js";
+import type { CacheRetention, Model, OpenAICompletionsCompat, StreamOptions } from "../types.js";
 
 const EXTENDED_RETENTION_MODELS = new Set([
   "gpt-5.5",
@@ -24,9 +24,11 @@ export function resolveOpenAIPromptCacheParams(
   compat: Required<
     Pick<OpenAICompletionsCompat, "supportsPromptCacheKey" | "supportsLongCacheRetention">
   >,
-): { prompt_cache_retention?: "24h"; prompt_cache_options?: { ttl: "30m" } } {
+  // Only Responses callers supply this; Chat Completions keeps its existing behavior.
+  promptCacheTtl?: StreamOptions["promptCacheTtl"],
+): { prompt_cache_retention?: "24h"; prompt_cache_options?: { ttl: "30m" | "12h" } } {
   if (
-    cacheRetention !== "long" ||
+    cacheRetention === "none" ||
     !compat.supportsPromptCacheKey ||
     !compat.supportsLongCacheRetention
   ) {
@@ -39,7 +41,12 @@ export function resolveOpenAIPromptCacheParams(
     version &&
     (Number(version[1]) > 5 || (Number(version[1]) === 5 && Number(version[2]) >= 6))
   ) {
-    return { prompt_cache_options: { ttl: "30m" } };
+    return promptCacheTtl || cacheRetention === "long"
+      ? { prompt_cache_options: { ttl: promptCacheTtl ?? "30m" } }
+      : {};
+  }
+  if (cacheRetention !== "long") {
+    return {};
   }
   const modelId = model.id.replace(/-\d{4}-\d{2}-\d{2}$/, "");
   return !isNativeOpenAIEndpoint(model) || EXTENDED_RETENTION_MODELS.has(modelId)

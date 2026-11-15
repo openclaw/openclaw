@@ -24,6 +24,7 @@ function reportMantisArtifacts(
     screenshotPath?: string;
     videoPath?: string;
   },
+  approvalCheckpointScreenshotPaths: readonly string[] = [],
 ) {
   process.stdout.write(`${label} report: ${result.reportPath}\n`);
   process.stdout.write(`${label} summary: ${result.summaryPath}\n`);
@@ -33,14 +34,16 @@ function reportMantisArtifacts(
   if (result.videoPath) {
     process.stdout.write(`${label} video: ${result.videoPath}\n`);
   }
-}
-
-export async function runMantisDiscordSmokeCommand(opts: MantisDiscordSmokeOptions) {
-  const result = await runMantisDiscordSmoke(opts);
-  reportMantisArtifacts("Mantis Discord smoke", result);
+  for (const screenshotPath of approvalCheckpointScreenshotPaths) {
+    process.stdout.write(`${label} approval checkpoint screenshot: ${screenshotPath}\n`);
+  }
   if (result.status === "fail") {
     process.exitCode = 1;
   }
+}
+
+export async function runMantisDiscordSmokeCommand(opts: MantisDiscordSmokeOptions) {
+  reportMantisArtifacts("Mantis Discord smoke", await runMantisDiscordSmoke(opts));
 }
 
 export async function runMantisBeforeAfterCommand(opts: MantisBeforeAfterOptions) {
@@ -53,24 +56,12 @@ export async function runMantisBeforeAfterCommand(opts: MantisBeforeAfterOptions
 }
 
 export async function runMantisDesktopBrowserSmokeCommand(opts: MantisDesktopBrowserSmokeOptions) {
-  const result = await runMantisDesktopBrowserSmoke(opts);
-  reportMantisArtifacts("Mantis desktop browser", result);
-  if (result.status === "fail") {
-    process.exitCode = 1;
-  }
+  reportMantisArtifacts("Mantis desktop browser", await runMantisDesktopBrowserSmoke(opts));
 }
 
 export async function runMantisSlackDesktopSmokeCommand(opts: MantisSlackDesktopSmokeOptions) {
   const result = await runMantisSlackDesktopSmoke(opts);
-  reportMantisArtifacts("Mantis Slack desktop", result);
-  for (const screenshotPath of result.approvalCheckpointScreenshotPaths ?? []) {
-    process.stdout.write(
-      `Mantis Slack desktop approval checkpoint screenshot: ${screenshotPath}\n`,
-    );
-  }
-  if (result.status === "fail") {
-    process.exitCode = 1;
-  }
+  reportMantisArtifacts("Mantis Slack desktop", result, result.approvalCheckpointScreenshotPaths);
 }
 
 export async function runMantisVisualDriverCommand(opts: MantisVisualDriverOptions) {
@@ -83,9 +74,5 @@ export async function runMantisVisualDriverCommand(opts: MantisVisualDriverOptio
 }
 
 export async function runMantisVisualTaskCommand(opts: MantisVisualTaskOptions) {
-  const result = await runMantisVisualTask(opts);
-  reportMantisArtifacts("Mantis visual task", result);
-  if (result.status === "fail") {
-    process.exitCode = 1;
-  }
+  reportMantisArtifacts("Mantis visual task", await runMantisVisualTask(opts));
 }

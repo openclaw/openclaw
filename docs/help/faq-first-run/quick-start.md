@@ -21,15 +21,17 @@ where to run the Gateway see
     ```
 
     The installer starts guided onboarding for you, so there is no separate
-    onboarding command to run. When onboarding finishes, press **Ctrl+C** to
-    stop the foreground Gateway and install the background service:
+    onboarding command to run. If you answered no to Quick start's background
+    question, press **Ctrl+C** to stop the foreground Gateway, install the
+    background service, and wait for it to be ready:
 
     ```bash
     openclaw gateway install
+    openclaw gateway start
     ```
 
     Prefer the classic step-by-step wizard and a service install in one
-    command? Run `openclaw onboard --install-daemon` instead of the two
+    command? Run `openclaw onboard --install-daemon` instead of the
     commands above. That flag selects the classic flow, so you do not see the
     guided **Quick start** and **Custom setup** choice.
 
@@ -53,8 +55,8 @@ where to run the Gateway see
 
   <Accordion title="I am stuck, fastest way to get unstuck">
     Use a local AI agent that can **see your machine**. Most "I'm stuck" cases are
-    **local config or environment issues** a remote helper cannot inspect, so this beats
-    asking in Discord.
+    **local config or environment issues** a remote helper cannot inspect.
+    For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/).
 
     - **Claude Code**: [https://www.anthropic.com/claude-code/](https://www.anthropic.com/claude-code/)
     - **OpenAI Codex**: [https://openai.com/codex/](https://openai.com/codex/)
@@ -69,7 +71,7 @@ where to run the Gateway see
     Ask the agent to plan and supervise the fix step-by-step, then execute only the
     necessary commands - smaller diffs are easier to audit.
 
-    Share these outputs when asking for help (in Discord or a GitHub issue):
+    Share these outputs when asking for support, or in a GitHub issue for a reproducible bug. Review diagnostics for secrets and personal information before posting:
 
     | Command | Shows |
     | --- | --- |
@@ -104,6 +106,7 @@ where to run the Gateway see
     - Token source: `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
     - Password source: `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
     - No shared secret configured yet? Run `openclaw doctor --generate-gateway-token` (or `openclaw doctor --fix --generate-gateway-token`).
+    - Windows PowerShell says running scripts is disabled? The bare command selected npm's `openclaw.ps1` shim. Use [npm's `openclaw.cmd`](/platforms/windows#powershell-execution-policy) instead of changing the execution policy.
 
     **Not on localhost:**
 
@@ -120,7 +123,7 @@ where to run the Gateway see
     | Skip reason | Meaning |
     | --- | --- |
     | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
+    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist markup |
     | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
 
     Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
@@ -153,9 +156,9 @@ where to run the Gateway see
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended); see
+    Node **24.22.1+** or **26.12.1+** is the primary and default runtime (Node 26 recommended); see
     [Node.js](/install/node) for the maintained requirement. `pnpm` is the repo package manager.
-    Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
+    Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -490,8 +493,8 @@ where to run the Gateway see
 
     - **Quick start** detects the AI access you already have, waits for you to
       choose a connection, verifies that one choice with a real completion,
-      prepares the agent workspace, and then starts the Gateway in the
-      foreground and opens the browser dashboard. It uses the default agent
+      prepares the agent workspace, offers to keep the Gateway running in the
+      background, and opens the browser dashboard. It uses the default agent
       name `main` and full access, and skips memory import and app
       recommendations. Choose **Skip for now** in the picker to prepare the
       local baseline and exit without starting the Gateway or AI chat.

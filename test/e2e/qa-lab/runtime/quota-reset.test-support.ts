@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createRequire } from "node:module";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -18,6 +19,7 @@ import {
 } from "../../../../src/agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../../../../src/agents/auth-profiles/state.js";
 import { createAuthProfileStoreRuntime } from "../../../../src/agents/auth-profiles/store.js";
+import { GatewayClientRequestError } from "../../../../src/gateway/client.js";
 import { connectGatewayClient } from "../../../../src/gateway/test-helpers.e2e.js";
 import { openNodeSqliteDatabase } from "../../../../src/infra/node-sqlite.js";
 import { createDeferredCore, type Deferred } from "../../../../src/shared/deferred.js";
@@ -37,6 +39,7 @@ export const BACKUP_RESPONSES_PATH = "/quota-backup/responses";
 
 const MODEL = "openai/gpt-5.5";
 export const UTILITY_MODEL_ID = "quota-test-utility";
+export const ORDINARY_RATE_LIMIT_RETRY_AFTER_MS = 30_000;
 const PROFILE_ID = "openai:quota";
 export const ACCOUNT_ID = "quota-test-account";
 export const MARKER = "QUOTA_TURN_OK";
@@ -208,8 +211,14 @@ export async function startQuotaProvider(
     };
   };
   const failure = () => {
-    const headers: Record<string, string> =
-      primaryExhausted() && source === "codex_rate_limits"
+    const ordinaryRateLimit =
+      phase === "ordinary-rate-limit" ||
+      phase === "ordinary-rate-limit-with-capacity" ||
+      phase === "ordinary-rate-limit-with-exhausted-usage";
+    // Ordinary throttles carry the provider's retry timing; it alone sets the cooldown.
+    const headers: Record<string, string> = ordinaryRateLimit
+      ? { "retry-after": String(ORDINARY_RATE_LIMIT_RETRY_AFTER_MS / 1000) }
+      : primaryExhausted() && source === "codex_rate_limits"
         ? {
             "x-codex-primary-used-percent": "100",
             "x-codex-primary-window-minutes": "300",
@@ -229,9 +238,7 @@ export async function startQuotaProvider(
               code: "invalid_api_key",
               message: "Invalid authentication token",
             }
-          : phase === "ordinary-rate-limit" ||
-              phase === "ordinary-rate-limit-with-capacity" ||
-              phase === "ordinary-rate-limit-with-exhausted-usage"
+          : ordinaryRateLimit
             ? {
                 type: "rate_limit_error",
                 code: "rate_limit_exceeded",
@@ -683,6 +690,11 @@ export async function createQuotaResetFixture(
     startTimeoutMs: 120_000,
     env: {
       ...(tls ? { NODE_EXTRA_CA_CERTS: caPath, CODEX_CA_CERTIFICATE: caPath } : {}),
+      // Dashboard bootstrap codes and auth readbacks must use the Gateway's
+      // advanced clock. NODE_OPTIONS also carries it through CLI respawns.
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, `--import=${preload.href}`]
+        .filter(Boolean)
+        .join(" "),
       OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
       OPENCLAW_SKIP_PROVIDERS: undefined,
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
@@ -800,7 +812,10 @@ export async function createQuotaResetFixture(
   const alternateProfileId = "openai:quota-alternate";
   const alternateAccess = syntheticAccessToken(expires, "quota-alternate-account");
   const { saveAuthProfileStoreWithPreparedOwner } = createAuthProfileStoreRuntime(
-    createExternalAuthRuntime(() => []),
+    createExternalAuthRuntime(
+      () => [],
+      async (_params, run) => run(),
+    ),
   );
   // Quota recovery uses shared auth, including the external saved-block writer.
   // Bind the fresh fixture's owner explicitly; an agent-local seed is not equivalent.
@@ -875,10 +890,30 @@ export async function createQuotaResetFixture(
       null,
       2,
     );
+  // The Gateway creates the agent database on its first write. A history read
+  // that races that creation is refused as retryable; retry it like the Control UI.
+  const readHistory = async (key: string): Promise<ChatHistory> => {
+    const deadline = Date.now() + 60_000;
+    while (true) {
+      try {
+        return await client.request<ChatHistory>("chat.history", { sessionKey: key, limit: 100 });
+      } catch (error) {
+        if (
+          !(error instanceof GatewayClientRequestError) ||
+          error.gatewayCode !== "UNAVAILABLE" ||
+          !error.retryable ||
+          asRecord(error.details)?.method !== "chat.history" ||
+          Date.now() >= deadline
+        ) {
+          throw error;
+        }
+        turns.push({ historyRetry: { sessionKey: key, message: error.message } });
+        await delay(error.retryAfterMs ?? 250);
+      }
+    }
+  };
   const turn = async (key = sessionKey, message = `Return ${MARKER}.`) => {
-    const before = assistantTexts(
-      await client.request<ChatHistory>("chat.history", { sessionKey: key, limit: 100 }),
-    );
+    const before = assistantTexts(await readHistory(key));
     const started = await client.request<{ runId: string; status: string }>("chat.send", {
       sessionKey: key,
       message,
@@ -891,10 +926,7 @@ export async function createQuotaResetFixture(
       { runId: started.runId, timeoutMs: 100_000 },
       { timeoutMs: 105_000 },
     );
-    const history = await client.request<ChatHistory>("chat.history", {
-      sessionKey: key,
-      limit: 100,
-    });
+    const history = await readHistory(key);
     turns.push({ started, terminal, history });
     const after = assistantTexts(history);
     expect(["ok", "error"], JSON.stringify({ terminal, evidence: evidence() })).toContain(

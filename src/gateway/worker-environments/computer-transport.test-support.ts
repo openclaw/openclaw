@@ -1,6 +1,5 @@
 import { Value } from "typebox/value";
 import { vi } from "vitest";
-import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -8,8 +7,6 @@ import {
   claimAgentRunApprovalAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
-import { NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE } from "../../infra/node-runner-inventory.js";
-import type { ComputerUseCapabilityDescriptor } from "../../plugins/computer-use-contract.js";
 import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -18,6 +15,7 @@ import {
   NodeWorkerComputerCloseParamsSchema,
   parseNodeWorkerComputerInput,
 } from "../../worker/node-computer-protocol.js";
+import { computerCapabilities } from "../desktop/computer.test-support.js";
 import { createContext, createNodeSession } from "../node-invoke-plugin-policy.test-helpers.js";
 import type {
   NodeWorkerSupervisorNodeProof,
@@ -27,22 +25,21 @@ import type { NodeRegistry, NodeSession } from "../node-registry.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
 import { createWorkerComputerTransportOwner } from "./computer-transport.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
+import { createNodeWorkerBundleTestNode } from "./node-worker-bundle.test-support.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import {
   isCurrentPlacementTurnClaim,
   type WorkerSessionPlacementRecord,
   type WorkerSessionTurnClaim,
 } from "./placement-record.js";
+import { activePlacement } from "./placement-suite.test-support.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
-export const COMPUTER_USE: ComputerUseCapabilityDescriptor = {
-  contractVersion: 2,
-  provider: { id: "fixture-computer", label: "Fixture computer", generation: "provider-1" },
-  actions: ["screenshot", "type"],
-  targets: ["screen"],
-  deliveryModes: ["foreground"],
-  observations: ["image"],
-  features: { recording: false, agentCursor: false, multiDisplay: false },
-};
+export const COMPUTER_USE = computerCapabilities(
+  { id: "fixture-computer", label: "Fixture computer", generation: "provider-1" },
+  ["screenshot", "type"],
+);
 export const EXECUTION_ID = "00000000-0000-4000-8000-000000000001";
 export const NEXT_EXECUTION_ID = "00000000-0000-4000-8000-000000000002";
 
@@ -54,12 +51,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     placementGeneration: 3,
     owner: { kind: "worker", environmentId: "environment-1", ownerEpoch: 7 },
   };
-  const placement: WorkerSessionPlacementRecord = {
-    state: "active",
-    executionMode: "worker-turn",
-    sessionId: claim.sessionId,
-    sessionKey: "agent:main:session-1",
-    agentId: "main",
+  const placement = activePlacement(claim.sessionId, {
     generation: claim.placementGeneration,
     turnClaim: {
       owner: "worker",
@@ -68,7 +60,6 @@ export function createHarness(sharedHost = false, withPolicy = true) {
       generation: claim.placementGeneration,
       ownerEpoch: 7,
     },
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
     environmentId: "environment-1",
@@ -76,35 +67,22 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     workspaceBaseManifestRef: "sha256:fixture",
     remoteWorkspaceDir: "/worker/workspace",
     workerBundleHash: "a".repeat(64),
-    lastTranscriptAckCursor: null,
-    lastLiveEventAckCursor: null,
-    recoveryError: null,
-    terminalReason: null,
-    terminalAtMs: null,
-  };
+  });
   const environment: WorkerEnvironmentRecord = {
-    preparation: null,
-    lastActivatedAtMs: null,
+    ...createDispatchEnvironmentFixtures().attached,
     environmentId: "environment-1",
     providerId: sharedHost ? "device" : "fixture-cloud",
     profileId: "desktop",
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision-1",
-    nodeSetupId: null,
     nodeDeviceId: "desktop-node",
     sharedHost,
     desktop: sharedHost ? null : { protocol: "rfb", port: 5900, passwordFilePath: "/vnc.password" },
     bootstrapReceipt: null,
     ownerEpoch: 7,
-    teardownTerminalState: null,
     attachedSessionIds: [claim.sessionId],
-    lastError: null,
-    createdAtMs: 1,
     updatedAtMs: 2,
     stateChangedAtMs: 2,
-    idleSinceAtMs: null,
-    destroyRequestedAtMs: null,
-    state: "attached",
     leaseId: "lease-1",
     sshEndpoint: null,
   };
@@ -118,17 +96,13 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     commands: sharedHost ? ["screen.snapshot", "computer.act"] : [],
     computerUse: sharedHost ? COMPUTER_USE : undefined,
   };
-  const proof: NodeWorkerSupervisorNodeProof = {
+  const proof: NodeWorkerSupervisorNodeProof = createNodeWorkerBundleTestNode({
     nodeId: node.nodeId,
     connId: node.connId,
     pairingIdentity: "pairing-identity",
     pairingGeneration: "pairing-1",
-    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
-    clientMode: "node",
-    protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
     workerHost: { enabled: true, capacity: { total: 1, available: 0 } },
-    commands: [],
-  };
+  });
   const state: {
     placement: WorkerSessionPlacementRecord;
     environment: Extract<WorkerEnvironmentRecord, { leaseId: string }>;
@@ -140,13 +114,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     beforePolicy?: () => Promise<void>;
     beforeDispatch?: () => Promise<void>;
     afterDispatch?: () => Promise<void>;
-  } = {
-    placement,
-    environment,
-    node,
-    privateCurrent: true,
-    config: {},
-  };
+  } = { placement, environment, node, privateCurrent: true, config: {} };
   const { context } = createContext({
     nodeSession: node,
     getRuntimeConfig: () => state.config,
@@ -253,6 +221,7 @@ export function createHarness(sharedHost = false, withPolicy = true) {
     store: { get: () => state.environment },
     placements: {
       get: () => state.placement,
+      getAsync: async () => structuredClone(state.placement),
       validateTurnClaim: (candidate: WorkerSessionTurnClaim) =>
         isCurrentPlacementTurnClaim(state.placement, candidate),
       registerTurnClaimClosedHandler(handler: (closed: WorkerSessionTurnClaim) => void) {
@@ -312,16 +281,10 @@ export function createHarness(sharedHost = false, withPolicy = true) {
 export type Harness = ReturnType<typeof createHarness>;
 
 export function connectionIdentity(h: Harness): WorkerConnectionIdentity {
-  return {
+  return createWorkerConnectionIdentity(h.claim, {
     environmentId: h.state.environment.environmentId,
-    credentialHash: "credential-hash",
     bundleHash: "bundle-hash",
-    sessionId: h.claim.sessionId,
-    runId: h.claim.runId,
-    turnClaim: h.claim,
     ownerEpoch: h.state.environment.ownerEpoch,
-    rpcSetVersion: 1,
-    protocolFeatures: [],
     credentialExpiresAtMs: Number.MAX_SAFE_INTEGER,
-  };
+  });
 }

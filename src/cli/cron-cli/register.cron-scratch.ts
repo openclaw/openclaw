@@ -9,19 +9,13 @@ import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { handleCronCliError, printCronJson, requireCronJobId } from "./shared.js";
+import {
+  callCronReadFromCli,
+  handleCronCliError,
+  printCronJson,
+  requireCronJobId,
+} from "./shared.js";
 import { readCronScratchContent } from "./trigger-options.js";
-
-function parseExpectedRevision(value: string | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const revision = parseStrictNonNegativeInteger(value);
-  if (revision === undefined) {
-    throw new CronCliError("--expected-revision must be a non-negative integer");
-  }
-  return revision;
-}
 
 export function registerCronScratchCommand(cron: Command) {
   addGatewayClientOptions(
@@ -54,7 +48,7 @@ export function registerCronScratchCommand(cron: Command) {
               ? parseStrictNonNegativeInteger(opts.expectedRevision)
               : undefined;
           if (expectedRevision === undefined) {
-            const current = (await callGatewayFromCli("cron.scratch.get", opts, {
+            const current = (await callCronReadFromCli("cron.scratch.get", opts, {
               id,
             })) as CronScratchGetResult;
             if (mutations === 0) {
@@ -65,8 +59,11 @@ export function registerCronScratchCommand(cron: Command) {
               }
               return;
             }
-            expectedRevision =
-              parseExpectedRevision(opts.expectedRevision) ?? current.currentRevision;
+            const explicitRevision = parseStrictNonNegativeInteger(opts.expectedRevision);
+            if (opts.expectedRevision !== undefined && explicitRevision === undefined) {
+              throw new CronCliError("--expected-revision must be a non-negative integer");
+            }
+            expectedRevision = explicitRevision ?? current.currentRevision;
           }
 
           const content = opts.unset

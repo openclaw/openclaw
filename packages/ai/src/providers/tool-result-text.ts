@@ -1,6 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { getAiTransportHost } from "../host.js";
 import { hasMediaPayload } from "../media-payload.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
@@ -36,71 +35,6 @@ function readMimeType(value: unknown): string | undefined {
     }
   }
   return undefined;
-}
-
-function isBinaryMimeType(mimeType: string): boolean {
-  const normalized = mimeType.split(";", 1)[0]?.trim().toLowerCase();
-  return normalized ? !TEXTUAL_MIME_PATTERN.test(normalized) : false;
-}
-
-function describeOmittedValue(value: unknown, label: string): string {
-  const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
-  return length ? `[${label} omitted: ${length} chars]` : `[${label} omitted]`;
-}
-
-function redactInlineDataUris(value: string): string {
-  return value.replace(
-    INLINE_DATA_URI_PATTERN,
-    (_match, prefix: string, uri: string) => `${prefix}[inline data URI: ${uri.length} chars]`,
-  );
-}
-
-function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
-  const seen = new WeakSet<object>();
-  try {
-    const host = getAiTransportHost();
-    const redactedWrapper = host.redactModelVisibleSecrets({
-      structuredToolResult: block,
-    });
-    const redactedBlock = redactedWrapper.structuredToolResult;
-    const serialized = JSON.stringify(
-      redactedBlock,
-      function structuredToolResultReplacer(this: unknown, key, value) {
-        if (OPAQUE_OR_BINARY_FIELD_RE.test(key)) {
-          return `[omitted ${key}]`;
-        }
-        if (key === "data") {
-          const mimeType = readMimeType(this);
-          if (mimeType && isBinaryMimeType(mimeType)) {
-            return describeOmittedValue(value, "binary data");
-          }
-        }
-        if (typeof value === "bigint") {
-          return value.toString();
-        }
-        if (typeof value === "string") {
-          return redactInlineDataUris(host.redactModelVisibleSecrets(value));
-        }
-        if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
-          return undefined;
-        }
-        if (!value || typeof value !== "object") {
-          return value;
-        }
-        if (seen.has(value)) {
-          return "[Circular]";
-        }
-        seen.add(value);
-        return value;
-      },
-    );
-    if (!serialized || serialized === "{}") {
-      return undefined;
-    }
-    return serialized;
-  } catch {
-    return undefined;
-  }
 }
 
 function truncateStructuredToolText(text: string): string {
@@ -155,8 +89,53 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
     const text = typeof record.text === "string" ? record.text : "";
     return text ? sanitizeSurrogates(text) : undefined;
   }
-  const structured = stringifyStructuredBlock(record);
-  return structured ? sanitizeSurrogates(truncateStructuredToolText(structured)) : undefined;
+  let structured: string | undefined;
+  const seen = new WeakSet<object>();
+  try {
+    structured = JSON.stringify(
+      record,
+      function structuredToolResultReplacer(this: unknown, key, value) {
+        if (OPAQUE_OR_BINARY_FIELD_RE.test(key)) {
+          return `[omitted ${key}]`;
+        }
+        if (key === "data") {
+          const mimeType = readMimeType(this);
+          const normalizedMimeType = mimeType?.split(";", 1)[0]?.trim().toLowerCase();
+          if (normalizedMimeType && !TEXTUAL_MIME_PATTERN.test(normalizedMimeType)) {
+            const length = typeof value === "string" ? value.length : JSON.stringify(value)?.length;
+            return length ? `[binary data omitted: ${length} chars]` : "[binary data omitted]";
+          }
+        }
+        if (typeof value === "bigint") {
+          return value.toString();
+        }
+        if (typeof value === "string") {
+          return value.replace(
+            INLINE_DATA_URI_PATTERN,
+            (_match, prefix: string, uri: string) =>
+              `${prefix}[inline data URI: ${uri.length} chars]`,
+          );
+        }
+        if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
+          return undefined;
+        }
+        if (!value || typeof value !== "object") {
+          return value;
+        }
+        if (seen.has(value)) {
+          return "[Circular]";
+        }
+        seen.add(value);
+        return value;
+      },
+    );
+    if (!structured || structured === "{}") {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return sanitizeSurrogates(truncateStructuredToolText(structured));
 }
 
 export function extractToolResultText(
@@ -198,12 +177,10 @@ export function extractToolResultText(
   return truncateStructuredToolText(structuredTexts.join("\n"));
 }
 
-type ToolResultMediaSupport = { images: boolean; audio: boolean };
-
 /** Describe media that cannot be represented on the target provider wire. */
 export function describeUnsupportedToolResultMedia(
   blocks: readonly unknown[],
-  support: ToolResultMediaSupport,
+  support: { images: boolean; audio: boolean },
 ): string | undefined {
   const { hasImage, hasAudio } = classifyToolResultMedia(blocks);
   const omittedImage = hasImage && !support.images;

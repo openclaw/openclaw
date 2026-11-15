@@ -4,11 +4,9 @@ import {
   patchLiveQaGatewayConfig,
   readLiveQaGatewayConfig,
 } from "../shared/live-gateway-config.runtime.js";
-import type { DiscordUser, DiscordObservedMessage } from "./discord-live.evidence.js";
+import type { DiscordUser } from "./discord-live.evidence.js";
 import {
-  type DiscordChannel,
   type DiscordQaScenarioImplementation,
-  type DiscordQaScenarioRun,
   type DiscordQaRuntimeEnv,
   buildDiscordQaConfig,
   resolveDiscordQaVoiceChannel,
@@ -18,21 +16,9 @@ import {
 type AdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
 type AdapterDefinition = Awaited<ReturnType<AdapterFactory["create"]>>;
 type FlowPreparationInput = Parameters<NonNullable<AdapterDefinition["prepareFlow"]>>[0];
-export type DiscordQaScenarioEnvironment = {
-  configureScenario: (implementation: DiscordQaScenarioImplementation) => Promise<{
-    cfg: OpenClawConfig;
-    configureTranscriptVoiceAccess?: (authorized: boolean) => Promise<void>;
-    run: DiscordQaScenarioRun;
-    voiceChannel?: DiscordChannel;
-  }>;
-  driverIdentity: DiscordUser;
-  observedMessages: DiscordObservedMessage[];
-  outputDir: string;
-  runtimeEnv: DiscordQaRuntimeEnv;
-  scenario: { id: string; timeoutMs: number; title: string };
-  sutAccountId: string;
-  sutIdentity: DiscordUser;
-};
+export type DiscordQaScenarioEnvironment = Awaited<
+  ReturnType<ReturnType<typeof createDiscordQaScenarioEnvironment>["prepareFlow"]>
+>["discordScenarioContext"];
 
 export function createDiscordQaScenarioEnvironment(params: {
   accountId: string;
@@ -40,7 +26,6 @@ export function createDiscordQaScenarioEnvironment(params: {
   runtimeEnv: DiscordQaRuntimeEnv;
   sutIdentity: DiscordUser;
 }) {
-  const observedMessages: DiscordObservedMessage[] = [];
   const prepareFlow = async (input: FlowPreparationInput) => {
     return {
       discordScenarioContext: {
@@ -122,7 +107,7 @@ export function createDiscordQaScenarioEnvironment(params: {
             run,
             ...(run.kind === "transcripts-voice-authorization"
               ? {
-                  configureTranscriptVoiceAccess: async (authorized: boolean) =>
+                  configureTranscriptVoiceAccess: async (authorized: boolean): Promise<void> =>
                     void (await applyConfig(authorized)),
                 }
               : {}),
@@ -130,7 +115,6 @@ export function createDiscordQaScenarioEnvironment(params: {
           };
         },
         driverIdentity: params.driverIdentity,
-        observedMessages,
         outputDir: input.outputDir,
         runtimeEnv: params.runtimeEnv,
         scenario: {
@@ -140,7 +124,7 @@ export function createDiscordQaScenarioEnvironment(params: {
         },
         sutAccountId: params.accountId,
         sutIdentity: params.sutIdentity,
-      } satisfies DiscordQaScenarioEnvironment,
+      },
     };
   };
   return { prepareFlow };

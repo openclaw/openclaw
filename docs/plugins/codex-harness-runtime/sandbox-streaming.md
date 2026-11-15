@@ -43,7 +43,7 @@ The node rechecks local policy immediately before spawning the pinned binary;
 a stale launch is refused. Each attempt owns an isolated Gateway app-server client so its
 remote environment registration retires with that attempt. Disconnect ends the
 active attempt and its remote processes; reconnect allows only a fresh
-attempt. Normal Codex turns work, but `/btw` side questions fail closed because
+attempt. Normal Codex turns work, but `/btw` side questions are blocked because
 they are not placement-bound. The placement workspace does not confine
 execution: process and filesystem access remain bounded only by the node's
 operating system account.

@@ -593,11 +593,11 @@ class SettingsScreensContrastTest {
       File(evidence, "cron-readiness.json").writeText(
         JSONObject()
           .put("connected", model.isConnected.value)
-          .put("status", model.statusText.value)
+          .put("status", model.gatewayConnectionDisplay.value.statusText)
           .put("cronEnabled", model.cronStatus.value.enabled)
           .put("cronRefreshing", model.cronRefreshing.value)
           .put("runtimeConnected", runtime.isConnected.value)
-          .put("runtimeStatus", runtime.statusText.value)
+          .put("runtimeStatus", runtime.gatewayConnectionDisplay.value.statusText)
           .put("cronError", model.cronErrorText.value)
           .put("methods", JSONArray(gateway.methods))
           .toString(2),
@@ -880,7 +880,7 @@ private class OperationalCaptionsGateway(
             "connect" -> {
               val role = params.getValue("role").jsonPrimitive.content
               json.parseToJsonElement(
-                """{"type":"hello-ok","protocol":3,"server":{"host":"caption-proof","version":"proof"},"features":{"methods":["cron.status","cron.list","exec.approval.list","approval.get","approval.resolve","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\",\"operator.approvals\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
+                """{"type":"hello-ok","protocol":3,"server":{"host":"caption-proof","version":"proof"},"features":{"methods":["agents.list","cron.status","cron.list","exec.approval.list","approval.get","approval.resolve","chat.history","chat.metadata","health","sessions.list"],"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\",\"operator.approvals\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
             }
 
@@ -915,6 +915,10 @@ private class OperationalCaptionsGateway(
 
             "chat.metadata" -> {
               json.parseToJsonElement("""{"commands":[],"models":[]}""")
+            }
+
+            "agents.list" -> {
+              json.parseToJsonElement("""{"defaultId":"main","mainKey":"main","agents":[{"id":"main"}]}""")
             }
 
             "sessions.list" -> {

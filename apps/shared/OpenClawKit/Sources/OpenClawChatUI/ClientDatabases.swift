@@ -40,6 +40,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     let cacheQueue: DatabaseQueue
     let stateQueue: DatabaseQueue
     let outboxChangeHub = OutboxChangeHub()
+    let composerDraftWrites = ComposerDraftWriteChain()
     public let watchMessages: OpenClawWatchMessageJournal
     private let legacyDirectoryURLs: [URL]
 
@@ -109,12 +110,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// removed. No gateway payload is deleted until the registry owner commits.
     public func stageGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.committing.rawValue {
             try self.commitGatewayRemoval(gatewayID: gatewayID)
         } else if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
@@ -154,12 +150,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
     /// metadata. A failed commit remains staged for startup reconciliation.
     public func commitGatewayRemoval(gatewayID: String) throws {
         let gatewayHash = Self.gatewayIdentityHash(gatewayID)
-        let existingPhase = try stateQueue.read { db in
-            try Int.fetchOne(
-                db,
-                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
-                arguments: [gatewayHash])
-        }
+        let existingPhase = try self.gatewayRemovalPhase(gatewayHash: gatewayHash)
         if existingPhase == GatewayRemovalPhase.scrubbing.rawValue {
             try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
             return
@@ -194,6 +185,7 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                     ])
             }
             try db.execute(sql: "DELETE FROM outbox_commands WHERE gateway_id = ?", arguments: [gatewayID])
+            try db.execute(sql: "DELETE FROM composer_drafts WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(sql: "DELETE FROM outbox_branch_scopes WHERE gateway_id = ?", arguments: [gatewayID])
             try db.execute(
                 sql: "DELETE FROM gateway_routing_identity WHERE gateway_id = ?",
@@ -228,6 +220,15 @@ public final class OpenClawClientDatabases: @unchecked Sendable {
                 arguments: [gatewayHash])
         }
         try self.finishGatewayRemovalScrub(gatewayHash: gatewayHash)
+    }
+
+    private func gatewayRemovalPhase(gatewayHash: String) throws -> Int? {
+        try self.stateQueue.read { db in
+            try Int.fetchOne(
+                db,
+                sql: "SELECT cleanup_phase FROM forgotten_gateways WHERE gateway_hash = ?",
+                arguments: [gatewayHash])
+        }
     }
 
     /// Cancels an uncommitted forget when the registry owner could not remove
@@ -441,26 +442,27 @@ extension OpenClawClientDatabases {
         self.registerClientStateMigrationsV1ThroughV5(&migrator)
         self.registerClientStateMigrationsV6ThroughV8(&migrator)
         self.registerWatchMessageJournalMigration(&migrator)
+        self.registerOutboxQueueModeMigration(&migrator)
+        self.registerComposerDraftsMigration(&migrator)
         try migrator.migrate(queue)
         return queue
     }
 
     private static func openRepairableCacheDatabase(at url: URL) throws -> DatabaseQueue {
-        do {
+        func openCache() throws -> DatabaseQueue {
             let queue = try DatabaseQueue(
                 path: url.path,
                 configuration: self.configuration(label: "OpenClaw.gateway-cache"))
             try self.prepareCacheSchema(queue)
             return queue
+        }
+        do {
+            return try openCache()
         } catch {
             // This file contains gateway snapshots only. A format mismatch or
             // corruption is repaired by rebuilding, never by migrating rows.
             self.removeDatabaseFiles(at: url)
-            let queue = try DatabaseQueue(
-                path: url.path,
-                configuration: self.configuration(label: "OpenClaw.gateway-cache"))
-            try self.prepareCacheSchema(queue)
-            return queue
+            return try openCache()
         }
     }
 

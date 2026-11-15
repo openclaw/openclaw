@@ -292,7 +292,7 @@ export class GatewayUpdateSuccessor {
     }
   }
 
-  async exit(code: number, exitProcess: (code: number) => void): Promise<void> {
+  async exit(code: number, exitProcess: (code: number) => void | Promise<void>): Promise<void> {
     await this.waitForStopSettlement();
     const exitCode = code === 0 && !this.stopRequested && !this.running ? 1 : code;
     if (exitCode !== code) {
@@ -301,6 +301,6 @@ export class GatewayUpdateSuccessor {
     if (this.stopRequested || exitCode !== 0) {
       await this.closed;
     }
-    exitProcess(exitCode);
+    await exitProcess(exitCode);
   }
 }

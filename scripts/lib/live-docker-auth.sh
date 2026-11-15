@@ -197,13 +197,11 @@ openclaw_live_should_include_auth_file_for_provider() {
 
 openclaw_live_collect_auth_dirs_from_csv() {
   local raw="${1:-}"
-  local token normalized
+  local token
   [[ -n "$(openclaw_live_trim "$raw")" ]] || return 0
   IFS=',' read -r -a tokens <<<"$raw"
   for token in "${tokens[@]}"; do
-    while IFS= read -r normalized; do
-      printf '%s\n' "$normalized"
-    done < <(openclaw_live_should_include_auth_dir_for_provider "$token")
+    openclaw_live_should_include_auth_dir_for_provider "$token"
   done | awk 'NF && !seen[$0]++'
 }
 
@@ -237,13 +235,11 @@ openclaw_live_collect_auth_dirs() {
 
 openclaw_live_collect_auth_files_from_csv() {
   local raw="${1:-}"
-  local token normalized
+  local token
   [[ -n "$(openclaw_live_trim "$raw")" ]] || return 0
   IFS=',' read -r -a tokens <<<"$raw"
   for token in "${tokens[@]}"; do
-    while IFS= read -r normalized; do
-      printf '%s\n' "$normalized"
-    done < <(openclaw_live_should_include_auth_file_for_provider "$token")
+    openclaw_live_should_include_auth_file_for_provider "$token"
   done | awk 'NF && !seen[$0]++'
 }
 
@@ -357,6 +353,16 @@ openclaw_live_append_array() {
   eval "${target_array}+=(\"\${${source_array}[@]}\")"
 }
 
+openclaw_live_append_default_env() {
+  local prefix="$1" setting name fallback
+  shift
+  for setting in "$@"; do
+    name="${prefix}${setting%%=*}"
+    fallback="${setting#*=}"
+    DOCKER_RUN_ARGS+=(-e "$name=${!name:-$fallback}")
+  done
+}
+
 openclaw_live_require_build_extension() {
   local extension="${1:?extension required}"
   local current="${OPENCLAW_DOCKER_BUILD_EXTENSIONS:-${OPENCLAW_EXTENSIONS:-}}"
@@ -375,12 +381,7 @@ openclaw_live_timeout_supports_kill_after() {
 }
 
 openclaw_live_resource_limits_disabled() {
-  case "${OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS:-${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}}" in
-    1 | true | TRUE | yes | YES | on | ON)
-      return 0
-      ;;
-  esac
-  return 1
+  openclaw_live_truthy "${OPENCLAW_LIVE_DOCKER_DISABLE_RESOURCE_LIMITS:-${OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS:-}}"
 }
 
 openclaw_live_docker_run_resource_args() {

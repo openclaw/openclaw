@@ -1,14 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type, type Static } from "typebox";
-import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
   SessionCreatedActorSchema,
   SessionRowSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GatewaySessionRow } from "../../gateway/session-utils.types.js";
 import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
-import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { stringEnum } from "../schema/typebox.js";
 import {
   createAgentToAgentPolicy,
@@ -30,11 +29,11 @@ export {
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
+  isSessionToolMainAlias,
   isExpectedSessionLookupMiss,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
 
-/** Coarse session kind used by session list/status tools. */
 export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
 type SessionKind = (typeof SESSION_LIST_KINDS)[number];
 
@@ -50,7 +49,6 @@ const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
 
 const SessionInventoryActorSchema = Type.Omit(SessionCreatedActorSchema, ["avatarUrl"]);
 
-/** Focused model-facing row contract derived from the Gateway protocol projection. */
 export const SessionListRowSchema = Type.Object(
   {
     ...Type.Pick(SessionRowSchema, [
@@ -69,6 +67,7 @@ export const SessionListRowSchema = Type.Object(
       "derivedTitle",
       "lastMessagePreview",
       "parentSessionKey",
+      "sidebarRoot",
       "model",
       "contextTokens",
       "totalTokens",
@@ -97,28 +96,18 @@ export const SessionListRowSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Full Gateway session row consumed by session orchestration internals. */
 export type GatewaySessionListRow = Omit<
-  SessionRow,
-  "classification" | "contextTokens" | "totalTokens"
+  GatewaySessionRow,
+  "classification" | "contextTokens" | "totalTokens" | "updatedAt"
 > & {
-  classification: NonNullable<SessionRow["classification"]>;
+  classification: NonNullable<GatewaySessionRow["classification"]>;
   contextTokens?: number | null;
   totalTokens?: number | null;
-  origin?: {
-    provider?: string;
-    accountId?: string;
-  };
-  category?: string;
-  deliveryContext?: DeliveryContext;
-  abortedLastRun?: boolean;
-  lastChannel?: string;
+  updatedAt?: number;
 };
 
-/** Focused model-facing row returned by sessions_list. */
 export type SessionListRow = Static<typeof SessionListRowSchema>;
 
-/** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
   agentId?: string;
   agentSessionKey?: string;
@@ -130,7 +119,7 @@ export function resolveSessionToolContext(opts?: {
   const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
-    a2aPolicy: createAgentToAgentPolicy(cfg),
+    a2aPolicy: createAgentToAgentPolicy(cfg, { sandboxed: opts?.sandboxed }),
     // Only read-tool constructors accept this host-bound scope. The temporary
     // auxiliary run keeps its execution identity but can read just the observed session.
     sessionVisibility: opts?.sessionReadScopeKey
@@ -145,7 +134,6 @@ export function resolveSessionToolContext(opts?: {
   };
 }
 
-/** Projects the Gateway's authoritative classification into the tool's coarse kinds. */
 export function classifySessionListKind(params: {
   classification: NonNullable<GatewaySessionListRow["classification"]>;
   peerKind?: GatewaySessionListRow["peerKind"];
@@ -156,7 +144,6 @@ export function classifySessionListKind(params: {
   return SESSION_KIND_BY_CLASSIFICATION[params.classification] ?? "other";
 }
 
-/** Derives the best channel label for a session row. */
 export function deriveChannel(params: {
   key: string;
   kind: SessionKind;

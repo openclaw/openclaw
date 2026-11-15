@@ -99,6 +99,16 @@ struct ChatMessageMetadataTests {
     }
 
     @Test
+    func `a step that stopped for tools has no footer and the reply it leads to does`() throws {
+        for reason in ["toolUse", "tool_use", "tool_calls"] {
+            let step = try self.message(fields: #""stopReason":"\#(reason)""#)
+            let tool = try self.message(role: "toolResult")
+            let answer = try self.message(fields: #""stopReason":"stop""#)
+            #expect(Set(self.footers([step, tool, answer]).keys) == [answer.id])
+        }
+    }
+
+    @Test
     func `active replies have no metadata while previous completed groups keep theirs`() throws {
         let first = try self.message(fields: #""__openclaw":{"runId":"done"}"#)
         let active = try self.message(fields: #""__openclaw":{"runId":"active"}"#)
@@ -118,6 +128,18 @@ struct ChatMessageMetadataTests {
         #expect(ChatTranscriptRow.footerMetadata(
             in: ChatTranscriptRow.build(from: [first]), activeRunIDs: [], runWorking: true,
             isMessageVisible: { _ in true }).isEmpty)
+    }
+
+    @Test
+    func `voice rendition never lends its model label to an adjacent consult answer`() throws {
+        let consult = try self.message(model: "\"provider/consult-model\"")
+        let spoken = try self.message(
+            timestamp: 2000, model: "\"realtime-voice\"",
+            fields: #""provenance":{"kind":"realtime_voice","sourceChannel":"talk"}"#)
+        let metadata = self.footers([consult, spoken])
+        #expect(metadata.count == 2)
+        #expect(metadata[consult.id]?.model == "provider/consult-model")
+        #expect(metadata[spoken.id]?.model == "realtime-voice")
     }
 
     private struct TimestampCase: Sendable {

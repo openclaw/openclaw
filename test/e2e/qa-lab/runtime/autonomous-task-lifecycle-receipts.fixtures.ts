@@ -5,9 +5,9 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Check } from "typebox/schema";
 import type { QaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { validateExecutionIdentityContextV1 } from "../../../../packages/gateway-protocol/src/audit-run-validators.js";
-import { lazyCompile } from "../../../../packages/gateway-protocol/src/protocol-validator.js";
 import {
   AuditRunInspectResultSchema,
   type AuditRunInspectResult,
@@ -56,11 +56,9 @@ function parseJson(raw: string, label: string): unknown {
   }
 }
 
-const validateAuditInspection = lazyCompile(AuditRunInspectResultSchema);
-
 export function parseAuditInspection(raw: string, label: string): AuditRunInspectResult {
   const value = parseJson(raw, label);
-  if (!validateAuditInspection(value)) {
+  if (!Check(AuditRunInspectResultSchema, value)) {
     throw new Error(`${label} did not match the audit inspection contract`);
   }
   return value;

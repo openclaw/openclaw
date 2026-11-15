@@ -30,23 +30,14 @@ const compiledToolsBySenderCache = new WeakMap<
   CompiledSenderPolicy
 >();
 
-type ParsedSenderPolicyKey =
-  | { kind: "wildcard" }
-  | { kind: "typed"; type: ToolsBySenderKeyType; key: string };
-
 type SenderPolicyBuckets = Record<ToolsBySenderKeyType, Map<string, GroupToolPolicyConfig>>;
 
-function normalizeSenderKey(
-  value: string,
-  options: {
-    stripLeadingAt?: boolean;
-  } = {},
-): string {
+function normalizeSenderKey(value: string, stripLeadingAt = false): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
   }
-  const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  const withoutAt = stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
   return normalizeLowercaseStringOrEmpty(withoutAt);
 }
 
@@ -54,9 +45,7 @@ function normalizeTypedSenderKey(value: string, type: ToolsBySenderKeyType): str
   if (type === "channel") {
     return normalizeChannelSenderKey(value);
   }
-  return normalizeSenderKey(value, {
-    stripLeadingAt: type === "username",
-  });
+  return normalizeSenderKey(value, type === "username");
 }
 
 function normalizeSenderPolicyChannel(value: string | null | undefined): string {
@@ -79,22 +68,6 @@ function normalizeChannelSenderKey(value: string): string {
     return "";
   }
   return `${channel}:${senderId}`;
-}
-
-function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
-  const trimmed = rawKey.trim();
-  if (!trimmed) {
-    return undefined;
-  }
-  if (trimmed === "*") {
-    return { kind: "wildcard" };
-  }
-  const typed = parseToolsBySenderTypedKey(trimmed);
-  if (!typed) {
-    throw new Error('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
-  }
-  const key = normalizeTypedSenderKey(typed.value, typed.type);
-  return key ? { kind: "typed", type: typed.type, key } : undefined;
 }
 
 function resolveCompiledToolsBySenderPolicy(
@@ -121,17 +94,22 @@ function resolveCompiledToolsBySenderPolicy(
     if (!policy) {
       continue;
     }
-    const parsed = parseSenderPolicyKey(rawKey);
-    if (!parsed) {
+    const trimmed = rawKey.trim();
+    if (!trimmed) {
       continue;
     }
-    if (parsed.kind === "wildcard") {
+    if (trimmed === "*") {
       wildcard = policy;
       continue;
     }
-    const bucket = buckets[parsed.type];
-    if (!bucket.has(parsed.key)) {
-      bucket.set(parsed.key, policy);
+    const typed = parseToolsBySenderTypedKey(trimmed);
+    if (!typed) {
+      throw new Error('Untyped toolsBySender keys are retired. Run "openclaw doctor --fix".');
+    }
+    const key = normalizeTypedSenderKey(typed.value, typed.type);
+    const bucket = buckets[typed.type];
+    if (key && !bucket.has(key)) {
+      bucket.set(key, policy);
     }
   }
 
@@ -147,7 +125,7 @@ function normalizeSenderIdCandidates(value: string | null | undefined): string[]
     return [];
   }
   const typed = normalizeTypedSenderKey(trimmed, "id");
-  const withoutAt = normalizeSenderKey(trimmed, { stripLeadingAt: true });
+  const withoutAt = normalizeSenderKey(trimmed, true);
   if (!withoutAt || withoutAt === typed) {
     return [typed];
   }
@@ -160,18 +138,16 @@ function matchToolsBySenderPolicy(
 ): GroupToolPolicyConfig | undefined {
   const senderIdCandidates = normalizeSenderIdCandidates(params.senderId);
   const channel = normalizeSenderPolicyChannel(params.messageProvider);
-  if (channel) {
+  for (const type of ["channel", "id"] as const) {
+    if (type === "channel" && !channel) {
+      continue;
+    }
     for (const senderIdCandidate of senderIdCandidates) {
-      const match = compiled.buckets.channel.get(`${channel}:${senderIdCandidate}`);
+      const key = type === "channel" ? `${channel}:${senderIdCandidate}` : senderIdCandidate;
+      const match = compiled.buckets[type].get(key);
       if (match) {
         return match;
       }
-    }
-  }
-  for (const senderIdCandidate of senderIdCandidates) {
-    const match = compiled.buckets.id.get(senderIdCandidate);
-    if (match) {
-      return match;
     }
   }
   for (const [type, value] of [

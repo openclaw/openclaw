@@ -19,7 +19,7 @@ import {
   resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
-import { defaultSlotIdForKey } from "./slots.js";
+import { defaultSlotIdForKey, resolveRetainedContextEngineIds } from "./slots.js";
 import {
   isUninstallPathInsideOrEqual,
   resolveComparableUninstallPath,
@@ -76,10 +76,6 @@ export function formatUninstallActionLabels(
     }
     return [UNINSTALL_ACTION_LABELS[key]];
   });
-}
-
-function hasUninstallAction(actions: PluginConfigUninstallActions): boolean {
-  return Object.values(actions).some(Boolean);
 }
 
 export type PluginUninstallDirectoryRemoval = {
@@ -358,7 +354,12 @@ type UninstallPluginParams = {
 export function planPluginUninstall(params: UninstallPluginParams): PluginUninstallPlanResult {
   const { config, pluginId, channelIds, deleteFiles = true, extensionsDir } = params;
   const packagePlan = resolvePluginPackageUninstallPlan(params);
-  const runtimePluginIds = packagePlan?.runtimePluginIds ?? [pluginId];
+  const retainedEnginePluginIds = Object.keys(
+    config.plugins?.installs?.[pluginId]?.contextEngineIdsByPlugin ?? {},
+  );
+  const runtimePluginIds = [
+    ...new Set([...(packagePlan?.runtimePluginIds ?? [pluginId]), ...retainedEnginePluginIds]),
+  ];
 
   const entries = config.plugins?.entries ?? {};
   const installs = config.plugins?.installs ?? {};
@@ -372,6 +373,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   for (const configPluginId of new Set(runtimePluginIds)) {
     const removal = removePluginRuntimePolicyFromConfig(newConfig, configPluginId, {
       channelIds,
+      contextEngineIds: resolveRetainedContextEngineIds(config, configPluginId, runtimePluginIds),
       loadPaths: packagePlan?.runtimeLoadPaths ? [...packagePlan.runtimeLoadPaths] : undefined,
     });
     newConfig = removal.config;
@@ -387,7 +389,7 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
     newConfig = prepareConfigForDisabledPluginSet(newConfig, runtimePluginIds);
   }
 
-  if (!hasEntry && !hasInstall && !hasUninstallAction(configActions)) {
+  if (!hasEntry && !hasInstall && !Object.values(configActions).some(Boolean)) {
     return { ok: false, error: `Plugin not found: ${pluginId}` };
   }
 
@@ -412,10 +414,6 @@ export function planPluginUninstall(params: UninstallPluginParams): PluginUninst
   };
 }
 
-export function pluginUninstallTargetExists(target: string): boolean {
-  return pathMayExistSync(target);
-}
-
 function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
   const cleanup = removal.cleanup;
   if (cleanup?.kind !== "npm") {
@@ -430,14 +428,13 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
   if (
     projectRoot
       ? !isPluginNpmManagedPath({ managedPath: cleanup.npmRoot, npmDir })
-      : !pluginUninstallTargetExists(npmDir) ||
-        !isPluginNpmManagedPath({ managedPath: npmDir, npmDir })
+      : !pathMayExistSync(npmDir) || !isPluginNpmManagedPath({ managedPath: npmDir, npmDir })
   ) {
     return false;
   }
   const manifestPath = path.join(cleanup.npmRoot, "package.json");
   if (
-    pluginUninstallTargetExists(manifestPath) &&
+    pathMayExistSync(manifestPath) &&
     !isPluginNpmManagedPath({ managedPath: manifestPath, npmDir })
   ) {
     return false;
@@ -461,7 +458,7 @@ function isOwnedNpmRemoval(removal: PluginUninstallDirectoryRemoval): boolean {
     return false;
   }
   return (
-    !pluginUninstallTargetExists(removal.target) ||
+    !pathMayExistSync(removal.target) ||
     isPluginNpmManagedPath({
       managedPath: removal.target,
       npmDir,
@@ -477,7 +474,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings: [] };
   }
 
-  const existed = pluginUninstallTargetExists(removal.target);
+  const existed = pathMayExistSync(removal.target);
   const warnings: string[] = [];
   let rethrowAuthorityFailure: (() => never) | undefined;
   const assertPersistentApply = () => {
@@ -515,7 +512,7 @@ export async function applyPluginUninstallDirectoryRemoval(
     return { directoryRemoved: false, warnings };
   }
 
-  const ownershipWarning = `Refused to remove npm path without canonical package ownership: ${removal.target}`;
+  const ownershipWarning = `Refused to remove npm path without verified package ownership: ${removal.target}`;
   if (!isOwnedNpmRemoval(removal)) {
     return { directoryRemoved: false, warnings: [ownershipWarning] };
   }
@@ -583,7 +580,7 @@ export async function applyPluginUninstallDirectoryRemoval(
       );
     }
   }
-  if (!isOwnedNpmRemoval(removal) && pluginUninstallTargetExists(removal.target)) {
+  if (!isOwnedNpmRemoval(removal) && pathMayExistSync(removal.target)) {
     return { directoryRemoved: false, warnings: [...warnings, ownershipWarning] };
   }
   assertPersistentApply();

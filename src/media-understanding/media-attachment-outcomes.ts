@@ -1,4 +1,7 @@
-import type { MediaAttachmentDisposition, MediaUnderstandingCapability } from "./types.js";
+import type {
+  MediaAttachmentDisposition,
+  MediaUnderstandingCapability,
+} from "../../packages/media-understanding-common/src/types.js";
 
 const MAX_SKIPPED_FILE_MARKERS = 5;
 

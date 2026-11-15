@@ -1,6 +1,5 @@
 import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { listLegacyDeliveryQueueArtifacts } from "../infra/delivery-queue-legacy-files.js";
 import { countPendingDeliveryQueueEntriesReadOnly } from "../infra/delivery-queue-sqlite.js";
 import {
   LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -19,8 +18,9 @@ export async function migrateDoctorDeliveryQueues(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<MigrationMessages> {
   const stateEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
+  const { repairRetiredDoctorState } = await import("./doctor-retired-state-repair.js");
+  const retired = await repairRetiredDoctorState(stateEnv);
   if (
-    listLegacyDeliveryQueueArtifacts(params.stateDir).length === 0 &&
     (await countPendingDeliveryQueueEntriesReadOnly(
       [
         LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
@@ -30,19 +30,14 @@ export async function migrateDoctorDeliveryQueues(params: {
       stateEnv,
     )) === 0
   ) {
-    return { changes: [], warnings: [] };
+    return retired;
   }
-  return withLegacyMigrationStateLock({
+  const migrated = await withLegacyMigrationStateLock({
     stateDir: params.stateDir,
     env: params.env,
     label: "legacy delivery queues",
     releaseLabel: "Delivery queue",
     run: async (env) => {
-      const { migrateLegacyDeliveryQueues } = await import("../infra/state-migrations.storage.js");
-      const imported = await migrateLegacyDeliveryQueues({ stateDir: params.stateDir });
-      if (imported.warnings.length > 0 && imported.warningDisposition !== "recoverable") {
-        return imported;
-      }
       const {
         loadLegacyPendingDeliveries,
         loadPendingLegacyDeliveryPreparations,
@@ -55,11 +50,11 @@ export async function migrateDoctorDeliveryQueues(params: {
         preparations.length === 0 &&
         loadPendingDeliveryMigrations(params.stateDir).length === 0
       ) {
-        return imported;
+        return { changes: [], warnings: [] };
       }
       const { migrateLegacyPendingOutboundDeliveries } =
         await import("../infra/outbound/delivery-queue-migration.js");
-      const warnings = [...imported.warnings];
+      const warnings: string[] = [];
       const log = {
         info: (_message: string) => {},
         warn: (message: string) => warnings.push(message),
@@ -126,7 +121,7 @@ export async function migrateDoctorDeliveryQueues(params: {
             throw error;
           }
           return {
-            changes: imported.changes,
+            changes: [],
             warnings: [
               ...warnings,
               `Legacy outbound delivery preparation deferred: ${String(error)}. Run openclaw doctor --fix after repairing the plugin.`,
@@ -171,15 +166,18 @@ export async function migrateDoctorDeliveryQueues(params: {
         );
       }
       return {
-        changes: [
-          ...imported.changes,
-          ...(result.moved > 0
+        changes:
+          result.moved > 0
             ? [`Prepared ${result.moved} legacy outbound deliveries for current queue recovery`]
-            : []),
-        ],
+            : [],
         warnings,
         warningDisposition: "recoverable",
       };
     },
   });
+  return {
+    ...migrated,
+    changes: [...retired.changes, ...migrated.changes],
+    warnings: [...retired.warnings, ...migrated.warnings],
+  };
 }

@@ -6,7 +6,6 @@ import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.util.Log
-import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Reports newly available app-visible networks, including private LANs without internet validation.
@@ -19,22 +18,14 @@ internal class NetworkMonitor(
 ) {
   private val logTag = "OpenClaw/NetworkMonitor"
 
-  // Coalesce one network's availability episode, not unrelated routes. Wi-Fi returning must
-  // wake retries even when cellular never went away; capability churn is not another attachment.
-  private val availableNetworks = ConcurrentHashMap.newKeySet<Network>()
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) {
-        if (!availableNetworks.add(network)) return
         try {
           onNetworkAvailable()
         } catch (err: Throwable) {
           Log.w(logTag, "network restore callback threw: ${err.message ?: err::class.java.simpleName}")
         }
-      }
-
-      override fun onLost(network: Network) {
-        availableNetworks.remove(network)
       }
     }
 

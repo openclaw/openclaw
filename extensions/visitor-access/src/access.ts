@@ -1,3 +1,4 @@
+import { isNamedOperatorRoleEnforcementEnabled } from "openclaw/plugin-sdk/gateway-config-runtime";
 import type { PluginRuntime } from "../api.js";
 import type { VisitorTarget } from "./cloudflare.js";
 import { VisitorAccessError } from "./errors.js";
@@ -12,8 +13,10 @@ type VisitorProfile = {
   id: string;
   emails: string[];
   role?: string;
+  effectiveRole?: string;
+  roleSource?: "assigned" | "githubLogin" | "default";
   mergedInto?: string | null;
-  githubIdentity?: { login: string } | null;
+  githubIdentity?: { host?: string; login: string } | null;
 };
 
 type VisitorGatewayAccess = {
@@ -57,15 +60,20 @@ export function createVisitorAccessReader(
     const profile = (target: VisitorTarget) =>
       typeof target === "string" ? byEmail.get(target) : byGithub.get(target);
     const config = runtime.config.current();
-    const roles = config.gateway?.roles;
+    const roles = isNamedOperatorRoleEnforcementEnabled(config) ? config.gateway?.roles : undefined;
     const access = (target: VisitorTarget) => describeAccess(profile(target), roles);
     return {
       describe: (target) => access(target).description,
-      githubLogin: (target) => profile(target)?.githubIdentity?.login,
+      githubLogin: (target) => {
+        const identity = profile(target)?.githubIdentity;
+        return (identity?.host ?? "github.com") === "github.com" ? identity?.login : undefined;
+      },
       assertGithubSelection(login, accountId) {
         const normalized = login.toLowerCase();
         const matches = canonical.filter(
-          (entry) => entry.githubIdentity?.login.toLowerCase() === normalized,
+          (entry) =>
+            (entry.githubIdentity?.host ?? "github.com") === "github.com" &&
+            entry.githubIdentity?.login.toLowerCase() === normalized,
         );
         if (matches.length > 1 || (matches[0] && matches[0].id !== profile(accountId)?.id)) {
           throw new VisitorAccessError(
@@ -108,13 +116,16 @@ function describeAccess(
   profile: VisitorProfile | undefined,
   roles: GatewayRoles,
 ): { invitable: boolean; description: string } {
-  if (profile && !profileUsesVisitorRole(roles, profile)) {
+  if (
+    profile &&
+    !profileUsesVisitorRole(roles, { id: profile.id, role: profile.effectiveRole ?? profile.role })
+  ) {
     return {
       invitable: true,
       description:
         profile.id === "gateway-owner"
           ? "Gateway access: shared owner authority retained; this invitation does not restrict it"
-          : `Gateway access: existing role ${JSON.stringify(profile.role)} retained; this invitation does not restrict it`,
+          : `Gateway access: existing role ${JSON.stringify(profile.effectiveRole ?? profile.role)} retained; this invitation does not restrict it`,
     };
   }
   if (!roles) {
@@ -122,7 +133,7 @@ function describeAccess(
   }
   const assignedRole =
     profile?.role && Object.hasOwn(roles.definitions, profile.role) ? profile.role : undefined;
-  const roleName = assignedRole ?? roles.default;
+  const roleName = profile?.effectiveRole ?? assignedRole ?? roles.default;
   const role =
     roleName && Object.hasOwn(roles.definitions, roleName)
       ? roles.definitions[roleName]
@@ -133,7 +144,10 @@ function describeAccess(
       description: `Gateway access could not be verified: default role ${JSON.stringify(roleName ?? "")} is unavailable`,
     };
   }
-  const source = assignedRole ? "assigned" : "default";
+  const source =
+    profile?.roleSource === "githubLogin"
+      ? "GitHub login"
+      : (profile?.roleSource ?? (assignedRole ? "assigned" : "default"));
   const identity = !profile
     ? "; first sign-in pending"
     : profile.role && !assignedRole

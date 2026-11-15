@@ -52,7 +52,6 @@ type MSTeamsActivity = {
 
 /** Structural alias for ActivityParams — avoids tsgo resolution bugs with the bundled @microsoft/teams.api package. */
 type MSTeamsActivityParams = { type?: string; [key: string]: unknown };
-/** Structural alias for ActivityLike. */
 export type MSTeamsActivityLike = MSTeamsActivityParams | string;
 
 type MSTeamsStreamer = {
@@ -66,9 +65,7 @@ type MSTeamsStreamer = {
 export type MSTeamsTurnContext = {
   activity: MSTeamsActivity;
   sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown>;
-  sendActivities: (activities: Array<MSTeamsActivityParams>) => Promise<unknown>;
   updateActivity: (activity: MSTeamsActivityParams) => Promise<{ id?: string } | void>;
-  deleteActivity: (activityId: string) => Promise<void>;
   /** Resolve Bot Framework team metadata through this activity's regional service URL. */
   getTeamDetails?: (teamId: string) => Promise<{ aadGroupId?: string }>;
   stream?: MSTeamsStreamer;

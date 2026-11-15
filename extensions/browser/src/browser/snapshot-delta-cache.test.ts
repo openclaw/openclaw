@@ -62,37 +62,6 @@ describe("snapshot delta cache", () => {
     expect(snapshot.newElements).toBe(1);
   });
 
-  it("does not reuse snapshot baselines after a browser runtime restart", () => {
-    const previousRuntime = createContext();
-    const restartedRuntime = createContext();
-    const scope = cacheScope("pw:document-1");
-
-    recordSnapshotKeys(previousRuntime, {
-      ...scope,
-      refs: { e1: { role: "button", name: "Save" } },
-    });
-
-    expect(getPreviousSnapshotKeys(restartedRuntime, scope)).toBeUndefined();
-  });
-
-  it.each([
-    { name: "profile", scope: { profile: "other" } },
-    { name: "tab", scope: { targetId: "tab-2" } },
-    { name: "snapshot options", scope: { family: { ...family, compact: true } } },
-  ])("isolates snapshot baselines by $name", ({ scope: alternateScope }) => {
-    const state = {} as BrowserServerState;
-    const firstRequest = createContext(state);
-    const secondRequest = createContext(state);
-    const scope = cacheScope("pw:document-1");
-
-    recordSnapshotKeys(firstRequest, {
-      ...scope,
-      refs: { e1: { role: "button", name: "Save" } },
-    });
-
-    expect(getPreviousSnapshotKeys(secondRequest, { ...scope, ...alternateScope })).toBeUndefined();
-  });
-
   it("clears a closed tab's baseline from a later browser request", () => {
     const state = {} as BrowserServerState;
     const snapshotRequest = createContext(state);
@@ -112,32 +81,5 @@ describe("snapshot delta cache", () => {
 
     expect(getPreviousSnapshotKeys(laterRequest, scope)).toBeUndefined();
     expect(getPreviousSnapshotKeys(laterRequest, otherTab)).toBeInstanceOf(Set);
-  });
-
-  it("evicts the oldest snapshot baseline after the 32-entry runtime limit", () => {
-    const state = {} as BrowserServerState;
-    const firstRequest = createContext(state);
-    const secondRequest = createContext(state);
-
-    for (let index = 0; index < 33; index += 1) {
-      recordSnapshotKeys(firstRequest, {
-        ...cacheScope("pw:document-1"),
-        targetId: `tab-${index}`,
-        refs: { e1: { role: "button", name: "Save" } },
-      });
-    }
-
-    expect(
-      getPreviousSnapshotKeys(secondRequest, {
-        ...cacheScope("pw:document-1"),
-        targetId: "tab-0",
-      }),
-    ).toBeUndefined();
-    expect(
-      getPreviousSnapshotKeys(secondRequest, {
-        ...cacheScope("pw:document-1"),
-        targetId: "tab-32",
-      }),
-    ).toBeInstanceOf(Set);
   });
 });

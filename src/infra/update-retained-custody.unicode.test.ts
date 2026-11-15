@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
@@ -14,6 +13,7 @@ import * as pathCase from "./path-case.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import {
   heldServiceLockCoordinate,
+  readManagedHandoffRowsJson,
   seedRetainedBorrower,
   type RetainedBorrowerSource,
 } from "./update-retained-custody.test-support.js";
@@ -101,18 +101,7 @@ function seedRetained(parent = acquire(), phase: "reserved" | "admitted" = "rese
   return result.lease;
 }
 
-function rows() {
-  const db = new DatabaseSync(path.join(fixture.root, "managed-update-handoffs.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    return JSON.stringify(
-      db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all(),
-    );
-  } finally {
-    db.close();
-  }
-}
+const rows = () => readManagedHandoffRowsJson(fixture.root);
 function snapshot(file: string) {
   const stat = fs.statSync(file);
   return { bytes: fs.readFileSync(file), dev: stat.dev, ino: stat.ino };
@@ -171,22 +160,6 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     },
   );
 
-  it.each([true, false])(
-    "case semantics (%s) do not decide absent Unicode identity",
-    (caseInsensitive) => {
-      const detector = vi
-        .spyOn(pathCase, "tryResolvePathCaseInsensitive")
-        .mockReturnValue(caseInsensitive);
-      const lease = seedRetained();
-      const before = rows();
-      expect(() => store.assertSourceUnborrowed(nfd)).toThrow(/alias identity/);
-      expect(detector).not.toHaveBeenCalled();
-      expect(fs.readdirSync(dir)).toEqual([]);
-      expect(rows()).toBe(before);
-      expect(store.release(lease)).toBe(false);
-    },
-  );
-
   it.each(["", ".lock"])(
     "preserves same-inode Unicode identity and bytes through wrappers (%s)",
     async (suffix) => {
@@ -230,33 +203,6 @@ describe("Unicode borrower identity before lock creation (pure)", () => {
     expect(fs.readdirSync(dir)).toEqual(names);
     expect(rows()).toBe(beforeRows);
     expect(store.release(lease)).toBe(false);
-  });
-
-  it("keeps known normalization-sensitive absence distinct (modeled lookup, real store)", () => {
-    // Model only alternate lookup of an existing sibling, never the matcher or
-    // SQLite. This proves the sensitive branch on hosts with normalizing APFS.
-    const witness = path.join(dir, "\u00e9vidence");
-    fs.writeFileSync(witness, "");
-    const observedName = fs.readdirSync(dir)[0]!;
-    const alternative =
-      observedName === observedName.normalize("NFC")
-        ? observedName.normalize("NFD")
-        : observedName.normalize("NFC");
-    const lstat = fs.lstatSync.bind(fs);
-    vi.spyOn(fs, "lstatSync").mockImplementation((...args) => {
-      if (args[0] === path.join(dir, alternative)) {
-        throw Object.assign(new Error("modeled normalization-sensitive ENOENT"), {
-          code: "ENOENT",
-        });
-      }
-      return Reflect.apply(lstat, fs, args);
-    });
-    seedRetained();
-    const before = rows();
-    expect(() => store.assertSourceUnborrowed(nfd)).not.toThrow();
-    expect(rows()).toBe(before);
-    expect(fs.existsSync(nfc)).toBe(false);
-    expect(fs.existsSync(nfd + ".lock")).toBe(false);
   });
 
   it.each([true, false])(

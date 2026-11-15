@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { cronRunEntryMatchesLink, resolveCronRouteData } from "./route-model.ts";
+import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
+import { resolveCronRouteData } from "./route-model.ts";
 
 describe("resolveCronRouteData", () => {
   it("keeps session links owner-qualified and gives exact jobs precedence", () => {

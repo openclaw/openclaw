@@ -68,7 +68,7 @@ read_when:
 
     - `steer` (default) - guide the active run at the next model boundary.
     - `followup` - queue messages and run them one at a time after the current run ends.
-    - `collect` - queue compatible messages and reply once after the current run ends.
+    - `collect` - combine compatible queued messages into one turn after the current run ends. Messages with separate durable ingress admission (including Discord and Telegram) still run one at a time.
     - `interrupt` - abort the current run and start fresh.
 
     Add options to queued modes like `debounce:0.5s cap:25 drop:summarize`. See [Command queue](/concepts/queue) and [Steering queue](/concepts/queue-steering).

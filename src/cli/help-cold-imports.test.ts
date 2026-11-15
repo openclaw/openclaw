@@ -1,6 +1,7 @@
 // Help cold import tests cover root help output without loading heavy command modules.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 
 const loaded = vi.hoisted(() => {
   const modules = new Set<string>();
@@ -137,12 +138,12 @@ vi.mock("../commands/agents.commands.add.js", () => {
   return { agentsAddCommand: vi.fn(async () => {}) };
 });
 
-vi.mock("../commands/agents.commands.bind.js", () => {
+vi.mock("../commands/agents.commands.bind.js", async (importOriginal) => {
   loaded.mark("agents-bind-command");
   return {
+    ...(await importOriginal<typeof import("../commands/agents.commands.bind.js")>()),
     agentsBindingsCommand: vi.fn(async () => {}),
-    agentsBindCommand: vi.fn(async () => {}),
-    agentsUnbindCommand: vi.fn(async () => {}),
+    agentsUpdateBindingsCommand: vi.fn(async () => {}),
   };
 });
 

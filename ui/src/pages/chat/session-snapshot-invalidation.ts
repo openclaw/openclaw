@@ -1,5 +1,5 @@
 import {
-  deleteSessionSnapshotDatabaseRecord,
+  deleteSessionSnapshotEntries,
   resetSessionSnapshotDatabase,
 } from "./session-snapshot-database.ts";
 import {
@@ -12,10 +12,14 @@ export async function deleteStoredChatSnapshot(
   reason?: SessionSnapshotInvalidationReason,
 ): Promise<void> {
   await publishSnapshotInvalidation({ sessionKey, ...(reason ? { reason } : {}) });
-  await deleteSessionSnapshotDatabaseRecord(sessionKey);
+  await deleteSessionSnapshotEntries(sessionKey, "key", reason);
 }
 
-export async function clearStoredChatSnapshots(): Promise<void> {
-  await publishSnapshotInvalidation({});
-  await resetSessionSnapshotDatabase();
+export async function clearStoredChatSnapshots(scopePrefix?: string): Promise<void> {
+  await publishSnapshotInvalidation(scopePrefix ? { scopePrefix } : {});
+  if (scopePrefix) {
+    await deleteSessionSnapshotEntries(scopePrefix, "prefix");
+  } else {
+    await resetSessionSnapshotDatabase();
+  }
 }

@@ -2,7 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginGenerationSourceLookup } from "./plugin-generation-source-lookup.js";
+import {
+  createPluginGenerationSourceLookup,
+  restorePluginRecoverySourceResolver,
+  snapshotPluginRecoverySourceResolver,
+} from "./plugin-generation-source-lookup.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -11,6 +15,28 @@ afterEach(() => {
 });
 
 describe("plugin generation source lookup", () => {
+  it("reuses isolated recovery facts for transport", () => {
+    const root = path.resolve("fixture-source");
+    const source = path.join(root, "index.js");
+    const captured = path.resolve("fixture-capture", "index.js");
+    const sources = new Map([[source, captured]]);
+    const resolve = restorePluginRecoverySourceResolver({
+      rootDir: root,
+      sourceRoot: root,
+      sources,
+    });
+    sources.set(source, path.resolve("replacement.js"));
+    sources.set(path.join(root, "later.js"), captured);
+
+    const snapshot = snapshotPluginRecoverySourceResolver(resolve)!;
+    expect(snapshotPluginRecoverySourceResolver(resolve)).toBe(snapshot);
+    expect(snapshot.sources).not.toBe(sources);
+    expect(resolve(source)).toBe(captured);
+    expect(() => resolve(path.join(root, "later.js"))).toThrow(
+      "outside its captured source package",
+    );
+  });
+
   it("accepts a captured source beneath a physical Windows root alias", () => {
     const parent = fs.realpathSync(tempDirs.make("plugin-generation-source-alias-"));
     const root = path.join(parent, "canonical-root");
@@ -29,6 +55,7 @@ describe("plugin generation source lookup", () => {
       capturedRoot: alias,
       boundaryRoot: alias,
       capturedPaths: new Map([[aliasedSource, source]]),
+      capturedDirectories: new Set(),
       hardlinkedSources: new Set(),
       assertModuleAvailable,
     });
@@ -54,6 +81,7 @@ describe("plugin generation source lookup", () => {
       capturedRoot: sourceRoot,
       boundaryRoot: sourceRoot,
       capturedPaths: new Map([[source, source]]),
+      capturedDirectories: new Set(),
       hardlinkedSources: new Set(),
       assertModuleAvailable: vi.fn(),
     });

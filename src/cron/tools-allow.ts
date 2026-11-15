@@ -4,11 +4,14 @@ import type { CronJob, CronStoredJob } from "./types.js";
 type CronToolRuntimeSpec = Pick<CronJob, "payload" | "trigger">;
 
 /** Returns whether a cron job can construct or execute OpenClaw agent tools. */
-export function cronJobUsesToolRuntime(job: CronToolRuntimeSpec): boolean {
+export function cronJobUsesToolRuntime(job: {
+  payload?: { kind?: unknown };
+  trigger?: { script?: unknown };
+}): boolean {
   return (
-    job.payload.kind === "agentTurn" ||
-    job.payload.kind === "script" ||
-    Boolean(job.trigger?.script.trim())
+    job.payload?.kind === "agentTurn" ||
+    job.payload?.kind === "script" ||
+    (typeof job.trigger?.script === "string" && job.trigger.script.trim().length > 0)
   );
 }
 

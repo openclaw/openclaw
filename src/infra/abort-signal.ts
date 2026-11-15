@@ -1,8 +1,4 @@
-export function createAbortError(message: string, options?: ErrorOptions): Error {
-  const error = new Error(message, options);
-  error.name = "AbortError";
-  return error;
-}
+export { createAbortError, racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 
 export function isAbortError(error: unknown): boolean {
   if (!error || typeof error !== "object") {
@@ -20,38 +16,23 @@ export function isAbortError(error: unknown): boolean {
   }
 }
 
-export function racePromiseWithAbortSignal<T>(
-  promise: Promise<T>,
+/** Resolves on abort or when `until` settles; passing the source releases abandoned listeners. */
+export async function waitForAbortSignal(
   signal?: AbortSignal,
-): Promise<T> {
-  if (!signal) {
-    return promise;
-  }
-  const abortError = () => createAbortError("Operation aborted", { cause: signal.reason });
-  if (signal.aborted) {
-    // The source may already be running. Observe its rejection while preserving
-    // the existing abort's precedence, even over an already-settled source.
-    return Promise.race([Promise.reject(abortError()), promise]);
-  }
+  until?: Promise<unknown>,
+): Promise<void> {
   let onAbort!: () => void;
-  const aborted = new Promise<never>((_, reject) => {
-    onAbort = () => reject(abortError());
-    signal.addEventListener("abort", onAbort, { once: true });
-    if (signal.aborted) {
-      onAbort();
+  const aborted = new Promise<void>((resolve) => {
+    onAbort = () => resolve();
+    if (!signal || signal.aborted) {
+      resolve();
+    } else {
+      signal.addEventListener("abort", onAbort, { once: true });
     }
   });
-  return Promise.race([promise, aborted]).finally(() => {
-    signal.removeEventListener("abort", onAbort);
-  });
-}
-
-/** Resolves when the signal aborts, or immediately when no wait is needed. */
-export async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
-  if (!signal || signal.aborted) {
-    return;
+  try {
+    await (until ? Promise.race([until, aborted]) : aborted);
+  } finally {
+    signal?.removeEventListener("abort", onAbort);
   }
-  await new Promise<void>((resolve) => {
-    signal.addEventListener("abort", () => resolve(), { once: true });
-  });
 }

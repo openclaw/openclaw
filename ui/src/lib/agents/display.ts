@@ -23,6 +23,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
 
 type AgentRosterEntry = {
   id: string;
@@ -36,6 +37,13 @@ export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonl
   return agents.filter((agent) => agent.kind !== "system");
 }
 
+export function findSelectableAgent<T extends AgentRosterEntry>(agents: readonly T[], id: string) {
+  const selectedId = normalizeAgentId(id);
+  return agents.find(
+    (agent) => agent.kind !== "system" && normalizeAgentId(agent.id) === selectedId,
+  );
+}
+
 export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
 }
@@ -47,11 +55,10 @@ type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
 
 type AgentConfigEntry = Pick<
   AgentConfig,
-  "name" | "workspace" | "agentDir" | "decisionModel" | "skills"
+  "name" | "workspace" | "agentDir" | "decisionModel" | "utilityModel" | "skills"
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
-  agentRuntime?: unknown;
   tools?: AgentDisplayTools;
 };
 
@@ -59,7 +66,7 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "models" | "skills"
+      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
@@ -87,12 +94,7 @@ export function normalizeAgentTargetLabel(
     hydratedIdentity?.nameSource && hydratedIdentity.nameSource !== "default"
       ? normalizeOptionalString(hydratedIdentity.name)
       : undefined;
-  return (
-    resolvedName ??
-    normalizeOptionalString(agent.name) ??
-    normalizeOptionalString(agent.identity?.name) ??
-    agent.id
-  );
+  return resolvedName ?? normalizeAgentLabel(agent);
 }
 
 export function resolveAgentTextAvatar(
@@ -105,31 +107,18 @@ export function resolveAgentTextAvatar(
     normalizeOptionalString(agentIdentity?.emoji),
     normalizeOptionalString(agentIdentity?.avatar),
   ];
-  for (const candidate of candidates) {
-    const textAvatar = resolveAssistantTextAvatar(candidate);
-    if (textAvatar) {
-      return textAvatar;
-    }
-  }
-  return null;
+  return candidates.map(resolveAssistantTextAvatar).find(Boolean) ?? null;
 }
 
-type FormatBytesOptions = {
-  fallback?: string;
-  maxUnit?: "kilo" | "mega" | "giga" | "tera";
-  fractionDigits?: Parameters<typeof formatByteSize>[1]["fractionDigits"];
-};
-
-export function formatBytes(bytes?: number, options: FormatBytesOptions = {}) {
+export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
-    return options.fallback ?? "-";
+    return "-";
   }
   return formatByteSize(bytes, {
     style: "legacy-binary",
-    maxUnit: options.maxUnit ?? "tera",
+    maxUnit: "tera",
     separator: " ",
-    fractionDigits:
-      options.fractionDigits ?? ((value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0)),
+    fractionDigits: (value, unit) => (unit === "byte" ? null : value < 10 ? 1 : 0),
   });
 }
 
@@ -148,23 +137,13 @@ export function resolveAgentConfig(config: Record<string, unknown> | null, agent
 /** Resolves the effective skill allowlist, including inherited agent defaults. */
 export function resolveAgentSkillsFilter(config: Record<string, unknown> | null, agentId: string) {
   const resolved = resolveAgentConfig(config, agentId);
-  if (Array.isArray(resolved.entry?.skills)) {
-    return normalizeStringEntries(resolved.entry.skills);
-  }
-  return Array.isArray(resolved.defaults?.skills)
-    ? normalizeStringEntries(resolved.defaults.skills)
-    : undefined;
+  const skills = Array.isArray(resolved.entry?.skills)
+    ? resolved.entry.skills
+    : resolved.defaults?.skills;
+  return Array.isArray(skills) ? normalizeStringEntries(skills) : undefined;
 }
 
-export type AgentContext = {
-  workspace: string;
-  model: string;
-  runtime: string;
-  identityName: string;
-  identityAvatar: string;
-  skillsLabel: string;
-  isDefault: boolean;
-};
+export type AgentContext = ReturnType<typeof buildAgentContext>;
 
 export function buildAgentContext(
   agent: AgentsListResult["agents"][number],
@@ -172,7 +151,7 @@ export function buildAgentContext(
   agentFilesList: AgentsFilesListResult | null,
   defaultId: string | null,
   agentIdentity?: AgentIdentityResult | null,
-): AgentContext {
+) {
   const config = resolveAgentConfig(configForm, agent.id);
   const workspaceFromFiles =
     agentFilesList && agentFilesList.agentId === agent.id ? agentFilesList.workspace : null;
@@ -189,7 +168,8 @@ export function buildAgentContext(
   const fallbacks =
     resolveEffectiveModelFallbacks(config.entry?.model, config.defaults?.model) ??
     (configForm ? null : resolveModelFallbacks(agent.model));
-  const modelLabel = primary ? resolveModelLabel({ primary, fallbacks }) : "-";
+  const modelLabel =
+    primary && fallbacks?.length ? `${primary} (+${fallbacks.length} fallback)` : (primary ?? "-");
   const runtime = formatAgentRuntimeLabel(agent.agentRuntime);
   const identityName =
     normalizeOptionalString(agent.identity?.name) ||
@@ -212,29 +192,6 @@ export function buildAgentContext(
       : t("agents.overview.allSkills"),
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };
-}
-
-export function resolveModelLabel(model?: unknown): string {
-  if (!model) {
-    return "-";
-  }
-  if (typeof model === "string") {
-    return normalizeOptionalString(model) || "-";
-  }
-  if (typeof model === "object") {
-    const record = model as { primary?: string; fallbacks?: string[] };
-    const primary = normalizeOptionalString(record.primary);
-    if (primary) {
-      const fallbackCount = Array.isArray(record.fallbacks) ? record.fallbacks.length : 0;
-      return fallbackCount > 0 ? `${primary} (+${fallbackCount} fallback)` : primary;
-    }
-  }
-  return "-";
-}
-
-export function normalizeModelValue(label: string): string {
-  const match = label.match(/^(.+) \(\+\d+ fallback\)$/);
-  return match?.[1] ?? label;
 }
 
 export function resolveModelPrimary(model?: unknown): string | null {
@@ -460,7 +417,7 @@ export function buildModelOptions(
     const separator = current.indexOf("/");
     options.unshift({
       value: current,
-      label: `Current (${current})`,
+      label: current,
       provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }

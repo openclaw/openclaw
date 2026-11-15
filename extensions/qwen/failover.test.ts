@@ -2,46 +2,41 @@ import { describe, expect, it } from "vitest";
 import { classifyQwenFailoverReason } from "./failover.js";
 
 describe("Qwen quota error semantics", () => {
-  it.each(["insufficient_quota", "Throttling.AllocationQuota"])(
-    "refines documented throttle messages for %s without treating free-credit exhaustion as transient",
-    (code) => {
-      for (const errorMessage of [
-        "Allocated quota exceeded, please increase your quota limit.",
-        "You exceeded your current quota, please check your plan and billing details.",
-      ]) {
-        expect(classifyQwenFailoverReason({ status: 429, code, errorMessage })).toBe("rate_limit");
-        expect(classifyQwenFailoverReason({ status: 429, errorType: code, errorMessage })).toBe(
-          "rate_limit",
+  it("distinguishes transient quotas, exhausted credit, and errors owned by shared failover", () => {
+    const cases: [
+      Parameters<typeof classifyQwenFailoverReason>[0],
+      ReturnType<typeof classifyQwenFailoverReason>,
+    ][] = [];
+    const messages = [
+      "Allocated quota exceeded, please increase your quota limit.",
+      "You exceeded your current quota, please check your plan and billing details.",
+    ];
+    for (const code of ["insufficient_quota", "Throttling.AllocationQuota"]) {
+      for (const errorMessage of messages) {
+        cases.push(
+          [{ status: 429, code, errorMessage }, "rate_limit"],
+          [{ status: 429, errorType: code, errorMessage }, "rate_limit"],
         );
       }
-      expect(
-        classifyQwenFailoverReason({
-          status: 429,
-          code,
-          errorMessage: "Free allocated quota exceeded.",
-        }),
-      ).toBe("billing");
-      expect(
-        classifyQwenFailoverReason({ status: 429, code, errorMessage: "Unknown quota condition" }),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["PrepaidBillOverdue", "PostpaidBillOverdue"])("recognizes explicit %s", (code) => {
-    expect(
-      classifyQwenFailoverReason({ status: 429, code, errorMessage: "Provider refusal" }),
-    ).toBe("billing");
-  });
-
-  it("leaves other statuses, unrelated codes, and unstructured text to the existing owner", () => {
-    const errorMessage = "Allocated quota exceeded, please increase your quota limit.";
+      cases.push(
+        [{ status: 429, code, errorMessage: "Free allocated quota exceeded." }, "billing"],
+        [{ status: 429, code, errorMessage: "Unknown quota condition" }, undefined],
+      );
+    }
+    for (const code of ["PrepaidBillOverdue", "PostpaidBillOverdue"]) {
+      cases.push([{ status: 429, code, errorMessage: "Provider refusal" }, "billing"]);
+    }
+    const errorMessage = messages[0]!;
     for (const context of [
       { status: 403, code: "insufficient_quota", errorMessage },
       { status: 429, code: "unrecognized_code", errorMessage },
       { status: 429, errorMessage },
       { code: "insufficient_quota", errorMessage },
     ]) {
-      expect(classifyQwenFailoverReason(context)).toBeUndefined();
+      cases.push([context, undefined]);
+    }
+    for (const [context, expected] of cases) {
+      expect(classifyQwenFailoverReason(context), JSON.stringify(context)).toBe(expected);
     }
   });
 });

@@ -14,8 +14,8 @@ enum PhotoLibraryAccess {
 }
 
 final class PhotoLibraryService: PhotosServicing {
-    // Keep the combined base64 payload within one Gateway WebSocket frame.
-    private static let maxTotalBase64Chars = 340 * 1024
+    /// Twenty photos stay below 6 MiB of base64, leaving room for the RPC envelope
+    /// within the native 16 MiB and Gateway 25 MiB WebSocket limits.
     private static let maxPerPhotoBase64Chars = 300 * 1024
 
     func latest(params: OpenClawPhotosLatestParams) async throws -> OpenClawPhotosLatestPayload {
@@ -33,23 +33,17 @@ final class PhotoLibraryService: PhotosServicing {
         let assets = PHAsset.fetchAssets(with: .image, options: fetchOptions)
 
         var results: [OpenClawPhotoPayload] = []
-        var remainingBudget = Self.maxTotalBase64Chars
         let maxWidth = params.maxWidth.flatMap { $0 > 0 ? $0 : nil } ?? 1600
         let quality = params.quality.map { max(0.1, min(1.0, $0)) } ?? 0.85
         let formatter = ISO8601DateFormatter()
 
-        assets.enumerateObjects { asset, _, stop in
+        assets.enumerateObjects { asset, _, _ in
             if let payload = try? Self.renderAsset(
                 asset,
                 maxWidth: maxWidth,
                 quality: quality,
                 formatter: formatter)
             {
-                if payload.base64.count > remainingBudget {
-                    stop.pointee = true
-                    return
-                }
-                remainingBudget -= payload.base64.count
                 results.append(payload)
             }
         }
@@ -91,8 +85,7 @@ final class PhotoLibraryService: PhotosServicing {
 
         let (data, finalImage) = try encodeJpegUnderBudget(
             image: image,
-            quality: quality,
-            maxBase64Chars: maxPerPhotoBase64Chars)
+            quality: quality)
 
         let created = asset.creationDate.map { formatter.string(from: $0) }
         return OpenClawPhotoPayload(
@@ -105,11 +98,10 @@ final class PhotoLibraryService: PhotosServicing {
 
     private static func encodeJpegUnderBudget(
         image: UIImage,
-        quality: Double,
-        maxBase64Chars: Int) throws -> (Data, UIImage)
+        quality: Double) throws -> (Data, UIImage)
     {
         var currentImage = image
-        var currentQuality = max(0.1, min(1.0, quality))
+        var currentQuality = quality
 
         // Try lowering JPEG quality first, then downscale if needed.
         for _ in 0..<10 {
@@ -120,7 +112,7 @@ final class PhotoLibraryService: PhotosServicing {
             }
 
             let base64Len = ((data.count + 2) / 3) * 4
-            if base64Len <= maxBase64Chars {
+            if base64Len <= self.maxPerPhotoBase64Chars {
                 return (data, currentImage)
             }
 
@@ -144,7 +136,7 @@ final class PhotoLibraryService: PhotosServicing {
 
     private static func resize(image: UIImage, targetWidth: CGFloat) -> UIImage {
         let size = image.size
-        if size.width <= 0 || size.height <= 0 || targetWidth <= 0 {
+        if size.width <= 0 || size.height <= 0 {
             return image
         }
         let scale = targetWidth / size.width

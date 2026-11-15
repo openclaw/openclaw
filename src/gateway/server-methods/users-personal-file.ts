@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   ErrorCodes,
   errorShape,
@@ -20,13 +20,18 @@ import { isMissingPathError } from "../../infra/errors.js";
 import { root, FsSafeError } from "../../infra/fs-safe.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
 import {
-  hasMultipleSessionSharingIdentities,
+  hasMultipleResidentSessionSharingIdentities,
   readResidentUserProfileId,
-  readUserProfileIdentity,
+  readResidentUserProfileIdentity,
 } from "../../state/user-profile-list.js";
+import {
+  isOpenClawIdTunnelPrincipalCurrent,
+  openclawIdSubjectRolePolicy,
+} from "../openclaw-id/tunnel-principal.js";
 import { resolveOperatorRolePolicyForAssignment } from "../operator-role-policy.js";
 import { isGatewayClientProfilePending } from "./gateway-client-identity.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
 import { enqueueWorkspaceFileUpdate } from "./workspace-fs.js";
@@ -52,12 +57,12 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       })?.assertCurrent();
     } catch (error) {
       throw new PersonalFileAccessError(
-        "Personal instructions are unavailable in this turn. Ask in your own Control UI turn with a new message.",
+        "Personal instructions are unavailable in this turn. Ask again yourself with a new message in the OpenClaw app.",
         { cause: error },
       );
     }
     options.sessionMutationCommitGuard?.();
-    if (!hasMultipleSessionSharingIdentities()) {
+    if (!hasMultipleResidentSessionSharingIdentities()) {
       throw new PersonalFileAccessError(
         "Personal instructions are only available on multi-user Gateways. Use the agent workspace USER.md on a single-user Gateway.",
       );
@@ -116,10 +121,20 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
       );
     }
     const cfg = context.getRuntimeConfig();
-    const policy = resolveOperatorRolePolicyForAssignment(
-      canonicalId,
-      readUserProfileIdentity(canonicalId)?.role ?? null,
-      cfg,
+    const profile = readResidentUserProfileIdentity(canonicalId);
+    // An owner device attributed to its linked profile keeps owner authority (OCF-510).
+    const principal = (operatorAuthority ?? client.internal)?.openclawIdPrincipal;
+    const policy = openclawIdSubjectRolePolicy(
+      principal?.kind === "owner" && !isOpenClawIdTunnelPrincipalCurrent(principal)
+        ? undefined
+        : principal,
+      () =>
+        resolveOperatorRolePolicyForAssignment(
+          canonicalId,
+          profile?.role ?? null,
+          cfg,
+          profile?.githubLogin ?? null,
+        ),
     );
     if (
       ![
@@ -127,11 +142,15 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
         ...(operatorAuthority ? [operatorAuthority.scopes] : []),
         ...(policy ? [policy.scopes] : []),
       ].every((allowedScopes) =>
-        roleScopesAllow({ role: "operator", requestedScopes: ["operator.read"], allowedScopes }),
+        roleScopesAllow({
+          role: "operator",
+          requestedScopes: ["operator.sessions.read"],
+          allowedScopes,
+        }),
       )
     ) {
       throw new PersonalFileAccessError(
-        "Personal instructions require current operator.read permission.",
+        "Personal instructions require current operator.sessions.read permission.",
       );
     }
     if (policy && policy.agents !== "*" && !policy.agents.includes(agentId)) {
@@ -165,10 +184,6 @@ function preparePersonalFile(options: GatewayRequestHandlerOptions, requestedAge
   return { agentId, profileId, workspaceDir, name: `users/${profileId}/USER.md`, assertCurrent };
 }
 
-function hash(content: Buffer | string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 async function runPersonalFile(
   options: GatewayRequestHandlerOptions,
   params: { agentId: string },
@@ -176,12 +191,12 @@ async function runPersonalFile(
 ) {
   try {
     const target = preparePersonalFile(options, params.agentId);
+    const identity = { agentId: target.agentId, profileId: target.profileId };
     const fsRoot = await root(target.workspaceDir, {
       symlinks: "reject",
       mutationSymlinks: "reject",
       hardlinks: "reject",
       maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-      nonBlockingRead: true,
       assertBeforeMutation: target.assertCurrent,
     });
     const read = async (): Promise<UsersPersonalFileGetResult> => {
@@ -190,11 +205,10 @@ async function runPersonalFile(
         const loaded = await fsRoot.read(target.name);
         target.assertCurrent();
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: false,
           content: new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(loaded.buffer),
-          hash: hash(loaded.buffer),
+          hash: sha256Hex(loaded.buffer),
         };
       } catch (error) {
         target.assertCurrent();
@@ -202,8 +216,7 @@ async function runPersonalFile(
           throw error;
         }
         return {
-          agentId: target.agentId,
-          profileId: target.profileId,
+          ...identity,
           missing: true,
           content: "",
           hash: null,
@@ -218,13 +231,10 @@ async function runPersonalFile(
     }
     // JS UTF-16 length matches the bootstrap cap, including astral characters.
     if (write.content.length > 4_000) {
-      options.respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "Keep personal instructions within 4,000 characters.",
-        ),
+      respondError(
+        options.respond,
+        ErrorCodes.INVALID_REQUEST,
+        "Keep personal instructions within 4,000 characters.",
       );
       return;
     }
@@ -248,11 +258,10 @@ async function runPersonalFile(
       await fsRoot.write(target.name, write.content, { mkdir: true, overwrite: !previous.missing });
       target.assertCurrent();
       options.respond(true, {
-        agentId: target.agentId,
-        profileId: target.profileId,
+        ...identity,
         missing: false,
         content: write.content,
-        hash: hash(write.content),
+        hash: sha256Hex(write.content),
       } satisfies UsersPersonalFileGetResult);
     });
   } catch (error) {

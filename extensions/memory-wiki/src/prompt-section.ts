@@ -1,5 +1,6 @@
 import type { MemoryPromptSectionBuilder } from "openclaw/plugin-sdk/memory-host-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { compareWikiClaimSummaries } from "./claim-health.js";
 import {
   loadMemoryWikiCompiledCache,
   type MemoryWikiCompiledCacheSnapshot,
@@ -23,41 +24,10 @@ function rankPromptDigestPage(page: MemoryWikiCompiledDigestPage): number {
   );
 }
 
-function rankPromptClaimFreshness(level?: string): number {
-  switch (level) {
-    case "fresh":
-      return 3;
-    case "aging":
-      return 2;
-    case "stale":
-      return 1;
-    default:
-      return 0;
-  }
-}
-
-function sortPromptClaims(
-  claims: MemoryWikiCompiledDigestClaim[],
-): MemoryWikiCompiledDigestClaim[] {
-  return claims.toSorted((left, right) => {
-    const leftConfidence = typeof left.confidence === "number" ? left.confidence : -1;
-    const rightConfidence = typeof right.confidence === "number" ? right.confidence : -1;
-    if (leftConfidence !== rightConfidence) {
-      return rightConfidence - leftConfidence;
-    }
-    const leftFreshness = rankPromptClaimFreshness(left.freshnessLevel);
-    const rightFreshness = rankPromptClaimFreshness(right.freshnessLevel);
-    if (leftFreshness !== rightFreshness) {
-      return rightFreshness - leftFreshness;
-    }
-    return left.text.localeCompare(right.text);
-  });
-}
-
 function formatPromptClaim(claim: MemoryWikiCompiledDigestClaim): string {
   const qualifiers = [
     claim.status?.trim() ? `status ${claim.status.trim()}` : null,
-    typeof claim.confidence === "number" ? `confidence ${claim.confidence.toFixed(2)}` : null,
+    claim.confidence !== undefined ? `confidence ${claim.confidence.toFixed(2)}` : null,
     claim.freshnessLevel?.trim() ? `freshness ${claim.freshnessLevel.trim()}` : null,
   ].filter(Boolean);
   if (qualifiers.length === 0) {
@@ -111,10 +81,9 @@ function buildDigestPromptSection(
     lines.push(
       `- ${truncateUtf16Safe(page.title, DIGEST_MAX_PAGE_TITLE_CHARS)}: ${details.join(", ")}`,
     );
-    for (const claim of sortPromptClaims(page.topClaims ?? []).slice(
-      0,
-      DIGEST_MAX_CLAIMS_PER_PAGE,
-    )) {
+    for (const claim of (page.topClaims ?? [])
+      .toSorted(compareWikiClaimSummaries)
+      .slice(0, DIGEST_MAX_CLAIMS_PER_PAGE)) {
       lines.push(`  - ${truncateUtf16Safe(formatPromptClaim(claim), DIGEST_MAX_CLAIM_CHARS)}`);
     }
   }
@@ -123,64 +92,37 @@ function buildDigestPromptSection(
 }
 
 function buildWikiToolGuidance(availableTools: Set<string>): string[] {
-  const hasMemorySearch = availableTools.has("memory_search");
-  const hasMemoryGet = availableTools.has("memory_get");
   const hasWikiSearch = availableTools.has("wiki_search");
   const hasWikiGet = availableTools.has("wiki_get");
-  const hasWikiApply = availableTools.has("wiki_apply");
-  const hasWikiLint = availableTools.has("wiki_lint");
-
-  if (
-    !hasMemorySearch &&
-    !hasMemoryGet &&
-    !hasWikiSearch &&
-    !hasWikiGet &&
-    !hasWikiApply &&
-    !hasWikiLint
-  ) {
-    return [];
-  }
-
-  const lines = [
-    "## Compiled Wiki",
-    "Use the wiki when the answer depends on accumulated project knowledge, prior syntheses, entity pages, or source-backed notes that should survive beyond one conversation.",
-  ];
-
-  if (hasMemorySearch) {
-    lines.push(
-      "Prefer `memory_search` with `corpus=all` for one recall pass across durable memory and the compiled wiki when both are relevant.",
-    );
-  }
-  if (hasMemoryGet) {
-    lines.push(
-      "Use `memory_get` with `corpus=wiki` or `corpus=all` when you already know the page path and want a small excerpt without leaving the shared memory tool flow.",
-    );
-  }
-
-  if (hasWikiSearch && hasWikiGet) {
-    lines.push(
-      "Workflow: `wiki_search` first, then `wiki_get` for the exact page or imported memory file you need. Use this when you want wiki-specific ranking or provenance details instead of the broader shared memory flow.",
-    );
-  } else if (hasWikiSearch) {
-    lines.push(
-      "Use `wiki_search` before answering from stored knowledge when you want wiki-specific ranking or provenance details.",
-    );
-  } else if (hasWikiGet) {
-    lines.push(
-      "Use `wiki_get` to inspect specific wiki pages or imported memory files by path/id.",
-    );
-  }
-
-  if (hasWikiApply) {
-    lines.push(
-      "Use `wiki_apply` for narrow synthesis filing and metadata repair instead of rewriting managed markdown blocks by hand.",
-    );
-  }
-  if (hasWikiLint) {
-    lines.push("After meaningful wiki updates, run `wiki_lint` before trusting the vault.");
-  }
-  lines.push("");
-  return lines;
+  const guidance = [
+    availableTools.has("memory_search")
+      ? "Prefer `memory_search` with `corpus=all` for one recall pass across durable memory and the compiled wiki when both are relevant."
+      : "",
+    availableTools.has("memory_get")
+      ? "Use `memory_get` with `corpus=wiki` or `corpus=all` when you already know the page path and want a small excerpt without leaving the shared memory tool flow."
+      : "",
+    hasWikiSearch && hasWikiGet
+      ? "Workflow: `wiki_search` first, then `wiki_get` for the exact page or imported memory file you need. Use this when you want wiki-specific ranking or provenance details instead of the broader shared memory flow."
+      : hasWikiSearch
+        ? "Use `wiki_search` before answering from stored knowledge when you want wiki-specific ranking or provenance details."
+        : hasWikiGet
+          ? "Use `wiki_get` to inspect specific wiki pages or imported memory files by path/id."
+          : "",
+    availableTools.has("wiki_apply")
+      ? "Use `wiki_apply` for narrow synthesis filing and metadata repair instead of rewriting managed markdown blocks by hand."
+      : "",
+    availableTools.has("wiki_lint")
+      ? "After meaningful wiki updates, run `wiki_lint` before trusting the vault."
+      : "",
+  ].filter(Boolean);
+  return guidance.length > 0
+    ? [
+        "## Compiled Wiki",
+        "Use the wiki when the answer depends on accumulated project knowledge, prior syntheses, entity pages, or source-backed notes that should survive beyond one conversation.",
+        ...guidance,
+        "",
+      ]
+    : [];
 }
 
 export function createWikiPromptSectionBuilder(): MemoryPromptSectionBuilder {

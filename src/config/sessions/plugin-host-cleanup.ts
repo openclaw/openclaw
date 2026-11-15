@@ -128,7 +128,7 @@ function hasPromotedSessionEntrySlot(
 
 export function matchesPluginHostCleanupSession(
   entryKey: string,
-  entry: SessionEntry,
+  entry: Pick<SessionEntry, "sessionId">,
   sessionKey?: string,
 ): boolean {
   const normalizedSessionKey = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);

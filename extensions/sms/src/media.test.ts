@@ -5,6 +5,7 @@ import {
   MediaFetchError,
   type unlinkIfExists as unlinkIfExistsType,
 } from "openclaw/plugin-sdk/media-runtime";
+import type { HostedOutboundMediaMetaRecord } from "openclaw/plugin-sdk/outbound-media";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenKeyedStoreOptions,
@@ -388,6 +389,33 @@ describe("SMS outbound hosted media", () => {
     expect(chunkReads()).toBe(0);
   });
 
+  it.each(["constructor", "__proto__"])(
+    "refuses previously staged %s media on GET and HEAD",
+    async (contentType) => {
+      const hostedUrl = await preparePhotoUrl();
+      const metadataStore = openKeyedStore.mock.results[0]?.value as
+        | PluginStateKeyedStore<HostedOutboundMediaMetaRecord>
+        | undefined;
+      const entry = (await metadataStore?.entries())?.find(({ value }) =>
+        hostedUrl.searchParams.has(`__openclaw_mms_token_${value.id}`),
+      );
+      if (!metadataStore || !entry) {
+        throw new Error("expected hosted media metadata");
+      }
+      await metadataStore.register(entry.key, { ...entry.value, contentType });
+
+      for (const method of ["GET", "HEAD"]) {
+        const response = createMockResponse();
+        await tryHandleHostedSmsMediaRequest(
+          { method, url: `/internal/sms${hostedUrl.search}` } as never,
+          response.res as never,
+        );
+        expect(response.res.statusCode).toBe(415);
+        expect(response.headers.has("Content-Disposition")).toBe(false);
+      }
+    },
+  );
+
   it("rejects multiple hosted-media token candidates before reading state", async () => {
     const response = createMockResponse();
     const firstId = "a".repeat(24);
@@ -518,6 +546,8 @@ describe("SMS outbound hosted media", () => {
     { contentType: "image/png; charset=binary", byteLength: 500_001, outcome: "accepts" },
     { contentType: "image/heic", byteLength: 500_001, outcome: "rejects" },
     { contentType: "application/msword", byteLength: 1, outcome: "unsupported" },
+    { contentType: "constructor", byteLength: 1, outcome: "unsupported" },
+    { contentType: "__proto__", byteLength: 1, outcome: "unsupported" },
   ])(
     "$outcome detected $contentType media at $byteLength bytes",
     async ({ contentType, byteLength, outcome }) => {
@@ -740,24 +770,11 @@ describe("SMS inbound MMS materialization", () => {
     expect(result.body).toContain("[2 Twilio MMS attachments unavailable]");
   });
 
-  it("rejects non-Twilio media hosts and exposes a visible failure notice", async () => {
-    const saveRemoteMedia = vi.fn();
-
-    const result = await materializeSmsInboundMedia({
-      account: createAccount(),
-      msg: createInboundMessage({
-        body: "",
-        media: [{ url: "https://example.com/not-twilio.jpg", contentType: "image/jpeg" }],
-      }),
-      mediaRuntime: { media: { saveRemoteMedia } } as never,
-    });
-
-    expect(saveRemoteMedia).not.toHaveBeenCalled();
-    expect(result.media).toEqual([]);
-    expect(result.body).toContain("Twilio MMS attachment unavailable");
-  });
-
   it.each([
+    {
+      name: "a non-Twilio media host",
+      url: "https://example.com/not-twilio.jpg",
+    },
     {
       name: "an arbitrary Twilio API path",
       url: "https://api.twilio.com/2010-04-01/Accounts.json",

@@ -83,7 +83,6 @@ internal class RealtimeAgentCoordinator(
   private val lock = Any()
   private val parentContext = parentScope.coroutineContext
   private val parentJob = parentContext[Job]
-  private var transportGeneration = Any()
   private var activeSession: RealtimeAgentSession? = null
   private var sessionScope: CoroutineScope? = null
   private val correlationJobs = LinkedHashSet<Job>()
@@ -127,7 +126,6 @@ internal class RealtimeAgentCoordinator(
     val staleJobs =
       synchronized(lock) {
         clearSessionLocked()
-        transportGeneration = Any()
         val jobs = correlationJobs.toList()
         correlationJobs.clear()
         pendingCalls.clear()
@@ -147,9 +145,9 @@ internal class RealtimeAgentCoordinator(
       synchronized(lock) {
         val session = activeSession ?: return false
         val resultScope = sessionScope ?: return false
-        Triple(session, resultScope, transportGeneration)
+        session to resultScope
       }
-    val (session, resultScope, generation) = sessionAndScopes
+    val (session, resultScope) = sessionAndScopes
     when (name) {
       AGENT_CONSULT_TOOL -> {
         val pendingCall = RealtimeAgentPendingCall(callId = callId, session = session)
@@ -172,11 +170,7 @@ internal class RealtimeAgentCoordinator(
           }
           val shouldStart =
             synchronized(lock) {
-              if (
-                activeSession == session &&
-                transportGeneration === generation &&
-                isPendingLocked(pendingCall)
-              ) {
+              if (activeSession == session && isPendingLocked(pendingCall)) {
                 pendingCall.job = job
                 correlationJobs += job
                 true

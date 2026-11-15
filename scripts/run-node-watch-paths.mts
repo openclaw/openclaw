@@ -20,6 +20,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
   "packages/media-understanding-common/src",
   "packages/normalization-core/src",
   "packages/retry/src",
+  "packages/worker-runtime/src",
   "packages/acp-core/src",
   "packages/terminal-core/src",
   "packages/net-policy/src",
@@ -28,6 +29,7 @@ const RUN_NODE_PACKAGE_SOURCE_ROOTS = [
 /** Source roots whose changes require the root dev build pipeline. */
 export const runNodeSourceRoots = [
   "src",
+  "ui/src/i18n/.i18n",
   ...RUN_NODE_PACKAGE_SOURCE_ROOTS,
   BUNDLED_PLUGIN_ROOT_DIR,
 ];
@@ -51,6 +53,8 @@ export const normalizeRunNodePath = (filePath: unknown): string =>
 export const isIgnoredRunNodeSourcePath = (relativePath: string): boolean =>
   relativePath.endsWith(".test.ts") ||
   relativePath.endsWith(".test.tsx") ||
+  relativePath.endsWith(".test-utils.ts") ||
+  relativePath.endsWith(".test-utils.tsx") ||
   relativePath.endsWith("test-helpers.ts");
 
 const isBuildRelevantSourcePath = (relativePath: string): boolean =>
@@ -74,6 +78,9 @@ const isRelevantRunNodePath = (
     ignoredRunNodeRepoPathPatterns.some((pattern) => pattern.test(normalizedPath))
   ) {
     return false;
+  }
+  if (/^ui\/src\/i18n\/\.i18n\/[^/]+\.tm\.jsonl$/u.test(normalizedPath)) {
+    return true;
   }
   if (runNodeConfigFiles.includes(normalizedPath)) {
     return true;

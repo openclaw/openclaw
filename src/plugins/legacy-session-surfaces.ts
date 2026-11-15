@@ -21,6 +21,7 @@ import { unwrapDefaultModuleExport } from "./module-export.js";
 import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { resolvePluginRuntimeArtifact } from "./plugin-runtime-artifact-resolution.js";
 import { resolvePluginRuntimeExecutionArtifact } from "./plugin-runtime-artifact-selection.js";
+import { withPreparedPluginSetupRead } from "./plugin-setup-module.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.js";
@@ -28,16 +29,6 @@ import { resolvePluginRuntimeLoadContext } from "./runtime/load-context.resolve.
 type LegacySurfaceManifestRecord = NonNullable<
   PluginRuntimeLoadContext["manifestRegistry"]
 >["plugins"][number];
-
-function prepareResult(
-  surfaces: BundledChannelLegacySessionSurface[],
-  failures: string[],
-): PreparedLegacySessionSurfaces {
-  return Object.freeze({
-    surfaces: Object.freeze(surfaces),
-    failures: Object.freeze(failures),
-  });
-}
 
 function formatLoadFailure(pluginId: string, detail: string): string {
   return `Deferred legacy session-key migration for channel owner "${pluginId}": ${detail}. Restore or reinstall the plugin setup entry, then rerun openclaw doctor --fix`;
@@ -101,7 +92,8 @@ function isEnabledLegacySurfaceOwner(params: {
 }
 
 function loadLegacySessionSurface(params: {
-  record: LegacySurfaceManifestRecord & { setupSource: string };
+  record: LegacySurfaceManifestRecord;
+  setupSource: string;
   env: NodeJS.ProcessEnv;
   artifactRegistry: ReturnType<typeof createEmptyPluginRegistry>;
 }): BundledChannelLegacySessionSurface {
@@ -109,7 +101,7 @@ function loadLegacySessionSurface(params: {
     resolvePluginRuntimeArtifact({
       pluginId: params.record.id,
       entryKind: "setup",
-      source: params.record.setupSource,
+      source: params.setupSource,
       rootDir: params.record.rootDir,
       origin: params.record.origin,
       preferBuiltPluginArtifacts: false,
@@ -152,75 +144,76 @@ function loadLegacySessionSurface(params: {
 export function prepareLegacySessionSurfaces(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  context?: PluginRuntimeLoadContext;
-}): PreparedLegacySessionSurfaces {
-  const context =
-    params.context ??
-    resolvePluginRuntimeLoadContext({
+}): Promise<PreparedLegacySessionSurfaces> {
+  return withPreparedPluginSetupRead(() => {
+    const context = resolvePluginRuntimeLoadContext({
       config: params.config,
       env: params.env,
     });
-  const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
-    (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
-  );
-  const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
-  let selectedPluginIds: Set<string> | undefined;
-  const declaringRecords = manifestRecords.filter((record) => {
-    if (
-      isEnabledLegacySurfaceOwner({
-        record,
-        config: context.activationSourceConfig,
-        normalizedConfig,
-      })
-    ) {
-      return true;
-    }
-    // Already eligible migration owners do not need persisted-auth presence probes.
-    selectedPluginIds ??= new Set(
-      resolveConfiguredChannelPluginIds({
-        config: context.config,
-        activationSourceConfig: context.activationSourceConfig,
-        workspaceDir: context.workspaceDir,
-        env: context.env,
-        manifestRecords,
-      }),
+    const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
+      (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
     );
-    return selectedPluginIds.has(record.id);
-  });
-  if (declaringRecords.length === 0) {
-    return EMPTY_LEGACY_SESSION_SURFACES;
-  }
-
-  const failures = declaringRecords.flatMap((record) =>
-    record.setupSource
-      ? []
-      : [
-          formatLoadFailure(
-            record.id,
-            "package metadata declares the surface but has no setupEntry",
-          ),
-        ],
-  );
-  const loadableRecords = declaringRecords.filter((record) => Boolean(record.setupSource));
-  if (loadableRecords.length === 0) {
-    return prepareResult([], failures);
-  }
-
-  const surfaces: BundledChannelLegacySessionSurface[] = [];
-  const artifactRegistry = createEmptyPluginRegistry();
-  for (const record of loadableRecords) {
-    try {
-      surfaces.push(
-        loadLegacySessionSurface({
-          record: record as LegacySurfaceManifestRecord & { setupSource: string },
+    const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
+    let selectedPluginIds: Set<string> | undefined;
+    const declaringRecords = manifestRecords.filter((record) => {
+      if (
+        isEnabledLegacySurfaceOwner({
+          record,
+          config: context.activationSourceConfig,
+          normalizedConfig,
+        })
+      ) {
+        return true;
+      }
+      // Already eligible migration owners do not need persisted-auth presence probes.
+      selectedPluginIds ??= new Set(
+        resolveConfiguredChannelPluginIds({
+          config: context.config,
+          activationSourceConfig: context.activationSourceConfig,
+          workspaceDir: context.workspaceDir,
           env: context.env,
-          artifactRegistry,
+          manifestRecords,
         }),
       );
-    } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      failures.push(formatLoadFailure(record.id, detail));
+      return selectedPluginIds.has(record.id);
+    });
+    if (declaringRecords.length === 0) {
+      return EMPTY_LEGACY_SESSION_SURFACES;
     }
-  }
-  return prepareResult(surfaces, failures);
+
+    const failures = declaringRecords.flatMap((record) =>
+      record.setupSource
+        ? []
+        : [
+            formatLoadFailure(
+              record.id,
+              "package metadata declares the surface but has no setupEntry",
+            ),
+          ],
+    );
+    const surfaces: BundledChannelLegacySessionSurface[] = [];
+    const artifactRegistry = createEmptyPluginRegistry();
+    for (const record of declaringRecords) {
+      if (!record.setupSource) {
+        continue;
+      }
+      try {
+        surfaces.push(
+          loadLegacySessionSurface({
+            record,
+            setupSource: record.setupSource,
+            env: context.env,
+            artifactRegistry,
+          }),
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        failures.push(formatLoadFailure(record.id, detail));
+      }
+    }
+    return Object.freeze({
+      surfaces: Object.freeze(surfaces),
+      failures: Object.freeze(failures),
+    });
+  });
 }

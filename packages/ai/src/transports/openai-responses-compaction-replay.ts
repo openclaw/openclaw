@@ -4,12 +4,11 @@ import type {
   ResponseCompactionItemParam,
   ResponseOutputItem,
 } from "openai/resources/responses/responses.js";
-import type {
-  BaseOpenAIStreamOptions,
-  OpenAIResponsesCompactionRejection,
-} from "../provider-options.js";
+import { getAiTransportHost } from "../host.js";
+import type { BaseOpenAIStreamOptions, CompactionReplayRejection } from "../provider-options.js";
 import {
   isOpenAIResponsesCompactionOutput,
+  publishResponsesCompactionInput,
   readOpenAIResponsesCompactionWindow,
   type OpenAIResponsesCompactionOutput,
 } from "./openai-responses-compaction-window.js";
@@ -47,21 +46,15 @@ function isOpenAIResponsesCompactionState(
   if (state.type === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_TYPE) {
     return state.data === OPENAI_RESPONSES_COMPACTION_SUPPRESSION_DATA;
   }
-  if (state.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE) {
-    return (
-      typeof state.data === "string" &&
-      state.data.length > 0 &&
-      (state.id === undefined || typeof state.id === "string") &&
-      state.replayIndex === undefined
-    );
-  }
+  const retained = state.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE;
   return (
-    state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE &&
+    (retained || state.type === OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE) &&
     typeof state.data === "string" &&
     state.data.length > 0 &&
     (state.id === undefined || typeof state.id === "string") &&
     (state.replayIndex === undefined ||
-      (typeof state.replayIndex === "number" &&
+      (!retained &&
+        typeof state.replayIndex === "number" &&
         Number.isSafeInteger(state.replayIndex) &&
         state.replayIndex >= 0))
   );
@@ -84,6 +77,7 @@ export function captureOpenAIResponsesCompaction(
   model: Model,
   captureMetadata?: OpenAIResponsesReasoningReplayMetadata,
   compactedOutput?: OpenAIResponsesCompactionOutput,
+  outputTokens?: number,
 ): void {
   const metadata = captureMetadata ?? buildOpenAIResponsesReasoningReplayMetadata(model);
   if (!item.encrypted_content) {
@@ -118,7 +112,13 @@ export function captureOpenAIResponsesCompaction(
     ...(metadata.sessionHash ? { sessionHash: metadata.sessionHash } : {}),
     ...(metadata.authProfileHash ? { authProfileHash: metadata.authProfileHash } : {}),
     ...(compactedOutput
-      ? { compactedWindow: { state: "ready" as const, output: JSON.stringify(compactedOutput) } }
+      ? {
+          compactedWindow: {
+            state: "ready" as const,
+            output: JSON.stringify(compactedOutput),
+            ...(outputTokens !== undefined ? { outputTokens } : {}),
+          },
+        }
       : {}),
   } satisfies OpenAIResponsesCompactionReplayState;
   if (compactedOutput && !readOpenAIResponsesCompactionWindow(replay, model)) {
@@ -131,7 +131,7 @@ export function suppressOpenAIResponsesCompaction(
   output: Pick<AssistantMessage, "providerReplay">,
   model: Model,
   options?: Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected" | "sessionId">,
-  rejectedCheckpoint?: OpenAIResponsesCompactionRejection,
+  rejectedCheckpoint?: CompactionReplayRejection,
 ): void {
   const context = buildProviderReplayContext(model, options);
   if (!context.baseUrlHash) {
@@ -213,6 +213,7 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       item: ResponseCompactionItemParam;
       mode: "complete-window";
       output: OpenAIResponsesCompactionOutput;
+      outputTokens?: number;
       replayIndex: number;
     }
   | { owner: AssistantMessage; mode: "refresh-required" }
@@ -251,7 +252,11 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
       replay.compactedWindow !== undefined ||
       replay.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
     ) {
-      const output = readOpenAIResponsesCompactionWindow(replay, model);
+      const output = readOpenAIResponsesCompactionWindow(
+        replay,
+        model,
+        getAiTransportHost().immutableData,
+      );
       const item = output?.at(-1);
       if (!output || item?.type !== "compaction") {
         return { owner: message, mode: "refresh-required" };
@@ -260,6 +265,10 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
         owner: message,
         mode: "complete-window",
         output,
+        ...(replay.compactedWindow?.state === "ready" &&
+        replay.compactedWindow.outputTokens !== undefined
+          ? { outputTokens: replay.compactedWindow.outputTokens }
+          : {}),
         item,
         replayIndex:
           replay.type === OPENAI_RESPONSES_RETAINED_COMPACTION_REPLAY_TYPE
@@ -267,13 +276,15 @@ export function resolveNewestOpenAIResponsesCompactionReplay(
             : (replay.replayIndex ?? 0),
       };
     }
+    const item: ResponseCompactionItemParam = {
+      type: "compaction",
+      ...(isSafeResponsesReplayItemId(replay.id) ? { id: replay.id } : {}),
+      encrypted_content: replay.data,
+    };
+    publishResponsesCompactionInput(replay, [item], getAiTransportHost().immutableData);
     return {
       owner: message,
-      item: {
-        type: "compaction",
-        ...(isSafeResponsesReplayItemId(replay.id) ? { id: replay.id } : {}),
-        encrypted_content: replay.data,
-      },
+      item,
       mode: "compacted-prefix",
       replayIndex: replay.replayIndex ?? 0,
     };

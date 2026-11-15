@@ -10,6 +10,7 @@ import {
   emitCoreModelRequestEndedDiagnosticEvent,
   emitCoreModelRequestStartedDiagnosticEvent,
 } from "../infra/diagnostic-model-request.js";
+import { resolveRunStaleThresholdMs } from "./diagnostic-run-activity-snapshot.js";
 import { activityByRunId, resolveSessionActivity } from "./diagnostic-run-activity-state.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -29,6 +30,39 @@ afterEach(() => {
 });
 
 describe("core model owner generations", () => {
+  it("keeps sliding quiet protection after the start-relative recovery allowance", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const startedAt = Date.parse("2026-10-04T00:00:00Z");
+    vi.setSystemTime(startedAt);
+    const ref = {
+      sessionId: "quiet-owner",
+      sessionKey: "agent:main:quiet-owner",
+      runId: "quiet-run",
+    };
+    const owner = createDiagnosticEmbeddedRunOwner(ref);
+    startDiagnosticRunActivityTracking();
+    markDiagnosticEmbeddedRunStarted({ ...ref, owner });
+    emitCoreModelRequestStartedDiagnosticEvent(
+      { ...ref, callId: "quiet-call", provider: "core", model: "request-model" },
+      owner.generation,
+      900_000,
+    );
+    await waitForDiagnosticEventsDrained();
+    vi.setSystemTime(startedAt + 800_000);
+    markDiagnosticRunProgress({ ...ref, reason: "model_call:stream_progress" });
+    vi.setSystemTime(startedAt + 1_160_000);
+    const activity = getDiagnosticSessionActivitySnapshot(ref);
+    expect(activity.lastProgressAgeMs).toBe(360_000);
+    expect(activity.repeatedRequestNoProgressAgeMs).toBeUndefined();
+    expect(activity.activeModelCallRequestTimeoutMs).toBe(900_000);
+    expect(
+      // Progress keeps the full sliding quiet allowance, even after the
+      // request's initial allowance has elapsed.
+      resolveRunStaleThresholdMs(activity, 360_000, 360_000),
+    ).toBe(900_000);
+    closeDiagnosticEmbeddedRunOwner(owner);
+  });
+
   it.each([false, true])(
     "releases drained run fences without losing idle progress (merged: %s)",
     async (merge) => {
@@ -179,6 +213,9 @@ describe("core model owner generations", () => {
   });
 
   it("keeps exact-call recovery policy intact across forged terminals and run completion", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const requestStartedAt = Date.parse("2026-10-04T00:00:00.000Z");
+    vi.setSystemTime(requestStartedAt);
     const ref = { sessionId: "core-owner-session", sessionKey: "agent:main:core-owner" };
     const runId = "core-owner-run";
     const owner = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
@@ -224,6 +261,9 @@ describe("core model owner generations", () => {
   });
 
   it("fences queued old starts and delayed terminals without erasing a same-run replacement", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const startedAt = Date.parse("2026-10-04T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
     const ref = { sessionId: "generation-session", sessionKey: "agent:main:generation" };
     const runId = "reused-run";
     const ownerA = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
@@ -244,6 +284,8 @@ describe("core model owner generations", () => {
 
     const ownerB = createDiagnosticEmbeddedRunOwner({ ...ref, runId });
     markDiagnosticEmbeddedRunStarted({ ...ref, runId, owner: ownerB });
+    const currentRequestStartedAt = startedAt + 100;
+    vi.setSystemTime(currentRequestStartedAt);
     emitCoreModelRequestStartedDiagnosticEvent(
       {
         ...ref,
@@ -287,5 +329,77 @@ describe("core model owner generations", () => {
       hasActiveEmbeddedRun: true,
       activeModelCallRequestTimeoutMs: 420_000,
     });
+  });
+
+  it("projects only the current owner generation request timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const startedAt = Date.parse("2026-10-04T00:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    const ref = {
+      sessionId: "deadline-generation-session",
+      sessionKey: "agent:main:deadline-generation",
+    };
+    const oldRunId = "long-prior-request";
+    const currentRunId = "current-request";
+    const oldOwner = createDiagnosticEmbeddedRunOwner({
+      ...ref,
+      runId: oldRunId,
+      workKey: "prior-owner",
+    });
+    const currentOwner = createDiagnosticEmbeddedRunOwner({
+      ...ref,
+      runId: currentRunId,
+      workKey: "current-owner",
+    });
+    startDiagnosticRunActivityTracking();
+    try {
+      markDiagnosticEmbeddedRunStarted({
+        ...ref,
+        runId: oldRunId,
+        workKey: oldOwner.workKey,
+        owner: oldOwner,
+      });
+      emitCoreModelRequestStartedDiagnosticEvent(
+        {
+          ...ref,
+          runId: oldRunId,
+          callId: "prior-long-call",
+          provider: "core",
+          model: "slow-prior-model",
+        },
+        oldOwner.generation,
+        600_000,
+      );
+      await waitForDiagnosticEventsDrained();
+
+      const currentRequestStartedAt = startedAt + 100;
+      vi.setSystemTime(currentRequestStartedAt);
+      markDiagnosticEmbeddedRunStarted({
+        ...ref,
+        runId: currentRunId,
+        workKey: currentOwner.workKey,
+        owner: currentOwner,
+      });
+      emitCoreModelRequestStartedDiagnosticEvent(
+        {
+          ...ref,
+          runId: currentRunId,
+          callId: "current-short-call",
+          provider: "core",
+          model: "current-model",
+        },
+        currentOwner.generation,
+        100_000,
+      );
+      await waitForDiagnosticEventsDrained();
+
+      const requestTimeoutMs =
+        getDiagnosticSessionActivitySnapshot(ref).activeModelCallRequestTimeoutMs;
+      expect(requestTimeoutMs).toBe(100_000);
+      expect(requestTimeoutMs).toBeLessThan(600_000);
+    } finally {
+      closeDiagnosticEmbeddedRunOwner(oldOwner);
+      closeDiagnosticEmbeddedRunOwner(currentOwner);
+    }
   });
 });

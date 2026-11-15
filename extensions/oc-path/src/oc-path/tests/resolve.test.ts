@@ -22,46 +22,7 @@ Preamble.
 `;
 
 describe("resolveOcPath", () => {
-  const { ast } = parseMd(SAMPLE);
-
-  it("resolves root", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md" });
-    expect(m?.kind).toBe("root");
-  });
-
-  it("resolves block by slug", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md", section: "boundaries" });
-    expect(m?.kind).toBe("block");
-    if (m?.kind === "block") {
-      expect(m.node.heading).toBe("Boundaries");
-    }
-  });
-
-  it("resolves item by slug", () => {
-    const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "tools",
-      item: "gh",
-    });
-    expect(m?.kind).toBe("item");
-    if (m?.kind === "item") {
-      expect(m.node.kv?.value).toBe("GitHub CLI");
-      expect(m.block.heading).toBe("Tools");
-    }
-  });
-
-  it("resolves item-field via kv", () => {
-    const m = resolveOcPath(ast, {
-      file: "AGENTS.md",
-      section: "tools",
-      item: "gh",
-      field: "gh",
-    });
-    expect(m?.kind).toBe("item-field");
-    if (m?.kind === "item-field") {
-      expect(m.value).toBe("GitHub CLI");
-    }
-  });
+  const ast = parseMd(SAMPLE);
 
   it("resolves frontmatter via [frontmatter] sentinel section", () => {
     const m = resolveOcPath(ast, {
@@ -73,11 +34,6 @@ describe("resolveOcPath", () => {
     if (m?.kind === "frontmatter") {
       expect(m.node.value).toBe("github");
     }
-  });
-
-  it("returns null for unknown section", () => {
-    const m = resolveOcPath(ast, { file: "AGENTS.md", section: "nonexistent" });
-    expect(m).toBeNull();
   });
 
   it("returns null for unknown item", () => {

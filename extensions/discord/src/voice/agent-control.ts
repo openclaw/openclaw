@@ -13,10 +13,6 @@ import type { VoiceSessionEntry } from "./session.js";
 
 const logger = createSubsystemLogger("discord/voice");
 
-type DiscordVoiceAgentControlOutcome =
-  | { handled: true; result: RealtimeVoiceAgentControlResult; speakText?: string }
-  | { handled: false; result?: RealtimeVoiceAgentControlResult };
-
 type DiscordVoiceAgentControlParams = {
   entry: VoiceSessionEntry;
   accountId: string;
@@ -76,7 +72,10 @@ async function controlDiscordVoiceAgentRun(params: DiscordVoiceAgentControlParam
 
 export async function maybeControlDiscordVoiceAgentRun(
   params: DiscordVoiceAgentControlParams,
-): Promise<DiscordVoiceAgentControlOutcome> {
+): Promise<
+  | { handled: true; result: RealtimeVoiceAgentControlResult; speakText?: string }
+  | { handled: false; result?: RealtimeVoiceAgentControlResult }
+> {
   if (!shouldAutoControlRealtimeVoiceAgentText(params.text)) {
     return { handled: false };
   }
@@ -95,9 +94,11 @@ export function logDiscordVoiceAgentControlResult(
   entry: VoiceSessionEntry,
   result: RealtimeVoiceAgentControlResult,
 ): void {
-  logger.info(
-    `discord voice: realtime active-run control handled mode=${result.mode} ok=${result.ok} active=${result.active} reason=${result.reason ?? "none"} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
-  );
+  if (result.active && !result.ok) {
+    logger.warn(
+      `discord voice: realtime active-run control failed mode=${result.mode} reason=${result.reason ?? "none"} voiceSession=${entry.voiceSessionKey} supervisorSession=${entry.route.sessionKey} agent=${entry.route.agentId}`,
+    );
+  }
 }
 
 export async function handleDiscordVoiceAgentControlToolCall(params: {

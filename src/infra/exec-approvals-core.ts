@@ -1,6 +1,11 @@
 // Shared exec approval types and mode normalization.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import type { ApprovalScope } from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { SchemaContract } from "../../packages/gateway-protocol/src/schema-contract.js";
+import type {
+  ApprovalScope,
+  StreamApprovalProposal,
+} from "../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ExecApprovalRequestParams } from "../../packages/gateway-protocol/src/schema/exec-approvals.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 import type { ExecAllowlistEntry, McpToolGrant } from "./exec-approvals.types.js";
@@ -11,24 +16,21 @@ export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
 export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 export type ExecApprovalDecision = "allow-once" | "allow-always" | "deny";
+export const EXEC_APPROVAL_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 export type ExecApprovalUnavailableDecision = "allow-always";
 
 const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
-function normalizeExecHost(value?: string | null): ExecHost | null {
+function normalizeExecPolicyValue<T extends string>(
+  value: unknown,
+  values: readonly T[],
+): T | null {
   const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "gateway" || normalized === "node") {
-    return normalized;
-  }
-  return null;
+  return values.find((candidate) => candidate === normalized) ?? null;
 }
 
 export function normalizeExecTarget(value?: string | null): ExecTarget | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "auto") {
-    return normalized;
-  }
-  return normalizeExecHost(normalized);
+  return normalizeExecPolicyValue(value, EXEC_TARGET_VALUES);
 }
 
 export function requireValidExecTarget(value?: unknown): ExecTarget | null {
@@ -56,33 +58,15 @@ export function requireValidExecTarget(value?: unknown): ExecTarget | null {
 }
 
 export function normalizeExecSecurity(value?: unknown): ExecSecurity | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "deny" || normalized === "allowlist" || normalized === "full") {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["deny", "allowlist", "full"]);
 }
 
 export function normalizeExecAsk(value?: unknown): ExecAsk | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "off" || normalized === "on-miss" || normalized === "always") {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["off", "on-miss", "always"]);
 }
 
 export function normalizeExecMode(value?: string | null): ExecMode | null {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (
-    normalized === "deny" ||
-    normalized === "allowlist" ||
-    normalized === "ask" ||
-    normalized === "auto" ||
-    normalized === "full"
-  ) {
-    return normalized;
-  }
-  return null;
+  return normalizeExecPolicyValue(value, ["deny", "allowlist", "ask", "auto", "full"]);
 }
 
 export function resolveExecModeFromPolicy(params: {
@@ -158,35 +142,24 @@ export function resolveExecModePolicy(params: {
   };
 }
 
-export type SystemRunApprovalBinding = {
-  argv: string[];
-  cwd: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalBinding = Pick<
+  SystemRunApprovalPlan,
+  "argv" | "cwd" | "agentId" | "sessionKey"
+> & {
   envHash: string | null;
 };
 
-export type SystemRunApprovalFileOperand = {
-  argvIndex: number;
-  path: string;
-  sha256: string;
-};
+export type SystemRunApprovalFileOperand = NonNullable<SystemRunApprovalPlan["mutableFileOperand"]>;
 
-export type SystemRunApprovalPlan = {
-  argv: string[];
-  cwd: string | null;
-  commandText: string;
-  commandPreview?: string | null;
-  agentId: string | null;
-  sessionKey: string | null;
+export type SystemRunApprovalPlan = SchemaContract<
+  Omit<NonNullable<ExecApprovalRequestParams["systemRunPlan"]>, "policySnapshot">
+> & {
   policySnapshot?: ExecApprovalPolicySnapshot;
-  mutableFileOperand?: SystemRunApprovalFileOperand | null;
 };
 
-export type ExecApprovalCommandSpan = {
-  startIndex: number;
-  endIndex: number;
-};
+export type ExecApprovalCommandSpan = NonNullable<
+  ExecApprovalRequestParams["commandSpans"]
+>[number];
 
 /** Cron job identity recorded at approval creation for a cron isolated run. */
 type ExecApprovalCronExecutionSource = {
@@ -208,6 +181,8 @@ export type ExecApprovalRequestPayload = {
   security?: string | null;
   ask?: string | null;
   warningText?: string | null;
+  /** Display metadata attached by the native stream mutation owner. */
+  streamProposal?: StreamApprovalProposal;
   /** Owner-declared blast-radius facts; display-only, never authorization. */
   scope?: ApprovalScope | null;
   commandAnalysis?: CommandExplanationSummary | null;
@@ -247,12 +222,7 @@ export type ExecApprovalResolved = {
   request?: ExecApprovalRequest["request"];
 };
 
-export type ExecApprovalsDefaults = {
-  security?: ExecSecurity;
-  ask?: ExecAsk;
-  askFallback?: ExecSecurity;
-  autoAllowSkills?: boolean;
-};
+export type ExecApprovalsDefaults = Partial<Omit<ExecApprovalPolicySnapshot, "allowlistRules">>;
 
 export type ExecApprovalsAgent = ExecApprovalsDefaults & {
   allowlist?: ExecAllowlistEntry[];

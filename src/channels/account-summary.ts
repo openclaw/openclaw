@@ -5,12 +5,13 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildRuntimeAccountStatusSnapshot } from "../plugin-sdk/status-helpers.js";
 import { isRecord } from "../utils.js";
 import { asBoolean } from "../utils/boolean.js";
+import { describeChannelAccount } from "./account-resolution.js";
 import {
   projectSafeChannelAccountSnapshotFields,
   redactChannelStatusSummaryBaseUrl,
 } from "./account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "./plugins/types.core.js";
-import type { ChannelPlugin } from "./plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./plugins/types.plugin.js";
 import { applyChannelAccountState, resolveChannelAccountState } from "./status/account-state.js";
 
 /** Projects an admitted lifetime without resolving its potentially stale account configuration. */
@@ -73,15 +74,15 @@ export function buildChannelAccountSnapshotFromInspection(params: {
   return redactChannelStatusSummaryBaseUrl(snapshot);
 }
 
-export function buildChannelAccountSummary(params: {
+export async function buildChannelAccountSummary(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
   accountId: string;
   enabled: boolean;
   configured: boolean;
-}): ChannelAccountSnapshot {
-  const described = params.plugin.config.describeAccount?.(params.account, params.cfg);
+}): Promise<ChannelAccountSnapshot> {
+  const described = await describeChannelAccount(params);
   return redactChannelStatusSummaryBaseUrl({
     enabled: params.enabled,
     configured: params.configured,
@@ -107,6 +108,28 @@ export function formatChannelAllowFrom(params: {
   return normalizeStringEntries(params.allowFrom);
 }
 
+export function buildChannelAccountNotes(
+  snapshot: ChannelAccountSnapshot,
+  credentialNote?: string,
+): string[] {
+  const sources = [
+    ["token", snapshot.tokenSource],
+    ["bot", snapshot.botTokenSource],
+    ["app", snapshot.appTokenSource],
+    ["signing", snapshot.signingSecretSource],
+  ].flatMap(([label, source]) => (source && source !== "none" ? [`${label}:${source}`] : []));
+  return [
+    snapshot.enabled === false ? "disabled" : undefined,
+    snapshot.dmPolicy ? `dm:${snapshot.dmPolicy}` : undefined,
+    ...sources,
+    credentialNote,
+    snapshot.baseUrl,
+    snapshot.port != null ? `port:${snapshot.port}` : undefined,
+    snapshot.cliPath ? `cli:${snapshot.cliPath}` : undefined,
+    snapshot.dbPath ? `db:${snapshot.dbPath}` : undefined,
+  ].filter((note): note is string => Boolean(note));
+}
+
 export function resolveChannelAccountEnabled(params: {
   plugin: ChannelPlugin;
   account: unknown;
@@ -123,16 +146,12 @@ export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
-  readAccountConfiguredField?: boolean;
 }): Promise<boolean> {
   if (params.plugin.config.isConfigured) {
     return await params.plugin.config.isConfigured(params.account, params.cfg);
   }
-  if (params.readAccountConfiguredField) {
-    // Status inspection can project an explicit configured=false marker. Normal runtime
-    // account objects default to configured unless the plugin owns a stricter check.
-    const configured = isRecord(params.account) ? params.account.configured : undefined;
-    return configured !== false;
-  }
-  return true;
+  // Status inspection can project an explicit configured=false marker. Account
+  // objects otherwise default to configured unless the plugin owns a stricter check.
+  const configured = isRecord(params.account) ? params.account.configured : undefined;
+  return configured !== false;
 }

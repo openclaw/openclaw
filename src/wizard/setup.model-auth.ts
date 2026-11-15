@@ -1,5 +1,6 @@
 // Model/auth provider selection step shared by the classic wizard and bootstrap onboarding.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import type { PreparedAuthChoiceResult } from "../commands/auth-choice.apply.types.js";
 import {
   applyOnboardingPrimaryModel,
@@ -9,12 +10,13 @@ import {
   resolveOnboardingSetupTarget,
 } from "../commands/onboard-agent-target.js";
 import type { AuthChoice, OnboardOptions } from "../commands/onboard-types.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
+import { readSetupConfigAuthority } from "./setup.shared.js";
 
 export type SetupModelAuthCandidate = {
   config: OpenClawConfig;
@@ -22,20 +24,10 @@ export type SetupModelAuthCandidate = {
   persistAuthProfiles: PreparedAuthChoiceResult["persistAuthProfiles"];
 };
 
-const loadAuthChoiceModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.apply.js"),
-);
-const loadModelCheckModule = createLazyRuntimeModule(
-  () => import("../commands/auth-choice.model-check.js"),
-);
-
-const loadModelPickerModule = createLazyRuntimeModule(() => import("../flows/model-picker.js"));
-
 async function resolveAuthChoiceModelSelectionPolicy(params: {
   authChoice: string;
   config: OpenClawConfig;
   workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
   resolvePreferredProviderForAuthChoice: (typeof import("../plugins/provider-auth-choice-preference.js"))["resolvePreferredProviderForAuthChoice"];
 }): Promise<{
   preferredProvider?: string;
@@ -46,7 +38,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
     choice: params.authChoice,
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
   });
 
   const [{ resolveManifestProviderAuthChoice }, { resolvePluginSetupProviderCore }] =
@@ -57,7 +48,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const manifestChoice = resolveManifestProviderAuthChoice(params.authChoice, {
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     includeUntrustedWorkspacePlugins: false,
   });
   if (manifestChoice) {
@@ -65,7 +55,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
       provider: manifestChoice.providerId,
       config: params.config,
       workspaceDir: params.workspaceDir,
-      env: params.env,
       pluginIds: [manifestChoice.pluginId],
     });
     const setupMethod = setupProvider?.auth.find(
@@ -85,7 +74,6 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
   const providers = resolvePluginProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
-    env: params.env,
     mode: "setup",
   });
   const resolvedChoice = resolveProviderPluginChoice({
@@ -99,9 +87,7 @@ async function resolveAuthChoiceModelSelectionPolicy(params: {
       if (!preferredId) {
         return undefined;
       }
-      return providers.find(
-        (provider) => typeof provider.id === "string" && provider.id.trim() === preferredId,
-      );
+      return providers.find((provider) => provider.id.trim() === preferredId);
     })();
   const setupPolicy =
     resolvedChoice?.wizard?.modelSelection ?? matchedProvider?.wizard?.setup?.modelSelection;
@@ -128,9 +114,15 @@ export async function runSetupModelAuthStep(params: {
   stateDir?: string;
   pendingAgent?: { name: string; workspaceDir: string };
   preserveExistingModelSelection?: boolean;
+  assertCurrent?: () => void;
 }): Promise<SetupModelAuthCandidate> {
   const { opts, prompter, runtime } = params;
   const env = params.stateDir ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } : undefined;
+  const assertCurrent =
+    params.assertCurrent ??
+    (opts.authChoice === "skip" || opts.authChoice === "custom-api-key"
+      ? undefined
+      : (await readSetupConfigAuthority(env)).assertCurrent);
   let nextConfig = params.stagedCandidate?.config ?? params.config;
   let replacementBaseConfig = params.config;
   let authProfiles: PreparedAuthChoiceResult["authProfiles"] =
@@ -146,6 +138,8 @@ export async function runSetupModelAuthStep(params: {
     | (typeof import("../commands/auth-choice-prompt.js"))["isKeepCurrentAuthChoice"]
     | undefined;
   let detectedProviderIds: ReadonlySet<string> | undefined;
+  // Staged credentials of a utility-only choice, kept while the agent's provider is chosen.
+  let utilityStage: Omit<SetupModelAuthCandidate, "config"> | undefined;
   // Auth/model proposals copy config; they do not change the admitted setup owner.
   const target = resolveOnboardingSetupTarget(params.config, params.pendingAgent);
   if (authChoiceFromPrompt) {
@@ -224,12 +218,11 @@ export async function runSetupModelAuthStep(params: {
       // Explicit skip should stay cold: do not bootstrap auth/profile machinery
       // or run model/auth checks when the caller already chose to skip setup.
       if (authChoiceFromPrompt) {
-        const { promptDefaultModel } = await loadModelPickerModule();
+        const { promptDefaultModel } = await import("../flows/model-picker.js");
         const modelSelection = await promptDefaultModel({
           config: nextConfig,
           prompter,
           allowKeep: true,
-          ignoreAllowlist: true,
           includeProviderPluginSetups: false,
           loadCatalog: false,
           agentId: target.agentId,
@@ -244,7 +237,8 @@ export async function runSetupModelAuthStep(params: {
           nextConfig = applyOnboardingPrimaryModel(nextConfig, target, modelSelection.model);
         }
 
-        const { warnIfModelConfigLooksOff } = await loadModelCheckModule();
+        const { warnIfModelConfigLooksOff } =
+          await import("../commands/auth-choice.model-check.js");
         await warnIfModelConfigLooksOff(nextConfig, prompter, {
           agentId: target.agentId,
           agentDir: target.agentDir,
@@ -259,15 +253,16 @@ export async function runSetupModelAuthStep(params: {
       { resolvePreferredProviderForAuthChoice },
       { promptDefaultModel },
     ] = await Promise.all([
-      loadAuthChoiceModule(),
-      loadModelCheckModule(),
+      import("../commands/auth-choice.apply.js"),
+      import("../commands/auth-choice.model-check.js"),
       import("../plugins/provider-auth-choice-preference.js"),
-      loadModelPickerModule(),
+      import("../flows/model-picker.js"),
     ]);
     prompter.disableBackNavigation?.();
     const agentScopedModels = nextConfig.agents?.ownership === "explicit";
     let authResult: PreparedAuthChoiceResult;
     try {
+      assertCurrent?.();
       authResult = await prepareAuthChoice({
         authChoice,
         config: agentScopedModels ? prepareAgentModelDefaults(nextConfig, target) : nextConfig,
@@ -279,6 +274,7 @@ export async function runSetupModelAuthStep(params: {
         setDefaultModel: true,
         preserveExistingDefaultModel: true,
         env,
+        assertCurrent,
         opts: {
           ...opts,
           token: opts.authChoice === "apiKey" && opts.token ? opts.token : undefined,
@@ -288,7 +284,11 @@ export async function runSetupModelAuthStep(params: {
       // Provider setup failures (missing CLI login, unreachable endpoint, ...)
       // must not kill the whole wizard: earlier answers only persist later, so
       // re-prompt instead. Explicit --auth-choice callers still fail loudly.
-      if (error instanceof WizardCancelledError || !authChoiceFromPrompt) {
+      if (
+        error instanceof WizardCancelledError ||
+        error instanceof ConfigMutationConflictError ||
+        !authChoiceFromPrompt
+      ) {
         throw error;
       }
       await prompter.note(
@@ -314,6 +314,15 @@ export async function runSetupModelAuthStep(params: {
     }
     if (authResult.utilityModelOverride) {
       nextConfig = applyOnboardingUtilityModel(nextConfig, target, authResult.utilityModelOverride);
+      // A utility-only provider (e.g. Apple Foundation Models) cannot serve agent chat. Without
+      // an agent model the first turn falls back to a provider the user never set up, so keep
+      // the utility setup and ask for the agent's provider next.
+      if (authChoiceFromPrompt && !resolveAgentEffectiveModelPrimary(nextConfig, target.agentId)) {
+        await prompter.note(t("wizard.setup.utilityOnlyNote"), t("wizard.setup.utilityOnlyTitle"));
+        utilityStage = { authProfiles, persistAuthProfiles };
+        replacementBaseConfig = nextConfig;
+        continue;
+      }
       break;
     }
 
@@ -333,7 +342,6 @@ export async function runSetupModelAuthStep(params: {
         config: nextConfig,
         prompter,
         allowKeep: authChoiceModelSelectionPolicy.allowKeepCurrent,
-        ignoreAllowlist: true,
         includeProviderPluginSetups: true,
         preferredProvider: authChoiceModelSelectionPolicy.preferredProvider,
         browseCatalogOnDemand: true,
@@ -357,5 +365,18 @@ export async function runSetupModelAuthStep(params: {
     });
     break;
   }
-  return { config: nextConfig, authProfiles, persistAuthProfiles };
+  if (!utilityStage) {
+    return { config: nextConfig, authProfiles, persistAuthProfiles };
+  }
+  const staged = utilityStage;
+  const agentPersist = persistAuthProfiles;
+  return {
+    config: nextConfig,
+    authProfiles: [...staged.authProfiles, ...authProfiles],
+    // Verification may rename the agent credential to a temporary setup profile.
+    persistAuthProfiles: async (profiles) => {
+      await staged.persistAuthProfiles();
+      await agentPersist(profiles);
+    },
+  };
 }

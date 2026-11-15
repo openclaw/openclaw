@@ -9,6 +9,7 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
@@ -28,18 +29,20 @@ function createExecHostDefaultsConfig(
       },
     },
     agents: {
-      list: agents.map((agent) => ({
-        id: agent.id,
-        ...(agent.execHost
-          ? {
-              tools: {
-                exec: {
-                  host: agent.execHost,
+      entries: Object.fromEntries(
+        agents.map((agent) => [
+          agent.id,
+          agent.execHost
+            ? {
+                tools: {
+                  exec: {
+                    host: agent.execHost,
+                  },
                 },
-              },
-            }
-          : {}),
-      })),
+              }
+            : {},
+        ]),
+      ),
     },
   };
 }
@@ -89,7 +92,7 @@ describe("Agent-specific exec tool defaults", () => {
       const config: OpenClawConfig = {
         tools: { exec: { timeoutSeconds: 45 } },
         agents: {
-          list: [{ id: "main", tools: { exec: { timeoutSeconds: 120 } } }, { id: "helper" }],
+          entries: { main: { tools: { exec: { timeoutSeconds: 120 } } }, helper: {} },
         },
       };
       const tools = createOpenClawCodingTools({
@@ -113,7 +116,7 @@ describe("Agent-specific exec tool defaults", () => {
       tools: { exec: { host: "gateway", mode: "full", cleanupMs: 60_000 } },
       agents: {
         ownership: "explicit",
-        list: [{ id: "main", tools: { exec: { cleanupMs: 180_000 } } }, { id: "helper" }],
+        entries: { main: { tools: { exec: { cleanupMs: 180_000 } } }, helper: {} },
       },
     };
     const toolsFor = (agentId: string) =>
@@ -210,6 +213,62 @@ describe("Agent-specific exec tool defaults", () => {
         agentId: "main",
       }).approvalRunningNoticeMs,
     ).toBe(0);
+  });
+
+  describe("tools.byProvider exec ceiling", () => {
+    const ceilingConfig = (mode: "deny" | "auto"): OpenClawConfig => ({
+      tools: {
+        exec: { host: "gateway", mode: "full" },
+        byProvider: { "local-llm/small": { exec: { mode } } },
+      },
+    });
+    const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "deny",
+      risk: "high",
+      rationale: "fixture denial",
+    }));
+    const toolsForModel = (config: OpenClawConfig, modelProvider: string, modelId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: "agent:main:main",
+        modelProvider,
+        modelId,
+        exec: { backgroundMs: 0, notifyOnExit: false, autoReviewer: reviewer },
+        ...createTempAgentDirs(`ceiling-${modelProvider}-${modelId}`),
+      });
+
+    it("denies exec only for the capped model", async () => {
+      const config = ceilingConfig("deny");
+      await expect(
+        requireExecTool(toolsForModel(config, "local-llm", "small")).execute("capped", {
+          command: "echo capped",
+        }),
+      ).rejects.toThrow("exec denied");
+      const other = await requireExecTool(toolsForModel(config, "anthropic", "big")).execute(
+        "uncapped",
+        { command: "echo uncapped" },
+      );
+      expect(other.details).toMatchObject({ status: "completed" });
+    });
+
+    it("sends only the capped model's exec misses to the reviewer before any process starts", async () => {
+      const config = ceilingConfig("auto");
+      const marker = (name: string) => path.join(tempDirs.make("ceiling-marker-"), name);
+      const capped = marker("capped");
+      const result = await requireExecTool(toolsForModel(config, "local-llm", "small")).execute(
+        "capped-review",
+        { command: `touch ${capped}` },
+      );
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("fixture denial");
+      expect(fs.existsSync(capped)).toBe(false);
+      const uncapped = marker("uncapped");
+      await requireExecTool(toolsForModel(config, "anthropic", "big")).execute("uncapped-run", {
+        command: `touch ${uncapped}`,
+      });
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(uncapped)).toBe(true);
+    });
   });
 
   it("should run exec synchronously when process is denied", async () => {
@@ -350,16 +409,15 @@ describe("Agent-specific exec tool defaults", () => {
           },
         },
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: {
                 exec: {
                   mode: "allowlist",
                 },
               },
             },
-          ],
+          },
         },
       },
       sessionKey: "agent:main:main",

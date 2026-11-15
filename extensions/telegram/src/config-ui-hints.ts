@@ -51,7 +51,7 @@ export const telegramChannelConfigUiHints = {
     nativeCommands: true,
     streaming: {
       "": 'Unified Telegram stream preview mode: "off" | "partial" | "block" | "progress" (default: "progress"). "progress" keeps a single editable progress draft until final delivery. Legacy boolean/streamMode keys are detected; run doctor --fix to migrate.',
-      mode: 'Canonical Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
+      mode: 'Telegram preview mode: "off" | "partial" | "block" | "progress" (default: "progress").',
       chunkMode:
         'Chunking mode for outbound Telegram text delivery: "length" (default) or "newline".',
       "block.enabled":
@@ -73,6 +73,10 @@ export const telegramChannelConfigUiHints = {
   richMessages: {
     label: "Telegram Rich Messages",
     help: "Opt into Bot API 10.3 rich text sends and edits, including native tables and rich media. Default: false because some current Telegram clients render these messages as unsupported.",
+  },
+  widgets: {
+    label: "Telegram Message Widgets",
+    help: "Opt into Bot API 10.4 message widgets: show_widget sends interactive widgets in private chats, and taps update them in place. Default: false because older Telegram clients cannot render widgets.",
   },
   "network.autoSelectFamily": {
     label: "Telegram autoSelectFamily",

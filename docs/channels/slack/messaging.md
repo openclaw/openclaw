@@ -135,6 +135,7 @@ When a turn spawns a visible work session, the finished card instead links to th
 - Media and non-text payloads fall back to normal delivery.
 - Outside compact progress, media/error finals cancel pending preview edits; eligible text/block finals flush only when they can edit the preview in place.
 - Native streamed replies wait for Slack's acknowledgement before delivery is marked successful. Each complete reply block flushes separately, including short blocks; routine progress updates still coalesce. A later progress-card finalization failure does not discard an already acknowledged reply.
+- If native progress streaming expires or is rejected mid-turn, later progress uses a temporary draft with ordinary message posts and edits. The final reply uses normal delivery, and the draft is deleted after delivery succeeds. User Stop requests still suppress later output.
 - Explicit HTTP 429 rate-limit rejections are retried up to twice by default, after Slack's `Retry-After` delay. This also applies to ordinary messages and upload completion; lost responses and server errors are not replayed.
 - Definite recipient or scope rejections fall back to normal delivery for buffered text. Ambiguous streaming failures (such as a lost response) report failure without replaying the unacknowledged text, because Slack may already have accepted it. Later payloads use normal delivery.
 
@@ -175,7 +176,7 @@ Legacy keys:
 - `channels.slack.streamMode` (`replace | status_final | append`) is a legacy alias for `channels.slack.streaming.mode`.
 - boolean `channels.slack.streaming` is a legacy alias for `channels.slack.streaming.mode` and `channels.slack.streaming.nativeTransport`.
 - top-level `channels.slack.chunkMode` and `channels.slack.nativeStreaming` are legacy aliases for `channels.slack.streaming.chunkMode` and `channels.slack.streaming.nativeTransport`.
-- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the canonical keys.
+- Legacy aliases are not read at runtime; run `openclaw doctor --fix` to rewrite persisted Slack streaming config to the current keys.
 
 ## Typing reaction fallback
 
@@ -192,6 +193,10 @@ Notes:
 - Slack expects shortcodes (for example `"hourglass_flowing_sand"`).
 - Use `""` to disable the typing reaction, including the default for quiet top-level turns.
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
+
+## Question buttons
+
+When an `ask_user` question is answered, canceled, or expires, OpenClaw updates the delivered question card with its outcome. Only that question's answer buttons are removed; other buttons and links on the card remain available.
 
 ## Commands and slash behavior
 

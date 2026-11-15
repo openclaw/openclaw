@@ -1,7 +1,60 @@
 // Text file tail helpers for E2E assertions.
 import fs from "node:fs";
 
-export function textFileContains(file, needle) {
+// Keep the cursor between readiness polls; logs belong to the current test run.
+export function createTextFileScanner(file, needles, chunkBytes = 64 * 1024) {
+  const markers = needles.map((needle) => Buffer.from(needle));
+  const carryBytes = Math.max(0, ...markers.map((marker) => marker.length - 1));
+  let offset = 0;
+  let carry = Buffer.alloc(0);
+  let found = -1;
+  return () => {
+    if (found >= 0) {
+      return found;
+    }
+    let fd;
+    try {
+      fd = fs.openSync(file, "r");
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) {
+        return -1;
+      }
+      if (stat.size < offset) {
+        offset = 0;
+        carry = Buffer.alloc(0);
+      }
+      const buffer = Buffer.alloc(chunkBytes);
+      while (offset < stat.size) {
+        const length = fs.readSync(fd, buffer, 0, Math.min(chunkBytes, stat.size - offset), offset);
+        if (!length) {
+          break;
+        }
+        const text = Buffer.concat([carry, buffer.subarray(0, length)]);
+        const indexes = markers.map((marker) => text.indexOf(marker)).filter((index) => index >= 0);
+        if (indexes.length) {
+          found = offset - carry.length + Math.min(...indexes);
+          return found;
+        }
+        carry = carryBytes ? text.subarray(-carryBytes) : Buffer.alloc(0);
+        offset += length;
+      }
+      return -1;
+    } catch (error) {
+      if (error.code !== "ENOENT") {
+        throw error;
+      }
+      offset = 0;
+      carry = Buffer.alloc(0);
+      return -1;
+    } finally {
+      if (fd !== undefined) {
+        fs.closeSync(fd);
+      }
+    }
+  };
+}
+
+export function textFileContains(file, needle, startOffset = 0) {
   let stat;
   try {
     stat = fs.statSync(file);
@@ -16,7 +69,7 @@ export function textFileContains(file, needle) {
   try {
     const buffer = Buffer.alloc(Math.min(64 * 1024, stat.size));
     let carry = "";
-    let offset = 0;
+    let offset = startOffset;
     while (offset < stat.size) {
       const bytesToRead = Math.min(buffer.length, stat.size - offset);
       const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);

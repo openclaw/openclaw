@@ -1,47 +1,32 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TypingMode } from "../../config/types.js";
 import type { SourceReplyDeliveryMode } from "../get-reply-options.types.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { TypingPolicy } from "../types.js";
 import type { TypingController } from "./typing.js";
-
-/** Inputs that decide when a channel typing indicator should be shown. */
-type TypingModeContext = {
-  configured?: TypingMode;
-  isGroupChat: boolean;
-  wasMentioned: boolean;
-  isHeartbeat: boolean;
-  typingPolicy?: TypingPolicy;
-  suppressTyping?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-};
 
 /** Resolves the effective typing mode for the current auto-reply turn. */
 export function resolveTypingMode({
   configured,
   isGroupChat,
   wasMentioned,
-  isHeartbeat,
   typingPolicy,
   suppressTyping,
   sourceReplyDeliveryMode,
-}: TypingModeContext): TypingMode {
-  if (
-    isHeartbeat ||
-    typingPolicy === "heartbeat" ||
-    typingPolicy === "system_event" ||
-    typingPolicy === "internal_webchat" ||
-    suppressTyping
-  ) {
+}: {
+  configured?: TypingMode;
+  isGroupChat: boolean;
+  wasMentioned: boolean;
+  typingPolicy?: TypingPolicy;
+  suppressTyping?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+}): TypingMode {
+  if (typingPolicy === "system_event" || typingPolicy === "internal_webchat" || suppressTyping) {
     return "never";
   }
   if (configured) {
     return configured;
   }
-  if (sourceReplyDeliveryMode === "message_tool_only") {
-    return "instant";
-  }
-  if (!isGroupChat || wasMentioned) {
+  if (sourceReplyDeliveryMode === "message_tool_only" || !isGroupChat || wasMentioned) {
     return "instant";
   }
   // Group chats wait for visible text to avoid noisy indicators.
@@ -67,14 +52,13 @@ export type TypingSignaler = {
 export function createTypingSignaler(params: {
   typing: TypingController;
   mode: TypingMode;
-  isHeartbeat: boolean;
 }): TypingSignaler {
-  const { typing, mode, isHeartbeat } = params;
+  const { typing, mode } = params;
   const shouldStartImmediately = mode === "instant";
   const shouldStartOnMessageStart = mode === "message";
   const shouldStartOnText = mode === "message" || mode === "instant";
   const shouldStartOnReasoning = mode === "thinking";
-  const disabled = isHeartbeat || mode === "never";
+  const disabled = mode === "never";
   let hasRenderableText = false;
 
   const refreshTyping = async (allowStart: boolean) => {
@@ -85,14 +69,6 @@ export function createTypingSignaler(params: {
       await typing.startTypingLoop();
     }
     typing.refreshTypingTtl();
-  };
-
-  const isRenderableText = (text?: string): boolean => {
-    const trimmed = normalizeOptionalString(text);
-    if (!trimmed) {
-      return false;
-    }
-    return !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN);
   };
 
   return {
@@ -112,7 +88,8 @@ export function createTypingSignaler(params: {
       }
     },
     async signalTextDelta(text?: string) {
-      if (disabled || !isRenderableText(text)) {
+      const trimmed = disabled ? undefined : normalizeOptionalString(text);
+      if (!trimmed) {
         return;
       }
       hasRenderableText = true;

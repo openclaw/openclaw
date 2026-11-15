@@ -1,3 +1,4 @@
+import { pluginCatalogIdFromRouteSuffix } from "../../packages/plugin-package-contract/src/catalog-route.js";
 import { resolvePluginDiscoveryIdentity } from "../plugins/catalog-discovery.js";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
@@ -45,6 +46,24 @@ export function isControlUiApprovalDocumentPath(params: {
   return encodedId.length > 0 && !encodedId.includes("/");
 }
 
+/** Classify the current request URL before loading optional Control UI handlers. */
+export function isControlUiHttpRequest(
+  req: { url?: string; method?: string; headers: { accept?: string } },
+  basePath: string,
+): boolean {
+  const url = req.url ? new URL(req.url, "http://localhost") : undefined;
+  return (
+    url !== undefined &&
+    classifyControlUiRequest({
+      basePath,
+      pathname: url.pathname,
+      search: url.search,
+      method: req.method,
+      accept: req.headers.accept,
+    }).kind !== "not-control-ui"
+  );
+}
+
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
   basePath: string;
@@ -72,40 +91,34 @@ export function classifyControlUiRequest(params: {
     ) {
       return { kind: "not-control-ui" };
     }
-    // Marketplace documents own the catalogue root and canonical generated catalog IDs.
+    // Marketplace documents own the catalogue root, owner/name paths, and generated IDs.
     // Other descendants and non-document requests remain plugin HTTP routes.
     if (pathname === "/plugins" || pathname.startsWith("/plugins/")) {
       const marketplaceDocument =
         pathname === "/plugins" ||
         pathname === "/plugins/" ||
-        resolvePluginDiscoveryIdentity(pathname.slice("/plugins/".length)) !== undefined;
+        resolvePluginDiscoveryIdentity(
+          pluginCatalogIdFromRouteSuffix(pathname.slice("/plugins/".length)) ?? "",
+        ) !== undefined;
       if (!marketplaceDocument || !isReadHttpMethod(method) || !spaFallback) {
         return { kind: "not-control-ui" };
       }
     }
-    if (pathname === "/api" || pathname.startsWith("/api/")) {
+    // API, OAuth, and join namespaces retain their runtime owners, including browser GETs.
+    if (
+      ["/api", "/j", "/v1", "/oauth"].some(
+        (root) => pathname === root || pathname.startsWith(`${root}/`),
+      )
+    ) {
       return { kind: "not-control-ui" };
     }
-    if (pathname === "/j" || pathname.startsWith("/j/")) {
-      return { kind: "not-control-ui" };
-    }
-    // Disabled OpenAI-compatible endpoints must return 404, not the SPA HTML.
-    if (pathname === "/v1" || pathname.startsWith("/v1/")) {
-      return { kind: "not-control-ui" };
-    }
-    if (!isReadHttpMethod(method)) {
-      return { kind: "not-control-ui" };
-    }
-    return { kind: "serve", spaFallback };
-  }
-
-  if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
+  } else if (!pathname.startsWith(`${basePath}/`) && pathname !== basePath) {
     return { kind: "not-control-ui" };
   }
   if (!isReadHttpMethod(method)) {
     return { kind: "not-control-ui" };
   }
-  if (pathname === basePath) {
+  if (basePath && pathname === basePath) {
     return { kind: "redirect", location: `${basePath}/${search}` };
   }
   return { kind: "serve", spaFallback };

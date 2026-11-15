@@ -3,16 +3,20 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/promise.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
-import { PROVIDER_ID, HARNESS_ID } from "./prepared-model-catalog-worker.test-support.js";
+import {
+  catalogEntry,
+  writeFixtureFiles,
+  PROVIDER_ID,
+  HARNESS_ID,
+} from "./prepared-model-catalog-worker.test-support.js";
 import {
   loadPublishedPreparedModelCatalogOwnerSnapshot,
   refreshExpiredPreparedModelCatalog,
 } from "./prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "./prepared-model-runtime-auth.js";
 import { registerPreparedModelRuntimePublicationListener } from "./prepared-model-runtime.publication-events.js";
-import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 import { readCatalogCaptureFootprint } from "./test-helpers/catalog-capture-footprint.js";
 import { createCatalogFleetFixture } from "./test-helpers/prepared-model-catalog-fleet-fixture.js";
 import {
@@ -23,104 +27,74 @@ import {
 const { makeTempDir } = usePreparedCatalogWorkerFixtures();
 const createFleetFixture = createCatalogFleetFixture(makeTempDir);
 const UNSEEN_NATIVE_PROVIDER = "native-only-fixture";
+const nativeRow = (revision: number) => ({
+  provider: revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID,
+  id: `native-${revision}`,
+  nativeRuntime: HARNESS_ID,
+});
 
-it("admits cold native discovery during expired fleet provider renewal and preserves both publications", async () => {
+it("preserves native and provider renewals and explicitly refreshes scoped warm catalogs", async ({
+  signal,
+}) => {
   let revision = 0;
+  let metadataRequests = 0;
   let clock = Date.now();
   let held: ReturnType<typeof createDeferred<void>> | undefined;
   let entered: ReturnType<typeof createDeferred<void>> | undefined;
   let nativeEntered: ReturnType<typeof createDeferred<void>> | undefined;
   let nativeHeld: ReturnType<typeof createDeferred<void>> | undefined;
   let nativeTarget: { agent: string; revision: number } | undefined;
-  let snapshots: PreparedModelRuntimeSnapshot[] = [];
   const requests: Array<{ agent: string; revision: number; authorization: string | undefined }> =
     [];
   const work: Promise<unknown>[] = [];
   const publications: Promise<unknown>[] = [];
-  const waiters = new Set<() => void>();
-  const unsubscribe = registerPreparedModelRuntimePublicationListener(() => {
-    for (const check of waiters) {
-      check();
-    }
-  });
-  const waitForCatalogs = (expectedRevision: number) => {
-    const completed = createDeferred();
-    const check = () => {
-      if (
-        snapshots.length &&
-        snapshots.every((snapshot) =>
-          snapshot
-            .readFullModelCatalog?.()
-            ?.entries.some((entry) => entry.id === `provider-${expectedRevision}`),
-        )
-      ) {
-        waiters.delete(check);
-        completed.resolve();
-      }
-    };
-    waiters.add(check);
-    check();
-    return withTestTimeout(completed.promise, 30_000, "Fleet provider catalogs did not publish");
-  };
   const server = await reserveTestPortListener({
     offsets: [0],
     createListener: () =>
       createServer((request, response) => {
         const url = new URL(request.url!, "http://fixture.invalid");
         const agent = url.searchParams.get("agent")!;
-        if (url.pathname === "/native") {
-          const nativeRevision = revision;
-          const release = nativeHeld;
-          if (agent === nativeTarget?.agent && nativeRevision === nativeTarget.revision) {
-            nativeEntered?.resolve();
-          }
-          const pending = (async () => {
-            await release?.promise;
-            response.setHeader("content-type", "application/json");
-            response.end(
-              JSON.stringify(
-                nativeRevision
-                  ? [
-                      {
-                        provider: nativeRevision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID,
-                        id: `native-${nativeRevision}`,
-                        name: "Native model",
-                        nativeRuntime: HARNESS_ID,
-                      },
-                    ]
-                  : [],
-              ),
-            );
-          })();
-          work.push(pending);
-          void pending.catch((error: unknown) =>
-            response.destroy(error instanceof Error ? error : new Error(String(error))),
-          );
+        const send = (value: unknown) => {
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify(value));
+        };
+        if (url.pathname === "/metadata") {
+          metadataRequests += 1;
+          send({ revision });
           return;
         }
-        if (url.pathname !== "/catalog") {
+        const native = url.pathname === "/native";
+        const currentRevision = revision;
+        const release = native ? nativeHeld : held;
+        if (native) {
+          if (agent === nativeTarget?.agent && currentRevision === nativeTarget.revision) {
+            nativeEntered?.resolve();
+          }
+        } else if (url.pathname === "/catalog") {
+          requests.push({
+            agent,
+            revision: currentRevision,
+            authorization: request.headers.authorization,
+          });
+          entered?.resolve();
+        } else {
           response.writeHead(404).end();
           return;
         }
-        const currentRevision = revision;
-        const release = held;
-        requests.push({
-          agent,
-          revision: currentRevision,
-          authorization: request.headers.authorization,
-        });
-        entered?.resolve();
         const pending = (async () => {
           await release?.promise;
-          response.setHeader("content-type", "application/json");
-          response.end(
-            JSON.stringify({
-              provider: {
-                api: "openai-completions",
-                baseUrl: "https://fleet.invalid/v1",
-                models: [{ id: `provider-${currentRevision}`, name: "Provider model" }],
-              },
-            }),
+          send(
+            native
+              ? currentRevision
+                ? [{ ...nativeRow(currentRevision), name: "Native model" }]
+                : []
+              : {
+                  provider: {
+                    api: "openai-completions",
+                    baseUrl: "https://fleet.invalid/v1",
+                    models: [{ id: `provider-${currentRevision}`, name: "Provider model" }],
+                  },
+                },
           );
         })();
         work.push(pending);
@@ -146,21 +120,17 @@ it("admits cold native discovery during expired fleet provider renewal and prese
           path.join(seed.root, "plugin", "payload.bin"),
           Buffer.alloc(1024 * 1024, 1),
         );
-        fs.writeFileSync(
-          path.join(seed.root, "plugin", "openclaw.plugin.json"),
-          JSON.stringify({
+        writeFixtureFiles(path.join(seed.root, "plugin"), {
+          "openclaw.plugin.json": {
             id: PROVIDER_ID,
             providers: [PROVIDER_ID],
             cliBackends: [HARNESS_ID],
+            providerCatalogEntry: "./provider-discovery.cjs",
             modelCatalog: { discovery: { [PROVIDER_ID]: "runtime" }, runtimeAugment: true },
             configSchema: { type: "object", additionalProperties: false },
-          }),
-        );
-        fs.writeFileSync(
-          path.join(seed.root, "plugin", "index.cjs"),
-          `
+          },
+          "index.cjs": `
 const fs = require("node:fs");
-const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   fs.appendFileSync(${JSON.stringify(registrations)}, JSON.stringify({ thread: require("node:worker_threads").threadId, filename: __filename }) + "\\n");
   api.registerAgentHarness({
@@ -168,32 +138,57 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     supports: () => ({ supported: true }), runAttempt: async () => ({ ok: false, error: "unused" }),
     loadModelCatalog: async (params) => (await fetch(${JSON.stringify(endpoint + "/native?agent=")} + encodeURIComponent(params.agentId))).json(),
   });
-  api.registerProvider({
+  api.registerProvider(require("./provider-discovery.cjs"));
+} };\n`,
+          "provider-discovery.cjs": `
+const fs = require("node:fs");
+const { getCachedLiveCatalogValue } = require("openclaw/plugin-sdk/provider-catalog-shared");
+module.exports = {
     id: ${JSON.stringify(PROVIDER_ID)}, label: "Fleet proof", auth: [],
     catalog: { async run(ctx) {
       const credential = ctx.resolveProviderAuth(${JSON.stringify(PROVIDER_ID)}).discoveryApiKey;
-      return getCachedLiveCatalogValue({
-        keyParts: [ctx.agentDir, credential], ttlMs: 1000,
+      const cached = (keyParts, ttlMs, load) => getCachedLiveCatalogValue({ keyParts, ttlMs, load,
         now: () => Number(fs.readFileSync(${JSON.stringify(clockFile)}, "utf8")),
-        load: async () => (await fetch(${JSON.stringify(endpoint + "/catalog?agent=")} + encodeURIComponent(require("node:path").basename(require("node:path").dirname(ctx.agentDir))), {
-          headers: { authorization: "Bearer " + credential },
-        })).json(),
       });
+      await cached(["fleet-public-metadata", ${JSON.stringify(endpoint)}], 60_000,
+        async () => (await fetch(${JSON.stringify(endpoint + "/metadata")})).json());
+      return cached([ctx.agentDir, credential], 1000,
+        async () => (await fetch(${JSON.stringify(endpoint + "/catalog?agent=")} + encodeURIComponent(require("node:path").basename(require("node:path").dirname(ctx.agentDir))), {
+          headers: { authorization: "Bearer " + credential },
+        })).json());
     } },
-  });
-} };\n`,
-        );
+};\n`,
+        });
       },
       true,
       { agentCount: 2 },
     );
-    snapshots = fixture.snapshots;
-    await Promise.all(snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)));
-    expect(requests).toHaveLength(2);
-    for (const snapshot of snapshots) {
-      expect(snapshot.readFullModelCatalog?.()?.entries).toContainEqual(
-        expect.objectContaining({ provider: PROVIDER_ID, id: "provider-0" }),
+    const snapshots = fixture.snapshots;
+    const waitForCatalogs = (expectedRevision: number) => {
+      const completed = createDeferred();
+      const check = () => {
+        if (
+          snapshots.every((snapshot) =>
+            snapshot
+              .readFullModelCatalog?.()
+              ?.entries.some((entry) => entry.id === `provider-${expectedRevision}`),
+          )
+        ) {
+          completed.resolve();
+        }
+      };
+      const stop = registerPreparedModelRuntimePublicationListener(check);
+      check();
+      return withTestTimeout(completed.promise, 30_000, "Fleet catalogs did not publish").finally(
+        stop,
       );
+    };
+    const initialCatalogs = await Promise.all(
+      snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
+    );
+    expect(requests, JSON.stringify({ metadataRequests, initialCatalogs })).toHaveLength(2);
+    for (const snapshot of snapshots) {
+      expect(snapshot.readFullModelCatalog?.()?.entries).toContainEqual(catalogEntry("provider-0"));
     }
     const preparedRegistrations = fs.readFileSync(registrations, "utf8");
     const registeredSources = preparedRegistrations
@@ -214,6 +209,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     expect(initialFootprint.bytes).toBeGreaterThanOrEqual(1024 * 1024);
     for (revision = 1; revision <= 3; revision++) {
       const nativeProvider = revision === 3 ? UNSEEN_NATIVE_PROVIDER : PROVIDER_ID;
+      const nativeEntry = nativeRow(revision);
       clock += 1001;
       fs.writeFileSync(path.join(fixture.root, "catalog-clock.txt"), String(clock));
       held = createDeferred();
@@ -263,13 +259,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         "Native selection did not complete",
       );
       expect(native).toMatchObject({
-        entries: expect.arrayContaining([
-          expect.objectContaining({
-            provider: nativeProvider,
-            id: `native-${revision}`,
-            nativeRuntime: HARNESS_ID,
-          }),
-        ]),
+        entries: expect.arrayContaining([expect.objectContaining(nativeEntry)]),
       });
       held?.resolve();
       held = undefined;
@@ -281,11 +271,7 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
       expect(published.entries).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: `provider-${revision}` }),
-          expect.objectContaining({
-            provider: nativeProvider,
-            id: `native-${revision}`,
-            nativeRuntime: HARNESS_ID,
-          }),
+          expect.objectContaining(nativeEntry),
         ]),
       );
       for (const [index, snapshot] of snapshots.entries()) {
@@ -294,16 +280,44 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
           key: `synthetic-catalog-${fixture.agentIds[index]}`,
         });
         if (revision === 3) {
-          expect(auth.credentials?.[UNSEEN_NATIVE_PROVIDER]).toBeUndefined();
-          expect(auth.authModes[UNSEEN_NATIVE_PROVIDER]).toBeUndefined();
-          expect(
-            Object.values(auth.authStore.profiles).some(
+          expect({
+            credential: auth.credentials?.[UNSEEN_NATIVE_PROVIDER],
+            mode: auth.authModes[UNSEEN_NATIVE_PROVIDER],
+            profile: Object.values(auth.authStore.profiles).some(
               (profile) => profile.provider === UNSEEN_NATIVE_PROVIDER,
             ),
-          ).toBe(false);
+          }).toEqual({ credential: undefined, mode: undefined, profile: false });
         }
       }
     }
+    // The worker and its SDK cache stay alive after TTL renewal. Explicit refresh must
+    // carry its intent across that boundary without expiring another agent's credential key.
+    expect(requests).toHaveLength(8);
+    // Short account-list expiry must not force a still-fresh shared metadata feed.
+    expect(metadataRequests).toBe(1);
+    const selected = snapshots[0]!;
+    await selected.loadFullModelCatalog!();
+    await selected.loadFullModelCatalog!({ changedOnly: true });
+    expect(requests).toHaveLength(8);
+    const refreshed = createDeferred();
+    const stopObservingRefresh = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "catalog-published") {
+        refreshed.resolve();
+      }
+    });
+    try {
+      await selected.loadFullModelCatalog!({ refresh: true, providerIds: [PROVIDER_ID] });
+      await withinTest(refreshed.promise, signal);
+    } finally {
+      stopObservingRefresh();
+    }
+    expect(requests).toHaveLength(9);
+    expect(metadataRequests).toBe(2);
+    expect(requests.at(-1)).toMatchObject({ agent: fixture.agentIds[0], revision: 4 });
+    expect(selected.readFullModelCatalog!()!.entries).toContainEqual(catalogEntry("provider-4"));
+    expect(snapshots[1]!.readFullModelCatalog!()!.entries).toContainEqual(
+      catalogEntry("provider-3"),
+    );
     for (const request of requests) {
       expect(request.authorization).toBe(`Bearer synthetic-catalog-${request.agent}`);
     }
@@ -313,7 +327,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     nativeHeld?.resolve();
     await Promise.allSettled([...work, pendingNative, ...publications]);
     restoreClock?.();
-    unsubscribe();
     server.listener.closeAllConnections();
     await server.releaseListener();
     await server.claim.release();

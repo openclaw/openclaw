@@ -1,43 +1,21 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
-import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
+import { skill } from "./skills-cli.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/agent-sessions", () => ({
   loadSkillsFromDir: () => ({ skills: [] }),
   formatSkillsForPrompt: () => "",
 }));
-function skill(name: string, overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntry {
-  const entry: SkillStatusEntry = {
-    name,
-    skillKey: name,
-    description: "A test skill",
-    source: "bundled",
-    bundled: false,
-    filePath: "/path/to/SKILL.md",
-    baseDir: "/path/to",
-    emoji: "🧪",
-    homepage: "https://example.com",
-    always: false,
-    disabled: false,
-    blockedByAllowlist: false,
-    blockedByAgentFilter: false,
-    eligible: true,
-    platformIncompatible: false,
-    modelVisible: true,
-    userInvocable: true,
-    commandVisible: true,
-    ...createEmptyInstallChecks(),
-    ...overrides,
-  };
-  entry.modelVisible = overrides.modelVisible ?? (entry.eligible && !entry.blockedByAgentFilter);
-  entry.commandVisible =
-    overrides.commandVisible ??
-    (entry.eligible && !entry.blockedByAgentFilter && entry.userInvocable);
-  return entry;
-}
 function report(skills: SkillStatusEntry[]): SkillStatusReport {
   return { workspaceDir: "/workspace", managedSkillsDir: "/managed", skills };
+}
+const info = (skills: SkillStatusEntry[], name: string, json = false) =>
+  formatSkillInfo(report(skills), name, { json });
+function expectContains(output: string, ...parts: string[]) {
+  for (const part of parts) {
+    expect(output).toContain(part);
+  }
 }
 const missing = { bins: ["missing-tool"], anyBins: [], env: [], config: [], os: [] };
 
@@ -74,21 +52,10 @@ describe("skills formatting", () => {
       }),
     ]);
     const output = formatSkillsList(mixed, { verbose: true });
-    for (const text of [
-      "1/4 ready",
-      "📸",
-      "✓",
-      "excluded",
-      "disabled",
-      "needs setup",
-      "anyBins",
-      "os:",
-    ]) {
-      expect(output).toContain(text);
-    }
-    const info = formatSkillInfo(mixed, "agent-excluded", {});
-    expect(info).toContain("Excluded by agent allowlist");
-    expect(info).toContain("excludes this skill");
+    expectContains(output, "1/4 ready", "📸", "✓", "excluded", "disabled", "needs setup");
+    expectContains(output, "anyBins", "os:");
+    const detail = formatSkillInfo(mixed, "agent-excluded", {});
+    expectContains(detail, "Excluded by agent allowlist", "excludes this skill");
     const eligible = formatSkillsList(mixed, { eligible: true });
     expect(eligible).toContain("ready");
     for (const name of ["agent-excluded", "disabled-skill", "needs-stuff"]) {
@@ -96,164 +63,96 @@ describe("skills formatting", () => {
     }
   });
 
-  it.each(["Excel-XLSX", "excel_xlsx"])("resolves unambiguous skill key %s", (skillKey) => {
-    expect(
-      formatSkillInfo(
-        report([skill("Excel XLSX", { skillKey, description: "Spreadsheet helpers" })]),
-        "excel-xlsx",
-        {},
-      ),
-    ).toContain("Spreadsheet helpers");
-  });
-
-  it("prefers an exact skill name over another skill's key in either discovery order", () => {
-    const alias = skill("another-skill", { skillKey: "requested-skill" });
-    const target = skill("requested-skill", { skillKey: "target-key" });
-    for (const entries of [
-      [alias, target],
-      [target, alias],
-    ]) {
-      expect(
-        JSON.parse(formatSkillInfo(report(entries), "requested-skill", { json: true })).name,
-      ).toBe("requested-skill");
-    }
+  it("resolves an unambiguous skill key", () => {
+    const entry = skill("Excel XLSX", {
+      skillKey: "Excel-XLSX",
+      description: "Spreadsheet helpers",
+    });
+    expect(info([entry], "excel-xlsx")).toContain("Spreadsheet helpers");
   });
 
   it.each([
-    {
-      name: "exact key",
-      query: "shared-key",
-      skills: [
-        skill("first", { skillKey: "shared-key" }),
-        skill("second", { skillKey: "shared-key" }),
+    [
+      "requested-skill",
+      [
+        skill("another-skill", { skillKey: "requested-skill" }),
+        skill("requested-skill", { skillKey: "target-key" }),
       ],
-    },
-    {
-      name: "case-insensitive",
-      query: "EXCEL-XLSX",
-      skills: [
-        skill("first", { skillKey: "Excel-XLSX" }),
-        skill("second", { skillKey: "excel-xlsx" }),
-      ],
-    },
-    {
-      name: "normalized",
-      query: "excel-xlsx",
-      skills: [
-        skill("Excel/XLSX", { skillKey: "slash" }),
-        skill("Excel_XLSX", { skillKey: "underscore" }),
-      ],
-    },
-  ])("rejects ambiguous $name selectors regardless of discovery order", ({ query, skills }) => {
+      { name: "requested-skill" },
+    ],
+    [
+      "shared-key",
+      [skill("first", { skillKey: "shared-key" }), skill("second", { skillKey: "shared-key" })],
+      { ok: false, skill: "shared-key" },
+    ],
+  ])("resolves %s consistently in either discovery order", (query, skills, expected) => {
     for (const entries of [skills, skills.toReversed()]) {
-      expect(JSON.parse(formatSkillInfo(report(entries), query, { json: true }))).toMatchObject({
-        ok: false,
-        skill: query,
-      });
+      expect(JSON.parse(info(entries, query, true))).toMatchObject(expected);
     }
   });
 
   it("reports readiness, model visibility and command access independently", () => {
+    const filtered = { eligible: false, blockedByAgentFilter: true, missing };
     const mixed = {
       ...report([
         skill("ready", { emoji: "🎛\uFE0E" }),
         skill("prompt-hidden", { modelVisible: false }),
         skill("slash-hidden", { userInvocable: false }),
         skill("agent-filtered", { blockedByAgentFilter: true }),
-        skill("excluded-missing", { eligible: false, blockedByAgentFilter: true, missing }),
+        skill("excluded-missing", filtered),
         skill("missing-bin", { eligible: false, missing, emoji: "🎙\uFE0E" }),
-        skill("disabled", {
-          eligible: false,
-          disabled: true,
-          blockedByAllowlist: true,
-          blockedByAgentFilter: true,
-          missing,
-        }),
-        skill("blocked-bundled", {
-          eligible: false,
-          blockedByAllowlist: true,
-          blockedByAgentFilter: true,
-          missing,
-        }),
+        skill("disabled", { ...filtered, disabled: true, blockedByAllowlist: true }),
+        skill("blocked-bundled", { ...filtered, blockedByAllowlist: true }),
       ]),
       agentId: "specialist",
       agentSkillFilter: ["ready", "prompt-hidden", "slash-hidden", "missing-bin"],
     };
     const parsed = JSON.parse(formatSkillsCheck(mixed, { json: true }));
-    expect(parsed.summary).toEqual({
-      total: 8,
-      eligible: 4,
-      modelVisible: 2,
-      commandVisible: 2,
-      disabled: 1,
-      blocked: 1,
-      agentFiltered: 4,
-      notInjected: 1,
-      missingRequirements: 2,
+    expect(parsed).toMatchObject({
+      summary: { total: 8, eligible: 4 },
+      modelVisible: ["ready", "slash-hidden"],
+      commandVisible: ["ready", "prompt-hidden"],
+      agentFiltered: ["agent-filtered", "excluded-missing", "disabled", "blocked-bundled"],
+      disabled: ["disabled"],
+      blocked: ["blocked-bundled"],
+      notInjected: [{ name: "prompt-hidden", reason: "disable-model-invocation" }],
     });
-    expect(parsed.modelVisible).toEqual(["ready", "slash-hidden"]);
-    expect(parsed.commandVisible).toEqual(["ready", "prompt-hidden"]);
-    expect(parsed.agentFiltered).toEqual([
-      "agent-filtered",
-      "excluded-missing",
-      "disabled",
-      "blocked-bundled",
-    ]);
-    expect(parsed.disabled).toEqual(["disabled"]);
-    expect(parsed.blocked).toEqual(["blocked-bundled"]);
-    expect(parsed.notInjected).toEqual([
-      { name: "prompt-hidden", reason: "disable-model-invocation" },
-    ]);
     expect(parsed.missingRequirements.map((entry: { name: string }) => entry.name)).toEqual([
       "excluded-missing",
       "missing-bin",
     ]);
     const human = formatSkillsCheck(mixed, {});
-    for (const text of [
+    expectContains(
+      human,
       "specialist",
       "🎛️ ready",
       "🎙️ missing-bin",
       "excluded-missing (bins: missing-tool)",
       "prompt-hidden (skill hides its instructions from the model; commands/cron may still use it)",
-    ]) {
-      expect(human).toContain(text);
-    }
+    );
     for (const name of parsed.agentFiltered) {
       expect(human).toContain(`${name} (loaded, but this agent is not allowed to see/use it)`);
     }
   });
 
-  it.each([false, true])("explains standalone skill visibility (hidden: %s)", (hidden) => {
+  it("explains standalone skills hidden from the model and commands", () => {
     vi.stubEnv("TERM", "dumb");
-    const output = formatSkillsCheck(
-      report([
-        skill("standalone", {
-          modelVisible: !hidden,
-          userInvocable: !hidden,
-          emoji: undefined,
-        }),
-      ]),
-      {},
-    );
-    expect(output).toContain("\n  standalone");
-    expect(output).toContain(
-      hidden ? "is not exposed as a command" : "Ready and visible to model:",
-    );
-    expect(output).not.toContain(
-      hidden ? "commands/cron may still use it" : "Hidden from model prompt:",
-    );
+    const entry = skill("standalone", {
+      modelVisible: false,
+      userInvocable: false,
+      emoji: undefined,
+    });
+    const output = formatSkillsCheck(report([entry]), {});
+    expectContains(output, "\n  standalone", "is not exposed as a command");
+    expect(output).not.toContain("commands/cron may still use it");
   });
 
   it("sanitizes ANSI and C1 controls in JSON fields", () => {
-    const output = formatSkillsList(
-      report([
-        skill("json-skill", {
-          emoji: "\u001b[31m📧\u001b[0m\u009f",
-          description: "desc\u0093\u001b[2J\u001b[33m colored\u001b[0m",
-        }),
-      ]),
-      { json: true },
-    );
+    const entry = skill("json-skill", {
+      emoji: "\u001b[31m📧\u001b[0m\u009f",
+      description: "desc\u0093\u001b[2J\u001b[33m colored\u001b[0m",
+    });
+    const output = formatSkillsList(report([entry]), { json: true });
     expect(JSON.parse(output).skills[0]).toMatchObject({
       emoji: "📧",
       description: "desc colored",

@@ -46,8 +46,8 @@ function createTelegramMessageContextSessionRuntimeForTest(
 ): TelegramTestSessionRuntime {
   return {
     buildChannelInboundEventContext,
-    readAmbientTranscriptWatermark: () => undefined,
-    readSessionUpdatedAt: () => undefined,
+    readAmbientTranscriptWatermarkAsync: async () => undefined,
+    readSessionUpdatedAtAsync: async () => undefined,
     recordInboundSession: async () => undefined,
     resolveAmbientTranscriptWatermarkKey: ({ channel, accountId, conversationId, threadId }) =>
       JSON.stringify([

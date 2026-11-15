@@ -21,7 +21,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-read.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
@@ -251,6 +251,9 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         expect(readClaim(sourceAgentId, sourcePath, "agent:main:chat", state.env)).toBeUndefined();
         expect(readClaim("ops", opsPath, "agent:ops:chat", state.env)?.events).toEqual(
           original.events,
+        );
+        expect(readClaim("ops", opsPath, "agent:ops:chat", state.env)?.entry.owner).toEqual(
+          original.entry.owner,
         );
         expect(readLedger()).toEqual([expect.objectContaining({ status: "completed" })]);
       } finally {

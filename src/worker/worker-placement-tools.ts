@@ -1,11 +1,11 @@
 import type { WorkerToolSurface } from "../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
+import type { ExecToolDefaults } from "../agents/bash-tools.exec-types.js";
 import { createCoreCodingTools } from "../agents/core-coding-tools.js";
-import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.js";
+import type { PreparedGitHubToolEnvironment } from "../agents/github-tool-identity.types.js";
 import { projectEffectiveExecPolicy } from "../agents/session-permission-exec-mode.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SkillSnapshot } from "../skills/types.js";
-import type { WorkerLaunchPlan } from "./launch-descriptor.js";
-import type { WorkerToolAuthority } from "./tool-authority.js";
+import type { WorkerLaunchPlan, WorkerToolAuthority } from "./launch-descriptor.js";
 
 export const WORKER_TOOL_CONFIG = { plugins: { enabled: false } } satisfies OpenClawConfig;
 
@@ -22,6 +22,7 @@ export function createWorkerPlacementTools(params: {
   runId: string;
   github?: PreparedGitHubToolEnvironment;
   skillsSnapshot?: SkillSnapshot;
+  createApprovalTransport?: ExecToolDefaults["createApprovalTransport"];
 }) {
   // Workers have no node/sandbox execution transport; host approval grants are not portable.
   const execUnavailable =
@@ -47,14 +48,22 @@ export function createWorkerPlacementTools(params: {
     shellTools: execUnavailable ? "patch-only" : "full",
     execDefaults: {
       ...policy,
+      strictInlineEval: execAuthority.strictInlineEval,
       safeBins: execAuthority.safeBins ?? [],
       node: execAuthority.host === "node" ? execAuthority.node : undefined,
-      // Worker LLM review and interactive approval transport remain a separate contract.
-      nonInteractiveApproval: Boolean(params.permissionMode && params.permissionMode !== "full"),
-      approvalFollowupText: params.permissionMode
-        ? `Exec denied (approval_required) in worker ${params.permissionMode} permission mode. Run this command locally for interactive approval, or ask an administrator to clear the session permission mode.`
-        : undefined,
+      createApprovalTransport: params.createApprovalTransport,
+      autoReviewer: () => {
+        throw new Error("Worker automatic review requires the Gateway approval transport");
+      },
+      // Definition preparation has no connection; it must never fall back to local RPC.
+      nonInteractiveApproval: !params.createApprovalTransport,
+      approvalFollowupText:
+        "Worker exec approval is unavailable. Reconnect to an updated Gateway and retry.",
       config: WORKER_TOOL_CONFIG,
+      // The Gateway secret store is not delegated to the worker's scratch state.
+      preparedStoreEnvironment: {},
+      // Synthetic worker keys have no lineage in the Gateway's session database.
+      preparedSubagentExecution: false,
       ...(params.github ? { preparedRunEnvironment: params.github } : {}),
       commandHighlighting: false,
       agentId: params.agentId,

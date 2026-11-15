@@ -1,121 +1,78 @@
-import { createApiRegistry, type ApiRegistry } from "@openclaw/ai";
+import { createApiRegistry, createLlmRuntime } from "@openclaw/ai";
+import { getEventStreamCompletion } from "@openclaw/ai/internal/runtime";
 import { resetApiProviders } from "@openclaw/ai/providers";
-// Covers dynamic registration of custom model API providers.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AssistantMessageEvent, StreamFn } from "@openclaw/llm-core";
+import { expect, it, vi } from "vitest";
+import { collect } from "../../test/helpers/async-iterable.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-let registry: ApiRegistry;
-
-function getRegisteredTestProvider() {
-  const provider = registry.getApiProvider("test-custom-api");
-  if (!provider) {
-    throw new Error("expected test-custom-api provider to be registered");
-  }
-  return provider;
+const model = makeProviderModelFixture({ api: "custom", provider: "custom", id: "m", baseUrl: "" });
+const usage = buildUsageWithNoCost({});
+const message = buildAssistantMessage({ model, content: [], stopReason: "stop", usage });
+const repaired: typeof message = { ...message, content: [{ type: "text", text: "repaired" }] };
+const context = { messages: [] };
+function runtime(factory: StreamFn) {
+  const registry = createApiRegistry();
+  ensureCustomApiRegistered(registry, model.api, factory);
+  return createLlmRuntime(registry);
 }
 
-describe("ensureCustomApiRegistered", () => {
-  beforeEach(() => {
-    registry = createApiRegistry();
+it("registers once, preserves producers and lazy results, and survives builtin refresh", async () => {
+  const registry = createApiRegistry();
+  const result = vi.fn(async () => repaired);
+  const source = Object.assign(createAssistantMessageEventStream(), { result });
+  const factory = () => source;
+  expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(true);
+  expect(ensureCustomApiRegistered(registry, model.api, factory)).toBe(false);
+  resetApiProviders(registry);
+  const provider = registry.getApiProvider(model.api)!;
+  expect(provider.stream(model, context, {})).toBe(source);
+  expect(provider.streamSimple(model, context, {})).toBe(source);
+  const stream = createLlmRuntime(registry).stream(model, context);
+  expect(getEventStreamCompletion(stream)).toBe(getEventStreamCompletion(source));
+  source.push({ type: "done", reason: "stop", message });
+  await expect(getEventStreamCompletion(stream)).resolves.toBe(message);
+  expect(result).not.toHaveBeenCalled();
+  await expect(stream.result()).resolves.toBe(repaired);
+  expect(registry.getApiProvider("openai-responses")).toBeDefined();
+});
+
+it.for(["sync", "async"])("preserves %s readonly events and independent results", async (kind) => {
+  const events: AssistantMessageEvent[] = [
+    { type: "text_delta", contentIndex: 0, delta: "done", partial: message },
+    { type: "done", reason: "stop", message },
+  ];
+  const source = Object.freeze({
+    result: async () => repaired,
+    async *[Symbol.asyncIterator]() {
+      yield* events;
+    },
   });
+  const rt = runtime(() => (kind === "sync" ? source : Promise.resolve(source)));
+  const stream = rt.stream(model, context),
+    result = stream.result();
+  expect(await collect(stream)).toEqual(events);
+  await expect(getEventStreamCompletion(stream)).resolves.toBe(message);
+  await expect(result).resolves.toBe(repaired);
+  await expect(rt.completeSimple(model, context)).resolves.toBe(repaired);
+});
 
-  it("registers a custom api provider once", () => {
-    // Custom API registration is idempotent so repeated plugin setup does not
-    // replace provider entries or create duplicate sources.
-    const streamFn = vi.fn(() => createAssistantMessageEventStream());
-
-    expect(ensureCustomApiRegistered(registry, "test-custom-api", streamFn)).toBe(true);
-    expect(ensureCustomApiRegistered(registry, "test-custom-api", streamFn)).toBe(false);
-
-    const provider = getRegisteredTestProvider();
-    expect(typeof provider.stream).toBe("function");
-    expect(typeof provider.streamSimple).toBe("function");
-  });
-
-  it("delegates both stream entrypoints to the provided stream function", () => {
-    const stream = createAssistantMessageEventStream();
-    const streamFn = vi.fn(() => stream);
-    ensureCustomApiRegistered(registry, "test-custom-api", streamFn);
-
-    const provider = getRegisteredTestProvider();
-
-    const model = { api: "test-custom-api", provider: "custom", id: "m" };
-    const context = { messages: [] };
-    const options = { maxTokens: 32 };
-
-    expect(provider.stream(model as never, context as never, options as never)).toBe(stream);
-    expect(provider.streamSimple(model as never, context as never, options as never)).toBe(stream);
-    expect(streamFn).toHaveBeenCalledTimes(2);
-  });
-
-  it("adapts async stream factories to the synchronous provider contract", async () => {
-    const message = buildAssistantMessage({
-      model: { api: "test-custom-api", provider: "custom", id: "m" },
-      content: [{ type: "text", text: "done" }],
-      stopReason: "stop",
-      usage: buildUsageWithNoCost({}),
-    });
-    const streamFn = vi.fn(async () => {
-      await Promise.resolve();
-      const stream = createAssistantMessageEventStream();
-      stream.push({ type: "done", reason: "stop", message });
-      return stream;
-    });
-    ensureCustomApiRegistered(registry, "test-custom-api", streamFn);
-
-    const provider = getRegisteredTestProvider();
-    const stream = provider.stream(
-      { api: "test-custom-api", provider: "custom", id: "m" } as never,
-      { messages: [] },
-      {},
-    );
-
-    expect(stream).not.toBeInstanceOf(Promise);
-    await expect(stream.result()).resolves.toBe(message);
-  });
-
-  it("converts async stream factory failures into terminal stream errors", async () => {
-    const streamFn = vi.fn(async () => {
-      throw new Error("factory failed");
-    });
-    ensureCustomApiRegistered(registry, "test-custom-api", streamFn);
-
-    const provider = getRegisteredTestProvider();
-    const stream = provider.stream(
-      { api: "test-custom-api", provider: "custom", id: "m" } as never,
-      { messages: [] },
-      {},
-    );
-
-    await expect(stream.result()).resolves.toMatchObject({
-      stopReason: "error",
-      errorMessage: "factory failed",
-    });
-  });
-
-  it("keeps plugin api providers when refreshing built-ins", () => {
-    // Built-in refresh should preserve plugin-owned API providers while
-    // repopulating core providers.
-    const sourceId = "plugin:test-reset-api";
-    const api = "test-reset-plugin-api";
-    const streamFn = vi.fn(() => createAssistantMessageEventStream());
-    const streamSimpleFn = vi.fn(() => createAssistantMessageEventStream());
-    registry.registerApiProvider(
-      {
-        api,
-        stream: streamFn,
-        streamSimple: streamSimpleFn,
-      },
-      sourceId,
-    );
-
-    resetApiProviders(registry);
-
-    expect(registry.getApiProvider(api)).toBeDefined();
-    expect(registry.getApiProvider("openai-responses")).toBeDefined();
-
-    registry.unregisterApiProviders(sourceId);
+it.for(["factory", "result"])("reports %s failure through the actual runtime", async (phase) => {
+  const rt = runtime(() =>
+    phase === "factory"
+      ? Promise.reject(new Error("factory failed"))
+      : Promise.resolve({
+          result: () => Promise.reject(new Error("result failed")),
+          async *[Symbol.asyncIterator]() {
+            yield { type: "done", reason: "stop", message } as const;
+          },
+        }),
+  );
+  await expect(rt.completeSimple(model, context)).resolves.toMatchObject({
+    stopReason: "error",
+    errorMessage: `${phase} failed`,
   });
 });

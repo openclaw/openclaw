@@ -3,8 +3,10 @@ import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
+import { bindPluginSharedStateAdmission } from "./plugin-shared-state-admission.js";
 import { hasRetainedPluginRuntimeCloseError } from "./runtime-close-error.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -61,6 +63,37 @@ export class LegacyPluginSdkResourceHost {
     return this.work.track(() => this.run(run));
   }
 
+  assertSharedStateAdmission(): void {
+    const parent = sharedStateWorkContext.getStore();
+    if (parent?.host === this && parent.active) {
+      return;
+    }
+    // Ingress and scheduler cancellation precede accepted finalizers. The close
+    // plan drains those owners before this host fences shared-state work.
+    if (this.closing || this.work.isClosing) {
+      throw Object.assign(
+        new Error("Gateway is closing; plugin shared-state admission is closed"),
+        {
+          code: "STATE_DATABASE_READ_ADMISSION_INVALIDATED",
+        },
+      );
+    }
+  }
+
+  /** Join accepted state work before SDK resources and the shared worker retire. */
+  trackSharedStateWork<T>(run: () => Promise<T>): Promise<T> {
+    this.assertSharedStateAdmission();
+    const frame = { host: this, active: true };
+    return this.work.track(async () => {
+      try {
+        return await sharedStateWorkContext.run(frame, run);
+      } finally {
+        // Completed operations cannot lend admission to inherited timers.
+        frame.active = false;
+      }
+    });
+  }
+
   /** Preserve synchronous SDK hooks while joining their asynchronous results and descendants. */
   invoke<T>(run: () => T): T {
     if (getAsyncWorkSignal() !== this.work.signal) {
@@ -108,30 +141,21 @@ export class LegacyPluginSdkResourceHost {
   /** Projection failures still own their asynchronous release until it settles. */
   releaseClaim(claim: ResourceClaim): void {
     const operation = createDeferredCore();
-    const completion = operation.promise.then(
-      () => {
-        this.pending.delete(completion);
-      },
-      (error: unknown) => {
+    const completion = operation.promise
+      .catch((error: unknown) => {
         this.failures.push(error);
+      })
+      .finally(() => {
         this.pending.delete(completion);
-      },
-    );
-    // Register before release can reenter host close through a disposer.
+      });
     this.pending.add(completion);
-    try {
-      // Failed projections may leave admitted tails; an idle host still releases immediately.
-      operation.resolve(
-        this.work.hasPendingWork
-          ? AsyncWorkScope.runWhenAllIdle(
-              () => [this.work],
-              () => claim.release(),
-            )
-          : claim.release(),
-      );
-    } catch (error) {
-      operation.reject(error);
-    }
+    // Register completion before an idle release can reenter close synchronously.
+    operation.resolve(
+      AsyncWorkScope.runWhenAllIdle(
+        () => [this.work],
+        () => claim.release(),
+      ),
+    );
   }
 
   /** Fence new SDK work and join its tails before prepared resources can retire. */
@@ -170,10 +194,14 @@ export class LegacyPluginSdkResourceHost {
   }
 }
 
-const { hostContext, gatewayHosts } = resolveGlobalSingleton(
+const { hostContext, gatewayHosts, sharedStateWorkContext } = resolveGlobalSingleton(
   Symbol.for("openclaw.legacyPluginSdkResourceHosts"),
   () => ({
     hostContext: new AsyncLocalStorage<LegacyPluginSdkResourceHost>(),
+    sharedStateWorkContext: new AsyncLocalStorage<{
+      host: LegacyPluginSdkResourceHost;
+      active: boolean;
+    }>(),
     gatewayHosts: new WeakMap<object, LegacyPluginSdkResourceHost>(),
   }),
 );
@@ -212,3 +240,8 @@ export function getLegacyPluginSdkResourceHost(): LegacyPluginSdkResourceHost {
     resolveGlobalSingleton(STANDALONE_HOST_KEY, () => new LegacyPluginSdkResourceHost())
   );
 }
+
+// Core shutdown persistence shares the host but is not a new plugin invocation.
+bindPluginSharedStateAdmission(() =>
+  pluginInstanceInvocation.getStore() ? getBoundLegacyPluginSdkResourceHost() : undefined,
+);

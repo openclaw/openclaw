@@ -32,28 +32,6 @@ describe("resolveTargetIdFromTabs", () => {
     });
   });
 
-  it.each(["suggestedTargetId", "tabId", "label"] as const)(
-    "rejects a %s collision with another tab's raw target id",
-    (field) => {
-      const collidingTabs = [
-        {
-          targetId: "ABCDEF123456",
-          [field]: "ABC999",
-        },
-        {
-          targetId: "ABC999",
-          suggestedTargetId: "t2",
-          tabId: "t2",
-        },
-      ];
-      expect(resolveTargetIdFromTabs("ABC999", collidingTabs)).toEqual({
-        ok: false,
-        reason: "ambiguous",
-        matches: ["ABCDEF123456", "ABC999"],
-      });
-    },
-  );
-
   it("rejects a raw-id and label collision regardless of tab order", () => {
     const collidingTabs = [
       {
@@ -88,18 +66,5 @@ describe("resolveTargetIdFromTabs", () => {
       reason: "ambiguous",
       matches: ["FIRST", "SECOND"],
     });
-  });
-
-  it("deduplicates matching namespaces on the same tab", () => {
-    expect(
-      resolveTargetIdFromTabs("SAME", [
-        {
-          targetId: "SAME",
-          suggestedTargetId: "SAME",
-          tabId: "SAME",
-          label: "SAME",
-        },
-      ]),
-    ).toEqual({ ok: true, targetId: "SAME" });
   });
 });

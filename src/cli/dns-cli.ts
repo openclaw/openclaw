@@ -2,9 +2,14 @@ import { spawnSync, type SpawnSyncReturns } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { Command } from "commander";
-import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import {
+  getTerminalTableWidth,
+  renderTerminalSafeTable,
+} from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
-import { getRuntimeConfig } from "../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
 import {
   getWideAreaZonePath,
@@ -13,6 +18,7 @@ import {
   resolveWideAreaDiscoveryDomain,
 } from "../infra/widearea-dns.js";
 import { defaultRuntime } from "../runtime.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
 import { formatDocsHelp } from "./help-format.js";
 
 type RunOpts = { allowFailure?: boolean; inherit?: boolean; timeoutMs?: number };
@@ -101,26 +107,6 @@ function zoneFileNeedsBootstrap(zonePath: string): boolean {
   }
 }
 
-function detectBrewPrefix(): string {
-  // A hung brew shim can block setup indefinitely; bound only this fast probe.
-  const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
-  const prefix = out.trim();
-  if (!prefix) {
-    throw new Error("failed to resolve Homebrew prefix");
-  }
-  return prefix;
-}
-
-function ensureImportLine(corefilePath: string, importGlob: string): boolean {
-  const existing = fs.readFileSync(corefilePath, "utf-8");
-  if (existing.includes(importGlob)) {
-    return false;
-  }
-  const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
-  writeFileSudoIfNeeded(corefilePath, next);
-  return true;
-}
-
 export function registerDnsCli(program: Command) {
   const dns = program
     .command("dns")
@@ -139,18 +125,22 @@ export function registerDnsCli(program: Command) {
       false,
     )
     .action(async (opts) => {
-      const cfg = getRuntimeConfig();
+      const cfg = await captureRuntimeConfigAsyncReader()();
       const tailnetIPv4 = pickPrimaryTailnetIPv4();
       const tailnetIPv6 = pickPrimaryTailnetIPv6();
       const explicitDomain = (opts.domain as string | undefined) ?? cfg.discovery?.wideArea?.domain;
       if (explicitDomain) {
         // Throw on invalid CLI/config input before resolveWideAreaDiscoveryDomain
         // silently swallows the validation error and falls back to env.
-        normalizeWideAreaDomain(explicitDomain);
+        try {
+          normalizeWideAreaDomain(explicitDomain);
+        } catch (err) {
+          throwExpectedCliError(formatErrorMessage(err));
+        }
       }
       const wideAreaDomain = resolveWideAreaDiscoveryDomain({ configDomain: explicitDomain });
       if (!wideAreaDomain) {
-        throw new Error(
+        throwExpectedCliError(
           "No wide-area domain configured. Set discovery.wideArea.domain or pass --domain.",
         );
       }
@@ -159,7 +149,7 @@ export function registerDnsCli(program: Command) {
       const tableWidth = getTerminalTableWidth();
       defaultRuntime.log(theme.heading("DNS setup"));
       defaultRuntime.log(
-        renderTable({
+        renderTerminalSafeTable({
           width: tableWidth,
           columns: [
             { key: "Key", header: "Key", minWidth: 18 },
@@ -188,10 +178,14 @@ export function registerDnsCli(program: Command) {
       defaultRuntime.log("");
       defaultRuntime.log(theme.heading("Tailscale admin (DNS → Nameservers):"));
       defaultRuntime.log(
-        theme.muted(`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`),
+        theme.muted(
+          terminalText`- Add nameserver: ${tailnetIPv4 ?? "<this machine's tailnet IPv4>"}`,
+        ),
       );
       defaultRuntime.log(
-        theme.muted(`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`),
+        theme.muted(
+          terminalText`- Restrict to domain (Split DNS): ${wideAreaDomain.replace(/\.$/, "")}`,
+        ),
       );
 
       if (!opts.apply) {
@@ -201,13 +195,20 @@ export function registerDnsCli(program: Command) {
       }
 
       if (process.platform !== "darwin") {
-        throw new Error("dns setup is currently supported on macOS only");
+        throwExpectedCliError("dns setup is currently supported on macOS only");
       }
       if (!tailnetIPv4 && !tailnetIPv6) {
-        throw new Error("no tailnet IP detected; ensure Tailscale is running on this machine");
+        throwExpectedCliError(
+          "no tailnet IP detected; check that Tailscale is running on this machine",
+        );
       }
 
-      const prefix = detectBrewPrefix();
+      // A hung brew shim can block setup indefinitely; bound only this fast probe.
+      const out = run("brew", ["--prefix"], { timeoutMs: 15_000 });
+      const prefix = out.trim();
+      if (!prefix) {
+        throw new Error("failed to resolve Homebrew prefix");
+      }
       const etcDir = path.join(prefix, "etc", "coredns");
       const corefilePath = path.join(etcDir, "Corefile");
       const confDir = path.join(etcDir, "conf.d");
@@ -225,7 +226,11 @@ export function registerDnsCli(program: Command) {
       if (!fs.existsSync(corefilePath)) {
         writeFileSudoIfNeeded(corefilePath, `import ${importGlob}\n`);
       } else {
-        ensureImportLine(corefilePath, importGlob);
+        const existing = fs.readFileSync(corefilePath, "utf-8");
+        if (!existing.includes(importGlob)) {
+          const next = `${existing.replace(/\s*$/, "")}\n\nimport ${importGlob}\n`;
+          writeFileSudoIfNeeded(corefilePath, next);
+        }
       }
 
       const bindArgs = [tailnetIPv4, tailnetIPv6].filter((v): v is string => Boolean(v?.trim()));
@@ -261,7 +266,7 @@ export function registerDnsCli(program: Command) {
           ``,
         ].filter((line): line is string => Boolean(line));
 
-        replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
+        await replaceWideAreaZoneFile(zonePath, zoneLines.join("\n"));
       }
 
       defaultRuntime.log("");

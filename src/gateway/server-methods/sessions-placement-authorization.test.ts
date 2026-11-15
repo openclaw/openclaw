@@ -1,8 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import {
   dispatchTestSessionId as sessionId,
   dispatchTestSessionKey as sessionKey,
@@ -18,137 +17,90 @@ import {
 import type { SessionMutationAuthorization } from "./types.js";
 
 const mocks = getDispatchTestMocks();
-const activePlacement = (): WorkerSessionPlacementRecord => ({
-  ...makeReclaimedPlacement(),
-  state: "active",
-  recoveryError: null,
-  terminalReason: null,
-  terminalAtMs: null,
-});
 
-describe("placement session authorization", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.resolveTarget.mockReturnValue(
-      makeSessionTarget({
-        sessionId,
-        agentRuntimeOverride: "openclaw",
-        worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
-      }),
+it("rejects queued placement mutations after session participation is revoked", async () => {
+  vi.clearAllMocks();
+  mocks.resolveTarget.mockReturnValue(
+    makeSessionTarget({
+      sessionId,
+      agentRuntimeOverride: "openclaw",
+      worktree: { id: "worktree-1", branch: "openclaw/cloud-test", repoRoot: "/repo" },
+    }),
+  );
+  mocks.findLiveByOwner.mockReturnValue({
+    id: "worktree-1",
+    ownerKind: "session",
+    ownerId: sessionKey,
+  });
+  const scenarios = [
+    { method: "dispatch", target: { profileId: "test" } },
+    { method: "dispatch", target: { deviceId: "device-1" } },
+    { method: "move", target: { kind: "gateway" } },
+    { method: "move", target: { kind: "profile", profileId: "test" } },
+    { method: "move", target: { kind: "device", deviceId: "device-1" } },
+    { method: "reclaim", failed: false },
+    { method: "reclaim", failed: true },
+  ] as const;
+  const expected = { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 };
+
+  for (const scenario of scenarios) {
+    const authorizationError = new SessionMutationAuthorizationChangedError(
+      errorShape(ErrorCodes.INVALID_REQUEST, "session participation changed"),
     );
-    mocks.findLiveByOwner.mockReturnValue({
-      id: "worktree-1",
-      ownerKind: "session",
-      ownerId: sessionKey,
+    const authorization: SessionMutationAuthorization = {
+      assertCurrent: vi.fn(),
+      assertTargetCurrent: vi.fn(),
+    };
+    const operationStarted = createDeferredCore();
+    const releaseOperation = createDeferredCore();
+    const durableTransition = vi.fn();
+    const transition = async (
+      _request: unknown,
+      onTransitionOrAuthorize?: () => void,
+      authorize?: () => void,
+    ) => {
+      operationStarted.resolve();
+      await releaseOperation.promise;
+      (scenario.method === "reclaim" ? onTransitionOrAuthorize : authorize)?.();
+      durableTransition();
+    };
+    const service = {
+      dispatch: scenario.method === "dispatch" ? transition : vi.fn(),
+      ...(scenario.method === "dispatch" ? {} : { [scenario.method]: transition }),
+    };
+    const placement =
+      scenario.method === "dispatch"
+        ? undefined
+        : scenario.method === "reclaim" && scenario.failed
+          ? { ...makeFailedPlacement(), environmentId: null }
+          : {
+              ...makeReclaimedPlacement(),
+              state: "active" as const,
+              recoveryError: null,
+              terminalReason: null,
+              terminalAtMs: null,
+            };
+    const context = makeDispatchTestContext({
+      workerPlacementDispatchService: service as never,
+      workerSessionPlacementService: {
+        getMany: () => new Map(placement ? [[sessionId, placement]] : []),
+      },
     });
-  });
 
-  it("rejects queued placement mutations after session participation is revoked", async () => {
-    const scenarios = [
-      ...(
-        [
-          ["profile dispatch", { profileId: "test" }],
-          ["device dispatch", { deviceId: "device-1" }],
-        ] as const
-      ).map(([name, target]) => ({
-        name,
-        placement: undefined,
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) => invokeSessionDispatch(context, target, authorization),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(async (_request, _onTransition, authorize?: () => void) => {
-            await afterWait(authorize);
-            return activePlacement();
-          }),
-        }),
-      })),
-      ...(
-        [
-          ["gateway move", { kind: "gateway" }],
-          ["profile move", { kind: "profile", profileId: "test" }],
-          ["device move", { kind: "device", deviceId: "device-1" }],
-        ] as const
-      ).map(([name, target]) => ({
-        name,
-        placement: activePlacement(),
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) =>
-          invokeSessionMove(
-            context,
-            {
-              expected: { generation: 4, environmentId: "environment-previous", ownerEpoch: 1 },
-              target,
-            },
-            authorization,
-          ),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(),
-          move: vi.fn(async (_request, _onTransition, authorize?: () => void) => {
-            await afterWait(authorize);
-            return { state: "local" as const, generation: 5 };
-          }),
-        }),
-      })),
-      ...(["active", "failed"] as const).map((state) => ({
-        name: `${state} reclaim`,
-        placement:
-          state === "active"
-            ? activePlacement()
-            : { ...makeFailedPlacement(), environmentId: null },
-        invoke: (
-          context: ReturnType<typeof makeDispatchTestContext>,
-          authorization: SessionMutationAuthorization,
-        ) => invokeSessionReclaim(context, authorization),
-        service: (afterWait: (authorize?: () => void) => Promise<void>) => ({
-          dispatch: vi.fn(),
-          reclaim: vi.fn(async (_request, authorize?: () => void) => {
-            await afterWait(authorize);
-            return makeReclaimedPlacement();
-          }),
-        }),
-      })),
-    ];
+    const operation =
+      scenario.method === "dispatch"
+        ? invokeSessionDispatch(context, scenario.target, authorization)
+        : scenario.method === "move"
+          ? invokeSessionMove(context, { expected, target: scenario.target }, authorization)
+          : invokeSessionReclaim(context, authorization);
+    await operationStarted.promise;
+    vi.mocked(authorization.assertCurrent).mockImplementation(() => {
+      throw authorizationError;
+    });
+    releaseOperation.resolve();
 
-    for (const scenario of scenarios) {
-      let participating = true;
-      const authorizationError = new SessionMutationAuthorizationChangedError(
-        errorShape(ErrorCodes.INVALID_REQUEST, "session participation changed"),
-      );
-      const authorization: SessionMutationAuthorization = {
-        assertCurrent: () => {
-          if (!participating) {
-            throw authorizationError;
-          }
-        },
-        assertTargetCurrent: vi.fn(),
-      };
-      const operationStarted = createDeferredCore();
-      const releaseOperation = createDeferredCore();
-      const durableTransition = vi.fn();
-      const afterWait = async (authorize?: () => void) => {
-        operationStarted.resolve();
-        await releaseOperation.promise;
-        authorize?.();
-        durableTransition();
-      };
-      const context = makeDispatchTestContext({
-        workerPlacementDispatchService: scenario.service(afterWait) as never,
-        workerSessionPlacementService: {
-          getMany: () => new Map(scenario.placement ? [[sessionId, scenario.placement]] : []),
-        },
-      });
-
-      const operation = scenario.invoke(context, authorization);
-      await operationStarted.promise;
-      participating = false;
-      releaseOperation.resolve();
-
-      await expect(operation, scenario.name).rejects.toBe(authorizationError);
-      expect(durableTransition, scenario.name).not.toHaveBeenCalled();
-    }
-  });
+    const name = JSON.stringify(scenario);
+    await expect(operation, name).rejects.toBe(authorizationError);
+    expect(durableTransition, name).not.toHaveBeenCalled();
+  }
 });

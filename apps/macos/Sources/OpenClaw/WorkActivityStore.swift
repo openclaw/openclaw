@@ -27,12 +27,8 @@ final class WorkActivityStore {
     private var currentSessionKey: String?
     private var toolCleanupOwners: [String: UUID] = [:]
 
-    private var mainSessionKeyStorage = "main"
+    private(set) var mainSessionKey = "main"
     private let toolResultGrace: TimeInterval = 2.0
-
-    var mainSessionKey: String {
-        self.mainSessionKeyStorage
-    }
 
     func reset() {
         self.jobs.removeAll()
@@ -58,7 +54,9 @@ final class WorkActivityStore {
         } else {
             // Job ended (done/error/aborted/etc). Clear everything for this session.
             self.clearTool(sessionKey: sessionKey)
-            self.clearJob(sessionKey: sessionKey)
+            if self.jobs.removeValue(forKey: sessionKey) != nil {
+                self.didClearActivity(sessionKey: sessionKey)
+            }
         }
     }
 
@@ -69,7 +67,8 @@ final class WorkActivityStore {
         meta: String?,
         args: [String: OpenClawProtocol.AnyCodable]?)
     {
-        let toolKind = Self.mapToolKind(name)
+        let displayCall = ToolDisplayRegistry.displayCall(name: name, args: args.map { AnyCodable($0) })
+        let toolKind = Self.mapToolKind(displayCall.name)
         let label = Self.buildLabel(name: name, meta: meta, args: args)
         if phase.lowercased() == "start" {
             self.lastToolUpdatedAt = Date()
@@ -91,12 +90,9 @@ final class WorkActivityStore {
             Task { [weak self] in
                 let nsDelay = UInt64((self?.toolResultGrace ?? 0) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nsDelay)
-                await MainActor.run {
-                    guard let self else { return }
-                    guard self.toolCleanupOwners[key] == owner else { return }
-                    self.lastToolUpdatedAt = Date()
-                    self.clearTool(sessionKey: key)
-                }
+                guard let self, self.toolCleanupOwners[key] == owner else { return }
+                self.lastToolUpdatedAt = Date()
+                self.clearTool(sessionKey: key)
             }
         }
     }
@@ -107,9 +103,7 @@ final class WorkActivityStore {
 
     private func updateCurrentSession(with activity: Activity) {
         // Main session preempts immediately.
-        if activity.role == .main {
-            self.currentSessionKey = activity.sessionKey
-        } else if self.currentSessionKey == nil || !self.isActive(sessionKey: self.currentSessionKey!) {
+        if activity.role == .main || self.currentSessionKey.map(self.isActive(sessionKey:)) != true {
             self.currentSessionKey = activity.sessionKey
         }
         self.refreshDerivedState()
@@ -118,17 +112,12 @@ final class WorkActivityStore {
     func setMainSessionKey(_ sessionKey: String) {
         let trimmed = sessionKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        guard trimmed != self.mainSessionKeyStorage else { return }
-        self.mainSessionKeyStorage = trimmed
+        guard trimmed != self.mainSessionKey else { return }
+        self.mainSessionKey = trimmed
         if let current = self.currentSessionKey, !self.isActive(sessionKey: current) {
             self.pickNextSession()
         }
         self.refreshDerivedState()
-    }
-
-    private func clearJob(sessionKey: String) {
-        guard self.jobs.removeValue(forKey: sessionKey) != nil else { return }
-        self.didClearActivity(sessionKey: sessionKey)
     }
 
     private func clearTool(sessionKey: String) {
@@ -146,8 +135,8 @@ final class WorkActivityStore {
 
     private func pickNextSession() {
         // Prefer main if present.
-        if self.isActive(sessionKey: self.mainSessionKeyStorage) {
-            self.currentSessionKey = self.mainSessionKeyStorage
+        if self.isActive(sessionKey: self.mainSessionKey) {
+            self.currentSessionKey = self.mainSessionKey
             return
         }
 
@@ -158,7 +147,7 @@ final class WorkActivityStore {
     }
 
     private func role(for sessionKey: String) -> SessionRole {
-        sessionKey == self.mainSessionKeyStorage ? .main : .other
+        sessionKey == self.mainSessionKey ? .main : .other
     }
 
     private func isActive(sessionKey: String) -> Bool {

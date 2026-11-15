@@ -42,7 +42,7 @@ it("removes retired path flags without dropping provider or install-exec records
     return changes;
   };
   expect(apply()).toEqual([
-    "Applied tier-eval tranche retirements; canonical settings and built-in defaults now apply.",
+    "Applied tier-eval tranche retirements; current settings and built-in defaults now apply.",
   ]);
   expect(raw).toStrictEqual(expected);
   expect(apply()).toEqual([]);

@@ -1,6 +1,5 @@
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { isPathInside } from "../infra/path-guards.js";
 export { AVATAR_MAX_BYTES } from "./avatar-limits.js";
 
 /**
@@ -63,9 +62,18 @@ export function isWindowsAbsolutePath(value: string): boolean {
   return WINDOWS_ABS_RE.test(value);
 }
 
-/** Checks that a resolved avatar path remains inside its configured root. */
-export function isPathWithinRoot(rootDir: string, targetPath: string): boolean {
-  return isPathInside(rootDir, targetPath);
+/**
+ * Trimmed avatar values that config validation confines to the agent workspace.
+ * Data and HTTP(S) URLs are allowed anywhere; "~" and other URI-like values are rejected.
+ */
+export function isAvatarWorkspacePath(value: string): boolean {
+  return (
+    value !== "" &&
+    !isAvatarDataUrl(value) &&
+    !isAvatarHttpUrl(value) &&
+    !value.startsWith("~") &&
+    (!hasAvatarUriScheme(value) || isWindowsAbsolutePath(value))
+  );
 }
 
 /** Heuristically detects strings that look like local avatar file paths. */

@@ -1,13 +1,17 @@
 import type { LlmRuntime } from "@openclaw/ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { getModelProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { resolveProviderTextTransforms } from "../../plugins/provider-runtime.js";
+import { createPreparedEmbeddedAgentSettingsManager } from "../agent-project-settings.js";
 import { wrapStreamFnTextTransforms } from "../plugin-text-transforms.js";
+import type { ModelCallUrgency } from "../run-trigger.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 import type { StreamFn } from "../runtime/index.js";
 import { applyExtraParamsToAgent } from "./extra-params.js";
+import type { PreparedCompactionRuntime } from "./prepared-compaction-runtime.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
@@ -20,7 +24,6 @@ export async function prepareCompactionSessionAgent(params: {
   llmRuntime: LlmRuntime;
   providerStreamFn: StreamFn | undefined;
   sessionId: string;
-  signal: AbortSignal;
   effectiveModel: ProviderRuntimeModel;
   resolvedApiKey?: string;
   authStorage: Parameters<typeof resolveEmbeddedAgentStream>[0]["authStorage"];
@@ -32,37 +35,20 @@ export async function prepareCompactionSessionAgent(params: {
   effectiveWorkspace: string;
   agentDir: string;
   runtimePlan?: AgentRuntimePlan;
-  sessionKey?: string;
-  sandboxToolPolicy?: { allow?: string[]; deny?: string[] };
-  messageProvider?: string;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
+  modelCallUrgency?: ModelCallUrgency;
 }) {
   const transportApiKey = params.authStorage
     ? await resolveEmbeddedAgentApiKey({
+        ...params,
         provider: params.effectiveModel.provider,
-        resolvedApiKey: params.resolvedApiKey,
-        authStorage: params.authStorage,
       })
     : params.resolvedApiKey;
   params.session.agent.streamFn = resolveEmbeddedAgentStream({
-    llmRuntime: params.llmRuntime,
+    ...params,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session }),
-    providerStreamFn: params.providerStreamFn,
-    sessionId: params.sessionId,
-    signal: params.signal,
     model: params.effectiveModel,
-    resolvedApiKey: params.resolvedApiKey,
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
-    authStorage: params.authStorage,
   }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
@@ -101,6 +87,7 @@ export async function prepareCompactionSessionAgent(params: {
     params.agentDir,
     undefined,
     {
+      modelCallUrgency: params.modelCallUrgency,
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       auth: params.runtimePlan?.auth.selectedAuthMode
         ? {
@@ -111,22 +98,27 @@ export async function prepareCompactionSessionAgent(params: {
       nativeWebSearchPolicyContext: {
         // Summaries have no tool loop; provider-hosted tools must not inherit
         // the originating conversation's broader web-search authority.
-        sessionKey: params.sessionKey,
         webSearchEnabled: false,
         runtimeToolAllowlist: [],
-        sandboxToolPolicy: params.sandboxToolPolicy,
-        messageProvider: params.messageProvider,
-        agentAccountId: params.agentAccountId,
-        groupId: params.groupId,
-        groupChannel: params.groupChannel,
-        groupSpace: params.groupSpace,
-        spawnedBy: params.spawnedBy,
-        senderId: params.senderId,
-        senderName: params.senderName,
-        senderUsername: params.senderUsername,
-        senderE164: params.senderE164,
       },
     },
   );
   return { ...extraParams, transportApiKey };
+}
+
+/** Bind one settings owner to the foreground agent and its resolved context budget. */
+export function createCompactionSessionSettings(runtime: PreparedCompactionRuntime) {
+  return createPreparedEmbeddedAgentSettingsManager({
+    agentId: runtime.sessionAgentId,
+    sessionId: runtime.params.sessionId,
+    cwd: runtime.effectiveCwd,
+    agentDir: runtime.agentDir,
+    cfg: runtime.params.config,
+    pluginMetadataSnapshot: getCurrentPluginMetadataSnapshot({
+      config: runtime.params.config,
+      env: process.env,
+      workspaceDir: runtime.effectiveWorkspace,
+    }),
+    contextTokenBudget: runtime.contextTokenBudget,
+  });
 }

@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-// Ensures Playwright Chromium is installed or a usable system browser is available.
 import { spawnSync as spawnSyncImpl } from "node:child_process";
 import { existsSync as existsSyncImpl, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -44,9 +43,6 @@ export const systemChromiumExecutableCandidates = [
   "/usr/bin/google-chrome-stable",
 ];
 
-/**
- * Checks whether a Chromium executable can start enough to print its version.
- */
 export function canRunChromiumExecutable(
   executablePath: string,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -57,9 +53,6 @@ export function canRunChromiumExecutable(
   return result.status === 0;
 }
 
-/**
- * Resolves the first runnable system Chromium executable path.
- */
 export function resolveSystemChromiumExecutablePath(
   existsSync: (path: string) => boolean = existsSyncImpl,
   spawnSync: SpawnSyncLike = spawnSyncImpl,
@@ -71,9 +64,6 @@ export function resolveSystemChromiumExecutablePath(
   );
 }
 
-/**
- * Reports whether Linux system dependencies should be installed with Chromium.
- */
 export function shouldInstallPlaywrightSystemDependencies(
   options: Pick<ChromiumInstallOptions, "env" | "getuid" | "platform"> = {},
 ) {
@@ -157,9 +147,6 @@ export function installLinuxSystemChromiumPackage(options: ChromiumInstallOption
   return 1;
 }
 
-/**
- * Checks whether this module is the direct script entrypoint.
- */
 export function isDirectScriptExecution(
   argvEntry: string | undefined = process.argv[1],
   modulePath = fileURLToPath(import.meta.url),
@@ -175,9 +162,6 @@ export function isDirectScriptExecution(
   }
 }
 
-/**
- * Ensures a runnable Chromium exists for Playwright-based UI tests.
- */
 export function ensurePlaywrightChromium(options: ChromiumInstallOptions = {}) {
   const env = options.env ?? process.env;
   const browserPath = env.PLAYWRIGHT_BROWSERS_PATH;

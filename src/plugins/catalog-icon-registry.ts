@@ -5,18 +5,14 @@ const MAX_CATALOG_ICON_URLS = 1_024;
 
 const catalogIconUrls = new LruCache<string>(MAX_CATALOG_ICON_URLS);
 
-function normalizeCatalogIconUrl(value: string): string | undefined {
+export function normalizeCatalogIconUrl(value: string): string | undefined {
   if (!value || value.length > 2_048) {
     return undefined;
   }
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
-      ? url.href
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  const url = URL.parse(value);
+  return url?.protocol === "https:" && url.hostname && !url.username && !url.password && !url.hash
+    ? url.href
+    : undefined;
 }
 
 export function registerClawHubCatalogIconUrls(values: Iterable<string | undefined>): void {

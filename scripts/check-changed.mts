@@ -10,16 +10,19 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import nodeModule from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import {
   LIVE_DOCKER_AUTH_SHELL_TARGETS,
+  detectChangedLanes,
   detectChangedLanesForPaths,
   getChangedCoreTestPaths,
   hasConfigDocInput,
   isConfigDocSchemaSourcePath,
   hasDeadcodeScannedSource,
+  hasLineCapRatchetInput,
   hasProtocolEventCoverageInput,
   listChangedPathsFromGit,
   listStagedChangedPaths,
@@ -32,7 +35,11 @@ import {
   parseFlagArgs,
   stringFlag,
 } from "./lib/arg-utils.mts";
-import { getChangedPathFacts, normalizeChangedPath } from "./lib/changed-path-facts.mjs";
+import {
+  getChangedPathFacts,
+  isTestLineAllocationPath,
+  normalizeChangedPath,
+} from "./lib/changed-path-facts.mjs";
 import { printTimingSummary } from "./lib/check-timing-summary.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
@@ -42,6 +49,7 @@ import { runManagedCommand } from "./lib/managed-child-process.mts";
 import { readNativeTypeScriptConfig } from "./lib/native-typescript-config.mts";
 import { createChangedOxlintEnv, isOxlintCommand } from "./lib/oxlint-changed-scope.mts";
 import { listGeneratedExtensionAssetSources } from "./lib/static-extension-assets.mts";
+import { TSGO_CORE_TEST_SHARDS } from "./lib/tsgo-core-test-shards.mts";
 import { createSparseTsgoSkipEnv } from "./lib/tsgo-sparse-guard.mts";
 import type { createChangedCoreTestCheck } from "./run-tsgo-core-test-shards.mts";
 import {
@@ -74,6 +82,7 @@ type CiLintSelection = {
 type ChangedCheckPlanOptions = {
   typecheckResult?: ChangedLaneResult;
   lintOnly?: boolean;
+  delegateCompilers?: boolean;
   lintSelection?: CiLintSelection;
   lintThreads?: 1 | 8;
   env?: NodeJS.ProcessEnv;
@@ -115,11 +124,11 @@ type NpmLockPackageDirsResolver = (changedPaths: string[]) => string[];
 type TargetedLintCommand = NonNullable<ReturnType<typeof createTargetedOxlintCommand>>;
 
 const NPM_LOCK_POLICY_PATH_RE =
-  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/generate-npm-package-lock\.mts|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
+  /^(?:package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|scripts\/(?:generate-npm-package-lock\.mts|lib\/(?:npm-lock-package-selection|record-shared)\.(?:mjs|d\.mts))|(?:extensions|packages)\/[^/]+(?:\/.*)?\/package\.json)$/u;
 const PROMPT_SNAPSHOT_CHECK_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/.+)$/u;
 const PROMPT_SNAPSHOT_OWNER_TEST_PATH_RE =
-  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts|sync-codex-model-prompt-fixture\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts|test\/fixtures\/agents\/prompt-snapshots\/codex-model-catalog\/.+)$/u;
+  /^(?:scripts\/(?:generate-prompt-snapshots\.ts|prompt-snapshot-files\.ts)|test\/helpers\/agents\/(?:happy-path-prompt-snapshots|prompt-snapshot-paths)\.ts)$/u;
 const RUNTIME_SIDECAR_BASELINE_PATH_RE =
   /^(?:scripts\/generate-runtime-sidecar-paths-baseline\.ts|scripts\/lib\/bundled-runtime-sidecar-paths\.json|src\/plugins\/runtime-sidecar-paths(?:-baseline)?\.ts)$/u;
 // Doctor-contract declaration truth depends on arbitrary plugin source (artifacts
@@ -140,6 +149,8 @@ const EXTENSION_TEST_CORE_IMPORT_PATH_RE =
   /^(?:extensions\/|test\/helpers\/|scripts\/(?:check-no-extension-test-core-imports|check-file-utils)\.ts$|scripts\/check-changed\.m[jt]s$)/u;
 const CONTROL_UI_I18N_VERIFY_PATH_RE =
   /^(?:package\.json$|ui\/(?:src\/|config\/control-ui-locales\.ts$)|scripts\/(?:control-ui-i18n(?:-(?:report|verify))?\.ts|lib\/(?:control-ui-i18n-[^/]+\.ts|control-ui-i18n-config\.json))$|test\/scripts\/control-ui-i18n[^/]*\.test\.ts$)/u;
+const CONTROL_UI_CONTROLLERS_PATH_RE =
+  /^(?:package\.json$|ui\/src\/|extensions\/(?:(?:workboard|memory-core|nostr|whatsapp)\/browser\/|(?:clawrouter|x)\/src\/control-ui\.tsx$)|config\/(?:control|plugin)-ui-\w+-baseline\.txt$|scripts\/(?:check-control-ui-controllers|control-ui-solid-inventory)\.mts$|scripts\/lib\/shrink-ratchet\.mts$|test\/scripts\/check-control-ui-controllers\.test\.ts$)/u;
 const SHRINK_RATCHET_OWNER_PATH = "scripts/lib/shrink-ratchet.mts";
 const CORE_OXLINT_TS_CONFIG = "config/tsconfig/oxlint.core.json";
 const EXTENSIONS_OXLINT_TS_CONFIG = "extensions/tsconfig.json";
@@ -150,10 +161,10 @@ const CORE_LINT_ARGV_BYTES = 24 * 1024;
 const LINTABLE_CORE_PATH_RE = /^(?:src|ui|packages)\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_EXTENSION_PATH_RE = /^extensions\/[^/]+\/.+\.[cm]?[jt]sx?$/u;
 const LINTABLE_SCRIPT_PATH_RE = /^scripts\/.+\.[cm]?[jt]sx?$/u;
-const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.(?:css|ts)|public\/themes\/[^/]+\.css)$/u;
+const LINTABLE_UI_STYLE_PATH_RE = /^ui\/(?:src\/.+\.css|public\/themes\/[^/]+\.css)$/u;
 // These baselines are checked by their ratchets, not consumed by Oxlint.
 const LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
-  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline)\.txt$)/u;
+  /^(?:docs\/|README\.md$|.*\.mdx?$|config\/(?:assertion-safety-baseline|env-var-count-budget|max-lines-baseline|test-timeout-race-baseline|test-mock-exports-baseline)\.txt$)/u;
 const CORE_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
   /^(?:scripts|test\/scripts)\/|^\.github\/workflows\/ci\.yml$|^ui\/(?:src\/.+|public\/themes\/[^/]+)\.css$/u;
 const TOOLING_LINT_OPTIMIZATION_NEUTRAL_PATH_RE =
@@ -272,6 +283,7 @@ function changedCheckDiffRefsReady({
     try {
       execFileSync("git", ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`], {
         cwd,
+        env: { ...process.env, GIT_NO_LAZY_FETCH: "1" },
         stdio: "ignore",
       });
     } catch {
@@ -343,7 +355,10 @@ function shouldRunPromptSnapshotOwnerTest(paths: string[]) {
 }
 
 function shouldRunControlUiI18nVerify(paths: string[]) {
-  return paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath));
+  return (
+    detectChangedScope(paths).runControlUiI18n ||
+    paths.some((changedPath) => CONTROL_UI_I18N_VERIFY_PATH_RE.test(changedPath))
+  );
 }
 
 function shouldRunRuntimeSidecarBaselineCheck(paths: string[]) {
@@ -484,11 +499,55 @@ export function createChangedCheckPlan(
 ) {
   const commands: ChangedCheckCommand[] = [];
   const broadAudits = new Set<ChangedCheckCommand>();
-  const typechecks = new Set<ChangedCheckCommand>();
+  const typechecks = new Map<ChangedCheckCommand, readonly string[]>();
   const lintChecks = new Set<ChangedCheckCommand>();
   const baseEnv = { ...resolveLocalCheckEnv(options.env ?? process.env) };
+  const controllerGuardArgs = [
+    "check:control-ui-controllers",
+    ...(options.staged ? ["--staged"] : []),
+    ...(!options.staged && baseEnv.CHECKOUT_BASE_SHA
+      ? ["--base", baseEnv.CHECKOUT_BASE_SHA, "--no-merge-base"]
+      : options.base
+        ? ["--base", options.base]
+        : []),
+  ];
   delete baseEnv.OPENCLAW_OXLINT_CHANGED_PATHS;
+  delete baseEnv.OPENCLAW_OXLINT_CHANGED_BASE;
   const cwd = process.cwd();
+  const changedOxlintContext = {
+    base: !options.staged ? baseEnv.CHECKOUT_BASE_SHA || options.base : undefined,
+    cwd,
+  };
+  const lanes = result.lanes;
+  const runAll =
+    lanes.all ||
+    (options.lintOnly &&
+      result.paths.some((file) =>
+        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
+          file,
+        ),
+      ));
+  // Dedicated CI rows already own their commands; central discovery is discarded.
+  if (options.lintOnly && options.lintSelection && !options.lintSelection.central) {
+    return {
+      delegatedTypeGraphs: [],
+      commands: createCiLintCommands(
+        options.lintSelection,
+        options.lintThreads ?? 1,
+        createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext),
+      ),
+      summary: result.docsOnly
+        ? "docs-only"
+        : lanes.releaseMetadata
+          ? "release metadata"
+          : runAll
+            ? "all"
+            : Object.entries(lanes)
+                .filter(([, enabled]) => enabled)
+                .map(([lane]) => lane)
+                .join(", "),
+    };
+  }
   if (
     result.paths.some((changedPath) => LINTABLE_EXTENSION_PATH_RE.test(changedPath)) &&
     cachedGeneratedExtensionAssetPaths?.cwd !== cwd
@@ -524,8 +583,8 @@ export function createChangedCheckPlan(
     commands.push(command);
     return command;
   };
-  const addTypecheck = (name: string, args: string[]) =>
-    typechecks.add(add(name, args, createSparseTsgoSkipEnv(baseEnv)));
+  const addTypecheck = (name: string, args: string[], graphs: readonly string[]) =>
+    typechecks.set(add(name, args, createSparseTsgoSkipEnv(baseEnv)), graphs);
   const addLintCommand = (name: string, bin: string, args: string[], env?: NodeJS.ProcessEnv) =>
     lintChecks.add(addCommand(name, bin, args, env));
   const finishPlan = (summary: string) => {
@@ -544,20 +603,27 @@ export function createChangedCheckPlan(
       const roots = new Set(config.fileNames.map((file) => path.resolve(file)));
       rootTestTargets = rootTestTargets.filter((file) => roots.has(path.resolve(file)));
     }
-    for (let offset = 0; offset < rootTestTargets.length; offset += TARGETED_LINT_PATH_LIMIT) {
-      const batch = rootTestTargets.slice(offset, offset + TARGETED_LINT_PATH_LIMIT);
-      addLintCommand(
-        batch.length === 1 ? "lint test root changed file" : "lint test root changed files",
-        "node",
-        ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...batch],
-        baseEnv,
-      );
+    for (const command of batchTargetedLintCommand(
+      {
+        name: "lint test root changed files",
+        bin: "node",
+        args: ["scripts/run-oxlint.mjs", "--tsconfig", ROOT_TEST_TS_CONFIG, ...rootTestTargets],
+        env: baseEnv,
+      },
+      options.platform ?? process.platform,
+      "test root",
+    )) {
+      addLintCommand(command.name, command.bin, command.args, command.env);
     }
     for (const command of [...lintChecks].filter(isOxlintCommand)) {
-      command.env = createChangedOxlintEnv(result.paths, command.env ?? baseEnv);
+      command.env = createChangedOxlintEnv(
+        result.paths,
+        command.env ?? baseEnv,
+        changedOxlintContext,
+      );
     }
     if (options.lintOnly) {
-      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv);
+      const lintEnv = createChangedOxlintEnv(result.paths, baseEnv, changedOxlintContext);
       const lintCommands = commands.filter((command) => lintChecks.has(command));
       const selection = options.lintSelection;
       const selectedCentralCommands = selection?.central
@@ -587,6 +653,7 @@ export function createChangedCheckPlan(
             }
             if (command.args[0] === "lint") {
               return [
+                { ...command, name: "Control UI controller guard", args: controllerGuardArgs },
                 { ...command, name: "Control UI i18n catalog", args: ["lint:ui:i18n"] },
                 {
                   ...command,
@@ -597,7 +664,6 @@ export function createChangedCheckPlan(
                     "tsx",
                     "scripts/run-stylelint.mts",
                     "ui/src/**/*.css",
-                    "ui/src/**/*.ts",
                     "ui/public/themes/*.css",
                   ],
                 },
@@ -607,6 +673,7 @@ export function createChangedCheckPlan(
           })
         : [];
       return {
+        delegatedTypeGraphs: [],
         commands: selection
           ? [
               ...(selection.central
@@ -630,12 +697,23 @@ export function createChangedCheckPlan(
     const prefix = commands.slice(0, end);
     // These audits produce diagnostics, not compiler inputs. Defer them without
     // moving compiler prerequisites or overlapping their resource-heavy processes.
+    // Narrow core tests share their boundary's in-memory inventory. Aggregate
+    // tsgo:all also owns the extension project-reference build, not one CI graph.
+    // Keep both inline rather than silently broadening or dropping their work.
+    const delegated = options.delegateCompilers
+      ? new Map(
+          [...typechecks].filter(
+            ([command, graphs]) => graphs.length > 0 && !command.coreTestCheck,
+          ),
+        )
+      : new Map<ChangedCheckCommand, readonly string[]>();
     return {
+      delegatedTypeGraphs: [...delegated.values()].flat(),
       commands: [
         ...prefix.filter((command) => !broadAudits.has(command)),
         ...prefix.filter((command) => broadAudits.has(command)),
         ...commands.slice(end),
-      ],
+      ].filter((command) => !delegated.has(command)),
       summary,
     };
   };
@@ -708,9 +786,7 @@ export function createChangedCheckPlan(
     );
   }
   add("conflict markers", ["check:no-conflict-markers"]);
-  if (
-    result.paths.some((file) => /\.(?:ts|tsx|mts|mjs)$/u.test(file) || file === ".oxlintrc.json")
-  ) {
+  if (hasLineCapRatchetInput(result.paths)) {
     add("line-cap growth ratchet", [
       "check:line-cap-ratchet",
       ...(options.staged ? ["--staged"] : []),
@@ -757,6 +833,12 @@ export function createChangedCheckPlan(
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
     ]);
+    add("SQLite dialect ratchet", [
+      "check:database-dialect-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
   }
   if (
     result.paths.some(
@@ -768,6 +850,24 @@ export function createChangedCheckPlan(
   ) {
     add("test timeout race ratchet", [
       "check:test-timeout-race-ratchet",
+      ...(options.staged ? ["--staged"] : []),
+      "--base",
+      options.base ?? (options.staged ? "HEAD" : "origin/main"),
+    ]);
+  }
+  if (
+    result.paths.some(
+      (file) =>
+        file === SHRINK_RATCHET_OWNER_PATH ||
+        file === "config/test-mock-exports-baseline.txt" ||
+        file === "package.json" ||
+        file === "tsconfig.json" ||
+        /^(?:packages|extensions)\/[^/]+\/package\.json$/u.test(file) ||
+        (/\.(?:[cm]?[jt]s|[jt]sx)$/u.test(file) && !/\.d\.[cm]?ts$/u.test(file)),
+    )
+  ) {
+    add("first-party mock export ratchet", [
+      "check:test-mock-exports",
       ...(options.staged ? ["--staged"] : []),
       "--base",
       options.base ?? (options.staged ? "HEAD" : "origin/main"),
@@ -905,7 +1005,6 @@ export function createChangedCheckPlan(
 
   addTestTempCreationReport();
 
-  const lanes = result.lanes;
   const typecheckResult = options.typecheckResult ?? result;
   // Release metadata is exempt only with its validating guard, selected by the
   // full diff. Filtering trivia must not grant that exemption to package changes.
@@ -915,14 +1014,6 @@ export function createChangedCheckPlan(
     !typecheckResult.paths.every((file) => getChangedPathFacts(file).surface === "docs")
       ? lanes
       : typecheckResult.lanes;
-  const runAll =
-    lanes.all ||
-    (options.lintOnly &&
-      result.paths.some((file) =>
-        /^(?:\.oxlint|config\/(?:oxlint|tsconfig\/oxlint)|scripts\/(?:run-oxlint|oxlint)|scripts\/lib\/local-check-runtime\.)|(?:^|\/)tsconfig[^/]*\.json$/u.test(
-          file,
-        ),
-      ));
   const shouldRunAndroidVersionSync = hasAndroidVersionSyncPath(result.paths);
 
   // Typechecking alone accepts extension imports; the graph guard also covers
@@ -977,38 +1068,49 @@ export function createChangedCheckPlan(
   } else if (shouldRunControlUiI18nVerify(result.paths)) {
     addLint("Control UI i18n catalog", ["lint:ui:i18n"]);
   }
+  if (!runAll && result.paths.some((file) => CONTROL_UI_CONTROLLERS_PATH_RE.test(file))) {
+    addLint("Control UI controller guard", controllerGuardArgs);
+  }
 
   if (typeLanes.all) {
-    addTypecheck("typecheck all", ["tsgo:all"]);
+    addTypecheck("typecheck all", ["tsgo:all"], []);
   } else {
     if (typeLanes.core) {
-      addTypecheck("typecheck core", ["tsgo:core"]);
+      addTypecheck("typecheck core", ["tsgo:core"], ["core"]);
     }
     if (typeLanes.coreTests || liveDockerTypes) {
-      addTypecheck("typecheck core tests", ["tsgo:core:test"]);
+      addTypecheck(
+        "typecheck core tests",
+        ["tsgo:core:test"],
+        TSGO_CORE_TEST_SHARDS.map(({ name }) => "core-test-" + name),
+      );
       if (narrowCoreTests) {
         commands.at(-1)!.coreTestCheck = "checkTypes";
       }
     }
     if (typeLanes.ui) {
-      addTypecheck("typecheck UI", ["tsgo:ui"]);
+      addTypecheck("typecheck UI", ["tsgo:ui"], ["ui"]);
     }
     if (typeLanes.extensions) {
-      addTypecheck("typecheck extensions", ["tsgo:extensions"]);
+      addTypecheck("typecheck extensions", ["tsgo:extensions"], ["extensions"]);
     }
     if (typeLanes.extensionTests) {
-      addTypecheck("typecheck extension tests", ["tsgo:extensions:test"]);
+      addTypecheck("typecheck extension tests", ["tsgo:extensions:test"], ["extensions-test"]);
     }
     if (typeLanes.scripts) {
-      addTypecheck("typecheck scripts", ["tsgo:scripts"]);
+      addTypecheck("typecheck scripts", ["tsgo:scripts"], ["scripts"]);
     }
     if (typeLanes.testRoot) {
-      addTypecheck("typecheck test root", ["tsgo:test:root"]);
+      addTypecheck("typecheck test root", ["tsgo:test:root"], ["test-root"]);
     }
   }
 
   if (runAll) {
-    addLint("lint", ["lint"]);
+    addLint("lint", [
+      "lint",
+      ...(options.staged ? ["--staged"] : []),
+      ...(options.base ? ["--base", options.base] : []),
+    ]);
     add("runtime import cycles", ["check:import-cycles"]);
     return finishPlan("all");
   }
@@ -1300,10 +1402,24 @@ export async function resolveChangedOxlintFileScope(
   if (!changedFiles.every((file) => isOxlintSourcePath(file, cwd) || rootTest(file))) {
     return undefined;
   }
-  // Declarations can affect consumers without import edges. Match the keyword
-  // so comments between declare and global/module cannot hide an augmentation.
-  const hasAmbientImpact = (file: string) =>
-    /\.d\.[cm]?ts$/u.test(file) || /\bdeclare\b/u.test(readFileSync(path.join(cwd, file), "utf8"));
+  // Declarations can affect consumers without import edges. Strip mode preserves
+  // offsets: erased matches stay conservative; comments and runtime strings do not.
+  const hasAmbientImpact = (file: string) => {
+    if (/\.d\.[cm]?ts$/u.test(file)) {
+      return true;
+    }
+    const source = readFileSync(path.join(cwd, file), "utf8");
+    const matches = [...source.matchAll(/\bdeclare\b/gu)];
+    if (matches.length === 0) {
+      return false;
+    }
+    try {
+      const stripped = nodeModule.stripTypeScriptTypes(source, { mode: "strip" });
+      return matches.some(({ index }) => stripped.slice(index, index + 7) !== "declare");
+    } catch {
+      return true;
+    }
+  };
   if (changedFiles.some(hasAmbientImpact)) {
     return undefined;
   }
@@ -1329,7 +1445,11 @@ export async function createChangedCiLintPlan(
   result: ChangedLaneResult,
   { runnerProfile }: { runnerProfile: string },
 ) {
-  const commands = createChangedCheckPlan(result, { lintOnly: true }).commands;
+  // Budget records retain their guards and formatting, but cannot affect lint inputs.
+  const lintPaths = result.paths.filter((file) => !isTestLineAllocationPath(file));
+  const lintResult =
+    lintPaths.length === result.paths.length ? result : detectChangedLanes(lintPaths);
+  const commands = createChangedCheckPlan(lintResult, { lintOnly: true }).commands;
   if (
     result.paths.some((file) => path.basename(file) === "package.json") ||
     commands.some(({ args }) =>
@@ -1358,6 +1478,7 @@ export async function createChangedCiLintPlan(
     coreStripes: [],
     extensionStripes: [],
     groups: [],
+    fullGroups: [],
     central: true,
   };
   const core: { stripe: number; lint_selection_json: string }[] = [];
@@ -1461,10 +1582,14 @@ export function createTargetedCoreLintCommands(
     tsconfig: CORE_OXLINT_TS_CONFIG,
     ...options,
   });
-  return command ? batchCoreLintCommand(command, options.platform ?? process.platform) : null;
+  return command ? batchTargetedLintCommand(command, options.platform ?? process.platform) : null;
 }
 
-function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Platform) {
+function batchTargetedLintCommand(
+  command: TargetedLintCommand,
+  platform: NodeJS.Platform,
+  label = "core",
+) {
   const prefix = command.args.slice(0, 3);
   const windows = platform === "win32";
   // POSIX uses the formatter's conservative argv budget. Keep Windows batches
@@ -1480,7 +1605,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
   for (const file of command.args.slice(3)) {
     const fileBytes = argumentBytes([file]);
     if (prefixBytes + fileBytes > maxBytes) {
-      throw new Error(`Core lint target exceeds the command-line budget: ${file}`);
+      throw new Error(`Targeted lint target exceeds the command-line budget: ${file}`);
     }
     if (batch.length === maxPaths || bytes + fileBytes > maxBytes) {
       batches.push(batch);
@@ -1494,7 +1619,7 @@ function batchCoreLintCommand(command: TargetedLintCommand, platform: NodeJS.Pla
     batches.push(batch);
   }
   return batches.map((files) => ({
-    name: files.length === 1 ? "lint core changed file" : "lint core changed files",
+    name: `lint ${label} changed ${files.length === 1 ? "file" : "files"}`,
     bin: command.bin,
     args: [...prefix, ...files],
     env: command.env,
@@ -1604,16 +1729,19 @@ export async function runChangedCheck(
       )
     : undefined;
   const timings: ChangedCheckTiming[] = [];
+  let failure = 0;
   for (const command of plan.commands) {
     const status = await runPlanCommand(command, timings, coreTestCheck);
-    if (status !== 0) {
-      printSummary(timings, options);
-      return status;
+    failure ||= status;
+    // Timeouts and cancellation deliberately stop admitting new work.
+    if (status === 124 || status >= 128) {
+      failure = status;
+      break;
     }
   }
 
   printSummary(timings, options);
-  return 0;
+  return failure;
 }
 
 function sameArgs(left: string[], right: string[]) {
@@ -1638,6 +1766,14 @@ function printPlan(
   }
   if ((options.typecheckResult ?? result).extensionImpactFromCore) {
     console.error(`${prefix} extension-impacting surface; extension typecheck included`);
+  }
+  if (options.delegateCompilers) {
+    console.error(
+      prefix +
+        " compiler graphs delegated to CI: " +
+        (plan.delegatedTypeGraphs.join(", ") || "none") +
+        "; narrow and aggregate checks remain inline",
+    );
   }
   for (const reason of result.reasons) {
     console.error(`${prefix} ${reason}`);
@@ -1780,6 +1916,7 @@ function parseArgs(argv: string[]) {
     dryRun: boolean;
     timed: boolean;
     noChanges: boolean;
+    delegateCompilers: boolean;
     help: boolean;
     paths: string[];
   } = {
@@ -1788,6 +1925,7 @@ function parseArgs(argv: string[]) {
     dryRun: false,
     timed: false,
     noChanges: false,
+    delegateCompilers: false,
     help: false,
     paths: new Array<string>(),
   };
@@ -1801,6 +1939,7 @@ function parseArgs(argv: string[]) {
       booleanFlag("--dry-run", "dryRun"),
       booleanFlag("--timed", "timed"),
       booleanFlag("--no-changes", "noChanges"),
+      booleanFlag("--delegate-compilers", "delegateCompilers"),
       booleanFlag("--help", "help"),
       booleanFlag("-h", "help"),
     ],
@@ -1832,6 +1971,7 @@ function printUsage() {
       "  --staged         Check staged paths instead of git diff paths",
       "  --dry-run        Print the planned checks without running them",
       "  --timed          Print timing summary",
+      "  --delegate-compilers  CI owns canonical compiler graphs; retain guards and narrow/aggregate checks",
       "  --no-changes     Treat the changed path set as empty",
       "  -h, --help       Show this help",
       "",
@@ -1843,8 +1983,7 @@ function isDirectRun() {
   return isDirectRunUrl(process.argv[1], import.meta.url);
 }
 
-async function main() {
-  const argv = process.argv.slice(2);
+export async function main(argv = process.argv.slice(2)) {
   let args: ReturnType<typeof parseArgs>;
   try {
     args = parseArgs(argv);
@@ -1887,24 +2026,6 @@ async function main() {
         head: args.head,
         staged: args.staged,
       });
-      let typecheckResult: ChangedLaneResult | undefined;
-      if (
-        !args.staged &&
-        !args.noChanges &&
-        args.paths.length === 0 &&
-        !argv.includes("--") &&
-        args.head === "HEAD"
-      ) {
-        const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
-        const inert = new Set(findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }));
-        if (inert.size) {
-          typecheckResult = detectChangedLanesForPaths({
-            paths: paths.filter((file) => !inert.has(file)),
-            base: args.base ?? "origin/main",
-            head: args.head,
-          });
-        }
-      }
       if (
         shouldDelegateChangedCheckToCrabbox(argv, process.env, {
           result,
@@ -1919,20 +2040,34 @@ async function main() {
       ) {
         const delegated = await runChangedCheckViaCrabbox(argv, process.env);
         if (delegated.backendUnavailable) {
-          // Say this loudly: the proof below is local, so whoever reads the run
-          // knows which machine produced it and that Linux-only lanes are unproven.
           console.error(
-            "[check:changed] the remote backend never ran the checks (no run summary). Falling back to local execution; note this in the proof summary.",
+            "[check:changed] remote proof is unavailable. Use PR CI or explicitly select a qualified local scope; platform-specific requirements remain unproven. Local checks were not started.",
           );
         }
-        process.exitCode = delegated.backendUnavailable
-          ? await runChangedCheck(result, {
-              ...args,
-              typecheckResult,
-              explicitPaths: args.paths.length > 0,
-            })
-          : delegated.exitCode;
+        process.exitCode = delegated.exitCode;
       } else {
+        // Only the executing branch needs trivia classification; remote children
+        // classify their own source instead of discarding a native compiler run here.
+        let typecheckResult: ChangedLaneResult | undefined;
+        if (
+          !args.staged &&
+          !args.noChanges &&
+          args.paths.length === 0 &&
+          !argv.includes("--") &&
+          args.head === "HEAD"
+        ) {
+          const { findTypecheckInertPaths } = await import("./lib/typecheck-inert.mts");
+          const inert = new Set(
+            findTypecheckInertPaths({ paths, base: args.base ?? "origin/main" }),
+          );
+          if (inert.size) {
+            typecheckResult = detectChangedLanesForPaths({
+              paths: paths.filter((file) => !inert.has(file)),
+              base: args.base ?? "origin/main",
+              head: args.head,
+            });
+          }
+        }
         process.exitCode = await runChangedCheck(result, {
           ...args,
           typecheckResult,

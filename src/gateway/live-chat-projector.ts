@@ -5,15 +5,9 @@ import {
   stripInternalRuntimeContext,
 } from "../agents/internal-runtime-context.js";
 import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
-import {
-  SILENT_REPLY_TOKEN,
-  startsWithSilentToken,
-  stripLeadingSilentToken,
-} from "../auto-reply/tokens.js";
 import { isRelativeAssistantMediaReference, splitMediaOutput } from "../media/parse-output.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import {
-  createActivatedProjector,
   createConditionalTextProjector,
   createTextProjection,
   type TextFilter,
@@ -25,12 +19,6 @@ import {
 } from "../utils/directive-tags.js";
 import type { AssistantTextSnapshot } from "./agent-event-assistant-text.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
-import {
-  isSuppressedControlReplyLeadFragment,
-  isSuppressedControlReplyText,
-  stripSuppressedControlReplyToken,
-  SUPPRESSED_CONTROL_REPLY_TOKENS,
-} from "./control-reply-text.js";
 
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
@@ -127,35 +115,6 @@ export function createLiveAssistantTextProjection(options?: {
   final?: boolean;
 }) {
   const managedMediaUrls = [...(options?.managedMediaUrls ?? [])];
-  let classified = projectLiveAssistantBufferedText("");
-  const controlFilter: TextFilter = {
-    transform: (text) => projectLiveAssistantBufferedText(text).text,
-    create: () => {
-      let active = false;
-      let ordinary = false;
-      let hasContent = false;
-      const project = createActivatedProjector({
-        activationTokens: SUPPRESSED_CONTROL_REPLY_TOKENS,
-        transform: (text) => {
-          active = true;
-          classified = projectLiveAssistantBufferedText(text);
-          return classified.text;
-        },
-      });
-      return (input) => {
-        const result = project(input);
-        if (!active) {
-          hasContent ||= /\S/u.test(input.delta ?? input.text);
-          classified =
-            !ordinary && hasContent
-              ? projectLiveAssistantBufferedText(input.text)
-              : { text: input.text, suppress: !input.text, pendingLeadFragment: false };
-          ordinary ||= hasContent && !classified.suppress && !classified.pendingLeadFragment;
-        }
-        return result;
-      };
-    },
-  };
   const projection = createTextProjection([
     inlineDirectiveDisplayTextFilter,
     {
@@ -176,24 +135,13 @@ export function createLiveAssistantTextProjection(options?: {
           },
         ]
       : []),
-    controlFilter,
   ]);
-  let previousVisible = "";
-  let previousSuppressed = true;
   const present = (result: TextProjection, replace = false) => {
-    const visible = classified.suppress ? "" : result.text;
-    const delta = replace
-      ? null
-      : classified.suppress
-        ? previousVisible
-          ? null
-          : ""
-        : previousSuppressed
-          ? visible
-          : result.delta;
-    previousVisible = visible;
-    previousSuppressed = classified.suppress;
-    return { ...classified, text: result.text, delta };
+    return {
+      text: result.text,
+      suppress: !result.text,
+      delta: replace ? null : result.delta,
+    };
   };
   return {
     get source() {
@@ -205,38 +153,12 @@ export function createLiveAssistantTextProjection(options?: {
   };
 }
 
-/** Projects buffered assistant text into display text or a suppressed/pending state. */
-export function projectLiveAssistantBufferedText(
-  rawText: string,
-  options?: { suppressLeadFragments?: boolean },
-): {
+/** Projects already-prepared text without interpreting reply control tokens. */
+export function projectLiveAssistantBufferedText(rawText: string): {
   text: string;
   suppress: boolean;
-  pendingLeadFragment: boolean;
 } {
-  if (!rawText) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (isSuppressedControlReplyText(rawText)) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
-    return { text: rawText, suppress: true, pendingLeadFragment: true };
-  }
-  const withoutTrailingControlToken = stripSuppressedControlReplyToken(rawText);
-  if (!withoutTrailingControlToken) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  const text = startsWithSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
-    ? stripLeadingSilentToken(withoutTrailingControlToken, SILENT_REPLY_TOKEN)
-    : withoutTrailingControlToken;
-  if (!text || isSuppressedControlReplyText(text)) {
-    return { text: "", suppress: true, pendingLeadFragment: false };
-  }
-  if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(text)) {
-    return { text, suppress: true, pendingLeadFragment: true };
-  }
-  return { text, suppress: false, pendingLeadFragment: false };
+  return { text: rawText, suppress: !rawText };
 }
 
 /** Returns true when an assistant event phase should not appear in live chat. */

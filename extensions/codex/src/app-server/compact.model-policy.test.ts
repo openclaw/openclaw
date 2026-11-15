@@ -3,9 +3,13 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   ensureCodexAppServerClientRuntime,
   retainCodexAppServerLiveThread,
@@ -20,7 +24,11 @@ import {
 } from "./inference-routing.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import { createClientHarness, createCodexTestModel } from "./test-support.js";
+import {
+  createClientHarness,
+  createCodexTestModel,
+  stubCodexInferenceTransportEnv,
+} from "./test-support.js";
 
 const transport = vi.hoisted(() => ({ fetch: vi.fn<typeof fetchWithSsrFGuard>() }));
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
@@ -30,49 +38,41 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
 
 beforeEach(() => {
   transport.fetch.mockReset();
-  for (const key of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
-    vi.stubEnv(key, undefined);
-  }
-  for (const key of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
-    vi.stubEnv(key, undefined);
-    vi.stubEnv(key.toLowerCase(), undefined);
-  }
+  setRuntimeConfigSnapshot({});
+  stubCodexInferenceTransportEnv();
+  // The global fetch dispatcher may already own the host proxy. Keep only this
+  // fixture's loopback transport direct while its upstream remains guarded.
+  vi.stubEnv("NO_PROXY", "127.0.0.1,localhost,::1");
+  vi.stubEnv("no_proxy", "127.0.0.1,localhost,::1");
 });
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  clearRuntimeConfigSnapshot();
+  vi.unstubAllEnvs();
+});
 
-describe("native compaction model policy", () => {
-  it.each([
-    {
-      name: "rejects a same-name model from another provider despite a prepared selected model",
-      selectedModel: "shared-model",
-      nativeProvider: "other-provider",
-      nativeModel: "shared-model",
-      allowed: false,
-      revokeSource: false,
-    },
-
-    {
-      name: "allows a prepared same-provider catalog alias for the actual wire model",
-      selectedModel: "catalog-model",
-      nativeProvider: "allowed-provider",
-      nativeModel: "wire-model",
-      allowed: true,
-      revokeSource: false,
-    },
-    {
-      name: "rejects an allowed model at final provider I/O when its original compaction source is revoked",
-      selectedModel: "catalog-model",
-      nativeProvider: "allowed-provider",
-      nativeModel: "wire-model",
-      allowed: true,
-      revokeSource: true,
-    },
-  ])("$name", async ({ selectedModel, nativeProvider, nativeModel, allowed, revokeSource }) => {
+it.each([
+  ["cross-provider same-name model", false, false],
+  ["same-provider catalog alias", true, false],
+  ["revoked compaction source", true, true],
+] as const)(
+  "native compaction model policy enforces %s",
+  async (_scenario, allowed, revokeSource) => {
+    const selectedModel = allowed ? "catalog-model" : "shared-model";
+    const nativeProvider = allowed ? "allowed-provider" : "other-provider";
+    const nativeModel = allowed ? "wire-model" : "shared-model";
     await withStateDirEnv("openclaw-compact-model-policy-", async ({ tempRoot }) => {
       const provider = "allowed-provider";
       const threadId = "compaction-policy-thread";
       const turnId = "compaction-policy-turn";
+      const turnEvent = (method: string, status: string, complete = false) => ({
+        method,
+        params: { threadId, turn: { id: turnId, status, ...(complete ? { items: [] } : {}) } },
+      });
+      const itemEvent = (method: string) => ({
+        method,
+        params: { threadId, turnId, item: { id: "item", type: "contextCompaction" } },
+      });
       const runId = randomUUID();
       const identity = {
         kind: "session" as const,
@@ -81,20 +81,21 @@ describe("native compaction model policy", () => {
         sessionKey: "agent:main:compaction-policy",
       };
       const controller = new AbortController();
+      const attempt = {
+        ...identity,
+        runId,
+        workspaceDir: tempRoot,
+        provider,
+        abortSignal: controller.signal,
+      };
       let sourceActive = true;
       const host = await createAgentHarnessHostCapabilitiesForTest({
         pluginId: "codex",
         nativeModelPolicySupport: "exact",
         attempt: {
-          runId,
-          agentId: identity.agentId,
-          sessionId: identity.sessionId,
-          sessionKey: identity.sessionKey,
-          workspaceDir: tempRoot,
+          ...attempt,
           agentDir: path.join(tempRoot, "agent"),
-          provider,
           modelId: selectedModel,
-          abortSignal: controller.signal,
         },
         operatorSource: {
           profileId: "compaction-policy-operator",
@@ -113,38 +114,24 @@ describe("native compaction model policy", () => {
       const started = createDeferred<void>();
       const harness = createClientHarness({
         onWrite(line, send) {
-          const request = JSON.parse(line) as { id: number; method: string };
-          if (request.method === "thread/compact/start") {
-            send({
-              method: "turn/started",
-              params: { threadId, turn: { id: turnId, status: "inProgress" } },
-            });
-            send({
-              method: "item/started",
-              params: {
-                threadId,
-                turnId,
-                item: { id: "policy-compaction-item", type: "contextCompaction" },
-              },
-            });
-            send({ id: request.id, result: {} });
+          const { id, method } = JSON.parse(line) as { id: number; method: string };
+          if (method === "thread/compact/start") {
+            send(turnEvent("turn/started", "inProgress"));
+            send(itemEvent("item/started"));
+            send({ id, result: {} });
             started.resolve();
-          } else if (request.method === "account/read") {
-            send({ id: request.id, result: { account: { type: "apiKey" } } });
-          } else if (
-            request.method === "turn/interrupt" ||
-            request.method === "thread/unsubscribe"
-          ) {
-            send({ id: request.id, result: {} });
-          } else {
+            return;
+          } else if (method === "account/read") {
+            send({ id, result: { account: { type: "apiKey" } } });
+            return;
+          } else if (method !== "turn/interrupt" && method !== "thread/unsubscribe") {
             send({
-              id: request.id,
-              error: {
-                code: -32_601,
-                message: `Unexpected policy fixture RPC: ${request.method}`,
-              },
+              id,
+              error: { code: -32_601, message: `Unexpected policy fixture RPC: ${method}` },
             });
+            return;
           }
+          send({ id, result: {} });
         },
       });
       let pending: ReturnType<typeof maybeCompactCodexAppServerSession> | undefined;
@@ -199,9 +186,7 @@ describe("native compaction model policy", () => {
             origins: {},
           },
         });
-        if (!inference) {
-          throw new Error("Expected a real owned inference qualification");
-        }
+        assert(inference, "Expected a real owned inference qualification");
         assertCodexInferenceRouteConfig(
           harness.client,
           inference.route,
@@ -210,34 +195,28 @@ describe("native compaction model policy", () => {
           inference.providers,
         );
         bindCodexInferenceThread(harness.client, threadId, inference.route, inference.providers);
-        if (!(await retainCodexAppServerLiveThread(harness.client, threadId))) {
-          throw new Error("Expected a retained compaction subscription");
-        }
+        assert(
+          await retainCodexAppServerLiveThread(harness.client, threadId),
+          "Expected a retained compaction subscription",
+        );
         const bindingStore = createCodexTestBindingStore();
         await bindingStore.mutate(identity, {
           kind: "set",
           binding: { threadId, cwd: tempRoot, model: nativeModel, modelProvider: nativeProvider },
         });
-        const runtimeModel = {
-          ...createCodexTestModel(provider),
-          id: selectedModel,
-          params: buildCodexRuntimeModelParams(selectedModel, nativeModel),
-        };
         const retainSourceAuthority = host.capabilities.retainSourceAuthority;
-        if (!retainSourceAuthority) {
-          throw new Error("Expected the production operator source capability");
-        }
+        assert(retainSourceAuthority, "Expected the production operator source capability");
         pending = maybeCompactCodexAppServerSession(
           {
-            ...identity,
-            runId,
+            ...attempt,
             sessionFile: path.join(tempRoot, "session.jsonl"),
-            workspaceDir: tempRoot,
-            provider,
             model: selectedModel,
-            runtimeModel,
+            runtimeModel: {
+              ...createCodexTestModel(provider),
+              id: selectedModel,
+              params: buildCodexRuntimeModelParams(selectedModel, nativeModel),
+            },
             trigger: "manual",
-            abortSignal: controller.signal,
             hostCapabilities: {
               kind: host.capabilities.kind,
               version: host.capabilities.version,
@@ -267,11 +246,10 @@ describe("native compaction model policy", () => {
           body: JSON.stringify({ model: nativeModel }),
         });
         const forwarded = allowed && !revokeSource;
-        expect(response.status === 200, "native compaction model admission").toBe(forwarded);
+        expect(response.status, "native compaction model admission").toBe(forwarded ? 200 : 403);
         if (forwarded) {
           expect(await response.text()).toBe("synthetic compaction provider response");
         } else {
-          expect(response.status).toBe(403);
           expect(await response.json()).toMatchObject({
             error: {
               code: "model_permission_denied",
@@ -287,36 +265,17 @@ describe("native compaction model policy", () => {
         if (revokeSource) {
           expect(finalAuthorityFailure).toBeInstanceOf(CodexInferenceAuthorizationError);
         }
-        harness.send({
-          method: "item/completed",
-          params: {
-            threadId,
-            turnId,
-            item: { id: "policy-compaction-item", type: "contextCompaction" },
-          },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: {
-            threadId,
-            turn: { id: turnId, status: forwarded ? "completed" : "interrupted", items: [] },
-          },
-        });
+        harness.send(itemEvent("item/completed"));
+        harness.send(turnEvent("turn/completed", forwarded ? "completed" : "interrupted", true));
         await expect(pending).resolves.toMatchObject({ ok: forwarded, compacted: forwarded });
       } finally {
-        harness.send({
-          method: "turn/started",
-          params: { threadId, turn: { id: turnId, status: "inProgress" } },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: { threadId, turn: { id: turnId, status: "interrupted", items: [] } },
-        });
+        harness.send(turnEvent("turn/started", "inProgress"));
+        harness.send(turnEvent("turn/completed", "interrupted", true));
         controller.abort();
         await pending?.catch(() => undefined);
         await harness.client.closeAndWait();
         host.close();
       }
     });
-  });
-});
+  },
+);

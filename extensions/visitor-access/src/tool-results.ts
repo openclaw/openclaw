@@ -4,16 +4,41 @@ const expiresAtSchema = Type.Union([Type.String(), Type.Null()], {
   description: "Null means an explicit forever grant.",
 });
 
+const visitorAccountSeatsSchema = Type.Object(
+  {
+    status: Type.Union([Type.Literal("available"), Type.Literal("full"), Type.Literal("unknown")]),
+    capacity: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    occupied: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    remaining: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+    diagnostics: Type.Array(Type.String()),
+  },
+  {
+    additionalProperties: false,
+    description:
+      "Fresh account-wide seat observation, not reserved capacity or a login guarantee. Null means unavailable, never zero inferred from failure.",
+  },
+);
+export type VisitorAccountSeats = Static<typeof visitorAccountSeatsSchema>;
+
 export const visitorInviteDetailsSchema = Type.Object(
   {
     outcome: Type.Union([Type.Literal("invited"), Type.Literal("renewed")]),
+    accountSeats: visitorAccountSeatsSchema,
     grantId: Type.String(),
     email: Type.Optional(Type.String()),
     githubAccountId: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
     githubLogin: Type.Optional(Type.String()),
     expiresAt: expiresAtSchema,
     gatewayAccess: Type.String(),
-    signInUrl: Type.String(),
+    signInUrl: Type.Optional(
+      Type.String({
+        description: "Absent without gateway.publicOrigin or when the Control UI is disabled.",
+      }),
+    ),
+    noteStored: Type.Boolean({ description: "Whether the grant now carries an inviter note." }),
+    invitationText: Type.String({
+      description: "Plain text for the inviter to hand to the visitor; contains no credentials.",
+    }),
   },
   {
     additionalProperties: false,
@@ -35,6 +60,7 @@ export const visitorRevokeDetailsSchema = Type.Object(
 
 export const visitorListDetailsSchema = Type.Object(
   {
+    accountSeats: visitorAccountSeatsSchema,
     counts: Type.Object(
       {
         recorded: Type.Integer(),
@@ -56,13 +82,11 @@ export const visitorListDetailsSchema = Type.Object(
           grantId: Type.Optional(
             Type.String({ description: "Stable selector for canceling this invitation." }),
           ),
-          profileId: Type.Optional(
-            Type.String({ description: "Canonical person selector for visitor_revoke." }),
-          ),
+          profileId: Type.Optional(Type.String({ description: "Person ID for visitor_revoke." })),
           githubLogin: Type.Optional(
             Type.String({
               description:
-                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the canonical person's recorded grants.",
+                "Current verified GitHub identity selected by the Gateway profile, when available. Use grantId to cancel one invitation; GitHub input selects its immutable account and the person's recorded grants.",
             }),
           ),
           invitedAt: Type.String(),
@@ -73,6 +97,28 @@ export const visitorListDetailsSchema = Type.Object(
               description:
                 "Missing policy membership takes precedence; expired grants await provider cleanup.",
             },
+          ),
+          welcome: Type.Optional(
+            Type.Object(
+              {
+                state: Type.Union([
+                  Type.Literal("pending"),
+                  Type.Literal("ready"),
+                  Type.Literal("failed"),
+                ]),
+                sessionKey: Type.Optional(
+                  Type.String({
+                    description:
+                      "This invitation's welcome session, once reserved. A deleted session is not recreated.",
+                  }),
+                ),
+              },
+              {
+                additionalProperties: false,
+                description:
+                  "Welcome-session progress for this invitation; absent on grants recorded before onboarding.",
+              },
+            ),
           ),
           gatewayAccess: Type.String(),
         },
@@ -97,7 +143,14 @@ export const visitorListDetailsSchema = Type.Object(
         },
       ),
     ),
-    omitted: Type.Integer({ description: "Rows omitted by the text output limits." }),
+    omitted: Type.Integer({
+      minimum: 0,
+      description: "Rows remaining after this page; counts describe the whole inventory.",
+    }),
+    nextCursor: Type.Union([Type.String(), Type.Null()], {
+      description:
+        "Pass as cursor to visitor_list for the next page. Null means complete. A changed inventory requires restarting without cursor; access and metadata are read fresh on each page.",
+    }),
   },
   { additionalProperties: false },
 );

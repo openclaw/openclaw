@@ -10,10 +10,11 @@ struct RuntimeLocatorTests {
         return path
     }
 
-    @Test func `resolve succeeds with valid node`() async throws {
+    @Test(arguments: ["24.16.0", "26.1.0", "24.22.1"])
+    func `resolve succeeds with valid node`(version: String) async throws {
         let script = """
         #!/bin/sh
-        echo v24.16.0
+        echo v\(version)
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -24,14 +25,14 @@ struct RuntimeLocatorTests {
             return
         }
         #expect(res.path == node.path)
-        #expect(res.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
+        #expect(res.version.description == version)
     }
 
     @Test func `runtime version probe tolerates loaded host delay`() async throws {
         let script = """
         #!/bin/sh
         /bin/sleep 2.1
-        echo v24.16.0
+        echo v24.22.1
         """
         let root = try makeTempDirForTests()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -41,7 +42,7 @@ struct RuntimeLocatorTests {
             Issue.record("Expected delayed version probe to succeed, got \(result)")
             return
         }
-        #expect(resolution.version == RuntimeVersion(major: 24, minor: 16, patch: 0))
+        #expect(resolution.version == Semver(major: 24, minor: 22, patch: 1))
     }
 
     @Test func `resolve fails on boundary below minimum`() async throws {
@@ -53,11 +54,11 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
-        guard case let .failure(.unsupported(_, found, path, _)) = result else {
+        guard case let .failure(.unsupported(found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
         }
-        #expect(found == RuntimeVersion(major: 22, minor: 22, patch: 2))
+        #expect(found == Semver(major: 22, minor: 22, patch: 2))
         #expect(path == node.path)
     }
 
@@ -70,11 +71,11 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
-        guard case let .failure(.unsupported(_, found, path, _)) = result else {
+        guard case let .failure(.unsupported(found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
         }
-        #expect(found == RuntimeVersion(major: 23, minor: 11, patch: 0))
+        #expect(found == Semver(major: 23, minor: 11, patch: 0))
         #expect(path == node.path)
     }
 
@@ -85,13 +86,18 @@ struct RuntimeLocatorTests {
         ("24.14.1", false),
         ("24.15.0", false),
         ("24.16.0", true),
+        ("24.22.0", true),
+        ("24.22.1", true),
         ("25.8.1", false),
         ("25.9.0", false),
         ("26.0.0", false),
         ("26.1.0", true),
+        ("26.12.0", true),
+        ("26.12.1", true),
+        ("27.0.0", true),
     ])
     func `node support matches the core runtime contract`(version: String, supported: Bool) throws {
-        let parsed = try #require(RuntimeVersion.from(string: version))
+        let parsed = try #require(RuntimeLocator.parseVersion(version))
         #expect(RuntimeLocator.isSupportedNodeVersion(parsed) == supported)
     }
 
@@ -104,11 +110,11 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
-        guard case let .failure(.unsupported(_, found, path, _)) = result else {
+        guard case let .failure(.unsupported(found, path, _)) = result else {
             Issue.record("Expected unsupported error, got \(result)")
             return
         }
-        #expect(found == RuntimeVersion(major: 18, minor: 2, patch: 0))
+        #expect(found == Semver(major: 18, minor: 2, patch: 0))
         #expect(path == node.path)
     }
 
@@ -121,7 +127,7 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: script)
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
-        guard case let .failure(.versionParse(_, raw, path, _)) = result else {
+        guard case let .failure(.versionParse(raw, path, _)) = result else {
             Issue.record("Expected versionParse error, got \(result)")
             return
         }
@@ -134,13 +140,13 @@ struct RuntimeLocatorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let node = try self.makeExecutable(in: root, contents: """
         #!/bin/sh
-        echo v24.16.0
+        echo v24.22.1
         exit 1
         """)
 
         let result = await RuntimeLocator.resolve(searchPaths: [node.deletingLastPathComponent().path])
 
-        guard case let .failure(.versionParse(_, raw, path, _)) = result else {
+        guard case let .failure(.versionParse(raw, path, _)) = result else {
             Issue.record("Expected the failed runtime probe to be rejected, got \(result)")
             return
         }
@@ -155,7 +161,6 @@ struct RuntimeLocatorTests {
 
         let parseMsg = RuntimeLocator.describeFailure(
             .versionParse(
-                kind: .node,
                 raw: "garbage",
                 path: "/usr/local/bin/node",
                 searchPaths: ["/usr/local/bin"]))
@@ -163,8 +168,8 @@ struct RuntimeLocatorTests {
     }
 
     @Test func `runtime version parses with leading V and metadata`() {
-        #expect(RuntimeVersion.from(string: "v22.1.3") == RuntimeVersion(major: 22, minor: 1, patch: 3))
-        #expect(RuntimeVersion.from(string: "node 22.3.0-alpha.1") == RuntimeVersion(major: 22, minor: 3, patch: 0))
-        #expect(RuntimeVersion.from(string: "bogus") == nil)
+        #expect(RuntimeLocator.parseVersion("v22.1.3") == Semver(major: 22, minor: 1, patch: 3))
+        #expect(RuntimeLocator.parseVersion("node 22.3.0-alpha.1") == Semver(major: 22, minor: 3, patch: 0))
+        #expect(RuntimeLocator.parseVersion("bogus") == nil)
     }
 }

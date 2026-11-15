@@ -44,6 +44,7 @@ export function projectWorkerTokenUsage(usage: Usage) {
     cacheRead: usage.cacheRead,
     cacheWrite: usage.cacheWrite,
     totalTokens: usage.totalTokens,
+    ...(usage.usageReport ? { usageReport: { ...usage.usageReport } } : {}),
     cost: {
       input: usage.cost.input,
       output: usage.cost.output,

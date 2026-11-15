@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveSessionStoreAgentId, resolveSessionStoreKey } from "./session-store-key.js";
-import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
+import type { WorkerSessionPlacementIdentity } from "./worker-environments/placement-record.js";
 import type {
   PlacementSessionEvidence,
   PlacementSessionEvidenceResolver,
@@ -13,17 +13,18 @@ import type {
 const log = createSubsystemLogger("gateway/placement-session-evidence");
 
 type PlacementSessionIdentity = {
-  placement: WorkerSessionPlacementRecord;
+  placement: WorkerSessionPlacementIdentity;
   agentId: string;
   sessionKey: string;
 };
 
 function resolvePlacementSessionIdentities(
   cfg: OpenClawConfig,
-  placement: WorkerSessionPlacementRecord,
+  placement: WorkerSessionPlacementIdentity,
 ): PlacementSessionIdentity[] {
   const requestedAgentId = normalizeAgentId(placement.agentId);
   const parsedKey = parseAgentSessionKey(placement.sessionKey);
+  const persistedAgentId = parsedKey ? normalizeAgentId(parsedKey.agentId) : requestedAgentId;
   const canonicalKey = resolveSessionStoreKey({
     cfg,
     sessionKey: placement.sessionKey,
@@ -32,13 +33,11 @@ function resolvePlacementSessionIdentities(
   const canonicalAgentId =
     canonicalKey === "global" || canonicalKey === "unknown" || !parsedKey
       ? requestedAgentId
-      : resolveSessionStoreAgentId(cfg, canonicalKey);
+      : canonicalKey === placement.sessionKey
+        ? persistedAgentId
+        : resolveSessionStoreAgentId(cfg, canonicalKey);
   const canonical = { placement, agentId: canonicalAgentId, sessionKey: canonicalKey };
-  if (!parsedKey) {
-    return [canonical];
-  }
-  const persistedAgentId = normalizeAgentId(parsedKey.agentId);
-  if (persistedAgentId === canonicalAgentId) {
+  if (!parsedKey || persistedAgentId === canonicalAgentId) {
     return [canonical];
   }
   // A deleted legacy owner can still hold the exact persisted placement row.
@@ -47,20 +46,25 @@ function resolvePlacementSessionIdentities(
 }
 
 export async function createWorkerPlacementSessionEvidenceResolver(
-  placements: readonly WorkerSessionPlacementRecord[],
+  placements: readonly WorkerSessionPlacementIdentity[],
+  signal?: AbortSignal,
 ): Promise<PlacementSessionEvidenceResolver> {
   try {
     const cfg = getRuntimeConfig();
     const identities = placements.flatMap((placement) =>
       resolvePlacementSessionIdentities(cfg, placement),
     );
-    const subjects = new Map(
+    const subjects = new Map<
+      WorkerSessionPlacementIdentity,
+      { agentId: string; sessionId: string; sessionKey: string; evidence: PlacementSessionEvidence }
+    >(
       placements.map((placement) => [
         placement,
         {
           agentId: placement.agentId,
           sessionId: placement.sessionId,
           sessionKey: placement.sessionKey,
+          evidence: "absent",
         },
       ]),
     );
@@ -71,18 +75,13 @@ export async function createWorkerPlacementSessionEvidenceResolver(
         sessionId: identity.placement.sessionId,
         sessionKey: identity.sessionKey,
       })),
-    );
-    const evidenceByPlacement = new Map<WorkerSessionPlacementRecord, PlacementSessionEvidence>(
-      placements.map((placement) => [placement, "absent"]),
+      signal,
     );
     for (const [index, result] of evidence.entries()) {
       const placement = identities[index]?.placement;
-      if (!placement) {
-        continue;
-      }
-      const current = evidenceByPlacement.get(placement) ?? "unknown";
-      if (current !== "current" && result.status !== "absent") {
-        evidenceByPlacement.set(placement, result.status);
+      const subject = placement && subjects.get(placement);
+      if (subject && subject.evidence !== "current" && result.status !== "absent") {
+        subject.evidence = result.status;
       }
     }
     return async (placement) => {
@@ -95,9 +94,10 @@ export async function createWorkerPlacementSessionEvidenceResolver(
       ) {
         return "unknown";
       }
-      return evidenceByPlacement.get(placement) ?? "unknown";
+      return subject.evidence;
     };
   } catch (error) {
+    signal?.throwIfAborted();
     // "unknown" keeps retirement fail-open, but a silent catch would hide a broken
     // evidence pipeline (bad config, store corruption) behind indefinite retention.
     log.warn("worker placement session evidence resolution failed; treating all as unknown", {

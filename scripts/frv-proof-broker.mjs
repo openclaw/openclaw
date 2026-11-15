@@ -164,7 +164,7 @@ function validateMainRef(value, workflowSha) {
   }
 }
 
-export function validateFixtureRun(value, expected) {
+function validateFixtureRun(value, expected) {
   const run = record(value, "fixture run");
   if (nestedRecord(run, "repository", "fixture run").full_name !== expected.repository) {
     throw new Error("fixture run repository does not match");

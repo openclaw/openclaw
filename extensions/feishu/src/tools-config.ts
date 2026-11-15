@@ -1,11 +1,6 @@
-// Feishu helper module supports tools config behavior.
 import type { FeishuToolsConfig } from "./types.js";
 
-/**
- * Default tool configuration.
- * - doc, chat, wiki, drive, scopes, bitable: enabled by default
- * - perm: disabled by default (sensitive operation)
- */
+// Permission tools default off because they perform sensitive operations.
 const DEFAULT_TOOLS_CONFIG: Required<FeishuToolsConfig> = {
   doc: true,
   chat: true,

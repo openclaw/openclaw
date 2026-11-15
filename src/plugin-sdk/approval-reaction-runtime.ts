@@ -32,10 +32,11 @@ export {
   normalizeApprovalReactionDecision,
   readApprovalReactionDecisionList,
   readApprovalReactionDeliveredBinding,
-  readApprovalReactionDeliveryMetadata,
   readApprovalReactionPresentationBinding,
   type ApprovalReactionDeliveryBinding,
 } from "./approval-reaction-binding.js";
+/** @deprecated Retained for plugins built against OpenClaw 2026.10.4 and earlier; tracked by `plugin-sdk-private-runtime-shipped-exports`. */
+export { readApprovalReactionDeliveryMetadata } from "./approval-reaction-binding.js";
 
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;
@@ -220,24 +221,6 @@ export function hasApprovalReactionHintText(text?: string | null): boolean {
   return APPROVAL_REACTION_HINT_PRESENT_RE.test(text ?? "");
 }
 
-/** Inserts a reaction hint after the `ID: <id>` header line, else prepends it. */
-export function insertApprovalReactionHintNearIdHeader(params: {
-  text: string;
-  hint: string;
-}): string {
-  const lines = params.text.split(/\r?\n/);
-  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
-  if (idLineIndex >= 0) {
-    const before = lines.slice(0, idLineIndex + 1).join("\n");
-    const after = lines
-      .slice(idLineIndex + 1)
-      .join("\n")
-      .replace(/^\n+/, "");
-    return after ? `${before}\n\n${params.hint}\n\n${after}` : `${before}\n\n${params.hint}`;
-  }
-  return `${params.hint}\n\n${params.text}`;
-}
-
 /** Adds the canonical reaction hint to approval prompt text unless one is present. */
 export function addApprovalReactionHintToText(params: {
   text: string;
@@ -247,7 +230,20 @@ export function addApprovalReactionHintToText(params: {
     return params.text;
   }
   const hint = buildApprovalReactionHint({ allowedDecisions: params.allowedDecisions });
-  return hint ? insertApprovalReactionHintNearIdHeader({ text: params.text, hint }) : params.text;
+  if (!hint) {
+    return params.text;
+  }
+  const lines = params.text.split(/\r?\n/);
+  const idLineIndex = lines.findIndex((line) => /^ID:\s*\S+/.test(line.trim()));
+  if (idLineIndex >= 0) {
+    const before = lines.slice(0, idLineIndex + 1).join("\n");
+    const after = lines
+      .slice(idLineIndex + 1)
+      .join("\n")
+      .replace(/^\n+/, "");
+    return after ? `${before}\n\n${hint}\n\n${after}` : `${before}\n\n${hint}`;
+  }
+  return `${hint}\n\n${params.text}`;
 }
 
 /** Normalize reaction emoji so skin-tone and text/presentation variants match canonical bindings. */

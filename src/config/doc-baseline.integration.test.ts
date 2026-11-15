@@ -1,4 +1,5 @@
 // Verifies generated config documentation baselines against source metadata.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
@@ -79,6 +80,14 @@ describe("config doc baseline integration", () => {
     const gatewayToken = requireEntry(byPath, "gateway.auth.token");
     expect(gatewayToken.kind).toBe("core");
     expect(gatewayToken.sensitive).toBe(true);
+    for (const entryPath of [
+      "gateway.auth.trustedProxy.gitCoauthor",
+      "gateway.auth.trustedProxy.gitCoauthor.nameHeader",
+      "gateway.auth.trustedProxy.gitCoauthor.emailHeader",
+      "gateway.auth.trustedProxy.gitCoauthor.emailVerifiedHeader",
+    ]) {
+      expect(requireEntry(byPath, entryPath).kind).toBe("core");
+    }
 
     const telegramToken = requireEntry(byPath, "channels.telegram.botToken");
     expect(telegramToken.kind).toBe("channel");

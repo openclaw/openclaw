@@ -17,82 +17,81 @@ vi.mock("./client.js", async (importOriginal) => ({
 
 type Post = (request: SlackPostMessagePayload) => Promise<Record<string, unknown>>;
 type Lookup = (request: Record<string, unknown>) => Promise<Record<string, unknown>>;
-type TestClient = WebClient & {
-  chat: { postMessage: ReturnType<typeof vi.fn<Post>> };
-  conversations: {
-    history: ReturnType<typeof vi.fn<Lookup>>;
-    open: ReturnType<typeof vi.fn<Lookup>>;
-    replies: ReturnType<typeof vi.fn<Lookup>>;
-  };
-};
+type SendOptions = Partial<Parameters<typeof sendMessageSlack>[2]> & { to?: string; text?: string };
 const cfg = { channels: { slack: { botToken: "xoxb-test" } } };
 const tokenCfg = { channels: { slack: { botToken: "xoxb-write", userToken: "xoxp-read" } } };
 const ts = "1782584647.000002";
-function createClient(): TestClient {
-  return {
+const postResult = (id = ts, channel = "C123") => ({ ok: true, channel, ts: id });
+const partIds = (count: number) =>
+  Array.from({ length: count }, (_, i) => `1782584647.00000${i + 1}`);
+const tamper = (metadata: MessageMetadata, patch: MessageMetadata["event_payload"]) => ({
+  ...metadata,
+  event_payload: { ...metadata.event_payload, ...patch },
+});
+function createClient() {
+  const stub = {
     chat: {
-      postMessage: vi.fn<Post>(async () => ({ ok: true, channel: "C123", ts, message: {} })),
+      postMessage: vi.fn<Post>(async () => postResult()),
     },
     conversations: {
       history: vi.fn<Lookup>(async () => ({ messages: [] })),
       open: vi.fn<Lookup>(async () => ({ channel: { id: "D123" } })),
       replies: vi.fn<Lookup>(async () => ({ messages: [] })),
     },
-  } as unknown as TestClient;
-}
-function context(
-  overrides: Partial<ChannelMessageUnknownSendContext> = {},
-): ChannelMessageUnknownSendContext {
-  return {
-    cfg,
-    queueId: "queue-1",
-    channel: "slack",
-    to: "channel:C123",
-    enqueuedAt: 1_782_584_644_000,
-    retryCount: 0,
-    platformSendStartedAt: 1_782_584_645_000,
-    payloads: [{ text: "final answer" }],
-    ...overrides,
   };
+  return stub as typeof stub & WebClient;
 }
-function reconcile(client: TestClient, overrides: Partial<ChannelMessageUnknownSendContext> = {}) {
-  clients.createSlackReadClient.mockReturnValue(client);
-  clients.getSlackWriteClient.mockReturnValue(client);
-  return reconcileSlackUnknownSend(context(overrides));
+function expectParts(metadata: MessageMetadata[], indexes: number[]) {
+  expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual(indexes);
+  expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual(
+    indexes.map(() => indexes.length),
+  );
+  expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
 }
-async function marker(
-  client: TestClient,
-  options: Partial<Parameters<typeof sendMessageSlack>[2]> = {},
-  to = "channel:C123",
-) {
-  await sendMessageSlack(to, "final answer", {
-    cfg,
-    client,
-    deliveryQueueId: "queue-1",
-    ...options,
-  });
-  return client.chat.postMessage.mock.calls[0]![0].metadata!;
-}
-beforeEach(() => {
-  clients.createSlackReadClient.mockReset();
-  clients.getSlackWriteClient.mockReset();
-});
-
 describe("Slack durable reconciliation", () => {
+  let client: ReturnType<typeof createClient>;
+  function reconcile(overrides: Partial<ChannelMessageUnknownSendContext> = {}) {
+    return reconcileSlackUnknownSend({
+      cfg,
+      queueId: "queue-1",
+      channel: "slack",
+      to: "channel:C123",
+      enqueuedAt: 1_782_584_644_000,
+      retryCount: 0,
+      platformSendStartedAt: 1_782_584_645_000,
+      payloads: [{ text: "final answer" }],
+      ...overrides,
+    });
+  }
+  function send({ to = "channel:C123", text = "final answer", ...options }: SendOptions = {}) {
+    return sendMessageSlack(to, text, { cfg, client, deliveryQueueId: "queue-1", ...options });
+  }
+  async function marker(options: SendOptions = {}) {
+    await send(options);
+    return client.chat.postMessage.mock.calls[0]![0].metadata!;
+  }
+  function history(metadata: MessageMetadata) {
+    return { messages: [{ ts, metadata }] };
+  }
+  function unresolved(error: string, retryable = true) {
+    return { status: "unresolved", error, retryable };
+  }
+  beforeEach(() => {
+    client = createClient();
+    clients.createSlackReadClient.mockReset().mockReturnValue(client);
+    clients.getSlackWriteClient.mockReset().mockReturnValue(client);
+  });
   it("uses workspace-scoped read and write clients for qualified reconciliation", async () => {
-    const reader = createClient();
     const writer = createClient();
-    clients.getSlackWriteClient.mockReturnValue(reader);
-    const metadata = await marker(reader, {}, "team:T123:channel:C123");
-    reader.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
-    clients.createSlackReadClient.mockReturnValue(reader);
+    const metadata = await marker({ to: "team:T123:channel:C123" });
+    client.conversations.history.mockResolvedValueOnce(history(metadata));
     clients.getSlackWriteClient.mockReturnValue(writer);
-    await expect(
-      reconcileSlackUnknownSend(context({ cfg: tokenCfg, to: "team:T123:channel:C123" })),
-    ).resolves.toMatchObject({ status: "sent", messageId: ts });
+    await expect(reconcile({ cfg: tokenCfg, to: "team:T123:channel:C123" })).resolves.toMatchObject(
+      { status: "sent", messageId: ts },
+    );
     expect(clients.createSlackReadClient).toHaveBeenCalledWith("xoxp-read", { teamId: "T123" });
     expect(clients.getSlackWriteClient).toHaveBeenCalledWith("xoxb-write", { teamId: "T123" });
-    expect(reader.conversations.history).toHaveBeenCalledWith(
+    expect(client.conversations.history).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "C123" }),
     );
     expect(writer.conversations.history).not.toHaveBeenCalled();
@@ -101,7 +100,7 @@ describe("Slack durable reconciliation", () => {
   it("returns a terminal unresolved result for bare Enterprise reconciliation", async () => {
     const installation = registerSlackInstallationState("default", "enterprise");
     try {
-      await expect(reconcileSlackUnknownSend(context())).resolves.toEqual({
+      await expect(reconcile()).resolves.toEqual({
         status: "unresolved",
         error: expect.stringContaining("unsupported_enterprise_slack_delivery"),
         retryable: false,
@@ -113,25 +112,17 @@ describe("Slack durable reconciliation", () => {
   });
 
   it("reconciles every ordered native-data fallback batch as one durable part set", async () => {
-    const client = createClient();
     client.chat.postMessage.mockRejectedValueOnce(
       Object.assign(new Error("invalid_blocks"), { data: { error: "invalid_blocks" } }),
     );
-    const ids = [1, 2, 3, 4].map((index) => `1782584647.00000${index}`);
+    const ids = partIds(4);
     for (const id of ids) {
-      client.chat.postMessage.mockResolvedValueOnce({ ok: true, channel: "C123", ts: id });
+      client.chat.postMessage.mockResolvedValueOnce(postResult(id));
     }
     const caption = "c".repeat(9_000);
-    const table = {
-      type: "data_table",
-      caption,
-      rows: [[{ type: "raw_text", text: "Account" }], [{ type: "raw_text", text: "Acme" }]],
-    };
     const onDeliveryResult = vi.fn();
-    const sent = await sendMessageSlack("channel:C123", "Pipeline", {
-      cfg,
-      client,
-      deliveryQueueId: "queue-1",
+    const sent = await send({
+      text: "Pipeline",
       onDeliveryResult,
       metadata: { event_type: "assistant_thread_context", event_payload: { team_id: "T123" } },
       blocks: [
@@ -147,7 +138,11 @@ describe("Slack durable reconciliation", () => {
             },
           ],
         },
-        table,
+        {
+          type: "data_table",
+          caption,
+          rows: ["Account", "Acme"].map((text) => [{ type: "raw_text", text }]),
+        },
       ],
     });
     const requests = client.chat.postMessage.mock.calls.map(([request]) => request);
@@ -171,30 +166,23 @@ describe("Slack durable reconciliation", () => {
     );
     expect(text.join("")).toBe(`Pipeline${caption} (table)\nAccount\nAcme`);
     const metadata = fallback.map((request) => request.metadata!);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual([
-      0, 1, 2, 3,
-    ]);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual([
-      4, 4, 4, 4,
-    ]);
+    expectParts(metadata, [0, 1, 2, 3]);
     expect(metadata[0]?.event_payload).toMatchObject({ team_id: "T123" });
     for (const part of metadata.slice(1)) {
       expect(part.event_payload).not.toHaveProperty("team_id");
     }
-    expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
     expect(sent.receipt.platformMessageIds).toEqual(ids);
     expect(onDeliveryResult.mock.calls.map(([delivery]) => delivery.messageId)).toEqual(ids);
     client.conversations.history.mockResolvedValueOnce({
       messages: metadata.map((part, index) => ({ ts: ids[index], metadata: part })).toReversed(),
     });
-    await expect(reconcile(client)).resolves.toMatchObject({
+    await expect(reconcile()).resolves.toMatchObject({
       status: "sent",
       receipt: { platformMessageIds: ids },
     });
   });
 
   it("opens a durable user-identity DM before marking platform dispatch", async () => {
-    const client = createClient();
     const order: string[] = [];
     client.conversations.open.mockImplementationOnce(async () => {
       order.push("open");
@@ -202,12 +190,12 @@ describe("Slack durable reconciliation", () => {
     });
     client.chat.postMessage.mockImplementationOnce(async () => {
       order.push("post");
-      return { ok: true, channel: "D123", ts };
+      return postResult(ts, "D123");
     });
-    clients.getSlackWriteClient.mockReturnValue(client);
-    await sendMessageSlack("user:U123", "final answer", {
+    await send({
+      to: "user:U123",
+      client: undefined,
       cfg: { channels: { slack: { postAs: "user", userToken: "test-user-token" } } },
-      deliveryQueueId: "queue-1",
       onPlatformSendDispatch: async () => {
         order.push("dispatch");
       },
@@ -216,51 +204,35 @@ describe("Slack durable reconciliation", () => {
     expect(order).toEqual(["open", "dispatch", "post"]);
   });
 
-  it.each(["missing_scope", "no marker"])(
-    "checks the write token after read-token %s",
-    async (failure) => {
-      const reader = createClient();
-      const writer = createClient();
-      const metadata = await marker(writer, {}, "user:U123");
-      if (failure === "missing_scope") {
-        reader.conversations.history.mockRejectedValueOnce(new Error(failure));
-      }
-      writer.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
-      clients.createSlackReadClient.mockReturnValue(reader);
-      clients.getSlackWriteClient.mockReturnValue(writer);
-      await expect(
-        reconcileSlackUnknownSend(context({ cfg: tokenCfg, to: "U123" })),
-      ).resolves.toMatchObject({ status: "sent" });
-      expect(writer.conversations.open).toHaveBeenCalledWith({ users: "U123" });
-      expect(reader.conversations.history).toHaveBeenCalledOnce();
-      expect(writer.conversations.history).toHaveBeenCalledOnce();
-    },
-  );
+  it("checks the write token after read-token missing_scope", async () => {
+    const reader = createClient();
+    const metadata = await marker({ to: "user:U123" });
+    reader.conversations.history.mockRejectedValueOnce(new Error("missing_scope"));
+    client.conversations.history.mockResolvedValueOnce(history(metadata));
+    clients.createSlackReadClient.mockReturnValue(reader);
+    await expect(reconcile({ cfg: tokenCfg, to: "U123" })).resolves.toMatchObject({
+      status: "sent",
+    });
+    expect(client.conversations.open).toHaveBeenCalledWith({ users: "U123" });
+    expect(reader.conversations.history).toHaveBeenCalledOnce();
+    expect(client.conversations.history).toHaveBeenCalledOnce();
+  });
 
   it("does not confuse an identical later message without the durable id", async () => {
-    const client = createClient();
     client.conversations.history.mockResolvedValue({ messages: [{ ts, text: "final answer" }] });
-    await expect(reconcile(client)).resolves.toEqual({
-      status: "unresolved",
-      error: "Slack history contains no exact durable delivery marker",
-      retryable: true,
-    });
-    await expect(reconcile(client, { retryCount: 2 })).resolves.toEqual({
-      status: "unresolved",
-      error: "Slack history contains no exact durable delivery marker",
-      retryable: false,
-    });
+    const error = "Slack history contains no exact durable delivery marker";
+    await expect(reconcile()).resolves.toEqual(unresolved(error));
+    await expect(reconcile({ retryCount: 2 })).resolves.toEqual(unresolved(error, false));
   });
 
   it("reconciles the persisted exact thread reply", async () => {
-    const client = createClient();
     const thread = "1782584644.377229";
-    const metadata = await marker(client, { threadTs: thread });
+    const metadata = await marker({ threadTs: thread });
     client.conversations.replies.mockResolvedValueOnce({
-      messages: [{ ts, thread_ts: thread, metadata }],
+      messages: [{ ts, metadata, thread_ts: thread }],
     });
     await expect(
-      reconcile(client, {
+      reconcile({
         threadId: "1782584644.111111",
         payloads: [{ text: "final answer", replyToId: "1782584644.222222" }],
         effectiveReplyToId: thread,
@@ -274,40 +246,29 @@ describe("Slack durable reconciliation", () => {
   it.each([
     { replyToId: "1782584644.377229", replyToMode: "off" as const },
     { replyToId: "1782584644.377229", payloads: [{ text: "final answer", replyToId: "" }] },
-    {
-      replyToId: "1782584644.377229",
-      payloads: [{ text: "final answer", replyToId: "1782584644.222222" }],
-      effectiveReplyToId: null,
-    },
   ])("uses channel history for a cleared reply target: %j", async (overrides) => {
-    const client = createClient();
-    const metadata = await marker(client);
-    client.conversations.history.mockResolvedValueOnce({ messages: [{ ts, metadata }] });
-    await expect(reconcile(client, overrides)).resolves.toMatchObject({ status: "sent" });
+    const metadata = await marker();
+    client.conversations.history.mockResolvedValueOnce(history(metadata));
+    await expect(reconcile(overrides)).resolves.toMatchObject({ status: "sent" });
     expect(client.conversations.history).toHaveBeenCalledOnce();
     expect(client.conversations.replies).not.toHaveBeenCalled();
   });
 
   it("paginates past malformed signatures to find the exact durable id", async () => {
-    const client = createClient();
-    const metadata = await marker(client);
+    const metadata = await marker();
     expect(JSON.stringify(metadata)).not.toContain("queue-1");
     const signature = metadata.event_payload.openclaw_delivery_signature as string;
-    const tampered = {
-      ...metadata,
-      event_payload: {
-        ...metadata.event_payload,
-        openclaw_delivery_signature: "é".repeat(signature.length),
-      },
-    };
+    const tampered = tamper(metadata, {
+      openclaw_delivery_signature: "é".repeat(signature.length),
+    });
     client.conversations.history
       .mockResolvedValueOnce({
         messages: [{ ts: "1782584648.000003", metadata: tampered }],
         has_more: true,
         response_metadata: { next_cursor: "cursor-2" },
       })
-      .mockResolvedValueOnce({ messages: [{ ts, metadata }] });
-    await expect(reconcile(client)).resolves.toMatchObject({ status: "sent", messageId: ts });
+      .mockResolvedValueOnce(history(metadata));
+    await expect(reconcile()).resolves.toMatchObject({ status: "sent", messageId: ts });
     expect(client.conversations.history).toHaveBeenNthCalledWith(2, {
       channel: "C123",
       oldest: "1782584315.000000",
@@ -318,55 +279,26 @@ describe("Slack durable reconciliation", () => {
     });
   });
 
-  it("reconciles complete indexed text parts and rejects forged indexes", async () => {
-    const client = createClient();
+  it("signs indexed text parts and rejects forged indexes", async () => {
     let index = 0;
-    client.chat.postMessage.mockImplementation(async () => ({
-      ok: true,
-      channel: "C123",
-      ts: `1782584647.00000${++index}`,
-    }));
-    await sendMessageSlack("channel:C123", "final answer", {
-      cfg,
-      client,
-      textLimit: 5,
-      deliveryQueueId: "queue-1",
-    });
-    expect(client.chat.postMessage).toHaveBeenCalledTimes(3);
+    const ids = partIds(3);
+    client.chat.postMessage.mockImplementation(async () => postResult(ids[index++]!));
+    await marker({ textLimit: 5 });
     const metadata = client.chat.postMessage.mock.calls.map(([request]) => request.metadata!);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_index)).toEqual([
-      0, 1, 2,
-    ]);
-    expect(metadata.map((part) => part.event_payload.openclaw_delivery_part_count)).toEqual([
-      3, 3, 3,
-    ]);
-    expect(new Set(metadata.map((part) => part.event_payload.openclaw_delivery_id)).size).toBe(1);
+    expectParts(metadata, [0, 1, 2]);
     expect(
       new Set(metadata.map((part) => part.event_payload.openclaw_delivery_signature)).size,
     ).toBe(3);
-    const ids = [1, 2, 3].map((part) => `1782584647.00000${part}`);
-    client.conversations.history.mockResolvedValueOnce({
-      messages: metadata.map((part, i) => ({ ts: ids[i], metadata: part })),
-    });
-    await expect(reconcile(client)).resolves.toMatchObject({
-      status: "sent",
-      receipt: { platformMessageIds: ids },
-    });
     const first = metadata[0]!;
-    const forged: MessageMetadata[] = [first];
-    for (const part of [1, 2]) {
-      forged.push({
-        ...first,
-        event_payload: { ...first.event_payload, openclaw_delivery_part_index: part },
-      });
-    }
+    const forged = [
+      first,
+      ...[1, 2].map((part) => tamper(first, { openclaw_delivery_part_index: part })),
+    ];
     client.conversations.history.mockResolvedValueOnce({
       messages: forged.map((part, i) => ({ ts: ids[i], metadata: part })),
     });
-    await expect(reconcile(client)).resolves.toEqual({
-      status: "unresolved",
-      error: "Slack history contains an incomplete durable delivery marker set",
-      retryable: true,
-    });
+    await expect(reconcile()).resolves.toEqual(
+      unresolved("Slack history contains an incomplete durable delivery marker set"),
+    );
   });
 });

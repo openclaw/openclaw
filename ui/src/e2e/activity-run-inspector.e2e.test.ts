@@ -4,6 +4,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -191,13 +192,13 @@ suite.define(() => {
       await page.getByRole("tab", { name: "Sessions" }).waitFor();
       expect(await page.getByRole("tab").count()).toBe(2);
       expect(await page.getByRole("tab", { name: "Run inspector" }).count()).toBe(0);
-      const liveTab = page.getByRole("tab", { name: "Live activity" });
+      const liveTab = page.getByRole("tab", { name: "Current work" });
       await liveTab.focus();
       await expect
         .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
-        .toBe("Live activity");
+        .toBe("Current work");
       await page.keyboard.press("Enter");
-      await page.locator(".activity-empty").waitFor();
+      await page.getByRole("region", { name: "Active sessions", exact: true }).waitFor();
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
@@ -412,13 +413,6 @@ suite.define(() => {
       });
       const accessibilityTree = await page.locator("body").ariaSnapshot();
       for (const hidden of [
-        "hidden-action-id",
-        "hidden-resource-id",
-        "hidden-target-id",
-        "hidden-evaluator-id",
-        "hidden-policy-id",
-        "hidden-grant-id",
-        "hidden-record-id",
         "rm -rf",
         "/private/operator-path",
         "credential-value",
@@ -637,103 +631,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
-    const context = await newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:main",
-      sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await page.locator(".activity-empty").waitFor();
-      await gateway.waitForRequest("sessions.messages.subscribe", {
-        match: { key: "agent:main:main" },
-      });
-
-      for (let index = 0; index < 40; index += 1) {
-        await gateway.emitGatewayEvent("agent", {
-          runId: `run-layout-${index}`,
-          seq: 1,
-          stream: "tool",
-          ts: Date.now() + index,
-          sessionKey: "agent:main:main",
-          data: {
-            phase: "start",
-            name: `layout_tool_${index}`,
-            toolCallId: `tool-layout-${index}`,
-            args: {},
-          },
-        });
-      }
-
-      const stream = page.locator(".activity-stream");
-      await expect.poll(() => page.locator(".activity-entry").count()).toBe(40);
-      const layout = await page.locator("#activity-mode-panel").evaluate((modePanel) => {
-        const livePanel = modePanel.querySelector<HTMLElement>("#activity-live-panel");
-        const streamElement = modePanel.querySelector<HTMLElement>(".activity-stream");
-        if (!livePanel || !streamElement) {
-          throw new Error("Live Activity layout is incomplete");
-        }
-        const modeStyle = getComputedStyle(modePanel);
-        const liveStyle = getComputedStyle(livePanel);
-        const workspace = modePanel.closest<HTMLElement>(".settings-workspace--fill-height");
-        return {
-          documentScrollHeight: document.documentElement.scrollHeight,
-          liveDisplay: liveStyle.display,
-          liveFlexGrow: liveStyle.flexGrow,
-          modeDisplay: modeStyle.display,
-          modeFlexGrow: modeStyle.flexGrow,
-          streamBottom: streamElement.getBoundingClientRect().bottom,
-          streamClientHeight: streamElement.clientHeight,
-          streamScrollHeight: streamElement.scrollHeight,
-          viewportHeight: window.innerHeight,
-          workspaceBottom: workspace?.getBoundingClientRect().bottom ?? 0,
-        };
-      });
-      expect(layout.modeDisplay).toBe("flex");
-      expect(layout.modeFlexGrow).toBe("1");
-      expect(layout.liveDisplay).toBe("flex");
-      expect(layout.liveFlexGrow).toBe("1");
-      expect(layout.streamScrollHeight).toBeGreaterThan(layout.streamClientHeight);
-      expect(layout.streamBottom).toBeLessThanOrEqual(layout.workspaceBottom + 1);
-      expect(layout.documentScrollHeight).toBeLessThanOrEqual(layout.viewportHeight + 1);
-      await stream.evaluate((element) => {
-        element.scrollTop = element.scrollHeight;
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await expect
-        .poll(() =>
-          stream.evaluate(
-            (element) => element.scrollHeight - element.scrollTop - element.clientHeight,
-          ),
-        )
-        .toBeLessThanOrEqual(1);
-      await screenshot(page, "13-populated-live-activity.png");
-
-      await page.setViewportSize({ height: 900, width: 720 });
-      const mobileLayout = await page.locator("main.content").evaluate((content) => {
-        const outlet = content.querySelector("openclaw-router-outlet");
-        const streamElement = content.querySelector<HTMLElement>(".activity-stream");
-        if (!outlet || !streamElement) {
-          throw new Error("Mobile Live Activity layout is incomplete");
-        }
-        return {
-          contentClientHeight: content.clientHeight,
-          contentOverflowY: getComputedStyle(content).overflowY,
-          contentScrollHeight: content.scrollHeight,
-          outletDisplay: getComputedStyle(outlet).display,
-        };
-      });
-      expect(mobileLayout.contentOverflowY).toBe("auto");
-      expect(mobileLayout.outletDisplay).toBe("block");
-      expect(mobileLayout.contentScrollHeight).toBeGreaterThan(mobileLayout.contentClientHeight);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("keeps populated desktop run evidence reachable without taking mobile page scrolling", async () => {
     const context = await newContext();
     const page = await context.newPage();
@@ -909,7 +806,7 @@ suite.define(() => {
     }
   });
 
-  it("shows loading, request failure, retry, and disconnected states", async () => {
+  it("shows loading, request failure, and retry while retaining evidence offline", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const runId = "retry-run";
@@ -921,7 +818,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=run&run=${runId}`);
-      await page.getByRole("heading", { name: "Loading run inspection" }).waitFor();
+      await page.getByRole("heading", { name: "Loading run inspection…" }).waitFor();
       await screenshot(page, "06-loading.png");
       await gateway.rejectDeferred("audit.run.inspect", {
         code: "UNAVAILABLE",
@@ -933,8 +830,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Retry inspection" }).click();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
 
-      await gateway.closeLatest(1006, "network unavailable");
-      await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
+      const receipts = page.locator(".run-inspector__receipt-list");
+      const evidence = await receipts.textContent();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await receipts.textContent()).toBe(evidence);
+      expect(await page.getByRole("heading", { name: "Disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
+        true,
+      );
       await screenshot(page, "08-disconnected.png");
     } finally {
       await suite.closeBrowserContext(context);

@@ -1,7 +1,50 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
+
+export function createDeferredExecDispatchMock(label = "notification") {
+  return {
+    dispatchInboundMessageWithRoutedChannelDispatcher: vi.fn<
+      typeof dispatchInboundMessageWithRoutedChannelDispatcher
+    >(async ({ replyOptions }) => {
+      const lifecycle = expectDefined(replyOptions?.turnAdoptionLifecycle, `${label} lifecycle`);
+      const signal = expectDefined(lifecycle.abortSignal, `${label} cancellation`);
+      lifecycle.onDeferred?.();
+      const onAbort = async () => {
+        try {
+          await lifecycle.onAbandoned?.();
+        } finally {
+          await lifecycle.onSettled?.();
+        }
+      };
+      signal.addEventListener("abort", () => void onAbort(), { once: true });
+      if (signal.aborted) {
+        await onAbort();
+      }
+      return {
+        deferredToActiveRun: "followup",
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      };
+    }),
+  };
+}
+
+export function captureProcessUnhandledRejections() {
+  const reasons: unknown[] = [];
+  const originalProcessEmit = process.emit.bind(process);
+  const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
+    if (event === "unhandledRejection") {
+      reasons.push(args[0]);
+      return true;
+    }
+    return originalProcessEmit(event, ...args);
+  });
+  return { reasons, restore: () => processEmit.mockRestore() };
+}
 
 export type HeldSupervisorExit = {
   wait: Promise<void>;
@@ -42,10 +85,6 @@ export function takeHeldSupervisorExit(): HeldSupervisorExit | undefined {
   return heldSupervisorExit;
 }
 
-function releaseHeldSupervisorExit(): void {
-  heldSupervisorExit?.release();
-}
-
 export async function withHeldSupervisorExit<T>(
   run: (exit: Pick<HeldSupervisorExit, "waitStarted">) => Promise<T>,
   settle: () => Promise<void>,
@@ -54,7 +93,7 @@ export async function withHeldSupervisorExit<T>(
   try {
     return await run(holdNextSupervisorExit());
   } finally {
-    releaseHeldSupervisorExit();
+    heldSupervisorExit?.release();
     try {
       await settle();
     } finally {

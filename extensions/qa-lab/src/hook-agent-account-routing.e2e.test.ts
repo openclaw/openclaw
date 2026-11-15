@@ -1,8 +1,8 @@
-// QA Lab product proof exercises hook delivery through a real Gateway child and qa-channel bus.
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.js";
+import { createQaGatewayChild } from "./gateway-child.js";
 import { startQaLabServer } from "./lab-server.js";
 import { startQaProviderServer } from "./providers/server-runtime.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
@@ -12,106 +12,98 @@ const MARKER = "QA_HOOK_ACCOUNT_ROUTING_OK";
 const DEFAULT_MARKER = "QA_HOOK_DEFAULT_ACCOUNT_ROUTING_OK";
 const MODEL = "mock-openai/gpt-5.6-luna";
 
-async function postJson(url: string, body: unknown, headers: Record<string, string>) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...headers,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
-  return {
-    status: response.status,
-    json: (await response.json()) as unknown,
-  };
-}
+const cleanups: Array<() => Promise<void>> = [];
 
 async function startHookAccountFixture() {
   const repoRoot = fileURLToPath(new URL("../../../", import.meta.url));
-  const lab = await startQaLabServer({
-    repoRoot,
-    embeddedGateway: "disabled",
-  });
-  const mock = await startQaProviderServer("mock-openai", {
-    modelRefs: [MODEL],
-  });
+  const lab = await startQaLabServer({ repoRoot, embeddedGateway: "disabled" });
+  cleanups.push(() => lab.stop());
+  const mock = await startQaProviderServer("mock-openai", { modelRefs: [MODEL] });
+  if (!mock) {
+    throw new Error("mock-openai provider server did not start");
+  }
+  cleanups.push(() => mock.stop());
   const gatewayOwner = createQaGatewayChild();
-  let gateway: QaGatewayChild | undefined;
-
-  try {
-    if (!mock) {
-      throw new Error("mock-openai provider server did not start");
-    }
-    const transport = createQaChannelTransport(lab.state);
-    gateway = await gatewayOwner.start({
-      repoRoot,
-      useRepoCli: true,
-      providerBaseUrl: `${mock.baseUrl}/v1`,
-      providerMode: "mock-openai",
-      primaryModel: MODEL,
-      alternateModel: MODEL,
-      transportBaseUrl: lab.listenUrl,
-      transport,
-      controlUiEnabled: false,
-      mutateConfig: (config) => {
-        const qaChannel = config.channels?.["qa-channel"];
-        if (!qaChannel) {
-          throw new Error("qa-channel transport config missing");
-        }
-        return {
-          ...config,
-          hooks: {
-            enabled: true,
-            token: HOOK_TOKEN,
-            path: "/hooks",
-          },
-          channels: {
-            ...config.channels,
-            "qa-channel": {
-              ...qaChannel,
-              defaultAccount: "default",
-              accounts: {
-                default: { name: "Default" },
-                work: { name: "Work" },
-                disabled: { name: "Disabled", enabled: false },
-              },
-            },
-          },
-        };
-      },
-    });
-  } catch (error) {
-    await gatewayOwner.stop().catch(() => undefined);
-    await mock?.stop().catch(() => undefined);
-    await lab.stop().catch(() => undefined);
-    throw error;
-  }
-  if (!gateway || !mock) {
-    throw new Error("hook account fixture did not start");
-  }
-
+  cleanups.push(() => stopQaGatewayFixture(gatewayOwner));
+  const transport = createQaChannelTransport(lab.state);
+  const gateway = await gatewayOwner.start({
+    repoRoot,
+    useRepoCli: true,
+    initializeCurrentRuntimeState: true,
+    providerBaseUrl: `${mock.baseUrl}/v1`,
+    providerMode: "mock-openai",
+    primaryModel: MODEL,
+    alternateModel: MODEL,
+    transportBaseUrl: lab.listenUrl,
+    transport,
+    controlUiEnabled: false,
+    mutateConfig: (config) => {
+      const qaChannel = config.channels?.["qa-channel"];
+      if (!qaChannel) {
+        throw new Error("qa-channel transport config missing");
+      }
+      config.hooks = { enabled: true, token: HOOK_TOKEN, path: "/hooks" };
+      Object.assign(qaChannel, {
+        defaultAccount: "default",
+        accounts: {
+          default: { name: "Default" },
+          work: { name: "Work" },
+          disabled: { name: "Disabled", enabled: false },
+        },
+      });
+      return config;
+    },
+  });
   return {
-    gateway,
     lab,
-    stop: async () => {
-      await gatewayOwner.stop().catch(() => undefined);
-      await mock.stop().catch(() => undefined);
-      await lab.stop().catch(() => undefined);
+    outbound: () =>
+      lab.state.getSnapshot().messages.filter((message) => message.direction === "outbound"),
+    post: async (overrides: { accountId?: string; message?: string; to?: string } = {}) => {
+      const response = await fetch(`${gateway.baseUrl}/hooks/agent`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${HOOK_TOKEN}` },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({
+          message: `Reply exactly: ${MARKER}`,
+          deliver: true,
+          channel: "qa-channel",
+          to: "dm:hook-recipient",
+          ...overrides,
+        }),
+      });
+      return { status: response.status, json: (await response.json()) as unknown };
     },
   };
 }
 
 describe("hook agent account routing product proof", () => {
   let fixture: Awaited<ReturnType<typeof startHookAccountFixture>>;
+  const waitOutbound = (count: number, accountId: string, id: string, text: string) =>
+    vi.waitFor(
+      () => {
+        const outbound = fixture.outbound();
+        expect(outbound).toHaveLength(count);
+        expect(outbound.at(-1)).toMatchObject({
+          accountId,
+          conversation: { id, kind: "direct" },
+          text,
+        });
+      },
+      { interval: 50, timeout: 60_000 },
+    );
 
   beforeAll(async () => {
     fixture = await startHookAccountFixture();
   }, 180_000);
 
   afterAll(async () => {
-    await fixture?.stop();
+    const errors: unknown[] = [];
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      await cleanup().catch((error: unknown) => errors.push(error));
+    }
+    if (errors.length) {
+      throw new AggregateError(errors, "hook account routing fixture cleanup failed");
+    }
   });
 
   it(
@@ -125,23 +117,14 @@ describe("hook agent account routing product proof", () => {
         { accountId: "disabled", expectedError: 'Account "disabled"' },
         { accountId: "__proto__", expectedError: 'Invalid account ID "__proto__"' },
       ]) {
-        const response = await postJson(
-          `${fixture.gateway.baseUrl}/hooks/agent`,
-          {
-            message: `Reply exactly: ${MARKER}`,
-            deliver: true,
-            channel: "qa-channel",
-            to: "dm:hook-recipient",
-            accountId,
-          },
-          { Authorization: `Bearer ${HOOK_TOKEN}` },
-        );
+        const response = await fixture.post({ accountId });
 
         expect(response.status, JSON.stringify(response.json)).toBe(400);
-        expect(response.json).toMatchObject({ ok: false, runId: expect.any(String) });
-        expect((response.json as { error?: unknown }).error).toEqual(
-          expect.stringContaining(expectedError),
-        );
+        expect(response.json).toMatchObject({
+          ok: false,
+          runId: expect.any(String),
+          error: expect.stringContaining(expectedError),
+        });
       }
       expect(fixture.lab.state.getSnapshot().messages).toHaveLength(messageCountBefore);
     },
@@ -151,75 +134,32 @@ describe("hook agent account routing product proof", () => {
     "delivers exactly once through the selected qa-channel account",
     { timeout: 180_000 },
     async () => {
-      const outboundCountBefore = fixture.lab.state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound").length;
-      const response = await postJson(
-        `${fixture.gateway.baseUrl}/hooks/agent`,
-        {
-          message: `Reply exactly: ${MARKER}`,
-          deliver: true,
-          channel: "qa-channel",
-          to: "dm:hook-recipient",
-          accountId: "work",
-        },
-        { Authorization: `Bearer ${HOOK_TOKEN}` },
-      );
+      const outboundCountBefore = fixture.outbound().length;
+      const response = await fixture.post({ accountId: "work" });
       expect(response.status, JSON.stringify(response.json)).toBe(200);
 
-      const body = response.json as { ok?: boolean; runId?: string };
-      expect(body.ok).toBe(true);
-      expect(body.runId).toEqual(expect.any(String));
+      expect(response.json).toMatchObject({ ok: true, runId: expect.any(String) });
 
-      await vi.waitFor(
-        () => {
-          const outbound = fixture.lab.state
-            .getSnapshot()
-            .messages.filter((message) => message.direction === "outbound");
-          expect(outbound).toHaveLength(outboundCountBefore + 1);
-          expect(outbound.at(-1)).toMatchObject({
-            accountId: "work",
-            conversation: { id: "hook-recipient", kind: "direct" },
-            text: MARKER,
-          });
-        },
-        { interval: 50, timeout: 60_000 },
-      );
+      await waitOutbound(outboundCountBefore + 1, "work", "hook-recipient", MARKER);
       await sleep(500);
 
-      const outbound = fixture.lab.state
-        .getSnapshot()
-        .messages.filter((message) => message.direction === "outbound");
+      const outbound = fixture.outbound();
       expect(outbound).toHaveLength(outboundCountBefore + 1);
       expect(
         outbound.slice(outboundCountBefore).filter((message) => message.accountId === "default"),
       ).toHaveLength(0);
 
-      const defaultResponse = await postJson(
-        `${fixture.gateway.baseUrl}/hooks/agent`,
-        {
-          message: `Reply exactly: ${DEFAULT_MARKER}`,
-          deliver: true,
-          channel: "qa-channel",
-          to: "dm:hook-default-recipient",
-        },
-        { Authorization: `Bearer ${HOOK_TOKEN}` },
-      );
+      const defaultResponse = await fixture.post({
+        message: `Reply exactly: ${DEFAULT_MARKER}`,
+        to: "dm:hook-default-recipient",
+      });
       expect(defaultResponse.status, JSON.stringify(defaultResponse.json)).toBe(200);
 
-      await vi.waitFor(
-        () => {
-          const currentOutbound = fixture.lab.state
-            .getSnapshot()
-            .messages.filter((message) => message.direction === "outbound");
-          expect(currentOutbound).toHaveLength(outboundCountBefore + 2);
-          expect(currentOutbound.at(-1)).toMatchObject({
-            accountId: "default",
-            conversation: { id: "hook-default-recipient", kind: "direct" },
-            text: DEFAULT_MARKER,
-          });
-        },
-        { interval: 50, timeout: 60_000 },
+      await waitOutbound(
+        outboundCountBefore + 2,
+        "default",
+        "hook-default-recipient",
+        DEFAULT_MARKER,
       );
     },
   );

@@ -1,4 +1,4 @@
-import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import {
   requestSqliteWorkerOperationAdmission,
   takeSqliteWorkerOperationAdmissionAttachment,
@@ -10,6 +10,7 @@ import type {
   WorkerOperationContext,
   WorkerOperationHandlers,
 } from "../../state/worker-operation-registry.js";
+import { pruneChannelIngressInDatabase } from "./ingress-queue-prune.kernel.js";
 import * as kernel from "./ingress-queue.kernel.js";
 import type { ChannelIngressListInput } from "./ingress-queue.types.js";
 
@@ -76,8 +77,11 @@ export const channelIngressOperations = {
     input: ChannelIngressListInput & { readOnly: boolean },
     { open, stateOptions },
   ) => {
-    const read = ({ db }: Pick<OpenClawStateDatabase, "db">) =>
-      runSqlitePinnedReadSnapshotSync(db, () => kernel.listChannelIngressRowsInDatabase(db, input));
+    const read = ({ db }: Pick<OpenClawStateDatabase, "db">) => {
+      const select = () => kernel.listChannelIngressRowsInDatabase(db, input);
+      // Pending listings paginate past corrupt payloads; other statuses use one SELECT.
+      return input.status === "pending" ? runSqliteReadSnapshotSync(db, select) : select();
+    };
     return input.readOnly
       ? (withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(read, stateOptions()) ?? [])
       : read(open());
@@ -87,15 +91,15 @@ export const channelIngressOperations = {
     { open },
   ) => {
     const { db } = open();
-    return runSqlitePinnedReadSnapshotSync(db, () =>
-      kernel.readChannelIngressClaimSnapshotInDatabase(db, input),
-    );
+    const read = () => kernel.readChannelIngressClaimSnapshotInDatabase(db, input);
+    return input.candidateIds?.length ? runSqliteReadSnapshotSync(db, read) : read();
   },
   "channelIngress.staleClaims": (
     input: Parameters<typeof kernel.listStaleChannelIngressClaimsInDatabase>[1],
     { open },
   ) => kernel.listStaleChannelIngressClaimsInDatabase(open().db, input),
   "channelIngress.enqueue": write(kernel.enqueueChannelIngressInDatabase),
+  "channelIngress.enqueueAndClaim": write(kernel.enqueueChannelIngressInDatabase, true),
   "channelIngress.claim": write(kernel.claimChannelIngressInDatabase, true),
   "channelIngress.claimNext": write(kernel.claimNextChannelIngressInDatabase, true),
   "channelIngress.recover": write(kernel.recoverChannelIngressClaimInDatabase),
@@ -105,6 +109,6 @@ export const channelIngressOperations = {
   "channelIngress.fail": write(kernel.failChannelIngressInDatabase),
   "channelIngress.delete": write(kernel.deleteChannelIngressInDatabase),
   "channelIngress.resubmit": write(kernel.resubmitChannelIngressInDatabase),
-  "channelIngress.prune": write(kernel.pruneChannelIngressInDatabase),
+  "channelIngress.prune": write(pruneChannelIngressInDatabase),
   "channelIngress.purge": write(kernel.purgeChannelIngressInDatabase),
 } satisfies WorkerOperationHandlers;

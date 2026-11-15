@@ -14,11 +14,8 @@ type StoredNativeRoute = {
   search: string;
 };
 
-function readStoredRoute(
-  storage?: Storage,
-  nativeHost = isNativeWebChromeHost(),
-): StoredNativeRoute | null {
-  const store = nativeHost ? (storage ?? getSafeLocalStorage()) : null;
+function readStoredRoute(storage?: Storage): StoredNativeRoute | null {
+  const store = storage ?? getSafeLocalStorage();
   if (!store) {
     return null;
   }
@@ -47,15 +44,6 @@ function readStoredRoute(
   return null;
 }
 
-// One-shot action params (palette slash-command drafts) must not replay on a
-// later launch; the pathname now owns session identity.
-function restorableSearch(search: string): string {
-  const params = new URLSearchParams(search);
-  params.delete("draft");
-  const filtered = params.toString();
-  return filtered ? `?${filtered}` : "";
-}
-
 export function persistRoute(
   routeId: RouteId,
   pathname: string,
@@ -68,19 +56,20 @@ export function persistRoute(
     return;
   }
   try {
+    // One-shot action params (palette slash-command drafts) must not replay on a
+    // later launch; the pathname now owns session identity.
+    const params = new URLSearchParams(search);
+    params.delete("draft");
+    const filtered = params.toString();
     store.setItem(
       NATIVE_LAST_ROUTE_KEY,
-      JSON.stringify({ routeId, pathname, search: restorableSearch(search) }),
+      JSON.stringify({ routeId, pathname, search: filtered ? `?${filtered}` : "" }),
     );
   } catch {
     // Storage may be unavailable for this origin; navigation must still work.
   }
 }
 
-/**
- * Returns the stored route to restore, or null when the boot route is an
- * explicit deep link, matches the stored route, or no valid entry exists.
- */
 export function considerRouteRestore(
   routeId: RouteId,
   pathname: string,
@@ -91,7 +80,7 @@ export function considerRouteRestore(
   if (!nativeHost || routeId !== "chat" || !pathname.endsWith("/chat") || search !== "") {
     return null;
   }
-  const stored = readStoredRoute(storage, nativeHost);
+  const stored = readStoredRoute(storage);
   if (
     !stored ||
     (stored.routeId === routeId && stored.pathname === pathname && stored.search === search)

@@ -14,7 +14,6 @@ TRUSTED_HARNESS_DIR="$(cd "$TRUSTED_HARNESS_DIR" && pwd)"
 CANDIDATE_ROOT="$(cd "$CANDIDATE_ROOT" && pwd)"
 ROOT_DIR="$TRUSTED_HARNESS_DIR"
 source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-image.sh"
-source "$TRUSTED_HARNESS_DIR/scripts/lib/docker-e2e-package.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-codex-npm-plugin-live-e2e" OPENCLAW_CODEX_NPM_PLUGIN_E2E_IMAGE)"
 DOCKER_TARGET="${OPENCLAW_CODEX_NPM_PLUGIN_DOCKER_TARGET:-bare}"
@@ -68,14 +67,17 @@ if [[ -z "$BINDING_STORE_CONTRACT" ]]; then
     BINDING_STORE_CONTRACT="legacy-sidecar"
   fi
 fi
-if grep -q \
-  'continuesSourceReplyProgress' \
-  "$CANDIDATE_ROOT/extensions/codex/src/app-server/dynamic-tools.ts" 2>/dev/null; then
-  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"
-else
-  # Frozen candidates continue after omitted finality; current candidates require false.
-  FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
-fi
+# Frozen candidates continue after omitted finality; current candidates require false.
+# The contract moved to dynamic-tool-source-reply.ts with tool-authored source replies
+# (#164558); older candidates define it in dynamic-tools.ts.
+FOLLOWTHROUGH_PROGRESS_FINAL_MODE="legacy"
+for progress_contract_file in dynamic-tool-source-reply.ts dynamic-tools.ts; do
+  if grep -q 'continuesSourceReplyProgress' \
+    "$CANDIDATE_ROOT/extensions/codex/src/app-server/$progress_contract_file" 2>/dev/null; then
+    FOLLOWTHROUGH_PROGRESS_FINAL_MODE="explicit"
+    break
+  fi
+done
 run_log=""
 # Signal traps inherit the harness function's log redirection. Reserve the original stdout
 # so EXIT cleanup cannot print the failure tail back into the log it is reading.
@@ -101,22 +103,18 @@ trap cleanup EXIT
 
 docker_e2e_build_or_reuse "$IMAGE_NAME" codex-npm-plugin-live "$CANDIDATE_ROOT/scripts/e2e/Dockerfile" "$CANDIDATE_ROOT" "$DOCKER_TARGET"
 
-prepare_package_tgz() {
-  if [ -n "$PACKAGE_TGZ" ]; then
-    PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
-    return 0
-  fi
+if [ -n "$PACKAGE_TGZ" ]; then
+  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live "$PACKAGE_TGZ")"
+else
   if [ "$HOST_BUILD" = "0" ] && [ -z "${OPENCLAW_CURRENT_PACKAGE_TGZ:-}" ]; then
     echo "OPENCLAW_CODEX_NPM_PLUGIN_HOST_BUILD=0 requires OPENCLAW_CURRENT_PACKAGE_TGZ" >&2
     exit 1
   fi
-  local harness_root="$ROOT_DIR"
-  ROOT_DIR="$CANDIDATE_ROOT"
-  PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz codex-npm-plugin-live)"
-  ROOT_DIR="$harness_root"
-}
-
-prepare_package_tgz
+  PACKAGE_TGZ="$(
+    ROOT_DIR="$CANDIDATE_ROOT"
+    docker_e2e_prepare_package_tgz codex-npm-plugin-live
+  )"
+fi
 
 configure_codex_plugin_registry_candidate() {
   local source_path="$1"

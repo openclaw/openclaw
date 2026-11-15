@@ -1,8 +1,7 @@
-// Qa Coverage Report script supports OpenClaw repository automation.
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mts";
 
 type Options = Parameters<
-  typeof import("../extensions/qa-lab/src/cli.runtime.ts").runQaCoverageReportCommand
+  typeof import("../extensions/qa-lab/reporting-api.ts").runQaCoverageReportCommand
 >[0];
 
 function parseArgs(args: string[]): Options {
@@ -11,6 +10,7 @@ function parseArgs(args: string[]): Options {
     {},
     [
       booleanFlag("--json", "json"),
+      stringFlag("--evidence", "evidence", { rejectShortOptions: true }),
       stringListFlag("--match", "match", { rejectShortOptions: true }),
       stringFlag("--output", "output", { rejectShortOptions: true }),
       stringFlag("--repo-root", "repoRoot", { rejectShortOptions: true }),
@@ -26,6 +26,7 @@ function parseArgs(args: string[]): Options {
 
 Options:
   --json                Print machine-readable JSON
+  --evidence <path>     Report scorecard gaps from an existing qa-evidence.json
   --match <query>       Search scenario metadata and print matching suite targets
   --output <path>       Write the report to a file
   --repo-root <path>    Repository root to target
@@ -41,7 +42,7 @@ Options:
 
 try {
   const opts = parseArgs(process.argv.slice(2));
-  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/src/cli.runtime.ts");
+  const { runQaCoverageReportCommand } = await import("../extensions/qa-lab/reporting-api.ts");
   await runQaCoverageReportCommand(opts);
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

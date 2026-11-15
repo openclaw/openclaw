@@ -97,7 +97,9 @@ package SHA/version, and skipped-live reason.
 
 ## Package Acceptance Plan
 
-Use this when validating a release branch, beta, or candidate package:
+Full Release Validation owns final candidate qualification with Q=C and the
+exact publication tarballs. Use standalone Package Acceptance for diagnostics
+or postpublish confidence, not as a replacement candidate qualification:
 
 ```bash
 gh workflow run package-acceptance.yml \
@@ -111,12 +113,13 @@ gh workflow run package-acceptance.yml \
   -f telegram_mode=mock-openai
 ```
 
-Use `source=npm -f package_spec=openclaw@beta` for published beta proof. Keep
-`workflow_ref` as trusted current harness code unless the release process says
-otherwise.
+Use `source=npm -f package_spec=openclaw@beta` for published beta proof. These
+standalone diagnostic/confidence runs may use trusted current harness code;
+candidate qualification must retain the frozen candidate's harness instead.
 
 For extended-stable shared publication, require complete exact-target Full
-Release Validation from the trusted main-pinned `release-ci/*` harness. Direct
+Release Validation from the admitted candidate-owned `release-ci/*` harness at Q=C,
+with trusted P admission and publication tooling separate. Direct
 canonical-branch or `main` producers do not satisfy the protected publisher.
 Package Acceptance is a post-publish selector smoke:
 
@@ -134,11 +137,17 @@ gh workflow run package-acceptance.yml \
 Record the resolved version. Still verify every package and selector in the
 tag's `all-publishable` inventory; one smoke is not registry readback.
 
-## Plugin npm Artifact Preflight
+## Plugin npm Artifact Qualification
 
-Use the trusted `main` workflow to prepare and read back a selected plugin npm
-artifact from an exact release SHA without entering any publish approval,
-environment, secret, OIDC, npm mutation, or ClawHub mutation path:
+For a publication candidate, Full Release Validation owns plugin npm artifact
+qualification. Supply its publication selection at dispatch; the all-group
+parent invokes `plugin-npm-release.yml` in artifact-only mode against the exact
+Release SHA, requires successful tarball readback, and records the immutable
+aggregate descriptor in `publicationArtifacts.pluginNpm`. Release Prepare and
+publication must adopt that exact descriptor rather than repacking plugins.
+
+Use a standalone trusted-workflow preflight only for a focused diagnostic or a
+selected-plugin repair that is outside a regular publication candidate:
 
 ```bash
 release_sha="$(git rev-parse origin/release/2026.7.1)"
@@ -164,7 +173,13 @@ the tarball and `plugin-publication-manifest.json`.
 Record the final artifact name and digest separately. The manifest uses
 `openclaw.plugin-publication-artifact/v1` and records the target SHA, package
 manifest hashes, publication route and policy, and tarball hashes and inventory.
-This proof is validation-only; it does not authorize or stage publication.
+This standalone proof is validation-only; it does not authorize or stage
+publication and cannot replace Full Release Validation's manifest-bound
+descriptor. The artifact inventory, rather than the unpacked source tree, is
+the security and package-content boundary: source-only fixtures are irrelevant.
+Package-owned test and fixture paths outside shipped runtime and skill assets
+fail qualification; shipped runtime remains security-scanned. Bundled
+`node_modules` stays with dependency evidence rather than plugin-source policy.
 The separate `trusted_publisher_preflight=true` OIDC check requires a protected
 `release-publish/<tooling-sha12>-<epoch>` dispatch tag and runs in `npm-publish`.
 Real publication also requires that tooling tag; a direct human dispatch waits

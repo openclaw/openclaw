@@ -1,7 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  resolveOptionalIntegerOption,
+  resolvePositiveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/time-runtime";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
@@ -28,33 +31,6 @@ export type QaWebOpenPageParams = {
   repoRoot?: string;
   timeoutMs?: number;
   viewport?: { width: number; height: number };
-};
-
-type QaWebWaitParams = {
-  pageId: string;
-  selector?: string;
-  text?: string;
-  timeoutMs?: number;
-};
-
-type QaWebTypeParams = {
-  pageId: string;
-  selector: string;
-  text: string;
-  submit?: boolean;
-  timeoutMs?: number;
-};
-
-type QaWebSnapshotParams = {
-  pageId: string;
-  timeoutMs?: number;
-  maxChars?: number;
-};
-
-type QaWebEvaluateParams = {
-  pageId: string;
-  expression: string;
-  timeoutMs?: number;
 };
 
 const sessions = new Map<string, QaWebSession>();
@@ -273,7 +249,12 @@ export function createQaWebPageOpener(owner: Set<string>, signal?: AbortSignal) 
   return (params: QaWebOpenPageParams) => openPage(params, owner, signal);
 }
 
-export async function qaWebWait(params: QaWebWaitParams) {
+export async function qaWebWait(params: {
+  pageId: string;
+  selector?: string;
+  text?: string;
+  timeoutMs?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   if (params.selector) {
@@ -291,7 +272,13 @@ export async function qaWebWait(params: QaWebWaitParams) {
   throw new Error("web wait requires selector or text");
 }
 
-export async function qaWebType(params: QaWebTypeParams) {
+export async function qaWebType(params: {
+  pageId: string;
+  selector: string;
+  text: string;
+  submit?: boolean;
+  timeoutMs?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const locator = session.page.locator(params.selector).first();
@@ -303,16 +290,17 @@ export async function qaWebType(params: QaWebTypeParams) {
   return { ok: true };
 }
 
-export async function qaWebSnapshot(params: QaWebSnapshotParams) {
+export async function qaWebSnapshot(params: {
+  pageId: string;
+  timeoutMs?: number;
+  maxChars?: number;
+}) {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   const body = session.page.locator("body");
   await body.waitFor({ timeout: timeoutMs });
   const text = (await body.textContent({ timeout: timeoutMs })) ?? "";
-  const maxChars =
-    typeof params.maxChars === "number" && Number.isFinite(params.maxChars)
-      ? Math.max(1, Math.floor(params.maxChars))
-      : undefined;
+  const maxChars = resolveOptionalIntegerOption(params.maxChars, { min: 1 });
   return {
     url: session.page.url(),
     title: await session.page.title().catch(() => ""),
@@ -321,7 +309,11 @@ export async function qaWebSnapshot(params: QaWebSnapshotParams) {
   };
 }
 
-export async function qaWebEvaluate<T = unknown>(params: QaWebEvaluateParams): Promise<T> {
+export async function qaWebEvaluate<T = unknown>(params: {
+  pageId: string;
+  expression: string;
+  timeoutMs?: number;
+}): Promise<T> {
   const session = resolveSession(params.pageId);
   const timeoutMs = resolveTimeoutMs(params.timeoutMs);
   return (await withTimeout(

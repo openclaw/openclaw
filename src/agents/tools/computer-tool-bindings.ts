@@ -185,7 +185,7 @@ export async function resolveComputerBinding(params: {
       (prepared?.configured === false && params.target !== "gateway");
     const gateway =
       (usePrepared ? prepared : undefined) ??
-      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
       const close = await bindGatewayComputerCleanup({
@@ -227,8 +227,10 @@ export async function resolveComputerBinding(params: {
     }
     if (gateway.configured || params.target === "gateway") {
       throw new Error(
-        (gateway.configured ? gateway.error : undefined) ??
-          "Gateway computer is unavailable; enable its computer provider and desktop session",
+        gateway.configured
+          ? (gateway.error ??
+              "Gateway computer is unavailable; enable its computer provider and desktop session")
+          : "Gateway computer is not configured on this host. Omit target, or use target: node, to select a paired computer-capable node.",
       );
     }
   }

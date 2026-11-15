@@ -1,9 +1,71 @@
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { getActiveAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
-import { mergeAcceptedSessionSpawnsForRun } from "../../accepted-session-spawn.js";
+import {
+  mergeAcceptedSessionSpawnsForRun,
+  retireAcceptedSessionSpawnCompletionForRun,
+} from "../../accepted-session-spawn.js";
 import type { OperationalRunInstanceRef } from "../../admitted-run-context.js";
+import {
+  captureGatewayToolCallerAssertion,
+  getGatewayToolCallerIdentity,
+} from "../../tools/gateway-caller-context.js";
 import { getSubagentRunsForRequesterSession, subagentRuns } from "./subagent-registry-memory.js";
-import { settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { resumeSubagentRun, settleRequesterAfterSessionSpawns } from "./subagent-registry.js";
+import { hasSubagentRunEnded } from "./subagent-run-liveness.js";
+
+/** An inline terminal result consumes the same durable obligation as a late completion. */
+export async function acknowledgeSubagentResultForRequesterTurn(params: {
+  runId: string;
+  requesterSessionKey: string;
+  requesterAgentId: string;
+  requesterTurnRunId: string;
+}): Promise<void> {
+  const assertCurrent = captureGatewayToolCallerAssertion();
+  const instance = getGatewayToolCallerIdentity()?.operationalRunInstance;
+  const accepted = await mutateSubagentRuns(
+    [params.runId],
+    (rows) => {
+      const entry = rows.get(params.runId);
+      if (
+        !entry ||
+        entry.requesterSessionKey !== params.requesterSessionKey ||
+        entry.requesterAgentId !== params.requesterAgentId ||
+        entry.requesterTurnRunId !== params.requesterTurnRunId ||
+        entry.requesterTurnYielded ||
+        entry.killIntent ||
+        entry.killReconciliation
+      ) {
+        throw new Error("Inline child result no longer belongs to its requester turn.");
+      }
+      const next = {
+        ...entry,
+        expectsCompletionMessage: false,
+        completion: { ...entry.completion, required: false },
+        delivery: { status: "delivered" as const, announcedAt: Date.now() },
+      };
+      return {
+        value: {
+          receipt: {
+            runId: entry.taskRunId ?? entry.runId,
+            childSessionKey: entry.childSessionKey,
+          },
+          ended: hasSubagentRunEnded(entry),
+        },
+        postimages: new Map([[entry.runId, next]]),
+      };
+    },
+    { runs: subagentRuns, assertCurrent },
+  );
+  if (instance) {
+    retireAcceptedSessionSpawnCompletionForRun(instance, accepted.receipt);
+  }
+  // A run that ended under the live inline claim deferred its cleanup to this owner;
+  // later endings reach cleanup through their own lifecycle once the claim is released.
+  if (accepted.ended) {
+    resumeSubagentRun(params.runId);
+  }
+}
 
 /** Account for committed claims; only retired requesters hand their cohort back to settlement. */
 export async function reconcileRequesterTurnClaimForRun(params: {

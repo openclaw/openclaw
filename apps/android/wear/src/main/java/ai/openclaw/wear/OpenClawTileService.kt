@@ -29,10 +29,8 @@ class OpenClawTileService :
     defaultColorScheme = openClawTileColorScheme,
   ) {
   override suspend fun MaterialScope.tileResponse(requestParams: RequestBuilders.TileRequest): TileBuilders.Tile {
-    val talkAction = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Voice)
-    val openAction = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Chat)
-    val talkClickable = clickable(action = talkAction, id = "talk_openclaw")
-    val openClickable = clickable(action = openAction, id = "open_openclaw")
+    val talkClickable = clickable(action = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Voice), id = "talk_openclaw")
+    val openClickable = clickable(action = wearLaunchAction(this@OpenClawTileService, WearLaunchTarget.Chat), id = "open_openclaw")
     val layout =
       primaryLayout(
         titleSlot = { text(getString(R.string.app_name).layoutString) },

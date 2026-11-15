@@ -7,6 +7,11 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 const REQUESTER_FINAL_ATTACHMENT_KEY = Symbol.for("openclaw.subagents.requesterFinalAttachment");
 const REQUESTER_FINAL_ATTACHMENT_MAX_TTL_MS = 2 * 60 * 60 * 1_000;
 
+type RequesterFinalAttachmentOwner = {
+  requesterAgentId: string;
+  requesterSessionKey: string;
+};
+
 type RequesterFinalAttachmentBatch = {
   batchRunIds: readonly string[];
   rearmGeneration: number;
@@ -39,13 +44,12 @@ function sameRunIds(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((runId, index) => runId === right[index]);
 }
 
-function getCurrentAttachment(params: {
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  requesterSessionId?: string;
-  batchRunIds?: readonly string[];
-  rearmGeneration?: number;
-}): RequesterFinalAttachment | undefined {
+function getCurrentAttachment(
+  params: RequesterFinalAttachmentOwner &
+    Partial<RequesterFinalAttachmentBatch> & {
+      requesterSessionId?: string;
+    },
+): RequesterFinalAttachment | undefined {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
   const attachment = state.byOwner.get(key);
   if (!attachment) {
@@ -72,15 +76,15 @@ function getCurrentAttachment(params: {
   return attachment;
 }
 
-export function registerRequesterFinalAttachment(params: {
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  requesterSessionId: string;
-  requesterTurnRunId: string;
-  lifecycleGeneration: string;
-  timeoutMs: number;
-  append: (text: string) => boolean;
-}): {
+export function registerRequesterFinalAttachment(
+  params: RequesterFinalAttachmentOwner & {
+    requesterSessionId: string;
+    requesterTurnRunId: string;
+    lifecycleGeneration: string;
+    timeoutMs: number;
+    append: (text: string) => boolean;
+  },
+): {
   releaseProvisional: () => void;
   revoke: () => void;
 } {
@@ -105,13 +109,12 @@ export function registerRequesterFinalAttachment(params: {
   };
 }
 
-export function promoteRequesterFinalAttachment(params: {
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  requesterTurnRunId: string;
-  batchRunIds: readonly string[];
-  rearmGeneration: number;
-}): boolean {
+export function promoteRequesterFinalAttachment(
+  params: RequesterFinalAttachmentOwner &
+    RequesterFinalAttachmentBatch & {
+      requesterTurnRunId: string;
+    },
+): boolean {
   const attachment = getCurrentAttachment({
     requesterAgentId: params.requesterAgentId,
     requesterSessionKey: params.requesterSessionKey,
@@ -126,14 +129,13 @@ export function promoteRequesterFinalAttachment(params: {
   return true;
 }
 
-export function transferRequesterFinalAttachment(params: {
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  requesterSessionId: string;
-  batchRunIds: readonly string[];
-  rearmGeneration: number;
-  requesterTurnRunId: string;
-}): boolean {
+export function transferRequesterFinalAttachment(
+  params: RequesterFinalAttachmentOwner &
+    RequesterFinalAttachmentBatch & {
+      requesterSessionId: string;
+      requesterTurnRunId: string;
+    },
+): boolean {
   const attachment = getCurrentAttachment(params);
   if (!attachment) {
     return false;
@@ -143,13 +145,12 @@ export function transferRequesterFinalAttachment(params: {
   return true;
 }
 
-export function revokeRequesterFinalAttachment(params: {
-  requesterAgentId: string;
-  requesterSessionKey: string;
-  requesterSessionId?: string;
-  batchRunIds?: readonly string[];
-  rearmGeneration?: number;
-}): boolean {
+export function revokeRequesterFinalAttachment(
+  params: RequesterFinalAttachmentOwner &
+    Partial<RequesterFinalAttachmentBatch> & {
+      requesterSessionId?: string;
+    },
+): boolean {
   const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
   if (!getCurrentAttachment(params)) {
     return false;
@@ -158,25 +159,51 @@ export function revokeRequesterFinalAttachment(params: {
   return true;
 }
 
-export function consumeRequesterFinalAttachment(params: {
-  requesterAgentId: string;
+/** A settled yield batch either attaches its visible final or releases the attachment. */
+export function finalizeRequesterFinalAttachment(params: {
+  requesterAgentId?: string;
   requesterSessionKey: string;
-  requesterSessionId: string;
+  requesterSessionId?: string;
   batchRunIds: readonly string[];
-  rearmGeneration: number;
-  text: string;
-}): "appended" | "rejected" | "missing" {
-  const key = ownerKey(params.requesterAgentId, params.requesterSessionKey);
-  const attachment = getCurrentAttachment(params);
+  rearmGeneration?: number;
+  requesterYieldBatch?: boolean;
+  pause: boolean;
+  delivered?: boolean;
+  finalAssistantVisibleText?: string;
+}): void {
+  const { requesterAgentId, rearmGeneration } = params;
+  if (
+    params.pause ||
+    !requesterAgentId ||
+    params.requesterYieldBatch !== true ||
+    rearmGeneration === undefined
+  ) {
+    return;
+  }
+  const owner = {
+    requesterAgentId,
+    requesterSessionKey: params.requesterSessionKey,
+    batchRunIds: params.batchRunIds,
+    rearmGeneration,
+  };
+  const text = params.finalAssistantVisibleText?.trim();
+  if (!params.delivered || !params.requesterSessionId || !text) {
+    revokeRequesterFinalAttachment(owner);
+    return;
+  }
+  const attachment = getCurrentAttachment({
+    ...owner,
+    requesterSessionId: params.requesterSessionId,
+  });
   if (!attachment) {
-    return "missing";
+    return;
   }
   // Claim before invoking provider code so replay and callback failure cannot double-append.
-  state.byOwner.delete(key);
+  state.byOwner.delete(ownerKey(requesterAgentId, params.requesterSessionKey));
   try {
-    return attachment.append(params.text) ? "appended" : "rejected";
+    attachment.append(text);
   } catch {
-    return "rejected";
+    // A failed append still consumes this final attachment.
   }
 }
 

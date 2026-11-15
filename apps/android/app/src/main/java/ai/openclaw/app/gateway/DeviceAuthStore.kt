@@ -72,8 +72,7 @@ class DeviceAuthStore(
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? {
-    val key = tokenKey(gatewayId, deviceId, role)
-    val token = prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val token = prefs.getString(tokenKey(gatewayId, deviceId, role))?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     val normalizedRole = normalizeRole(role)
     val metadata =
       prefs
@@ -101,7 +100,12 @@ class DeviceAuthStore(
       if (replacesStoredToken != null && loadEntry(gatewayId, deviceId, role)?.token != replacesStoredToken.trim()) {
         return@synchronized false
       }
-      val normalizedScopes = normalizeScopes(scopes)
+      val normalizedScopes =
+        scopes
+          .map(String::trim)
+          .filter(String::isNotEmpty)
+          .distinct()
+          .sorted()
       val key = tokenKey(gatewayId, deviceId, role)
       prefs.commitSecureStrings(
         mapOf(
@@ -154,12 +158,4 @@ class DeviceAuthStore(
 
   /** Normalizes role names so node/operator token slots are stable across callers. */
   private fun normalizeRole(role: String): String = role.trim().lowercase()
-
-  /** Stores scopes in deterministic order for display and restart comparisons. */
-  private fun normalizeScopes(scopes: List<String>): List<String> =
-    scopes
-      .map { it.trim() }
-      .filter { it.isNotEmpty() }
-      .distinct()
-      .sorted()
 }

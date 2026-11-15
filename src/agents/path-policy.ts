@@ -4,9 +4,12 @@
  * Converts validated absolute or relative inputs into root-relative paths without allowing boundary escapes.
  */
 import path from "node:path";
+import { URL } from "node:url";
+import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "@openclaw/fs-safe/advanced";
+import { isWindowsDrivePath } from "@openclaw/fs-safe/archive";
 import { pathExistsSync } from "../infra/fs-safe.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
-import { resolveSandboxInputPath } from "./sandbox-paths.js";
+import { normalizeFileReferencePrefix, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
 /** Compare resolved runtime paths using the declared root's syntax, never the host OS. */
@@ -56,23 +59,19 @@ export function resolveSandboxPathMapping<
 type RelativePathOptions = {
   allowRoot?: boolean;
   cwd?: string;
-  boundaryLabel?: string;
-  includeRootInError?: boolean;
 };
 
-function toRelativePathUnderRoot(params: {
-  root: string;
-  candidate: string;
-  options?: RelativePathOptions;
-}): string {
-  const resolvedInput = resolveSandboxInputPath(
-    params.candidate,
-    params.options?.cwd ?? params.root,
-  );
+function toRelativePathUnderRoot(
+  root: string,
+  candidate: string,
+  options: RelativePathOptions = {},
+  sandbox = false,
+): string {
+  const resolvedInput = resolveSandboxInputPath(candidate, options.cwd ?? root);
 
   const windows = process.platform === "win32";
   const syntax = windows ? path.win32 : path;
-  const rootResolved = syntax.resolve(params.root);
+  const rootResolved = syntax.resolve(root);
   const resolvedCandidate = syntax.resolve(resolvedInput);
   // Strip extended-length Windows prefixes without lowercasing the relative
   // path that callers use to create files. win32.relative already ignores case.
@@ -81,7 +80,7 @@ function toRelativePathUnderRoot(params: {
     windows ? normalizeWindowsPathPreservingCase(resolvedCandidate) : resolvedCandidate,
   );
   const targetsRoot = relative === "" || relative === ".";
-  if (targetsRoot && params.options?.allowRoot) {
+  if (targetsRoot && options.allowRoot) {
     return "";
   }
   // Absolute results catch Windows drive-relative oddities after normalization.
@@ -92,52 +91,24 @@ function toRelativePathUnderRoot(params: {
     relative.startsWith("..\\") ||
     syntax.isAbsolute(relative)
   ) {
-    const boundary = params.options?.boundaryLabel ?? "workspace root";
-    const suffix = params.options?.includeRootInError ? ` (${rootResolved})` : "";
-    throw new Error(`Path escapes ${boundary}${suffix}: ${params.candidate}`);
+    const boundary = sandbox ? `sandbox root (${rootResolved})` : "workspace root";
+    throw new Error(`Path escapes ${boundary}: ${candidate}`);
   }
   return relative;
 }
 
-/**
- * Return a workspace-relative path for a candidate path after rejecting paths
- * that escape the workspace root.
- */
+/** Return a workspace-relative path after rejecting boundary escapes. */
 export function toRelativeWorkspacePath(
   root: string,
   candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
+  options?: RelativePathOptions,
 ): string {
-  return toRelativePathUnderRoot({
-    root,
-    candidate,
-    options: {
-      allowRoot: options?.allowRoot,
-      cwd: options?.cwd,
-      boundaryLabel: "workspace root",
-    },
-  });
+  return toRelativePathUnderRoot(root, candidate, options);
 }
 
-/**
- * Return a sandbox-relative path for a candidate path after rejecting paths that
- * escape the sandbox root. Errors include the sandbox root for operator clarity.
- */
-export function toRelativeSandboxPath(
-  root: string,
-  candidate: string,
-  options?: Pick<RelativePathOptions, "allowRoot" | "cwd">,
-): string {
-  return toRelativePathUnderRoot({
-    root,
-    candidate,
-    options: {
-      allowRoot: options?.allowRoot,
-      cwd: options?.cwd,
-      boundaryLabel: "sandbox root",
-      includeRootInError: true,
-    },
-  });
+/** Return a sandbox-relative path, including the sandbox root in boundary errors. */
+export function toRelativeSandboxPath(root: string, candidate: string): string {
+  return toRelativePathUnderRoot(root, candidate, undefined, true);
 }
 
 /** Resolve a user-supplied path against `cwd` using the sandbox input rules. */
@@ -206,4 +177,72 @@ export function preserveAtPrefixedRelativePath(
         ? literalPath
         : filePath,
     );
+}
+
+export function resolveContainerPathCandidate(filePath: string): string {
+  let candidate = normalizeFileReferencePrefix(filePath);
+  if (/^file:\/\//i.test(candidate)) {
+    const localFilePath = trySafeFileURLToPath(candidate);
+    if (localFilePath) {
+      candidate = localFilePath;
+    } else {
+      // Windows rejects posix-style file:///workspace/... in fileURLToPath; map via URL pathname
+      // when it clearly refers to the container workdir (same idea as sandbox-paths).
+      let parsed: URL;
+      try {
+        parsed = new URL(candidate);
+      } catch {
+        return filePath;
+      }
+      if (parsed.protocol !== "file:") {
+        return filePath;
+      }
+      const host = parsed.hostname.trim().toLowerCase();
+      if (host && host !== "localhost") {
+        return filePath;
+      }
+      if (hasEncodedFileUrlSeparator(parsed.pathname)) {
+        return filePath;
+      }
+      let normalizedPathname: string;
+      try {
+        normalizedPathname = decodeURIComponent(parsed.pathname).replace(/\\/g, "/");
+      } catch {
+        return filePath;
+      }
+      candidate = normalizedPathname;
+    }
+  }
+  return candidate;
+}
+
+export function mapContainerPathToWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const candidate = resolveContainerPathCandidate(params.filePath);
+  const mapped = params.containerWorkdir
+    ? resolveSandboxPathMapping(
+        [{ hostRoot: params.root, containerRoot: params.containerWorkdir }],
+        candidate,
+      )
+    : null;
+  return mapped?.hostPath ?? candidate;
+}
+
+export function resolveToolPathAgainstWorkspaceRoot(params: {
+  filePath: string;
+  root: string;
+  containerWorkdir?: string;
+}): string {
+  const mapped = mapContainerPathToWorkspaceRoot(params);
+  const candidate = normalizeFileReferencePrefix(mapped);
+  if (isWindowsDrivePath(candidate)) {
+    return path.win32.normalize(candidate);
+  }
+  if (path.isAbsolute(candidate)) {
+    return path.resolve(candidate);
+  }
+  return path.resolve(params.root, candidate || ".");
 }

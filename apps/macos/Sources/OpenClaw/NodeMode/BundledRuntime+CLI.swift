@@ -29,7 +29,13 @@ extension BundledRuntime {
                     try shim.write(to: command, atomically: true, encoding: .utf8)
                     try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: command.path)
                 }
-                Self.installShellPath(bin: bin, homeDirectory: homeDirectory)
+                // Shared shell files outlive this launch; only the persistently installed default profile owns PATH.
+                if allowsPersistentIntegration, !profile.isActive {
+                    Self.installShellPath(bin: bin, homeDirectory: homeDirectory)
+                } else {
+                    Self.cliLogger.notice(
+                        "Shell PATH unchanged for this profile or app location; run \(command.path, privacy: .public)")
+                }
             } else {
                 Self.cliLogger.warning("Keeping operator-managed terminal CLI at \(command.path, privacy: .public)")
             }

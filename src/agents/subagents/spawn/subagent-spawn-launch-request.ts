@@ -1,6 +1,10 @@
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { FreshChildSession } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../../utils/delivery-context.types.js";
+import type { AdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import type { BootstrapContextMode } from "../../bootstrap-files.js";
+import type { RequesterOrigin } from "../../requester-origin.js";
 import { normalizeSpawnedRunMetadata } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
 import { resolveSubagentAgentGatewayTimeoutMs } from "./subagent-spawn-gateway.js";
@@ -16,11 +20,14 @@ export function buildSubagentLaunchRequest(params: {
   toolSpawnMetadata: Parameters<typeof normalizeSpawnedRunMetadata>[0];
   spawnedWorkspaceDir?: string;
   childSessionKey: string;
+  childSession: {
+    entry?: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
+    freshChild?: FreshChildSession;
+  };
   childSessionOrigin?: DeliveryContext;
   childIdem: string;
   outputSchema?: Record<string, unknown>;
   childSystemPrompt: string;
-  thinkingOverride?: string;
   runTimeoutSeconds: number;
   lightContext: boolean;
   requesterOrigin?: DeliveryContext;
@@ -28,6 +35,8 @@ export function buildSubagentLaunchRequest(params: {
   currentChannelId?: string;
   currentMessageId?: string | number;
   launchAuthorization?: SubagentLaunchAuthorization;
+  requesterFacts?: RequesterOrigin;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
   swarmSchedulerGroupKey?: string;
   swarmMaxConcurrent: number;
 }) {
@@ -52,8 +61,8 @@ export function buildSubagentLaunchRequest(params: {
       ? {}
       : {
           channel: params.childSessionOrigin?.channel,
-          to: params.childSessionOrigin?.to ?? undefined,
-          accountId: params.childSessionOrigin?.accountId ?? undefined,
+          to: params.childSessionOrigin?.to,
+          accountId: params.childSessionOrigin?.accountId,
           threadId:
             params.childSessionOrigin?.threadId != null
               ? stringifyRouteThreadId(params.childSessionOrigin.threadId)
@@ -67,9 +76,8 @@ export function buildSubagentLaunchRequest(params: {
     swarmOutputSchema: params.outputSchema,
     cleanupBundleMcpOnRunEnd: params.spawnMode !== "session",
     extraSystemPrompt: params.childSystemPrompt,
-    thinking: params.thinkingOverride,
     timeout: params.runTimeoutSeconds,
-    // Creation owns the label; delayed launches must preserve operator renames.
+    // Creation owns label and thinking; delayed launches preserve later session edits.
     ...(bootstrapContextMode
       ? {
           bootstrapContextMode,
@@ -83,17 +91,20 @@ export function buildSubagentLaunchRequest(params: {
     ...(params.launchAuthorization ? { authorization: params.launchAuthorization } : {}),
     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(params.runTimeoutSeconds),
   };
-  const queuedLaunch =
-    collect && params.swarmSchedulerGroupKey
-      ? {
-          ...childLaunch,
-          schedulerGroupKey: params.swarmSchedulerGroupKey,
-          maxConcurrent: params.swarmMaxConcurrent,
-        }
-      : undefined;
+  const childEntry = params.childSession.entry;
   return {
     childLaunch,
-    queuedLaunch,
+    // Private admission facts stay attached to the live launch.
+    preparedLaunch:
+      childEntry?.sessionId && childEntry.lifecycleRevision
+        ? {
+            sessionKey: params.childSessionKey,
+            sessionId: childEntry.sessionId,
+            lifecycleRevision: childEntry.lifecycleRevision,
+            runId: params.childIdem,
+            freshChild: params.childSession.freshChild,
+          }
+        : undefined,
     progressOrigin: {
       channel: params.requesterOrigin?.channel,
       accountId: params.requesterOrigin?.accountId,

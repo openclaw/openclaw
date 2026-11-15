@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
+import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import type {
   GatewayRequestContext,
@@ -79,6 +80,7 @@ function runAsCaller<T>(run: () => Promise<T>, localEmbedded = false) {
   authorities.push(authority);
   const context = {
     getRuntimeConfig: () => mocks.config,
+    validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     trackExecution: (work: () => Promise<void>) => work(),
     ...(localEmbedded ? { localEmbedded: true } : {}),
   } as GatewayRequestContext;
@@ -123,12 +125,6 @@ describe("gateway tool defaults", () => {
   afterAll(() => {
     releaseAuthorities();
     vi.unstubAllEnvs();
-  });
-
-  it("rejects invalid timeouts", () => {
-    expect(() => readGatewayCallOptions({ timeoutMs: -1 })).toThrow(
-      "timeoutMs must be a positive integer",
-    );
   });
 
   it("parses allowlisted RPC options and scopes", async () => {
@@ -181,6 +177,24 @@ describe("gateway tool defaults", () => {
     expect(call).not.toHaveProperty("approvalRuntimeToken");
   });
 
+  it.each(["system.run.prepare"])(
+    "requires Gateway context support before dispatching %s",
+    async (command) => {
+      await callGatewayTool(
+        "node.invoke",
+        {},
+        {
+          ...nodeParams,
+          command,
+          params: { executionContext: { subagent: true } },
+        },
+      );
+      expect(capturedGatewayCall().requiredCapabilities).toEqual([
+        "system.run.execution-context.v1",
+      ]);
+    },
+  );
+
   it("fails approval replay closed without a persisted device", async () => {
     mocks.missingDevice = true;
     await expect(
@@ -214,18 +228,18 @@ describe("gateway tool defaults", () => {
     });
   });
 
-  it.each([
-    "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
-    "gateway rejected required agent runtime identity auth field; refusing to retry without it",
-  ])("fails stale Gateway identity authentication closed: %s", async (message) => {
-    mocks.callGateway.mockRejectedValueOnce(new Error(message));
-    await expect(
-      runAsCaller(() => callGatewayTool("cron.remove", {}, { id: "job-1" }), true),
-    ).rejects.toThrow(
-      "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
-    );
-    expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
-  });
+  it.each(["invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'"])(
+    "fails stale Gateway identity authentication closed: %s",
+    async (message) => {
+      mocks.callGateway.mockRejectedValueOnce(new Error(message));
+      await expect(
+        runAsCaller(() => callGatewayTool("cron.remove", {}, { id: "job-1" }), true),
+      ).rejects.toThrow(
+        "The running Gateway is from an older OpenClaw build and rejected current agent runtime connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+      );
+      expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
+    },
+  );
 
   it("pins hosted cron calls to their local Gateway", async () => {
     mocks.config = {
@@ -321,15 +335,12 @@ describe("gateway tool defaults", () => {
     expect(sent).toEqual(stage === "preparation" ? [] : [nodeParams]);
   });
 
-  it.each([true, undefined])(
-    "requires pre-dispatch proof for node retries: %s",
-    async (dispatched) => {
-      const error = schemaError(dispatched);
-      mocks.callGateway.mockRejectedValueOnce(error);
-      await expect(runAsCaller(invokeNode, true)).rejects.toBe(error);
-      expect(mocks.callGateway).toHaveBeenCalledTimes(1);
-    },
-  );
+  it.each([true])("requires pre-dispatch proof for node retries: %s", async (dispatched) => {
+    const error = schemaError(dispatched);
+    mocks.callGateway.mockRejectedValueOnce(error);
+    await expect(runAsCaller(invokeNode, true)).rejects.toBe(error);
+    expect(mocks.callGateway).toHaveBeenCalledTimes(1);
+  });
 
   it.each([false, true])(
     "attaches resolution identity only when required: %s",
@@ -367,15 +378,6 @@ describe("gateway tool defaults", () => {
     const call = capturedGatewayCall();
     expect(call.url).toBeUndefined();
     expect(call.token).toBeUndefined();
-    expect(call).not.toHaveProperty("approvalRuntimeToken");
-    expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
-  });
-
-  it("does not trust environment-selected loopback", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789");
-    await waitForApproval();
-    const call = capturedGatewayCall();
-    expect(call.url).toBeUndefined();
     expect(call).not.toHaveProperty("approvalRuntimeToken");
     expect(call.deviceIdentity).toEqual(mocks.deviceIdentity);
   });

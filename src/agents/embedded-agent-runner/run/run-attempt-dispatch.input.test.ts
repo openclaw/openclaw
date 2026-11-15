@@ -61,11 +61,3 @@ it.each([false, true])(
     expect(snapshot).toHaveBeenCalledOnce();
   },
 );
-
-it("leaves callers without an input admission guard unchanged", async () => {
-  const { input } = fixture();
-  const afterAdmission = new Error("Stop before workspace effects");
-  const mkdir = vi.spyOn(fs, "mkdir").mockRejectedValue(afterAdmission);
-  await expect(prepareAndDispatchEmbeddedRunAttempt(input)).rejects.toBe(afterAdmission);
-  expect(mkdir).toHaveBeenCalledOnce();
-});

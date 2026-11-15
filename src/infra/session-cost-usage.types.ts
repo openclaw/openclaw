@@ -19,10 +19,11 @@ export type UsageCostTranscriptFile = {
   inode?: number;
   eventCount?: number;
   maxSeq?: number;
+  generation?: string | null;
+  cold?: boolean;
 };
 
 export type ParsedTranscriptEntry = {
-  message: Record<string, unknown>;
   role?: "user" | "assistant";
   timestamp?: Date;
   durationMs?: number;
@@ -34,6 +35,18 @@ export type ParsedTranscriptEntry = {
   stopReason?: string;
   toolNames: string[];
   toolResultCounts: { total: number; errors: number };
+};
+
+/**
+ * Canonical latency inputs for one full transcript scan.
+ *
+ * `userTimestamps` names each billed reply's own user turn, so a displaced path
+ * measures inside itself. `activeUserTimestamp` is the continuation cursor the
+ * next append-only scan measures its first reply against.
+ */
+export type UsageRollupTiming = {
+  userTimestamps: ReadonlyMap<ParsedTranscriptEntry, number>;
+  activeUserTimestamp?: number;
 };
 
 export type CostUsageTotals = {
@@ -68,6 +81,7 @@ export type CostUsageSummary = {
     pendingFiles: number;
     staleFiles: number;
     refreshedAt?: number;
+    partial?: { reason: "aggregate-boundary"; message: string };
   };
 };
 

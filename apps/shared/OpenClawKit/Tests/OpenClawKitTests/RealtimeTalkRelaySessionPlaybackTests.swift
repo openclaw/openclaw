@@ -75,6 +75,55 @@ struct RealtimeTalkRelaySessionPlaybackTests {
         #expect(request.params?["markName"]?.stringValue == "audio-1")
     }
 
+    @Test func `speaking is reported once per reply, not per audio chunk`() async throws {
+        var speakingReports: [Bool] = []
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: StalledPCMStreamingAudioPlayer(),
+            onStatus: { _ in },
+            onIssue: { _ in },
+            onTermination: { _ in },
+            onSpeakingChanged: { speakingReports.append($0) })
+        session._test_setRelaySessionId("relay-1")
+
+        for _ in 0..<20 {
+            await session._test_handleGatewayEvent(
+                outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
+        }
+
+        #expect(speakingReports == [true])
+    }
+
+    @Test func `a whole reply delivered in one burst does not overflow playback`() async throws {
+        // xAI delivers a reply faster than realtime; 10 s arriving before playback drains is normal.
+        let player = StalledPCMStreamingAudioPlayer()
+        var terminations: [RealtimeTalkRelayTermination] = []
+        let session = RealtimeTalkRelaySession(
+            transport: RealtimeTalkRelayTransport(
+                subscribeServerEvents: { _ in AsyncStream { $0.finish() } },
+                request: { _, _, _ in Data("{\"ok\":true}".utf8) }),
+            options: .init(sessionKey: "main", provider: "xai", model: nil, voice: nil),
+            audioCapture: TestRealtimeTalkAudioCapture(),
+            pcmPlayer: player,
+            onStatus: { _ in },
+            onIssue: { _ in },
+            onTermination: { terminations.append($0) },
+            onSpeakingChanged: { _ in })
+        session._test_setRelaySessionId("relay-1")
+
+        for _ in 0..<500 {
+            await session._test_handleGatewayEvent(
+                outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
+        }
+
+        #expect(terminations.isEmpty)
+        #expect(player.stopCount == 0)
+    }
+
     @Test func `output buffer cap plus one terminates visibly and requests recovery`() async throws {
         let requests = RealtimeRelayStartupRequestLog()
         let player = StalledPCMStreamingAudioPlayer()
@@ -100,7 +149,7 @@ struct RealtimeTalkRelaySessionPlaybackTests {
             onSpeakingChanged: { _ in })
         session._test_setRelaySessionId("relay-1")
 
-        for _ in 0...32 {
+        for _ in 0...RealtimeTalkRelaySession.maxBufferedOutputChunks {
             await session._test_handleGatewayEvent(
                 outputAudioEvent(turnId: "turn-1", data: Data(repeating: 1, count: 960)))
         }

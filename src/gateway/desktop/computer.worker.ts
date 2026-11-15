@@ -3,7 +3,8 @@ import {
   requestExitAfterOneShotOutput,
   runCliWithExitFinalization,
 } from "../../cli/one-shot-exit.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import {
   ensureNodeHostPluginRegistry,
   invokeRegisteredNodeHostCommand,
@@ -30,14 +31,12 @@ async function runComputerHost(): Promise<void> {
   let startup: Promise<void> | undefined;
   let stopWatching: ReturnType<typeof watchRegisteredNodeHostCommandAvailability> | undefined;
   let stopping: Promise<void> | undefined;
-  let stopped = false;
 
   const stop = (execution?: ComputerHostExecutionClose) => {
     if (stopping) {
       return stopping;
     }
     stopping = completion.promise;
-    stopped = true;
     if (!execution) {
       for (const request of requests.values()) {
         request.abort(new Error("Computer host is stopping"));
@@ -59,15 +58,7 @@ async function runComputerHost(): Promise<void> {
           })(),
           Promise.resolve().then(() => stopWatching?.()),
         ]);
-        const failures = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : [],
-        );
-        if (failures.length === 1) {
-          throw failures[0];
-        }
-        if (failures.length > 1) {
-          throw new AggregateError(failures, "Computer host cleanup failed");
-        }
+        throwIfSettledRejected(results, "Computer host cleanup failed");
       } finally {
         input.close();
         requestExitAfterOneShotOutput();
@@ -81,7 +72,7 @@ async function runComputerHost(): Promise<void> {
   };
 
   input.on("line", (line) => {
-    if (stopped) {
+    if (stopping) {
       return;
     }
     let message;
@@ -106,7 +97,7 @@ async function runComputerHost(): Promise<void> {
       }
       const pluginIds = message.pluginIds;
       startup = (async () => {
-        const config = getRuntimeConfig();
+        const config = await captureRuntimeConfigAsyncReader()();
         const context = { config, env: process.env };
         await ensureNodeHostPluginRegistry({
           ...context,
@@ -114,7 +105,7 @@ async function runComputerHost(): Promise<void> {
           commandAllowlist: new Set(["screen.snapshot", "computer.act"]),
           logger: { info: log, warn: log, error: log, debug: log },
         });
-        if (stopped) {
+        if (stopping) {
           return;
         }
         const declaration = listRegisteredNodeHostCapsAndCommands(context);
@@ -145,7 +136,7 @@ async function runComputerHost(): Promise<void> {
       try {
         await startup;
         controller.signal.throwIfAborted();
-        if (stopped) {
+        if (stopping) {
           throw new Error("Computer host is stopping");
         }
         const payload = await invokeRegisteredNodeHostCommand(

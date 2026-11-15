@@ -1,79 +1,104 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import { readPresenceEntries } from "../app/user-profile.ts";
+import type { SessionListSnapshot } from "../lib/sessions/session-capability.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export type PersonActivityData = Readonly<
-  Pick<
-    SessionDataController,
-    | "sessionsAgentId"
-    | "sessionsResult"
-    | "sessionResultsByAgent"
-    | "childSessionRowsByParent"
-    | "loadedChildSessionKeys"
-    | "presencePayload"
-  >
+  Pick<SessionDataOwner, "sessionsResult" | "presencePayload">
 >;
 
-type PersonActivitySource = { data?: PersonActivityData; listeners: Set<() => void> };
-// Share the loaded, caller-visible roster rather than fetching another person's
-// sessions or reconstructing a second cache in each transcript mention.
-const sources = new WeakMap<ApplicationContext, PersonActivitySource>();
-function sourceFor(context: ApplicationContext): PersonActivitySource {
-  let source = sources.get(context);
-  if (!source) {
-    source = { listeners: new Set() };
-    sources.set(context, source);
-  }
-  return source;
-}
+type PersonPresenceData = Pick<PersonActivityData, "presencePayload">;
+const sources = new WeakMap<ApplicationContext, PersonPresenceData>();
 
-/** Publishes the existing roster owner's facts after its update, without copying state. */
-export class PersonActivityDataController implements ReactiveController {
-  private source: PersonActivitySource | undefined;
-  constructor(
-    private readonly host: ReactiveControllerHost & { readonly isConnected: boolean },
-    private readonly context: () => ApplicationContext | undefined,
-    private readonly data: PersonActivityData,
-  ) {}
-
-  hostUpdated() {
-    if (!this.host.isConnected) {
-      return;
+/** Late-open cards read the current owner's snapshot, not the initial hello. */
+export function registerPersonActivityData(context: ApplicationContext, data: PersonPresenceData) {
+  sources.set(context, data);
+  return () => {
+    if (sources.get(context) === data) {
+      sources.delete(context);
     }
-    const context = this.context();
-    const source = context ? sourceFor(context) : undefined;
-    if (this.source !== source) {
-      this.hostDisconnected();
-      this.source = source;
-    }
-    if (source) {
-      source.data = this.data;
-      for (const listener of source.listeners) {
-        listener();
-      }
-    }
-  }
-
-  hostDisconnected() {
-    if (this.source?.data === this.data) {
-      this.source.data = undefined;
-      for (const listener of this.source.listeners) {
-        listener();
-      }
-    }
-    this.source = undefined;
-  }
+  };
 }
 
 export function observePersonActivityData(context: ApplicationContext, changed: () => void) {
-  const source = sourceFor(context);
-  source.listeners.add(changed);
+  const sessions = context.sessions;
+  const scope = sessions.captureConnectionScope();
+  let disposed = false;
+  let ready = false;
+  let snapshot: SessionListSnapshot | undefined;
+  let result: PersonActivityData["sessionsResult"] = null;
+  const initialPresence = readPresenceEntries(context.gateway.snapshot.hello?.snapshot);
+  const source = sources.get(context);
+  let presencePayload = source
+    ? source.presencePayload
+    : initialPresence
+      ? { presence: initialPresence }
+      : undefined;
+  const current = () => !disposed && scope !== null && sessions.isConnectionScopeCurrent(scope);
+  const notify = () => {
+    if (current()) {
+      if (
+        ready &&
+        snapshot &&
+        !snapshot.loading &&
+        !snapshot.error &&
+        snapshot.readSucceeded === true
+      ) {
+        result = snapshot.result;
+      }
+      changed();
+    }
+  };
+  const stopPresence = context.gateway.subscribeEvents((event) => {
+    if (event.event === "presence" && current()) {
+      const presence = readPresenceEntries(event.payload);
+      presencePayload = presence ? { presence } : undefined;
+      notify();
+    }
+  });
+  const observation = scope
+    ? sessions.observeList(
+        {
+          source: "activity",
+          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
+          rowMode: "compact",
+          includeDerivedTitles: true,
+          includeLastMessage: true,
+        },
+        (next) => {
+          snapshot = next;
+          if (ready) {
+            notify();
+          }
+        },
+      )
+    : undefined;
+  const settled = () => {
+    ready = true;
+    notify();
+  };
+  // Do not freeze Recent sessions from a retained snapshot before this open's
+  // access-scoped refresh completes. The managed owner also handles live events.
+  // A resolved refresh may only report temporary Gateway unavailability.
+  // Admit membership from the owner's successful-read receipt, not settlement.
+  void observation?.refresh().then(settled, () => {
+    snapshot = undefined;
+    settled();
+  });
   return {
-    get data() {
-      return source.data;
+    get data(): PersonActivityData | undefined {
+      return current()
+        ? {
+            presencePayload,
+            sessionsResult: result,
+          }
+        : undefined;
     },
     dispose: () => {
-      source.listeners.delete(changed);
+      disposed = true;
+      observation?.dispose();
+      stopPresence();
     },
   };
 }

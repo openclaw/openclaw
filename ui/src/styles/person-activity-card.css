@@ -1,0 +1,221 @@
+/* Explicit details remain interactive on touch devices as well as hover pointers. */
+.person-activity-hovercard[data-open="true"] {
+  pointer-events: auto;
+}
+
+.person-activity-hovercard {
+  width: min(304px, calc(100vw - 24px));
+}
+
+.person-activity-card {
+  display: grid;
+  gap: 14px;
+  padding: 16px 16px 12px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  line-height: 1.5;
+}
+
+.person-activity-card h2,
+.person-activity-card h3,
+.person-activity-card p {
+  margin: 0;
+}
+
+.person-activity-card__header {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px 12px;
+  /* Identity reads as one unit; give it more room than the sections below. */
+  margin-bottom: 4px;
+}
+
+.person-activity-card__identity {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.person-activity-card__avatar {
+  position: relative;
+  display: flex;
+}
+
+.person-activity-card__avatar .viewer-avatar--footer {
+  width: 40px;
+  height: 40px;
+  border: 0;
+  font-size: calc(14px * var(--control-ui-text-scale));
+}
+
+/* Offline and unobserved presence carry no dot; the status line names them. */
+.person-activity-card__avatar[data-presence-activity]::after {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  box-sizing: content-box;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--popover);
+  border-radius: var(--radius-full);
+  background: var(--ok);
+  content: "";
+}
+
+.person-activity-card__avatar[data-presence-activity="idle"]::after {
+  background: var(--presence-idle);
+}
+
+.person-activity-card__avatar[data-presence-activity="unknown"]::after {
+  background: var(--muted);
+}
+
+/* Name and metadata stay one line each; full values remain in titles. */
+.person-activity-card h2,
+.person-activity-card__status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.person-activity-card h2 {
+  color: var(--text-strong);
+  font-size: calc(15px * var(--control-ui-text-scale));
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.person-activity-card__status {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+/* The face's spaces are narrow; widen them so two facts read as two. */
+.person-activity-card__separator {
+  padding-inline: 0.2em;
+  color: var(--text-tertiary);
+}
+
+.person-activity-card__clock strong {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.person-activity-card__hint {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  line-height: 1.42;
+}
+
+.person-activity-card h3 {
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  line-height: 1.92;
+}
+
+.person-activity-card__muted {
+  padding: 4.5px 0 3.5px;
+  color: var(--muted);
+  line-height: 1.42;
+}
+
+.person-activity-card__sessions {
+  display: grid;
+  gap: 3px;
+}
+
+.person-activity-card__session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 4.5px 6px;
+  margin: 0 -6px;
+  border-radius: var(--radius-sm);
+  color: var(--text-strong);
+  line-height: 1.42;
+  text-decoration: none;
+}
+
+.person-activity-card__session-name {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+.person-activity-card__session-name.hover-marquee {
+  --hover-marquee-fade-width: 18px;
+
+  white-space: nowrap;
+  color: var(--text-strong);
+  text-overflow: clip;
+}
+
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .person-activity-card__session-name > .hover-marquee__text {
+    display: inline;
+    white-space: normal;
+    transform: none;
+    transition: none;
+  }
+
+  .person-activity-card__session-name.hover-marquee {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-indent: 0;
+    transition: none;
+    mask-image: none;
+  }
+}
+
+.person-activity-card__session-age {
+  color: var(--muted);
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-variant-numeric: tabular-nums;
+  font-weight: 400;
+  /* A short line box plus this offset shares the title's first baseline; baseline
+     alignment itself grows rows whose title is a marquee. */
+  margin-top: 3px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.person-activity-card__activity {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: var(--menu-item-radius);
+  background: var(--surface-selected);
+  color: var(--text-strong);
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.person-activity-card__session:hover {
+  background: var(--surface-hover);
+}
+
+.person-activity-card__activity:hover {
+  background: var(--surface-selected-hover);
+}
+
+.person-activity-card a:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+@media (pointer: coarse) {
+  .person-activity-card a {
+    min-height: 44px;
+    align-items: center;
+  }
+}

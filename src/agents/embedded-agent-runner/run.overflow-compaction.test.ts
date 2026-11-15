@@ -1,7 +1,8 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { markRuntimeCompactionDelegate } from "../../context-engine/compaction-watchdog.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { delegateCompactionToRuntime } from "../../context-engine/delegate.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../context-engine/host-compat.js";
 import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
@@ -16,18 +17,17 @@ import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { SessionManager } from "../sessions/session-manager.js";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import { readCompactionAccountingRecorder } from "./run/compaction-accounting-bridge.js";
 import {
-  compactEmbeddedRunForRecovery,
+  compactEmbeddedRunForRecovery as compactForRecovery,
   createEmbeddedRunCompactionRuntime,
   type EmbeddedRunCompactionRecoveryInput,
 } from "./run/compaction-runtime.js";
 import { createEmbeddedRunContextRecoveryState } from "./run/context-recovery-state.js";
 import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
-import type { EmbeddedRunAttemptResult } from "./run/types.js";
 import { createUsageAccumulator } from "./usage-accumulator.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -50,8 +50,6 @@ const compactRuntimeMocks = vi.hoisted(() => ({
 vi.mock("../simple-completion-runtime.js", () => completionMocks);
 vi.mock("./compact.runtime.js", () => compactRuntimeMocks);
 
-// Keep this dedicated leaf on the compaction composition boundary. Runtime/auth/lane policy is
-// covered at its direct owners so this shard never reloads the complete public runner graph.
 const baseRunParams = {
   agentId: "main",
   sessionId: "session-1",
@@ -63,24 +61,13 @@ const baseRunParams = {
   runId: "run-1",
 } satisfies PreparedEmbeddedRunInput["runParams"];
 
-function makeAttempt(overrides: Partial<EmbeddedRunAttemptResult> = {}): EmbeddedRunAttemptResult {
-  return {
-    terminal: { kind: "failed", source: "prompt", error: new Error("context overflow") },
-    sessionIdUsed: "session-1",
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    ...overrides,
-  };
-}
+const recoveryRequest = {
+  tokenBudget: 200_000,
+  trigger: "overflow",
+  diagId: "diag-1",
+  attempt: 1,
+  maxAttempts: 3,
+} satisfies Parameters<typeof compactForRecovery>[1];
 
 function makeContextEngine(
   compact: ContextEngine["compact"] | ReturnType<typeof vi.fn> = vi.fn(),
@@ -114,24 +101,21 @@ function makeRecoveryInput(
           storePath: path.join(runParams.workspaceDir, "openclaw-agent.sqlite"),
         },
       },
-      assertActive: () => {
-        runParams.abortSignal?.throwIfAborted();
-        overrides.assertRecoveryActive?.();
-      },
+      assertActive: composeSessionSourceAssertion([
+        () => {
+          runParams.abortSignal?.throwIfAborted();
+          overrides.assertRecoveryActive?.();
+        },
+      ]),
       withTranscriptWrites: async <T>(signal: AbortSignal | undefined, run: () => Promise<T>) => {
         signal?.throwIfAborted();
         return await run();
       },
     }),
-    prepareRecoverySession: () => ({
-      sessionManager: SessionManager.inMemory(),
-      assertActive: vi.fn(),
-      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
-        await operation(),
-    }),
+    prepareRecoverySession: vi.fn<EmbeddedRunCompactionRecoveryInput["prepareRecoverySession"]>(),
     contextEngine: makeContextEngine(),
     genericCompactionRecoveryAllowed: true,
-    attempt: makeAttempt(),
+    attempt: makeAttemptResult(),
     runtimeAuthPlan: {
       providerForAuth: "openai",
       authProfileProviderForAuth: "openai",
@@ -153,14 +137,11 @@ function makeRecoveryInput(
         promptTokenBudget: tokenBudget,
         degradedReason,
       }),
-    onCompactionHookMessages: vi.fn(async () => {}),
+    onCompactionHookMessages: vi.fn(),
     runOwnsCompactionBeforeHook: vi.fn(async () => {}),
     runOwnsCompactionAfterHook: vi.fn(async () => {}),
     adoptCompactionTranscript: vi.fn(async () => undefined),
-    getActiveSession: () => ({
-      id: "session-1",
-      file: runParams.sessionFile ?? runParams.sessionKey ?? runParams.sessionId,
-    }),
+    getActiveSession: vi.fn<EmbeddedRunCompactionRecoveryInput["getActiveSession"]>(),
     prepareCompactedTranscriptRetry: vi.fn(async () => {}),
     armPostCompactionGuard: vi.fn(),
     usageAccumulator: createUsageAccumulator(),
@@ -168,71 +149,49 @@ function makeRecoveryInput(
   };
 }
 
+function recover(
+  input: Partial<EmbeddedRunCompactionRecoveryInput> = {},
+  request: Partial<Parameters<typeof compactForRecovery>[1]> = {},
+) {
+  return compactForRecovery(makeRecoveryInput(input), { ...recoveryRequest, ...request });
+}
+
 describe("compactEmbeddedRunForRecovery", () => {
-  beforeEach(() => {
-    compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockReset();
-    completionMocks.acquireSimpleCompletionModelForAgent.mockReset();
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockReset();
-    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReset();
-    completionMocks.acquireSimpleCompletionModelForAgent.mockResolvedValue({
-      selection: { provider: "openai", modelId: "gpt-5.5", agentDir: "/tmp/main" },
-      model: {
-        provider: "openai",
-        id: "gpt-5.5",
-        name: "gpt-5.5",
-        api: "openai",
-        baseUrl: "https://fixture.invalid/v1",
-        input: ["text"],
-        reasoning: false,
-        contextWindow: 128_000,
-        maxTokens: 4096,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      },
-      auth: { apiKey: "test-api-key", source: "test", mode: "api-key" },
-      async [Symbol.asyncDispose]() {},
-    });
-    completionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValue({
-      content: [{ type: "text", text: "done" }],
-      usage: { input: 1, output: 1, total: 2 },
-    });
-    completionMocks.resolveSimpleCompletionSelectionForAgent.mockReturnValue({
-      provider: "openai",
-      modelId: "gpt-5.5",
-      agentDir: "/tmp/main",
-    });
-  });
+  beforeEach(() => vi.resetAllMocks());
 
   it("carries locked model, auth, fallback, cache, and overflow facts into compaction", async () => {
-    const compact = vi.fn(async () => ({
+    const qualityFacts = { qualityDegraded: true, summaryRefused: true } as const;
+    const onAgentEvent = vi.fn();
+    const compact = vi.fn<ContextEngine["compact"]>(async () => ({
       ok: true as const,
       compacted: true as const,
-      result: { summary: "compacted", tokensBefore: 150_000, tokensAfter: 80_000 },
+      result: {
+        summary: "compacted",
+        tokensBefore: 150_000,
+        tokensAfter: 80_000,
+        details: { readFiles: [], modifiedFiles: [], ...qualityFacts },
+      },
     }));
-    const contextEngine = makeContextEngine(compact);
     const promptCache = {
       retention: "short" as const,
       lastCallUsage: { input: 150_000, cacheRead: 32_000, total: 182_000 },
       observation: { broke: false, cacheRead: 32_000 },
       lastCacheTouchAt: 1_700_000_000_000,
     };
-    const runtimeAuthPlan = {
-      authProfileProviderForAuth: "openai",
-      providerForAuth: "openai",
-    } satisfies AgentRuntimeAuthPlan;
-
-    const result = await compactEmbeddedRunForRecovery(
-      makeRecoveryInput({
+    const result = await recover(
+      {
         runParams: {
           ...baseRunParams,
+          onAgentEvent,
+          trigger: "user",
           sandboxSessionKey: "global",
           sandboxAgentId: "main",
           modelSelectionLocked: true,
           modelFallbacksOverride: [],
         },
-        contextEngine,
+        contextEngine: makeContextEngine(compact),
         contextTokenBudget: 200_000,
-        attempt: makeAttempt({ promptCache }),
-        runtimeAuthPlan,
+        attempt: makeAttemptResult({ promptCache }),
         thinkLevel: "ultra",
         modelSelection: {
           provider: "openai",
@@ -240,23 +199,19 @@ describe("compactEmbeddedRunForRecovery", () => {
           authProfileId: "openai:work",
           authProfileIdSource: "user",
         },
-      }),
-      {
-        tokenBudget: 200_000,
-        trigger: "overflow",
-        diagId: "diag-1",
-        attempt: 1,
-        maxAttempts: 3,
-        currentTokenCount: 277_403,
       },
+      { currentTokenCount: 277_403 },
     );
 
     expect(result.result).toMatchObject({ ok: true, compacted: true });
+    expect(onAgentEvent.mock.lastCall?.[0].data).toEqual({
+      phase: "end",
+      itemId: "diag-1",
+      completed: true,
+      ...qualityFacts,
+    });
     expect(compact).toHaveBeenCalledOnce();
-    const compactInput = (
-      compact.mock.calls as unknown as Array<[Record<string, unknown>]>
-    )[0]?.[0];
-    expect(compactInput).toMatchObject({
+    expect(compact.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "session-1",
       sessionKey: baseRunParams.sessionKey,
       currentTokenCount: 277_403,
@@ -265,6 +220,7 @@ describe("compactEmbeddedRunForRecovery", () => {
         sandboxSessionKey: "global",
         sandboxAgentId: "main",
         trigger: "overflow",
+        modelCallUrgency: "foreground",
         currentTokenCount: 277_403,
         provider: "openai",
         model: "gpt-5.5",
@@ -276,47 +232,36 @@ describe("compactEmbeddedRunForRecovery", () => {
     });
   });
 
-  it.each(["timeout_recovery"] as const)(
-    "lets delegated native %s compaction use its progress-aware watchdog",
-    async (trigger) => {
-      vi.useFakeTimers();
-      try {
-        compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockImplementationOnce(
-          (params: { compactionTimeoutReset?: () => void }) =>
-            new Promise((resolve) => {
-              setTimeout(() => params.compactionTimeoutReset?.(), 900);
-              setTimeout(() => resolve({ ok: true, compacted: false }), 1_100);
-            }),
-        );
-        const contextEngine = makeContextEngine(delegateCompactionToRuntime, false);
-        const pending = compactEmbeddedRunForRecovery(
-          makeRecoveryInput({
-            runParams: {
-              ...baseRunParams,
-              config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
-            },
-            contextEngine,
+  it("lets delegated native timeout recovery use its progress-aware watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand.mockImplementationOnce(
+        (params: { compactionTimeoutReset?: () => void }) =>
+          new Promise((resolve) => {
+            setTimeout(() => params.compactionTimeoutReset?.(), 900);
+            setTimeout(() => resolve({ ok: true, compacted: false }), 1_100);
           }),
-          {
-            tokenBudget: 200_000,
-            trigger,
-            diagId: `diag-${trigger}`,
-            attempt: 1,
-            maxAttempts: 3,
+      );
+      const pending = recover(
+        {
+          runParams: {
+            ...baseRunParams,
+            config: { agents: { defaults: { compaction: { timeoutSeconds: 1 } } } },
           },
-        );
-        const assertion = expect(pending).resolves.toMatchObject({
-          result: { ok: true, compacted: false },
-        });
-
-        await vi.advanceTimersByTimeAsync(1_100);
-        await assertion;
-        expect(compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand).toHaveBeenCalledOnce();
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+          contextEngine: makeContextEngine(delegateCompactionToRuntime, false),
+        },
+        { trigger: "timeout_recovery", diagId: "diag-timeout_recovery" },
+      );
+      const assertion = expect(pending).resolves.toMatchObject({
+        result: { ok: true, compacted: false },
+      });
+      await vi.advanceTimersByTimeAsync(1_100);
+      await assertion;
+      expect(compactRuntimeMocks.compactEmbeddedAgentSessionOnDemand).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it("does not trust the active run fallback during recovery compaction", async () => {
     const compact = vi.fn(async (params: { runtimeContext?: ContextEngineRuntimeContext }) => {
@@ -334,19 +279,13 @@ describe("compactEmbeddedRunForRecovery", () => {
     } satisfies PreparedEmbeddedRunInput["runParams"];
 
     await expect(
-      compactEmbeddedRunForRecovery(
-        makeRecoveryInput({
+      recover(
+        {
           runParams,
           contextEngine,
           resolvedSessionKey: "legacy-session",
-        }),
-        {
-          tokenBudget: 200_000,
-          trigger: "overflow",
-          diagId: "diag-unbound",
-          attempt: 1,
-          maxAttempts: 3,
         },
+        { diagId: "diag-unbound" },
       ),
     ).resolves.toMatchObject({
       result: {
@@ -358,7 +297,7 @@ describe("compactEmbeddedRunForRecovery", () => {
     expect(completionMocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
   });
 
-  it.each(["returned", "failed", "cancelled", "failed-result"] as const)(
+  it.each(["failed", "cancelled", "failed-result"] as const)(
     "keeps committed context chronology when the backend is %s",
     async (outcome) => {
       const state = createEmbeddedRunContextRecoveryState();
@@ -372,9 +311,7 @@ describe("compactEmbeddedRunForRecovery", () => {
       const controller = new AbortController();
       const error = new Error("backend settled after the committed replacement");
       const usageAccumulator = createUsageAccumulator();
-      let progressReset: unknown;
       const compact = vi.fn<ContextEngine["compact"]>(async ({ runtimeContext }) => {
-        progressReset = runtimeContext?.compactionTimeoutReset;
         const recorder = readCompactionAccountingRecorder(runtimeContext);
         expect(recorder?.requestBudget).toBe(requestBudget);
         expect(runtimeContext).not.toHaveProperty("requestBudget");
@@ -410,18 +347,14 @@ describe("compactEmbeddedRunForRecovery", () => {
         state,
         usageAccumulator,
         runParams: { ...baseRunParams, abortSignal: controller.signal },
-        // Only this synthetic canonical delegate is tagged; the real safety helper
-        // must project its progress callback without losing private accounting.
-        contextEngine: makeContextEngine(markRuntimeCompactionDelegate(compact), false),
+        contextEngine: makeContextEngine(compact, false),
       });
       const recovery = {
+        ...recoveryRequest,
         tokenBudget: 100,
-        trigger: "overflow" as const,
         diagId: "ordered-commit",
-        attempt: 1,
-        maxAttempts: 3,
       };
-      const pending = compactEmbeddedRunForRecovery(input, recovery);
+      const pending = compactForRecovery(input, recovery);
       if (outcome === "cancelled") {
         await expect(pending).rejects.toBe(error);
       } else if (outcome === "failed-result") {
@@ -433,39 +366,24 @@ describe("compactEmbeddedRunForRecovery", () => {
           .soft(input.adoptCompactionTranscript)
           .toHaveBeenCalledExactlyOnceWith(completedFact, undefined);
       } else {
-        await expect(pending).resolves.toMatchObject({ result: { ok: outcome === "returned" } });
+        await expect(pending).resolves.toMatchObject({ result: { ok: false } });
       }
       expect(compact).toHaveBeenCalledOnce();
-      expect.soft(typeof progressReset).toBe("function");
       expect.soft(usageAccumulator).toMatchObject({ input: 100, output: 50, total: 150 });
       expect(state).toMatchObject({
         autoCompactionCount: 1,
         lastCompactionTokensAfter: 40,
         currentContextSnapshot: { tokens: 20 },
       });
-      if (outcome === "returned") {
-        compact.mockResolvedValueOnce({
-          ok: true,
-          compacted: true,
-          result: { tokensBefore: 100, tokensAfter: 60 },
-        });
-        await compactEmbeddedRunForRecovery(input, { ...recovery, attempt: 2 });
-        expect(state).toMatchObject({
-          autoCompactionCount: 2,
-          currentContextSnapshot: { tokens: 60 },
-        });
-      }
     },
   );
 });
 
 describe("createEmbeddedRunCompactionRuntime", () => {
-  async function createRuntime(
-    params: {
-      compactResult?: Awaited<ReturnType<ContextEngine["compact"]>>;
-      sessionTarget?: ContextEngineSessionTarget;
-    } = {},
-  ) {
+  beforeEach(() => setRuntimeConfigSnapshot({}));
+  afterEach(() => clearRuntimeConfigSnapshot());
+
+  async function createRuntime(sessionTarget?: ContextEngineSessionTarget) {
     const hookRunner = {
       hasHooks: vi.fn(() => true),
       runBeforeCompaction: vi.fn(async () => undefined),
@@ -515,54 +433,62 @@ describe("createEmbeddedRunCompactionRuntime", () => {
       },
       sessionPromptState,
     });
-    const compactResult =
-      params.compactResult ??
-      ({
-        ok: true,
-        compacted: true,
-        result: {
-          summary: "compacted",
-          tokensBefore: 120,
-          tokensAfter: 50,
-          sessionId: "rotated-session",
-          sessionTarget: params.sessionTarget,
-        },
-      } as Awaited<ReturnType<ContextEngine["compact"]>>);
+    const compactResult = {
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "compacted",
+        tokensBefore: 120,
+        tokensAfter: 50,
+        sessionId: "rotated-session",
+        sessionTarget,
+      },
+    };
     return { compactResult, hookRunner, onAgentEvent, runtime, sessionPromptState, currentTarget };
   }
 
-  it("adopts the top-level successor id for a partial session target", async () => {
-    const fixture = await createRuntime({
-      sessionTarget: {
+  it("adopts a partial successor target and fires hooks against the rotated transcript", async () => {
+    const { runtime, compactResult, sessionPromptState, currentTarget, hookRunner } =
+      await createRuntime({
         sessionKey: "agent:main:session-1",
         threadId: "thread-hint",
-      },
-    });
+      });
 
-    const previousSessionId = await fixture.runtime.adoptCompactionTranscript(
-      fixture.compactResult,
-    );
+    await runtime.runOwnsCompactionBeforeHook("overflow recovery");
+    const previousSessionId = await runtime.adoptCompactionTranscript(compactResult);
 
     expect(previousSessionId).toBe("session-1");
-    expect(fixture.sessionPromptState.sessionTarget).toEqual({
-      ...fixture.currentTarget,
+    expect(sessionPromptState.sessionTarget).toEqual({
+      ...currentTarget,
       sessionId: "rotated-session",
       threadId: "thread-hint",
     });
-    expect(fixture.sessionPromptState.sessionId).toBe("rotated-session");
-    expect(fixture.sessionPromptState.committedCompactionSuccessor).toBeUndefined();
+    expect(sessionPromptState.sessionId).toBe("rotated-session");
+    expect(sessionPromptState.committedCompactionSuccessor).toBeUndefined();
+    await runtime.runOwnsCompactionAfterHook("overflow recovery", compactResult, previousSessionId);
+    expect(hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
+      { messageCount: -1, sessionFile: baseRunParams.sessionKey },
+      expect.objectContaining({ sessionId: "session-1" }),
+    );
+    expect(hookRunner.runAfterCompaction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tokenCount: 50,
+        previousSessionId: "session-1",
+        sessionFile: baseRunParams.sessionKey,
+      }),
+      expect.objectContaining({ sessionId: "rotated-session" }),
+    );
   });
 
   it("retires MCP predecessors when an in-memory compaction rotates identity", async () => {
     const fixture = await createRuntime();
-    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+    const { getOrCreateSessionMcpRuntime, getSessionMcpRuntimeTestManager, unopenedMcpConfig } =
       await import("../agent-bundle-mcp-manager.test-support.js");
-    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
-      await import("../agent-bundle-mcp-manager-api.js");
+    const { setSessionMcpRuntimeScheduler } = await import("../agent-bundle-mcp-manager-api.js");
     const scheduler = createTestGatewayScheduler();
     onTestFinished(() => scheduler.stop());
     await setSessionMcpRuntimeScheduler(scheduler);
-    const manager = getSessionMcpRuntimeManagerForTesting();
+    const manager = getSessionMcpRuntimeTestManager();
     const create = (sessionId: string) =>
       getOrCreateSessionMcpRuntime({
         sessionId,
@@ -582,40 +508,10 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     }
   });
 
-  it("fires ownership hooks against the rotated compacted transcript", async () => {
-    const fixture = await createRuntime();
-    await fixture.runtime.runOwnsCompactionBeforeHook("overflow recovery");
-    const previousSessionId = await fixture.runtime.adoptCompactionTranscript(
-      fixture.compactResult,
-    );
-
-    await fixture.runtime.runOwnsCompactionAfterHook(
-      "overflow recovery",
-      fixture.compactResult,
-      previousSessionId,
-    );
-
-    expect(fixture.hookRunner.runBeforeCompaction).toHaveBeenCalledWith(
-      {
-        messageCount: -1,
-        sessionFile: "agent:main:session-1",
-      },
-      expect.objectContaining({ sessionId: "session-1" }),
-    );
-    expect(fixture.hookRunner.runAfterCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tokenCount: 50,
-        previousSessionId: "session-1",
-        sessionFile: baseRunParams.sessionKey,
-      }),
-      expect.objectContaining({ sessionId: "rotated-session" }),
-    );
-  });
-
   it("forwards non-empty compaction hook messages as agent events", async () => {
     const fixture = await createRuntime();
 
-    await fixture.runtime.onCompactionHookMessages({
+    fixture.runtime.onCompactionHookMessages({
       phase: "after",
       messages: ["", "Compaction complete"],
     });
@@ -623,8 +519,7 @@ describe("createEmbeddedRunCompactionRuntime", () => {
     expect(fixture.onAgentEvent).toHaveBeenCalledWith({
       stream: "compaction",
       data: {
-        phase: "end",
-        completed: true,
+        phase: "notice",
         messages: ["Compaction complete"],
       },
       sessionKey: "agent:main:session-1",

@@ -1,3 +1,4 @@
+import "../../test-utils/prepare-compiled-subprocesses.js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import {
@@ -52,7 +53,10 @@ const command = {
   environment: {},
 };
 
-vi.mock("../../runtime.js", () => ({ defaultRuntime: lifecycleTestRuntime }));
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
+  defaultRuntime: lifecycleTestRuntime,
+}));
 vi.mock("../../daemon/service.js", async (original) => ({
   ...(await original<typeof import("../../daemon/service.js")>()),
   resolveGatewayService: () => service,
@@ -78,8 +82,10 @@ vi.mock("../../infra/gateway-lock.js", () => ({
   isSameGatewayLockIdentity: (a: { ownerId?: string }, b: { ownerId?: string }) =>
     a.ownerId === b.ownerId,
 }));
+// mock-isolation: The fixture owns process identities and signals without native process discovery.
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync: () => [owner.pid],
+  findVerifiedGatewayListenerPidsOnPort: async () => [owner.pid],
   signalVerifiedGatewayPidSync: mocks.signalPid,
   formatGatewayPidList: (pids: number[]) => pids.join(", "),
 }));

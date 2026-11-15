@@ -5,7 +5,11 @@ import {
 } from "./github-link-eligibility.ts";
 
 type GitHubItemTarget = { kind: "issue" | "pull"; owner: string; repo: string; number: number };
-export type GitHubLinkTarget = GitHubItemTarget & { href: string };
+export function formatGitHubItemReference(
+  item: Pick<GitHubItemTarget, "owner" | "repo" | "number">,
+): string {
+  return `${item.owner}/${item.repo}#${item.number}`;
+}
 
 export function decodeGitHubPathSegment(value: string): string | null {
   try {
@@ -25,7 +29,7 @@ export function parseGitHubItemPath(url: URL): GitHubItemTarget | null {
   return match ? itemTarget(match) : null;
 }
 
-export function parseGitHubLinkTarget(href: string): GitHubLinkTarget | null {
+export function parseGitHubLinkTarget(href: string): (GitHubItemTarget & { href: string }) | null {
   // Anchors resolve relative links; the stream scanner supplies absolute URLs.
   const url = URL.parse(href);
   const match = url ? matchGitHubItemUrl(url) : null;

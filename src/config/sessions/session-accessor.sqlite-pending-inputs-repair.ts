@@ -12,11 +12,9 @@ import {
   SESSION_PENDING_INPUTS_TABLE,
 } from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import {
-  isFinalInputCompletion,
-  readSessionPendingInputByKey,
-} from "./session-accessor.sqlite-pending-inputs.js";
+import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { isFinalInputCompletion } from "./session-pending-input-value.js";
 
 type PendingInputDatabase = Pick<OpenClawAgentDatabase, "db" | "path">;
 

@@ -1,15 +1,23 @@
 import { EventEmitter, once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
-import {
-  GATEWAY_SERVER_CAPS,
-  type HelloOk,
-} from "../../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
+import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import * as systemPresence from "../../../infra/system-presence.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveGatewayAuth } from "../../auth-resolve.js";
+import type { HealthSummary } from "../../health/types.js";
+import { setOpenClawIdClawOriginResolver } from "../../openclaw-id/claw-origin.js";
 import { startGatewayTailscaleExposure } from "../../server-tailscale.js";
 import { prepareTailscalePublishedOrigin } from "../../tailscale-published-origin.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
+import { getHealthCache } from "../health-state.js";
+import { disconnectDisallowedGatewayPolicyClients } from "../ws-origin-policy.js";
 import type { GatewayWsClient } from "../ws-types.js";
 
 // Hello update-scope tests cover authenticated role/scope and recovery ownership projection.
@@ -17,10 +25,12 @@ import type { GatewayWsClient } from "../ws-types.js";
 const {
   buildGatewaySnapshotMock,
   emitGatewayAuthSecurityEventMock,
+  getSessionRowProjectionMock,
   listControlUiPluginTabsMock,
   listControlUiPluginWidgetKindsMock,
 } = vi.hoisted(() => ({
   emitGatewayAuthSecurityEventMock: vi.fn(),
+  getSessionRowProjectionMock: vi.fn(),
   listControlUiPluginTabsMock: vi.fn((_scopes: readonly string[]) => []),
   listControlUiPluginWidgetKindsMock: vi.fn((_scopes: readonly string[]) => []),
   buildGatewaySnapshotMock: vi.fn((opts?: { includeUpdateDetails?: boolean }) => {
@@ -69,8 +79,14 @@ vi.mock("../health-state.js", () => ({
   getHealthVersion: vi.fn(() => 1),
 }));
 
-vi.mock("../../../state/user-profiles.js", () => ({
-  hasMultipleSessionSharingIdentities: vi.fn(() => false),
+vi.mock("../../session-row-projection-access.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../session-row-projection-access.js")>()),
+  getSessionRowProjection: getSessionRowProjectionMock,
+}));
+
+vi.mock("../../../state/user-profile-list.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../state/user-profile-list.js")>()),
+  hasMultipleResidentSessionSharingIdentities: vi.fn(() => false),
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
@@ -86,6 +102,8 @@ vi.mock("./connect-auth-security.js", () => ({
 vi.mock("../../../version.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../version.js")>()),
   resolveRuntimeServiceBuildId: () => "build-a",
+  resolveRuntimeServiceCommit: () => "abcdef0",
+  resolveRuntimeServiceBuiltAt: () => "2026-10-21T11:55:00.000Z",
 }));
 
 const tailscaleClaim = vi.hoisted(() => vi.fn());
@@ -102,12 +120,21 @@ function makeContext(
   scopes: string[],
   client?: Pick<GatewayWsClient, "internal" | "preparedSessionProfile">,
 ) {
+  const connectParams: ConnectParams = {
+    minProtocol: PROTOCOL_VERSION,
+    maxProtocol: PROTOCOL_VERSION,
+    client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
+    role,
+    scopes,
+  };
+  const gatewayClient = client ? { connect: connectParams, ...client } : null;
   return {
     handler: {
       socket: new EventEmitter(),
       isClosed: vi.fn(() => false),
-      getClient: () => client ?? null,
+      getClient: () => gatewayClient,
       connId: `conn-${role}`,
+      ingressAttribution: { kind: "direct-local" } as { kind: string },
       bootId: "gateway-boot-a",
       gatewayMethods: [],
       events: [],
@@ -120,11 +147,7 @@ function makeContext(
       logHealth: { error: vi.fn() },
     },
     frame: { id: `hello-${role}` },
-    connectParams: {
-      client: { id: "gateway-client", version: "dev", platform: "test", mode: "backend" },
-      role,
-      scopes,
-    },
+    connectParams,
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
     onHelloDelivered: vi.fn(),
@@ -150,6 +173,37 @@ function makeState(role: "operator" | "node", scopes: string[]) {
   };
 }
 
+describe("sendGatewayHello running Gateway exposure", () => {
+  const gatewayExposure = { bindHost: "0.0.0.0", tailscaleMode: "off" } as const;
+
+  it("advertises what the process runs with to admins, not what config says", async () => {
+    const context = makeContext("operator", ["operator.admin"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      { ...makeState("operator", ["operator.admin"]), resolvedAuth: { mode: "password" } } as never,
+      {},
+    );
+    expect(helloSnapshot(context)).toMatchObject({
+      authMode: "password",
+      bindHost: "0.0.0.0",
+      tailscaleMode: "off",
+    });
+  });
+
+  it("keeps it from clients without admin scope", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    await sendGatewayHello(
+      { ...context, handler: { ...context.handler, gatewayExposure } } as never,
+      makeState("operator", ["operator.read"]) as never,
+      {},
+    );
+    const snapshot = helloSnapshot(context);
+    expect(snapshot?.authMode).toBeUndefined();
+    expect(snapshot?.bindHost).toBeUndefined();
+    expect(snapshot?.tailscaleMode).toBeUndefined();
+  });
+});
+
 function helloPayload(context: ReturnType<typeof makeContext>) {
   const response = context.sendFrame.mock.calls.at(0)?.at(0) as { payload?: HelloOk } | undefined;
   return response?.payload;
@@ -172,13 +226,303 @@ function expectRedactedHelloSnapshot(context: ReturnType<typeof makeContext>) {
   expect(helloSnapshot(context)?.updateSchedule).toBeUndefined();
 }
 
+function startManagedServe() {
+  return startGatewayTailscaleExposure({
+    tailscaleMode: "serve",
+    port: 18789,
+    backend: { host: "127.0.0.1", port: 19000 },
+    logTailscale: { info: vi.fn(), warn: vi.fn() },
+  });
+}
+
+type HelloSocketConnection = {
+  client: WebSocket;
+  hello: HelloOk;
+  close: ReturnType<typeof vi.fn>;
+};
+
+/** Delivers real operator hellos over loopback sockets whose close the hello may bind. */
+async function withHelloSocketServer(
+  run: (connect: () => Promise<HelloSocketConnection>) => Promise<void>,
+) {
+  const gatewayMethods = ["health", "config.get"];
+  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  await once(server, "listening");
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("missing WebSocket listener");
+  }
+  const clients: WebSocket[] = [];
+  const connect = async (): Promise<HelloSocketConnection> => {
+    const accepted = once(server, "connection");
+    const client = new WebSocket(`ws://127.0.0.1:${address.port}`);
+    clients.push(client);
+    await once(client, "open");
+    const [socket] = (await accepted) as [WebSocket];
+    const context = makeContext("operator", ["operator.read"]);
+    const state = {
+      ...makeState("operator", ["operator.read"]),
+      resolvedAuth: { mode: "token", allowTailscale: true },
+    };
+    const response = once(client, "message");
+    await sendGatewayHello(
+      {
+        ...context,
+        handler: {
+          ...context.handler,
+          gatewayMethods,
+          socket,
+          close: (code?: number, reason?: string) => socket.close(code, reason),
+        },
+        sendFrame: (frame: unknown) =>
+          new Promise<void>((resolve, reject) => {
+            socket.send(JSON.stringify(frame), (error) => (error ? reject(error) : resolve()));
+          }),
+      } as never,
+      state as never,
+      {},
+    );
+    const [frame] = await response;
+    const hello = (JSON.parse(String(frame)) as { payload: HelloOk }).payload;
+    // The delivered frame is this socket's real hello, not a fixture projection.
+    expect(hello.features.methods).toEqual(gatewayMethods);
+    const close = vi.fn();
+    client.on("close", close);
+    return { client, hello, close };
+  };
+  try {
+    await run(connect);
+  } finally {
+    for (const client of clients) {
+      client.terminate();
+    }
+    for (const socket of server.clients) {
+      socket.terminate();
+    }
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+  }
+}
+
 describe("sendGatewayHello update detail scope", () => {
   afterEach(() => {
+    vi.restoreAllMocks();
+    getSessionRowProjectionMock.mockReset();
     prepareTailscalePublishedOrigin({ origin: "https://reset.test", mode: "serve" })();
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getHealthCache).mockReturnValue(null);
+  });
+
+  it("fences an advertised privacy claim while hello delivery is pending", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const person = ensureProfileForEmail("hello-timeline@example.test");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      let committed: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "member",
+            definitions: {
+              member: {
+                sessions: { others: "view" },
+                agents: "*",
+                scopes: ["operator.read", "operator.sessions.write"],
+              },
+            },
+          },
+        },
+      };
+      const context = makeContext("operator", ["operator.sessions.write"]);
+      context.configSnapshot = committed;
+      const client = {
+        connect: context.connectParams,
+        authenticatedUserProfile: dispatchProfile(person.id),
+        socket: { close: vi.fn() },
+        profileActivity: undefined as GatewayWsClient["profileActivity"],
+      };
+      context.handler.getClient = () => client;
+      context.handler.buildRequestContext = () => ({
+        nodeRegistry: { get: () => undefined },
+        getCommittedRuntimeConfig: () => committed,
+      });
+      const deliveryEntered = createDeferredCore();
+      const deliver = createDeferredCore();
+      context.sendFrame.mockImplementation(async () => {
+        deliveryEntered.resolve();
+        await deliver.promise;
+      });
+      const sending = sendGatewayHello(
+        context as never,
+        makeState("operator", context.connectParams.scopes!) as never,
+        {},
+      );
+      try {
+        await deliveryEntered.promise;
+        expect(helloPayload(context)?.auth.profileActivityViewerId).toBeUndefined();
+        expect(client.profileActivity).toEqual({ viewerId: undefined });
+        committed = structuredClone(committed);
+        committed.gateway!.roles!.definitions.member!.scopes = ["operator.sessions.write"];
+        disconnectDisallowedGatewayPolicyClients([client], committed);
+        expect(client.socket.close).toHaveBeenCalledExactlyOnceWith(4001, "gateway policy changed");
+      } finally {
+        deliver.resolve();
+        await sending;
+      }
+      expect(client.profileActivity).toEqual({ viewerId: undefined });
+    });
+  });
+
+  it("advertises input custody without changing negotiated scopes", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloPayload(context)?.features.capabilities).toContain("chat-input-custody-v1");
+    expect(helloPayload(context)?.auth.scopes).toEqual(["operator.read"]);
+  });
+
+  it.each([
+    { origin: "https://gateway.example.test", local: false, expected: true },
+    { origin: "http://127.0.0.1:18789", local: true, expected: true },
+    { origin: "http://127.0.0.1:18789", local: false, expected: false },
+  ])(
+    "advertises browser sign-in only for a secure served return: %j",
+    async ({ origin, local, expected }) => {
+      const context = {
+        ...makeContext("operator", ["operator.read"]),
+        browserOrigin: { origin, requestHost: new URL(origin).host, isLocalClient: local },
+      };
+      const gatewayMethods = ["health", "mcp.authLogin"];
+      await sendGatewayHello(
+        { ...context, handler: { ...context.handler, gatewayMethods } } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        expected ? gatewayMethods : ["health"],
+      );
+    },
+  );
+
+  it.each([undefined, false, true])(
+    "advertises ID methods/events only while enabled: %s",
+    async (enabled) => {
+      const context = makeContext("operator", ["operator.read"]);
+      const gatewayMethods = [
+        "health",
+        "openclawId.status",
+        "openclawId.people",
+        "openclawId.authority",
+      ];
+      await sendGatewayHello(
+        {
+          ...context,
+          configSnapshot: { gateway: { openclawId: { enabled } } },
+          handler: {
+            ...context.handler,
+            gatewayMethods,
+            events: ["tick", "openclawId.people.changed"],
+          },
+        } as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.features.methods).toEqual(
+        enabled ? gatewayMethods : ["health"],
+      );
+      expect(helloPayload(context)?.features.events).toEqual(
+        enabled ? ["tick", "openclawId.people.changed"] : ["tick"],
+      );
+    },
+  );
+
+  it.each([
+    { caps: [], mode: "full" },
+    { caps: [GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY], mode: "summary" },
+    { caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND], mode: "empty" },
+    {
+      caps: [GATEWAY_CLIENT_CAPS.HELLO_HEALTH_ON_DEMAND, GATEWAY_CLIENT_CAPS.HEALTH_SUMMARY],
+      mode: "empty",
+    },
+  ])("negotiates $mode cached health in hello", async ({ caps, mode }) => {
+    const summary = {
+      ok: true as const,
+      ts: 123,
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+    };
+    const health: HealthSummary = {
+      ...summary,
+      agents: [],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    vi.mocked(getHealthCache).mockReturnValue(health);
+    const context = makeContext("operator", ["operator.read"]);
+    context.connectParams = {
+      ...context.connectParams,
+      caps,
+    };
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(helloSnapshot(context)).toMatchObject({
+      presence: [],
+      stateVersion: { presence: 1, health: 1 },
+      uptimeMs: 1,
+    });
+    expect(helloSnapshot(context)?.health).toEqual(
+      mode === "empty" ? {} : mode === "summary" ? summary : health,
+    );
+  });
+
+  it.each([undefined, []])(
+    "sends hello without membership reads for idle presence (%j)",
+    async (watchedSessions) => {
+      vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+        { text: "idle peer", ts: 1, watchedSessions },
+      ]);
+      const projection = {
+        needsMembershipPreparation: vi.fn(() => true),
+        prepareMembership: vi.fn(async () => {
+          throw new Error("unexpected membership read");
+        }),
+      };
+      getSessionRowProjectionMock.mockReturnValue(projection);
+      const context = makeContext("operator", ["operator.read"]);
+
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+
+      expect(projection.needsMembershipPreparation).not.toHaveBeenCalled();
+      expect(projection.prepareMembership).not.toHaveBeenCalled();
+      expect(context.sendFrame).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("sends hello while watched-session membership preparation is pending", async () => {
+    vi.spyOn(systemPresence, "listSystemPresence").mockReturnValue([
+      { text: "watching peer", ts: 1, watchedSessions: ["agent:main:watched"] },
+    ]);
+    const projection = {
+      needsMembershipPreparation: vi.fn(() => true),
+      prepareMembership: vi.fn(() => new Promise<void>(() => {})),
+    };
+    getSessionRowProjectionMock.mockReturnValue(projection);
+    const context = makeContext("operator", ["operator.read"]);
+
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+
+    expect(context.sendFrame).toHaveBeenCalledOnce();
+    expect(projection.prepareMembership).not.toHaveBeenCalled();
   });
 
   it.each(["write", "suggest", "view", "none", undefined] as const)(
@@ -284,19 +628,6 @@ describe("sendGatewayHello update detail scope", () => {
     },
   );
 
-  it("does not advertise configured Serve identity without a live route claim", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    context.configSnapshot = {
-      gateway: { publicOrigin: "https://other.example.test", tailscale: { mode: "serve" } },
-    };
-    const state = {
-      ...makeState("operator", ["operator.read"]),
-      resolvedAuth: { mode: "token", allowTailscale: true },
-    };
-    await sendGatewayHello(context as never, state as never, {});
-    expect(helloSnapshot(context)).not.toHaveProperty("controlUiIdentityUrl");
-  });
-
   it.each(["before hello delivery", "after hello delivery", "during hello delivery"] as const)(
     "releases only live announcement owners when withdrawn %s",
     async (phase) => {
@@ -334,101 +665,71 @@ describe("sendGatewayHello update detail scope", () => {
   it.each(["exit", "cleanup", "replacement"] as const)(
     "retires an announced Serve connection on route %s and renews its hello",
     async (withdrawal) => {
-      const gatewayMethods = ["health", "config.get"];
       const exited = createDeferredCore();
-      tailscaleClaim.mockResolvedValue({
+      tailscaleClaim.mockResolvedValueOnce({
         exited: exited.promise,
         isActive: () => true,
         stop: vi.fn(),
       });
-      const cleanup = await startGatewayTailscaleExposure({
-        tailscaleMode: "serve",
-        port: 18789,
-        backend: { host: "127.0.0.1", port: 19000 },
-        logTailscale: { info: vi.fn(), warn: vi.fn() },
-      });
-      const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-      await once(server, "listening");
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("missing WebSocket listener");
-      }
-      const clients: WebSocket[] = [];
-      const connect = async () => {
-        const accepted = once(server, "connection");
-        const client = new WebSocket(`ws://127.0.0.1:${address.port}`);
-        clients.push(client);
-        await once(client, "open");
-        const [socket] = (await accepted) as [WebSocket];
-        const context = makeContext("operator", ["operator.read"]);
-        const state = {
-          ...makeState("operator", ["operator.read"]),
-          resolvedAuth: { mode: "token", allowTailscale: true },
-        };
-        const response = once(client, "message");
-        await sendGatewayHello(
-          {
-            ...context,
-            handler: {
-              ...context.handler,
-              gatewayMethods,
-              socket,
-              close: (code?: number, reason?: string) => socket.close(code, reason),
-            },
-            sendFrame: (frame: unknown) =>
-              new Promise<void>((resolve, reject) => {
-                socket.send(JSON.stringify(frame), (error) => (error ? reject(error) : resolve()));
-              }),
-          } as never,
-          state as never,
-          {},
-        );
-        const [frame] = await response;
-        const hello = JSON.parse(String(frame)) as { payload: HelloOk };
-        return { client, hello: hello.payload, close: vi.fn() };
-      };
+      tailscaleClaim.mockRejectedValue(new Error("Tailscale daemon unavailable"));
+      const cleanup = await startManagedServe();
       try {
-        const original = await connect();
-        expect(original.hello.features.methods).toEqual(gatewayMethods);
-        expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
-          "https://gateway.tailnet.ts.net/",
-        );
-        original.client.on("close", original.close);
-        if (withdrawal === "exit") {
-          exited.resolve();
-        } else if (withdrawal === "cleanup") {
-          await cleanup?.();
-        } else {
-          prepareTailscalePublishedOrigin({
-            origin: "https://replacement.tailnet.ts.net",
-            mode: "serve",
-          });
-          // A late old cleanup must not withdraw the replacement's announcement.
-          await cleanup?.();
-        }
-        await vi.waitFor(() =>
-          expect(original.close).toHaveBeenCalledWith(1012, expect.anything()),
-        );
-        const renewed = await connect();
-        expect(renewed.hello.features.methods).toEqual(gatewayMethods);
-        expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe(
-          withdrawal === "replacement" ? "https://replacement.tailnet.ts.net/" : undefined,
-        );
-        expect(renewed.client.readyState).toBe(WebSocket.OPEN);
-      } finally {
-        for (const client of clients) {
-          client.terminate();
-        }
-        for (const socket of server.clients) {
-          socket.terminate();
-        }
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
+        await withHelloSocketServer(async (connect) => {
+          const original = await connect();
+          expect(original.hello.snapshot.controlUiIdentityUrl).toBe(
+            "https://gateway.tailnet.ts.net/",
+          );
+          if (withdrawal === "exit") {
+            exited.resolve();
+          } else if (withdrawal === "cleanup") {
+            await cleanup?.();
+          } else {
+            prepareTailscalePublishedOrigin({
+              origin: "https://replacement.tailnet.ts.net",
+              mode: "serve",
+            });
+            // A late old cleanup must not withdraw the replacement's announcement.
+            await cleanup?.();
+          }
+          await vi.waitFor(() =>
+            expect(original.close).toHaveBeenCalledWith(1012, expect.anything()),
+          );
+          const renewed = await connect();
+          expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe(
+            withdrawal === "replacement" ? "https://replacement.tailnet.ts.net/" : undefined,
+          );
+          expect(renewed.client.readyState).toBe(WebSocket.OPEN);
         });
+      } finally {
         await cleanup?.();
       }
     },
   );
+
+  it("renews a hello announced while managed Serve was unpublished once its route returns", async () => {
+    tailscaleClaim.mockResolvedValue({
+      exited: new Promise<never>(() => {}),
+      isActive: () => true,
+      stop: vi.fn(),
+    });
+    let cleanup: Awaited<ReturnType<typeof startManagedServe>> | undefined;
+    try {
+      await withHelloSocketServer(async (connect) => {
+        // A native client reconnecting during a Serve outage or startup gets no identity route.
+        const unannounced = await connect();
+        expect(unannounced.hello.snapshot).not.toHaveProperty("controlUiIdentityUrl");
+        cleanup = await startManagedServe();
+        await vi.waitFor(() =>
+          expect(unannounced.close).toHaveBeenCalledWith(1012, expect.anything()),
+        );
+        const renewed = await connect();
+        expect(renewed.hello.snapshot.controlUiIdentityUrl).toBe("https://gateway.tailnet.ts.net/");
+        expect(renewed.client.readyState).toBe(WebSocket.OPEN);
+      });
+    } finally {
+      await cleanup?.();
+    }
+  });
 
   it.each([
     { role: "node", origin: "https://team.example.test", enabled: true },
@@ -458,6 +759,11 @@ describe("sendGatewayHello update detail scope", () => {
   );
 
   it.each([
+    {
+      label: "member",
+      role: "operator" as const,
+      scopes: ["operator.sessions.read", "operator.sessions.write"],
+    },
     { label: "pairing-only operator", role: "operator" as const, scopes: ["operator.pairing"] },
     { label: "node", role: "node" as const, scopes: ["operator.read"] },
   ])("omits update details for a $label", async ({ role, scopes }) => {
@@ -470,44 +776,12 @@ describe("sendGatewayHello update detail scope", () => {
       includeUpdateDetails: false,
     });
     expectRedactedHelloSnapshot(context);
-  });
-
-  it("includes update details for an operator.read client", async () => {
-    const context = makeContext("operator", ["operator.read"]);
-    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
-
-    expect(buildGatewaySnapshotMock).toHaveBeenCalledWith({
-      client: null,
-      includeSensitive: false,
-      includeUpdateDetails: true,
+    expect(helloPayload(context)?.server).toMatchObject({
+      commit: "abcdef0",
+      builtAt: "2026-10-21T11:55:00.000Z",
     });
-    expect(helloSnapshot(context)).toEqual(
-      expect.objectContaining({
-        updateAvailable: expect.objectContaining({
-          upstreamRef: "origin/main",
-          upstreamSha: "2222222222222222222222222222222222222222",
-          commitsBehind: 1,
-          commits: [{ sha: "2222222", subject: "Detailed commit subject" }],
-        }),
-        updateSchedule: {
-          channel: "dev",
-          autoEnabled: true,
-          install: { kind: "git" },
-        },
-      }),
-    );
-    expect(helloPayload(context)?.server.buildId).toBe("build-a");
-    expect(helloPayload(context)?.server.bootId).toBe("gateway-boot-a");
-    expect(helloPayload(context)?.server.controlUiBuildSource).toBe("bundled");
-    expect(helloPayload(context)?.features.capabilities).toContain(
-      GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-    );
-    expect(helloPayload(context)?.features.capabilities).toContain(
-      GATEWAY_SERVER_CAPS.PROGRESS_CARD_AGENT_SCOPE,
-    );
-    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-chat-metadata");
-    expect(helloPayload(context)?.features.capabilities).toContain("session-scoped-model-catalog");
-    expect(helloPayload(context)?.features.capabilities).toContain("profile-binding-v1");
+    expect(helloPayload(context)?.features.capabilities).toContain("node-permission-errors");
+    expect(helloPayload(context)?.features.capabilities).toContain("agent-session-id-create-v1");
   });
 
   it.each([
@@ -567,6 +841,67 @@ describe("sendGatewayHello update detail scope", () => {
     }
   });
 
+  it.each([
+    ["openclaw-id-tunnel", {}, "https://studio-k7x2q.claws.example.test/remote"],
+    ["openclaw-id-tunnel", { enabled: false }, undefined],
+    ["tailscale-serve", {}, undefined],
+  ])(
+    "advertises the linked claw address to %s connections: %j",
+    async (kind, controlUi, controlUiClawUrl) => {
+      setOpenClawIdClawOriginResolver(() => "https://studio-k7x2q.claws.example.test");
+      try {
+        const context = makeContext("operator", ["operator.read"]);
+        context.handler.ingressAttribution = { kind };
+        const gateway = {
+          publicOrigin: "https://gateway.example.test",
+          controlUi: { basePath: "/remote", ...controlUi },
+        };
+        context.configSnapshot = { gateway };
+        await sendGatewayHello(
+          context as never,
+          makeState("operator", ["operator.read"]) as never,
+          {},
+        );
+        expect(helloPayload(context)?.controlUiClawUrl).toBe(controlUiClawUrl);
+        // Anonymous share links keep the public address: the tunnel admits members only.
+        expect(helloPayload(context)?.controlUiUrl).toBe(
+          gateway.controlUi.enabled === false ? undefined : "https://gateway.example.test/remote",
+        );
+      } finally {
+        setOpenClawIdClawOriginResolver(undefined);
+      }
+    },
+  );
+
+  it("omits the claw address on tunnel connections while no claw is linked", async () => {
+    const context = makeContext("operator", ["operator.read"]);
+    context.handler.ingressAttribution = { kind: "openclaw-id-tunnel" };
+    context.configSnapshot = { gateway: { publicOrigin: "https://gateway.example.test" } };
+    await sendGatewayHello(context as never, makeState("operator", ["operator.read"]) as never, {});
+    expect(helloPayload(context)).not.toHaveProperty("controlUiClawUrl");
+  });
+
+  it.each([
+    [{ controlUi: { basePath: "/__openclaw__/" } }, "/__openclaw__"],
+    [{ controlUi: { basePath: "/" } }, undefined],
+    [{ controlUi: { enabled: false, basePath: "/__openclaw__" } }, undefined],
+  ])(
+    "advertises the Control UI mount path without a public origin: %j",
+    async (gateway, basePath) => {
+      const context = makeContext("operator", ["operator.read"]);
+      context.configSnapshot = { gateway };
+      await sendGatewayHello(
+        context as never,
+        makeState("operator", ["operator.read"]) as never,
+        {},
+      );
+      expect(helloPayload(context)?.controlUiBasePath).toBe(basePath);
+      if (basePath === undefined) {
+        expect(helloPayload(context)).not.toHaveProperty("controlUiBasePath");
+      }
+    },
+  );
+
   it("keeps hello projection and telemetry at effective scopes", async () => {
     const state = {
       ...makeState("operator", ["operator.pairing"]),
@@ -591,6 +926,7 @@ describe("sendGatewayHello update detail scope", () => {
       method: "none",
       role: "operator",
       scopes: ["operator.pairing"],
+      roleAllowsAdmin: true,
       recoveryMigrationAllowed: true,
       recoveryScope: expect.stringMatching(/^[A-Za-z0-9_-]+$/u),
       deviceToken: "paired-token",

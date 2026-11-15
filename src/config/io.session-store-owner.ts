@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
-import { getConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
+import { applyUnsetPathsForWrite } from "./config-path-mutation.js";
+import { getConfigValueAtPath } from "./config-paths.js";
 import {
   isPerAgentSessionStoreConfig,
   isSameSessionStoreConfig,
@@ -44,10 +45,9 @@ export function prepareSessionStoreOwnershipForWrite(params: {
   if (sameSessionStore || !previousOwner || suppliesDestinationOwner) {
     return { config: params.targetConfig, sameFixedSessionStore, ownershipPaths: [] };
   }
-  const agents = structuredClone(params.targetConfig.agents ?? {});
-  unsetConfigValueAtPath(agents as Record<string, unknown>, SESSION_STORE_OWNER_PATH.slice(1));
+  const cleared = applyUnsetPathsForWrite(params.targetConfig, [[...SESSION_STORE_OWNER_PATH]]);
   return {
-    config: { ...params.targetConfig, agents },
+    config: { ...cleared, agents: cleared.agents ?? {} },
     sameFixedSessionStore,
     ownershipPaths: [[...SESSION_STORE_OWNER_PATH]],
   };

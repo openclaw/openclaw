@@ -1,5 +1,4 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/channel-core";
-import type { StatusReactionTiming } from "openclaw/plugin-sdk/channel-feedback";
 import type {
   DmPolicy,
   GroupPolicy,
@@ -10,7 +9,7 @@ import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 
-export type SignalEnvelope = {
+type SignalEnvelope = {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
   sourceName?: string | null;
@@ -61,7 +60,7 @@ export type SignalReactionMessage = {
   } | null;
 };
 
-export type SignalAttachment = {
+type SignalAttachment = {
   id?: string | null;
   contentType?: string | null;
   filename?: string | null;
@@ -86,7 +85,6 @@ export type SignalNativeReplyContext = {
 export type SignalEventHandlerDeps = {
   runtime: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
-  statusReactionTiming?: Required<StatusReactionTiming>;
   abortSignal?: AbortSignal;
   runTrackedTask?: (task: () => Promise<void>) => void;
   cfg: OpenClawConfig;

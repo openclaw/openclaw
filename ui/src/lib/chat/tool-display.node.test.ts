@@ -1,8 +1,9 @@
 // @vitest-environment node
 
 import { describe, expect, it } from "vitest";
+import { resolveEmbedSandbox } from "./canvas-embed-policy.ts";
 import { resolveToolDisplayIcon } from "./tool-display-icon.ts";
-import { formatToolDetail, resolveEmbedSandbox, resolveToolDisplay } from "./tool-display.ts";
+import { formatToolDetail, resolveToolDisplay } from "./tool-display.ts";
 
 describe("tool display", () => {
   it("shares semantic icons across compact and full tool displays", () => {
@@ -10,6 +11,8 @@ describe("tool display", () => {
       { name: " EXEC ", icon: "squareTerminal" },
       { name: "web_search", icon: "search" },
       { name: "read", icon: "fileText" },
+      { name: "message", icon: "mail" },
+      { name: "image_generate", icon: "image" },
       { name: "unknown_tool", icon: "puzzle" },
       { name: "constructor", icon: "puzzle" },
     ]) {
@@ -18,7 +21,28 @@ describe("tool display", () => {
     }
   });
 
+  it("preserves foreign tool aliases in previews and rows without classifiable arguments", () => {
+    for (const [name, icon] of [
+      [" SHELL ", "squareTerminal"],
+      ["search", "search"],
+      ["grep", "search"],
+      ["find", "search"],
+      ["glob", "search"],
+    ] as const) {
+      expect(resolveToolDisplayIcon(name)).toBe(icon);
+      expect(resolveToolDisplay({ name, args: {} }).icon).toBe(icon);
+    }
+  });
+
   it.each([
+    {
+      name: "Tool Search inner query",
+      params: {
+        name: "tool_call",
+        args: { id: "web_search", args: { query: "OpenClaw release notes" } },
+      },
+      detail: 'with for "OpenClaw release notes"',
+    },
     {
       name: "trimmed action with a false first detail",
       params: {
@@ -28,9 +52,9 @@ describe("tool display", () => {
       detail: "with false",
     },
     {
-      name: "redacted unknown-tool fallback",
+      name: "source-preserving unknown-tool fallback",
       params: { name: "unknown_tool", args: { path: "AKIDABCDEFGHIJKLMNOP1234567890" } },
-      detail: ["with AKIDAB…7890", "with AKIDAB...7890"],
+      detail: "with AKIDABCDEFGHIJKLMNOP1234567890",
     },
     {
       name: "raw command detail",
@@ -53,13 +77,7 @@ describe("tool display", () => {
   ] as const)("preserves $name", ({ params, detail }) => {
     const display = resolveToolDisplay(params);
     const formatted = formatToolDetail(display);
-    if (Array.isArray(detail)) {
-      // Core uses a Unicode ellipsis; the browser alias uses three dots.
-      expect(detail).toContain(formatted);
-      expect(formatted).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
-    } else {
-      expect(formatted).toBe(detail);
-    }
+    expect(formatted).toBe(detail);
   });
 });
 

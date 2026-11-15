@@ -13,19 +13,7 @@ const REASON_LABELS = {
   shutdown_failed: "shutdown failed",
 } as const;
 
-type ExporterSignal = (typeof SIGNALS)[number];
-type ExporterStatus = (typeof STATUSES)[number];
-type ExporterReason = keyof typeof REASON_LABELS | "configured" | "default_endpoint";
-
-type ExporterHealthRecord = {
-  seq: number;
-  source: string;
-  signal: ExporterSignal;
-  status: ExporterStatus;
-  transport?: string;
-  reason?: ExporterReason;
-  ownership?: "configured" | "default_endpoint";
-};
+type ExporterHealthRecord = NonNullable<ReturnType<typeof parseExporterHealthRecord>>;
 
 type TelemetryExporterSummary = {
   title: string;
@@ -37,7 +25,7 @@ function oneOf<const T extends readonly string[]>(value: unknown, choices: T): v
   return typeof value === "string" && (choices as readonly string[]).includes(value);
 }
 
-function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undefined {
+function parseExporterHealthRecord(value: unknown) {
   if (
     !isRecord(value) ||
     value.type !== "telemetry.exporter" ||
@@ -58,7 +46,7 @@ function parseExporterHealthRecord(value: unknown): ExporterHealthRecord | undef
     (value.reason === "configured" ||
       value.reason === "default_endpoint" ||
       Object.hasOwn(REASON_LABELS, value.reason))
-      ? (value.reason as ExporterReason)
+      ? (value.reason as keyof typeof REASON_LABELS | "configured" | "default_endpoint")
       : undefined;
   const ownership =
     value.mode === "configured" || value.mode === "default_endpoint" ? value.mode : undefined;
@@ -105,7 +93,6 @@ function formatReason(record: ExporterHealthRecord): string | undefined {
     : undefined;
 }
 
-/** Builds the redacted exporter-health text shared by Doctor and status --all. */
 export function formatTelemetryExporterSummary(snapshot: unknown): TelemetryExporterSummary | null {
   if (!isRecord(snapshot) || !Array.isArray(snapshot.events)) {
     return null;

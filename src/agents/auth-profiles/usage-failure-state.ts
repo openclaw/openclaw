@@ -1,13 +1,14 @@
 import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, ProfileUsageStats } from "./types.js";
 import {
+  isActiveUnusableWindow,
   isBlockedWindowActiveForModel,
   isModelScopedCooldownReason,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 
 export function resolveUsageWindowUntil(now: number, durationMs: number): number {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+  if (durationMs <= 0) {
     return now;
   }
   return (
@@ -26,17 +27,12 @@ function calculateAuthProfileCooldownMs(errorCount: number): number {
   return 5 * 60_000; // 5 minutes max
 }
 
-// Without a provider reset, grow failed half-open probes up to one billing day:
-// frequent retries risk metered fallback spend, while a finite cap still retries daily.
-const RATE_LIMIT_BACKOFF_BASE_MS = 30_000;
-const RATE_LIMIT_BACKOFF_MAX_MS = 24 * 60 * 60 * 1000;
-
-type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
+type BackoffFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
 
 const FAILURE_WINDOW_MS = 24 * 60 * 60 * 1000;
 // Keep the initial billing disable short so inline API keys can retry soon
 // after recharge, even though they cannot probe during an active window.
-const DISABLED_FAILURE_BACKOFF_POLICIES = {
+const FAILURE_BACKOFF_POLICIES = {
   billing: {
     baseMs: 10 * 60 * 1000,
     maxMs: 24 * 60 * 60 * 1000,
@@ -47,7 +43,7 @@ const DISABLED_FAILURE_BACKOFF_POLICIES = {
     baseMs: 10 * 60 * 1000,
     maxMs: 60 * 60 * 1000,
   },
-} satisfies Record<DisabledFailureReason, { baseMs: number; maxMs: number }>;
+} satisfies Record<BackoffFailureReason, { baseMs: number; maxMs: number }>;
 
 function calculateCappedExponentialBackoffMs(params: {
   errorCount: number;
@@ -63,15 +59,52 @@ function calculateCappedExponentialBackoffMs(params: {
   return Math.min(maxMs, raw);
 }
 
-function keepActiveWindowOrRecompute(params: {
-  existingUntil: number | undefined;
+function resolveNextCooldownModel(
+  existing: ProfileUsageStats,
+  now: number,
+  reason: AuthProfileFailureReason,
+  modelId: string | undefined,
+): string | undefined {
+  if (!isModelScopedCooldownReason(reason)) {
+    return undefined;
+  }
+  if (!isActiveUnusableWindow(existing.cooldownUntil, now)) {
+    return modelId;
+  }
+  // Keep an active scope only while every failure names the same model.
+  // An already profile-wide window cannot narrow until it expires.
+  const previousModel = existing.cooldownModel;
+  return !previousModel || previousModel === modelId ? previousModel : undefined;
+}
+
+/**
+ * Provider timing alone bounds a rate limit: there is no local counter, backoff or
+ * cap. A later provider deadline extends the shared window; an earlier one cannot
+ * shorten it. Without usable timing the profile stays available, and
+ * lastRateLimitAt lets session recovery return to it after a fallback.
+ */
+function computeRateLimitUsageStats(params: {
+  existing: ProfileUsageStats;
   now: number;
-  recomputedUntil: number;
-}): number {
-  const { existingUntil, now, recomputedUntil } = params;
-  const hasActiveWindow =
-    typeof existingUntil === "number" && Number.isFinite(existingUntil) && existingUntil > now;
-  return hasActiveWindow ? existingUntil : recomputedUntil;
+  modelId?: string;
+  retryAfterMs?: number;
+}): ProfileUsageStats {
+  const { existing, now } = params;
+  const providerUntil = resolveUsageWindowUntil(now, params.retryAfterMs ?? 0);
+  if (providerUntil <= now) {
+    return { ...existing, lastRateLimitAt: now };
+  }
+  const activeUntil = isActiveUnusableWindow(existing.cooldownUntil, now)
+    ? (existing.cooldownUntil ?? 0)
+    : 0;
+  return {
+    ...existing,
+    lastRateLimitAt: now,
+    cooldownUntil: Math.max(activeUntil, providerUntil),
+    cooldownReason: "rate_limit",
+    cooldownClassification: undefined,
+    cooldownModel: resolveNextCooldownModel(existing, now, "rate_limit", params.modelId),
+  };
 }
 
 export function computeNextProfileUsageStats(params: {
@@ -79,14 +112,14 @@ export function computeNextProfileUsageStats(params: {
   now: number;
   reason: AuthProfileFailureReason;
   modelId?: string;
+  retryAfterMs?: number;
 }): ProfileUsageStats {
-  // The provider quota writer already recorded this failure and its retry deadline.
-  if (
-    params.reason === "rate_limit" &&
-    params.existing.blockedReason === "subscription_limit" &&
-    isBlockedWindowActiveForModel(params.existing, params.now, params.modelId ?? null)
-  ) {
-    return params.existing;
+  if (params.reason === "rate_limit") {
+    // The provider quota writer already recorded this failure and its retry deadline.
+    return params.existing.blockedReason === "subscription_limit" &&
+      isBlockedWindowActiveForModel(params.existing, params.now, params.modelId ?? null)
+      ? params.existing
+      : computeRateLimitUsageStats(params);
   }
   const windowExpired =
     typeof params.existing.lastFailureAt === "number" &&
@@ -102,18 +135,10 @@ export function computeNextProfileUsageStats(params: {
   const unusableUntil = resolveProfileUnusableUntil(params.existing);
   const previousCooldownExpired = typeof unusableUntil === "number" && params.now >= unusableUntil;
 
-  // A rate-limit profile remains half-open until a real request succeeds. Its
-  // dedicated counter survives expiry, while the aggregate counter resets so
-  // unrelated failures do not inherit the rate-limit backoff history.
-  const shouldResetAggregateCounter = windowExpired || previousCooldownExpired;
-  const baseErrorCount = shouldResetAggregateCounter ? 0 : (params.existing.errorCount ?? 0);
+  const shouldResetCounters = windowExpired || previousCooldownExpired;
+  const baseErrorCount = shouldResetCounters ? 0 : (params.existing.errorCount ?? 0);
   const nextErrorCount = baseErrorCount + 1;
-  const preservedRateLimitCount = params.existing.failureCounts?.rate_limit;
-  const failureCounts = shouldResetAggregateCounter
-    ? preservedRateLimitCount
-      ? { rate_limit: preservedRateLimitCount }
-      : {}
-    : { ...params.existing.failureCounts };
+  const failureCounts = shouldResetCounters ? {} : { ...params.existing.failureCounts };
   failureCounts[params.reason] = (failureCounts[params.reason] ?? 0) + 1;
 
   const updatedStats: ProfileUsageStats = {
@@ -128,52 +153,30 @@ export function computeNextProfileUsageStats(params: {
 
   const disabledFailureReason =
     params.reason === "billing" || params.reason === "auth_permanent" ? params.reason : null;
-
+  const backoffMs = disabledFailureReason
+    ? calculateCappedExponentialBackoffMs({
+        errorCount: failureCounts[disabledFailureReason] ?? 1,
+        ...FAILURE_BACKOFF_POLICIES[disabledFailureReason],
+      })
+    : calculateAuthProfileCooldownMs(nextErrorCount);
+  const window = disabledFailureReason ? "disabledUntil" : "cooldownUntil";
+  // Retries within either active window cannot push recovery further out.
+  const existingUntil = params.existing[window];
+  const recomputedUntil = resolveUsageWindowUntil(params.now, backoffMs);
+  updatedStats[window] =
+    typeof existingUntil === "number" && existingUntil > params.now
+      ? existingUntil
+      : recomputedUntil;
   if (disabledFailureReason) {
-    const disableCount = failureCounts[disabledFailureReason] ?? 1;
-    const backoffMs = calculateCappedExponentialBackoffMs({
-      errorCount: disableCount,
-      ...DISABLED_FAILURE_BACKOFF_POLICIES[disabledFailureReason],
-    });
-    // Keep active disable windows immutable so retries within the window cannot
-    // extend recovery time indefinitely.
-    updatedStats.disabledUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.disabledUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
     updatedStats.disabledReason = disabledFailureReason;
   } else {
-    const backoffMs =
-      params.reason === "rate_limit"
-        ? calculateCappedExponentialBackoffMs({
-            errorCount: failureCounts.rate_limit ?? 1,
-            baseMs: RATE_LIMIT_BACKOFF_BASE_MS,
-            maxMs: RATE_LIMIT_BACKOFF_MAX_MS,
-          })
-        : calculateAuthProfileCooldownMs(nextErrorCount);
-    // Keep active cooldown windows immutable so retries within the window
-    // cannot push recovery further out.
-    updatedStats.cooldownUntil = keepActiveWindowOrRecompute({
-      existingUntil: params.existing.cooldownUntil,
-      now: params.now,
-      recomputedUntil: resolveUsageWindowUntil(params.now, backoffMs),
-    });
-    const existingCooldownActive =
-      typeof params.existing.cooldownUntil === "number" &&
-      params.existing.cooldownUntil > params.now;
     updatedStats.cooldownReason = params.reason;
-    if (!isModelScopedCooldownReason(params.reason)) {
-      updatedStats.cooldownModel = undefined;
-    } else if (existingCooldownActive) {
-      // Keep an active scope only while every failure names the same model.
-      // An already profile-wide window cannot narrow until it expires.
-      const previousModel = params.existing.cooldownModel;
-      updatedStats.cooldownModel =
-        !previousModel || previousModel === params.modelId ? previousModel : undefined;
-    } else {
-      updatedStats.cooldownModel = params.modelId;
-    }
+    updatedStats.cooldownModel = resolveNextCooldownModel(
+      params.existing,
+      params.now,
+      params.reason,
+      params.modelId,
+    );
   }
 
   return updatedStats;

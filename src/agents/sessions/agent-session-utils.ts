@@ -1,8 +1,11 @@
-import type {
-  BranchSummaryResult as CoreBranchSummaryResult,
-  AgentMessage,
+import { collectTextContentBlocks } from "../content-blocks.js";
+import {
+  estimateTokens,
+  buildSessionContext,
+  type AgentMessage,
+  type CompactionResult,
+  type SessionTreeEntry,
 } from "../runtime/index.js";
-import { estimateTokens } from "../runtime/index.js";
 
 export function unwrapCoreResult<T>(
   result: { ok: true; value: T } | { ok: false; error: Error },
@@ -13,48 +16,12 @@ export function unwrapCoreResult<T>(
   throw result.error;
 }
 
-export function normalizeBranchSummaryResult(
-  result:
-    | { ok: true; value: CoreBranchSummaryResult }
-    | { ok: false; error: { code: string; message: string } },
-): {
-  summary?: string;
-  readFiles?: string[];
-  modifiedFiles?: string[];
-  aborted?: boolean;
-  error?: string;
-} {
-  if (result.ok) {
-    return result.value;
-  }
-  if (result.error.code === "aborted") {
-    return { aborted: true, error: result.error.message };
-  }
-  return { error: result.error.message };
-}
-
 export function hasPersistedAssistantContent(content: unknown): boolean {
   return (typeof content === "string" || Array.isArray(content)) && content.length > 0;
 }
 
 export function extractTextContent(content: unknown): string {
-  if (typeof content === "string") {
-    return content;
-  }
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  let text = "";
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const candidate = block as { type?: unknown; text?: unknown };
-    if (candidate.type === "text" && typeof candidate.text === "string") {
-      text += candidate.text;
-    }
-  }
-  return text;
+  return typeof content === "string" ? content : collectTextContentBlocks(content).join("");
 }
 
 export function replaceAgentMessageInPlace(target: AgentMessage, replacement: AgentMessage): void {
@@ -71,4 +38,29 @@ export function replaceAgentMessageInPlace(target: AgentMessage, replacement: Ag
 
 export function estimateMessagesFromContent(messages: AgentMessage[]): number {
   return messages.reduce((total, message) => total + estimateTokens(message), 0);
+}
+
+export function compactionErrorMessage(error: unknown, fallback: string): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.trim() ? message : fallback;
+}
+
+/** Project the persisted replacement through the canonical replay boundary. */
+export function projectCompactionReplacement(
+  pathEntries: SessionTreeEntry[],
+  itemId: string,
+  result: Pick<CompactionResult, "firstKeptEntryId" | "tokensBefore">,
+  summary: string,
+) {
+  return buildSessionContext([
+    ...pathEntries,
+    {
+      ...result,
+      type: "compaction",
+      id: itemId,
+      parentId: pathEntries.at(-1)?.id ?? null,
+      timestamp: new Date().toISOString(),
+      summary,
+    },
+  ]).messages;
 }

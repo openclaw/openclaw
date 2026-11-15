@@ -1,4 +1,5 @@
 import type { LocalPackageOverridesResult } from "./package-local-overrides-shared.js";
+import type { PackageActivationRuntime } from "./package-update-activation-runtime.types.js";
 import type { PackagePostInstallVerifier } from "./package-update-verification-step.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import type { NativePackageStage } from "./update-native-package-stage.js";
@@ -8,16 +9,19 @@ import type { UpdateStepResult } from "./update-step-result.js";
 
 export type PackageActivationOptions = {
   fence: UpdateRecoveryFence;
-  nodeRunner: string;
+  runtime: PackageActivationRuntime;
   onPrepared: (command: string) => void;
   onUnavailable?: (message: string) => void;
+  onWarning?: (message: string) => void;
 };
 
 /** The orchestrator owns schema safety and service verification before confirming or restoring. */
 export type PackageUpdateTransaction = {
   backupRoot: string;
-  /** Migration snapshots must outlive the journal's package-only retirement. */
+  /** Capture root outside journal retirement; cleared when snapshots must be retained. */
   databaseBackupRoot?: string;
+  /** Drops server-side captures; retirement calls it before removing the snapshot root. */
+  discardDatabaseCaptures?: () => Promise<void>;
   assertRollbackSafe?: () => Promise<void>;
   rollback: (
     assertCurrent: () => void,

@@ -22,11 +22,8 @@ export type TelegramContext = {
   getFile: Context["getFile"];
 };
 
-/** Telegram sticker metadata for context enrichment and caching. */
 export interface StickerMetadata {
-  /** Emoji associated with the sticker. */
   emoji?: string;
-  /** Name of the sticker set the sticker belongs to. */
   setName?: string;
   /** Telegram file_id for sending the sticker back. */
   fileId?: string;

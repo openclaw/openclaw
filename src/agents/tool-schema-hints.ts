@@ -109,7 +109,11 @@ function normalizeNullableSchemaForHint(
   };
 }
 
-function renderPrimitive(value: unknown): string | undefined {
+function renderPrimitive(value: unknown, maxChars: number): string | undefined {
+  // Remote schemas can carry huge literals; reject them before serializing.
+  if (typeof value === "string" && value.length > maxChars) {
+    return undefined;
+  }
   if (
     value === null ||
     typeof value === "string" ||
@@ -129,7 +133,9 @@ function compactLiteralUnion(values: unknown, limits: CompactSchemaLimits): Sche
   ) {
     return undefined;
   }
-  const rendered = values.map(renderPrimitive);
+  const rendered = values.map((value) =>
+    renderPrimitive(value, limits.declaration ? limits.maxChars : MAX_COMPACT_ENUM_CHARS),
+  );
   if (rendered.some((value) => value === undefined)) {
     return undefined;
   }
@@ -239,7 +245,8 @@ function compactObjectHint(
     ) {
       return UNKNOWN_HINT;
     }
-    const fields = keys.toSorted().map((key) => {
+    // oxlint-disable-next-line unicorn/no-array-sort -- keys is a private array freshly spread from the Set above.
+    const fields = keys.sort().map((key) => {
       const hint = compactSchemaType(properties[key], depth, limits);
       return (
         (IDENTIFIER_RE.test(key) ? key : JSON.stringify(key)) +
@@ -383,7 +390,7 @@ function compactSchemaType(
   if (schemaUnion) {
     return finish(schemaUnion);
   }
-  const literal = renderPrimitive(schema.const);
+  const literal = renderPrimitive(schema.const, limits.maxChars);
   if (literal !== undefined) {
     return finish(completeHint(literal));
   }

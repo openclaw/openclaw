@@ -28,7 +28,6 @@ describe("bindRunToPreparedModelRuntime", () => {
       runParams,
       requestedWorkspaceResolution: {
         agentId: "requested-agent",
-        agentIdSource: "explicit",
         workspaceDir: "/tmp/requested-workspace",
         usedFallback: true,
         isCanonicalWorkspace: true,
@@ -47,7 +46,6 @@ describe("bindRunToPreparedModelRuntime", () => {
     );
     expect(result.workspaceResolution).toEqual({
       agentId: "committed-agent",
-      agentIdSource: "explicit",
       workspaceDir: "/tmp/committed-workspace",
       usedFallback: true,
       isCanonicalWorkspace: true,

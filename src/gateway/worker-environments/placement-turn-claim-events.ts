@@ -1,18 +1,27 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import type {
+  WorkerTurnAdmissionParams,
+  WorkerTurnAdmissionResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
 } from "../../agents/admitted-run-context.js";
+import { captureRequesterOrigin, type RequesterOrigin } from "../../agents/requester-origin.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
+import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
+  captureAgentRunDelegatedSourceAssertion,
   claimAgentRunApprovalAuthority,
   getActiveAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import { deferSqlitePostCommitPublication } from "../../infra/sqlite-post-commit.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import {
@@ -22,27 +31,16 @@ import {
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import { extractAssistantTranscriptSourceText } from "../../shared/chat-message-content.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { notifyListeners } from "../../shared/listeners.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
+import { signalTurnClaimRelease } from "./placement-turn-wait.js";
+import type { WorkerExecApprovalOwner } from "./worker-exec-approval-contract.js";
 import type { WorkerGatewayToolRuntime } from "./worker-gateway-tool-contract.js";
-
-type TurnClaimReleaseWaiter = (error?: Error) => void;
-
-const turnClaimReleaseWaiters = resolveGlobalMap<string, Map<string, Set<TurnClaimReleaseWaiter>>>(
-  Symbol.for("openclaw.turnClaimReleaseWaiters"),
-  (waitersByPath) => {
-    const error = new Error("Gateway lifecycle ended while waiting for turn claim release");
-    for (const bySession of waitersByPath.values()) {
-      for (const waiters of bySession.values()) {
-        for (const reject of waiters) {
-          reject(error);
-        }
-      }
-    }
-    waitersByPath.clear();
-  },
-);
+import type { WorkerGitHubBindingGrant } from "./worker-github-binding-contract.js";
+import type { WorkerReplyMediaPreparer } from "./worker-reply-media.types.js";
+import type { WorkerTurnPromptCacheContext } from "./worker-turn-prompt.types.js";
 
 const workerTurnClaimClosedHandlers = resolveGlobalMap<
   string,
@@ -57,11 +55,15 @@ export type WorkerTurnExecutionIdentity = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   operationalRunInstance: OperationalRunInstanceRef;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Authenticated requester facts remain on the host and confer no worker authority. */
+  requesterOrigin?: RequesterOrigin;
   /** Original presence reader, retained on the Gateway without a worker-writable claim. */
   assertPresenceSourceCurrent?: () => void;
   receiptAuthority: () => void;
   sessionKey: string;
-  sessionTarget: Readonly<BoundAgentRunSessionTarget>;
+  sessionTarget: Readonly<
+    BoundAgentRunSessionTarget & ReturnType<typeof captureSessionTranscriptTargetBinding>
+  >;
   turnClaim: WorkerSessionTurnClaim;
 }>;
 
@@ -72,15 +74,11 @@ export type WorkerTurnTranscriptSource = Pick<
 
 export type WorkerTurnExecutionIdentityCapability = WorkerTurnTranscriptSource &
   Readonly<{
+    assertPresenceSourceCurrent?: () => void;
     run<T>(callback: (identity: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T>;
   }>;
 
 type WorkerTurnFinishingOutcome = { error?: string; replayInvalid?: true };
-
-export type WorkerTurnPromptCacheContext = Readonly<{
-  boundaryCount: number;
-  promptCacheKey?: string;
-}>;
 
 type BoundWorkerTurnOwner = {
   capability: WorkerTurnExecutionIdentityCapability;
@@ -88,6 +86,12 @@ type BoundWorkerTurnOwner = {
   runtime: {
     assertActive: () => void;
     toolSurface?: WorkerGatewayToolRuntime;
+    inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
+    inputApproved?: boolean;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
+    githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
     approvalLifetime: AbortController;
     finishing?: {
@@ -103,6 +107,12 @@ type BoundWorkerTurnOwner = {
     stopWatchingAuthority?: () => void;
   };
 };
+
+type WorkerTurnAdmission = (
+  request: WorkerTurnAdmissionParams,
+  assertCurrent: () => void,
+  recordApproval: () => void,
+) => Promise<WorkerTurnAdmissionResult>;
 
 const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwner>>(
   Symbol.for("openclaw.workerTurnExecutionIdentities"),
@@ -146,6 +156,7 @@ export async function bindWorkerTurnOwner(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   assertPresenceSourceCurrent?: () => void,
   promptCacheContext?: WorkerTurnPromptCacheContext,
+  requesterOrigin?: RequesterOrigin,
 ): Promise<
   Readonly<{
     capability: WorkerTurnExecutionIdentityCapability;
@@ -153,7 +164,10 @@ export async function bindWorkerTurnOwner(
   }>
 > {
   let claim = structuredClone(requestedClaim);
-  const sessionTarget = Object.freeze({ ...requestedSource });
+  const preparedRequesterOrigin = requesterOrigin
+    ? captureRequesterOrigin({ requesterOrigin })
+    : undefined;
+  const sessionTarget = Object.freeze(captureSessionTranscriptTargetBinding(requestedSource));
   const preparedPromptCacheContext = promptCacheContext
     ? Object.freeze({ ...promptCacheContext })
     : undefined;
@@ -181,7 +195,6 @@ export async function bindWorkerTurnOwner(
         throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
       }
     };
-    assertPreparedCurrent();
     assertRunActive();
     operatorAuthority?.assertCurrent();
     assertPreparedCurrent();
@@ -195,29 +208,40 @@ export async function bindWorkerTurnOwner(
   const authority = claimAuthority;
   claim = authority.claim;
   const owners = workerTurnOwners.get(path) ?? new Map();
+  const refuseOwner: () => never = () => {
+    throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+  };
+  const delegatedSource = captureAgentRunDelegatedSourceAssertion(delegatedAuthority, refuseOwner);
+  if (!delegatedSource) {
+    approvalLifetime.abort();
+    authority.release();
+    scope?.release();
+    refuseOwner();
+  }
   const assertOwnerCurrent = () => {
     if (
       owners.get(claim.sessionId) !== owner ||
       workerTurnOwners.get(path) !== owners ||
-      !authority.isCurrent() ||
-      !validateAgentRunDelegatedAuthority(delegatedAuthority)
+      !authority.isCurrent()
     ) {
-      throw new Error(`Session ${claim.sessionId} worker turn authority changed`);
+      refuseOwner();
     }
+    delegatedSource.assertBinding();
   };
-  const assertActive = () => {
-    // A closed claim must not consult its retired source. Callbacks can also revoke it.
-    assertOwnerCurrent();
-    assertRunActive();
-    operatorAuthority?.assertCurrent();
-    assertOwnerCurrent();
-  };
+  const assertActive = composeSessionSourceAssertion(
+    [delegatedSource.assertCurrent, assertRunActive, operatorAuthority?.assertCurrent],
+    (assertSources) => {
+      assertSources();
+      assertOwnerCurrent();
+    },
+  );
   const identity = Object.freeze({
     agentId: sessionTarget.agentId,
     delegatedAuthority,
     ...(token ? { executionIdentityToken: token } : {}),
     operationalRunInstance,
     ...(operatorAuthority ? { operatorAuthority } : {}),
+    ...(preparedRequesterOrigin ? { requesterOrigin: preparedRequesterOrigin } : {}),
     ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     receiptAuthority: assertActive,
     sessionKey: sessionTarget.sessionKey,
@@ -227,6 +251,7 @@ export async function bindWorkerTurnOwner(
   const capability = Object.freeze({
     sessionTarget,
     receiptAuthority: assertActive,
+    ...(assertPresenceSourceCurrent ? { assertPresenceSourceCurrent } : {}),
     async run<T>(callback: (current: WorkerTurnExecutionIdentity) => Promise<T> | T): Promise<T> {
       assertActive();
       const result = await callback(identity);
@@ -322,12 +347,11 @@ export function captureWorkerTurnClaimCurrentness(
     owners?.get(claim.sessionId) === bound &&
     bound.runtime.claimAuthority.isCurrent();
   return () =>
-    isBoundCurrent() &&
     validateAgentRunDelegatedAuthority(delegatedAuthority, bound.runtime.delegatedAuthority) &&
     isBoundCurrent();
 }
 
-function resolveWorkerTurnRuntime(
+function resolveBoundWorkerTurnRuntime(
   identity: Pick<
     WorkerConnectionIdentity,
     "turnClaim" | "sessionId" | "runId" | "environmentId" | "ownerEpoch"
@@ -356,16 +380,14 @@ function resolveWorkerTurnRuntime(
     }
     owner = candidate;
   }
-  const runtime = owner?.runtime;
-  if (
-    !owner ||
-    !runtime ||
-    !runtime.claimAuthority.isCurrent() ||
-    !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
-  ) {
-    return undefined;
-  }
-  return runtime;
+  return owner?.runtime.claimAuthority.isCurrent() ? owner.runtime : undefined;
+}
+
+function resolveWorkerTurnRuntime(identity: Parameters<typeof resolveBoundWorkerTurnRuntime>[0]) {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  return runtime && validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
+    ? runtime
+    : undefined;
 }
 
 /** Cache identity follows the Gateway's admitted transcript, never worker-supplied history. */
@@ -375,11 +397,17 @@ export function readWorkerTurnPromptCacheContext(
   return resolveWorkerTurnRuntime(identity)?.promptCacheContext;
 }
 
-export function bindWorkerTurnToolSurface(
+export function bindWorkerTurnCapabilities(
   store: WorkerTurnExecutionIdentityStore,
   claim: WorkerSessionTurnClaim,
-  toolSurface: WorkerGatewayToolRuntime,
-): void {
+  capabilities: {
+    toolSurface: WorkerGatewayToolRuntime;
+    prepareReplyMedia?: WorkerReplyMediaPreparer;
+    inference?: WorkerInferenceExecutor;
+    admitTurn?: WorkerTurnAdmission;
+    execApproval?: WorkerExecApprovalOwner;
+  },
+): () => void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
   if (
@@ -391,11 +419,118 @@ export function bindWorkerTurnToolSurface(
     throw new Error("Worker turn has no admitted tool surface owner");
   }
   owner.runtime.toolSurface?.abort();
-  owner.runtime.toolSurface = toolSurface;
+  Object.assign(owner.runtime, capabilities);
+  owner.runtime.inputApproved = false;
+  // Finalization retains this claim's decision after execution authority closes.
+  return () => {
+    if (capabilities.admitTurn) {
+      assertWorkerTurnInputApproval(owner.runtime);
+    }
+  };
+}
+
+export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.prepareReplyMedia;
 }
 
 export function getWorkerTurnToolSurface(identity: Parameters<typeof resolveWorkerTurnRuntime>[0]) {
   return resolveWorkerTurnRuntime(identity)?.toolSurface;
+}
+
+export function getWorkerTurnExecApproval(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.execApproval;
+}
+
+/** The exact admitted turn retains the grant; reconnects cannot elect another issuer. */
+export function bindWorkerTurnGitHubGrant(
+  store: WorkerTurnExecutionIdentityStore,
+  claim: WorkerSessionTurnClaim,
+  grant: WorkerGitHubBindingGrant,
+): void {
+  const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
+  const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
+  if (
+    !owner ||
+    owner.claimKey !== claimKey(claim) ||
+    !owner.runtime.claimAuthority.isCurrent() ||
+    !validateAgentRunDelegatedAuthority(owner.runtime.delegatedAuthority) ||
+    owner.runtime.githubGrant
+  ) {
+    throw new Error("Worker GitHub grant lost its admitted turn owner");
+  }
+  owner.runtime.githubGrant = grant;
+}
+
+export function getWorkerTurnGitHubGrant(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.githubGrant;
+}
+
+/** Publication consumes both the retained grant and its current turn/profile authority. */
+export function assertWorkerTurnGitHubGrantCurrent(
+  identity: WorkerConnectionIdentity,
+  expected: WorkerGitHubBindingGrant | undefined,
+): void {
+  if (getWorkerTurnGitHubGrant(identity) !== expected) {
+    throw new Error("Worker GitHub grant owner changed");
+  }
+  expected?.assertCurrent?.();
+}
+
+export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
+  return resolveWorkerTurnRuntime(identity)?.inference;
+}
+
+function assertWorkerTurnInputApproval(runtime: BoundWorkerTurnOwner["runtime"] | undefined): void {
+  if (!runtime?.inputApproved) {
+    throw new Error("Worker turn input admission is required before persistence or inference");
+  }
+}
+
+export function assertWorkerTurnInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
+    runtime?.assertActive();
+  }
+}
+
+/** Cancellation closes execution, but the exact claim retains its prior input decision. */
+export function assertWorkerTurnLiveEventInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
+  }
+}
+
+export async function admitWorkerTurnInput(
+  identity: WorkerConnectionIdentity,
+  request: WorkerTurnAdmissionParams,
+  validate: () => boolean,
+) {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (!runtime?.admitTurn || !validate()) {
+    return { ok: false as const, closeReason: "placement-mismatch" as const };
+  }
+  const assertCurrent = () => {
+    if (!validate()) {
+      throw new Error("Worker turn admission authority changed");
+    }
+    runtime.assertActive();
+  };
+  assertCurrent();
+  const result = await runtime.admitTurn(request, assertCurrent, () => {
+    assertCurrent();
+    // Approval belongs to this claim's callback and its captured Gateway input.
+    runtime.inputApproved = true;
+  });
+  assertCurrent();
+  return { ok: true as const, result };
 }
 
 /** Capture before buffering; delayed events must never bind to a replacement owner. */
@@ -485,54 +620,6 @@ export function attachWorkerTurnExecutionIdentityStore(store: object, path: stri
   Object.defineProperty(store, WORKER_TURN_EXECUTION_IDENTITY_PATH, { value: path });
 }
 
-export function waitersFor(path: string, sessionId: string): Set<TurnClaimReleaseWaiter> {
-  let bySession = turnClaimReleaseWaiters.get(path);
-  if (!bySession) {
-    bySession = new Map();
-    turnClaimReleaseWaiters.set(path, bySession);
-  }
-  let waiters = bySession.get(sessionId);
-  if (!waiters) {
-    waiters = new Set();
-    bySession.set(sessionId, waiters);
-  }
-  return waiters;
-}
-
-function signalTurnClaimRelease(path: string, sessionId: string): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  bySession.delete(sessionId);
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-  for (const resolve of waiters) {
-    resolve();
-  }
-}
-
-export function removeTurnClaimReleaseWaiter(
-  path: string,
-  sessionId: string,
-  waiter: TurnClaimReleaseWaiter,
-): void {
-  const bySession = turnClaimReleaseWaiters.get(path);
-  const waiters = bySession?.get(sessionId);
-  if (!bySession || !waiters) {
-    return;
-  }
-  waiters.delete(waiter);
-  if (waiters.size === 0) {
-    bySession.delete(sessionId);
-  }
-  if (bySession.size === 0) {
-    turnClaimReleaseWaiters.delete(path);
-  }
-}
-
 export function registerWorkerTurnClaimClosedHandler(
   path: string,
   handler: (claim: WorkerSessionTurnClaim) => void,
@@ -549,6 +636,7 @@ export function registerWorkerTurnClaimClosedHandler(
 }
 
 function closeBoundOwner(owner: BoundWorkerTurnOwner): void {
+  void owner.runtime.githubGrant?.revoke();
   owner.runtime.toolSurface?.abort();
   owner.runtime.approvalLifetime.abort();
   owner.runtime.finishing = undefined;
@@ -576,13 +664,7 @@ function closeWorkerTurnClaim(
       workerTurnOwners.delete(path);
     }
   }
-  for (const handler of workerTurnClaimClosedHandlers.get(path) ?? []) {
-    try {
-      handler(claim);
-    } catch {
-      // Settlement observation cannot roll back the authoritative store transition.
-    }
-  }
+  notifyListeners(workerTurnClaimClosedHandlers.get(path) ?? [], claim);
 }
 
 export function prepareWorkerTurnClaimClosed(
@@ -595,17 +677,11 @@ export function prepareWorkerTurnClaimClosed(
 }
 
 export function deferWorkerTurnClaimClosed(
-  db: DatabaseSync,
+  db: EngineConnection,
   path: string,
   claim: WorkerSessionTurnClaim,
 ): void {
   if (!deferSqlitePostCommitPublication(db, prepareWorkerTurnClaimClosed(path, claim))) {
     throw new Error("Worker turn closure requires its owning transaction");
-  }
-}
-
-export function deferTurnClaimRelease(db: DatabaseSync, path: string, sessionId: string): void {
-  if (!deferSqlitePostCommitPublication(db, () => signalTurnClaimRelease(path, sessionId))) {
-    throw new Error("Worker turn release requires its owning transaction");
   }
 }

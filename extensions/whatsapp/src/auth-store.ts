@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import { isPathStrictlyInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import {
@@ -249,12 +250,7 @@ async function shouldClearOnLogout(authDir: string, isLegacyAuthDir: boolean): P
     const backupStats = await fs.lstat(resolveWebCredsBackupPath(authDir)).catch(() => null);
     return backupStats?.isFile() === true;
   } catch (error) {
-    const codeValue =
-      error && typeof error === "object" && "code" in error
-        ? (error as { code?: unknown }).code
-        : undefined;
-    const code = typeof codeValue === "string" ? codeValue : "";
-    return code !== "ENOENT";
+    return extractErrorCode(error) !== "ENOENT";
   }
 }
 
@@ -358,6 +354,14 @@ export async function logoutWeb(params: {
   return true;
 }
 
+function parseWebSelfIdentity(raw: string, authDir: string): WhatsAppSelfIdentity {
+  const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
+  return resolveComparableIdentity(
+    { jid: parsed?.me?.id ?? null, lid: parsed?.me?.lid ?? null },
+    authDir,
+  );
+}
+
 export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   try {
     const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
@@ -365,14 +369,7 @@ export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
     if (!raw) {
       return emptyWebSelfId();
     }
-    const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
-    const identity = resolveComparableIdentity(
-      {
-        jid: parsed?.me?.id ?? null,
-        lid: parsed?.me?.lid ?? null,
-      },
-      authDir,
-    );
+    const identity = parseWebSelfIdentity(raw, authDir);
     return {
       e164: identity.e164 ?? null,
       jid: identity.jid ?? null,
@@ -391,14 +388,7 @@ export async function readWebSelfIdentity(
   const raw = await readWebCredsJsonRaw(resolveWebCredsPath(resolvedAuthDir));
   if (raw) {
     try {
-      const parsed = JSON.parse(raw) as { me?: { id?: string; lid?: string } } | undefined;
-      return resolveComparableIdentity(
-        {
-          jid: parsed?.me?.id ?? null,
-          lid: parsed?.me?.lid ?? null,
-        },
-        resolvedAuthDir,
-      );
+      return parseWebSelfIdentity(raw, resolvedAuthDir);
     } catch {
       // Fall through to the live message identity below when cached creds are corrupt.
     }

@@ -17,14 +17,23 @@ import {
   inspectQaExecutionIdentityStorage,
   readNativeQaSubagentRuns,
 } from "./execution-identity-storage-inspection.js";
-import { assertNoGatewayLogSentinels, scanGatewayLogSentinels } from "./gateway-log-sentinel.js";
+import {
+  assertNoGatewayLogSentinels,
+  extractGatewayMessageText,
+  formatGatewayLogSentinelSummary,
+  scanGatewayLogSentinels,
+} from "./gateway-log-sentinel.js";
 import { resolveQaLiveTurnTimeoutMs } from "./live-timeout.js";
+import { splitQaModelRef } from "./model-selection.js";
 import * as modelSwitchEval from "./model-switch-eval.js";
 import { runQaCli } from "./qa-cli-process.js";
 import * as runtimeToolFixture from "./runtime-tool-fixture.js";
+import {
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
+} from "./runtime-tool-search-evidence.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
-import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
 import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
 import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
 import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
@@ -45,8 +54,7 @@ import * as webRuntime from "./web-runtime.js";
 type QaSuiteScenarioFlowEnv = {
   lab: unknown;
   webSessionIds: Set<string>;
-  transport: QaSuiteRuntimeEnv["transport"] & QaScenarioRuntimeEnv["transport"];
-} & Omit<QaSuiteRuntimeEnv, "transport">;
+} & QaSuiteRuntimeEnv;
 
 const qaSuiteScenarioIdentityDeps = {
   fs,
@@ -54,9 +62,30 @@ const qaSuiteScenarioIdentityDeps = {
   sleep,
   randomUUID,
   projectQaToolMessages,
-  ...suiteRuntimeAgentMedia,
-  ...suiteRuntimeAgentProcess,
-  ...suiteRuntimeAgentSession,
+  extractGatewayMessageText,
+  // YAML scenarios resolve these bindings by name; keep the registry statically visible.
+  ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
+  extractMediaPathFromText: suiteRuntimeAgentMedia.extractMediaPathFromText,
+  resolveGeneratedImagePath: suiteRuntimeAgentMedia.resolveGeneratedImagePath,
+  findManagedDreamingCronJob: suiteRuntimeAgentProcess.findManagedDreamingCronJob,
+  forceMemoryIndex: suiteRuntimeAgentProcess.forceMemoryIndex,
+  listCronJobs: suiteRuntimeAgentProcess.listCronJobs,
+  readDoctorMemoryStatus: suiteRuntimeAgentProcess.readDoctorMemoryStatus,
+  runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
+  startAgentRun: suiteRuntimeAgentProcess.startAgentRun,
+  waitForAgentHistory: suiteRuntimeAgentProcess.waitForAgentHistory,
+  waitForAgentHistoryReply: suiteRuntimeAgentProcess.waitForAgentHistoryReply,
+  waitForAgentRun: suiteRuntimeAgentProcess.waitForAgentRun,
+  createSession: suiteRuntimeAgentSession.createSession,
+  readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
+  readQaSessionTranscriptEvents: suiteRuntimeAgentSession.readQaSessionTranscriptEvents,
+  readRawQaSessionStore: suiteRuntimeAgentSession.readRawQaSessionStore,
+  readSessionToolActivity: suiteRuntimeAgentSession.readSessionToolActivity,
+  readSessionTranscriptSummary: suiteRuntimeAgentSession.readSessionTranscriptSummary,
+  readSkillStatus: suiteRuntimeAgentSession.readSkillStatus,
+  readSubagentHandoffReply: suiteRuntimeAgentSession.readSubagentHandoffReply,
+  seedQaSessionEntries: suiteRuntimeAgentSession.seedQaSessionEntries,
+  seedQaSessionTranscript: suiteRuntimeAgentSession.seedQaSessionTranscript,
   callPluginToolsMcp,
   findSkill,
   handleQaAction,
@@ -77,7 +106,47 @@ const qaSuiteScenarioIdentityDeps = {
   buildAgentSessionKey,
   resolveAgentRoute,
   normalizeLowercaseStringOrEmpty,
+  formatToolSearchDiscoveryReceipt,
+  requireToolSearchDiscoveryEvidence,
 };
+
+const QA_FAILURE_GATEWAY_SENTINEL_LIMIT = 5;
+
+const isValidGatewayLogMark = (mark: number | undefined): mark is number =>
+  Number.isSafeInteger(mark) && (mark ?? -1) >= 0;
+
+// Gateway log sentinels often name the cause of a wait timeout (for example a
+// channel final reply that failed to deliver) while transport timeouts stay
+// content-free. Attach them to the failed step only: parity classifies
+// scenario-level details by keyword, and appended log text must not move it.
+function appendGatewayLogSentinelEvidence(
+  result: QaSuiteScenarioResult,
+  gateway: QaSuiteScenarioFlowEnv["gateway"],
+  mark: number | undefined,
+): QaSuiteScenarioResult {
+  const failedStepIndex = result.steps.findIndex((step) => step.status === "fail");
+  if (failedStepIndex < 0 || !gateway.readLogsSince || !isValidGatewayLogMark(mark)) {
+    return result;
+  }
+  const findings = scanGatewayLogSentinels(gateway.readLogsSince(mark));
+  if (findings.length === 0) {
+    return result;
+  }
+  const omitted = findings.length - QA_FAILURE_GATEWAY_SENTINEL_LIMIT;
+  const evidence = [
+    "Gateway log sentinel(s) during scenario:",
+    formatGatewayLogSentinelSummary(findings.slice(0, QA_FAILURE_GATEWAY_SENTINEL_LIMIT)),
+    ...(omitted > 0 ? [`(${omitted} more)`] : []),
+  ].join("\n");
+  return {
+    ...result,
+    steps: result.steps.map((step, index) =>
+      index === failedStepIndex
+        ? { ...step, details: step.details ? `${step.details}\n${evidence}` : evidence }
+        : step,
+    ),
+  };
+}
 
 export async function runQaSuiteScenarioSteps(
   name: string,
@@ -86,9 +155,6 @@ export async function runQaSuiteScenarioSteps(
   const result: QaSuiteScenarioResult = { name, status: "pass", steps: [] };
   for (const step of steps) {
     try {
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] start scenario="${name}" step="${step.name}"`);
-      }
       const outcome = await step.run();
       const details = outcome?.details;
       if (outcome?.timing) {
@@ -102,9 +168,6 @@ export async function runQaSuiteScenarioSteps(
         result.timing ??= {};
         result.timing.rttMs = result.rttMeasurement.finalMatchedReplyRttMs;
       }
-      if (process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] pass scenario="${name}" step="${step.name}"`);
-      }
       result.steps.push({
         name: step.name,
         status: "pass",
@@ -113,9 +176,6 @@ export async function runQaSuiteScenarioSteps(
     } catch (error) {
       const details = formatQaErrorMessage(error);
       const status = error instanceof QaSuiteScenarioSkipError ? "skip" : "fail";
-      if (status === "fail" && process.env.OPENCLAW_QA_DEBUG === "1") {
-        console.error(`[qa-suite] fail scenario="${name}" step="${step.name}" details=${details}`);
-      }
       result.steps.push({ name: step.name, status, details });
       result.status = status;
       result.details = details;
@@ -123,129 +183,6 @@ export async function runQaSuiteScenarioSteps(
     }
   }
   return result;
-}
-
-type QaSuiteScenarioDepsParams = {
-  env: QaSuiteScenarioFlowEnv;
-  runScenario: (name: string, steps: QaSuiteStep[]) => Promise<QaSuiteScenarioResult>;
-  splitModelRef: (ref: string) => { provider: string; model: string } | null;
-  formatErrorMessage: typeof formatQaErrorMessage;
-  liveTurnTimeoutMs: typeof resolveQaLiveTurnTimeoutMs;
-  resolveQaLiveTurnTimeoutMs: typeof resolveQaLiveTurnTimeoutMs;
-};
-
-type QaSuiteScenarioFlowApiParams = QaSuiteScenarioDepsParams & {
-  scenario: QaSeedScenarioWithSource;
-  constants: Parameters<typeof createQaScenarioRuntimeApi>[0]["constants"];
-};
-
-function createQaSuiteScenarioDeps(
-  params: QaSuiteScenarioDepsParams,
-  webOpenPage: ReturnType<typeof webRuntime.createQaWebPageOpener>,
-) {
-  const waitForAccountOutboundMessage: typeof suiteRuntimeTransport.waitForOutboundMessage = (
-    state,
-    predicate,
-    timeoutMs,
-    options,
-  ) =>
-    suiteRuntimeTransport.waitForOutboundMessage(state, predicate, timeoutMs, {
-      ...options,
-      accountId: params.env.transport.accountId,
-    });
-  const markLogs = params.env.gateway.markLogs;
-  const readLogsSince = params.env.gateway.readLogsSince;
-  let monotonicGatewayLogs =
-    typeof markLogs === "function" && typeof readLogsSince === "function"
-      ? { mark: markLogs, readSince: readLogsSince }
-      : undefined;
-  const isValidGatewayLogMark = (mark: number | undefined): mark is number =>
-    Number.isSafeInteger(mark) && (mark ?? -1) >= 0;
-  const fullLegacyGatewayLogSnapshotMark = -1;
-  const readGatewayLogs = (mark?: number) => {
-    if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
-      return monotonicGatewayLogs.readSince(mark);
-    }
-    return params.env.gateway.logs?.() ?? "";
-  };
-  return {
-    ...qaSuiteScenarioIdentityDeps,
-    runScenario: params.runScenario,
-    waitForOutboundMessage: waitForAccountOutboundMessage,
-    browserRequest: browserRuntime.callQaBrowserRequest,
-    waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
-    browserOpenTab: browserRuntime.qaBrowserOpenTab,
-    browserSnapshot: browserRuntime.qaBrowserSnapshot,
-    browserAct: browserRuntime.qaBrowserAct,
-    webOpenPage,
-    webWait: webRuntime.qaWebWait,
-    webType: webRuntime.qaWebType,
-    webSnapshot: webRuntime.qaWebSnapshot,
-    webEvaluate: webRuntime.qaWebEvaluate,
-    readGatewayLogs,
-    markGatewayLogCursor: () => {
-      if (monotonicGatewayLogs) {
-        const mark = monotonicGatewayLogs.mark();
-        if (isValidGatewayLogMark(mark)) {
-          return mark;
-        }
-        monotonicGatewayLogs = undefined;
-        return fullLegacyGatewayLogSnapshotMark;
-      }
-      return fullLegacyGatewayLogSnapshotMark;
-    },
-    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
-      scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
-    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
-      assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
-    runRuntimeToolFixture: async (
-      envArg: QaSuiteScenarioFlowEnv,
-      configArg: Record<string, unknown>,
-    ) =>
-      runtimeToolFixture.runRuntimeToolFixture(envArg, configArg, {
-        createSession: suiteRuntimeAgentSession.createSession,
-        readEffectiveTools: suiteRuntimeAgentSession.readEffectiveTools,
-        runAgentPrompt: suiteRuntimeAgentProcess.runAgentPrompt,
-        fetchJson: suiteRuntimeGateway.fetchJson,
-        ensureImageGenerationConfigured: suiteRuntimeAgentMedia.ensureImageGenerationConfigured,
-      }),
-    formatErrorMessage: params.formatErrorMessage,
-    liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-    resolveQaLiveTurnTimeoutMs: params.resolveQaLiveTurnTimeoutMs,
-    normalizeModelRef: (raw: string) => {
-      const split = params.splitModelRef(raw);
-      return split
-        ? (resolveModelRefFromString({
-            cfg: params.env.cfg,
-            raw,
-            defaultProvider: split.provider,
-          })?.ref ?? null)
-        : null;
-    },
-    splitModelRef: params.splitModelRef,
-  };
-}
-
-function createQaSuiteScenarioFlowApi(
-  params: QaSuiteScenarioFlowApiParams & { signal: AbortSignal },
-) {
-  const createWebPageOpener = (signal?: AbortSignal) => {
-    const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
-    return (webParams: webRuntime.QaWebOpenPageParams) =>
-      open({ ...webParams, repoRoot: params.env.repoRoot });
-  };
-  const api = {
-    ...createQaScenarioRuntimeApi({
-      env: params.env,
-      scenario: params.scenario,
-      deps: createQaSuiteScenarioDeps(params, createWebPageOpener(params.signal)),
-      constants: params.constants,
-    }),
-    signal: params.signal,
-  };
-  // DSL finally actions may need a new page after the scenario deadline.
-  // They share the suite owner and seal, but not the expired acquisition signal.
-  return { api, cleanupApi: { ...api, webOpenPage: createWebPageOpener() } };
 }
 
 function createQaScenarioDeadline(timeoutMs?: number, whenUnhealthy?: Promise<Error>) {
@@ -290,72 +227,15 @@ function createQaScenarioDeadline(timeoutMs?: number, whenUnhealthy?: Promise<Er
   };
 }
 
-function createQaSuiteScenarioStepRunner(
-  env: QaSuiteScenarioFlowEnv,
-  scenario: QaSeedScenarioWithSource,
-  vars: Record<string, unknown>,
-  deadline: ReturnType<typeof createQaScenarioDeadline>,
-  deps: {
-    liveTurnTimeoutMs: QaSuiteScenarioDepsParams["liveTurnTimeoutMs"];
-    runScenario: QaSuiteScenarioDepsParams["runScenario"];
-  } = {
-    liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
-    runScenario: runQaSuiteScenarioSteps,
-  },
-): QaSuiteScenarioDepsParams["runScenario"] {
-  const prepareFlow = env.transport.prepareFlow;
-  const execution = scenario.execution;
-  return async (name, steps) => {
-    const scenarioSteps = steps.map((step) =>
-      Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
-    );
-    const preparedSteps =
-      prepareFlow && execution.kind === "flow"
-        ? [
-            {
-              name: `Prepare ${env.transport.label}`,
-              run: async () => {
-                const fallbackTimeoutMs = deps.liveTurnTimeoutMs(env, 60_000);
-                const preparationDeadline = createQaScenarioDeadline(
-                  Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
-                  env.transport.whenUnhealthy,
-                );
-                try {
-                  const prepared = await preparationDeadline.run(() =>
-                    prepareFlow({
-                      signal: AbortSignal.any([preparationDeadline.signal, deadline.signal]),
-                      config: execution.config ?? {},
-                      gateway: env.gateway,
-                      outputDir: env.outputDir,
-                      primaryModel: env.primaryModel,
-                      scenarioId: scenario.id,
-                      scenarioTitle: scenario.title,
-                      timeoutMs: execution.timeoutMs ?? fallbackTimeoutMs,
-                      waitForConfigRestartSettle: async (options) =>
-                        await suiteRuntimeGateway.waitForConfigRestartSettle(
-                          env,
-                          options?.restartDelayMs,
-                          options?.timeoutMs,
-                        ),
-                    }),
-                  );
-                  preparationDeadline.signal.throwIfAborted();
-                  if (prepared) {
-                    Object.assign(vars, prepared);
-                  }
-                } finally {
-                  preparationDeadline.dispose();
-                }
-              },
-            },
-            ...scenarioSteps,
-          ]
-        : scenarioSteps;
-    return await deps.runScenario(name, preparedSteps);
+export async function runQaSuiteScenarioDefinition(params: {
+  env: QaSuiteScenarioFlowEnv;
+  scenario: QaSeedScenarioWithSource;
+  constants: {
+    imageUnderstandingPngBase64: string;
+    imageUnderstandingLargePngBase64: string;
+    imageUnderstandingValidPngBase64: string;
   };
-}
-
-export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowApiParams) {
+}) {
   if (params.scenario.execution.kind !== "flow") {
     throw new Error(`scenario is not a flow: ${params.scenario.id}`);
   }
@@ -368,14 +248,156 @@ export async function runQaSuiteScenarioDefinition(params: QaSuiteScenarioFlowAp
     params.env.transport.whenUnhealthy,
   );
   try {
-    const { api, cleanupApi } = createQaSuiteScenarioFlowApi({
-      ...params,
+    const { env, scenario } = params;
+    const prepareFlow = env.transport.prepareFlow;
+    const execution = scenario.execution;
+    const runScenario = async (name: string, steps: QaSuiteStep[]) => {
+      const gatewayLogMark = env.gateway.markLogs?.();
+      const scenarioSteps = steps.map((step) =>
+        Object.assign({}, step, { run: async () => await deadline.run(step.run) }),
+      );
+      const preparedSteps =
+        prepareFlow && execution.kind === "flow"
+          ? [
+              {
+                name: `Prepare ${env.transport.label}`,
+                run: async () => {
+                  const fallbackTimeoutMs = resolveQaLiveTurnTimeoutMs(env, 60_000);
+                  const preparationDeadline = createQaScenarioDeadline(
+                    Math.max(execution.timeoutMs ?? 0, fallbackTimeoutMs),
+                    env.transport.whenUnhealthy,
+                  );
+                  try {
+                    const prepared = await preparationDeadline.run(() =>
+                      prepareFlow({
+                        signal: AbortSignal.any([preparationDeadline.signal, deadline.signal]),
+                        config: execution.config ?? {},
+                        gateway: env.gateway,
+                        outputDir: env.outputDir,
+                        primaryModel: env.primaryModel,
+                        scenarioId: scenario.id,
+                        scenarioTitle: scenario.title,
+                        timeoutMs: execution.timeoutMs ?? fallbackTimeoutMs,
+                        waitForConfigRestartSettle: async (options) =>
+                          await suiteRuntimeGateway.waitForConfigRestartSettle(
+                            env,
+                            options?.restartDelayMs,
+                            options?.timeoutMs,
+                          ),
+                      }),
+                    );
+                    preparationDeadline.signal.throwIfAborted();
+                    if (prepared) {
+                      Object.assign(vars, prepared);
+                    }
+                  } finally {
+                    preparationDeadline.dispose();
+                  }
+                },
+              },
+              ...scenarioSteps,
+            ]
+          : scenarioSteps;
+      const result = await runQaSuiteScenarioSteps(name, preparedSteps);
+      return result.status === "fail"
+        ? appendGatewayLogSentinelEvidence(result, env.gateway, gatewayLogMark)
+        : result;
+    };
+    const createWebPageOpener = (signal?: AbortSignal) => {
+      const open = webRuntime.createQaWebPageOpener(params.env.webSessionIds, signal);
+      return (webParams: webRuntime.QaWebOpenPageParams) =>
+        open({ ...webParams, repoRoot: params.env.repoRoot });
+    };
+    const webOpenPage = createWebPageOpener(deadline.signal);
+    const waitForAccountOutboundMessage: typeof suiteRuntimeTransport.waitForOutboundMessage = (
+      state,
+      predicate,
+      timeoutMs,
+      options,
+    ) =>
+      suiteRuntimeTransport.waitForOutboundMessage(state, predicate, timeoutMs, {
+        ...options,
+        accountId: params.env.transport.accountId,
+      });
+    const markLogs = params.env.gateway.markLogs;
+    const readLogsSince = params.env.gateway.readLogsSince;
+    const monotonicGatewayLogs =
+      typeof markLogs === "function" && typeof readLogsSince === "function"
+        ? { mark: markLogs, readSince: readLogsSince }
+        : undefined;
+    const readGatewayLogs = (mark?: number) => {
+      if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
+        return monotonicGatewayLogs.readSince(mark);
+      }
+      return params.env.gateway.logs?.() ?? "";
+    };
+    const deps = {
+      ...qaSuiteScenarioIdentityDeps,
+      runScenario,
+      waitForOutboundMessage: waitForAccountOutboundMessage,
+      browserRequest: browserRuntime.callQaBrowserRequest,
+      waitForBrowserReady: browserRuntime.waitForQaBrowserReady,
+      browserOpenTab: browserRuntime.qaBrowserOpenTab,
+      browserSnapshot: browserRuntime.qaBrowserSnapshot,
+      browserAct: browserRuntime.qaBrowserAct,
+      webOpenPage,
+      webWait: webRuntime.qaWebWait,
+      webType: webRuntime.qaWebType,
+      webSnapshot: webRuntime.qaWebSnapshot,
+      webEvaluate: webRuntime.qaWebEvaluate,
+      readGatewayLogs,
+      markGatewayLogCursor: () => monotonicGatewayLogs?.mark() ?? -1,
+      scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
+        scanGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
+      assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
+        assertNoGatewayLogSentinels(readGatewayLogs(options?.since), { ...options, since: 0 }),
+      runRuntimeToolFixture: runtimeToolFixture.runRuntimeToolFixture,
+      formatErrorMessage: formatQaErrorMessage,
+      liveTurnTimeoutMs: resolveQaLiveTurnTimeoutMs,
+      resolveQaLiveTurnTimeoutMs,
+      normalizeModelRef: (raw: string) => {
+        const split = splitQaModelRef(raw);
+        return split
+          ? (resolveModelRefFromString({
+              cfg: params.env.cfg,
+              raw,
+              defaultProvider: split.provider,
+            })?.ref ?? null)
+          : null;
+      },
+      splitModelRef: splitQaModelRef,
+    };
+    const transport = params.env.transport;
+    const transportState = transport.state;
+    const resetTransportState = async () => {
+      await transport.reset();
+    };
+
+    const api = {
+      ...deps,
+      env: params.env,
+      lab: params.env.lab,
+      transport,
+      state: transportState,
+      scenario: params.scenario,
+      config: params.scenario.execution.config ?? {},
+      waitForCondition: transport.waitForCondition,
+      waitForChannelReady: deps.waitForTransportReady,
+      waitForQaChannelReady: deps.waitForTransportReady,
+      imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
+      imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
+      imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,
+      getTransportSnapshot: transportState.getSnapshot.bind(transportState),
+      resetTransport: resetTransportState,
+      injectInboundMessage: transport.sendInbound.bind(transport),
+      injectOutboundMessage: transportState.addOutboundMessage.bind(transportState),
+      readTransportMessage: transportState.readMessage.bind(transportState),
+      resetBus: resetTransportState,
+      reset: resetTransportState,
       signal: deadline.signal,
-      runScenario: createQaSuiteScenarioStepRunner(params.env, params.scenario, vars, deadline, {
-        liveTurnTimeoutMs: params.liveTurnTimeoutMs,
-        runScenario: params.runScenario,
-      }),
-    });
+    };
+    // DSL finally actions share the suite owner without the expired acquisition signal.
+    const cleanupApi = { ...api, webOpenPage: createWebPageOpener() };
     return await runScenarioFlow({
       api,
       cleanupApi,

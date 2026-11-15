@@ -8,6 +8,32 @@ title: "Talk realtime sessions and delegation"
 sidebarTitle: "Realtime sessions"
 ---
 
+## Split speech in the browser
+
+With `talk.realtime.mode: "stt-tts"`, browser Talk uses separate transcription,
+agent, and speech steps instead of a realtime speech-to-speech provider. Every
+utterance goes through the current chat session, so its configured model and
+tool permissions apply. Set `talk.provider` and `talk.providers.<provider>` for
+Talk output, or leave the provider unset to use the global `tts` configuration.
+
+For local transcription, configure an audio entry in `tools.media.models` as
+described in [Audio and voice notes](/nodes/audio). The browser uses the existing
+Gateway transcription session; the Gateway passes the completed recording to
+the file-transcription owner. Its provider selection, input limits, timeout, and
+fallback policy also apply here. Explicit streaming-provider selections and a
+matching `agents.defaults.voiceModel` take precedence. File transcription produces
+a final transcript after the utterance ends. The catalog marks file transcription
+ready only when a configured provider or CLI command is available.
+
+Capture pauses during the agent response and speech playback, then resumes for
+the next utterance. Stop cancels the call's own chat run and playback. A Talk
+failure, including the two-minute answer timeout, ends capture and playback but
+leaves the accepted chat run to finish in the conversation. The timeout message
+explains that the answer will appear in chat. Leaving the chat, disconnecting, or
+switching away from Talk also detaches without cancelling accepted work. Split Talk
+does not offer realtime voice switching or camera input. Leaving the mode unset
+preserves realtime Talk.
+
 ## Choose a Talk voice from chat
 
 During an active browser, iOS, or Android realtime Talk call, ask the assistant
@@ -41,7 +67,7 @@ For Talk TTS playback, after setting `talk.provider` and the matching `talk.prov
 
 Status and list are read-only. Setting a voice requires the message-channel owner or a Gateway client with `operator.admin`. Configuration, provider lookup, unknown-voice, and permission failures are returned visibly in chat. A masked API-key value in `/voice status` describes config only; it does not verify credential availability.
 
-Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering queues into the active embedded run; rejected steering returns a reason such as `no_active_run`, `not_streaming`, or `compacting`. A newer GPT-Live spoken task also supersedes the running delegation.
+Client-owned realtime Talk normally forwards provider tool calls through `talk.client.toolCall` instead of calling `chat.send` directly. GPT-Live WebRTC sessions delegate on a Gateway-owned sideband, and the Gateway binds each delegation to the browser or Gateway-relay Talk session that owns it. Backend WebSocket bridges use the normal relay consult path. While a realtime consult is active, clients can call `talk.client.steer` or `talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or `followup`; this includes GPT-Live delegations. Accepted steering enters the active session turn; rejected steering returns a reason such as `no_active_run` or `injection_unavailable`. A newer GPT-Live spoken task also supersedes the running delegation.
 
 Thin audio clients can request `gateway-control-v1` in
 `talk.client.create.capabilities`. OpenAI GA Realtime requires a Platform API
@@ -60,6 +86,14 @@ Unsupported combinations, including GA with OAuth only, fail visibly instead
 of falling back to client-owned control. Existing browser clients omit this
 capability and keep their data channel and client transcript reporting.
 
+A ready Gateway-controlled client can call `talk.client.say` with its
+`sessionKey`, `voiceSessionId`, and nonblank `text` of at most 1,024 UTF-8 bytes.
+This requires `operator.talk` and the connection that owns that exact call.
+It submits the text for playback through the current voice provider without
+starting an agent task. `{ accepted: true }` confirms submission, not audible
+playback. Closed, replaced, or not-yet-ready calls reject the request; the
+Gateway does not retain speech for a later connection.
+
 In Gateway-controlled native calls and native Gateway relays, the provider's
 delegation starts each host action. Final speech transcripts are saved to history;
 they neither trigger actions nor repeat a delegation's action. Status keeps the
@@ -71,7 +105,10 @@ weather” still start tasks while idle. Genuine new tasks retain the native
 delegation replacement behavior.
 
 These calls disable provider-generated delegation acknowledgments at creation.
-OpenClaw sends one neutral receipt when it launches a real task; status and
+OpenClaw asks the voice model for one brief, naturally worded launch acknowledgment
+in the caller's language. Wording should fit the request and avoid repeating recent
+acknowledgments; variation is not guaranteed. It must remain provisional, without
+claiming acceptance or completion, guessing an answer, or promising one. Status and
 cancellation requests wait for the host result instead, without waiting for final
 speech transcription. A full control queue produces a spoken refusal; retry after
 the pending controls finish. A task receipt is not confirmation that a model or
@@ -114,8 +151,13 @@ replies retain their existing visibility.
 
 Direct provider-owned consultations keep their own final answer visible in Chat.
 Accepted work can outlive a closed or replaced audio connection, so a spoken
-replacement is not guaranteed. If speech also arrives, both records may be visible;
-OpenClaw preserves the answer rather than guessing that the spoken text replaces it.
+replacement is not guaranteed. For native provider-owned calls, new assistant speech
+appears in an expandable **Voice transcript**, separately from the backing agent's answer.
+Speech-only dialogue remains available there, and chat search expands matching
+transcripts. The transcript does not claim that speech replaces a particular
+consultation. Raw history, exports, and model context retain both records;
+missing or failed audio never hides the backing answer. Chat-backed Talk and
+older speech records without the presentation marker retain their existing display.
 
 OpenAI GA browser Talk keeps provider conversation order even when an assistant
 reply finishes before the user's transcription or item announcements arrive out
@@ -124,19 +166,27 @@ places it beside the correct reply. Stopping a call drains finalized speech,
 skips unfinished transcriptions, and records a browser console warning for
 missing transcriptions or unresolved conversation links.
 
-Google Live saves complete utterances during the call, including Gemini 3.1
-transcriptions that omit an explicit transcription-finished flag. Partial text
-stays provisional until the provider's completion boundary.
+Google Live saves complete utterances during the call, including Gemini 3.1 and
+3.8 transcriptions that omit an explicit transcription-finished flag. This also
+applies to Gemini 3.8 Extended Thinking. Partial text from older models stays
+provisional until the provider's completion boundary.
 
-Voice-originated consult runs require a new, exact spoken confirmation before high-impact actions such as sending messages, controlling nodes, browser/computer actions, service changes, destructive shell commands, or publication. The gate applies to runs started through `talk.client.toolCall`, the Gateway relay, and GPT-Live sideband delegations. The confirmation applies only to the canonical final execution arguments and is consumed once; if a policy or hook rewrites the approved action, OpenClaw blocks it until the rewritten action is confirmed. Unrelated concurrent runs remain unaffected. When a call closes, OpenClaw can send a compact **Voice call changes** digest for mutating tools to the session's last non-WebChat delivery target.
+Talk uses the same effective tool permissions as text for the same authenticated
+caller, agent, session, target, operation, and final arguments. An action already
+permitted without approval does not gain an extra spoken-confirmation prompt.
+Actions requiring ordinary approval still require that approval through the
+host-authenticated approval flow; saying “yes” or supplying confirmation text to
+the model does not grant permission. Denied actions remain denied.
 
-After a confirmation prompt, say **yes** to confirm the pending action or **no**
-to cancel it. Each confirmation permits one matching action; another action may
-need another confirmation. Native GPT-Live calls use the finalized user speech
-recorded for that call, so generated delegation text cannot supply confirmation.
-When a native consult is blocked by this gate, Talk returns a specific retry
-prompt. If the pending confirmation expires or is cleared before the result,
-Talk reports that the action did not run and asks for a fresh request.
+Gateway shutdown joins accepted voice transcripts, final tool outcomes, and provider-close summaries before releasing persistence resources. Accepted consults keep their persistence ownership until all queued and deferred work finishes, including when diagnostics are disabled. Queued summaries keep their original physical stores while waiting for a delivery slot. Recipient lookup honors `session.store`; voice metadata and delivery markers remain in their separate per-agent store. A missing conversation is reported as a failed digest attempt instead of silently dropping its summary. Provider cleanup failures do not bypass that persistence drain. Stored formats and retry limits are unchanged. Confirmed deliveries retry only their completion marker; partial or uncertain deliveries are not resent. Unresolved outcomes retain a fence for the lifetime of the delivery owner within its existing bounded retry capacity.
+
+Direct provider delegations and chat-backed Talk retain their real voice identity.
+Operator and source revocation, cancellation, sandbox restrictions, node routing,
+and final executable checks still apply. Previous external delivery history can
+supply a reply destination, not the caller's authorization channel. Audio and
+transcript capabilities remain transport-specific. Closing a call can still send
+a compact **Voice call changes** digest for mutating tools to its last non-WebChat
+delivery target.
 
 Transcription-only Talk emits the same Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. All Talk sessions broadcast events on the `talk.event` channel; clients subscribe to it for partial/final transcript updates (`transcript.delta`/`transcript.done`) and other session telemetry.
 
@@ -164,6 +214,50 @@ If session creation fails, Talk releases the microphone before reporting the err
 If OpenAI cannot transcribe an utterance, browser Talk shows the provider's error
 without ending the call or inventing a transcript. You can speak again; audio
 responses continue independently of input transcription.
+
+Set `talk.realtime.providers.openai.inputTranscriptionModel` in `openclaw.json`
+to choose the input-transcription model separately from the Realtime
+conversation model. For Azure, use the Azure deployment name for this setting:
+
+```json5
+{
+  talk: {
+    realtime: {
+      providers: {
+        openai: {
+          azureEndpoint: "https://<resource>.openai.azure.com",
+          azureDeployment: "<realtime-deployment>",
+          apiKey: "<azure-resource-key>",
+          inputTranscriptionModel: "<transcription-deployment>",
+        },
+      },
+    },
+  },
+}
+```
+
+This value configures transcription only; it does not change the Realtime
+conversation model. For Azure, the bridge sends a GA Realtime `session.update`
+with `type: "realtime"`, audio input transcription and turn detection, and the
+configured realtime deployment in the WebSocket URL. Azure input transcription
+uses the `inputTranscriptionModel` deployment when set, or `whisper-1` when
+unset. The transcription deployment must be available on the Azure resource.
+Azure authentication uses the resource key in the `api-key` header; it does not
+use an OpenAI Platform key. An explicit `azureApiVersion` keeps the preview URL
+and preview session protocol, including its existing endpoint path; omit it to use GA.
+For GA, the endpoint may be the resource root or end in `/openai` or `/openai/v1`.
+The setting is also available
+under the Voice Call plugin provider config at
+`plugins.entries.voice-call.config.realtime.providers.openai.inputTranscriptionModel`.
+
+Browser Gateway-relay Talk tolerates slow audio acknowledgments while keeping
+at most three seconds of microphone audio in flight. Excess frames are dropped
+with a notice asking you to repeat the last part. A successful acknowledgment
+renews the relay's liveness window; if pending audio receives no acknowledgment
+for 30 seconds, Talk ends with a connection error and guidance to restart it.
+Explicit Gateway errors or a lost connection still end the call immediately.
+iOS and macOS Gateway-relay Talk use the same three-second input budget and
+30-second acknowledgment limit; iOS shows the same repeat-the-last-part notice.
 
 If the microphone disconnects or its permission is revoked, browser Talk ends
 the call and shows an error. Choose an available **Microphone input**, restore

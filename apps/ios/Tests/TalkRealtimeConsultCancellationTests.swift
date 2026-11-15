@@ -207,7 +207,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     defaultRealtimeModelIdFallback: "gpt-realtime-2",
                     defaultSilenceTimeoutMs: 900))
                 manager.gatewayTalkPermissionState = .ready
-                await manager.prefetchRealtimeSessionIfReady(reason: "synthetic handoff")
+                await manager.prefetchRealtimeSessionIfReady()
                 let deadline = Date().addingTimeInterval(5)
                 while !manager._test_hasPrefetchedRealtimeSession(), Date() < deadline {
                     try await Task.sleep(for: .milliseconds(10))
@@ -275,6 +275,11 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                 let requests = ConsultRequestCapture()
                 let manager = TalkModeManager(allowSimulatorCapture: true)
                 let createMethod = path == "gateway-relay" ? "talk.session.create" : "talk.client.create"
+                let talkConfig: [String: Any] = ["talk": ["realtime": [
+                    "mode": "realtime", "provider": "openai", "brain": "agent-consult",
+                    "transport": path == "gateway-relay" ? "gateway-relay" : "webrtc",
+                ]]]
+                let talkConfigJSON = try JSONSerialization.data(withJSONObject: talkConfig)
                 let socket = GatewayTestWebSocketTask(sendHook: { [weak manager] socket, message, _ in
                     let data: Data
                     switch message {
@@ -284,7 +289,13 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     }
                     let frame = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
                     await requests.append(data)
-                    if frame["method"] as? String == createMethod {
+                    if frame["method"] as? String == "talk.config" {
+                        // Every Talk start reads the current Gateway config.
+                        try socket.emitReceiveSuccess(.data(JSONSerialization.data(withJSONObject: [
+                            "type": "res", "id": XCTUnwrap(frame["id"] as? String), "ok": true,
+                            "payload": ["config": JSONSerialization.jsonObject(with: talkConfigJSON)],
+                        ])))
+                    } else if frame["method"] as? String == createMethod {
                         // Stop before replying so awaiting start never opens a microphone or provider call.
                         await manager?.stop()
                         let payload: [String: Any] = path == "gateway-relay" ? [
@@ -316,10 +327,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     manager.attachGateway(gateway)
                     manager.updateGatewayConnected(true)
                     manager._test_applyLoadedTalkConfig(TalkModeGatewayConfigParser.parse(
-                        config: ["talk": ["realtime": [
-                            "mode": "realtime", "provider": "openai", "brain": "agent-consult",
-                            "transport": path == "gateway-relay" ? "gateway-relay" : "webrtc",
-                        ]]],
+                        config: talkConfig,
                         defaultProvider: "elevenlabs",
                         defaultModelIdFallback: "eleven_v3",
                         defaultRealtimeModelIdFallback: "gpt-realtime-2",
@@ -327,7 +335,7 @@ final class TalkRealtimeConsultCancellationTests: XCTestCase {
                     manager.gatewayTalkPermissionState = .ready
                     if path != "prefetch" { manager._test_prepareEnabledRealtimeSessionForClose() }
                     if path == "prefetch" {
-                        await manager.prefetchRealtimeSessionIfReady(reason: "synthetic compatibility")
+                        await manager.prefetchRealtimeSessionIfReady()
                     } else {
                         await manager.start()
                     }

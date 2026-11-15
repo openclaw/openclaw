@@ -21,27 +21,19 @@ describe("hook update work deadlines", () => {
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "hook-work-deadline" });
     vi.stubEnv("NPM_CONFIG_GLOBALCONFIG", await state.writeText("global-npmrc", ""));
-    const packageDir = path.join(state.root, "package");
-    await fs.mkdir(path.join(packageDir, "hooks", "deadline"), { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "deadline-hooks",
-        version: "1.0.0",
-        openclaw: { hooks: ["./hooks/deadline"] },
-        dependencies: { "deadline-fixture": "1.0.0" },
-      }),
-    );
-    await fs.writeFile(
-      path.join(packageDir, "hooks", "deadline", "HOOK.md"),
+    await state.writeJson("package/package.json", {
+      name: "deadline-hooks",
+      version: "1.0.0",
+      openclaw: { hooks: ["./hooks/deadline"] },
+      dependencies: { "deadline-fixture": "1.0.0" },
+    });
+    await state.writeText(
+      "package/hooks/deadline/HOOK.md",
       '---\nname: deadline\ndescription: Deadline fixture\nmetadata: {"openclaw":{"events":["command:new"]}}\n---\n# Deadline fixture\n',
     );
-    await fs.writeFile(
-      path.join(packageDir, "hooks", "deadline", "handler.ts"),
-      "export default async () => {};\n",
-    );
+    await state.writeText("package/hooks/deadline/handler.ts", "export default async () => {};\n");
     const archivePath = path.join(state.root, "fixture.tgz");
-    await tar.c({ cwd: state.root, file: archivePath, gzip: true }, ["package"]);
+    await tar.c({ cwd: state.stateDir, file: archivePath, gzip: true }, ["package"]);
     runCommand.mockReset();
     runCommand.mockImplementation(async (argv: string[], options: CommandOptions) => {
       let stdout = "";

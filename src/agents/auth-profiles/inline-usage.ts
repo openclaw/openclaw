@@ -1,14 +1,14 @@
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
+import { createSqliteLifecycleAggregateError } from "../../infra/sqlite-lifecycle-errors.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { withOpenClawAgentDatabaseAsync } from "../../state/openclaw-agent-db.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { openOpenClawAgentSqliteWorkerStore } from "../../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import {
   hydrateOpenClawStateWorkerError,
   retainOpenClawStateWorkerErrorPayload,
@@ -19,7 +19,6 @@ import type {
   InlineAuthFailureInput,
   InlineAuthFailureOperations,
   InlineAuthFailureReceipt,
-  InlineAuthFailureResult,
 } from "./inline-usage-kernel.js";
 import { publishInlineAuthFailure } from "./inline-usage-publication.js";
 import {
@@ -27,15 +26,23 @@ import {
   assertAuthProfileMigrationStateAtDatabasePath,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { clearRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
 import { loadPersistedAuthProfileStoreFromRows } from "./sqlite-read.js";
-import { prepareAuthProfileWriteTransaction } from "./sqlite.js";
+import {
+  prepareAuthProfileWriteTransactionAsync,
+  prepareAuthProfileWriteEnvironment,
+  resolveAuthProfileDatabasePath,
+  resolveAuthProfileDatabaseOwnerId,
+} from "./sqlite.js";
 import {
   getScopedAuthProfileEnv,
   getScopedSharedAuthStore,
   resolveRuntimeAuthProfileAgentDir,
 } from "./store.js";
+import { reserveAuthProfileUsagePreparation, runAuthProfileUsage } from "./usage-lifecycle.js";
+import { captureAuthProfileWriteExecution } from "./write-execution.js";
 
 function inlineAuthFailureError(payload: OpenClawStateWorkerErrorPayload): Error {
   const error = new Error("Auth usage transaction failed");
@@ -49,10 +56,54 @@ export async function persistInlineAuthFailure(
   input: Omit<InlineAuthFailureInput, "expectedCredentials" | "inheritedUsageStats">,
 ): Promise<InlineAuthFailureReceipt | null> {
   const effectiveAgentDir = resolveRuntimeAuthProfileAgentDir(agentDir);
-  const prepared = prepareAuthProfileWriteTransaction(effectiveAgentDir, {
-    env: getScopedAuthProfileEnv(),
+  const env = prepareAuthProfileWriteEnvironment({ env: getScopedAuthProfileEnv() });
+  if (!effectiveAgentDir) {
+    throw new Error("Inline auth failure requires its selected agent directory");
+  }
+  const databasePath = resolveAuthProfileDatabasePath(effectiveAgentDir);
+  return runAuthProfileUsage(async () => {
+    const execution = captureAuthProfileWriteExecution({
+      path: databasePath,
+      agentId: resolveAuthProfileDatabaseOwnerId(effectiveAgentDir),
+      env,
+    });
+    const inheritedUsageStats = structuredClone(getScopedSharedAuthStore()?.usageStats);
+    let transferred = false;
+    const reservation = reserveAuthProfileUsagePreparation([
+      resolveOpenClawStateSqlitePath(env),
+      databasePath,
+    ]);
+    try {
+      await reservation.ready;
+      const prepared = await prepareAuthProfileWriteTransactionAsync(
+        effectiveAgentDir,
+        { env },
+        () => execution.assertCurrent(),
+      );
+      transferred = true;
+      return await persistPreparedInlineAuthFailure(
+        effectiveAgentDir,
+        input,
+        prepared,
+        execution,
+        inheritedUsageStats,
+      );
+    } finally {
+      if (!transferred) {
+        await execution.release();
+      }
+      reservation.release();
+    }
   });
-  const inheritedUsageStats = structuredClone(getScopedSharedAuthStore()?.usageStats);
+}
+
+async function persistPreparedInlineAuthFailure(
+  effectiveAgentDir: string | undefined,
+  input: Omit<InlineAuthFailureInput, "expectedCredentials" | "inheritedUsageStats">,
+  prepared: Awaited<ReturnType<typeof prepareAuthProfileWriteTransactionAsync>>,
+  execution: ReturnType<typeof captureAuthProfileWriteExecution>,
+  inheritedUsageStats: InlineAuthFailureInput["inheritedUsageStats"],
+): Promise<InlineAuthFailureReceipt | null> {
   const { databaseTarget, sharedOwner } = prepared;
   if (databaseTarget.kind !== "agent") {
     throw new Error("Inline auth failure requires its selected agent database");
@@ -63,7 +114,6 @@ export async function persistInlineAuthFailure(
     env: owner.env,
   });
   const identity = readDatabasePathIdentitySync(databaseTarget.path);
-  const execution = captureOpenClawAgentDatabaseExecution(databaseTarget);
   let durableReceipt: InlineAuthFailureReceipt | undefined;
   let failure: { error: unknown } | undefined;
   let hasCredentials: boolean | undefined;
@@ -95,63 +145,53 @@ export async function persistInlineAuthFailure(
     try {
       return await runOpenClawAgentWriteAdmission(
         databaseTarget,
-        () =>
-          withOpenClawAgentDatabaseAsync(
+        async () => {
+          const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
             databaseTarget,
-            async (database) => {
-              const client = await openOpenClawAgentSqliteWorkerStore<InlineAuthFailureOperations>(
-                databaseTarget,
-                database.db,
-                {
-                  moduleUrl: resolveRuntimeWorkerUrl(
-                    runtimeProcessEntrypoints.authProfileInlineUsage,
-                  ),
-                  input: {},
-                },
-              );
-              let outcome:
-                | { ok: true; value: InlineAuthFailureResult }
-                | { ok: false; error: unknown };
-              try {
-                const value = await client.run(async (scope) => {
-                  const readTarget = () =>
-                    scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined });
-                  const rows = await readTarget();
-                  const store = loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath);
-                  hasCredentials = Object.keys(store?.profiles ?? {}).length > 0;
-                  assertCurrent();
-                  const result = await scope.execute({
-                    type: "authProfiles.inlineFailure",
-                    input: {
-                      ...input,
-                      inheritedUsageStats,
-                      expectedCredentials: rows.store.status === "readable" ? rows.store.raw : null,
-                    },
-                  });
-                  if (!result.ok) {
-                    return result;
-                  }
-                  const { receipt } = result;
-                  durableReceipt = receipt;
-                  // Publication failure cannot turn a known commit into a retryable failed write.
-                  try {
-                    await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
-                  } catch (error) {
-                    clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
-                      owner.databasePath,
-                      effectiveAgentDir,
-                    );
-                    reportCommittedInlineAuthFailure(
-                      "auth usage committed but publication failed",
-                      error,
-                    );
-                  }
+            { execution },
+            {
+              moduleUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.authProfileInlineUsage),
+              input: {},
+            },
+          );
+          const executionResult = await withAuthProfileCleanup(
+            () =>
+              client.run(async (scope) => {
+                const readTarget = () =>
+                  scope.execute({ type: "authProfiles.inlineSnapshot", input: undefined });
+                const rows = await readTarget();
+                const store = loadPersistedAuthProfileStoreFromRows(rows, owner.databasePath);
+                hasCredentials = Object.keys(store?.profiles ?? {}).length > 0;
+                assertCurrent();
+                const result = await scope.execute({
+                  type: "authProfiles.inlineFailure",
+                  input: {
+                    ...input,
+                    inheritedUsageStats,
+                    expectedCredentials: rows.store.status === "readable" ? rows.store.raw : null,
+                  },
+                });
+                if (!result.ok) {
                   return result;
-                }, assertCurrent);
-                outcome = { ok: true, value };
-              } catch (error) {
-                outcome = { ok: false, error };
-              }
+                }
+                const { receipt } = result;
+                durableReceipt = receipt;
+                // Publication failure cannot turn a known commit into a retryable failed write.
+                try {
+                  await publishInlineAuthFailure(owner, receipt, readTarget, assertCurrent);
+                } catch (error) {
+                  clearRuntimeAuthProfileStoreSnapshotAtDatabasePath(
+                    owner.databasePath,
+                    effectiveAgentDir,
+                  );
+                  reportCommittedInlineAuthFailure(
+                    "auth usage committed but publication failed",
+                    error,
+                  );
+                }
+                return result;
+              }, assertCurrent),
+            async (outcome) => {
               try {
                 await client.close();
               } catch (cleanupError) {
@@ -174,16 +214,13 @@ export async function persistInlineAuthFailure(
                   cleanupError,
                 );
               }
-              if (!outcome.ok) {
-                throw outcome.error;
-              }
-              if (!outcome.value.ok) {
-                throw inlineAuthFailureError(outcome.value.error);
-              }
-              return outcome.value.receipt;
             },
-            assertCurrent,
-          ),
+          );
+          if (!executionResult.ok) {
+            throw inlineAuthFailureError(executionResult.error);
+          }
+          return executionResult.receipt;
+        },
         true,
       );
     } catch (error) {
@@ -205,7 +242,7 @@ export async function persistInlineAuthFailure(
       failure = { error };
       const message = error instanceof Error ? error.message : String(error);
       authProfilesLog.warn(`auth profile store update failed: ${message}`, {
-        agentDir,
+        agentDir: effectiveAgentDir,
         error: message,
       });
       if (!isSqliteLockError(error)) {
@@ -214,34 +251,24 @@ export async function persistInlineAuthFailure(
       return null;
     }
   };
-  const outcome = await runWithAdmission().then(
-    (value) => ({ ok: true as const, value }),
-    (error: unknown) => ({ ok: false as const, error }),
-  );
-  let releaseFailure: { error: unknown } | undefined;
-  try {
-    await execution.release();
-  } catch (error) {
-    releaseFailure = { error };
-  }
-  if (releaseFailure) {
-    if (durableReceipt) {
-      reportCommittedInlineAuthFailure(
-        "auth usage committed before captured owner release failed",
-        releaseFailure.error,
-      );
-    } else if (failure) {
-      throw new AggregateError(
-        [failure.error, releaseFailure.error],
-        "Auth usage and captured owner release failed",
-        { cause: failure.error },
-      );
-    } else {
-      throw releaseFailure.error;
+  return withAuthProfileCleanup(runWithAdmission, async () => {
+    try {
+      await execution.release();
+    } catch (error) {
+      if (durableReceipt) {
+        reportCommittedInlineAuthFailure(
+          "auth usage committed before captured owner release failed",
+          error,
+        );
+      } else if (failure) {
+        throw createSqliteLifecycleAggregateError(
+          [failure.error, error],
+          "Auth usage and captured owner release failed",
+          failure.error,
+        );
+      } else {
+        throw error;
+      }
     }
-  }
-  if (!outcome.ok) {
-    throw outcome.error;
-  }
-  return outcome.value;
+  });
 }

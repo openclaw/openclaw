@@ -77,26 +77,14 @@ docker_e2e_docker_run_with_resource_diagnostics() {
     return "$?"
   fi
   local tee_bin=""
-  if ! tee_bin="$(docker_e2e_diagnostic_bin tee)"; then
-    docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
-    docker_e2e_timeout_cmd \
-      "$timeout_value" \
-      docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return "$?"
-  fi
   local tail_bin=""
-  if ! tail_bin="$(docker_e2e_diagnostic_bin tail)"; then
-    docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
-    docker_e2e_timeout_cmd \
-      "$timeout_value" \
-      docker run "${DOCKER_E2E_RUN_RESOURCE_ARGS[@]}" "$@"
-    return "$?"
-  fi
   local stderr_file="${diagnostic_dir}/stderr"
   local stderr_fifo="${diagnostic_dir}/stderr.pipe"
   local capture_fifo="${diagnostic_dir}/capture.pipe"
   local mkfifo_bin=""
-  if ! mkfifo_bin="$(docker_e2e_diagnostic_bin mkfifo)" ||
+  if ! tee_bin="$(docker_e2e_diagnostic_bin tee)" ||
+    ! tail_bin="$(docker_e2e_diagnostic_bin tail)" ||
+    ! mkfifo_bin="$(docker_e2e_diagnostic_bin mkfifo)" ||
     ! "$mkfifo_bin" "$stderr_fifo" "$capture_fifo"; then
     docker_e2e_remove_diagnostic_dir "$diagnostic_dir"
     docker_e2e_timeout_cmd \

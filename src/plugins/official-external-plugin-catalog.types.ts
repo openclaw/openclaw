@@ -6,9 +6,11 @@ import type {
   PluginManifestContracts,
   PluginManifestProviderEndpoint,
   PluginManifestNativeSessionCatalogSetup,
+  PluginManifestOnboardingScope,
 } from "./manifest-types.js";
 import type {
   OpenClawPackageManifest,
+  OpenClawPackageBuild,
   PluginPackageChannel,
   PluginPackageInstall,
 } from "./package-manifest.types.js";
@@ -32,7 +34,7 @@ export type OfficialExternalProviderAuthChoice = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: readonly ("text-inference" | "image-generation" | "music-generation")[];
+  onboardingScopes?: readonly PluginManifestOnboardingScope[];
 };
 
 type OfficialExternalProviderCatalogProvider = {
@@ -78,6 +80,8 @@ type OfficialExternalCatalogChannel = PluginPackageChannel & {
 
 /** Manifest-like metadata stored in official external catalog entries. */
 export type OfficialExternalPluginCatalogManifest = {
+  /** An installable plugin can still belong to the default core distribution. */
+  build?: Pick<OpenClawPackageBuild, "bundledDist">;
   legacyPluginIds?: readonly string[];
   legacyNpmPackageNames?: readonly string[];
   setupFeatures?: OpenClawPackageManifest["setupFeatures"];

@@ -24,13 +24,11 @@ export function xaiUserAgent(): string {
   return `${ORIGINATOR}/${resolveXaiUserAgentVersion()}`;
 }
 
-const XAI_NATIVE_API_HOSTS = new Set(["api.x.ai"]);
-
 // Returns a `User-Agent` header entry only when the resolved baseUrl points
 // at a verified xAI-native API host. User-configured proxy baseUrls produce
 // an empty record so the openclaw identity is not forwarded to the proxy.
 export function xaiUserAgentHeaderFor(baseUrl: string | undefined): Record<string, string> {
-  if (baseUrl && XAI_NATIVE_API_HOSTS.has(URL.parse(baseUrl)?.hostname ?? "")) {
+  if (baseUrl && URL.parse(baseUrl)?.hostname === "api.x.ai") {
     return { "User-Agent": xaiUserAgent() };
   }
   return {};

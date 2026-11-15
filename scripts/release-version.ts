@@ -29,16 +29,7 @@ type ReleaseVersionArgs = {
   version: string | null;
 };
 
-type ReleaseVersionChange = {
-  currentContent: string;
-  nextContent: string;
-  path: string;
-};
-
-type ReleaseVersionPlan = {
-  changes: ReleaseVersionChange[];
-  version: string;
-};
+type ReleaseVersionPlan = ReturnType<typeof planReleaseVersion>;
 
 type AndroidVersionManifest = {
   version?: unknown;
@@ -77,7 +68,7 @@ export function planReleaseVersion(params: {
   android?: boolean;
   rootDir?: string;
   version: string;
-}): ReleaseVersionPlan {
+}) {
   const rootDir = path.resolve(params.rootDir ?? ".");
   const parsedVersion = parseReleaseVersion(params.version);
   if (!parsedVersion) {
@@ -164,7 +155,7 @@ export function main(argv = process.argv.slice(2)): number {
   return 0;
 }
 
-function planPackageJson(rootDir: string, version: string): ReleaseVersionChange {
+function planPackageJson(rootDir: string, version: string) {
   const filePath = path.join(rootDir, "package.json");
   const currentContent = fs.readFileSync(filePath, "utf8");
   const packageJson = JSON.parse(currentContent) as Record<string, unknown>;
@@ -182,7 +173,7 @@ function planPackageJson(rootDir: string, version: string): ReleaseVersionChange
 function planMacosInfoPlist(
   rootDir: string,
   releaseVersion: NonNullable<ReturnType<typeof parseReleaseVersion>>,
-): ReleaseVersionChange {
+) {
   const filePath = path.join(rootDir, MACOS_INFO_PLIST);
   const currentContent = fs.readFileSync(filePath, "utf8");
   const buildVersion = [
@@ -206,7 +197,7 @@ function planMacosInfoPlist(
   return { currentContent, nextContent, path: filePath };
 }
 
-function planAndroidVersion(rootDir: string, baseVersion: string): ReleaseVersionChange[] {
+function planAndroidVersion(rootDir: string, baseVersion: string) {
   const versionPath = path.join(rootDir, ANDROID_VERSION_FILE);
   const propertiesPath = path.join(rootDir, ANDROID_VERSION_PROPERTIES_FILE);
   const changelogPath = path.join(rootDir, ANDROID_CHANGELOG_FILE);

@@ -6,8 +6,8 @@ import type {
   SkillsLibraryListResult,
 } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
 import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { SkillLibraryError } from "../skill-library-error.js";
 import { validateSkillLibraryPath } from "./bundle.js";
-import { SkillLibraryError } from "./errors.js";
 
 /** Model edits are named changes; unread binary resources retain their exact bytes and modes. */
 export function mergeSkillLibrarySupportFiles(
@@ -67,7 +67,8 @@ export type SkillLibraryAuthoringCapability = {
   target: "personal";
   defaultTarget: "workspace" | "personal";
   multipleProfiles: boolean;
-  assertWorkspaceCurrent?: () => void;
+  /** Gate for Workshop calls through the workspace-default wrapper, given the run's sandbox state. */
+  assertWorkspaceCurrent?: (run?: { sandboxed?: boolean }) => void;
   bind: (context: AdmittedRunContext) => void;
   invoke: (
     params: SkillLibraryAuthoringInput,

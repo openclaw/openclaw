@@ -8,7 +8,6 @@ import {
   createListCard,
 } from "./flex-templates/basic-cards.js";
 import { createReceiptCard } from "./flex-templates/schedule-cards.js";
-import type { ListItem } from "./flex-templates/types.js";
 import { createFlexMessage } from "./send.js";
 import type { LineChannelData, LineTemplateActionPayload } from "./types.js";
 
@@ -113,55 +112,20 @@ function parseActions(actionsStr: string | undefined): LineTemplateActionPayload
   return results;
 }
 
-/**
- * Parse list items format: "Item1|Subtitle1,Item2|Subtitle2"
- */
-function parseListItems(itemsStr: string): ListItem[] {
-  return splitCardValue(itemsStr, ",")
-    .map((part) => {
-      const [title, subtitle] = splitCardPair(part);
-      return { title, subtitle };
-    })
-    .filter((item) => item.title);
-}
+export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPayload> {
+  let argsStr = argsInput?.trim() ?? "";
+  if (!argsStr) {
+    return { text: CARD_USAGE };
+  }
 
-/**
- * Parse receipt items format: "Item1:$10,Item2:$20"
- */
-function parseReceiptItems(itemsStr: string): Array<{ name: string; value: string }> {
-  return splitCardValue(itemsStr, ",")
-    .map((part) => {
-      // The last unescaped colon separates the entry value, so a name may still
-      // contain colons of its own.
-      const segments = splitCardValue(part, ":");
-      const value = segments.length > 1 ? segments.pop() : undefined;
-      return {
-        name: segments.join(":").trim(),
-        value: value?.trim() ?? "",
-      };
-    })
-    .filter((item) => item.name);
-}
-
-/**
- * Parse quoted arguments from command string
- * Supports: /card type "arg1" "arg2" "arg3" --flag value
- */
-function parseCardArgs(argsStrInput: string): {
-  type: string;
-  args: Array<string | undefined>;
-  flags: Record<string, string>;
-} {
-  let argsStr = argsStrInput;
-  const result: { type: string; args: Array<string | undefined>; flags: Record<string, string> } = {
-    type: "",
-    args: [],
-    flags: {},
-  };
+  // Parse /card type "arg1" "arg2" "arg3" --flag value.
+  let type = "";
+  const args: Array<string | undefined> = [];
+  const flags: Record<string, string> = {};
 
   const typeMatch = argsStr.match(/^(\w+)/);
   if (typeMatch) {
-    result.type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
+    type = normalizeLowercaseStringOrEmpty(typeMatch[1]);
     argsStr = argsStr.slice(typeMatch[0].length).trim();
   }
 
@@ -171,27 +135,14 @@ function parseCardArgs(argsStrInput: string): {
   const quotedRegex = /"([^"]*?)"/g;
   let match;
   while ((match = quotedRegex.exec(argsStr)) !== null) {
-    result.args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
+    args.push(expectDefined(match[1], "quoted card argument capture") || undefined);
   }
 
-  // Extract flags (--key value or --key "value")
   const flagRegex = /--(\w+)\s+(?:"([^"]*?)"|(\S+))/g;
   while ((match = flagRegex.exec(argsStr)) !== null) {
     const key = expectDefined(match[1], "card flag name capture");
-    result.flags[key] = expectDefined(match[2] ?? match[3], "card flag value capture");
+    flags[key] = expectDefined(match[2] ?? match[3], "card flag value capture");
   }
-
-  return result;
-}
-
-export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPayload> {
-  const argsStr = argsInput?.trim() ?? "";
-  if (!argsStr) {
-    return { text: CARD_USAGE };
-  }
-
-  const parsed = parseCardArgs(argsStr);
-  const { type, args, flags } = parsed;
 
   if (!type) {
     return { text: CARD_USAGE };
@@ -224,20 +175,18 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
         const bubble = createActionCard(
           title,
           body,
-          actions.map((action) => ({
-            label: action.label,
-            action:
-              action.type === "uri"
-                ? { type: "uri", label: action.label, uri: action.uri }
-                : action.type === "postback"
-                  ? {
-                      type: "postback",
-                      label: action.label,
-                      data: action.data,
-                      displayText: action.label,
-                    }
-                  : { type: "message", label: action.label, text: action.data },
-          })),
+          actions.map((action) =>
+            action.type === "uri"
+              ? { type: "uri", label: action.label, uri: action.uri }
+              : action.type === "postback"
+                ? {
+                    type: "postback",
+                    label: action.label,
+                    data: action.data,
+                    displayText: action.label,
+                  }
+                : { type: "message", label: action.label, text: action.data },
+          ),
           { imageUrl: flags.url || flags.image },
         );
         return buildLineFlexReply(body ? `${title}: ${body}` : title, bubble);
@@ -245,7 +194,12 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
 
       case "list": {
         const [title = "List", itemsStr = ""] = args;
-        const items = parseListItems(itemsStr || flags.items || "");
+        const items = splitCardValue(itemsStr || flags.items || "", ",")
+          .map((part) => {
+            const [itemTitle, subtitle] = splitCardPair(part);
+            return { title: itemTitle, subtitle };
+          })
+          .filter((item) => item.title);
         if (items.length === 0) {
           return {
             text: 'Error: List card requires items. Usage: /card list "Title" "Item1|Desc1,Item2|Desc2"',
@@ -260,7 +214,18 @@ export async function handleLineCardCommand(argsInput?: string): Promise<ReplyPa
 
       case "receipt": {
         const [title = "Receipt", itemsStr = ""] = args;
-        const items = parseReceiptItems(itemsStr || flags.items || "");
+        const items = splitCardValue(itemsStr || flags.items || "", ",")
+          .map((part) => {
+            // The last unescaped colon separates the entry value, so a name may still
+            // contain colons of its own.
+            const segments = splitCardValue(part, ":");
+            const value = segments.length > 1 ? segments.pop() : undefined;
+            return {
+              name: segments.join(":").trim(),
+              value: value?.trim() ?? "",
+            };
+          })
+          .filter((item) => item.name);
         const total = flags.total ? { label: "Total", value: flags.total } : undefined;
         const footer = flags.footer;
 

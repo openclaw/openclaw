@@ -34,3 +34,12 @@ Verified cleanup-only failures warn without blocking an upgrade.
 
 Plugin developers can follow the
 [Doctor ingress migration contract](https://docs.openclaw.ai/plugins/sdk-migration/how-to-migrate#migrate-durable-ingress-files-through-doctor).
+
+## Retired JSON sidecars
+
+Bot-info, sticker, thread-binding, update-offset, message, sent-message, and
+topic-name JSON sidecars from before July 2026 are no longer inspected or
+archived by Doctor. The files remain untouched. If they contain state you
+still need, restore a complete pre-update backup, run `openclaw doctor --fix`
+with OpenClaw 2026.9.5, then update again. See
+[older-version upgrades](https://docs.openclaw.ai/install/updating#upgrading-very-old-versions).

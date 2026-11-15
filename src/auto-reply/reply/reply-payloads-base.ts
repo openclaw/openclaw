@@ -3,6 +3,7 @@ import type { ReplyToMode } from "../../config/types.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
 import {
   copyReplyPayloadMetadata,
+  getReplyPayloadMetadata,
   isRenderablePayload,
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
@@ -13,18 +14,22 @@ import {
   resolveImplicitCurrentMessageReplyAllowance,
 } from "./reply-threading.js";
 
-function resolveReplyThreadingForPayload(params: {
+export function applyReplyTagsToPayload(params: {
   payload: ReplyPayload;
   replyToMode?: ReplyToMode;
   implicitReplyToId?: string;
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload {
-  const payload = normalizeOptionalString(params.payload.replyToId)
-    ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
-        replyToIdExplicit: true,
-      })
-    : params.payload;
+  const payload =
+    normalizeOptionalString(params.payload.replyToId) &&
+    (params.payload.replyToTag ||
+      params.payload.replyToCurrent ||
+      getReplyPayloadMetadata(params.payload)?.replyToIdExplicit !== false)
+      ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
+          replyToIdExplicit: true,
+        })
+      : params.payload;
   const implicitReplyToId = normalizeOptionalString(params.implicitReplyToId);
   const currentMessageId = normalizeOptionalString(params.currentMessageId);
   const allowImplicitReplyToCurrentMessage = resolveImplicitCurrentMessageReplyAllowance(
@@ -44,18 +49,21 @@ function resolveReplyThreadingForPayload(params: {
         });
 
   // Inline reply tags override implicit threading without losing payload metadata.
-  if (typeof resolved.text === "string" && resolved.text.includes("[[")) {
+  if (resolved.text?.includes("[[")) {
     const tags = parseInlineDirectives(resolved.text, {
       currentMessageId,
       stripAudioTag: false,
     });
     resolved = copyReplyPayloadMetadata(resolved, {
       ...resolved,
-      text: tags.text ? tags.text : undefined,
+      text: tags.text || undefined,
       replyToId: tags.replyToId ?? resolved.replyToId,
       replyToTag: tags.hasReplyTag || resolved.replyToTag,
       replyToCurrent: tags.replyToCurrent || resolved.replyToCurrent,
     });
+    if (tags.hasReplyTag) {
+      setReplyPayloadMetadata(resolved, { replyToIdExplicit: true });
+    }
   }
 
   if (resolved.replyToCurrent && !resolved.replyToId && currentMessageId) {
@@ -68,14 +76,6 @@ function resolveReplyThreadingForPayload(params: {
   return resolved;
 }
 
-/** Applies inline reply tags to a single payload. */
-export function applyReplyTagsToPayload(
-  payload: ReplyPayload,
-  currentMessageId?: string,
-): ReplyPayload {
-  return resolveReplyThreadingForPayload({ payload, currentMessageId });
-}
-
 type ReplyThreadingParams = {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;
@@ -84,13 +84,12 @@ type ReplyThreadingParams = {
   replyThreading?: ReplyThreadingPolicy;
 };
 
-/** Resolves reply targets and filters empty payloads before channel delivery. */
 export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): ReplyPayload[] {
   const { payloads, replyToMode, currentMessageId, replyThreading } = params;
   const implicitReplyToId = normalizeOptionalString(currentMessageId);
   return payloads
     .map((payload) =>
-      resolveReplyThreadingForPayload({
+      applyReplyTagsToPayload({
         payload,
         replyToMode,
         implicitReplyToId,
@@ -101,7 +100,6 @@ export function resolveReplyThreadingPayloads(params: ReplyThreadingParams): Rep
     .filter(isRenderablePayload);
 }
 
-/** Applies threading policy and filters empty payloads before channel delivery. */
 export function applyReplyThreading(params: ReplyThreadingParams): ReplyPayload[] {
   const applyReplyToMode = createReplyToModeFilterForChannel(
     params.replyToMode,

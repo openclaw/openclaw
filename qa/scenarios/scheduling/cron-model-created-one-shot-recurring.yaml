@@ -26,7 +26,7 @@ scenario:
     - docs/automation/cron-jobs.md
   codeRefs:
     - src/agents/tools/cron-tool.ts
-    - src/cron/service/timer.ts
+    - src/cron/service/scheduler-actor.ts
     - extensions/qa-lab/src/cron-run-wait.ts
   execution:
     kind: flow
@@ -120,6 +120,7 @@ flow:
                     const mutations = projectQaToolMessages(history.messages ?? [])
                       .flatMap((message) => message.role === 'assistant' && Array.isArray(message.content) ? message.content : [])
                       .filter((item) => item.type === 'toolCall' && item.name === 'automations'
+                        && item.isError !== true
                         && !['list', 'status', 'get', 'runs'].includes(item.arguments?.action));
                     return mutations.filter((call) => call.arguments?.action === 'add').length >= 2
                       || mutations.some((call) => call.arguments?.action !== 'add')
@@ -205,13 +206,13 @@ flow:
         - set: preRestartBaseUrl
           value:
             expr: env.gateway.baseUrl
-        - set: preRestartTransportCursor
+        - set: preRestartInboundCursors
           value:
-            expr: state.getSnapshot().cursor
+            expr: "state.getSnapshot().events.filter((event) => event.kind === 'inbound-message' && event.accountId === transport.accountId).map((event) => event.cursor)"
         - call: waitForCondition
           args:
             - lambda:
-                expr: "state.getAcknowledgedPollCursor(transport.accountId) >= preRestartTransportCursor ? true : undefined"
+                expr: "preRestartInboundCursors.every((cursor) => state.hasCompletedInboundEvent(transport.accountId, cursor)) || undefined"
             - 10000
             - 25
         - assert:

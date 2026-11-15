@@ -1,7 +1,6 @@
 import type { MatrixMessageSummary } from "./actions/types.js";
 import {
   buildPollResultsSummary,
-  formatPollAsText,
   formatPollResultsAsText,
   isPollEventType,
   isPollStartType,
@@ -11,12 +10,7 @@ import {
 } from "./poll-types.js";
 import type { MatrixClient, MatrixRawEvent } from "./sdk.js";
 
-export type MatrixPollSnapshot = {
-  pollEventId: string;
-  triggerEvent: MatrixRawEvent;
-  rootEvent: MatrixRawEvent;
-  text: string;
-};
+export type MatrixPollSnapshot = NonNullable<Awaited<ReturnType<typeof fetchMatrixPollSnapshot>>>;
 
 export function resolveMatrixPollRootEventId(
   event: Pick<MatrixRawEvent, "event_id" | "type" | "content">,
@@ -57,7 +51,7 @@ export async function fetchMatrixPollSnapshot(
   client: MatrixClient,
   roomId: string,
   event: MatrixRawEvent,
-): Promise<MatrixPollSnapshot | null> {
+) {
   if (!isPollEventType(event.type)) {
     return null;
   }
@@ -82,11 +76,8 @@ export async function fetchMatrixPollSnapshot(
 
   const relationEvents = await readAllPollRelations(client, roomId, pollEventId);
   const pollResults = buildPollResultsSummary({
-    pollEventId,
-    roomId,
     sender: rootEvent.sender,
-    senderName: rootEvent.sender,
-    content: pollStartContent,
+    poll: pollSummary,
     relationEvents,
   });
 
@@ -94,7 +85,7 @@ export async function fetchMatrixPollSnapshot(
     pollEventId,
     triggerEvent: event,
     rootEvent,
-    text: pollResults ? formatPollResultsAsText(pollResults) : formatPollAsText(pollSummary),
+    text: formatPollResultsAsText(pollResults),
   };
 }
 
