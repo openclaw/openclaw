@@ -87,7 +87,9 @@ function signalRateLimitRecoverySuffix(error: SignalRpcError): string | null {
     parts.push(`wait ${Math.max(1, Math.ceil(facts.retryAfterSeconds))}s to retry`);
   }
   if (facts.captchaRequired) {
-    parts.push("captcha challenge required; solve one at https://signalcaptchas.org/challenge/generate.html and run `signal-cli submitRateLimitChallenge --challenge <token> --captcha <result>` to recover");
+    parts.push(
+      "captcha challenge required; solve one at https://signalcaptchas.org/challenge/generate.html and run `signal-cli submitRateLimitChallenge --challenge <token> --captcha <result>` to recover",
+    );
   }
   return parts.length > 0 ? ` (${parts.join("; ")})` : null;
 }
