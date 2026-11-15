@@ -86,7 +86,12 @@ it.each([{ flags: [] }, { flags: ["--include-test-types", "--include-architectur
         ...stages.flatMap((stage) => ["--stage", stage]),
       ]);
       expect(process.exitCode).toBe(0);
-      return run.mock.calls.map(([command]) => command.args);
+      return run.mock.calls.map(([command]) => {
+        if (!command.args) {
+          throw new Error("Check stages must pass command arguments to the managed runner.");
+        }
+        return command.args;
+      });
     };
     try {
       const full = await trace();
