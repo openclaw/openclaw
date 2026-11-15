@@ -3,6 +3,7 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi, type TestContext } from "vitest";
 import { resolveDefaultAgentDir } from "../../../src/agents/agent-scope.js";
+import * as preparedModelCatalog from "../../../src/agents/prepared-model-catalog.js";
 import * as configFileSource from "../../../src/config/source-file.js";
 import { GatewayClient, GatewayClientRequestError } from "../../../src/gateway/client.js";
 import { invalidateConfigGetResponseCache } from "../../../src/gateway/config-get-response.js";
@@ -116,7 +117,10 @@ async function startConfigRpcGateway(
     level: "info",
     consoleLevel: "silent",
   });
-  const config = { agents: { entries: { main: {} } } };
+  const config = {
+    agents: { entries: { main: {} } },
+    gateway: { controlUi: { enabled: false } },
+  };
   const configPath = configRelativePath ? state.statePath(configRelativePath) : state.configPath;
   recordPhase?.("config.write");
   if (configRelativePath) {
@@ -325,6 +329,8 @@ export function installConfigWriteGatewayHooks(options: ConfigRpcGatewayOptions 
         JSON.stringify({ test: context.task.name, ...phases }),
       );
     });
+    // Config mutations exercise on-demand discovery, not advisory native startup warmup.
+    vi.spyOn(preparedModelCatalog, "prewarmDefaultNativeModelCatalog").mockResolvedValue(undefined);
     return startConfigRpcGateway(options, (phase) => {
       phases.setup = phase;
     });

@@ -8,6 +8,7 @@ import { GatewayLockError } from "../../infra/gateway-lock.js";
 import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
 import { findStartupMaintenanceRequiredError } from "../../infra/startup-maintenance-required.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
+import { withoutFileLogging } from "../../logging/state.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
@@ -67,22 +68,26 @@ export async function handleGatewayStartupMaintenance(error: unknown): Promise<b
     const { parkCurrentLaunchAgentForMaintenance } = await import("../../daemon/launchd.js");
     parked = await parkCurrentLaunchAgentForMaintenance();
   } catch (parkError) {
-    gatewayLog.error(`failed to park the managed LaunchAgent: ${formatErrorMessage(parkError)}`);
-  }
-  if (refusal instanceof OpenClawDatabaseSchemaPreflightError) {
-    gatewayLog.error(
-      `${formatErrorMessage(refusal)}${parked ? " Parked the managed LaunchAgent." : ""}`,
+    withoutFileLogging(() =>
+      gatewayLog.error(`failed to park the managed LaunchAgent: ${formatErrorMessage(parkError)}`),
     );
-    defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(refusal)}`);
-  } else {
-    gatewayLog.error(
-      `gateway requires ${reason}${parked ? "; parked the managed LaunchAgent" : ""}. ${guidance}`,
-    );
-    defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}. ${guidance}`);
   }
-  // systemd's RestartPreventExitStatus already treats EX_CONFIG as terminal.
-  defaultRuntime.exit(78);
-  return true;
+  return withoutFileLogging(() => {
+    if (refusal instanceof OpenClawDatabaseSchemaPreflightError) {
+      gatewayLog.error(
+        `${formatErrorMessage(refusal)}${parked ? " Parked the managed LaunchAgent." : ""}`,
+      );
+      defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(refusal)}`);
+    } else {
+      gatewayLog.error(
+        `gateway requires ${reason}${parked ? "; parked the managed LaunchAgent" : ""}. ${guidance}`,
+      );
+      defaultRuntime.error(`Gateway failed to start: ${formatErrorMessage(error)}. ${guidance}`);
+    }
+    // systemd's RestartPreventExitStatus already treats EX_CONFIG as terminal.
+    defaultRuntime.exit(78);
+    return true;
+  });
 }
 
 export async function handleGatewayLockFailure(

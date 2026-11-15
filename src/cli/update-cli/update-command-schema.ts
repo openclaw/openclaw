@@ -19,6 +19,7 @@ import type { UpdateFailureFact } from "../../infra/update-failure-facts.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { prepareGitCandidateNodeRuntime } from "../../infra/update-runner-git-node-preflight.js";
+import { withoutFileLogging } from "../../logging/state.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
@@ -215,57 +216,65 @@ export async function previewUpdateCommand(params: {
       notes,
       ...(preflight.preflightFailures?.length ? { failures: preflight.preflightFailures } : {}),
     };
-    if (opts.json) {
-      defaultRuntime.writeJson(preview);
-    } else {
-      defaultRuntime.log(theme.heading("Update dry-run"));
-      defaultRuntime.log(theme.muted("No changes were applied."));
-      defaultRuntime.log("");
-      defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
-      defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
-      defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
-      defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
-      defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
-      if (preview.currentVersion) {
-        defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
-      }
-      if (preview.targetVersion) {
-        defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
-      } else if (preview.targetVersionReason) {
-        defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
-      }
-      if (preview.downgradeRisk) {
-        defaultRuntime.log(theme.warn("  Downgrade confirmation would be required in a real run."));
-      }
-
-      const printSection = (heading: string, lines: string[], format = (line: string) => line) => {
+    await withoutFileLogging(async () => {
+      if (opts.json) {
+        defaultRuntime.writeJson(preview);
+      } else {
+        defaultRuntime.log(theme.heading("Update dry-run"));
+        defaultRuntime.log(theme.muted("No changes were applied."));
         defaultRuntime.log("");
-        defaultRuntime.log(theme.heading(heading));
-        for (const line of lines) {
-          defaultRuntime.log(`  - ${format(line)}`);
+        defaultRuntime.log(`  Root: ${theme.muted(preview.root)}`);
+        defaultRuntime.log(`  Install kind: ${theme.muted(preview.installKind)}`);
+        defaultRuntime.log(`  Mode: ${theme.muted(preview.mode)}`);
+        defaultRuntime.log(`  Channel: ${theme.muted(preview.effectiveChannel)}`);
+        defaultRuntime.log(`  Tag/spec: ${theme.muted(preview.tag)}`);
+        if (preview.currentVersion) {
+          defaultRuntime.log(`  Current version: ${theme.muted(preview.currentVersion)}`);
         }
-      };
-      printSection("Planned actions:", preview.actions);
-      if (preview.notes.length > 0) {
-        printSection("Notes:", preview.notes, theme.muted);
+        if (preview.targetVersion) {
+          defaultRuntime.log(`  Target version: ${theme.muted(preview.targetVersion)}`);
+        } else if (preview.targetVersionReason) {
+          defaultRuntime.log(`  Target version: unresolved (${preview.targetVersionReason})`);
+        }
+        if (preview.downgradeRisk) {
+          defaultRuntime.log(
+            theme.warn("  Downgrade confirmation would be required in a real run."),
+          );
+        }
+
+        const printSection = (
+          heading: string,
+          lines: string[],
+          format = (line: string) => line,
+        ) => {
+          defaultRuntime.log("");
+          defaultRuntime.log(theme.heading(heading));
+          for (const line of lines) {
+            defaultRuntime.log(`  - ${format(line)}`);
+          }
+        };
+        printSection("Planned actions:", preview.actions);
+        if (preview.notes.length > 0) {
+          printSection("Notes:", preview.notes, theme.muted);
+        }
+        await printResult(
+          {
+            runId: params.runId,
+            status: "skipped",
+            mode,
+            reason: "dry-run",
+            steps: [],
+            durationMs: 0,
+          },
+          opts,
+          {
+            record: run,
+            ...(!canReadHistory ? { readHistory: false } : {}),
+            ...(params.malformedConfig ? { writeArtifacts: false } : {}),
+          },
+        );
       }
-      await printResult(
-        {
-          runId: params.runId,
-          status: "skipped",
-          mode,
-          reason: "dry-run",
-          steps: [],
-          durationMs: 0,
-        },
-        opts,
-        {
-          record: run,
-          ...(!canReadHistory ? { readHistory: false } : {}),
-          ...(params.malformedConfig ? { writeArtifacts: false } : {}),
-        },
-      );
-    }
+    });
   }
 }
 

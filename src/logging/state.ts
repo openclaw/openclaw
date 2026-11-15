@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const LOGGING_STATE_KEY = Symbol.for("openclaw.loggingState");
@@ -11,6 +12,7 @@ function createUnownedAppliedLoggingConfig():
 
 function createLoggingState() {
   return {
+    fileLoggingSuppressed: new AsyncLocalStorage<boolean>(),
     appliedConfig: createUnownedAppliedLoggingConfig(),
     cachedLogger: null as unknown,
     cachedSettings: null as unknown,
@@ -40,3 +42,12 @@ const globalStore = globalThis as Record<PropertyKey, unknown>;
 export const loggingState =
   (globalStore[LOGGING_STATE_KEY] as LoggingState | undefined) ?? createLoggingState();
 globalStore[LOGGING_STATE_KEY] = loggingState;
+
+/** Read-only diagnostics retain console output without creating persistent log artifacts. */
+export function withoutFileLogging<T>(operation: () => T): T {
+  return loggingState.fileLoggingSuppressed.run(true, operation);
+}
+
+export function isFileLoggingSuppressed(): boolean {
+  return loggingState.fileLoggingSuppressed.getStore() === true;
+}

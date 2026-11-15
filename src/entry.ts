@@ -35,6 +35,7 @@ import { isMainModule } from "./infra/is-main.js";
 import { ensureOpenClawExecMarkerOnProcess } from "./infra/openclaw-exec-env.js";
 import "./shared/detached-async-context.js";
 import { installProcessWarningFilter } from "./infra/warning-filter.js";
+import { withoutFileLogging } from "./logging/state.js";
 import {
   getManagedNodeHostStatePath,
   isNodeHostLauncherChild,
@@ -335,16 +336,18 @@ async function prepareCliFailureHandler(argv: string[], commandStarted: () => bo
     await loadCliDotEnvForEarlyDiagnostic(argv);
     configureTrace();
     enableConsoleCapture();
-    if (isJsonOutputModeActive(argv)) {
-      defaultRuntime.writeJson(formatCliJsonFailure(error));
-    }
-    for (const line of formatCliFailureLines({
-      title: commandStarted() ? "The CLI command failed." : "Could not start the CLI.",
-      error,
-      argv,
-    })) {
-      console.error(line);
-    }
+    withoutFileLogging(() => {
+      if (isJsonOutputModeActive(argv)) {
+        defaultRuntime.writeJson(formatCliJsonFailure(error));
+      }
+      for (const line of formatCliFailureLines({
+        title: commandStarted() ? "The CLI command failed." : "Could not start the CLI.",
+        error,
+        argv,
+      })) {
+        console.error(line);
+      }
+    });
     process.exitCode = 1;
   };
 }
