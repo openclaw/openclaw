@@ -45,10 +45,15 @@ export function findGraphemeChunkEnd(
     return preferred;
   }
 
-  const segments = getGraphemeSegmenter().segment(text);
-  let end = segments.containing(preferred)?.index ?? preferred;
+  // A boundary depends only on the text before it and the next code point, so a
+  // window ending two code units past the budget gives the same answer as the whole text.
+  const segments = getGraphemeSegmenter().segment(text.slice(start, hardEnd + 2));
+  let end = (segments.containing(preferred - start)?.index ?? preferred - start) + start;
   if (end <= start && preferred < hardEnd) {
-    end = hardEnd === text.length ? hardEnd : (segments.containing(hardEnd)?.index ?? hardEnd);
+    end =
+      hardEnd === text.length
+        ? hardEnd
+        : (segments.containing(hardEnd - start)?.index ?? hardEnd - start) + start;
   }
   return end > start
     ? end
@@ -76,14 +81,25 @@ export function skipWhitespaceGraphemes(
   if (!/\s/u.test(text.charAt(start))) {
     return start;
   }
-  const segments = getGraphemeSegmenter().segment(text);
   let cursor = start;
-  for (let count = 0; count < maxGraphemes && cursor < text.length; count += 1) {
-    const cluster = segments.containing(cursor);
-    if (!cluster || cluster.index !== cursor || !WHITESPACE_GRAPHEME_RE.test(cluster.segment)) {
-      break;
+  let count = 0;
+  // Segment a growing window so a long reply is never copied into ICU per chunk.
+  for (let span = 256; count < maxGraphemes && cursor < text.length; span *= 2) {
+    const windowEnd = Math.min(text.length, cursor + span);
+    for (const { segment } of getGraphemeSegmenter().segment(text.slice(cursor, windowEnd))) {
+      if (count >= maxGraphemes) {
+        return cursor;
+      }
+      // The last cluster of a cut window may continue past it.
+      if (cursor + segment.length === windowEnd && windowEnd < text.length) {
+        break;
+      }
+      if (!WHITESPACE_GRAPHEME_RE.test(segment)) {
+        return cursor;
+      }
+      cursor += segment.length;
+      count += 1;
     }
-    cursor += cluster.segment.length;
   }
   return cursor;
 }
@@ -93,18 +109,28 @@ export function trimEndWhitespaceGraphemes(text: string, end = text.length): str
   if (!/\s/u.test(text.charAt(end - 1))) {
     return text.slice(0, end);
   }
-  const segments = getGraphemeSegmenter().segment(text);
-  let cursor = end;
-  while (cursor > 0) {
-    const cluster = segments.containing(cursor - 1);
-    if (
-      !cluster ||
-      cluster.index + cluster.segment.length > cursor ||
-      !WHITESPACE_GRAPHEME_RE.test(cluster.segment)
-    ) {
-      break;
+  for (let span = 256; ; span *= 2) {
+    const from = Math.max(0, end - span);
+    // Two extra code units reveal a mark that joins the whitespace across `end`.
+    const segments = getGraphemeSegmenter().segment(text.slice(from, end + 2));
+    let cursor = end - from;
+    while (cursor > 0) {
+      const cluster = segments.containing(cursor - 1);
+      if (
+        !cluster ||
+        cluster.index + cluster.segment.length > cursor ||
+        !WHITESPACE_GRAPHEME_RE.test(cluster.segment)
+      ) {
+        return text.slice(0, from + cursor);
+      }
+      // A cluster cut by the window start may be longer than it looks.
+      if (cluster.index === 0 && from > 0) {
+        break;
+      }
+      cursor = cluster.index;
     }
-    cursor = cluster.index;
+    if (cursor === 0) {
+      return text.slice(0, from);
+    }
   }
-  return text.slice(0, cursor);
 }
