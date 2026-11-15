@@ -442,27 +442,48 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
   expectModels(respond, [{ provider: second.provider, id: second.id }]);
 });
 
-it("lets an unrelated plugin reload while native discovery is hung (#199521)", async () => {
-  const config = nativeConfig("demo/native-model", {
-    "demo/native-model": { agentRuntime: { id: "native-test" } },
+it("lets settled and uncalled plugins reload while another native lookup is hung (#199521)", async () => {
+  const config = nativeConfig("fast/native-model", {
+    "fast/native-model": { agentRuntime: { id: "native-fast" } },
   });
-  mocks.resolveNativeModelPrimary.mockReturnValue("demo/native-model");
+  mocks.resolveNativeModelPrimary.mockReturnValue("fast/native-model");
   const registry = createEmptyPluginRegistry();
-  const [harnessPlugin, sibling] = ["native-test", "sibling-provider"].map((id) => {
+  const [fastPlugin, failPlugin, hangPlugin, sibling] = [
+    "native-fast",
+    "native-fail",
+    "native-hang",
+    "sibling-provider",
+  ].map((id) => {
     const record = createPluginRecord({ id, status: "loaded" });
     registry.plugins.push(record);
     return createTestInstance(id, { record, registry });
   });
   const started = createDeferredCore();
   const hung = createDeferredCore<never[]>();
-  registry.agentHarnesses.push(
-    ...harnessRegistry("native-test", {
-      loadModelCatalog: harnessPlugin!.wrap(() => {
+  // Discovery runs these in order: one returns, one throws, and the last stays pending.
+  const harnesses = [
+    { id: "native-fast", plugin: fastPlugin!, load: async () => [] },
+    {
+      id: "native-fail",
+      plugin: failPlugin!,
+      load: async () => {
+        throw new Error("synthetic native catalog failure");
+      },
+    },
+    {
+      id: "native-hang",
+      plugin: hangPlugin!,
+      load: () => {
         started.resolve();
         return hung.promise;
-      }),
-    }).agentHarnesses,
-  );
+      },
+    },
+  ];
+  for (const { id, plugin, load } of harnesses) {
+    registry.agentHarnesses.push(
+      ...harnessRegistry(id, { loadModelCatalog: plugin.wrap(load) }).agentHarnesses,
+    );
+  }
   mocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(registry);
   mocks.runPreparedModelCatalogWorker.mockResolvedValue(snapshot([saved]));
   const owner = await prepareOwner(config);
@@ -470,28 +491,27 @@ it("lets an unrelated plugin reload while native discovery is hung (#199521)", a
   try {
     const served = owner.loadNativeModelCatalog!();
     await started.promise;
-    expect(harnessPlugin!.retentionSnapshot().references).toContainEqual(
+    // Plugins whose callbacks settled, and a plugin the lookup never called, hold nothing.
+    for (const plugin of [fastPlugin!, failPlugin!, sibling!]) {
+      expect(plugin.retainedWorkCount).toBe(0);
+      expect(plugin.ordinaryCallCount).toBe(0);
+      const releaseReservation = plugin.reserveReplacement();
+      await plugin.waitForIdle(new AbortController().signal);
+      releaseReservation();
+    }
+    // The hung harness keeps its own plugin through its running call, attributed to discovery.
+    expect(hangPlugin!.retainedWorkCount).toBe(0);
+    expect(hangPlugin!.ordinaryCallCount).toBe(1);
+    expect(hangPlugin!.retentionSnapshot().references).toContainEqual(
       expect.objectContaining({
-        kind: "work",
-        reason: "prepared-generation-lease",
+        kind: "call",
         owner: { agentId: "pro", serviceId: "model-catalog-discovery" },
       }),
     );
-    // Only the plugin the lookup called is held; a reload of its sibling can drain now.
-    expect(sibling!.retainedWorkCount).toBe(0);
-    const releaseReservation = sibling!.reserveReplacement();
-    await sibling!.waitForIdle(new AbortController().signal);
-    releaseReservation();
     await vi.advanceTimersByTimeAsync(5_000);
     expect((await served).entries).toContainEqual(expect.objectContaining(saved));
-    // The harness's own deadline owns its call; its plugin stays held until the call settles.
-    expect(harnessPlugin!.retainedWorkCount).toBe(1);
-    expect(harnessPlugin!.ordinaryCallCount).toBe(1);
     hung.resolve([]);
-    await vi.waitFor(() => {
-      expect(harnessPlugin!.retainedWorkCount).toBe(0);
-      expect(harnessPlugin!.ordinaryCallCount).toBe(0);
-    });
+    await vi.waitFor(() => expect(hangPlugin!.ordinaryCallCount).toBe(0));
   } finally {
     hung.resolve([]);
     vi.useRealTimers();

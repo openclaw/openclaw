@@ -293,24 +293,26 @@ export function runWithPreparedPluginGeneration<T>(
   const owner = { agentId: agentFacts.input.agentId, serviceId: "model-catalog-discovery" };
   return pluginInvocationContext.exit(() =>
     withPluginRetentionOwner(owner, async () => {
-      // Custody keeps the generation's resources; work holds only plugins the build calls, so a
-      // slow lookup in one plugin does not defer reloading the others (#199521).
-      const lifetime = ownPreparedPluginGeneration(generation);
-      const { work, scope } = createGenerationWorkScope(lifetime, false);
-      let release: (() => Promise<void> | undefined) | undefined;
+      // Custody keeps the generation's resources without holding work on its plugins. Each
+      // plugin stays held only by its own running calls, so a plugin whose callback settled, or
+      // that the build never called, reloads while a slower lookup continues (#199521).
+      const release = ownPreparedPluginGeneration(generation).retain();
       try {
-        release = lifetime.retain();
-        return await (scope ? scope.run(build) : build());
+        return await build();
       } finally {
-        scope?.release();
-        await releaseRuntimePluginWork(release, work.release);
+        await release();
       }
     }),
   );
 }
 
-/** Work custody starts when a scoped call first resolves an exact plugin of the generation. */
-function createGenerationWorkScope(lifetime: Lifetime, retainOverlap: boolean) {
+/** Each admitted lease owns callable authority independently of its parent's lifetime. */
+export function createPreparedModelRuntimeLease(
+  snapshot: PreparedModelRuntimeSnapshot,
+  pluginGeneration: PreparedModelRuntimePluginGeneration,
+  onRelease?: () => void,
+): PreparedModelRuntimeLease {
+  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
   const registryByInstance = lifetime.instances;
   const registry = registryByInstance?.values().next().value;
   const work = createRuntimePluginWork("prepared-generation-lease", (pluginId, yieldHold) =>
@@ -324,25 +326,12 @@ function createGenerationWorkScope(lifetime: Lifetime, retainOverlap: boolean) {
     registryByInstance && registry
       ? new PluginInvocationScope(registry, registryByInstance.keys(), {
           // Overlap promises already-admitted leases access after ordinary admission closes.
-          retained: retainOverlap
-            ? (instance) => instance.owner?.record.generationOverlap === true
-            : undefined,
+          retained: (instance) => instance.owner?.record.generationOverlap === true,
           work,
           parent: pluginInvocationContext.getStore(),
           registryByInstance,
         })
       : undefined;
-  return { work, scope };
-}
-
-/** Each admitted lease owns callable authority independently of its parent's lifetime. */
-export function createPreparedModelRuntimeLease(
-  snapshot: PreparedModelRuntimeSnapshot,
-  pluginGeneration: PreparedModelRuntimePluginGeneration,
-  onRelease?: () => void,
-): PreparedModelRuntimeLease {
-  const lifetime = ownPreparedPluginGeneration(pluginGeneration);
-  const { work, scope } = createGenerationWorkScope(lifetime, true);
   let releaseGeneration: () => Promise<void>;
   try {
     for (const instance of lifetime.deferredCapabilities ?? []) {

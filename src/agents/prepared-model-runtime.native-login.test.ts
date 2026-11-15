@@ -252,10 +252,12 @@ it("lets an unrelated plugin reload while a native login probe is hung (#199521)
   const pending = recheck({ force: true });
   await vi.advanceTimersByTimeAsync(0);
   expect(native.probe).toHaveBeenCalledOnce();
+  // The probe holds its own plugin through its running call, attributed to discovery.
+  expect(cliPlugin!.retainedWorkCount).toBe(0);
+  expect(cliPlugin!.ordinaryCallCount).toBe(1);
   expect(cliPlugin!.retentionSnapshot().references).toContainEqual(
     expect.objectContaining({
-      kind: "work",
-      reason: "prepared-generation-lease",
+      kind: "call",
       owner: { agentId: "main", serviceId: "model-catalog-discovery" },
     }),
   );
