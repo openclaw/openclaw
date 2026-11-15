@@ -151,6 +151,8 @@ Named operator roles bind authenticated profiles to a policy: which sessions the
 
 Give guests the session-only `operator.sessions.write` scope, which also permits reading. `operator.read` and `operator.write` are Gateway-wide: they add channel sends, node and computer control, logs, the user directory, and other shared surfaces that a guest does not need. With `sessions.others: "view"`, guests can still read every shared session, including tool output. Keep sensitive work in draft sessions.
 
+A guest's CLI stays within a session-only device grant. `openclaw gateway call` requests the session scope for session methods such as `sessions.list`, and `openclaw tui` connects with the grant itself. The first connection after approval cannot know the grant yet: its request is refused with a scope-upgrade request that reports the approved scopes, and the CLI retries within them. Later connections reuse the stored grant and file no request. Methods that need a Gateway-wide scope, such as `status`, and the TUI's command list and pending approvals stay unavailable.
+
 Assign roles with the `users.setRole` Gateway method; see [Named operator roles](/gateway/operator-scopes#named-operator-roles) for the full policy surface and [Permission modes](/gateway/permission-modes) for per-session tool posture. To admit and expire individual outside guests, see [Invite guests](#invite-guests).
 
 #### Coding as a guest

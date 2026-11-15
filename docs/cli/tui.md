@@ -80,6 +80,12 @@ Aliases: `openclaw chat` and `openclaw terminal` invoke this command with
   `--url`, needs no `--token` or `--password`: it sends a pairing request to
   approve in that Gateway's Control UI. A Gateway on token or password auth
   still needs its credential.
+- A device paired with only session scopes (`operator.sessions.*`) connects
+  within that grant instead of requesting the default operator scopes. Until
+  the grant is stored, the first request is refused with a scope-upgrade
+  request that reports the approved scopes, and the TUI reconnects within
+  them. The command list and pending approvals need `operator.read` and
+  `operator.approvals` and stay empty.
 - With no explicit URL or port, `tui` follows the active local Gateway port
   recorded by the running Gateway. Explicit `--url`, `OPENCLAW_GATEWAY_URL`,
   `OPENCLAW_GATEWAY_PORT`, and remote Gateway config keep precedence.

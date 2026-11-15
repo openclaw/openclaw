@@ -266,6 +266,35 @@ export function projectOperatorScopesForMethod(params: {
   });
 }
 
+/**
+ * Narrows a least-privilege request to a stored grant only when the method's
+ * session-scoped alternative authorizes it. Any other gap keeps the request,
+ * so the Gateway's scope-upgrade flow still applies.
+ */
+export function fitOperatorScopesToGrant(params: {
+  method: string;
+  requestParams: unknown;
+  scopes: OperatorScope[];
+  grantedScopes: readonly string[];
+}): OperatorScope[] {
+  const { method, requestParams, scopes, grantedScopes } = params;
+  if (
+    roleScopesAllow({ role: "operator", requestedScopes: scopes, allowedScopes: grantedScopes })
+  ) {
+    return scopes;
+  }
+  const fitted = projectOperatorScopesForMethod({
+    method,
+    requestParams,
+    requestedScopes: scopes,
+    allowedScopes: grantedScopes,
+  }).filter(isOperatorScope);
+  return fitted.length > 0 &&
+    authorizeOperatorScopesForMethod(method, fitted, requestParams).allowed
+    ? fitted
+    : scopes;
+}
+
 export function authorizeOperatorScopesForMethod(
   method: string,
   scopes: readonly string[],
