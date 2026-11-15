@@ -483,7 +483,7 @@ export function collapseCompletedTurnWork(
     const ownerCandidates = answers.filter(
       (answer) =>
         answer === terminalReply ||
-        earlierRunReplies.has(answer as MessageGroup) ||
+        (answer.kind === "group" && earlierRunReplies.has(answer)) ||
         !(isLegacyWorkGroup(answer) && isUnlabeledAssistantText(answer)),
     );
     const firstAnswer = ownerCandidates.find(
