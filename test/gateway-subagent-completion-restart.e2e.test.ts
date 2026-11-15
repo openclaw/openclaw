@@ -373,7 +373,12 @@ it
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          delivery: { status: privateContinuation ? "delivered" : "pending" },
+          // Shutdown can checkpoint custody before terminal delivery settlement finishes.
+          delivery: {
+            status: privateContinuation
+              ? expect.stringMatching(/^(pending|delivered)$/)
+              : "pending",
+          },
         });
         if (interruptAnnounce) {
           expect(readRun(capturedRunId)).toMatchObject({

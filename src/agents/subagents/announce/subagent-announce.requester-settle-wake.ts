@@ -154,7 +154,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   const hasCurrentWake = (entry: SubagentRunRecord | undefined): entry is SubagentRunRecord =>
     Boolean(entry?.requesterSettleWake) &&
     entry?.requesterSettleWake?.rearmGeneration === currentRearmGeneration;
-  let settledBatch: SubagentRunRecord[];
+  let settledBatch: readonly SubagentRunRecord[];
   if (pauseNotice) {
     settledBatch = [currentSettledEntry];
   } else if (frozenBatchRunIds && frozen) {
@@ -204,7 +204,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
   const batchSessionKeys = [...new Set(settledBatch.map((run) => run.childSessionKey))].toSorted();
-  const currentCompletionRows = (rows: SubagentRunRecord[]) =>
+  const currentCompletionRows = (rows: readonly SubagentRunRecord[]) =>
     selectCurrentRequesterCompletionRows({
       rows,
       requesterSessionKey,
@@ -515,10 +515,13 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
         controllerInput,
         directIdempotencyKey,
         (fact) =>
-          params.recordRequesterDelivery!(settledBatch, {
-            ...fact,
-            ...(parentOnly ? { private: true as const } : {}),
-          }),
+          params.recordRequesterDelivery!(
+            settledBatch,
+            { ...fact, ...(parentOnly ? { private: true as const } : {}) },
+            (entries) => {
+              settledBatch = entries;
+            },
+          ),
       );
     }
     const retireUnadoptedInput = () => {

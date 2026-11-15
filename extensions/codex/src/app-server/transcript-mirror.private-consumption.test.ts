@@ -23,7 +23,7 @@ it("records private input consumption once after the accepted native prompt is m
   const consumed = vi.fn();
   const recorder = createRecorder({
     input: { text: "Continue the runtime event.", idempotencyKey: "announce:private:user" },
-    target: () => target,
+    target: () => ({ ...target, sessionEntry: { sessionId: target.sessionId, updatedAt: 1 } }),
     onInputSubmitted: consumed,
   });
   const params = {

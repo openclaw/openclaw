@@ -406,7 +406,7 @@ export function scheduleRequesterSettleWake(
                   settledEntry: entry,
                   isSourceCurrent,
                   onAccepted: releasePreparation,
-                  recordRequesterDelivery: async (batch, fact) => {
+                  recordRequesterDelivery: async (batch, fact, onPublished) => {
                     await mutateRequesterSettleWakeBatch(
                       context,
                       batch,
@@ -414,6 +414,7 @@ export function scheduleRequesterSettleWake(
                       { kind: "requesterDelivery", fact },
                       stateContext,
                       {},
+                      onPublished,
                     );
                   },
                   onDescendantsPending: (deadline) => {

@@ -64,6 +64,7 @@ type RequesterSettleWakeBatchCallbacks = {
   recordRequesterDelivery?: (
     batch: readonly SubagentRunRecord[],
     fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+    onPublished?: (entries: readonly SubagentRunRecord[]) => void,
   ) => Promise<void>;
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
