@@ -5,6 +5,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "./session-key.ts";
+import { sessionRequestAgentId } from "./session-requests.ts";
 import {
   parseSessionChangedEvent,
   reconcileParsedSessionChangedRow,
@@ -93,11 +94,13 @@ export function createSessionDescribeReads(host: {
     const scope = host.connection.capture();
     const requestOptions: [] | [{ timeoutMs: number }] =
       options.timeoutMs === undefined ? [] : [{ timeoutMs: options.timeoutMs }];
+    const { agentId, ...unscoped } = params;
+    const wire = sessionRequestAgentId(params.key, agentId) ? params : unscoped;
     if (!scope || (options.client && options.client !== scope.client)) {
       // Placement settlement retains its initiating client across a UI reconnect.
       // Its explicit fresh read must never enter the replacement connection's cache.
       if (options.refresh && options.client) {
-        return options.client.request<Result>("sessions.describe", params, ...requestOptions);
+        return options.client.request<Result>("sessions.describe", wire, ...requestOptions);
       }
       throw new Error("gateway not connected");
     }
@@ -116,7 +119,7 @@ export function createSessionDescribeReads(host: {
       return read.result ?? read.promise;
     }
     reads.delete(key);
-    const request = scope.client.request<Result>("sessions.describe", params, ...requestOptions);
+    const request = scope.client.request<Result>("sessions.describe", wire, ...requestOptions);
     const pending: Read = {
       params,
       scope,

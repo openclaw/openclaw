@@ -76,6 +76,27 @@ describe("session descriptor reads", () => {
     expect(h.read).toHaveBeenCalledTimes(2);
   });
 
+  it("omits an ACP harness agent id that only repeats the session key", async () => {
+    const acpKey = "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7";
+    const sent: unknown[] = [];
+    const client = createTestGatewayClient(async (method, params) => {
+      if (method === "sessions.describe") {
+        sent.push(params);
+        return { session: initial };
+      }
+      return method === "sessions.list" ? sessionsResult([initial], 1) : { subscribed: true };
+    });
+    const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
+    await sessions.describe({ key: acpKey, agentId: "claude" });
+    await sessions.describe({ key: acpKey, agentId: "main" });
+    await sessions.describe({ key, agentId: "main" });
+    expect(sent).toEqual([
+      { key: acpKey },
+      { key: acpKey, agentId: "main" },
+      { key, agentId: "main" },
+    ]);
+  });
+
   it("keeps session, agent, preview parameters and request timeout distinct", async () => {
     for (const params of [
       { key },

@@ -12,6 +12,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
+import { isAcpSessionKey, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import type {
   SessionListOptions,
   SessionRequestClient,
@@ -67,11 +68,21 @@ export function buildSessionRequestParams(
   agentId?: string | null,
 ): { key: string; agentId?: string } {
   const normalizedKey = key.trim();
-  const normalizedAgentId = agentId?.trim();
+  const normalizedAgentId = sessionRequestAgentId(normalizedKey, agentId);
   return {
     key: normalizedKey,
     ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
   };
+}
+
+/** ACP harness agents can be listed without an agents.entries entry, and the
+ *  Gateway rejects that id when sent explicitly. Their keys already name it. */
+export function sessionRequestAgentId(key: string, agentId?: string | null): string | undefined {
+  const normalizedAgentId = agentId?.trim() || undefined;
+  const keyAgentId = isAcpSessionKey(key) ? parseAgentSessionKey(key)?.agentId : undefined;
+  return keyAgentId && normalizeAgentId(keyAgentId) === normalizeAgentId(normalizedAgentId)
+    ? undefined
+    : normalizedAgentId;
 }
 
 export function buildSessionListParams(options: SessionListOptions = {}): SessionsListParams {

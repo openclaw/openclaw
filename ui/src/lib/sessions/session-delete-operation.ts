@@ -45,7 +45,7 @@ function performSessionDelete(
       try {
         const result = await scope.client.request<{ session: GatewaySessionRow | null }>(
           "sessions.describe",
-          { key: target.key, agentId: target.agentId },
+          buildSessionRequestParams(target.key, target.agentId),
         );
         if (result.session !== null || !host.connection.isCurrent(scope) || !host.owns(deletion)) {
           return false;

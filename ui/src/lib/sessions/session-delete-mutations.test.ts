@@ -78,6 +78,32 @@ describe("optimistic session deletion", () => {
     },
   );
 
+  it.each(["single", "batch"] as const)(
+    "deletes a listed ACP harness session by key alone in a %s deletion",
+    async (mode) => {
+      const h = createSessionDeletionHarness();
+      const acp = {
+        ...h.alpha,
+        key: "agent:claude:acp:25f77580-de30-4d80-9bc3-7cbc6374bce7",
+        sessionId: "acp-id",
+      };
+      h.setRows([acp]);
+      await h.sessions.refresh({ force: true });
+      const target = { key: acp.key, agentId: "claude", expectedSessionId: acp.sessionId };
+      const operation =
+        mode === "single" ? h.sessions.delete(acp.key, target) : h.sessions.deleteMany([target]);
+      const response = await h.waitForDeleteRequest(acp.key);
+      h.setRows([]);
+      response.resolve({ deleted: true });
+      await operation;
+      expect(h.request.mock.calls.find(([method]) => method === "sessions.delete")?.[1]).toEqual({
+        key: acp.key,
+        deleteTranscript: true,
+        expectedSessionId: acp.sessionId,
+      });
+    },
+  );
+
   it.each([
     { firstKey: "main", firstMode: "single", secondMode: "batch" },
     { firstKey: "agent:main:main", firstMode: "batch", secondMode: "single" },
