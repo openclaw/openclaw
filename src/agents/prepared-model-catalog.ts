@@ -1,6 +1,7 @@
 /** Lifecycle-owned model catalog access. */
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isAbortError } from "../infra/abort-signal.js";
 import {
   listAgentIds,
   resolveAgentDir,
@@ -482,6 +483,13 @@ export async function loadProviderScopedThinkingCatalog(params: {
   const request = { ...params, readOnly: true };
   const admitted = resolveAdmittedModelCatalogOwner(request);
   let snapshot: ModelCatalogSnapshot;
+  const canRetainAfterNativeTimeout = (owner: PreparedModelRuntimeSnapshot, error: unknown) =>
+    params.agentRuntime === "codex" &&
+    params.requiredInputRoute === undefined &&
+    error instanceof Error &&
+    error.message === "codex app-server request timed out" &&
+    !isAbortError(error) &&
+    owner.isCurrent();
   if (admitted) {
     // Replacement inventory may belong to another account on the very same URL.
     // A retained turn reads its captured facts without invoking retired owner callbacks.
@@ -501,12 +509,13 @@ export async function loadProviderScopedThinkingCatalog(params: {
         });
       } catch (error) {
         if (
-          !(error instanceof PreparedModelRuntimePublicationSupersededError) ||
-          admitted.owner.isCurrent()
+          !canRetainAfterNativeTimeout(admitted.owner, error) &&
+          (!(error instanceof PreparedModelRuntimePublicationSupersededError) ||
+            admitted.owner.isCurrent())
         ) {
           throw error;
         }
-        // Retirement during a native observation leaves only this turn's captured facts.
+        // A timeout or retirement leaves only this turn's captured facts.
       }
     }
   } else {
@@ -520,11 +529,18 @@ export async function loadProviderScopedThinkingCatalog(params: {
       params.agentRuntime &&
       params.agentRuntime !== "openclaw"
     ) {
-      snapshot = await owner.loadNativeModelCatalog({
-        provider: params.provider,
-        modelId: params.model,
-        runtime: params.agentRuntime,
-      });
+      try {
+        snapshot = await owner.loadNativeModelCatalog({
+          provider: params.provider,
+          modelId: params.model,
+          runtime: params.agentRuntime,
+        });
+      } catch (error) {
+        if (!canRetainAfterNativeTimeout(owner, error)) {
+          throw error;
+        }
+        snapshot = owner.modelCatalog;
+      }
     } else {
       const catalog = owner
         ? (await materializeRequestedModelCatalog(owner, true, undefined)).modelCatalog

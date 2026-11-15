@@ -291,6 +291,33 @@ it.each(["ready", "retired", "failure"] as const)(
   },
 );
 
+it.each(["admitted", "published"] as const)(
+  "keeps %s thinking capabilities after a Codex discovery timeout",
+  async (scope) => {
+    const config = {};
+    const retained = nativeEntry({ nativeRuntime: "codex" });
+    const timeout = new Error("codex app-server request timed out");
+    const loadNativeModelCatalog = vi.fn().mockRejectedValue(timeout);
+    const snapshot = { ...owner(config, [retained]), loadNativeModelCatalog };
+    publishedSnapshotMock.mockReturnValue(snapshot);
+    const read = () =>
+      scope === "admitted"
+        ? readAdmitted(snapshot, { agentRuntime: "codex" })
+        : readThinking(config, { agentDir: snapshot.agentDir, agentRuntime: "codex" });
+
+    await expect(read()).resolves.toEqual([retained]);
+    expect(loadNativeModelCatalog).toHaveBeenCalledOnce();
+
+    for (const error of [
+      new DOMException(timeout.message, "AbortError"),
+      new Error("native observation unavailable"),
+    ]) {
+      loadNativeModelCatalog.mockRejectedValueOnce(error);
+      await expect(read()).rejects.toBe(error);
+    }
+  },
+);
+
 it.each([
   { configured: [], before: [entry] },
   { configured: [entry], before: undefined },
