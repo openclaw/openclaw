@@ -178,9 +178,11 @@ it.each(
       return state;
     },
   }),
-)("preserves %s state", async (_name, setup) => {
+)("preserves %s state", async (name, setup) => {
   const state = setup();
-  expect(await migration.detectLegacyState(state)).not.toBeNull();
+  expect(await migration.detectLegacyState(state)).toEqual(
+    name === "rejected repair" ? { preview: [expect.any(String)] } : null,
+  );
   expect(await migration.migrateLegacyState(state)).toEqual({
     changes: [],
     warnings: [expect.any(String)],
