@@ -4,6 +4,7 @@ import ai.openclaw.app.CronEditorDraftState
 import ai.openclaw.app.GatewayCronActionState
 import ai.openclaw.app.GatewayCronJobDetail
 import ai.openclaw.app.GatewayCronJobEdit
+import ai.openclaw.app.GatewayCronModelChoices
 import ai.openclaw.app.GatewayCronNoticeKind
 import ai.openclaw.app.GatewayCronPayloadEdit
 import ai.openclaw.app.GatewayCronRunHistoryState
@@ -69,6 +70,8 @@ internal fun CronJobManagementPanel(
   onToggleEnabled: () -> Unit,
   onSave: (GatewayCronJobEdit) -> Unit,
   onRefreshHistory: () -> Unit,
+  models: GatewayCronModelChoices,
+  onRefreshModels: () -> Unit,
   onDelete: () -> Unit,
 ) {
   val busy = actionState is GatewayCronActionState.Running
@@ -140,6 +143,8 @@ internal fun CronJobManagementPanel(
         !busy &&
         !editorDraft.savePending &&
         !editorDraft.saveSucceeded,
+    models = models,
+    onRefreshModels = onRefreshModels,
     canRevert = !busy && !editorDraft.savePending && !editorDraft.saveSucceeded,
     busy = busy,
     onSave = onSave,
@@ -219,6 +224,8 @@ private fun CronEditorPanel(
   onDraftChange: (CronEditorDraftState) -> Unit,
   enabled: Boolean,
   canRevert: Boolean,
+  models: GatewayCronModelChoices,
+  onRefreshModels: () -> Unit,
   busy: Boolean,
   onSave: (GatewayCronJobEdit) -> Unit,
 ) {
@@ -288,6 +295,8 @@ private fun CronEditorPanel(
     CronPayloadEditor(
       payload = edit.payload,
       originalCommandCwd = job.payloadCommandCwd,
+      models = models,
+      onRefreshModels = onRefreshModels,
       enabled = enabled,
       onChange = { onDraftChange(draft.withEdit(edit.copy(payload = it))) },
     )
@@ -434,6 +443,8 @@ private fun CronScheduleEditor(
 private fun CronPayloadEditor(
   payload: GatewayCronPayloadEdit,
   originalCommandCwd: String?,
+  models: GatewayCronModelChoices,
+  onRefreshModels: () -> Unit,
   enabled: Boolean,
   onChange: (GatewayCronPayloadEdit) -> Unit,
 ) {
@@ -463,24 +474,20 @@ private fun CronPayloadEditor(
         enabled = enabled,
         minLines = 3,
       )
-      Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ClawTextField(
-          value = payload.model,
-          onValueChange = { onChange(payload.copy(model = it)) },
-          placeholder = nativeString("Optional override"),
-          label = nativeString("Model"),
-          enabled = enabled,
-          modifier = Modifier.weight(1f),
-        )
-        ClawTextField(
-          value = payload.thinking,
-          onValueChange = { onChange(payload.copy(thinking = it)) },
-          placeholder = nativeString("Optional override"),
-          label = nativeString("Thinking"),
-          enabled = enabled,
-          modifier = Modifier.weight(1f),
-        )
-      }
+      CronModelEditor(
+        value = payload.model,
+        enabled = enabled,
+        catalog = models,
+        onRefresh = onRefreshModels,
+        onChange = { onChange(payload.copy(model = it)) },
+      )
+      ClawTextField(
+        value = payload.thinking,
+        onValueChange = { onChange(payload.copy(thinking = it)) },
+        placeholder = nativeString("Optional override"),
+        label = nativeString("Thinking"),
+        enabled = enabled,
+      )
     }
 
     is GatewayCronPayloadEdit.Command -> {
