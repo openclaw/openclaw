@@ -729,23 +729,32 @@ it("snapshots a mutable native edit once while retained generations keep their p
   });
 });
 
-it("keeps only the current namespace in the admission state as retired generations are released", async () => {
-  await withOpenClawTestState({ label: "native-admission-retention" }, async (state) => {
-    await using resources = captureResources();
-    const fixture = createFixture(state.path("source"), false);
-    const helper = path.join(fixture.root, "helper.cjs");
-    fs.writeFileSync(helper, "module.exports = 0;");
-    await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
-    const cache = resources.cache();
-    preparePluginNativeAdmissions(fixture.index, cache);
-    for (let edit = 1; edit <= 4; edit += 1) {
-      // Each companion edit admits a new namespace; the retired generation is released.
-      const generation = resources.capture(cache, fixture.root);
-      await generation.disposeAsync();
-      fs.writeFileSync(helper, `module.exports = ${edit};`);
-    }
-    const current = resources.capture(cache, fixture.root);
-    expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
-    expectBytes(current.resolve(fixture.filename), fixture.bytes);
-  });
-});
+it.each(["companion", "source-path"] as const)(
+  "keeps only the current namespace after a %s edit releases retired generations",
+  async (change) => {
+    await withOpenClawTestState({ label: "native-admission-retention" }, async (state) => {
+      await using resources = captureResources();
+      const fixture = createFixture(state.path("source"), false);
+      const helper = path.join(fixture.root, "helper.cjs");
+      fs.writeFileSync(helper, "module.exports = 0;");
+      await writePersistedInstalledPluginIndex(fixture.index, { stateDir: state.stateDir });
+      const cache = resources.cache();
+      preparePluginNativeAdmissions(fixture.index, cache);
+      let filename = fixture.filename;
+      for (let edit = 1; edit <= 4; edit += 1) {
+        const generation = resources.capture(cache, fixture.root);
+        await generation.disposeAsync();
+        if (change === "source-path") {
+          const next = path.join(fixture.root, `native-${edit}.so`);
+          fs.renameSync(filename, next);
+          filename = next;
+        }
+        fs.writeFileSync(helper, `module.exports = ${edit};`);
+      }
+      const current = resources.capture(cache, fixture.root);
+      expect(nativeAdmissionStateFor(cache).namespaces.size).toBe(1);
+      expect([...nativeAdmissionStateFor(cache).files.keys()]).toEqual([filename]);
+      expectBytes(current.resolve(filename), fixture.bytes);
+    });
+  },
+);

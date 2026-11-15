@@ -47,6 +47,7 @@ export type AdmissionState = {
   >;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
+  receiptInventoryComplete: boolean;
   files: Map<string, PluginNativeArtifactFact>;
   namespaces: Map<string, PluginNativeNamespaceFact>;
   pins: Map<string, () => void>;
@@ -113,11 +114,18 @@ export function adoptPluginNativeAdmissions(
   }
 }
 
-/** A replaced receipt releases the member maps that no remaining receipt or file fact names. */
+/** A replaced receipt retires unreferenced file facts before pruning namespace maps. */
 export function releaseReplacedNamespaces(
   state: AdmissionState,
   replaced: PluginSourceAdmissionReceipt | undefined,
 ): void {
+  if (state.receiptInventoryComplete) {
+    for (const source of Object.keys(replaced?.nativeArtifacts ?? {})) {
+      if (![...state.receipts.values()].some((receipt) => source in receipt.nativeArtifacts)) {
+        state.files.delete(source);
+      }
+    }
+  }
   for (const id of Object.keys(replaced?.nativeNamespaces ?? {})) {
     if (
       ![...state.receipts.values()].some((receipt) => id in receipt.nativeNamespaces) &&
@@ -278,6 +286,7 @@ export function nativeAdmissionStateFor(cache = getPluginCache()): AdmissionStat
       owners: new Map(),
       managedRoots: new Map(),
       receipts: new Map(),
+      receiptInventoryComplete: true,
       files: new Map(),
       namespaces: new Map(),
       pins: new Map(),
