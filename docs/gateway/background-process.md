@@ -60,7 +60,7 @@ Behavior:
 - Manually canceled commands do not trigger completion notifications, even when they produced output. Retained output remains available through `process poll` or `process log`. Cleanup failures from `process kill` still notify; request Stop reports cleanup failures through its error response without starting a completion turn.
 - Request Stop also retires the ordinary command's queued or running completion turn, including after its retained process output expires. A stopped continuation cannot deliver a late reply or retry itself. Unrelated queued events and later human requests remain eligible to run.
 - If automatic completion wake is unavailable, or `tools.exec.notifyOnExitEmptySuccess=false` keeps silent successes quiet, poll with `process`.
-- Background exec does not automatically wake hidden subagent sessions; visible spawned sessions are woken like other sessions. A hidden subagent must collect its command result with `process poll` before yielding without another completion source. A requested stop also needs its terminal result collected.
+- Hidden subagent runs and isolated cron runs end with their final reply, so their running results say to call `sessions_yield` if only waiting remains. `sessions_yield` awaits the wake-armed commands this run started, bounded by each command's `timeoutSeconds`, and the first exit resumes the same run with the exit result. Without that yield, a hidden subagent gets the exit only as a passive notice. Visible spawned sessions are woken like other sessions.
 - A quiet foreground command with an unexpired execution allowance is reported as long-running. Once that allowance expires, stalled-session recovery can abort the owning run. Repeated `process poll` or `process log` calls with unchanged output count toward loop detection; elapsed idle time alone is not progress.
 - Don't emulate saved reminders, recurring work or cross-session follow-ups with `sleep` loops or repeated polling; use cron for those. A one-time wait in the current conversation is one background command.
 
@@ -274,7 +274,12 @@ Cleanup stops when the groups disappear or their cleanup budgets expire; it does
 not periodically scan the host's process table.
 
 On Linux with the default Node runtime, the Gateway starts a small spawn broker
-before loading its main runtime.
+before loading its main runtime. On hosts with 1 GiB of RAM or less, or a process
+memory limit of 1 GiB or less, it uses in-process spawning instead. This leaves
+more memory for requests but retains Linux's per-command fork cost. Commands
+spawned in-process do not use the broker's optional agent-exec cgroup placement;
+shared command memory monitoring still applies. Native database resource brokers
+keep their separate ownership and cleanup.
 If initial broker startup fails, the Gateway logs the failure reason and runtime
 entry path, then uses in-process spawning for the rest of that Gateway process.
 A new Gateway process tries the broker again.

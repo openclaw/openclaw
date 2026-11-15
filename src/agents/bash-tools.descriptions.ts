@@ -14,7 +14,7 @@ export function describeExecTool(params?: {
       : [
           "Run shell now; background continuation supported.",
           "Completed calls return command output directly. Use process only when exec reports running with a sessionId; output text alone is not a process handle.",
-          `Long run: a command still running at yieldMs returns a handle. When the running result says its exit wakes this conversation, end the turn instead of polling; otherwise process poll collects the result. ${EXEC_WAIT_RECIPE} Output while still running does not start another turn. Background commands can outlive the turn; use process kill when no longer needed. This is not a saved, restartable automation.`,
+          `Long run: a command still running at yieldMs returns a handle. When the running result says its exit wakes this conversation, end the turn instead of polling; when it says to call sessions_yield, do that; otherwise process poll collects the result. ${EXEC_WAIT_RECIPE} Output while still running does not start another turn. Background commands can outlive the turn; use process kill when no longer needed. This is not a saved, restartable automation.`,
         ];
   const base = [
     params?.hasCronTool

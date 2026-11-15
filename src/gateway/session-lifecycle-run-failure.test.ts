@@ -520,8 +520,8 @@ describe("durable pre-reply run failure", () => {
             : kind === "route_unavailable"
               ? "⚠️ The provider cannot serve this model right now. Choose another model."
               : kind === "auth_permanent"
-                ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the Control UI or run `openclaw configure`."
-                : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the Control UI or run `openclaw configure`.";
+                ? "⚠️ The AI service isn't accepting your login. Sign in again under Models in the OpenClaw app or run `openclaw configure`."
+                : "⚠️ Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.";
         const canonicalCopy = renderAssistantRequestFailureCopy({
           reason,
           code,
@@ -593,7 +593,7 @@ describe("durable pre-reply run failure", () => {
         openclawRunError: {
           runId,
           summary:
-            "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.",
+            "⚠️ The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the OpenClaw app.",
         },
       });
       expect(JSON.stringify(visible)).not.toContain("PRIVATEPROVIDERDETAIL");

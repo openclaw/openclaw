@@ -35,7 +35,7 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "./session-store-target-runtime.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 afterAll(clearRuntimeConfigSnapshot);
@@ -179,7 +179,7 @@ describe("transcript turn physical identity", () => {
     const storePath = `${fixture.storePath()}.custom.json`;
     const databasePath = `${fixture.storePath()}.custom.sqlite`;
     openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const reads = vi.spyOn(sessionStoreLane.pool, "run");
     const select = (agentId = "main") =>
       withSessionStoreTarget(
         {
@@ -218,7 +218,7 @@ describe("transcript turn physical identity", () => {
       { agentId: "main", storePath, sessionKey: "agent:main:global" },
       { sessionId, updatedAt: 1 },
     );
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
+    const reads = vi.spyOn(sessionStoreLane.pool, "run");
     const select = inventoryReader({ agents, session: { store: storePath } }, ["other"]);
     const selected = await select();
     expect(selected).toEqual({ available: true, targets: [] });
@@ -247,8 +247,8 @@ describe("transcript turn physical identity", () => {
     };
     const session = { agentId: "main", storePath, sessionKey: "agent:main:global", env };
     replaceSessionEntrySync(session, { sessionId, updatedAt: 1 });
-    const reads = vi.spyOn(targetDiscoveryLane.pool, "run");
-    const closes = vi.spyOn(targetDiscoveryLane.pool, "closeResources");
+    const reads = vi.spyOn(sessionStoreLane.pool, "run");
+    const closes = vi.spyOn(sessionStoreLane.pool, "closeResources");
     const select = inventoryReader({ agents: { entries: { main: {} } } }, ["main"], env);
     const expected = { available: true, targets: [{ agentId: "main", storePath }] };
     expect(await select()).toEqual(expected);
@@ -308,11 +308,11 @@ describe("transcript turn physical identity", () => {
       const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
       const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
       const shared = openOpenClawStateDatabase();
-      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
       const selected = createDeferred();
       const resume = createDeferred();
       let reads = 0;
-      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

@@ -607,7 +607,10 @@ it.each([
       { openai: 2 },
       [],
       ({ outcome, observations, usageStats, startedAt }) => {
-        expect(attemptRoutes(observations)).toEqual([
+        expect(
+          attemptRoutes(observations),
+          outcome.kind === "error" ? outcome.error.message : JSON.stringify(outcome),
+        ).toEqual([
           ["openai", "mock-1", "openai:p1"],
           ["openai", "mock-1", "openai:p2"],
         ]);
