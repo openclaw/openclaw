@@ -54,6 +54,30 @@ describe("channel dead-letter commands", () => {
     });
   });
 
+  it.each([
+    { stored: "telegram", requested: "Telegram" },
+    { stored: "imessage", requested: "IMSG" },
+    { stored: "msteams", requested: "teams" },
+    { stored: "mcp-events", requested: "mcp-events" },
+  ])("lists $stored failures requested as $requested", async ({ stored, requested }) => {
+    await withFailedEvent({ channelId: stored }, async () => {
+      await channelsDeadLettersListCommand({ channel: requested, json: true });
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toMatchObject({
+        channelId: stored,
+        deadLetters: [expect.objectContaining({ id: "event-1" })],
+      });
+    });
+  });
+
+  it("resubmits a failure addressed by a channel alias", async () => {
+    await withFailedEvent({ channelId: "imessage" }, async (queue) => {
+      await channelsDeadLettersResubmitCommand("event-1", { channel: "imsg" });
+      expect(await queue.claimNext({ ownerId: "replay-worker" })).toMatchObject({
+        id: "event-1",
+      });
+    });
+  });
+
   it("resubmits through the queue API and reports completed events as terminal", async () => {
     await withFailedEvent({ channelId: "line" }, async (queue) => {
       await channelsDeadLettersResubmitCommand("event-1", { channel: "line" });
