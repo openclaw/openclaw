@@ -117,6 +117,7 @@ export function createContext(
     snapshot: {
       updateAvailable: null,
       updateSchedule: null,
+      installOwner: null,
       heldUpdateCampaignId: null,
       updateRunning: false,
       updateStatusRefreshing: false,
