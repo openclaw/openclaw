@@ -159,7 +159,7 @@ describe("native Talk action ownership through public plugin registration", () =
     await import("../../../agents/embedded-agent-runner/run/attempt-stream-prepare.js");
   });
 
-  it("keeps native generated input in current-turn custody but out of display and future calls", async () => {
+  it("keeps native generated input hidden while retaining it in model history", async () => {
     const spoken = "Keep the literal labels Context: and Spoken style: in my note.";
     const delegated =
       "Check the note requested by the speaker. Context: preserve both labels. Spoken style: one sentence.";
@@ -291,8 +291,15 @@ describe("native Talk action ownership through public plugin registration", () =
         const reconnected = await connectNativeSession(fixture);
         activeVoiceSessionId = requireString(reconnected.result, "voiceSessionId");
         const session = await nativeCallSession();
-        expect.soft(session.instructions).not.toContain(delegated);
-        expect(nativeBackgroundItems(session)).toEqual(retained);
+        const retainedPrompt =
+          run.prompt.length <= 800 ? run.prompt : `${run.prompt.slice(0, 797)}...`;
+        expect(nativeBackgroundItems(session)).toEqual([
+          retained[0],
+          { role: "user", text: retainedPrompt },
+          ...retained.slice(1),
+        ]);
+        const visible = await readSessionPreviewItemsFromTranscriptAsync(scope, 16, 800);
+        expect(JSON.stringify(visible)).not.toContain(delegated);
         expect(session.delegation?.ack_filler).toBe(false);
         expect(rawTranscriptRows()).toEqual(rawCompleted);
       } catch (error) {
