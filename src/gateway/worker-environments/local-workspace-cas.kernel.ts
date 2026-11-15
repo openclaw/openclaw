@@ -148,7 +148,7 @@ export function readLocalWorkspaceSourcePaths(db: EngineConnection, digest: Uint
 export function readLocalWorkspaceTree(
   db: EngineConnection,
   root: Uint8Array,
-  options?: { allowMissing?: boolean },
+  options?: { allowMissing?: boolean; referencesOnly?: boolean },
 ) {
   const records: string[] = [];
   let pending = [localWorkspaceDigestReference(root)];
@@ -161,14 +161,23 @@ export function readLocalWorkspaceTree(
         db,
         query(db)
           .selectFrom(packs)
-          .select(["records_json", "children_json"])
+          .select(["tree_digest", "children_json"])
+          .select((eb) =>
+            options?.referencesOnly
+              ? eb.val(null).as("records_json")
+              : eb.ref("records_json").as("records_json"),
+          )
           .where("tree_digest", "in", batch.map(localWorkspaceDigestBytes)),
       ).rows;
       if (rows.length !== batch.length && !options?.allowMissing) {
         throw new Error("Local workspace baseline nodes are missing");
       }
       for (const row of rows) {
-        records.push(row.records_json);
+        records.push(
+          options?.referencesOnly
+            ? localWorkspaceDigestReference(row.tree_digest)
+            : row.records_json!,
+        );
         // SAFETY: This is the owner-produced child-pack digest array.
         for (const child of JSON.parse(row.children_json) as string[]) {
           next.push(child);

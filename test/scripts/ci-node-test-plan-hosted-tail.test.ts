@@ -42,6 +42,10 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
   for (const [ownerName, maxFiles] of [
     ["agentic-control-plane-agent-chat", 30],
     ["agentic-gateway-methods", 96],
+    ["agentic-agents-support", 64],
+    ["core-runtime-config", 64],
+    ["agentic-commands-status-tools", 64],
+    ["agentic-commands-doctor", 64],
     ["core-runtime-infra-storage-state", 64],
   ] as const) {
     const owner = owners.find((entry) => entry.shardName === ownerName)!;
@@ -56,8 +60,20 @@ it.each([false, true])("bounds hosted main groups (main validation: %s)", (mainV
         expect(group.configs).toEqual(owner.configs);
         expect(group.requiresDist).toBe(owner.requiresDist);
         expect(job.planConcurrency).toBe(1);
-        if (ownerName !== "core-runtime-infra-storage-state") {
+        if (
+          ownerName !== "core-runtime-infra-storage-state" &&
+          ownerName !== "agentic-agents-support" &&
+          !ownerName.startsWith("agentic-commands-")
+        ) {
           expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
+        }
+        if (ownerName === "agentic-agents-support") {
+          expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBeUndefined();
+        }
+        if (ownerName.startsWith("agentic-commands-")) {
+          expect(Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? group.fallbackMaxWorkers)).toBe(
+            2,
+          );
         }
         if (
           !mainValidation &&

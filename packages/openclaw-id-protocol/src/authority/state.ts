@@ -14,7 +14,12 @@ import type {
   SignedStatement,
   UnixSeconds,
 } from "../statements/types.js";
-import type { OwnerDeviceLookup, TrustAnchor, VerifyErrorCode } from "../statements/verify.js";
+import type {
+  MemberDeviceLookup,
+  OwnerDeviceLookup,
+  TrustAnchor,
+  VerifyErrorCode,
+} from "../statements/verify.js";
 import { SUPPORTED_DESCRIPTOR_VERSIONS, SUPPORTED_STATEMENT_VERSIONS } from "../version.js";
 
 /**
@@ -52,9 +57,23 @@ export type OwnerDeviceRecord = {
   peer_listed_seq?: number[];
 };
 
+/** Who admitted a member device to this claw. */
+export type MemberDeviceApprover =
+  | { kind: "invite"; invite_id: string }
+  | { kind: "owner"; by: "root" | KeyFingerprint }
+  | { kind: "member_device"; device_fp: KeyFingerprint };
+
+/** A member's signing key and untrusted display label, attached to its peer key. */
+export type MemberDevice = {
+  device_pub: Ed25519PublicKey;
+  label: string;
+  approved_by: MemberDeviceApprover;
+};
+
 /** A member and the browsers (peer keys) they use at this claw. */
 export type MemberRecord = {
   role: MemberRole;
+  devices?: Partial<Record<IrohEndpointKey, MemberDevice>>;
   peer_keys: IrohEndpointKey[];
   /** Last tunnel admission per peer key (or when it was added), unix seconds. */
   last_seen: Partial<Record<IrohEndpointKey, UnixSeconds>>;
@@ -73,6 +92,7 @@ export type InviteRecord = {
   pending: {
     account_id: string;
     device_pub: Ed25519PublicKey;
+    label: string;
     peer_key: IrohEndpointKey;
     requested_at: UnixSeconds;
   } | null;
@@ -86,7 +106,7 @@ export type InviteRecord = {
 /**
  * An admitted node; it has no account, role, owner capabilities or approval descendants. It was
  * approved either from a node invite (`invite_id`) or together with an owner device
- * (`owner_device`), whose removal removes it.
+ * (`owner_device`), whose removal removes it and whose certificate bounds its lifetime.
  */
 export type NodeRecord = {
   description: NodeRedemptionBody["description"];
@@ -132,7 +152,12 @@ export type AuthorityEvent =
   | { type: "cancel_runs"; account_id: string }
   | {
       type: "notify_owners";
-      event: "kit_used" | "redemption_pending" | "redemption_resolved" | "rebind";
+      event:
+        | "kit_used"
+        | "redemption_pending"
+        | "redemption_resolved"
+        | "rebind"
+        | "member_device_added";
       ref: string;
     }
   | { type: "publish_snapshot" };
@@ -242,6 +267,21 @@ export function ownerLookup(state: AuthorityState, now: UnixSeconds): OwnerDevic
   return (devicePub) => caps.get(devicePub);
 }
 
+/** Listed member signing keys. A peer without device metadata has no signing authority. */
+export function memberLookup(state: AuthorityState): MemberDeviceLookup {
+  return (devicePub) => {
+    for (const [account_id, member] of Object.entries(state.members)) {
+      const peer_key = member.peer_keys.find(
+        (peer) => member.devices?.[peer]?.device_pub === devicePub,
+      );
+      if (peer_key) {
+        return { account_id, peer_key };
+      }
+    }
+    return undefined;
+  };
+}
+
 /**
  * The earliest moment after `now` at which a currently active owner device stops being
  * active because its certificate expires, or null if none expires. The Gateway closes
@@ -260,7 +300,8 @@ export function nextOwnerExpiry(state: AuthorityState, now: UnixSeconds): UnixSe
 
 /**
  * Tunnel admission (the tunnel child asks this for every connection): the peer key
- * belongs to a member or to an owner device active at `now`. Discovery is not consulted,
+ * belongs to a member, an active owner device, or a node whose bound owner is active.
+ * Invite-enrolled nodes have independent lifetimes. Discovery is not consulted,
  * so a withheld or delayed snapshot cannot keep a removed key admitted.
  */
 export function isAdmitted(
@@ -268,8 +309,13 @@ export function isAdmitted(
   peerKey: IrohEndpointKey,
   now: UnixSeconds,
 ): boolean {
-  if (isNode(state, peerKey)) {
-    return true;
+  const node = state.nodes[peerKey];
+  if (node) {
+    if (!node.owner_device) {
+      return true;
+    }
+    const owner = state.owner_devices[node.owner_device];
+    return owner !== undefined && isOwnerDeviceActive(owner, now);
   }
   if (Object.values(state.members).some((member) => member.peer_keys.includes(peerKey))) {
     return true;
@@ -305,7 +351,9 @@ export function snapshotBody(
       ...new Set(active.flatMap((record) => record.cert.body.peer_keys)),
     ].toSorted(),
     // SAFETY: nodes is keyed by IrohEndpointKey; Object.keys widens keys to string.
-    node_peer_keys: Object.keys(state.nodes).toSorted() as IrohEndpointKey[],
+    node_peer_keys: (Object.keys(state.nodes) as IrohEndpointKey[])
+      .filter((key) => isAdmitted(state, key, now))
+      .toSorted(),
     members: Object.entries(state.members)
       .map(([account_id, member]) => ({
         account_id,

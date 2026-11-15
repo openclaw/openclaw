@@ -290,7 +290,11 @@ extension OpenClawChatViewModel {
         guard self.supportsComposerCapabilities,
               !self.composerCapabilityOwnerMatches || self.composerCapabilityState.phase != .loaded
         else { return }
-        Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+        Task { [weak self] in
+            // The recovery pass reloads capabilities after its transcript settles.
+            guard let self, self.pendingTransportRecoveryID == nil else { return }
+            await self.loadComposerCapabilities(force: true)
+        }
     }
 
     func invalidateComposerCapabilities() {

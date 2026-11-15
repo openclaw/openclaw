@@ -42,6 +42,8 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
     private static let maximumCacheBytes = 12 * 1024 * 1024
 
     private var cache: [ChatMermaidRequest: ChatMermaidRenderedImage] = [:]
+    // Least recently used first; at most 32 requests, so a linear touch stays bounded.
+    private var cacheOrder: [ChatMermaidRequest] = []
     private var cacheBytes = 0
     private var queued: [Job] = []
     private var active: Job?
@@ -70,6 +72,8 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
             return nil
         }
         if let cached = self.cache[request] {
+            self.cacheOrder.removeAll { $0 == request }
+            self.cacheOrder.append(request)
             completion(.success(cached))
             return nil
         }
@@ -115,6 +119,7 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
 
     @objc private func removeCachedImages() {
         self.cache.removeAll(keepingCapacity: true)
+        self.cacheOrder.removeAll(keepingCapacity: true)
         self.cacheBytes = 0
         if self.active == nil { self.retireDocument() }
     }
@@ -322,13 +327,16 @@ final class ChatMermaidRenderer: NSObject, WKNavigationDelegate {
         self.timeout = nil
         self.active = nil
         if case let .success(image) = result, image.byteCount <= Self.maximumCacheBytes {
-            if self.cache.count >= Self.maximumCacheEntries || self.cacheBytes + image.byteCount > Self
+            while self.cache.count >= Self.maximumCacheEntries || self.cacheBytes + image.byteCount > Self
                 .maximumCacheBytes
             {
-                self.cache.removeAll(keepingCapacity: true)
-                self.cacheBytes = 0
+                let oldest = self.cacheOrder.removeFirst()
+                if let evicted = self.cache.removeValue(forKey: oldest) {
+                    self.cacheBytes -= evicted.byteCount
+                }
             }
             self.cache[job.request] = image
+            self.cacheOrder.append(job.request)
             self.cacheBytes += image.byteCount
         }
         let completions = Array(job.completions.values)

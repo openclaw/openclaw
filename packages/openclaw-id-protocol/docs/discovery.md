@@ -288,3 +288,18 @@ the Gateway's live authority always decides tunnel admission and node principal 
 `POST /iroh/admit` also admits `node_peer_keys` from verified current-binding snapshots.
 Pending requests/invites alone never authorize relay admission. This remains an abuse filter,
 not a membership authority; a removed node cannot keep a tunnel alive using a stale snapshot.
+
+## Member device self-mail
+
+`MailboxRecipient` includes `"self"`: the sender's own account's devices at this claw.
+A user sender must have a bound device and be the owner or a listed member; unrelated
+accounts receive the same uniform 404 as other hidden claws. Discovery stores this mail for
+the sender's account. A device reader receives it only while still bound to that same
+account, never for another account. Existing mailbox rate limits apply. The Gateway cannot
+send to `"self"`, including notices.
+
+Member SAS sends `start` to `"self"`, with the existing accept/key/sealed/abort messages
+replied to the same-account device fingerprint. Payloads, commitments and codes are unchanged.
+The approving member submits its signed `add_member_device` directly over the tunnel before
+sending `sealed`; the mailbox never accepts member-signed authority changes.
+`member_device_added` is an owner notice with the added peer key's fingerprint as `ref`.

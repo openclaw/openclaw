@@ -5,7 +5,7 @@ import { buildAssistantEvents } from "./mock-openai-events.js";
 // shape: `UXSTREAM chunks=400 interval=50` streams 400 deltas, 50 ms apart. The token is one
 // capitalized word because phone keyboards autocorrect lowercase phrases typed by UI drivers.
 const QA_UX_STREAM_PROMPT_RE = /\bUXSTREAM\b/;
-export const QA_UX_STREAM_END_MARKER = "UX-STREAM-END";
+const QA_UX_STREAM_END_MARKER = "UX-STREAM-END";
 
 const DEFAULT_CHUNKS = 200;
 const MAX_CHUNKS = 2_000;

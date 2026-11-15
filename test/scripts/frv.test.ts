@@ -707,6 +707,72 @@ describe("FRV continuation preflight", () => {
     },
   );
 
+  it("retries one npm qualification leaf and its dependent seal without replacing prepared bytes", async () => {
+    const fixture = artifactFixture("npm");
+    fixture.producer.conclusion = "failure";
+    const preparation = {
+      ...job("Prepare npm artifacts / Prepare publishable npm package"),
+      id: 901,
+      run_attempt: 1,
+    };
+    fixture.client.getAttemptJobs = async (runId: string, attempt: number) =>
+      runId !== "81"
+        ? [{ ...job("test"), id: Number(runId) }]
+        : [
+            preparation,
+            {
+              ...job(
+                "Prepare npm artifacts / Check npm dependencies",
+                attempt === 1 ? "failure" : "success",
+              ),
+              id: 902,
+              run_attempt: attempt,
+            },
+            {
+              ...job("Seal artifact producer receipt", attempt === 1 ? "failure" : "success"),
+              id: 903,
+              run_attempt: attempt,
+            },
+          ];
+    let parentAttempt = 1;
+    const read = fixture.client.getRun.getMockImplementation()!;
+    fixture.client.getRun.mockImplementation(async (id) =>
+      id === "77"
+        ? rootRun(parentAttempt, parentAttempt === 1 ? "failure" : "success")
+        : structuredClone(await read(id)),
+    );
+    const rerunJob = vi.fn(async (jobId: number) => {
+      expect(jobId).toBe(902);
+      fixture.producer.run_attempt = 2;
+      fixture.producer.conclusion = "success";
+    });
+    fixture.client.rerunJob = rerunJob;
+    fixture.client.rerunParent.mockImplementation(async () => {
+      parentAttempt = 2;
+    });
+    const verify = vi.fn();
+    const recoveryPlan = { ...fixture.plan, candidate: { producer: { runId: "606" } } };
+    await expect(
+      continueFailed(recoveryPlan, "77", { ...fixture.client, verify }),
+    ).resolves.toMatchObject({ action: "reran-parent" });
+    expect(rerunJob).toHaveBeenCalledExactlyOnceWith(902);
+    expect(fixture.client.rerunFailed).not.toHaveBeenCalled();
+    expect(verify).toHaveBeenCalledOnce();
+  });
+
+  it("still refuses multiple independent npm failures plus their seal", () => {
+    expect(() =>
+      planReleaseChildRerun({
+        childKey: "artifact:npm",
+        jobs: [
+          job("Prepare npm artifacts / Check npm dependencies", "failure"),
+          job("Prepare npm artifacts / Check npm package contents", "failure"),
+          job("Seal artifact producer receipt", "failure"),
+        ],
+      }),
+    ).toThrow("refusing a multi-job rerun");
+  });
+
   it("recognizes a carried npm preparation by its execution fingerprint", async () => {
     const fixture = artifactFixture("npm");
     fixture.producer.run_attempt = 2;

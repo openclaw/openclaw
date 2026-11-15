@@ -19,6 +19,7 @@ import {
   type DurableProcessRecord,
 } from "./bash-durable-process-store.js";
 import { prepareAdoptedDurableProcessNotification } from "./bash-process-durable-notify.js";
+import { launchdDurableSupervisor } from "./bash-process-launchd.js";
 import {
   addSession,
   appendOutput,
@@ -28,23 +29,19 @@ import {
   type ProcessSession,
   waitForExecSession,
 } from "./bash-process-registry.js";
-import {
-  cleanupDurableProcess,
-  durableProcessUnitName,
-  launchDurableProcess,
-  readDurableProcess,
-  requireDurableProcessHost,
-  stopDurableProcess,
-} from "./bash-process-systemd.js";
+import { systemdDurableSupervisor } from "./bash-process-systemd.js";
 import { maybeNotifyOnExit } from "./bash-tools.exec-notify.js";
 import { buildExecExitOutcome, buildExecRuntimeErrorOutcome } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
 import { createStreamingBinaryOutputSanitizer } from "./shell-utils.js";
 
 let store: ReturnType<typeof createDurableProcessStore> | undefined;
+// Linux user services and macOS launchd jobs supervise behind the same operations.
+const supervisor = () =>
+  process.platform === "darwin" ? launchdDurableSupervisor : systemdDurableSupervisor;
 const warn = () =>
   logWarn(
-    "exec: durable process observation or persistence failed; inspect process status and the systemd user manager.",
+    "exec: durable process observation or persistence failed; inspect process status and the systemd user manager or launchd.",
   );
 const sessions = () => listExecSessionsForCancellation().filter((session) => session.durable);
 async function forgetLog(file: string) {
@@ -95,14 +92,19 @@ export async function initializeDurableProcesses(options: { assertCurrent?: () =
       backgrounded: true,
       cursorKeyMode: "normal",
     });
+    // Prepare the wake at adoption so poll and process lists report it; exit prepares it again.
+    const prepareNotification = () => {
+      session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
+      return prepareAdoptedDurableProcessNotification(session, record.sessionId);
+    };
+    await prepareNotification();
     const run = bind(session, record, current);
     addSession(session);
     void run
       .wait()
       .then(async (exit) => {
         session.finalizing = true;
-        session.notifyOnExit = record.notifyOnExit && !record.notificationSettled;
-        await prepareAdoptedDurableProcessNotification(session, record.sessionId);
+        await prepareNotification();
         await settleExecProcessExit({
           session,
           outcome: buildExecExitOutcome({
@@ -147,12 +149,12 @@ export async function startDurableExecProcess(
 ): Promise<ManagedRun> {
   if (!store || !session.agentId || !session.sessionKey || !sessionId || input.mode !== "child") {
     throw new Error(
-      "Durable exec requires a Gateway-host session on Linux with systemd 250 or newer and a reachable user manager; sandbox, node, worker, and one-shot execution are unsupported.",
+      "Durable exec requires a Gateway-host session on Linux with systemd 250 or newer and a reachable user manager, or on macOS in a logged-in GUI session; sandbox, node, worker, and one-shot execution are unsupported.",
     );
   }
   const persistence = store;
-  await requireDurableProcessHost(input.env);
-  const unitName = durableProcessUnitName(session.id);
+  await supervisor().requireHost(input.env);
+  const unitName = supervisor().unitName(session.id);
   const logPath = path.join(resolveStateDir(), "processes", `${unitName}.log`);
   await mkdir(path.dirname(logPath), { recursive: true, mode: 0o700 });
   const log = await open(logPath, "wx", 0o600);
@@ -187,7 +189,7 @@ export async function startDurableExecProcess(
     ),
   );
   try {
-    await launchDurableProcess({
+    await supervisor().launch({
       id: session.id,
       argv: input.argv,
       cwd: input.cwd,
@@ -203,7 +205,7 @@ export async function startDurableExecProcess(
     appendOutput(
       session,
       "stderr",
-      "Durable launch was not confirmed. Check this process and the systemd user manager before repeating work.\n",
+      "Durable launch was not confirmed. Check this process and the systemd user manager or launchd before repeating work.\n",
     );
   }
   const run = bind(session, record, persistence);
@@ -234,7 +236,7 @@ function bind(
     }
     const observed = record.result
       ? { state: "missing" as const }
-      : await readDurableProcess(record.unitName);
+      : await supervisor().read(record.unitName);
     const file = await open(record.logPath, "r").catch((error: unknown) => {
       if (!hasErrnoCode(error, "ENOENT")) {
         throw error;
@@ -267,20 +269,28 @@ function bind(
           "\nDurable process unit is missing; outcome unknown. Check saved output and side effects before repeating work.\n",
         );
       }
+      if (observed.state === "exited" && observed.note) {
+        appendOutput(session, "stderr", observed.note);
+      }
       const result = {
         reason:
           stopReason ?? (observed.state === "exited" ? observed.reason : ("spawn-error" as const)),
         exitCode: observed.state === "exited" ? observed.exitCode : null,
         exitSignal: observed.state === "exited" ? observed.exitSignal : null,
-        durationMs: Date.now() - record.startedAt,
+        // A supervisor-measured duration excludes time the outcome waited for this Gateway.
+        durationMs:
+          (observed.state === "exited" ? observed.durationMs : undefined) ??
+          Date.now() - record.startedAt,
       };
       const endedAt = Date.now();
       await persistence.upsert({ ...record, result, endedAt });
       record.result = result;
       record.endedAt = endedAt;
     }
-    // Record the real status before releasing systemd's retained unit.
-    await cleanupDurableProcess(record.unitName, { assertCurrent: persistence.assertCurrent });
+    // Record the real status before releasing the supervisor's retained job.
+    await supervisor().cleanup(record.unitName, {
+      assertCurrent: persistence.assertCurrent,
+    });
     session.endedAt = record.endedAt;
     appendOutput(session, "stdout", sanitize(decoder.end()));
     terminal = true;
@@ -306,7 +316,7 @@ function bind(
         record.cancellationRequested = true;
       }
       await persistence.upsert(record, assertCurrent);
-      await stopDurableProcess(record.unitName, { assertCurrent });
+      await supervisor().stop(record.unitName, { assertCurrent });
       stopReason ??= reason;
       await observeUnit();
     });

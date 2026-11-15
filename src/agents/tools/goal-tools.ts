@@ -73,14 +73,22 @@ export function createGetGoalTool(options: GoalToolOptions): AnyAgentTool {
     name: "get_goal",
     displaySummary: "Get the current thread goal",
     description:
-      "Get the current session goal, including its full objective, status, token usage, and optional budget.",
+      "Get the current session goal, including its full objective, status, token usage, and optional budget. Inactive goal status stops automatic pursuit, not work authorized by the current user request; do not require Goal Resume before continuing that work within its actual permissions.",
     parameters: GetGoalToolSchema,
     execute: async () => {
       const snapshot = await getSessionGoal({
         ...resolveGoalSessionScope(options),
         persist: false,
       });
-      return jsonResult(snapshot);
+      return jsonResult({
+        ...snapshot,
+        ...(snapshot.goal && snapshot.goal.status !== "active"
+          ? {
+              nextAction:
+                "This goal is not being pursued automatically. Continue work authorized by the current user request within its actual permissions; Goal Resume is not a prerequisite for this turn. Do not resume the goal merely to execute this turn. Do not open a blocking question for Goal Resume: native session controls may require this run to finish first.",
+            }
+          : {}),
+      });
     },
   };
 }

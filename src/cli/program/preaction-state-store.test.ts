@@ -50,7 +50,10 @@ describe("state-store preAction guard", () => {
   it("refuses before bootstrap and action", async () => {
     mocks.check.mockResolvedValueOnce({ kind: "refuse", message: "state stores differ" });
 
-    await expect(program.parseAsync(process.argv)).rejects.toThrow("state stores differ");
+    await expect(program.parseAsync(process.argv)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: "state stores differ",
+    });
 
     expect(mocks.check).toHaveBeenCalledWith({ command: "openclaw configure" });
     expect(mocks.ensureBootstrap).not.toHaveBeenCalled();
