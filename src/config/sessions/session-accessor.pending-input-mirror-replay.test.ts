@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it } from "vitest";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { readRequesterDeliveryReceipt } from "../../sessions/requester-delivery-receipt.js";
 import { bindUserTurnTranscriptAnnotation } from "../../sessions/user-turn-transcript-annotation.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -80,6 +81,11 @@ async function commitMirroredInput() {
   const committed = structuredClone(
     expectDefined(recorder.getPersistedMessage?.(), "native prompt"),
   );
+  expect(readRequesterDeliveryReceipt(original)).toBeUndefined();
+  expect(readRequesterDeliveryReceipt(committed)).toEqual({
+    runId,
+    inputIdempotencyKey: `${runId}:user`,
+  });
   const transcript = await loadTranscriptEvents(scope);
   recorder.finishPendingInput?.("interrupted");
   await closeOpenClawAgentDatabasesAsync();

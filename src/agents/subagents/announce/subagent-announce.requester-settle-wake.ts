@@ -26,7 +26,6 @@ import {
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { observeSubagentRequesterDelivery } from "../registry/subagent-requester-delivery.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
@@ -509,7 +508,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (controllerInput.custody.rpcAdopted) {
       return false;
     }
-    let waitForRequesterDelivery: (() => Promise<void>) | undefined;
     const retireUnadoptedInput = () => {
       if (controllerInput && !controllerInput.custody.rpcAdopted) {
         retireSessionControllerInput(controllerInput);
@@ -572,20 +570,16 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
-      if (!pauseNotice && params.recordRequesterDelivery) {
-        waitForRequesterDelivery = await observeSubagentRequesterDelivery(
-          controllerInput,
-          directIdempotencyKey,
-          (fact) =>
-            params.recordRequesterDelivery!(
-              settledBatch,
-              { ...fact, ...(parentOnly ? { private: true as const } : {}) },
-              (entries) => {
-                settledBatch = entries;
-              },
-            ),
-        );
-      }
+      const requesterDelivery = pauseNotice
+        ? undefined
+        : {
+            state: "waiting" as const,
+            runId: directIdempotencyKey,
+            at: Date.now(),
+            blockingRunId: controllerInput.mailbox.claim?.inputs.find(
+              (source) => source !== controllerInput,
+            )?.protocolRunId,
+          };
       const dispatch = () => {
         const deliver = () =>
           deliverSubagentAnnouncement({
@@ -629,6 +623,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
                   lastError: undefined,
                 },
                 refreshBatch,
+                requesterDelivery,
               );
               dispatchPrepared = true;
             },
@@ -645,22 +640,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           },
         );
       };
-      try {
-        delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
-          followup
-            ? withFollowupSuccessor(
-                followup.successor(settledBatch, directIdempotencyKey, () => {
-                  if (!isSourceSessionEffectsAllowed()) {
-                    throw new Error("Followup completion cohort changed.");
-                  }
-                }),
-                dispatch,
-              )
-            : dispatch(),
-        );
-      } finally {
-        await waitForRequesterDelivery?.();
-      }
+      delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
+        followup
+          ? withFollowupSuccessor(
+              followup.successor(settledBatch, directIdempotencyKey, () => {
+                if (!isSourceSessionEffectsAllowed()) {
+                  throw new Error("Followup completion cohort changed.");
+                }
+              }),
+              dispatch,
+            )
+          : dispatch(),
+      );
     } catch (error) {
       retireUnadoptedInput();
       if (!dispatchPrepared) {

@@ -69,6 +69,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "promptCacheKey"
     | "sessionId"
     | "sessionKey"
+    | "runId"
     | "skipPreparedUserTurnMessage"
     | "suppressNextUserMessagePersistence"
     | "userTurnTranscriptRecorder"
@@ -117,6 +118,18 @@ export async function submitEmbeddedAttemptPrompt(input: {
     return;
   }
   const userTurnRecorder = attempt.userTurnTranscriptRecorder;
+  const source = userTurnRecorder?.getPersistedMessage?.() ?? userTurnRecorder?.message;
+  if (
+    input.runtimeContextMessage &&
+    source?.idempotencyKey &&
+    source.provenance?.kind === "inter_session" &&
+    source.provenance.sourceTool === "subagent_announce"
+  ) {
+    input.runtimeContextMessage.details.requesterDelivery = {
+      runId: attempt.runId,
+      inputIdempotencyKey: source.idempotencyKey,
+    };
+  }
   const projectionRecorder =
     attempt.skipPreparedUserTurnMessage || input.runtimeOnly || userTurnRecorder?.isBlocked()
       ? undefined

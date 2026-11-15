@@ -189,6 +189,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       await submitSession(session, {
         attempt: {
           sessionId,
+          runId: "prompt-submit-run",
           userTurnTranscriptRecorder: recorder,
           skipPreparedUserTurnMessage: state.activePrompt.internal,
           suppressNextUserMessagePersistence: state.suppressNextUserMessagePersistence,
@@ -560,7 +561,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
         setActiveSessionSystemPrompt: vi.fn(),
       });
       await submitSession(session, {
-        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
         appendOnlyRuntimeContext: retryContext !== "transient",
         appendContext: undefined,
         prependContext: undefined,
@@ -837,7 +838,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     const submit = () =>
       submitEmbeddedAttemptPrompt({
         ...input,
-        attempt: { sessionId, promptCacheKey },
+        attempt: { sessionId, runId: "prompt-submit-run", promptCacheKey },
         activeSession,
         toolResultAggregateMaxChars: 6_000,
         promptActiveSession: async () => {
@@ -927,7 +928,7 @@ describe("embedded provider dispatch admission", () => {
           modelPrompt: message.content,
           prependContext: undefined,
           appendContext: undefined,
-          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+          attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
         });
         try {
           // The actual user append starts admission; the test never calls the waiter.

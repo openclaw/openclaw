@@ -12,6 +12,7 @@ import {
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import type { OpenClawStateReadRequest } from "../../../state/openclaw-state-read.types.js";
 import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
+import { projectSubagentRequesterDelivery } from "./subagent-requester-delivery.worker.js";
 
 /** The single SELECT owns its snapshot; backpressure bounds decoded facts in flight. */
 export async function streamSubagentRegistryInWorker(
@@ -51,7 +52,7 @@ export async function streamSubagentRegistryInWorker(
       if (!entry) {
         throw new Error("Canonical subagent restore found an unreadable durable row");
       }
-      batch.push({ entry, createdAt: row.created_at });
+      batch.push({ entry: projectSubagentRequesterDelivery(entry), createdAt: row.created_at });
       bytes += size;
       count += 1;
     }

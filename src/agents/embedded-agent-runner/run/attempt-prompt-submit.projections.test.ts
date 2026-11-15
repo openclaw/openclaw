@@ -225,7 +225,11 @@ describe("durable model prompt projection at provider dispatch", () => {
               return createAssistantResultStream(createAssistant(model, "done"));
             });
             await submit(session, {
-              attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+              attempt: {
+                sessionId,
+                runId: "prompt-submit-run",
+                userTurnTranscriptRecorder: recorder,
+              },
               appendOnlyRuntimeContext: true,
               runtimeContextMessage: buildRuntimeContextCustomMessage("Synthetic runtime"),
               transcriptPrompt: "original",
@@ -336,7 +340,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           },
         });
         await submit(active.session, {
-          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+          attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
           ...(turn === 1 ? { images: promptImages(imageBuffer) } : {}),
           transcriptPrompt: text,
           modelPrompt: "",
@@ -350,7 +354,7 @@ describe("durable model prompt projection at provider dispatch", () => {
       const first = await openSession();
       const recorder = await send(first, 1);
       await submit(first.session, {
-        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
         transcriptPrompt: "original turn 1",
         modelPrompt: "Changed prompt from the retry",
         images: promptImages(createSolidPngBuffer(1, 1, { r: 200, g: 100, b: 50 })),
@@ -495,6 +499,7 @@ describe("durable model prompt projection at provider dispatch", () => {
           await submit(session, {
             attempt: {
               sessionId,
+              runId: "prompt-submit-run",
               userTurnTranscriptRecorder: recorder,
               skipPreparedUserTurnMessage: internal,
             },
@@ -607,7 +612,11 @@ describe("durable model prompt projection at provider dispatch", () => {
         };
         try {
           await submit(session, {
-            attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+            attempt: {
+              sessionId,
+              runId: "prompt-submit-run",
+              userTurnTranscriptRecorder: recorder,
+            },
             transcriptPrompt: original.text,
             modelPrompt: "enriched image request",
             prependContext: undefined,
@@ -688,7 +697,7 @@ describe("durable model prompt projection at provider dispatch", () => {
       const requests = captureRequests();
 
       await submit(session, {
-        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
         transcriptPrompt: "original compacted turn",
         modelPrompt: "enriched compacted turn",
         prependContext: "unrelated hook",
@@ -762,7 +771,7 @@ describe("durable model prompt projection at provider dispatch", () => {
 
         // The first request keeps the same stored provenance envelope as replay.
         await submit(session, {
-          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+          attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
           transcriptPrompt: annotated,
           modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
           runtimeContextMessage: restart
@@ -838,7 +847,7 @@ describe("tool-result projection persistence at dispatch", () => {
       return createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }]));
     };
     await submitEmbeddedAttemptPrompt({
-      attempt: { sessionId: toolProjectionSessionId },
+      attempt: { sessionId: toolProjectionSessionId, runId: "tool-projection-run" },
       contextTokenBudget: 8_000,
       images: [],
       modelPrompt: "read files",

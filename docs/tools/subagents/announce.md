@@ -17,10 +17,12 @@ Sub-agents report back through completion delivery:
 - Duplicate delivery is suppressed through recorded completion and source-message delivery facts. Subagents and internal parent review turns do not use silent tokens for deduplication.
 
 While a completion waits for its requester, its delivery record carries
-`requesterDelivery.state: "waiting"`, the continuation `runId`, and the
+`requesterDelivery.state: "waiting"`, the continuation `runId` once assigned, and
 `blockingRunId` when another requester turn holds the mailbox. Pending handoffs
 have no terminal non-delivery disposition. Once the transcript owner commits the
-input, it records `state: "consumed"` with the consuming run and timestamp.
+input, registry readers project `state: "consumed"` with the consuming run from
+that receipt. Missing or unreadable receipts preserve the raw registry state.
+Terminal settlement copies the consumption fact into the registry.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.

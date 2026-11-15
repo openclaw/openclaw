@@ -1,4 +1,5 @@
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
+import type { RequesterDeliveryReceipt } from "../../sessions/requester-delivery-receipt.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
 import type { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
@@ -36,6 +37,7 @@ export type TranscriptAppendOptions = {
 };
 
 export type TranscriptAppendCursor = {
+  requesterDeliveries?: RequesterDeliveryReceipt[];
   deferWrites?: boolean;
   windowUpdatedAt?: number;
   rowTranscript?: SessionRowTranscriptProjection;

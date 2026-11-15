@@ -309,7 +309,6 @@ describe("subagent registry sqlite store", () => {
           state: "consumed",
           runId: "requester-continuation",
           at: 300,
-          private: true,
         },
       },
     });

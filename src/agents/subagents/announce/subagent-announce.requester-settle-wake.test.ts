@@ -96,17 +96,21 @@ function prepareDispatch(params: Parameters<typeof deliverSpy>[0]) {
   return params.onBeforeDispatch();
 }
 describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
-  it("retires its unadopted input when the waiting receipt is rejected", async () => {
+  it("retires its unadopted input when dispatch and waiting publication are rejected", async () => {
     setChildren();
     const failure = new Error("Requester wake batch changed before its outcome was recorded");
+    deliverSpy.mockImplementationOnce(async (params) => {
+      await prepareDispatch(params);
+      throw new Error("unreachable");
+    });
     await expect(
       wake({
-        recordRequesterDelivery: async () => {
+        transitionBatch: async () => {
           throw failure;
         },
       }),
     ).rejects.toBe(failure);
-    expect(deliverSpy).not.toHaveBeenCalled();
+    expect(deliverSpy).toHaveBeenCalledOnce();
     expect([...sessionControllerMailboxes()].flatMap((mailbox) => mailbox.entries)).toEqual([]);
   });
 

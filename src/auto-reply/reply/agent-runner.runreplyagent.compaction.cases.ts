@@ -228,7 +228,7 @@ export function registerReplyCompactionCases({
             const withTranscriptWrite = <T>(write: () => Promise<T>) =>
               withSessionManagerWrite(sessionManager, write);
             await submitEmbeddedAttemptPrompt({
-              attempt: { sessionId: session.sessionId },
+              attempt: { sessionId: session.sessionId, runId: "compaction-run" },
               activeSession: session,
               contextTokenBudget: 200_000,
               compactBeforeRequest: createChatGPTV2CompactionBoundary({

@@ -287,7 +287,7 @@ async function fixture(
   const boundary = createChatGPTV2CompactionBoundary(boundaryParams);
   const submit = (prompt = "current request") =>
     submitEmbeddedAttemptPrompt({
-      attempt: { sessionId: session.sessionId },
+      attempt: { sessionId: session.sessionId, runId: "compaction-run" },
       activeSession: session,
       contextTokenBudget,
       compactBeforeRequest: boundary,

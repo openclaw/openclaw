@@ -527,8 +527,6 @@ export type SessionControllerInput = {
   sequence: number;
   readonly sourceTurnId?: string;
   protocolRunId?: string;
-  /** Producer records transcript custody after the input owner commits it. */
-  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   policy: Readonly<QueueSettings>;
   mailbox: SessionControllerMailbox;
   readonly custody: SessionControllerSourceCustody;

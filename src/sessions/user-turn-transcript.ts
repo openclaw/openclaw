@@ -641,18 +641,7 @@ export function createUserTurnTranscriptRecorder(
       admissionHandler = handler;
     },
     markSentToProvider: () => {
-      if (sentToProvider) {
-        return;
-      }
       sentToProvider = true;
-      if (!params.onInputSubmitted) {
-        return;
-      }
-      try {
-        void Promise.resolve(params.onInputSubmitted()).catch(handlePersistenceError);
-      } catch (error) {
-        handlePersistenceError(error);
-      }
     },
     markRuntimePersistencePending: (pending) => {
       runtimePersistencePromise = pending;

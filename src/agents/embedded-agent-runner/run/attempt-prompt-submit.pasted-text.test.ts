@@ -123,7 +123,7 @@ it("retains pasted text attachments in later provider requests and reopened sess
       const prompt = turn === 1 ? enriched : "What was the emergency access phrase?";
       await submitEmbeddedAttemptPrompt({
         ...createBaseInput(),
-        attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+        attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
         activeSession: active.session,
         transcriptPrompt: prompt,
         modelPrompt: prompt,

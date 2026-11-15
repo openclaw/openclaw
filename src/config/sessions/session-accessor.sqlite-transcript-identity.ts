@@ -5,6 +5,10 @@ import {
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  readRequesterDeliveryReceipt,
+  requesterDeliveryReceiptKey,
+} from "../../sessions/requester-delivery-receipt.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptMessageAppendOptions } from "./session-accessor.sqlite-contract.js";
 import {
@@ -158,7 +162,7 @@ function readTranscriptMessageByIdentity(
 }
 
 export function readTranscriptMessageByEventId(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   scope: ResolvedTranscriptScope,
   eventId: string,
 ): { messageId: string; message: unknown } | undefined {
@@ -171,12 +175,15 @@ export function readTranscriptEventIdentity(event: unknown) {
     return undefined;
   }
   const eventId = typeof event.id === "string" && event.id.trim() ? event.id.trim() : undefined;
+  const receipt = event.type === "custom_message" ? readRequesterDeliveryReceipt(event) : undefined;
   return eventId
     ? {
         eventId,
         eventType: typeof event.type === "string" ? event.type : null,
         parentId: typeof event.parentId === "string" ? event.parentId : null,
-        messageIdempotencyKey: readMessageIdempotencyKey(event.message),
+        messageIdempotencyKey:
+          readMessageIdempotencyKey(event.message) ??
+          (receipt ? requesterDeliveryReceiptKey(receipt.inputIdempotencyKey) : null),
       }
     : undefined;
 }

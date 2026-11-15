@@ -147,6 +147,7 @@ export function createTranscriptAppendBatch(
             {
               windowUpdatedAt: cursor.windowUpdatedAt,
               rowTranscript: projectionNeedsRebuild ? undefined : cursor.rowTranscript,
+              requesterDeliveries: cursor.requesterDeliveries,
               projectionReady: !projectionNeedsRebuild,
               writeActorMutation: flushProjectionWithMutation,
               ...(fold
