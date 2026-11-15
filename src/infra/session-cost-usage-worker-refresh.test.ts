@@ -18,6 +18,7 @@ import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js"
 import { scanUsageCostRollupInWorker } from "./session-cost-usage-worker-refresh.js";
 
 const timestamp = Date.parse("2026-09-23T12:00:00.000Z");
+const fixtureCreatedAt = new Date(timestamp).toISOString();
 type Row = { seq: number; event: Record<string, unknown> };
 function makeRow(
   seq: number,
@@ -190,7 +191,7 @@ const answerEvent = (id: string, parentId: string, tokens: number) => {
 };
 /** u1 -> a1(10), the never-active sibling u2b -> a2b(40), then the active u2 -> a2(20). */
 const branchedSource = (): TranscriptEvent[] => [
-  createSessionTranscriptHeader({ sessionId: "source" }),
+  createSessionTranscriptHeader({ sessionId: "source", timestamp: fixtureCreatedAt }),
   userEvent("u1", null),
   answerEvent("a1", "u1", 10),
   userEvent("u2b", "a1"),
@@ -252,7 +253,7 @@ it.each([
 // reachable billed paths. They are one spend: no model call happened.
 it("bills each real turn once across rewrites, copies and displaced paths", async () => {
   const turn: TranscriptEvent[] = [
-    createSessionTranscriptHeader({ sessionId: "source" }),
+    createSessionTranscriptHeader({ sessionId: "source", timestamp: fixtureCreatedAt }),
     userEvent("u1", null),
     answerEvent("a1", "u1", 10),
   ];
@@ -289,6 +290,7 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
   const window = (sessionId: string, inheritedThrough: string[], leaves: TranscriptEvent[]) => [
     createSessionTranscriptHeader({
       sessionId,
+      timestamp: fixtureCreatedAt,
       ...(inheritedThrough.length && { inheritedThrough }),
     }),
     ...branchedSource().slice(1),
@@ -309,6 +311,10 @@ it("bills each real turn once across rewrites, copies and displaced paths", asyn
       window("legacy-after-rewind", ["a2", "a2b"], [switchLeaf, rewindLeaf]),
     ].reduce((sum, rows) => sum + tokensOf(rows), 0),
   ).toBe(70);
+  // v2026.11.3 copied without `inheritedThrough` under a newer header; the source bills a2.
+  const cut = { type: "leaf", id: "stable-cut", parentId: "a2", targetId: "a1" };
+  const stableCopy = [createSessionTranscriptHeader(), ...branchedSource().slice(1), cut];
+  expect(tokensOf(window("v2026.11.3-source", [], [])) + tokensOf(stableCopy)).toBe(40);
 });
 
 /** The real in-place install: one appended leaf control on the same transcript. */

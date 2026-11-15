@@ -1,3 +1,4 @@
+import { parseDateFirstTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { readInheritedThrough } from "../config/sessions/transcript-header.js";
 import { projectTranscriptNavigationFields } from "../config/sessions/transcript-navigation-fields.js";
@@ -16,6 +17,10 @@ export function projectUsageScanFields(
   projectTranscriptNavigationFields(event, record);
   if (event.type === "session" && event.inheritedThrough !== undefined) {
     record.inheritedThrough = readInheritedThrough(event);
+  }
+  // Billing compares branch tips with the transcript's creation; see `selectBilledTranscriptPaths`.
+  if (event.timestamp !== undefined) {
+    record.timestamp = event.timestamp;
   }
   // A maintenance rewrite re-appends one turn as a copy. Keep the supersession
   // link so billing can recognize the copies of a single turn.
@@ -81,14 +86,30 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   // reachable this way and stays unbilled, matching the retired-copy accounting
   // this replaced. Emission order carries no meaning.
   const activeUserTurn = addPath(tree.leafId);
+  // A branch whose tip was written before this transcript existed was written,
+  // and billed, in the transcript it was copied from. Pre-upgrade rewinds copied
+  // the whole transcript and appended a control displacing the old tip, and the
+  // retained source still bills that tip on its own active path; billing it here
+  // too would count the turn twice. Such a branch keeps the active-path-only
+  // accounting it had before in-place cuts.
+  const createdAtMs = readTimestampMs(records.find((record) => record.type === "session"));
+  const billBranch = (leafId: string | null) => {
+    const tipMs =
+      createdAtMs === undefined || leafId === null
+        ? undefined
+        : readTimestampMs(tree.byId.get(leafId)?.entry);
+    if (tipMs === undefined || createdAtMs === undefined || tipMs >= createdAtMs) {
+      addPath(leafId);
+    }
+  };
   for (const node of tree.nodes) {
     if (!isSessionTranscriptLeafControl(node.entry) || node.leafId === undefined) {
       // An invalid control changed no navigation, so it displaced no branch.
       continue;
     }
-    addPath(node.leafId);
+    billBranch(node.leafId);
     if (node.displacedLeafId !== undefined) {
-      addPath(node.displacedLeafId);
+      billBranch(node.displacedLeafId);
     }
   }
   // A transcript rewrite re-appends a turn as a copy carrying `supersedesEntryId`
@@ -119,6 +140,10 @@ function selectBilledTranscriptPaths<T extends Record<string, unknown>>(
   return tree.hasLeafControl
     ? { billed: selection, userTurnOf, activeUserTurn, navigated: true }
     : { billed: selection, userTurnOf: new Map(), navigated: false };
+}
+
+function readTimestampMs(record: Record<string, unknown> | undefined): number | undefined {
+  return parseDateFirstTimestampMs(record?.timestamp);
 }
 
 /** Billed rows alone, for diagnostics that report counted history. */
