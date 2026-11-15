@@ -39,6 +39,9 @@ suite.define(() => {
             ".new-session-page__composer .agent-chat__composer-controls",
           );
           const before = await controls.boundingBox();
+          const chevron = trigger.locator(".chat-controls__inline-select-chevron");
+          const chevronBefore = await chevron.boundingBox();
+          const triggerPath = await trigger.evaluate((node) => `summary#${CSS.escape(node.id)}`);
           const shifts = await observeLayoutShifts(page);
           await gateway.resolveDeferred("models.list");
           await pollText(trigger).toContain("gpt-5.5");
@@ -50,8 +53,22 @@ suite.define(() => {
               }),
           );
           expect(await controls.boundingBox()).toEqual(before);
+          expect(await chevron.boundingBox()).toEqual(chevronBefore);
           const result = await shifts.evaluate((probe) => probe.read());
-          expect(result.value, JSON.stringify(result, null, 2)).toBe(0);
+          // The chip now hugs its name instead of reserving an empty label track.
+          // Only its leading edge may resize; the chevron, row and other UI stay put.
+          for (const entry of result.entries.filter((shift) => !shift.hadRecentInput)) {
+            expect(entry.sources.length).toBeGreaterThan(0);
+            for (const source of entry.sources) {
+              expect(source.node).toBe(triggerPath);
+              expect(source.currentRect.y).toBe(source.previousRect.y);
+              expect(source.currentRect.height).toBe(source.previousRect.height);
+              expect(source.currentRect.x + source.currentRect.width).toBeCloseTo(
+                source.previousRect.x + source.previousRect.width,
+                3,
+              );
+            }
+          }
           await shifts.evaluate((probe) => probe.stop());
           await shifts.dispose();
           await cpu.detach();

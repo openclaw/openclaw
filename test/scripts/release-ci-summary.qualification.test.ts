@@ -9,8 +9,10 @@ import {
 } from "../../scripts/docker-release-artifacts.mjs";
 import {
   buildReleaseExecutionPlanArtifact,
+  composeReleaseAttemptJobs,
   validateReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { evaluateReleaseChildPolicy } from "../../scripts/lib/release-validation-waivers.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -106,6 +108,9 @@ function npmProducer(f: ReturnType<typeof candidatePublicationFixture>) {
 describe("candidate-owned publish consumer chain", () => {
   it.each([
     "same qualification",
+    "candidate-bound same qualification",
+    "candidate-bound changelog descendant",
+    "candidate-bound execution-plan descendant",
     "changelog descendant",
     "execution-plan descendant",
     "changed candidate",
@@ -113,9 +118,78 @@ describe("candidate-owned publish consumer chain", () => {
     "changed P",
     "revoked P",
   ])("selects a direct admitted root across transport refs only for %s", async (scenario) => {
-    const root = candidatePublicationFixture();
-    const descendant =
-      scenario === "changelog descendant" || scenario === "execution-plan descendant";
+    const candidateBound = scenario.startsWith("candidate-bound");
+    const version = candidateBound ? "2026.11.4" : "2026.8.28-beta.1";
+    const changedPaths = [
+      `CHANGELOG/${version.split("-")[0]}.md`,
+      `CHANGELOG/records/${version.split("-")[0]}.md`,
+    ];
+    const root = candidatePublicationFixture({
+      candidateVersion: version,
+      ...(candidateBound ? { candidateSha: "5eb2d8052ddc363245bea3ca4ec0833815ab6e93" } : {}),
+    });
+    let evidenceClient: Parameters<typeof validateReleaseRunEvidence>[1] = root.client;
+    if (candidateBound) {
+      const child = root.plan.children.find((entry) => entry.key === "normalCi");
+      assert(child);
+      const originalJobs = await root.client.getRunAttemptJobs(child.runId);
+      const gate = originalJobs.find((job) => job.name === "openclaw/ci-gate");
+      assert(gate);
+      const jobs = [
+        ...originalJobs.filter((job) => job !== gate),
+        ...[
+          "checks-node-agentic-control-plane-runtime-state",
+          "checks-ui-e2e-real-gateway (1/2)",
+          "macos-swift (tests)",
+          gate.name,
+        ].map((name, index) =>
+          Object.assign({}, gate, {
+            id: 1501 + index,
+            name,
+            conclusion: "failure",
+            steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+          }),
+        ),
+      ];
+      const composite = composeReleaseAttemptJobs([{ jobs, runAttempt: 1 }], {
+        effectiveRunAttempt: 1,
+        plannedRunAttempt: 1,
+      });
+      assert(root.manifest.childEvidence.normalCi);
+      Object.assign(root.manifest.childEvidence.normalCi, {
+        jobs: composite.jobs,
+        compositeJobsSha256: composite.sha256,
+      });
+      Object.assign(root.manifest, {
+        waivers: evaluateReleaseChildPolicy({
+          child: { key: "normalCi", jobs },
+          targetVersion: version,
+          targetSha: root.q,
+        }).waivers.map((waiver) =>
+          Object.assign({}, waiver, { runId: child.runId, runAttempt: 1 }),
+        ),
+      });
+      const original = { ...root.client };
+      evidenceClient = {
+        ...original,
+        getRunAttemptJobs: async (id: string) =>
+          id === child.runId ? jobs : original.getRunAttemptJobs(id),
+        getRun: async (id: string) => ({
+          ...(await original.getRun(id)),
+          ...(id === child.runId ? { conclusion: "failure" } : {}),
+        }),
+        getJobLog: async (id: number) =>
+          id === 1504
+            ? ["checks-ui-e2e-real-gateway", "checks-node-core-test-nondist-shard", "macos-swift"]
+                .map(
+                  (cause) =>
+                    `2026-11-15T04:00:00.0000000Z ##[error]${cause} finished with failure (selected=true)`,
+                )
+                .join("\n")
+            : original.getJobLog(id),
+      };
+    }
+    const descendant = scenario.endsWith("descendant");
     const candidateSha = scenario === "changed candidate" || descendant ? "d".repeat(40) : root.q;
     const targetSha = descendant ? "d".repeat(40) : root.q;
     const workflowRef = "release-ci/" + candidateSha.slice(0, 12) + "-456";
@@ -137,7 +211,7 @@ describe("candidate-owned publish consumer chain", () => {
       inputs,
       candidateSha,
       transportRef: workflowRef,
-      candidateVersion: "2026.8.28-beta.1",
+      candidateVersion: version,
       policy: JSON.parse(readFileSync("scripts/lib/release-qualification-coverage.json", "utf8")),
       workflowSource: readFileSync(".github/workflows/full-release-validation.yml", "utf8"),
     });
@@ -147,15 +221,12 @@ describe("candidate-owned publish consumer chain", () => {
       current.authority.permission = "read";
     }
     const client = {
-      ...root.client,
+      ...evidenceClient,
       compareCommits: descendant
         ? () => ({
             status: "ahead",
             merge_base_commit: { sha: root.q },
-            files: [
-              { filename: "CHANGELOG/2026.8.28.md", status: "modified" },
-              { filename: "CHANGELOG/records/2026.8.28.md", status: "modified" },
-            ],
+            files: changedPaths.map((filename) => ({ filename, status: "modified" })),
           })
         : root.client.compareCommits,
       verifyQualificationAdmission: (
@@ -173,9 +244,9 @@ describe("candidate-owned publish consumer chain", () => {
       {
         ...verifier(root),
         verifierSourceSha: scenario === "changed P" ? "e".repeat(40) : root.p,
-        ...(scenario === "execution-plan descendant"
+        ...(scenario.endsWith("execution-plan descendant")
           ? {
-              expectedChangedPaths: ["CHANGELOG/2026.8.28.md", "CHANGELOG/records/2026.8.28.md"],
+              expectedChangedPaths: changedPaths,
               expectedEvidencePolicy: "split-changelog-release-v1",
               expectedEvidenceSha: root.q,
               expectedRootRunId: root.runId,
@@ -200,7 +271,9 @@ describe("candidate-owned publish consumer chain", () => {
       },
       client,
     );
-    if (scenario === "same qualification" || descendant) {
+    if (candidateBound && descendant) {
+      await expect(result).rejects.toThrow("candidate-bound release waiver");
+    } else if (scenario.endsWith("same qualification") || descendant) {
       const evidence = await result;
       expect(evidence).toMatchObject({
         valid: true,
@@ -208,6 +281,12 @@ describe("candidate-owned publish consumer chain", () => {
         root: { runId: root.runId, workflowRefProof: "candidate-owned-admission-v1" },
         current: { conclusion: "success" },
       });
+      if (candidateBound) {
+        expect(evidence.waivers).toHaveLength(3);
+        expect(evidence.children.find((child) => child.role === "normalCi")).toMatchObject({
+          conclusion: "failure",
+        });
+      }
       expect(evidence.manifest.publicationArtifacts).toEqual(root.manifest.publicationArtifacts);
       expect(evidence.children.map((child) => child.runId)).toEqual(
         root.plan.children.map((child) => child.runId),

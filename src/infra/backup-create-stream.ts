@@ -1,38 +1,37 @@
 import fsSync, { createWriteStream, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
-import { compose, Transform } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { finished, pipeline } from "node:stream/promises";
-import { createGzip } from "node:zlib";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { createAbortError, isAbortError } from "./abort-signal.js";
+import { gzipInParallel } from "./backup-gzip.js";
 import type { ReportBackupProgress } from "./backup-progress.js";
 
 const BACKUP_ARCHIVE_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 /** Seal the manifest from observed entries after the single payload traversal. */
 export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManifest: () => Buffer) {
-  return compose(
-    payload,
-    async function* (source: AsyncIterable<Buffer>) {
-      // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
-      // Replace only that terminator; the payload headers and bytes stay intact.
-      let tail: Buffer = Buffer.alloc(0);
-      for await (const chunk of source) {
-        const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
-        if (length) {
-          yield tail.subarray(0, length);
-        }
-        tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+  async function* sealed() {
+    // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
+    // Replace only that terminator; the payload headers and bytes stay intact.
+    let tail: Buffer = Buffer.alloc(0);
+    for await (const chunk of payload) {
+      const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
+      if (length) {
+        yield tail.subarray(0, length);
       }
-      if (tail.length > 1024) {
-        yield tail.subarray(0, -1024);
-      }
-      yield createManifest();
-    },
-    createGzip(),
-  );
+      tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+    }
+    if (tail.length > 1024) {
+      yield tail.subarray(0, -1024);
+    }
+    yield createManifest();
+  }
+  // Byte mode pulls the next member only after the archive file accepts the last,
+  // so a slow disk holds a few blocks rather than a queue of them.
+  return Readable.from(gzipInParallel(sealed()), { objectMode: false });
 }
 
 type BackupArchiveProgress = {

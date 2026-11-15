@@ -3,30 +3,28 @@ import { InlineAlert } from "../../components/solid/inline-alert.tsx";
 import { providerUsageAttention } from "../../components/solid/provider-usage.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { hasRoutineOAuthExpiry } from "../../lib/model-auth.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-/** The auth owner supplies a reason for unusable grants, not for routine access expiry. */
-export function isAccessTokenExpiry(profile: ModelAuthStatusProfile): boolean {
+/** A failed refresh or a lost grant: only a fresh sign-in recovers the account. */
+export function needsOAuthSignIn(profile: ModelAuthStatusProfile): boolean {
   return (
     profile.type === "oauth" &&
-    (profile.status === "expiring" || profile.status === "expired") &&
-    profile.reasonCode === undefined
+    (profile.reasonCode === "refresh_failed" || profile.reasonCode === "missing_credential")
   );
 }
 
 export function profileAuthProblem(profile: ModelAuthStatusProfile): string | undefined {
-  if (profile.type !== "oauth") {
+  if (!needsOAuthSignIn(profile)) {
     return undefined;
   }
-  if (profile.reasonCode === "missing_credential") {
-    return "modelProviders.status.signInAgain";
-  }
-  // The existing reason covers both pending and failed refresh markers, not just rejection.
-  return profile.reasonCode === "expired" ? "modelProviders.status.signInUnavailable" : undefined;
+  return profile.reasonCode === "refresh_failed"
+    ? "modelProviders.status.signInExpired"
+    : "modelProviders.status.missing";
 }
 
 const AUTH_STATUS: Record<
@@ -95,8 +93,8 @@ export function needsAuthAttention(card: ModelProviderCard): boolean {
     return false;
   }
   // A rollup has no credential type. Unknown or mixed expiry retains its warning.
-  const expiring = card.profiles.filter((profile) => profile.status === card.auth?.kind);
-  return expiring.length === 0 || !expiring.every(isAccessTokenExpiry);
+  // A refresh in progress is routine too; it settles without the operator.
+  return !hasRoutineOAuthExpiry(card.auth.kind, card.profiles);
 }
 
 /**

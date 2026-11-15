@@ -547,11 +547,7 @@ function openAgentDatabaseBackend(
       return undefined;
     }
     if (command.type === "database.walMaintenance") {
-      return (
-        openWriter().walMaintenance.maintainPeriodic?.(command.input, admit) ?? {
-          reclaimedPages: 0,
-        }
-      );
+      return maintenance.maintainPeriodic(command.input);
     }
     return registry.execute(command, context);
   };

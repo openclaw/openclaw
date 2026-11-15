@@ -1,5 +1,5 @@
-import { writeSync } from "node:fs";
-import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
   createUpdateStateInspectionReporter,
@@ -9,10 +9,9 @@ import { findUpdateCaptureSpaceError, UpdateCaptureSpaceError } from "./update-c
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import { UPDATE_STATE_INSPECTION_PROGRESS_PREFIX } from "./update-state-inspection-protocol.js";
 
-vi.mock("node:fs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:fs")>()),
-  writeSync: vi.fn(),
-}));
+beforeEach(() => {
+  vi.spyOn(fs, "writeSync").mockReturnValue(0);
+});
 
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
@@ -44,7 +43,6 @@ function progressChunk(value: object) {
 }
 
 afterEach(() => {
-  vi.mocked(writeSync).mockReset();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -54,14 +52,14 @@ it.each(["EAGAIN", "EWOULDBLOCK"])(
   (code) => {
     const report = createUpdateStateInspectionReporter(true);
     const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
-    vi.mocked(writeSync).mockImplementation(() => {
+    vi.mocked(fs.writeSync).mockImplementation(() => {
       throw Object.assign(new Error("pipe full"), { code });
     });
     for (let index = 0; index < 1000; index++) {
       report(progress);
     }
     const output: string[] = [];
-    vi.mocked(writeSync).mockImplementation((_fd, line) => {
+    vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
       output.push(line);
       return Buffer.byteLength(line);
     });
@@ -77,7 +75,7 @@ it("delivers the legacy omission notice once after its pipe becomes writable", (
   const output: string[] = [];
   const omitted = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
   let blocked = true;
-  vi.mocked(writeSync).mockImplementation((_fd, line) => {
+  vi.mocked(fs.writeSync).mockImplementation((_fd, line) => {
     if (line === omitted && blocked) {
       throw Object.assign(new Error("pipe full"), { code: "EAGAIN" });
     }

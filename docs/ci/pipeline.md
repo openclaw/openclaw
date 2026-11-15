@@ -502,7 +502,10 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Package tests start after preflight and do not consume the Linux runtime artifact.
+Package tests and full-validation release compilation start after preflight and do not
+consume the Linux runtime artifact. The release phase shares the independent package
+matrix and its two-worker cap. It no longer waits for Linux build verification;
+all native suites and total job counts are unchanged.
 App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
 runner queueing cannot consume the native test job's 30-minute budget. They download
 the producer's artifact by its output ID and verify the selected checkout SHA before

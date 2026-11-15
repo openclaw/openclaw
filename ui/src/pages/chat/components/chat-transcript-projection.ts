@@ -267,6 +267,13 @@ export function projectChatTranscript(
     props.showToolCalls && !props.waitingApproval && props.retryAt === undefined && !subagents.wait
       ? runningActivityGroupKey
       : undefined;
+  // Per-message disclosures (long prompts, forwarded messages, reasoning) outlive row remounts.
+  const messageDisclosures = {
+    isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
+    onToggleUserMessageExpanded: (messageId: string) => {
+      toggleExpansionState(expandedUserMessages, messageId);
+    },
+  };
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
     branding: props.branding,
@@ -285,6 +292,7 @@ export function projectChatTranscript(
     onOpenSubagents: subagents.listed ? actions.onOpenSubagents : undefined,
     runOutputTokens,
     questionPrompts,
+    ...messageDisclosures,
   } satisfies StreamGroupOptions;
   const pendingSteerForMessage = createPendingSteerLookup(props.pendingInputs);
   const renderGroupOptions = (item: MessageGroup) => {
@@ -303,10 +311,7 @@ export function projectChatTranscript(
       bubbleActivityGroupKey,
       isToolMessageExpanded: toolExpanded,
       onToggleToolMessageExpanded: toggleToolCardExpanded,
-      isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
-      onToggleUserMessageExpanded: (messageId: string) => {
-        toggleExpansionState(expandedUserMessages, messageId);
-      },
+      ...messageDisclosures,
       loadFullAssistantMessage: actions.loadFullAssistantMessage ?? undefined,
       getAssistantMessageExpansion: recovery.get,
       onToggleAssistantMessageExpanded: recovery.expand,

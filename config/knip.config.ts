@@ -73,6 +73,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // The Windows benchmark launches this observer with Node --import by exact path.
   "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
+  "scripts/lib/agent-planner-statistics-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",
@@ -209,6 +211,7 @@ const repositoryScriptEntries = [
   "scripts/bench-channel-turn.mts!",
   // Opt-in append benchmark CLI documented in its source header.
   "scripts/perf/transcript-append-normalization-measure.ts!",
+  "scripts/perf/transcript-plan-stats.ts!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-cold-selection.ts!",
   "scripts/perf/session-delete-diagnostics-measure.ts!",
@@ -247,8 +250,6 @@ const repositoryScriptEntries = [
   "scripts/bench-gateway-validators.mts!",
   "scripts/bench-ingress-polling.mts!",
   "scripts/bench-lobster-validators.mts!",
-  "scripts/bench-media-completion-gateway.mts!",
-  "scripts/bench-media-completion-wait.mts!",
   "scripts/bench-memory-keyword.mjs!",
   "scripts/bench-session-cost-ready.mts!",
   "scripts/bench-session-projection-ready.mts!",

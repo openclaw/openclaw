@@ -85,6 +85,7 @@ async function agentCommandInternal(
       detached: prepared.opts.sessionEffects === "internal",
     },
     async (_operation, abortSignal) => {
+      prepared.opts.assertTurnAdmissionCurrent?.();
       return await agentCommandInternalOwned(
         { ...prepared, opts: { ...prepared.opts, abortSignal } },
         admissionIngress,
