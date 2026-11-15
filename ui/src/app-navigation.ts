@@ -1,6 +1,11 @@
 import { isValidWorkboardBoardId } from "@openclaw/workboard-contract";
 import { parseSidebarSessionReference } from "../../packages/gateway-protocol/src/schema/ui-navigation-preferences.ts";
-import { pluginTabForLocation, type PluginTab, type RouteId } from "./app-route-paths.ts";
+import {
+  pluginTabForLocation,
+  type PluginTab,
+  type RouteId,
+  isSessionRouteId,
+} from "./app-route-paths.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
@@ -61,6 +66,29 @@ export function sidebarSectionForRoute(
       : route === "activity"
         ? "online"
         : undefined;
+}
+
+/**
+ * The sidebar a page shows, decided by the page alone: its section's list, the Sessions list
+ * beside conversations, or none, leaving only the rail. The open plugin page's key places
+ * plugin pages that belong to a section.
+ */
+export function sidebarViewForPage(
+  route: NavigationRouteId,
+  pluginKey?: string,
+): ReturnType<typeof sidebarSectionForRoute> | "sessions" {
+  const section =
+    sidebarSectionForRoute(route) ??
+    (route === "plugin" && pluginKey && USERS_SECTION_PLUGIN_PAGES.has(pluginKey)
+      ? "online"
+      : undefined);
+  if (section) {
+    return section;
+  }
+  // Systems lists its machines in the Sessions view of the sidebar.
+  return isSessionRouteId(route) || route === "new-session" || route === "systems"
+    ? "sessions"
+    : undefined;
 }
 
 // Worktrees renders as a tab of the Sessions hub; the sidebar highlights the

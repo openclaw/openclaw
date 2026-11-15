@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import {
   SIDEBAR_NAV_ROUTES,
   sidebarSectionForRoute,
+  sidebarViewForPage,
   formatDocumentTitle,
   isPluginsHubRoute,
   navigationIconForRoute,
@@ -218,3 +219,15 @@ function expectRoutedPath(path: string, route: RouteId, base = "") {
   expect(dynamicRouteFromPath(path, base)?.[0]).toBe(route);
   expect(inferBasePathFromPathname(path)).toBe(base);
 }
+
+it("lets each page decide its sidebar: its section, Sessions, or none", () => {
+  expect(sidebarViewForPage("cron")).toBe("automations");
+  expect(sidebarViewForPage("activity")).toBe("online");
+  expect(sidebarViewForPage("chat")).toBe("sessions");
+  expect(sidebarViewForPage("new-session")).toBe("sessions");
+  expect(sidebarViewForPage("systems")).toBe("sessions");
+  expect(sidebarViewForPage("usage")).toBeUndefined();
+  expect(sidebarViewForPage("plugin", "knowledge/overview")).toBeUndefined();
+  // Remote access belongs to the Users section.
+  expect(sidebarViewForPage("plugin", "openclaw-id-access/access")).toBe("online");
+});
