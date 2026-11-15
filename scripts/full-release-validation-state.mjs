@@ -337,6 +337,7 @@ export async function readChild(child, previous, signal, options = {}) {
       const policy = evaluateReleaseChildPolicy({
         child: snapshot,
         targetVersion: options.targetVersion,
+        targetSha: options.targetSha,
       });
       const jobs = evidence.jobs.map((job) =>
         attempts
@@ -1446,6 +1447,7 @@ async function collectMode(mode) {
       ],
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1506,6 +1508,7 @@ async function collectMode(mode) {
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         }),
       ),
     );
@@ -1518,6 +1521,7 @@ async function collectMode(mode) {
       extraErrors,
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1546,6 +1550,7 @@ async function collectMode(mode) {
           ],
           localFailures: gateFailures,
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         });
       }
     }
