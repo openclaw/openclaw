@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import { ok } from "@openclaw/normalization-core/result";
 import { captureWorkspaceStateFilesystemGuard } from "../agents/workspace-state-guard.js";
@@ -6,7 +7,6 @@ import { resolveRepositoryIdentity } from "../agents/worktrees/repository-paths.
 import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entry-children-read.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import type { GitHubPublicationRequesterV2 } from "./github-publication-requester.js";
 import type { PublicationSessionRead } from "./github-publication-session.types.js";
 import { readSharedGitHubPublication } from "./github-publication-shared-read.js";
@@ -52,16 +52,13 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     sessionId: parent.entry.sessionId,
     lifecycleRevision: parent.entry.lifecycleRevision ?? null,
   };
-  const taskId = deriveGitHubPublicationTaskId(origin, params.idempotencyKey);
-  const label = `github-publication-${taskId}`;
+  // One task owns each checkout's publication for this conversation, so later
+  // publications from the checkout update the same branch and PR.
+  const hash = createHash("sha256").update(`${origin.sessionKey}\0${source}`).digest("hex");
+  const label = `github-publication-${hash.slice(0, 32)}`;
   const incognito = parent.entry.incognito === true || isIncognitoSessionKey(parent.canonicalKey);
-  // Accepted retries recover the original source even if its task was renamed.
-  const receipt = await readSharedGitHubPublication(origin, {
-    idempotencyKey: params.idempotencyKey,
-  });
-  assertPreparationCurrent();
-  let key = receipt?.session_key;
-  if (!key && incognito) {
+  let key: string | undefined = `agent:${parent.agentId}:dashboard:${label}`;
+  if (incognito) {
     const children = await listSessionChildEntriesReadOnly({
       agentId: parent.agentId,
       sessionKey: parent.canonicalKey,
@@ -70,39 +67,33 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
     assertPreparationCurrent();
     key = children.find(({ entry }) => entry.label === label)?.sessionKey;
   }
-  key ??= incognito ? undefined : `agent:${parent.agentId}:dashboard:github-${taskId}`;
   const assertTask = (entry: InternalSessionEntry | undefined) => {
     if (
       !entry ||
       entry.parentSessionKey !== origin.sessionKey ||
-      entry.parentSessionId !== origin.sessionId ||
-      (entry.parentSessionLifecycleRevision ?? null) !== origin.lifecycleRevision ||
       entry.createdVia !== "spawn" ||
       entry.projectId !== parent.entry.projectId ||
-      (receipt && entry.sessionId !== receipt.session_id) ||
       entry.worktree?.canonicalWorkspaceDir !== source
     ) {
       throw new Error("The local publication task changed; its saved checkout was preserved.");
     }
   };
-  if (key) {
-    const loaded = await loadGatewaySessionEntryReadOnlyInWorker({
-      cfg: getConfig(),
-      agentId: parent.agentId,
-      key,
-      assertActive: assertPreparationCurrent,
-      projection: "full",
-    });
-    assertPreparationCurrent();
-    if (loaded.entry) {
-      assertTask(loaded.entry);
-      return { agentId: parent.agentId, sessionKey: loaded.canonicalKey };
-    }
-    if (receipt) {
-      throw new Error(
-        "The original publication task is unavailable; inspect its existing receipt.",
-      );
-    }
+  const existing = key
+    ? await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg: getConfig(),
+        agentId: parent.agentId,
+        key,
+        assertActive: assertPreparationCurrent,
+        projection: "full",
+      })
+    : undefined;
+  // A retry must not republish an accepted request whose task was deleted.
+  const receipt = existing?.entry
+    ? undefined
+    : await readSharedGitHubPublication(origin, { idempotencyKey: params.idempotencyKey });
+  assertPreparationCurrent();
+  if (receipt) {
+    throw new Error("The original publication task is unavailable; inspect its existing receipt.");
   }
   const gitOptions = { signal: options.signal, beforeRun: assertPreparationCurrent };
   if (await requireGit(source, ["status", "--porcelain"], gitOptions)) {
@@ -130,6 +121,31 @@ export async function prepareGitHubPublicationTaskWorkspace(params: {
         "This checkout belongs to a different repository than the conversation's project; its files were preserved.",
       );
     }
+  }
+  if (existing?.entry) {
+    assertTask(existing.entry);
+    // Merge the source commit with its exact tree: the task branch fast-forwards and
+    // its PR shows the source's changes even after a rebase or amend.
+    const cwd = existing.entry.spawnedCwd!;
+    const format = "--format=%H%n%T%n%an%n%ae%n%cn%n%ce";
+    const [head, tree, an, ae, cn, ce] = (
+      await requireGit(source, ["log", "-1", format], gitOptions)
+    ).split("\n");
+    if (tree !== (await requireGit(cwd, ["rev-parse", "HEAD^{tree}"], gitOptions))) {
+      const env = {
+        GIT_AUTHOR_NAME: an,
+        GIT_AUTHOR_EMAIL: ae,
+        GIT_COMMITTER_NAME: cn,
+        GIT_COMMITTER_EMAIL: ce,
+      };
+      const merge = await requireGit(
+        cwd,
+        ["commit-tree", "--no-gpg-sign", "-p", "HEAD", "-p", head!, "-m", `Merge ${head}`, tree!],
+        { ...gitOptions, env },
+      );
+      await requireGit(cwd, ["merge", "--ff-only", "--quiet", merge], gitOptions);
+    }
+    return { agentId: parent.agentId, sessionKey: existing.canonicalKey };
   }
   const checkoutCommit = await requireGit(source, ["rev-parse", "HEAD"], gitOptions);
   const captured = await captureGatewayOperatorRunAuthority(options);

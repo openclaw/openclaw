@@ -432,7 +432,7 @@ describe("local checkout publication", () => {
       projectId = (await registerProjectRegistry({ path: projectRoot })).id;
       await upsertSessionEntryCore(scope, { projectId });
     }
-    const before = await worktreeState(source);
+    let before = await worktreeState(source);
     if (outcome === "linked project worktree") {
       const update = mocks.updateIndex.getMockImplementation()!;
       mocks.updateIndex.mockImplementationOnce(async (...args) => {
@@ -607,17 +607,38 @@ describe("local checkout publication", () => {
       }
       if (outcome === "project") {
         projectVisibility = "private";
-        expect(await invoke(publicationSource)).toEqual(result);
-        expect(await invoke(publicationSource, true, "new-project-task")).toMatchObject([
-          false,
-          undefined,
-          { message: expect.stringContaining("project is unavailable to this requester") },
-        ]);
+        // A retry checks current access again before it reaches the accepted receipt.
+        for (const key of ["local-checkout", "new-project-task"]) {
+          expect(await invoke(publicationSource, true, key)).toMatchObject([
+            false,
+            undefined,
+            { message: expect.stringContaining("project is unavailable to this requester") },
+          ]);
+        }
         expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
         expect(source.effects).toEqual(["push", "pull_request"]);
       }
       return;
     }
+
+    // Fixing CI, or amending, in the same checkout updates its task, branch and PR.
+    for (const [text, args] of [
+      ["follow-up\n", ["commit", "-qam", "Fix CI"]],
+      ["amended\n", ["commit", "-qa", "--amend", "--no-edit"]],
+    ] as const) {
+      await fs.writeFile(path.join(source.cwd, "artifact.txt"), text);
+      await source.git(...args);
+      expect(await invoke(source.cwd, true, text)).toMatchObject([
+        true,
+        { status: "published", url: result[1].url, branch: result[1].branch },
+      ]);
+      expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
+        text,
+      );
+    }
+    expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
+    expect(source.effects).toEqual(["push", "pull_request", "push", "push"]);
+    before = await worktreeState(source);
 
     // A later task can edit and publish another repository from the same conversation.
     const other = path.join(root, "another-repository");
@@ -633,7 +654,7 @@ describe("local checkout publication", () => {
     const edit = createHostWorkspaceEditTool(resumedRoot!, { workspaceOnly: true });
     await edit.execute("next-task", {
       path: path.join(other, "artifact.txt"),
-      edits: [{ oldText: "accepted\n", newText: "second task\n" }],
+      edits: [{ oldText: "amended\n", newText: "second task\n" }],
     });
     await source.git("-C", other, "add", "artifact.txt");
     await source.git("-C", other, "commit", "-m", "Implement the next task");
