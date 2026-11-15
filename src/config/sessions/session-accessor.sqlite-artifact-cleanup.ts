@@ -32,7 +32,7 @@ import { withSessionActorStorage } from "./session-actor-storage-acquisition.js"
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import { prepareCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
-import { maintenanceLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { captureSessionTranscriptTargetBinding } from "./transcript-target-binding.js";
 
@@ -210,7 +210,7 @@ export async function cleanupSessionLifecycleArtifactsCore(
                 },
                 signal,
               ),
-            maintenanceLane,
+            sessionStoreLane,
           );
           await continuation?.prepareCurrent();
           assertSourceCurrent();

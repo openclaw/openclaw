@@ -18,7 +18,7 @@ import * as sessionReads from "../config/sessions/session-entry-read-runtime.js"
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { removeCronRunContinuationSessionIfIdle } from "../cron/run-continuation-cleanup.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
-import { resetSystemEventsForTest } from "../infra/system-events.js";
+import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import type { OpenClawPluginDefinition } from "../plugins/plugin-definition.types.js";
 import type { OpenClawPluginToolFactory } from "../plugins/tool-types.js";
@@ -415,6 +415,82 @@ test.for([
     });
   },
 );
+
+test.for([
+  { label: "share the next turn", runIds: ["run-0", "run-0", "run-0"], turns: [[1], [2, 3]] },
+  {
+    label: "keep separate launch runs apart",
+    runIds: ["run-0", "run-0", "run-1"],
+    turns: [[1], [2], [3]],
+  },
+  // About 2,040 chars per result: three later results fit the shared turn, the fourth waits.
+  {
+    label: "stay within the size bound",
+    runIds: Array(5).fill("run-0"),
+    pad: 1_990,
+    sizes: [1, 3, 1],
+  },
+])("completions pending behind a completion turn $label", async (testCase, { signal }) => {
+  const { runIds } = testCase;
+  const sessionKey = `agent:main:dashboard:batched-${runIds.join("-")}`;
+  await seedOrigin(sessionKey);
+  const gate = createDeferredCore();
+  const firstTurn = createDeferredCore();
+  const calls: RunEmbeddedAgentParams[] = [];
+  model.mockImplementation(async (params: RunEmbeddedAgentParams) => {
+    await admitModelTurn(params);
+    calls.push(params);
+    if (calls.length === 1) {
+      firstTurn.resolve();
+      await gate.promise;
+    }
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  const directory = await fs.realpath(await fs.mkdtemp(path.join(state.workspaceDir, "batch-")));
+  const release = (job: number) => path.join(directory, job === 1 ? "first" : "later");
+  // Every command captures its destination before any exit changes the session.
+  for (const [index, runId] of runIds.entries()) {
+    const job = index + 1;
+    const script = `const t = setInterval(() => { if (require("node:fs").existsSync(${JSON.stringify(release(job))})) { clearInterval(t); process.stdout.write("BATCH_${job}" + "x".repeat(${testCase.pad ?? 0})); } }, 20);`;
+    runningSession(
+      (await backgroundExec(sessionKey, { agentId: "main", runId })(`batch-${job}`, script))
+        .details,
+    );
+  }
+  await fs.writeFile(release(1), "");
+  await withinTest(firstTurn.promise, signal);
+  await fs.writeFile(release(2), "");
+  await withinTest(waitForExecScope(sessionKey), signal);
+  // Exit notification follows process settlement; wait until every later exit is queued.
+  await vi.waitFor(
+    () => expect(peekSystemEventEntries(sessionKey)).toHaveLength(runIds.length - 1),
+    { timeout: 30_000 },
+  );
+  // The later exits wait for the running completion turn instead of queueing their own.
+  expect(receipts).toHaveLength(1);
+  gate.resolve();
+  const turnCount = (testCase.sizes ?? testCase.turns ?? []).length;
+  await vi.waitFor(() => expect(receipts).toHaveLength(turnCount), { timeout: 30_000 });
+  await completion(signal);
+  // Each turn names the run that launched its commands; later exits may finish in any order.
+  const observed = calls.map((params) => ({
+    jobs: (params.prompt.match(/BATCH_\d/g) ?? [])
+      .map((job) => Number(job.slice(6)))
+      .toSorted((a, b) => a - b),
+    runId: params.inputProvenance?.runId,
+  }));
+  expect(observed[0]?.jobs).toEqual([1]);
+  if (testCase.sizes) {
+    expect(observed.map((turn) => turn.jobs.length)).toEqual(testCase.sizes);
+    expect(observed.flatMap((turn) => turn.jobs).toSorted((a, b) => a - b)).toEqual([
+      1, 2, 3, 4, 5,
+    ]);
+    return;
+  }
+  expect(observed.toSorted((a, b) => (a.jobs[0] ?? 0) - (b.jobs[0] ?? 0))).toEqual(
+    testCase.turns.map((jobs) => ({ jobs, runId: runIds[(jobs[0] ?? 1) - 1] })),
+  );
+});
 
 test("starts and notifies when identity enrichment fails, then resolves child identity again", async ({
   signal,

@@ -1,8 +1,6 @@
 /** Owns captured destinations and cancellation for background exec completion notifications. */
-import {
-  captureSessionEventTargetForHost as captureSessionEventTarget,
-  enqueueSessionEventForHost as enqueueSessionEvent,
-} from "../auto-reply/reply/session-event-handoff.js";
+import { enqueueBatchedSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-batch.js";
+import { captureSessionEventTargetForHost as captureSessionEventTarget } from "../auto-reply/reply/session-event-handoff.js";
 import {
   hasAgentRunContextExecutionOwner,
   listAgentRunsForSession,

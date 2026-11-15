@@ -11,7 +11,6 @@ import "../../../styles/chat/composer-mobile.css";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
 import type { ChatComposerPlusMenuView } from "../composer-capability-types.ts";
 import "../../../styles/chat/composer-context-strip.css";
@@ -585,28 +584,11 @@ export function renderChatComposerView(
                 </span>
                 <Show when={context().predictionText}>
                   <span class="agent-chat__composer-prediction" aria-hidden="true">
-                    {context().predictionText}
+                    {context().predictionText}{" "}
+                    <span class="agent-chat__composer-prediction-hint">
+                      {t("chat.composer.predictionHint")}
+                    </span>
                   </span>
-                  <div class="agent-chat__composer-prediction-actions">
-                    <button
-                      type="button"
-                      aria-label={t("chat.composer.usePrediction")}
-                      aria-keyshortcuts="Tab"
-                      onClick={() => context().acceptPrediction()}
-                    >
-                      <Show when={keyboardHintsVisible()}>
-                        <kbd>{t("chat.composer.predictionShortcut")}</kbd>{" "}
-                      </Show>
-                      {t("chat.composer.usePrediction")}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => context().dismissPrediction()}
-                      aria-label={t("chat.composer.dismissPrediction")}
-                    >
-                      {t("chat.composer.dismissPrediction")}
-                    </button>
-                  </div>
                 </Show>
                 <span class="sr-only" role="status" aria-live="polite" aria-atomic="true">
                   {predictionAnnouncement()}

@@ -41,7 +41,7 @@ import {
 import {
   clearDatabaseWorkerIdleRetirement,
   historyLane,
-  projectionLane,
+  sessionStoreLane,
   registerSessionTranscriptReaderLane,
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
@@ -533,7 +533,7 @@ describe("search reader concurrency", () => {
             "Parallel needle",
           );
           const release = createDeferred();
-          const readers = [historyLane, projectionLane].map((lane) => {
+          const readers = [historyLane, sessionStoreLane].map((lane) => {
             const reader = retainSessionHistoryWorkerDatabase(database, lane);
             const entered = createDeferred();
             const work = reader.owner.searchTranscripts(request, async () => {

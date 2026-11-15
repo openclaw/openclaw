@@ -44,7 +44,7 @@ import {
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
 import {
   historyLane,
-  targetDiscoveryLane,
+  sessionStoreLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -459,7 +459,7 @@ export function prepareSessionTranscriptHydration(
                         preparedEntry: readOwnedSessionTranscriptEntry(target),
                         caller,
                       },
-                      targetDiscoveryLane,
+                      sessionStoreLane,
                     ),
                   (prepared) => {
                     const consumed = consume(prepared);
@@ -476,7 +476,7 @@ export function prepareSessionTranscriptHydration(
           },
           signal,
           // Keep discovery separate from the bounded history worker.
-          targetDiscoveryLane,
+          sessionStoreLane,
         );
       }
     : undefined;

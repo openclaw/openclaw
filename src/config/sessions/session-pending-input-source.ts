@@ -6,7 +6,7 @@ import type { PendingInputSourceSnapshot } from "./session-pending-input-operati
 import type { PendingInputScope } from "./session-pending-input-store.js";
 import { parseSessionPendingInputMessage } from "./session-pending-input-value.js";
 import { withSessionTranscriptReadSource } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 async function readPendingInputSource<T>(
@@ -85,7 +85,7 @@ async function readPendingInputSource<T>(
       return consume(snapshot);
     },
     undefined,
-    targetDiscoveryLane,
+    sessionStoreLane,
   );
 }
 

@@ -13,7 +13,7 @@ import type {
 } from "./session-store-target-inventory.js";
 import type { SessionStoreTargetInventoryRequest } from "./session-store-target-routing.js";
 import {
-  targetDiscoveryLane,
+  sessionStoreLane,
   prepareSessionStoreCandidatesInWorker,
   withSessionHistoryWorkerReadCandidates,
   type SessionHistoryWorkerLane,
@@ -81,7 +81,7 @@ export function prepareSessionStoreTargetInventoryRead(
           }
           return operation(inventory, assertCurrent);
         },
-        targetDiscoveryLane,
+        sessionStoreLane,
         signal,
       );
     },
@@ -94,7 +94,7 @@ export async function withSessionStoreTarget<T>(
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
   signal?: AbortSignal,
-  lane: SessionHistoryWorkerLane = targetDiscoveryLane,
+  lane: SessionHistoryWorkerLane = sessionStoreLane,
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = {

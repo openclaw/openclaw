@@ -64,9 +64,8 @@ import {
 } from "./session-store-target-runtime.js";
 import type { SessionStoreWorkerReader } from "./session-store-worker-reader.types.js";
 import {
-  projectionLane,
+  sessionStoreLane,
   prepareSessionStoreCandidatesInWorker,
-  targetDiscoveryLane,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
@@ -153,7 +152,7 @@ export async function withSessionEntryReadOnlyInWorker<T>(
     },
     {
       backing: true,
-      lane: lane ?? projectionLane,
+      lane: lane ?? sessionStoreLane,
       dataOnly: true,
       logical: { assertCurrent: assertCallerCurrent, onReadError },
       prepareSource,
@@ -277,7 +276,7 @@ export function createSessionEntryListReader(
           },
         };
       },
-      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: projectionLane },
+      { backing: true, dataOnly: true, capturePhysicalSource: true, lane: sessionStoreLane },
     ).finally(() => {
       pending = undefined;
     }));
@@ -357,7 +356,7 @@ export async function withSessionEntriesFromStoresInWorker<T>(
     return withOrderedSessionEntriesInWorker(capturedInputs, consume, {
       readStore: (input, read) =>
         withSessionStoreReaderInWorker(input, read, {
-          lane: targetDiscoveryLane,
+          lane: sessionStoreLane,
           prepareSource: options.prepareSource?.bind(
             options,
             originalInputs[capturedInputs.indexOf(input)]!,
@@ -517,7 +516,7 @@ export async function withSessionEntriesFromStoreInWorker<T>(
       assertCurrent();
       return consume({ result, database, assertCurrent });
     },
-    { backing: input.projection === "list", lane: projectionLane, dataOnly, prepareSource },
+    { backing: input.projection === "list", lane: sessionStoreLane, dataOnly, prepareSource },
   );
 }
 
@@ -546,7 +545,7 @@ export async function withSessionStoreReaderInWorker<T>(
   const agentId = input.agentId === undefined ? undefined : normalizeAgentId(input.agentId);
   const storePath = input.storePath;
   const preparedSource = input.preparedSource && { ...input.preparedSource };
-  const readLane = lane ?? (input.projection === "sharing" ? projectionLane : undefined);
+  const readLane = lane ?? (input.projection === "sharing" ? sessionStoreLane : undefined);
   preparedSource?.assertCurrent();
   logical?.assertCurrent?.();
   const onReadError = logical?.onReadError;

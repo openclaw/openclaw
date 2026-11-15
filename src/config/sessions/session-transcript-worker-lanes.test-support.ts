@@ -196,10 +196,8 @@ vi.mock("./disk-budget-runtime.js", () => ({
 
 import {
   historyLane,
-  maintenanceLane,
-  projectionLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "./session-transcript-worker-resources.js";
 
 let sequence = 0;
@@ -233,11 +231,7 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all(
-    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
-      rotateDatabaseWorkers(lane),
-    ),
-  );
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
 });
 afterAll(() => {
   vi.useRealTimers();

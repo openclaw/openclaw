@@ -5,11 +5,6 @@ import { en } from "./en.ts";
 // diagnostic inspector does not tax every Control UI startup.
 const enActivity = {
   activity: {
-    images: {
-      failed: "Couldn’t load images. Try again.",
-      older: "Older images",
-      incomplete: "Images too large to preview here",
-    },
     pulse: {
       title: "Sessions by last activity",
       lastYear: "Last 12 months",
@@ -35,29 +30,6 @@ const enActivity = {
       merged: "Merged",
       closed: "Closed",
     },
-    title: "Activity",
-    visibleCount: "{visible} of {total}",
-    search: "Search",
-    searchPlaceholder: "Filter by activity, summary, reply, or session",
-    filters: "Filters",
-    toolFilter: "Tool",
-    allTools: "All tools",
-    statusFilters: "Status filters",
-    autoFollow: "Auto-follow",
-    expandAll: "Expand all",
-    collapseAll: "Collapse all",
-    clear: "Clear",
-    empty: "No activity yet.",
-    emptyDescription: "Activity appears here while this view is open.",
-    emptyFiltered: "No activity matches these filters.",
-    argumentHiddenOne: "1 argument hidden",
-    argumentsHidden: "{count} arguments hidden",
-    streamLabel: "Agent activity entries",
-    toolCallId: "Tool call",
-    runId: "Run",
-    session: "Session",
-    outputTruncated: "Preview truncated.",
-    noOutputPreview: "No output preview.",
     currentWork: {
       title: "Active sessions",
       loading: "Loading active sessions…",
@@ -67,13 +39,6 @@ const enActivity = {
       queued: "Queued",
       limit: "Showing {count} of {total} active sessions.",
     },
-    answerCandidate: {
-      title: "Answer candidate",
-      itemId: "Item",
-      candidate: "Candidate answer",
-      superseded: "Superseded answer",
-      selected: "Selected answer",
-    },
     status: {
       running: "Running",
       done: "Done",
@@ -81,7 +46,7 @@ const enActivity = {
     },
     runInspector: {
       activityView: "Activity view",
-      liveMode: "Live activity",
+      liveMode: "Current work",
       mode: "Run inspector",
       intro:
         "Durable Gateway-backed identity evidence for one run. Reloading this page queries the Gateway again.",

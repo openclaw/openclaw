@@ -77,6 +77,7 @@ export type LocalWorkspaceMutation =
 export type LocalWorkspacePreparedUpdate = {
   revision: number;
   patch: Updateable<DB["local_workspace_projections"]>;
+  rejectedResult?: LocalWorkspaceRejectedResult;
   mutation: Uint8Array;
   preparations?: Uint8Array[];
 };

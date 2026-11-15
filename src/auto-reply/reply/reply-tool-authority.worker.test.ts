@@ -34,10 +34,7 @@ import { observeSessionMaintenanceCompletion } from "../../config/sessions/sessi
 import * as maintenance from "../../config/sessions/session-accessor.sqlite-maintenance.js";
 import { observeNextPeriodicMaintenance } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
-import {
-  projectionLane,
-  targetDiscoveryLane,
-} from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { bindSessionRowProjection } from "../../gateway/session-row-projection-access.js";
@@ -354,27 +351,26 @@ it.each(["main", "policy", "borrowed"] as const)(
           sessionId: run.run.sessionId,
         });
         let initialEntries = 0;
-        const initialReads = [projectionLane, targetDiscoveryLane].map(({ pool }) => {
-          const runRequest = pool.run.bind(pool);
-          return vi.spyOn(pool, "run").mockImplementation(async (...args) => {
-            const reply = await runRequest(...args);
-            if (
-              reply.ok &&
-              typeof reply.value === "object" &&
-              reply.value !== null &&
-              "kind" in reply.value &&
-              reply.value.kind === "session-exact-entries"
-            ) {
-              initialEntries++;
-            }
-            return reply;
-          });
+        const { pool } = sessionStoreLane;
+        const runRequest = pool.run.bind(pool);
+        const initialRead = vi.spyOn(pool, "run").mockImplementation(async (...args) => {
+          const reply = await runRequest(...args);
+          if (
+            reply.ok &&
+            typeof reply.value === "object" &&
+            reply.value !== null &&
+            "kind" in reply.value &&
+            reply.value.kind === "session-exact-entries"
+          ) {
+            initialEntries++;
+          }
+          return reply;
         });
         try {
           await operation.bindToolAuthoritySnapshotAsync(snapshot);
           expect(initialEntries).toBe(policyAgent === "borrowed" ? 0 : 1);
         } finally {
-          initialReads.forEach((read) => read.mockRestore());
+          initialRead.mockRestore();
         }
         const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
         await upsertSessionEntryCore(

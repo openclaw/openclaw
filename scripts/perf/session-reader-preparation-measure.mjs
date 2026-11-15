@@ -580,10 +580,10 @@ if (values.operation === "detached-transcript") {
   const { getOwnedSessionTranscriptReader } = await load(
     "src/config/sessions/transcript-write-context.ts",
   );
-  const { historyLane, targetDiscoveryLane } = await load(
+  const { historyLane, sessionStoreLane } = await load(
     "src/config/sessions/session-transcript-worker-resources.ts",
   );
-  detachedReadPools = [historyLane, targetDiscoveryLane];
+  detachedReadPools = [historyLane, sessionStoreLane];
   const scope = {
     ...options,
     storePath: readPath,

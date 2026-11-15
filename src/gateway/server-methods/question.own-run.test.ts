@@ -6,7 +6,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
-import { projectionLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -401,8 +401,8 @@ describe("own-run question admission", () => {
         retainedReads += 1;
         assertCurrent(read);
       });
-      const run = projectionLane.pool.run.bind(projectionLane.pool);
-      vi.spyOn(projectionLane.pool, "run").mockImplementation((...args) => {
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation((...args) => {
         retainedReads += 1;
         return run(...args);
       });
@@ -569,9 +569,9 @@ describe("own-run question admission", () => {
           factsInvalidated: true,
         });
         // Background membership refresh shares this lane; fault only the question's row read.
-        const run = projectionLane.pool.run.bind(projectionLane.pool);
+        const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
         let injected = false;
-        const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
+        const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
           let selected = false;
           const result = await run(async () => {
             const input = typeof args[0] === "function" ? await args[0]() : args[0];

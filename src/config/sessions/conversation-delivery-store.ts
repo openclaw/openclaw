@@ -19,7 +19,7 @@ import {
 } from "./conversation-registry.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 import { createSessionWorkerExecutionSource } from "./session-worker-execution-source.js";
 
@@ -82,7 +82,7 @@ function readConversationDelivery(
         options,
         (reader) => reader.readConversationDelivery({ lookup, env: preparedScope.env }),
         // Conflict cleanup retains this FIFO turn and must not drain independent readers.
-        targetDiscoveryLane,
+        sessionStoreLane,
       ),
     ),
   );

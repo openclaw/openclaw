@@ -1,7 +1,10 @@
 import { serialize } from "node:v8";
 import { deflateRawSync } from "node:zlib";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { localWorkspaceDigestBytes } from "./local-workspace-cas.js";
+import {
+  localWorkspaceDigestBytes,
+  prepareLocalWorkspaceSourcePathSet,
+} from "./local-workspace-cas.js";
 import type {
   LocalWorkspaceManifestMutation,
   LocalWorkspaceMutation,
@@ -48,10 +51,18 @@ export function prepareLocalWorkspaceUpdate(
       : {}),
     ...localWorkspaceFingerprintPatch(manifest?.fingerprints),
   };
+  let wirePatch = patch;
+  if (typeof patch.source_paths_json === "string") {
+    const paths = prepareLocalWorkspaceSourcePathSet(patch.source_paths_json);
+    preparations.push(deflateRawSync(serialize({ paths })));
+    patch.source_paths_digest = localWorkspaceDigestBytes(paths.digest);
+    wirePatch = { ...patch, source_paths_json: "[]" };
+  }
   return {
     revision: mutation.revision,
     patch,
-    mutation: deflateRawSync(serialize({ ...mutation, patch })),
+    rejectedResult: mutation.rejectedResult,
+    mutation: deflateRawSync(serialize({ ...mutation, patch: wirePatch })),
     preparations,
   };
 }

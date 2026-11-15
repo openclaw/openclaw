@@ -217,6 +217,7 @@ it("retires idle discovery workers while retaining the catalog and explicit refr
   signal,
 }) => {
   vi.useRealTimers();
+  using clock = vi.spyOn(performance, "now").mockReturnValue(0);
   const created = vi.spyOn(workerCpu, "createCpuTrackedWorker");
   const entry = String(resolveRuntimeProcessEntrypointUrl("skillsDiscovery"));
   const observedWorkers = () =>
@@ -236,6 +237,7 @@ it("retires idle discovery workers while retaining the catalog and explicit refr
       throw new Error("Expected the real discovery worker");
     }
     const exited = once(worker, "exit", { signal: AbortSignal.timeout(5_000) });
+    clock.mockReturnValue(1_000);
     channel("openclaw.memory.critical").publish(undefined);
     await expect(
       withinTest(exited, signal),

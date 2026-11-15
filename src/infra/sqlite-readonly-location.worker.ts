@@ -104,7 +104,7 @@ async function inspect(
     }
     if (mode === "state-sqlite-populated") {
       const [{ inspectPhysicalStoreInProcess }, { inspectStateSqlite }] = await Promise.all([
-        import("./database-engine/physical-store.js"),
+        import("./database-engine/physical-store-inspection.js"),
         import("../state/openclaw-state-db-engine.js"),
       ]);
       return {
@@ -116,7 +116,8 @@ async function inspect(
       };
     }
     if (mode === "backup-engine" || mode === "backup-engine-preserving") {
-      const { readBackupEngineInProcess } = await import("./database-engine/physical-store.js");
+      const { readBackupEngineInProcess } =
+        await import("./database-engine/physical-store-inspection.js");
       return {
         ok: true,
         engine: await readBackupEngineInProcess(pathname, mode === "backup-engine-preserving"),

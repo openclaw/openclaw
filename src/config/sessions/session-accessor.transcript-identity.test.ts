@@ -40,7 +40,7 @@ import {
   prepareSessionStoreTargetInventoryRead,
   withSessionStoreTarget,
 } from "./session-store-target-runtime.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 afterAll(clearRuntimeConfigSnapshot);
@@ -304,11 +304,11 @@ describe("transcript turn physical identity", () => {
       const target = { ...scope(), storePath: `${fixture.storePath()}.custom.json` };
       const databaseOptions = toDatabaseOptions(resolveSqliteScope(target));
       const shared = openOpenClawStateDatabase();
-      const run = targetDiscoveryLane.pool.run.bind(targetDiscoveryLane.pool);
+      const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
       const selected = createDeferred();
       const resume = createDeferred();
       let reads = 0;
-      vi.spyOn(targetDiscoveryLane.pool, "run").mockImplementation(async (...args) => {
+      vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
         const reply = await run(...args);
         if (
           reply.ok &&

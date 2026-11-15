@@ -90,7 +90,8 @@ afterEach(async () => {
 it("refreshes queued usage without synchronous filesystem work in its refresh owner", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "usage-periodic-filesystem";
-    const sessionFile = state.path("session.jsonl");
+    const sessionFile = path.join(state.sessionsDir(agentId), "session.jsonl");
+    await fs.promises.mkdir(path.dirname(sessionFile), { recursive: true });
     const line = (id: string) =>
       `${JSON.stringify({
         type: "message",
@@ -111,7 +112,10 @@ it("refreshes queued usage without synchronous filesystem work in its refresh ow
     const realpath = fs.realpathSync.native;
     const observe = (kind: string) => {
       const stack = new Error().stack;
-      if (stack?.includes("/session-cost-usage-cache.sqlite.ts:")) {
+      if (
+        stack?.includes("/session-cost-usage-cache.sqlite.ts:") ||
+        stack?.includes("/session-cost-usage-worker-runtime.ts:")
+      ) {
         calls.push(`${kind}\n${stack}`);
       }
     };
@@ -131,7 +135,6 @@ it("refreshes queued usage without synchronous filesystem work in its refresh ow
           config: {},
           agentId,
           storePath: path.join(state.sessionsDir(agentId), "sessions.json"),
-          sessionFiles: [sessionFile],
           env: state.env,
         }),
       );

@@ -580,9 +580,10 @@ It does not predict on every keystroke. Each active browser tab can make its own
 prediction request. Read-only, imported, and incognito conversations do not show
 predictions.
 
-Press **Tab** or select **Use suggestion** to copy the suggestion into your draft.
-This never sends it: you can edit or undo it before sending normally. **Escape**,
-**Dismiss suggestion**, or typing your own message dismisses it. Suggestions are
+The small **Tab to complete** badge follows the suggestion without wrapping within the badge.
+Press **Tab** to copy the suggestion into your draft.
+This never sends it: you can edit or undo it before sending normally. **Escape**
+or typing your own message dismisses it. Suggestions are
 not saved as messages or collaborator drafts until you accept them. Switching
 conversations, hiding the page, or starting another turn discards pending results.
 

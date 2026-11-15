@@ -455,8 +455,6 @@ describe("production lint suppressions", () => {
         // These Solid sinks consume HTML sanitized or escaped by their content owners.
         "ui/src/components/solid/markdown-html.tsx|solid/no-innerhtml|1",
         "ui/src/components/solid/sanitized-html.tsx|solid/no-innerhtml|1",
-        // JSON materializes the bounded preview; structuredClone retains sliced string backing storage.
-        "ui/src/pages/activity/tool-activity.ts|unicorn/prefer-structured-clone|1",
         // Browser preview selection reverses only freshly collected private arrays.
         "ui/src/pages/chat/components/chat-tool-cards.ts|unicorn/no-array-reverse|2",
         // A fresh one-shot MessageChannel port uses onmessage to start delivery and closes both ports.

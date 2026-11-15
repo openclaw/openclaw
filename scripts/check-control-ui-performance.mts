@@ -58,13 +58,12 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Entering-row forecasts (#196173): measured 1,300,731 B, plus 64 B headroom.
-  // Cold construction split: add CI-measured 336 B, coordinator-accepted (local +508 B).
-  // Josh approved the #196456 key-warning delta: +2,580 B; inherited debt stays.
-  chatBootJsGzipBytes: 1_303_711,
-  // Same warm reveal latch (#195865): measured 803,300 B (+623 B) plus 64 B.
-  // Josh approved the #196456 key-warning delta: +2,522 B; inherited debt stays.
-  newBootJsGzipBytes: 805_886,
+  // Coordinator-accepted shipped feature cost after paydown #199196.
+  // Measured on main 5328b275: exact route totals, with no added headroom.
+  // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
+  chatBootJsGzipBytes: 1_310_894,
+  // The same shared lazy signer adds the coordinator-accepted +235 B here.
+  newBootJsGzipBytes: 814_563,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
