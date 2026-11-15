@@ -165,7 +165,7 @@ it.each([
     expect(mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).toHaveBeenCalledTimes(
       1,
     );
-    checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateValidation);
+    checks.expectNoSideEffects(mocks.serviceStop, mocks.serviceRestart, mocks.candidateCheck);
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledOnce();
     expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledWith(
       expect.objectContaining({ coreVersion: VERSION, updateChannel: channel ?? "stable" }),
@@ -204,7 +204,7 @@ it("refuses a foreign legacy caller without an explicit channel request", async 
   checks.expectNoSideEffects(
     mocks.serviceStop,
     mocks.serviceRestart,
-    mocks.candidateValidation,
+    mocks.candidateCheck,
     cli.replaceConfigFile,
     mocks.updateNpmInstalledPlugins,
     mocks.legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
@@ -227,39 +227,49 @@ it.each(["caller", "service"] as const)(
         ? await useFileBackedConfigIO()
         : (await import("../config/io.js")).createConfigIO;
     readFrom(createConfigIO);
-    let selectedConfig: OpenClawConfig | undefined;
     if (owner === "service") {
       const serviceState = f.profileStateDir("work");
       await writeProfile(serviceState, { gateway: { mode: "local", bind: "lan" } });
       primeManagedProfile(root, serviceState);
-      const selected = await createConfigIO({
-        env: { ...process.env, ...profileEnv("work", serviceState) },
-        observe: false,
-        pluginValidation: "skip",
-      }).readConfigFileSnapshot();
-      expect(selected.config).not.toEqual(selected.sourceConfig);
-      selectedConfig = selected.config;
     }
-    mocks.candidateValidation.mockImplementationOnce(async (options) => {
-      if (owner === "caller") {
-        expect(options.config.gateway.bind).toBe("loopback");
-        expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      }
-      throw new Error(
-        owner === "caller"
-          ? "candidate refused the projected config"
-          : "candidate refused materialized config",
-      );
+    // The candidate refuses through its real result contract while the authored bytes are intact.
+    const refusal = `candidate refused the ${owner} config`;
+    mocks.candidateCheck.mockImplementationOnce(async ({ root: candidateRoot }) => {
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
+      return {
+        status: "error",
+        steps: [
+          {
+            name: "candidate-recovery",
+            command: "--check",
+            cwd: candidateRoot,
+            durationMs: 1,
+            exitCode: 1,
+            stderrTail: refusal,
+            failureFacts: [
+              { check: "runtime", code: "candidate-runtime-failed", message: refusal },
+            ],
+          },
+        ],
+      };
     });
     await withConfig(
       configPath,
       () => expectUpdateFailure({ channel: "beta", yes: true, restart: false, json: true }),
       owner === "service" ? { OPENCLAW_PROFILE: "personal" } : {},
     );
-    expect(mocks.candidateValidation).toHaveBeenCalledTimes(1);
-    if (owner === "service") {
-      expect(mocks.candidateValidation.mock.calls[0]?.[0].config).toEqual(selectedConfig);
-    }
+    expect(mocks.candidateCheck).toHaveBeenCalledTimes(1);
+    // The terminal result is the candidate's refusal, not an incidental error.
+    expect(checks.lastWriteJsonCall()).toMatchObject({
+      status: "error",
+      reason: "runtime-verification-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          name: "candidate-recovery",
+          failureFacts: [expect.objectContaining({ message: refusal })],
+        }),
+      ]),
+    });
     expect(await fs.readFile(configPath, "utf8")).toBe(before);
     checks.expectNoSideEffects(
       cli.replaceConfigFile,

@@ -2666,7 +2666,6 @@
         ],
         "env": {},
         "includePatterns": [
-          "src/infra/update-candidate-canary.integration.test.ts",
           "src/infra/update-managed-service-handoff-lifecycle.test.ts"
         ],
         "pretestBuildMode": "runtime",
