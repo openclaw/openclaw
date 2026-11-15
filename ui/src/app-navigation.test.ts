@@ -172,8 +172,16 @@ it("reads a namespaced tab reference from the generic URL", () => {
 });
 
 it("recognizes plugin hub routes", () => {
-  const routes = ["plugins", "skills", "skill-workshop", "skill-settings", "sessions"] as const;
-  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, false, false]);
+  const routes = [
+    "plugins",
+    "skills",
+    "skill-workshop",
+    "templates",
+    "skill-settings",
+    "sessions",
+  ] as const;
+  expect(routes.map(isPluginsHubRoute)).toEqual([true, true, true, true, false, false]);
+  expect(SIDEBAR_NAV_ROUTES).not.toContain("templates");
 });
 
 function expectRoutedPath(path: string, route: RouteId, base = "") {
