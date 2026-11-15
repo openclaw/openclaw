@@ -491,7 +491,7 @@ reason in the current protocol, so no `trigger` label is emitted; `cron.list`'s
 `trigger` parameter filters job types and does not identify why a client fetched.
 
 The budget is at most **8 additional samples and scrape series per method**,
-created only for observed kinds and subject to the shared 16,384-sample cap.
+created only for observed kinds and subject to the shared 16,576-sample cap.
 Existing method-only counters and timing histograms keep their labels and bucket
 counts. To attribute polling, use:
 
@@ -588,7 +588,7 @@ uses one sample in the existing shared cap.
 
 Outcome totals aggregate by phase and outcome without a
 method dimension. Each method with all four timings, both byte histograms, and the exclusive-sample counter occupies eight aggregate
-samples in the shared 16,384-sample cap. An RPC duration histogram occupies one sample
+samples in the shared 16,576-sample cap. An RPC duration histogram occupies one sample
 but expands into 44 scrape series (41 finite buckets, `+Inf`, sum, and count).
 The four timing histograms therefore use 176 scrape series per method, compared
 with 76 previously. Including request and exclusive-sample counters and both
@@ -795,7 +795,7 @@ queue and exporter endpoint whenever diagnostics and an interested trusted
 consumer are active. They have no slow-log threshold and add no request, session,
 provider or host labels. The six elapsed and two CPU populations consume at most
 eight aggregate samples, or 152 exposed histogram series, under the existing
-16,384-sample cap. Startup-phase emission and its whole-process CPU semantics are
+16,576-sample cap. Startup-phase emission and its whole-process CPU semantics are
 unchanged.
 
 An OpenTelemetry exporter with traces disabled does not request phase events.
@@ -1410,7 +1410,7 @@ attributes.
 
   </Accordion>
   <Accordion title="Series cap and overflow accounting">
-    The exporter retains at most **16,384 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
+    The exporter retains at most **16,576 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series. The WebSocket frame-size family is different: its nine cumulative scalar bounds each consume an entry, so 200 event names use 1,800 entries.
 
     A fixed catalog of 141 metric families reserves **16,128 entries**, leaving **256 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed. This protects late RPC, run, model, tool, GC, and memory observations from startup traffic in other families. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
 

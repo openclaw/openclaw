@@ -153,7 +153,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
 } as const;
 
 export type PrometheusMetricName = keyof typeof PROMETHEUS_FAMILY_RESERVES;
-const MAX_PROMETHEUS_SERIES = 16384;
+const MAX_PROMETHEUS_SERIES = 16576;
 // Larger explicit reserves also raise the ceiling, without borrowing shared entries.
 export const MAX_PROMETHEUS_FAMILY_SERIES = 128;
 export const SHARED_PROMETHEUS_SERIES =
