@@ -115,10 +115,10 @@ export async function startGatewayPostAttachRuntime(params: {
   let durableRuntime: typeof import("../agents/bash-process-durable.js") | undefined;
   let durableStartup: Promise<void> | undefined;
   let durableStopped = false;
+  // Every platform reports ordinary background commands a restart lost; only Linux and
+  // macOS can also launch durable ones.
   const startDurableProcesses =
-    !params.minimalTestGateway &&
-    !candidateCanary &&
-    (process.platform === "linux" || process.platform === "darwin")
+    !params.minimalTestGateway && !candidateCanary
       ? (signal: AbortSignal) => {
           durableStartup ??= (async () => {
             const assertCurrent = () => {

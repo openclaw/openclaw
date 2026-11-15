@@ -91,8 +91,9 @@ exit would wake the conversation, the next Gateway start sends that conversation
 notice for each such command, which starts a turn. The notice names the command's process handle and start time, so
 the agent can find the command in its transcript and decide whether to run it again.
 This covers crashes too, not only graceful restarts. The notice is new system input under
-the session's current authority; reset, archived, incognito, hidden subagent and ended
-cron sessions get no notice, and disabling `tools.exec.notifyOnExit` suppresses it.
+the session's current authority. Reset, archived, hidden subagent and ended cron sessions
+get no notice, incognito sessions are never recorded, and disabling
+`tools.exec.notifyOnExit` suppresses the notice.
 A command whose exit would not wake the conversation, such as a service started with
 `notifyOnExit` off, gets no notice.
 
@@ -100,7 +101,8 @@ What happened to the command depends on how the Gateway stopped:
 
 - A graceful stop or restart stops ordinary commands. The notice says the command was stopped.
 - On Linux, a Gateway that crashes or is killed also takes its ordinary commands with it. The notice says the command was stopped.
-- On macOS, a killed Gateway can leave a command running: it keeps going until it next writes output, then ends. The notice says the command may still be running but its result will not wake the conversation.
+- On macOS, a killed Gateway can leave a command running: it keeps going until it next writes output, then ends. The notice says the command may still be running but its result will not wake the conversation. Other platforms get the same cautious notice after a crash.
+- A command that ran in a sandbox container gets the same cautious notice, because the Gateway cannot observe the container.
 
 The stored row carries no command text or output. If the Gateway cannot record the
 row, the command still runs normally; only the restart notice is missing. Use

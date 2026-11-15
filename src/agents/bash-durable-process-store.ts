@@ -25,6 +25,8 @@ export type DurableProcessRecord = Pick<
 > & {
   /** An ordinary wake-armed process: no unit, so a restart always settles it as lost. */
   kind?: "ordinary";
+  /** The ordinary process ran in a sandbox container, whose fate the Gateway cannot observe. */
+  sandboxed?: true;
   agentId: string;
   sessionKey: string;
   sessionId: string;

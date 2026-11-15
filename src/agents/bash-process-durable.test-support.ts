@@ -42,6 +42,7 @@ import {
   getFinishedSession,
   getActiveBackgroundExecSessionCount,
   createProcessSession,
+  markBackgrounded,
   type ProcessSession,
   setExitWakeRecorder,
   waitForExecSession,
@@ -450,6 +451,34 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
       const crashed = await ordinary("sleep 30");
       await delay(5);
       const stopped = await ordinary("sleep 30");
+      // The Gateway cannot see inside a sandbox container; incognito state never reaches storage.
+      const unobserved = (id: string, key: string, sandboxContainerName?: string) => {
+        const session = createProcessSession({
+          id,
+          command: "sleep 30",
+          agentId: "main",
+          sessionKey: key,
+          sandboxContainerName,
+          startedAt: Date.now(),
+          cleanupMs: 60_000,
+          maxOutputChars: 8_000,
+          totalOutputChars: 0,
+          pendingStdoutChars: 0,
+          pendingStderrChars: 0,
+          pendingOutputDropped: false,
+          exited: false,
+          truncated: false,
+          backgrounded: false,
+          cursorKeyMode: "normal",
+          notifyOnExit: true,
+          notifyOnExitEmptySuccess: true,
+        });
+        session.notifySessionTarget = stopped.notifySessionTarget;
+        markBackgrounded(session);
+        return session;
+      };
+      const sandboxed = unobserved("sandboxed-waiter", sessionKey, "sandbox-container");
+      unobserved("incognito-waiter", "agent:main:dashboard:incognito-waiter");
       // The Gateway ends without observing either exit, so both rows stay as armed.
       setExitWakeRecorder(undefined);
       await kill(crashed);
@@ -460,8 +489,10 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
         [
           { id: crashed.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
           { id: stopped.id, kind: "ordinary", sessionKey, sessionId, command: "Background exec" },
+          { id: sandboxed.id, kind: "ordinary", sandboxed: true, sessionKey, sessionId },
         ],
       );
+      assert.equal((await store.list()).length, 3);
       resetProcessRegistryForTests();
       const suspended = tryBeginGatewaySuspendAdmission(() => {});
       assert.ok(suspended?.commit());
@@ -491,6 +522,7 @@ void it("reports each wake-armed ordinary command a restart lost, once, with wha
             : /It may still be running, but its result will not wake this conversation/,
         );
         assert.match(await notice(stopped), /was stopped when the Gateway shut down/);
+        assert.match(await notice(sandboxed), /It may still be running/);
         await disposeDurableProcesses();
         assert.deepEqual(await store.list(), []);
         const { consumeSelectedSystemEventEntries } = await import("../infra/system-events.js");

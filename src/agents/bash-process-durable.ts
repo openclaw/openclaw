@@ -15,6 +15,7 @@ import type {
 } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 import { waitForAgentDatabasePreparation } from "../state/agent-database-preparation-context.js";
 import {
   createDurableProcessStore,
@@ -87,10 +88,11 @@ const ordinaryExitWakeRecorder = {
     if (
       !persistence ||
       session.durable ||
-      session.sandboxContainerName ||
       !hasExitWake(session) ||
       !session.agentId ||
       !session.sessionKey ||
+      // Incognito state stays in memory; it never reaches shared storage.
+      isIncognitoSessionKey(session.sessionKey) ||
       !target?.sessionId
     ) {
       return;
@@ -98,6 +100,7 @@ const ordinaryExitWakeRecorder = {
     const unitName = supervisor().unitName(session.id);
     const record: DurableProcessRecord = {
       kind: "ordinary",
+      ...(session.sandboxContainerName ? { sandboxed: true as const } : {}),
       id: session.id,
       agentId: session.agentId,
       sessionKey: session.sessionKey,
@@ -150,14 +153,15 @@ async function settleLostOrdinaryProcess(
   const crashed = crashWindows?.[record.agentId]?.some(
     (window) => record.startedAt >= window.startedAt && record.startedAt < window.endedAt,
   );
-  // Measured: shutdown stops ordinary commands everywhere, and Linux stops them when the
-  // Gateway dies; on macOS a killed Gateway can leave one running until it writes output.
+  // Measured: shutdown stops Gateway-host commands, and Linux stops them when the Gateway
+  // dies; a killed macOS Gateway can leave one running, and a sandbox's fate is unobserved.
+  const stopped = !record.sandboxed && (!crashed || process.platform === "linux");
   appendOutput(
     session,
     "stderr",
-    !crashed || process.platform === "linux"
+    stopped
       ? `This background command (started ${startedAt}) was stopped when the Gateway ${crashed ? "restarted unexpectedly" : "shut down"}, so its result will not arrive. If you still need it, check its output and side effects, then run it again.\n`
-      : `The Gateway restarted unexpectedly while this background command (started ${startedAt}) was running. It may still be running, but its result will not wake this conversation. Check its output and side effects before running it again.\n`,
+      : `The Gateway ${crashed ? "restarted unexpectedly" : "restarted"} while this background command (started ${startedAt}) was running. It may still be running, but its result will not wake this conversation. Check its output and side effects before running it again.\n`,
   );
   session.finalizing = true;
   // After a crash, agent database preparation finishes after the listener binds.
