@@ -9296,6 +9296,7 @@ test "$package_manager" = "pnpm@12.1.0"
       "Forbid preflight artifact promotion on validation-only runs",
     ]);
     const consumers = [
+      "check_openclaw_npm_stage",
       "check_openclaw_npm",
       "prepare_openclaw_npm",
       "check_sdk_npm",
@@ -9304,11 +9305,11 @@ test "$package_manager" = "pnpm@12.1.0"
       "verify_openclaw_npm",
     ];
     const phases: [string, string, string[]][] = [
-      ["source", "", ["check_openclaw_npm"]],
+      ["source", "", ["check_openclaw_npm_stage", "check_openclaw_npm"]],
       ["prepare", "", ["prepare_openclaw_npm"]],
       ["all", "", consumers],
       ["verify", "", consumers.filter((job) => job !== "prepare_openclaw_npm")],
-      ["verify", "sealed", consumers.slice(2)],
+      ["verify", "sealed", consumers.slice(3)],
     ];
     for (const [phase, sourceEvidence, scheduled] of phases) {
       for (const admission of ["success", "failure", "skipped", "cancelled"] as const) {
@@ -9374,7 +9375,7 @@ test "$package_manager" = "pnpm@12.1.0"
                 ? "boat-xlarge"
                 : "blacksmith-8vcpu-ubuntu-2404";
           for (const jobName of [
-            "check_openclaw_npm",
+            "check_openclaw_npm_stage",
             "prepare_openclaw_npm",
             "check_sdk_npm",
             "check_dependencies_npm",
@@ -16565,6 +16566,7 @@ esac
       [OPENCLAW_NPM_RELEASE_WORKFLOW, "validate_publish_request", "Checkout"],
       [RELEASE_PUBLISH_WORKFLOW, "resolve_release_target", "Checkout release tag"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_openclaw_npm", "Checkout"],
+      [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_openclaw_npm_stage", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "prepare_openclaw_npm", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "verify_openclaw_npm", "Checkout"],
       [OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm", "Checkout trusted Plugin SDK API tooling"],
