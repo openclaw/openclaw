@@ -253,6 +253,6 @@ export async function installSkillFromSource(
     sourceDir,
     sourceSpec: params.spec,
     source: "path",
-    fallbackLabel: path.basename(path.resolve(sourceDir)).trim(),
+    fallbackLabel: path.basename(path.resolve(sourcePath)).trim(),
   });
 }

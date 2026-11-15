@@ -7,9 +7,9 @@ import { installSkillFromSource } from "./source-install.js";
 const tempDirs = createTempDirTracker();
 afterEach(() => tempDirs.cleanup());
 
-async function writeSkill(directory: string, content: string) {
+async function writeSkill(directory: string, content: string, name = "local-guide") {
   await fs.mkdir(directory, { recursive: true });
-  const markdown = `---\nname: local-guide\ndescription: A local guide\n---\n${content}\n`;
+  const markdown = `---\nname: ${name}\ndescription: A local guide\n---\n${content}\n`;
   await fs.writeFile(path.join(directory, "SKILL.md"), markdown);
   await fs.writeFile(path.join(directory, "asset.txt"), content);
   return markdown;
@@ -47,6 +47,28 @@ it.skipIf(process.platform === "win32").each(["trailing-space", "physical-parent
     expect(origin).toMatchObject({ source: "path", spec, slug: "installed-guide" });
     expect(await fs.readFile(path.join(decoy, "SKILL.md"), "utf8")).toBe(decoyBytes);
     expect(await fs.readFile(path.join(selected, "SKILL.md"), "utf8")).toBe(expected);
+  },
+);
+
+it.each(["release.1", "different-name"])(
+  "keeps the selected alias as the fallback slug for %s without an explicit slug",
+  async (physicalName) => {
+    const root = tempDirs.make("skill-source-alias-");
+    const source = path.join(root, physicalName);
+    const markdown = await writeSkill(source, "selected source", "Display name with spaces");
+    const spec = path.join(root, "my-guide");
+    await fs.symlink(source, spec, process.platform === "win32" ? "junction" : "dir");
+    const result = await installSkillFromSource({
+      workspaceDir: path.join(root, "workspace"),
+      spec,
+    });
+    expect(result.slug).toBe("my-guide");
+    expect(path.basename(result.targetDir)).toBe("my-guide");
+    expect(await fs.readFile(path.join(result.targetDir, "SKILL.md"), "utf8")).toBe(markdown);
+    expect(await fs.readFile(path.join(result.targetDir, "asset.txt"), "utf8")).toBe(
+      "selected source",
+    );
+    expect(await fs.readFile(path.join(source, "SKILL.md"), "utf8")).toBe(markdown);
   },
 );
 
