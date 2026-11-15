@@ -106,7 +106,7 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const sessionKey = "agent:main:main";
       const runId = "reload-run";
-      const messages: unknown[] = [
+      const messages: Record<string, unknown>[] = [
         {
           role: "user",
           content: "Run the long check",
@@ -185,7 +185,10 @@ suite.define(() => {
       await page
         .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
         .waitFor({ state: "attached" });
-      const cached = await page.evaluate(persistColdLoadWarmState, {
+      const cached = await page.evaluate<
+        { messages: number },
+        { sessionKey: string; sidebarView: "sessions" }
+      >(persistColdLoadWarmState, {
         sessionKey,
         sidebarView: "sessions",
       });

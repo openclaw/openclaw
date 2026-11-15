@@ -603,7 +603,8 @@ export function handleAgentEvent(
       Boolean(segment.itemId) &&
       !segment.toolCallId &&
       segment.runId === payload.runId &&
-      segment.afterUserSendId === entry.afterUserSendId &&
+      (segment.afterUserSendId === undefined ||
+        segment.afterUserSendId === entry.afterUserSendId) &&
       segment.ts <= entry.startedAt;
     if (host.chatStreamSegments.some(introducesCall)) {
       host.chatStreamSegments = host.chatStreamSegments.map((segment) =>

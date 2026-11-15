@@ -374,18 +374,17 @@ export function materializeVisibleStreamState(
     if (opts.requirePersistedTool && toolIndex < 0) {
       continue;
     }
+    // The call is an upper bound; earlier commentary must stay before a steer.
     const insertIndex =
-      toolIndex >= 0
-        ? toolIndex
-        : part.source === "segment"
-          ? streamCausalInsertIndex(
-              nextMessages,
-              part.timestamp,
-              interval.start,
-              interval.end,
-              messageTimestampMs,
-            )
-          : interval.end;
+      part.source === "segment"
+        ? streamCausalInsertIndex(
+            nextMessages,
+            part.timestamp,
+            interval.start,
+            toolIndex >= 0 ? toolIndex : interval.end,
+            messageTimestampMs,
+          )
+        : interval.end;
     const afterSequence = nextMessages
       .slice(0, insertIndex)
       .map((message) => readSessionMessageIdentity(message)?.sequence)

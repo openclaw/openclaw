@@ -10,7 +10,10 @@ import {
   createState,
 } from "./chat-history.inflight.test-support.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
-import { visibleAssistantStreamParts } from "./stream-reconciliation.ts";
+import {
+  materializeVisibleStreamState,
+  visibleAssistantStreamParts,
+} from "./stream-reconciliation.ts";
 import { TOOL_STREAM_TEST_NOW, useToolStreamFakeTimers } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
@@ -27,13 +30,21 @@ function commentaryHarness() {
   let seq = 0;
   let messageSeq = 0;
   const envelope = () => ({ sessionKey: "main", runId: RUN_ID, seq: ++seq });
-  const agent = (stream: "item" | "tool", data: Record<string, unknown>) =>
-    handleAgentEvent(host, {
-      ...envelope(),
-      stream,
-      ts: TOOL_STREAM_TEST_NOW + seq,
-      data,
-    });
+  const agent = (
+    stream: "item" | "tool",
+    data: Record<string, unknown>,
+    source: "live" | "history" = "live",
+  ) =>
+    handleAgentEvent(
+      host,
+      {
+        ...envelope(),
+        stream,
+        ts: TOOL_STREAM_TEST_NOW + seq,
+        data,
+      },
+      source,
+    );
   const deliver = () => {
     const projected = gateway.resolveBuffer(RUN_ID);
     const delta = gateway.takeBufferDelta(RUN_ID, projected.text);
@@ -87,46 +98,101 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("keeps a nested wait after its introducing commentary when the saved call predates it", () => {
-  const h = commentaryHarness();
-  h.host.chatMessages = [{ role: "user", content: "Collect the results", timestamp: 1 }];
-  h.preamble("collect-commentary", "Waiting for the collected results.");
-  const args = { title: "Collect results", code: "return await agents_wait({ids: ['child']});" };
-  h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
-  applySessionMessagePayload(
-    h.host,
-    {
-      runId: RUN_ID,
-      messageId: "saved-collect",
-      messageSeq: 1,
-      message: {
-        role: "assistant",
-        timestamp: TOOL_STREAM_TEST_NOW - 1_000,
-        content: [{ type: "toolCall", id: "collect", name: "exec", arguments: args }],
-        __openclaw: { id: "saved-collect", seq: 1, runId: RUN_ID },
+it.each([
+  { source: "live", steered: false },
+  { source: "history", steered: false },
+  { source: "history", steered: true },
+] as const)(
+  "keeps a nested wait after $source commentary (steered=$steered)",
+  ({ source, steered }) => {
+    const h = commentaryHarness();
+    h.host.chatMessages = [
+      {
+        role: "user",
+        content: "Collect the results",
+        timestamp: 1,
+        __openclaw: { id: "collect-user", idempotencyKey: "run-1:user", seq: 1 },
       },
-    },
-    true,
-    { kind: "live", activeRunId: RUN_ID },
-  );
-  h.agent("tool", {
-    phase: "start",
-    toolCallId: "wait",
-    parentToolCallId: "collect",
-    name: "agents_wait",
-    args: { ids: ["child"] },
-  });
-  vi.advanceTimersByTime(100);
-  const order = buildStateItems(h.host).flatMap((item) =>
-    item.kind === "group"
-      ? item.messages.flatMap(({ message }) => {
-          const cards = extractToolCards(message);
-          return cards.length ? cards.map((card) => card.callId) : [item.role];
-        })
-      : [item.kind],
-  );
-  expect(order).toEqual(["user", "stream", "collect", "wait"]);
-});
+    ];
+    h.agent(
+      "item",
+      {
+        kind: "preamble",
+        itemId: "collect-commentary",
+        progressText: "Waiting for the collected results.",
+      },
+      source,
+    );
+    if (steered) {
+      h.host.chatMessages.push({
+        role: "user",
+        content: "Keep the existing collection",
+        timestamp: TOOL_STREAM_TEST_NOW + 2,
+        __openclaw: {
+          id: "steer-user",
+          idempotencyKey: "steer:user",
+          steerTargetRunId: RUN_ID,
+          seq: 2,
+        },
+      });
+    }
+    const args = { title: "Collect results", code: "return await agents_wait({ids: ['child']});" };
+    h.agent("tool", { phase: "start", toolCallId: "collect", name: "exec", args });
+    applySessionMessagePayload(
+      h.host,
+      {
+        runId: RUN_ID,
+        messageId: "saved-collect",
+        messageSeq: steered ? 3 : 2,
+        message: {
+          role: "assistant",
+          timestamp: TOOL_STREAM_TEST_NOW - 1_000,
+          content: [{ type: "toolCall", id: "collect", name: "exec", arguments: args }],
+          __openclaw: { id: "saved-collect", seq: steered ? 3 : 2, runId: RUN_ID },
+        },
+      },
+      true,
+      { kind: "live", activeRunId: RUN_ID },
+    );
+    h.agent("tool", {
+      phase: "start",
+      toolCallId: "wait",
+      parentToolCallId: "collect",
+      name: "agents_wait",
+      args: { ids: ["child"] },
+    });
+    vi.advanceTimersByTime(100);
+    const order = buildStateItems(h.host).flatMap((item) =>
+      item.kind === "group"
+        ? item.messages.flatMap(({ message }) => {
+            const cards = extractToolCards(message);
+            return cards.length ? cards.map((card) => card.callId) : [item.role];
+          })
+        : [item.kind],
+    );
+    expect(order).toEqual(
+      steered
+        ? ["user", "stream", "user", "collect", "wait"]
+        : ["user", "stream", "collect", "wait"],
+    );
+    const materialized = materializeVisibleStreamState(h.host.chatMessages, h.host, {
+      persistCommentary: true,
+      isHiddenAssistantMessage: () => false,
+      isHiddenStreamText,
+    });
+    expect(
+      materialized.flatMap((message) => {
+        const cards = extractToolCards(message);
+        return cards.length ? cards.map((card) => card.callId) : [extractText(message)];
+      }),
+    ).toEqual([
+      "Collect the results",
+      "Waiting for the collected results.",
+      ...(steered ? ["Keep the existing collection"] : []),
+      "collect",
+    ]);
+  },
+);
 
 it("does not anchor new commentary to a reused call ID from an older run", () => {
   const h = commentaryHarness();

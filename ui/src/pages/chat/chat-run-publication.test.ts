@@ -422,7 +422,9 @@ describe("chat run publication", () => {
 
 it("settles unfinished tool activity when Stop ends the owning run", () => {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
   const { state } = createSessionEventState({ chatRunId: "run" });
   agentEvent(state, "run", 1, "tool", {
     name: "exec",

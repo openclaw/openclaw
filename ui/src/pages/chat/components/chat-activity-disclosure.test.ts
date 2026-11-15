@@ -337,7 +337,7 @@ it.each([
       ? [createAssistantMessage([], { activity: [preparedOutcome("blocked")] })]
       : attachHistoryActivity(
           prepareChatHistoryFixture(
-            [0, 1].flatMap((index) => {
+            [0, 1].flatMap<Record<string, unknown>>((index) => {
               const id = `call-${index}`;
               if (source.startsWith("failed code")) {
                 return [

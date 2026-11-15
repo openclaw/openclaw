@@ -110,7 +110,7 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
           <>
             {kind === "work" ? (
               <WorkGroupSummary
-                item={{ key: "work", durationMs: null, groups }}
+                item={{ key: "work", durationMs: null }}
                 options={{ expanded: props.expanded, onToggle: toggle }}
               />
             ) : kind === "activity" ? (
@@ -174,7 +174,12 @@ describe.runIf(browserMode)("chat disclosure activation", () => {
         <ContentPresentation value={() => true}>
           <ActivityGroup
             groups={groups}
-            options={{ showToolCalls: true, runActive: true, activityRunId: "arrival-run" }}
+            options={{
+              showToolCalls: true,
+              showReasoning: false,
+              runActive: true,
+              activityRunId: "arrival-run",
+            }}
             presentation="standalone"
           />
         </ContentPresentation>
