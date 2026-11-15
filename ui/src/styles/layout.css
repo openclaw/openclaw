@@ -2356,6 +2356,63 @@ div.shell.shell--onboarding {
   font-size: 12px;
 }
 
+/* Dashboards rows read like Automations rows: a title in the text color over a quieter
+   byline, with a run's indicator on the right instead of an empty lead. */
+.sidebar-dashboards .sidebar-recent-session,
+.sidebar-dashboards .sidebar-recent-session__link {
+  min-height: 0;
+}
+
+.sidebar-dashboards .sidebar-recent-session__link {
+  padding-block: 6px;
+}
+
+.sidebar-dashboards .sidebar-zone-entry .sidebar-session-indicator {
+  order: 1;
+  width: 16px;
+  flex-basis: 16px;
+}
+
+.sidebar-dashboards .sidebar-zone-entry .sidebar-session-indicator:empty {
+  display: none;
+}
+
+.sidebar-dashboards .sidebar-recent-session__text {
+  gap: 2px;
+}
+
+.sidebar-dashboards .sidebar-recent-session__name {
+  color: var(--text);
+  line-height: 18px;
+}
+
+.sidebar-dashboards .sidebar-recent-session__details {
+  height: 16px;
+}
+
+.sidebar-dashboards .sidebar-recent-session__subtitle {
+  color: color-mix(in srgb, var(--muted) 80%, transparent);
+  font-size: 12px;
+  line-height: 16px;
+}
+
+/* More dashboards load from a quiet text link under the rows. */
+.sidebar-dashboards__more {
+  align-self: flex-start;
+  padding: 6px 8px 6px calc(var(--sidebar-inset) + 4px);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: var(--cursor-action);
+}
+
+.sidebar-dashboards__more:hover,
+.sidebar-dashboards__more:focus-visible {
+  color: var(--text);
+}
+
 /* Customize section: the hub's pages, then the installed plugins. */
 .sidebar-customize {
   display: flex;

@@ -1007,7 +1007,7 @@ describe("personal navigation rail", () => {
     ).toContain("Team board");
     const pending = createDeferred<typeof result>();
     sessions.list.mockClear().mockReturnValueOnce(pending.promise);
-    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-dashboards > .btn")!;
+    const more = sidebar.querySelector<HTMLButtonElement>(".sidebar-dashboards__more")!;
     more.click();
     more.click();
     expect(sessions.list).toHaveBeenCalledExactlyOnceWith(
@@ -1024,7 +1024,7 @@ describe("personal navigation rail", () => {
       sidebar.querySelector('.sidebar-dashboards [data-sidebar-entry="session:agent:main:second"]')
         ?.textContent,
     ).toContain("Second board");
-    expect(sidebar.querySelector(".sidebar-dashboards > .btn")).toBeNull();
+    expect(sidebar.querySelector(".sidebar-dashboards__more")).toBeNull();
   });
 
   it("stores only stable person references", () => {

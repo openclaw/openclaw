@@ -216,7 +216,7 @@ export function SidebarDashboards(props: { host: AppSidebarRenderHost }): JSX.El
       <Show when={dashboards()?.result?.hasMore}>
         <button
           type="button"
-          class="btn btn--sm"
+          class="sidebar-dashboards__more"
           onClick={() => props.host.navigationCatalog.loadMoreDashboards()}
         >
           {t("chat.selectors.loadMoreSessions")}
