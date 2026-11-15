@@ -2090,6 +2090,7 @@ span.new-session-page__select {
     flex: 0 0 14px;
     width: 14px;
     height: 14px;
+    margin-inline-start: auto;
     color: var(--muted);
     stroke-width: 1.5px;
   }
