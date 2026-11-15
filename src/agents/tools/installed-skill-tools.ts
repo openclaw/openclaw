@@ -22,7 +22,7 @@ import {
 import {
   asToolParamsRecord,
   jsonResult,
-  readNumberParam,
+  readPositiveIntegerParam,
   readToolStringParam,
   type AnyAgentTool,
 } from "./common.js";
@@ -114,7 +114,10 @@ export function createInstalledSkillTools(
             await searchInstalledSkills(
               skills,
               readToolStringParam(params, "query", { required: true }),
-              readNumberParam(params, "limit"),
+              readPositiveIntegerParam(params, "limit", {
+                max: 20,
+                message: "limit must be an integer between 1 and 20",
+              }),
               signal,
               () => authority !== undefined && readAuthority === authority,
             ),

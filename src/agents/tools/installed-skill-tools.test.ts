@@ -34,6 +34,16 @@ function skillTools(skills: InstalledSkill[]) {
     load: (id: string, name = "guide") => read.execute(id, { name }),
   };
 }
+
+it.each(["12junk", "1.5", "21", "0"])(
+  "rejects skills_search limit %s like the advertised 1-20 integer schema",
+  async (limit) => {
+    const { search } = skillTools([skill()]);
+    await expect(search.execute("budget", { query: "guide", limit })).rejects.toThrow(
+      "limit must be an integer between 1 and 20",
+    );
+  },
+);
 it("requires the effective native read tool for body I/O and cached body matches", async () => {
   const reader = vi.fn(async () => "Private canary deployment instructions");
   const { tools, search, read, find } = skillTools([skill({ readSearchContent: reader })]);
