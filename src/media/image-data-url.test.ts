@@ -15,6 +15,27 @@ describe("decodeDataUrl", () => {
     );
   });
 
+  it.each([
+    {
+      label: "dangling tail characters",
+      // Length is not a multiple of four; Buffer.from would silently drop the
+      // trailing characters while decoding.
+      b64: `${Buffer.from("Hello").toString("base64")}xx`,
+    },
+    { label: "non-canonical trailing bits", b64: "QR==" },
+  ])("rejects a base64 payload with a $label", ({ b64 }) => {
+    expect(() => decodeDataUrl(`data:image/png;base64,${b64}`)).toThrow(
+      "Invalid data URL: base64 payload is truncated or non-canonical.",
+    );
+  });
+
+  it("keeps decoding the valid unpadded payloads PR #140226 pinned", () => {
+    const padded = Buffer.from("Hello").toString("base64");
+    const unpadded = padded.slice(0, -1);
+    expect(decodeDataUrl(`data:image/png;base64,${unpadded}`).buffer.toString()).toBe("Hello");
+    expect(decodeDataUrl(`data:image/png;base64,${padded}`).buffer.toString()).toBe("Hello");
+  });
+
   it.each([0, 1])("checks a canonical-size payload with %i extra bytes", (extraBytes) => {
     const bytes = MAX_IMAGE_BYTES + extraBytes;
     const input = `data:image/png;base64,${Buffer.alloc(bytes).toString("base64")}`;
