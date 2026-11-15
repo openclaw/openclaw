@@ -3,7 +3,6 @@ import {
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { readRequesterDeliveryReceipt } from "../../sessions/requester-delivery-receipt.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { preparePriorWorkspaceRewriteInTransaction } from "./session-accessor.sqlite-prior-workspace.js";
@@ -158,10 +157,6 @@ export function rewriteSqliteTranscriptEventRowsInTransaction(
       if (options.touchMutation !== false) {
         touchTranscriptMutationInTransaction(database, resolved.sessionId, {
           projectionReady: projectionUnchanged || rebuildSynchronously,
-          requesterDeliveries: rewrites.flatMap(({ event }) => {
-            const receipt = readRequesterDeliveryReceipt(event);
-            return receipt ? [receipt] : [];
-          }),
         });
       }
       return generation;

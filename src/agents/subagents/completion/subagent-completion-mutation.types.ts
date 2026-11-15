@@ -15,6 +15,10 @@ export type BlockSubagentCompletionRequest = {
 
 export type RequesterWakeMutation =
   | {
+      kind: "requesterDelivery";
+      fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>;
+    }
+  | {
       kind: "transition";
       state: RequesterSettleWakeBatchState;
       requesterDelivery?: NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"];

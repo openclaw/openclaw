@@ -151,25 +151,23 @@ export function publishSessionTranscriptAuthority(
   database: OpenClawAgentDatabase,
   context: SessionTranscriptAuthority,
 ): void {
-  const previous = staged.get(database.db)?.get(context.sessionKey)?.facts.get(context.sessionKey);
-  const prior =
-    previous?.kind === "postimage" && previous.value.sessionId === context.sessionId
-      ? previous.value
-      : undefined;
-  const preparedContext = {
-    ...context,
-    ...(context.lastAssistantMessage === "unchanged" && prior
-      ? { lastAssistantMessage: prior.lastAssistantMessage ?? ("unknown" as const) }
-      : {}),
-    ...(prior?.requesterDeliveries?.length
-      ? {
-          requesterDeliveries: [
-            ...prior.requesterDeliveries,
-            ...(context.requesterDeliveries ?? []),
-          ],
-        }
-      : {}),
-  };
+  let preparedContext = context;
+  if (context.lastAssistantMessage === "unchanged") {
+    const previous = staged
+      .get(database.db)
+      ?.get(context.sessionKey)
+      ?.facts.get(context.sessionKey);
+    // A turn can append several messages before its one committed receipt is published.
+    if (previous?.kind === "postimage" && previous.value.sessionId === context.sessionId) {
+      preparedContext = {
+        ...context,
+        lastAssistantMessage:
+          previous.value.lastAssistantMessage === undefined
+            ? "unknown"
+            : previous.value.lastAssistantMessage,
+      };
+    }
+  }
   publishTranscriptFact(database, context.sessionKey, {
     kind: "postimage",
     value: Object.freeze(prepareSessionActorTranscriptAuthority(database, preparedContext)),

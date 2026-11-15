@@ -20,9 +20,9 @@ While a completion waits for its requester, its delivery record carries
 `requesterDelivery.state: "waiting"`, the continuation `runId` once assigned, and
 `blockingRunId` when another requester turn holds the mailbox. Pending handoffs
 have no terminal non-delivery disposition. Once the transcript owner commits the
-input, registry readers project `state: "consumed"` with the consuming run from
-that receipt. Missing or unreadable receipts preserve the raw registry state.
-Terminal settlement copies the consumption fact into the registry.
+input, it immediately records `state: "consumed"` and the consuming run in the
+registry, before the requester source settles. Registry readers use that stored
+fact directly.
 Consumption is distinct from sending a reply to the user. A later cancellation
 does not turn a consumed private result into failed delivery; restart recovery
 and the existing completion retention window remain unchanged.

@@ -109,10 +109,7 @@ export const recordAnnounceDeliveryResult = (
   }
   deliveryState.disposition =
     delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
-  if (
-    delivery.reason === "completion_handoff_pending" &&
-    delivery.disposition === "intentional_non_delivery"
-  ) {
+  if (delivery.reason === "completion_handoff_pending") {
     recordRequesterHandoff(entry);
   }
 };

@@ -18,7 +18,6 @@ import { rowToSubagentRunRecord } from "./subagent-registry.store.codec.js";
 import { hasParentStoreColumns } from "./subagent-registry.store.kernel.js";
 import type { SubagentRunSqliteRow } from "./subagent-registry.store.row.js";
 import type { SubagentRunMaintenanceRecord, SubagentRunRecord } from "./subagent-registry.types.js";
-import { projectSubagentRequesterDelivery } from "./subagent-requester-delivery.worker.js";
 import { collectSubagentSessionReadKeys } from "./subagent-session-read-scope.js";
 
 type SubagentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
@@ -45,12 +44,11 @@ export function readSubagentRunRow(
 }
 
 export function readSubagentRun(
-  database: Pick<OpenClawStateDatabase, "db">,
+  database: OpenClawStateDatabase,
   runId: string,
 ): SubagentRunRecord | null {
   const row = readSubagentRunRow(database, runId);
-  const entry = row && rowToSubagentRunRecord(row);
-  return entry ? projectSubagentRequesterDelivery(entry) : null;
+  return row ? rowToSubagentRunRecord(row) : null;
 }
 
 type SubagentRegistryReadScope =
@@ -153,7 +151,6 @@ const subagentMaintenancePayload = (db: EngineConnection) =>
 
 const subagentSessionListPaths = [
   "completionTarget",
-  "completionRequesterSessionId",
   "swarmRunId",
   "schedulerSlotId",
   "swarmLaunchReplayKey",
@@ -344,7 +341,7 @@ function loadScopedSubagentRuns(
   }
   return readSubagentRegistryRows(normalizedScope, database).flatMap((row) => {
     const run = rowToSubagentRunRecord(row);
-    return run ? [projectSubagentRequesterDelivery(run)] : [];
+    return run ? [run] : [];
   });
 }
 
@@ -380,7 +377,7 @@ function decodeSubagentRegistryRows<T>(
   for (const row of rows) {
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
-      runs.set(entry.runId, project(projectSubagentRequesterDelivery(entry)));
+      runs.set(entry.runId, project(entry));
     }
   }
   return runs;
@@ -412,10 +409,7 @@ export function loadSubagentSessionListRunsFromSqlite(
     row.requester_session_key = row.requester_session_key.trim();
     const entry = rowToSubagentRunRecord(row);
     if (entry) {
-      runs.set(
-        entry.runId,
-        projectSubagentRunForSessionList(projectSubagentRequesterDelivery(entry)),
-      );
+      runs.set(entry.runId, projectSubagentRunForSessionList(entry));
     }
   }
   return runs;
@@ -467,7 +461,7 @@ export function loadSubagentRunsForSessionsInDatabase(
       for (const row of rows) {
         const entry = rowToSubagentRunRecord(row);
         if (entry) {
-          runs.set(entry.runId, projectSubagentRequesterDelivery(entry));
+          runs.set(entry.runId, entry);
         }
       }
     }

@@ -15,10 +15,7 @@ import {
   resolveSubagentChildAgentId,
   resolveSubagentChildAuthority,
 } from "./subagent-child-owner-match.js";
-import {
-  projectSubagentRunForSessionList,
-  recordRequesterDelivery,
-} from "./subagent-delivery-state.js";
+import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "./subagent-lifecycle-events.js";
 import { SubagentRunIndex } from "./subagent-registry-memory-index.js";
 import type { SubagentCompletionCustody } from "./subagent-registry-memory.types.js";
@@ -107,13 +104,19 @@ export function restoreSubagentRunPayload(
   const restored = copySubagentRunRuntimeOwner(resident, {
     ...resident,
     task: full.task,
-    delivery: resident.delivery && { ...resident.delivery, payload: full.delivery?.payload },
-    completion: resident.completion && {
-      ...resident.completion,
-      resultText: full.completion?.resultText,
-      fallbackResultText: full.completion?.fallbackResultText,
-      terminalReply: full.completion?.terminalReply,
-    },
+    ...(resident.delivery
+      ? { delivery: { ...resident.delivery, payload: full.delivery?.payload } }
+      : {}),
+    ...(resident.completion
+      ? {
+          completion: {
+            ...resident.completion,
+            resultText: full.completion?.resultText,
+            fallbackResultText: full.completion?.fallbackResultText,
+            terminalReply: full.completion?.terminalReply,
+          },
+        }
+      : {}),
   });
   bindGatewayContextResolver(restored, getGatewayContextResolver(resident));
   return immutableSubagentRun(restored);
@@ -508,10 +511,12 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
       resolve,
       settled: false,
     };
-    const pending =
-      retirementPublications.get(publication.key) ?? new Set<SubagentRetirementPublication>();
-    pending.add(publication);
-    retirementPublications.set(publication.key, pending);
+    const pending = retirementPublications.get(publication.key);
+    if (pending) {
+      pending.add(publication);
+    } else {
+      retirementPublications.set(publication.key, new Set([publication]));
+    }
     // A newer row can already coexist with a specifically selected legacy task.
     const initial =
       latestSubagentRun(
@@ -621,22 +626,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     this.publishRuntimeOwner(previous, current);
   }
 
-  override set(runId: string, record: SubagentRunRecord): this {
-    let entry = record;
+  override set(runId: string, entry: SubagentRunRecord): this {
     const prev = this.get(runId);
     retainSubagentRunRuntimeOwner(prev, entry);
     if (prev && prev !== entry && isSameSubagentRunOwner(prev, entry)) {
-      const fact = prev.delivery?.requesterDelivery;
-      // An older registry acknowledgment cannot erase committed transcript consumption.
-      if (
-        fact?.state === "consumed" &&
-        entry.delivery?.requesterDelivery?.state !== "consumed" &&
-        entry.delivery?.generation === prev.delivery?.generation
-      ) {
-        const next = { ...entry, delivery: entry.delivery && { ...entry.delivery } };
-        recordRequesterDelivery(next, fact);
-        entry = immutableSubagentRun(copySubagentRunRuntimeOwner(entry, next));
-      }
       this.publishRuntimeOwner(prev, entry);
     }
     super.set(runId, entry);
@@ -773,7 +766,10 @@ export function findSwarmCollectorSession(
   childAgentId?: string,
 ): SubagentRunRecord | undefined {
   const key = childSessionKey?.trim();
-  const ownerKey = key && childSessionOwnerKey({ childSessionKey: key, childAgentId });
+  if (!key) {
+    return undefined;
+  }
+  const ownerKey = childSessionOwnerKey({ childSessionKey: key, childAgentId });
   return ownerKey ? collectorsByChildSessionOwner.getLatest(ownerKey) : undefined;
 }
 
@@ -785,10 +781,14 @@ export function findAuthorizedSwarmCollectorRequest(params: {
   outputSchema?: Record<string, unknown>;
 }): SubagentRunRecord | undefined {
   const idempotencyKey = params.idempotencyKey?.trim();
-  const entry =
-    idempotencyKey && findSwarmCollectorSession(params.childSessionKey, params.childAgentId);
-  return entry &&
-    entry.swarmLaunchIdempotencyKey === idempotencyKey &&
+  if (!idempotencyKey) {
+    return undefined;
+  }
+  const entry = findSwarmCollectorSession(params.childSessionKey, params.childAgentId);
+  if (!entry) {
+    return undefined;
+  }
+  return entry.swarmLaunchIdempotencyKey === idempotencyKey &&
     isDeepStrictEqual(entry.outputSchema, params.outputSchema)
     ? entry
     : undefined;

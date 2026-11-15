@@ -13,7 +13,6 @@ import {
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { readRequesterDeliveryReceipt } from "../../sessions/requester-delivery-receipt.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { advanceCliHistoryBoundaryInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -361,10 +360,6 @@ export function appendTranscriptEventInTransaction(
           ).updatedAt;
         }
       }
-      const receipt = readRequesterDeliveryReceipt(persistedEvent);
-      if (receipt) {
-        (cursor.requesterDeliveries ??= []).push(receipt);
-      }
       cursor.rowTranscript = projectionNeedsRebuild
         ? undefined
         : (projectSessionRowTranscriptFields(
@@ -383,7 +378,6 @@ export function appendTranscriptEventInTransaction(
           touchTranscriptMutationInTransaction(database, scope.sessionId, {
             windowUpdatedAt: deferWindowTouch ? windowUpdatedAt : undefined,
             rowTranscript: cursor.rowTranscript,
-            requesterDeliveries: cursor.requesterDeliveries,
             persistActorMutation: options.persistActorMutation,
             writeActorMutation: flushProjectionWithMutation,
             projectionReady: !projectionNeedsRebuild,

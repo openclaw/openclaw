@@ -10,7 +10,6 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import { reserveSubagentControllerSource } from "../announce/subagent-announce-controller-source.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
-import { requesterDeliveryInputKey } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "./subagent-lifecycle-events.js";
 import * as cleanupPolicy from "./subagent-registry-cleanup.js";
 import {
@@ -30,7 +29,6 @@ import {
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { publishRequesterDeliveryReceipt } from "./subagent-requester-delivery.js";
 
 type AnnounceFlow = SubagentLifecycleOptions["runSubagentAnnounceFlow"];
 
@@ -67,38 +65,23 @@ export function registerLifecycleDeliveryReceiptCases({
   it.each([false, true])(
     "records private transcript consumption before cancellation (consumed: %s)",
     async (consumed) => {
-      const entry = createRunEntry({
-        completionTarget: "parent",
-        expectsCompletionMessage: true,
-        requesterAgentId: "main",
-        completionRequesterSessionId: "requester-session",
-      });
-      subagentRuns.set(entry.runId, entry);
-      onTestFinished(() => {
-        subagentRuns.delete(entry.runId);
-      });
+      const entry = createRunEntry({ completionTarget: "parent", expectsCompletionMessage: true });
       const releaseRequester = createDeferredCore();
+      const receiptStarted = createDeferredCore();
+      const releaseReceipt = createDeferredCore();
+      onTestFinished(() => releaseReceipt.resolve());
       const runSubagentAnnounceFlow = vi.fn<AnnounceFlow>(async (params) => {
+        expect(readLifecycleRun(entry).delivery?.requesterDelivery).toMatchObject({
+          state: "waiting",
+          blockingRunId: "live-requester-settle",
+        });
         releaseRequester.resolve();
+        const consumption = consumed
+          ? params.controllerInput!.onTranscriptCommitted!("requester-continuation")
+          : undefined;
         if (consumed) {
-          publishRequesterDeliveryReceipt(
-            subagentRuns,
-            {
-              agentId: "main",
-              sessionKey: entry.requesterSessionKey,
-              sessionId: "requester-session",
-            },
-            {
-              runId: "requester-continuation",
-              inputIdempotencyKey: requesterDeliveryInputKey(entry),
-            },
-          );
-        }
-        if (consumed) {
-          expect(readLifecycleRun(entry).delivery?.requesterDelivery?.state).toBe("consumed");
-          expect(
-            loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery?.requesterDelivery?.state,
-          ).not.toBe("consumed");
+          await receiptStarted.promise;
+          expect(readLifecycleRun(entry).delivery?.requesterDelivery?.state).toBe("waiting");
         }
         const settlement = params.onDeliveryResult?.({
           delivered: false,
@@ -108,7 +91,9 @@ export function registerLifecycleDeliveryReceiptCases({
           disposition: "intentional_non_delivery",
           error: "private requester continuation was cancelled",
         });
+        releaseReceipt.resolve();
         await settlement;
+        await consumption;
         if (consumed) {
           expect(loadSubagentRegistryFromSqlite().get(entry.runId)?.delivery).toMatchObject({
             status: "delivered",
@@ -122,7 +107,15 @@ export function registerLifecycleDeliveryReceiptCases({
       });
       const controller = createLifecycleController({
         entry,
-        runs: subagentRuns,
+        beforeWrite: async ({ postimages }) => {
+          if (
+            postimages.get(entry.runId)?.delivery?.requesterDelivery?.state === "consumed" &&
+            postimages.get(entry.runId)?.delivery?.status === "pending"
+          ) {
+            receiptStarted.resolve();
+            await releaseReceipt.promise;
+          }
+        },
         runSubagentAnnounceFlow,
         maybeWakeRequesterAfterAllChildrenSettled: async () => false,
       });
@@ -306,7 +299,7 @@ export function registerLifecycleDeliveryReceiptCases({
   it.each([
     ["new failure", false, undefined, 1],
     ["changed disposition", true, undefined, 1],
-    ["unchanged prior diagnostics", true, "retryable", 0],
+    ["prior diagnostics after requester wait", true, "retryable", 1],
   ] as const)(
     "persists %s before stalled announce bookkeeping settles",
     async (_name, reusePreviousError, previousDisposition, persistCalls) => {

@@ -559,7 +559,6 @@ export function advanceTranscriptMutationAtInTransaction(
           ? { projectionReady: true as const }
           : {}),
         ...publicationProjection,
-        requesterDeliveries: options.requesterDeliveries,
       });
       return undefined;
     }
@@ -584,7 +583,6 @@ export function advanceTranscriptMutationAtInTransaction(
         ...context,
         ...(options.projectionReady ? { projectionReady: true as const } : {}),
         ...publicationProjection,
-        requesterDeliveries: options.requesterDeliveries,
       });
       return {
         generation: context.generation,

@@ -4080,9 +4080,8 @@ describe("requester settle wake trigger", () => {
             path: "none",
             reason: "completion_handoff_pending",
             terminal: true,
-            disposition: "intentional_non_delivery",
           });
-          return "intentional_non_delivery" as const;
+          return "requester_waiting" as const;
         },
       );
       onTestFinished(seedResidentLifecycleRun(entry));
@@ -4270,9 +4269,8 @@ describe("requester settle wake trigger", () => {
           path: "none",
           reason: "completion_handoff_pending",
           terminal: true,
-          disposition: "intentional_non_delivery",
         });
-        return "intentional_non_delivery" as const;
+        return "requester_waiting" as const;
       },
     );
     let pendingDescendantRuns = 0;

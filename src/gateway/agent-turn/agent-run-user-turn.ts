@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import {
   claimExecApprovalFollowupRuntimeHandoff,
@@ -150,6 +149,7 @@ export async function prepareAgentRunUserTurn(params: {
   assertCurrent: () => void;
   onUserTurnMediaPersisted: () => void;
   assertCompletionCurrent?: () => void;
+  onTranscriptCommitted?: (runId: string) => void | Promise<void>;
   privateCompletion?: true;
   replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
@@ -389,24 +389,15 @@ export async function prepareAgentRunUserTurn(params: {
             }
           : resolveTarget,
         errorContext: "gateway agent user turn transcript",
+        // Direct completion results live in a runtime carrier after the trigger message.
+        ...(params.onTranscriptCommitted
+          ? params.request.internalEvents?.length
+            ? { onInputSubmitted: () => params.onTranscriptCommitted?.(params.runId) }
+            : { onMessagePersisted: () => params.onTranscriptCommitted?.(params.runId) }
+          : {}),
         beforeMessageWrite: (writeContext) => {
           const preparedMessage = runAgentHarnessBeforeMessageWriteHook(writeContext);
           params.assertCurrent();
-          if (
-            !params.request.internalEvents?.length &&
-            preparedMessage?.role === "user" &&
-            params.inputProvenance?.kind === "inter_session" &&
-            (params.inputProvenance.sourceTool === "subagent_announce" ||
-              params.inputProvenance.sourceTool === "subagent_settle")
-          ) {
-            return {
-              ...preparedMessage,
-              __openclaw: {
-                ...asOptionalRecord(asOptionalRecord(preparedMessage)?.["__openclaw"]),
-                runId: params.runId,
-              },
-            };
-          }
           return preparedMessage;
         },
         onPersistenceError: (error) => {

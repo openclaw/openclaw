@@ -209,7 +209,11 @@ export const finalizeSubagentCleanup = async (
     await finishCleanup(skipRequesterDelivery, undefined, finalizeDelivery);
     return;
   }
-  if (announceOutcome === "delivered" || announceOutcome === "intentional_non_delivery") {
+  if (
+    announceOutcome === "delivered" ||
+    announceOutcome === "intentional_non_delivery" ||
+    announceOutcome === "requester_waiting"
+  ) {
     let terminalNonDelivery = false;
     const finalizeDelivery = (draft: SubagentRunRecord) => {
       terminalNonDelivery =

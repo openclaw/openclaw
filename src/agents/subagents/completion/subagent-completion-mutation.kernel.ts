@@ -38,7 +38,6 @@ import {
   readSubagentRunRow,
 } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
-import { projectSubagentRequesterDelivery } from "../registry/subagent-requester-delivery.worker.js";
 import { sameRequesterSettleRunIdentity } from "../registry/subagent-requester-settle-identity.js";
 import { compareSubagentRunGeneration } from "../registry/subagent-run-generation.js";
 import type {
@@ -69,7 +68,7 @@ export function decodeSubagentCompletionRecord(
     "subagent completion acknowledged native record",
   );
   return {
-    subagent: projectSubagentRequesterDelivery(subagent),
+    subagent,
     cleanupHandled,
   };
 }
@@ -123,6 +122,17 @@ function ownsRetiredCancellation(
   );
 }
 
+function markDelivered(subagent: SubagentRunRecord, deliveredAt: number): void {
+  Object.assign(ensureDeliveryState(subagent), {
+    status: "delivered",
+    disposition: "delivered",
+    deliveredAt,
+    announcedAt: deliveredAt,
+    lastDropReason: undefined,
+  });
+  clearSubagentPendingDelivery(subagent);
+}
+
 // One mutation kernel serves ordinary blocking and whole requester-batch settlement.
 // It only prepares records; its caller owns the transaction and final publication.
 function prepareBlockedSubagentCompletion(
@@ -156,14 +166,7 @@ function prepareBlockedSubagentCompletion(
     }
   }
   if (consumed) {
-    const delivery = ensureDeliveryState(subagent);
-    Object.assign(delivery, {
-      status: "delivered",
-      disposition: "delivered",
-      deliveredAt: now,
-      announcedAt: now,
-    });
-    clearSubagentPendingDelivery(subagent);
+    markDelivered(subagent, now);
     return { subagent };
   }
   const successful = subagent.execution.outcome?.status === "ok";
@@ -260,11 +263,9 @@ function commitCompletionMutations(
   );
   return {
     applied: true,
-    // Prepared mutations already carry requester receipts; do not re-read their source.
-    records: rows.map(({ row, cleanupHandled }) => ({
-      subagent: expectDefined(rowToSubagentRunRecord(row), "prepared completion postimage"),
-      cleanupHandled,
-    })),
+    records: rows.map(({ row, cleanupHandled }) =>
+      decodeSubagentCompletionRecord(row, cleanupHandled),
+    ),
     retiredRunIds,
   };
 }
@@ -336,6 +337,10 @@ function mutateRequesterBatch(
       : input;
   const mutations = batch.map(({ expected, subagent }): CompletionMutation => {
     if (params.kind === "requesterWake") {
+      if (params.operation.kind === "requesterDelivery") {
+        recordRequesterDelivery(subagent, params.operation.fact);
+        return { subagent };
+      }
       if (params.operation.kind === "complete") {
         return { subagent, retire: completeRequesterSettleWakeState(subagent) };
       }
@@ -383,16 +388,7 @@ function mutateRequesterBatch(
         settleExpiredDelivery)
     ) {
       if (params.outcome.delivered) {
-        const delivery = ensureDeliveryState(subagent);
-        const deliveredAt = params.outcome.deliveredAt ?? now;
-        Object.assign(delivery, {
-          status: "delivered",
-          disposition: "delivered",
-          deliveredAt,
-          announcedAt: deliveredAt,
-          lastDropReason: undefined,
-        });
-        clearSubagentPendingDelivery(subagent);
+        markDelivered(subagent, params.outcome.deliveredAt ?? now);
       } else {
         const blocked = prepareBlockedSubagentCompletion(
           database,

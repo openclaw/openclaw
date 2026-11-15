@@ -302,7 +302,7 @@ describe("context advancement through embedded attempt guards", () => {
       });
       try {
         await submitEmbeddedAttemptPrompt({
-          attempt: { sessionId, runId: "context-advancement-run" },
+          attempt: { sessionId },
           activeSession: session,
           contextTokenBudget: promptContext.contextTokenBudget,
           images: [],

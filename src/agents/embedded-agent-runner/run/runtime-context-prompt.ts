@@ -7,7 +7,6 @@ import {
   setRuntimeContextRetention,
   type Context,
 } from "../../../llm/types.js";
-import type { RequesterDeliveryReceipt } from "../../../sessions/requester-delivery-receipt.js";
 import {
   memoizeFrozenPlainDataProjection,
   isDeeplyFrozenPlainData,
@@ -40,7 +39,7 @@ export type RuntimeContextCustomMessage = {
   customType: string;
   content: string;
   display: false;
-  details: { requesterDelivery?: RequesterDeliveryReceipt } & (
+  details:
     | {
         source: "openclaw-runtime-context";
         runtimeContextCarrier: true;
@@ -51,8 +50,7 @@ export type RuntimeContextCustomMessage = {
         turnScoped: boolean;
         replay?: "append";
         fragments?: never;
-      }
-  );
+      };
   timestamp: number;
 };
 

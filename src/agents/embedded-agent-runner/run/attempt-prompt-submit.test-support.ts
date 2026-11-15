@@ -54,7 +54,7 @@ export function createBaseInput() {
   onTestFinished(() => lease[Symbol.dispose]());
   const sessionPromptState = lease.state;
   return {
-    attempt: { sessionId, runId: "attempt-prompt-submit-run" },
+    attempt: { sessionId },
     appendContext: "append context",
     contextTokenBudget: 8_000,
     images: [] as ImageContent[],

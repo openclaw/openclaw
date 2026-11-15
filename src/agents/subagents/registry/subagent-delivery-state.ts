@@ -1,10 +1,6 @@
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeAgentRunTerminalReplySnapshot } from "../../agent-run-terminal-reply.js";
-import {
-  buildAnnounceIdFromChildRun,
-  buildAnnounceIdempotencyKey,
-} from "../../announce-idempotency.js";
 import type { SubagentAnnounceDeliveryResult } from "../announce/subagent-announce-dispatch.js";
 import type {
   PendingFinalDeliveryPayload,
@@ -212,18 +208,6 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
   entry.delivery = {
     status: entry.expectsCompletionMessage === false ? "not_required" : "pending",
   };
-}
-
-export function requesterDeliveryInputKey(entry: SubagentRunRecord): string {
-  return `${
-    entry.delivery?.requesterDelivery?.runId ??
-    buildAnnounceIdempotencyKey(
-      buildAnnounceIdFromChildRun({
-        childSessionKey: entry.childSessionKey,
-        childRunId: entry.runId,
-      }),
-    )
-  }:user`;
 }
 
 export function recordRequesterDelivery(

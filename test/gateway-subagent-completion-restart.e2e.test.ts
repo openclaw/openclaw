@@ -3,7 +3,6 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { readSubagentRun } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { readTranscriptExportSnapshotReadOnlySync } from "../src/config/sessions/session-accessor.sqlite-export-read.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import {
@@ -220,14 +219,11 @@ it
     onTestFinished(() => {
       vi.unstubAllEnvs();
     });
-    const readRun = (runId: string, raw = false) => {
+    const readRun = (runId: string) => {
       const db = openNodeSqliteDatabase(path.join(instance.stateDir, "state", "openclaw.sqlite"), {
         readOnly: true,
       });
       try {
-        if (!raw) {
-          return readSubagentRun({ db }, runId);
-        }
         const row = db
           .prepare("SELECT payload_json FROM subagent_runs WHERE run_id = ?")
           .get(runId);
@@ -366,7 +362,6 @@ it
               }),
             { timeout: 15_000 },
           );
-          expect(readRun(capturedRunId!, true)).toMatchObject({ delivery: { status: "pending" } });
         }
         phase = "restart";
         if (kind === "nested") {

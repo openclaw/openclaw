@@ -169,7 +169,7 @@ it.each([
         );
         await submitEmbeddedAttemptPrompt({
           ...baseInput,
-          attempt: { sessionId, runId: "prompt-submit-run", userTurnTranscriptRecorder: recorder },
+          attempt: { sessionId, userTurnTranscriptRecorder: recorder },
           activeSession: session,
           transcriptPrompt: text,
           modelPrompt: text,

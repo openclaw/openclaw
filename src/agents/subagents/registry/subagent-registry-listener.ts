@@ -1,4 +1,3 @@
-import { readPreparedSessionTranscriptChange } from "../../../config/sessions/session-transcript-authority.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -8,7 +7,6 @@ import {
   isGatewayRestartDraining,
   runWithGatewayIndependentRootWorkContinuation,
 } from "../../../process/gateway-work-admission.js";
-import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
@@ -28,7 +26,6 @@ import {
 } from "./subagent-registry-persistence.js";
 import { settleUnreachableYieldedSubagentRun } from "./subagent-registry-sweep-settle.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
-import { publishRequesterDeliveryReceipt } from "./subagent-requester-delivery.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 import { isYieldedSubagentRun } from "./subagent-run-liveness.js";
 import { shouldSuppressSubagentSessionEffects } from "./subagent-session-effects-policy.js";
@@ -56,22 +53,6 @@ export function createSubagentRegistryListener(config: {
     if (listenerStop) {
       return;
     }
-    const stopReceipts = sessionChanges.subscribeFacts((evt) => {
-      const fact = readPreparedSessionTranscriptChange(evt);
-      if (!("all" in evt) && fact?.kind === "postimage") {
-        for (const receipt of fact.value.requesterDeliveries ?? []) {
-          publishRequesterDeliveryReceipt(
-            runs,
-            {
-              ...evt,
-              agentId: evt.agentId ?? resolveAgentIdFromSessionKey(evt.sessionKey),
-              sessionId: fact.value.sessionId,
-            },
-            receipt,
-          );
-        }
-      }
-    });
     const stopSession = sessionChanges.subscribe((evt) => {
       if ("all" in evt || evt.scope !== "runtime" || isGatewayRestartDraining()) {
         return;
@@ -250,7 +231,6 @@ export function createSubagentRegistryListener(config: {
     });
     listenerStop = () => {
       stopAgent();
-      stopReceipts();
       stopSession();
     };
   }

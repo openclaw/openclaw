@@ -111,7 +111,7 @@ async function dispatch(
   using promptStateLease = retainEmbeddedSessionPromptState(sessionId);
   try {
     await submitEmbeddedAttemptPrompt({
-      attempt: { sessionId, runId: "result-budget-run" },
+      attempt: { sessionId },
       activeSession,
       contextTokenBudget: contextWindowTokens,
       images: [],

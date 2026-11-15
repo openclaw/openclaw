@@ -1,5 +1,4 @@
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
-import type { RequesterDeliveryReceipt } from "../../sessions/requester-delivery-receipt.js";
 import type { SessionTranscriptAuthority } from "./session-transcript-authority.types.js";
 import type { TranscriptWindowUpdate } from "./session-transcript-index-postgres.js";
 
@@ -11,7 +10,6 @@ export type TranscriptMutationAdvance = {
 };
 
 export type TranscriptMutationOptions = {
-  requesterDeliveries?: RequesterDeliveryReceipt[];
   strictly?: boolean;
   steps?: number;
   windowUpdatedAt?: number;
