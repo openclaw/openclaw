@@ -144,72 +144,81 @@ it.each([
     );
   },
 );
-it("carries explicit current policy without changing native turn input", async () => {
-  const params = paramsForTurn(undefined, {
-    prompt: "unchanged current request",
-    messageChannel: "telegram",
-    currentChannelId: "123",
-    permissionChange: permissionChange("Permission changed."),
-  });
-  const options = turnOptions({
-    messageToolAvailable: true,
-    requireExplicitMessageTarget: false,
-    preserveNativeTurnSettings: true,
-  });
-  const build = (overrides: Partial<TurnParams>, settings: Partial<TurnOptions> = {}) =>
-    buildTurnStartParams({ ...params, ...overrides }, { ...options, ...settings });
-  const turns = await Promise.all(
-    (["automatic", "message_tool_only", undefined] as const).map((mode) =>
-      build({ sourceReplyDeliveryMode: mode }),
-    ),
-  );
-  const values = turns.map(deliveryValue);
-  expect(values[0]).toContain("OpenClaw delivers your final response automatically");
-  expect(values[1]).toContain("Use `message(action=send)`");
-  expect(values[1]).toContain("For progress, set `final=false`");
-  expect(values[1]).toContain("Set `final=true`, or omit it,");
-  expect(values[1]).toContain("current source is default target");
-  expect(values[1]).toContain("`message(action=send, final=false)`");
-  expect(values[2]).toBe(values[0]);
-  const deliveryOnly = await build({ messageToolFinalByDefault: false });
-  const deliveryOnlyValue = deliveryValue(deliveryOnly);
-  expect(deliveryOnlyValue).toContain("(`final=true`) or an added reaction");
-  expect(deliveryOnlyValue).toContain("A send ends this turn only with `final=true`.");
-  expect(values[0]).not.toContain("A send ends this turn only");
-  for (const turn of turns) {
-    expect(turn.input).toEqual(textInput(params.prompt));
-    expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
-    expect(turn.additionalContext?.openclaw_permission_change).toEqual(
-      application("Permission changed."),
+it.each(["telegram", "webchat"])(
+  "carries channel-backed %s policy without changing native turn input",
+  async (messageChannel) => {
+    const params = paramsForTurn(undefined, {
+      prompt: "unchanged current request",
+      sessionKey: "agent:main:telegram:direct:123",
+      messageChannel,
+      currentChannelId: "123",
+      permissionChange: permissionChange("Permission changed."),
+    });
+    const options = turnOptions({
+      messageToolAvailable: true,
+      requireExplicitMessageTarget: false,
+      preserveNativeTurnSettings: true,
+    });
+    const build = (overrides: Partial<TurnParams>, settings: Partial<TurnOptions> = {}) =>
+      buildTurnStartParams({ ...params, ...overrides }, { ...options, ...settings });
+    const turns = await Promise.all(
+      (["automatic", "message_tool_only", undefined] as const).map((mode) =>
+        build({ sourceReplyDeliveryMode: mode }),
+      ),
     );
-    expect(turn.additionalContext?.openclaw_source_delivery?.kind).toBe("application");
-    expect(
-      Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
-    ).toBeLessThan(1_000);
-    expect(turn).not.toHaveProperty("collaborationMode");
-  }
-  const required = await build(
-    { sourceReplyDeliveryMode: "message_tool_only" },
-    { requireExplicitMessageTarget: true },
-  );
-  expect(deliveryValue(required)).toContain("target required this turn");
-  const unavailable = await build(
-    { sourceReplyDeliveryMode: "message_tool_only" },
-    { messageToolAvailable: false, requireExplicitMessageTarget: true },
-  );
-  expect(deliveryValue(unavailable)).toContain("remains private");
-  for (const text of ["Use `message`", "target required", "final=false"]) {
-    expect(deliveryValue(unavailable)).not.toContain(text);
-  }
-  const finalOnly = await build(
-    { sourceReplyDeliveryMode: "automatic" },
-    { messageToolAvailable: false },
-  );
-  expect(deliveryValue(finalOnly)).toContain(
-    "including questions received during ongoing work, in your final response",
-  );
-  expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
-});
+    const values = turns.map(deliveryValue);
+    expect(values[0]).toContain("OpenClaw delivers your final response automatically");
+    expect(values[1]).toContain("Use `message(action=send)`");
+    for (const value of values) {
+      expect(value).toContain("Use commentary for routine progress; it may be hidden.");
+      expect(value).toContain("for durable answers or attention-needed updates during work");
+      expect(value).not.toContain("for progress");
+      expect(value).not.toContain("For progress");
+    }
+    expect(values[1]).toContain("Set `final=true`, or omit it,");
+    expect(values[1]).toContain("current source is default target");
+    expect(values[1]).toContain("`message(action=send, final=false)`");
+    expect(values[2]).toBe(values[0]);
+    const deliveryOnly = await build({ messageToolFinalByDefault: false });
+    const deliveryOnlyValue = deliveryValue(deliveryOnly);
+    expect(deliveryOnlyValue).toContain("(`final=true`) or an added reaction");
+    expect(deliveryOnlyValue).toContain("A send ends this turn only with `final=true`.");
+    expect(values[0]).not.toContain("A send ends this turn only");
+    for (const turn of turns) {
+      expect(turn.input).toEqual(textInput(params.prompt));
+      expect(turn.additionalContext?.openclaw_temporal_context).toBeDefined();
+      expect(turn.additionalContext?.openclaw_permission_change).toEqual(
+        application("Permission changed."),
+      );
+      expect(turn.additionalContext?.openclaw_source_delivery?.kind).toBe("application");
+      expect(
+        Buffer.byteLength(turn.additionalContext!.openclaw_source_delivery!.value, "utf8"),
+      ).toBeLessThan(1_000);
+      expect(turn).not.toHaveProperty("collaborationMode");
+    }
+    const required = await build(
+      { sourceReplyDeliveryMode: "message_tool_only" },
+      { requireExplicitMessageTarget: true },
+    );
+    expect(deliveryValue(required)).toContain("target required this turn");
+    const unavailable = await build(
+      { sourceReplyDeliveryMode: "message_tool_only" },
+      { messageToolAvailable: false, requireExplicitMessageTarget: true },
+    );
+    expect(deliveryValue(unavailable)).toContain("remains private");
+    for (const text of ["Use `message`", "target required", "final=false"]) {
+      expect(deliveryValue(unavailable)).not.toContain(text);
+    }
+    const finalOnly = await build(
+      { sourceReplyDeliveryMode: "automatic" },
+      { messageToolAvailable: false },
+    );
+    expect(deliveryValue(finalOnly)).toContain(
+      "including questions received during ongoing work, in your final response",
+    );
+    expect(deliveryValue(finalOnly)).not.toContain("message(action=send");
+  },
+);
 it("replaces channel delivery guidance on a routeless operator turn", async () => {
   const options = turnOptions({
     messageToolAvailable: true,
@@ -220,7 +229,10 @@ it("replaces channel delivery guidance on a routeless operator turn", async () =
     paramsForTurn(undefined, { messageChannel: "telegram", currentChannelId: "123" }),
     options,
   );
-  const operatorTurn = await buildTurnStartParams(paramsForTurn(), options);
+  const operatorTurn = await buildTurnStartParams(
+    paramsForTurn(undefined, { messageChannel: "webchat" }),
+    options,
+  );
 
   expect(deliveryValue(channelTurn)).toContain("current source is default target");
   expect(deliveryValue(operatorTurn)).toContain(

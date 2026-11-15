@@ -40,6 +40,11 @@ describe("system prompt messaging routing", () => {
       expect(prompt).toContain(
         "or a final reaction to the current source message: `message(action=react, final=true)`",
       );
+      expect(prompt).toContain("Use commentary for routine progress; it may be hidden.");
+      expect(prompt).toContain(
+        "Set `final=false` for durable mid-task answers or attention-needed updates.",
+      );
+      expect(prompt).not.toContain("Set `final=false` for progress");
       expect(prompt).not.toContain("Provider messaging: never exec/curl");
       expect(prompt).not.toContain("NO_REPLY");
       expect(prompt).not.toContain("user explicitly requests only a reaction");

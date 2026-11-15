@@ -443,7 +443,10 @@ a separate status for execution, startup, or approval. After a session is idle,
 a new run starts its own Working timer, including when it starts outside the
 Dashboard; earlier tool activity remains in the conversation. **Keep commentary** in
 the chat view menu controls whether commentary stays visible after the run,
-not whether the active run’s narration survives a history refresh. Completed
+not whether the active run’s narration survives a history refresh. Routine progress
+belongs in commentary. Explicitly delivered answers and attention-needed updates
+remain visible, including answers sent before the task finishes; this setting does
+not hide message-tool sends or retroactively reclassify older messages. Completed
 dashboard turns collapse their narration and tool activity under **Worked for …**
 above the answer, with durations such as **Worked for 2m 3s**.
 Expanding it restores the sequence with the existing tool-call groups and shows

@@ -11,6 +11,17 @@ const options = {
 };
 
 describe("message schema variants", () => {
+  it("keeps routine progress out of the durable source-reply guidance", () => {
+    const schema = buildMessageToolSchemaFromActions(["send", "react"], options);
+    expect(schema.properties.final.description).toContain("use commentary for routine progress");
+    expect(schema.properties.final.description).toContain(
+      "set false for durable answers or attention-needed updates",
+    );
+    expect(
+      Value.Check(schema, { action: "send", message: "Requested status answer", final: false }),
+    ).toBe(true);
+  });
+
   it("projects presentation table cells to a scalar Gemini type without changing the source schema", () => {
     const source = buildMessageToolSchemaFromActions(["send"], {
       ...options,

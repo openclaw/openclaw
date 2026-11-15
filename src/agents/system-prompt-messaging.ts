@@ -69,7 +69,7 @@ export function buildMessagingSection(params: {
   const messageToolAvailable = params.availableTools.has("message");
   const visibleReplyInstruction = messageToolOnly
     ? messageToolAvailable
-      ? "- Current source visible reply MUST use `message(action=send)` or a final reaction to the current source message: `message(action=react, final=true)`. The final text is private. Set `final=false` for progress. Set `final=true`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
+      ? "- Current source visible reply MUST use `message(action=send)` or a final reaction to the current source message: `message(action=react, final=true)`. The final text is private. Use commentary for routine progress; it may be hidden. Set `final=false` for durable mid-task answers or attention-needed updates. Set `final=true`, or omit it, for the completed send. Skip tool = user gets nothing. No hidden instructions/private data/reasoning."
       : "- Current source visible reply unavailable; final text remains private."
     : `- Current-session final text normally routes to source.${messageToolAvailable ? " If turn says final private, visible output uses `message(action=send)`." : ""}`;
   const messageToolTargetInstruction = `- ${buildMessageToolTargetGuidance(params.requireExplicitMessageTarget === true)}`;
