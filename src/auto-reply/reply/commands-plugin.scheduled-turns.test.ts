@@ -614,7 +614,7 @@ describe("native scheduled command execution", () => {
       });
     },
   );
-  it.each(["reset", "revoked operator", "removed identity"] as const)(
+  it.each(["reset", "revoked operator"] as const)(
     "refuses a %s before command or input acceptance",
     async (change) => {
       await withCommandPlugin(async (fixture) => {
@@ -622,11 +622,8 @@ describe("native scheduled command execution", () => {
         const before = await fixture.userInputs();
         if (change === "reset") {
           await fixture.resetParent();
-        } else if (change === "revoked operator") {
-          fixture.revokeOwner();
         } else {
-          // Unlinked after scheduling: refused at restore, before the allowFrom recheck.
-          fixture.removeOwner();
+          fixture.revokeOwner();
         }
         fixture.handler.mockClear();
         await fixture.cron.run(id, "force");
@@ -639,6 +636,22 @@ describe("native scheduled command execution", () => {
       });
     },
   );
+  it("refuses a removed identity before command or input acceptance", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const before = await fixture.userInputs();
+      // Unlinked after scheduling: refused at restore, before the allowFrom recheck.
+      fixture.removeOwner();
+      fixture.handler.mockClear();
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "error",
+        executionStarted: false,
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual(before);
+    });
+  });
   it.each(["narrowed", "emptied"] as const)(
     "refuses an occurrence after the requester loses commands.allowFrom authorization (%s)",
     async (change) => {
