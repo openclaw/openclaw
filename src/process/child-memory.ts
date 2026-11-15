@@ -158,6 +158,7 @@ const owner = resolveGlobalSingleton(
     timer?: NodeJS.Timeout;
     sampling: boolean;
     assessmentPending: boolean;
+    largestCommand?: { bytes: number; atMs: number };
   } => ({
     watches: new Set(),
     sampling: false,
@@ -174,12 +175,45 @@ export function getHostExecMemoryBudget(): HostExecMemoryBudget | undefined {
 }
 
 /**
- * The exec budget and what watched commands hold now, for work that starts commands later and
- * must leave them room. Sizes the budget if no command has yet; undefined off Linux.
+ * How long the most memory one command held stays the figure for the next ones. Long enough to
+ * cover the gap between commands of recurring work, short enough that one unusual command does
+ * not hold later work back for long.
  */
-export function readHostExecMemory(): { budgetBytes: number; usedBytes: number } | undefined {
+const LARGEST_COMMAND_WINDOW_MS = 10 * 60_000;
+
+/**
+ * The exec budget, what watched commands hold now, and the most one command has held within the
+ * last ten minutes (0 when none has), for work that starts commands later and must leave them
+ * room. Sizes the budget if no command has yet; undefined off Linux.
+ */
+export function readHostExecMemory():
+  | { budgetBytes: number; usedBytes: number; largestCommandBytes: number }
+  | undefined {
   const budget = getHostExecMemoryBudget();
-  return budget && { budgetBytes: budget.memoryBytes, usedBytes: totalUsage().memoryBytes };
+  const largest = owner.largestCommand;
+  return (
+    budget && {
+      budgetBytes: budget.memoryBytes,
+      usedBytes: totalUsage().memoryBytes,
+      largestCommandBytes:
+        largest && performance.now() - largest.atMs <= LARGEST_COMMAND_WINDOW_MS
+          ? largest.bytes
+          : 0,
+    }
+  );
+}
+
+/** Keeps the largest sample within the window; an older one gives way to any new sample. */
+function recordCommandSample({ pids, extra }: Snapshot): void {
+  let bytes = extra.memoryBytes;
+  for (const usage of pids.values()) {
+    bytes += usage.memoryBytes;
+  }
+  const atMs = performance.now();
+  const largest = owner.largestCommand;
+  if (!largest || bytes >= largest.bytes || atMs - largest.atMs > LARGEST_COMMAND_WINDOW_MS) {
+    owner.largestCommand = { bytes, atMs };
+  }
 }
 
 function formatLimit(observed: HostExecMemoryUsage, budget: HostExecMemoryBudget): string {
@@ -443,6 +477,7 @@ export function watchHostExecMemory(
         }
         const previousPids = watch.snapshot.pids;
         watch.snapshot = snapshot;
+        recordCommandSample(snapshot);
         intervalMs = 5000;
         if (
           Array.from(snapshot.pids.keys()).some(

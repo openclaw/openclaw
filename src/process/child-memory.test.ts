@@ -7,6 +7,7 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   getHostExecMemoryBudget,
   readCgroupMemoryUsage,
+  readHostExecMemory,
   watchHostExecMemory,
 } from "./child-memory.js";
 
@@ -15,7 +16,9 @@ const procfs = vi.hoisted(() => ({
   readdir: vi.fn<(path: string) => Promise<string[]>>(),
 }));
 const memoryOwner = vi.hoisted(() => {
-  const state: { current?: { budget?: { memoryBytes: number; swapBytes: number } } } = {};
+  const state: {
+    current?: { budget?: { memoryBytes: number; swapBytes: number }; largestCommand?: unknown };
+  } = {};
   return state;
 });
 vi.mock("../../node-version.mjs", async (importOriginal) => {
@@ -84,6 +87,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   memoryOwner.current!.budget = undefined;
+  memoryOwner.current!.largestCommand = undefined;
   procfs.readFile.mockReset();
   procfs.readdir.mockReset();
 });
@@ -220,6 +224,31 @@ it("lets one command borrow unused capacity and cancels one large contributor af
   large.stop();
   await vi.advanceTimersByTimeAsync(1000);
   expect(small.onLimit).not.toHaveBeenCalled();
+});
+
+it("remembers the most one command held for the next ten minutes", async () => {
+  const files = {
+    "/proc/100/status": "VmRSS:\t96 kB\n",
+    "/proc/200/status": "VmRSS:\t16 kB\n",
+  };
+  mockFiles(files);
+  const large = watch(100);
+  watch(200);
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(readHostExecMemory()).toMatchObject({
+    usedBytes: 112 * 1024,
+    largestCommandBytes: 96 * 1024,
+  });
+  // The large command ends; later commands are still counted at its size.
+  large.stop();
+  await vi.advanceTimersByTimeAsync(5 * 60_000);
+  expect(readHostExecMemory()).toMatchObject({
+    usedBytes: 16 * 1024,
+    largestCommandBytes: 96 * 1024,
+  });
+  // Ten minutes on, the small command's samples take over.
+  await vi.advanceTimersByTimeAsync(5 * 60_000 + 5000);
+  expect(readHostExecMemory()).toMatchObject({ largestCommandBytes: 16 * 1024 });
 });
 
 it.each(["throw", "reject"])(
