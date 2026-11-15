@@ -42,7 +42,7 @@ const enTerminal = {
     startCancelled: en.terminal.startCancelled,
     connecting: "Connecting to session…",
     connectionTimedOut: "Session did not connect within 30 seconds.",
-    refreshRequired: "Control UI updated. Reload this page to continue the terminal action.",
+    refreshRequired: "OpenClaw updated. Reload this page to continue the terminal action.",
     tabLabel: "shell {n}",
     tabHint: "{agent} · {cwd}",
     agentOwnedBadge: "agent",
@@ -56,7 +56,7 @@ const enTerminal = {
     dockMode: "Terminal panel position",
     unavailable: en.terminal.unavailable,
     unusableSession:
-      "The Gateway returned an unusable terminal session (missing {field}). The Gateway is likely older than this Control UI — update it, then retry.",
+      "The Gateway returned an unusable terminal session (missing {field}). The Gateway is likely older than this web app — update it, then retry.",
     uploadTooLarge: "Couldn’t upload {file}. Choose a file no larger than 16 MiB.",
     uploadUnsafeCmdPath:
       "Couldn’t insert the file path into cmd.exe. Rename the file without % or ! and try again.",

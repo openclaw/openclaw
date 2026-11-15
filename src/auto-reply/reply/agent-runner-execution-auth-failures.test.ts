@@ -205,7 +205,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**. You can also re-auth with `claude auth login && openclaw models auth login --provider anthropic --method cli` on the gateway.",
       );
       expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }
@@ -225,7 +225,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the Control UI or run `openclaw configure`.",
+        "⚠️ Couldn't connect to OpenAI. Run `openclaw doctor --fix`, then try again. If it still fails, open Models in the OpenClaw app or run `openclaw configure`.",
       );
     }
   });
@@ -272,7 +272,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+        "This saved login isn't available. Choose another login under Models in the OpenClaw app or run `openclaw configure`.",
       );
       expect(result.payload.text).not.toContain("openai:private");
       expect(result.payload.text).not.toContain("arbitrary plugin detail");
@@ -296,7 +296,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ This AI service isn't set up yet. Sign in under Models in the Control UI or run `openclaw configure`.",
+        "⚠️ This AI service isn't set up yet. Sign in under Models in the OpenClaw app or run `openclaw configure`.",
       );
     }
   });
@@ -312,7 +312,7 @@ describe("executeAgentTurn: authentication failures", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or Control UI session. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
+        "⚠️ Your model provider needs a new login. Send `/login` from a private chat or the OpenClaw app. Where shown, you can also select **Sign in**. You can also re-auth with `openclaw models auth login` on the gateway.",
       );
       expect(result.payload.presentation).toEqual(providerLoginPresentation("/login"));
     }

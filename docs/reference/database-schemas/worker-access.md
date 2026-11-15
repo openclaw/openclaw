@@ -801,6 +801,13 @@ An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
 
+Usage aggregation, compression, and changed-month selection happen before writer
+admission. Publication deletes replaced partitions by individual session ranges
+and removed months by exact keys, using SQLite's existing primary-key index.
+These deletions share the transaction with their checkpoints and quarter summaries.
+Combining many ranges or keys can make stale small-cache statistics select a
+full-cache scan while holding the writer.
+
 Refresh discovery reuses the durable rollup's raw transcript statistics only when
 the transcript owner's mutation timestamp and rewrite generation still match.
 Changed or missing checkpoints use canonical statistics; unchanged histories do

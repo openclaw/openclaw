@@ -595,6 +595,7 @@ export function runCiManifestFixture(options: CiManifestFixtureOptions, compiler
       "ci-node-test-capacity.mts",
       "vitest-shard-metadata.mts",
       "ci-skills-python-plan.mjs",
+      "ci-test-observations.mjs",
       "changed-path-facts.mjs",
     ]) {
       copyFixture(`.ci-harness/scripts/lib/${name}`, `scripts/lib/${name}`);

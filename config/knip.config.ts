@@ -73,6 +73,7 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/dependency-lifetime-inherit.cjs!",
   // The Windows benchmark launches this observer with Node --import by exact path.
   "scripts/lib/session-source-observer-preload.mjs!",
+  "scripts/lib/usage-rollup-write-observer.cjs!",
   "scripts/perf/agent-exec-cgroup-proof.ts!",
   "scripts/perf/agent-startup-inspection.ts!",
   "scripts/perf/anthropic-request-construction.ts!",

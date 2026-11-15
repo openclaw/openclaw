@@ -77,7 +77,7 @@ export const handleForkCommand: CommandHandler = defineAuthorizedTextCommand(
     const prepareFork = plugin?.conversationBindings?.prepareFork;
     if (!conversation || !plugin || !prepareFork) {
       return commandReply(
-        "/fork is unavailable here. Use a supported channel thread, or Fork conversation in the Control UI.",
+        "/fork is unavailable here. Use a supported channel thread, or Fork conversation in the OpenClaw app.",
       );
     }
     const title = rawTitle.trim() || undefined;

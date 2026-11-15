@@ -30,6 +30,8 @@ export type UpdateRunReport = { headline: string; lines: string[]; markdown: str
 
 const IN_PROGRESS_REPORT_PREFIX = "⬆️ OpenClaw update in progress: ";
 const FAILURE_RECOVERY_HINTS: Readonly<Record<string, string>> = {
+  "preflight-local-replay-conflict":
+    "A local commit conflicts with the update target. Resolve the conflict in the paths named by the failing check (rebase the local commits onto the update target, or drop them), then rerun the update.",
   "preflight-insufficient-space":
     "Free space on the preflight staging and package-manager store filesystems, then rerun the update.",
   "pnpm-corepack-missing":
