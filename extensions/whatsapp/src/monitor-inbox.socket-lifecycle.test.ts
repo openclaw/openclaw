@@ -117,6 +117,42 @@ describe("web monitor inbox socket lifecycle", () => {
     }
   });
 
+  it("clears typing after tool sends and inbound text/media replies", async () => {
+    const { listener, sock, inbound } = await primeInboundReplyHandle({
+      onMessage: vi.fn(async () => undefined),
+      socketRef: createSocketRef(),
+      upsertId: "typing-stop",
+    });
+    try {
+      for (const send of [
+        () => listener.sendMessage("+999", "tool reply"),
+        () => inbound.platform.reply("automatic reply"),
+        () => inbound.platform.sendMedia({ text: "media reply" }),
+      ]) {
+        sock.sendPresenceUpdate.mockClear();
+        await send();
+        expect(sock.sendPresenceUpdate).toHaveBeenCalledWith("paused", "999@s.whatsapp.net");
+      }
+      sock.sendPresenceUpdate.mockRejectedValueOnce(new Error("presence unavailable"));
+      const callsBefore = sock.sendMessage.mock.calls.length;
+      await expect(inbound.platform.reply("accepted")).resolves.toMatchObject({
+        providerAccepted: true,
+      });
+      expect(sock.sendMessage).toHaveBeenCalledTimes(callsBefore + 1);
+      const paused = Promise.withResolvers<void>();
+      sock.sendPresenceUpdate.mockImplementationOnce(() => paused.promise);
+      try {
+        await expect(
+          inbound.platform.reply("accepted without waiting for presence"),
+        ).resolves.toMatchObject({ providerAccepted: true });
+      } finally {
+        paused.resolve();
+      }
+    } finally {
+      await listener.close();
+    }
+  });
+
   it("socket session stays unavailable on connect in self-chat mode", async () => {
     const { listener, sock } = await startInboxMonitor(vi.fn(async () => {}) as InboxOnMessage, {
       selfChatMode: true,
@@ -158,6 +194,7 @@ describe("web monitor inbox socket lifecycle", () => {
     await inbound.platform.reply("pong");
     await inbound.platform.sendMedia({ text: "after-reconnect" });
     await inbound.platform.sendComposing();
+    await inbound.platform.sendComposing("paused");
 
     expect(replacementSock.sendMessage).toHaveBeenNthCalledWith(
       1,
@@ -179,6 +216,7 @@ describe("web monitor inbox socket lifecycle", () => {
       "composing",
       "999@s.whatsapp.net",
     );
+    expect(replacementSock.sendPresenceUpdate).toHaveBeenCalledWith("paused", "999@s.whatsapp.net");
     expect(sock.sendMessage).not.toHaveBeenCalled();
 
     await listener.close();

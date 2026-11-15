@@ -13,6 +13,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getWhatsAppConnectionController } from "../connection-controller-runtime-context.js";
 import { identitiesOverlap, type WhatsAppSelfIdentity } from "../identity.js";
+import { isWhatsAppNewsletterJid } from "../normalize-target.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";
 import {
   DEFAULT_RECONNECT_POLICY,
@@ -330,6 +331,12 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
             trackedOptions,
           );
           rememberOutboundMessage(jid, result);
+          if (!("react" in content) && !isWhatsAppNewsletterJid(jid)) {
+            // A presence failure must never delay or retry an accepted message.
+            void currentSocketOperations(currentSock)
+              .sendPresenceUpdate("paused", jid)
+              .catch((error) => options.logVerbose(`Presence update failed: ${String(error)}`));
+          }
           return result;
         } catch (error) {
           if (!shouldRetryDisconnect() || !isRetryableSendDisconnectError(error)) {

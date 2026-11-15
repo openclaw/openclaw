@@ -585,6 +585,9 @@ export function createWhatsAppReplyPlan(params: {
       return { visibleReplySent: didSendReply || delivered > 0 };
     },
     onReplyStart: params.transport.sendComposing,
+    onCleanup: () => {
+      void params.transport.sendComposing("paused");
+    },
   };
   const delivery: ChannelInboundTurnPlan["delivery"] = {
     observeMessageSent: true,
