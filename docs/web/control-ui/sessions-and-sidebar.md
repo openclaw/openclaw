@@ -315,6 +315,8 @@ An unrecognized Git clone or refresh failure includes a **Diagnostic ID**. Give
 that ID to the Gateway operator to find the matching `projects/clone` file-log
 entry, which retains Git's exit status and process output. Raw Git output stays
 out of the shared conversation; the diagnostic ID does not grant log access.
+Refresh preparation and branch-update failures ask you to retry first by sending
+your message again; if they persist, give the diagnostic ID to the Gateway operator.
 
 Accepted browser messages, including initial prompts waiting for workspace
 preparation and follow-ups during a run, remain visible as normal message bubbles
