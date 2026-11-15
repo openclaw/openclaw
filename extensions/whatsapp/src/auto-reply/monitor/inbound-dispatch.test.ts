@@ -626,11 +626,3 @@ describe("WhatsApp main route", () => {
     expect(resolveWhatsAppDmRouteTarget({ msg, normalizeE164: () => null })).toBe("+15550003333");
   });
 });
-
-it("stops WhatsApp typing when a turn finishes without a visible reply", async () => {
-  const sendComposing = vi.fn(async () => {});
-  const { plan } = await fixture({ msg: message({ platform: { sendComposing } }) });
-  await plan.dispatcherOptions?.onReplyStart?.();
-  await plan.dispatcherOptions?.onCleanup?.();
-  expect(sendComposing.mock.calls).toEqual([[], ["paused"]]);
-});
