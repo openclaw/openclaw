@@ -220,7 +220,7 @@ describe("undecodable scheduled authority", () => {
             channel: "telegram",
             to: "fixture-recipient",
             payload: {
-              text: 'Automation "Test Job" failed 1 times\nCheck automation history for details.',
+              text: 'Automation "Test Job" failed\nCheck automation history for details.',
             },
           }),
         );
