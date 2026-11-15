@@ -709,6 +709,7 @@ export async function withSessionStoreReaderInWorker<T>(
             assertFinalCurrent();
             return value;
           }),
+        input.pointRead,
       );
     }
     // Only returned data may be refused after cleanup; synchronous consumers can already publish.

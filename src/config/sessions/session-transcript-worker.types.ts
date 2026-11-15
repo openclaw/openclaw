@@ -633,5 +633,8 @@ export type SessionHistoryWorkerRequestRunner = <
   receive: (value: SessionTranscriptWorkerValues[Request["kind"]]) => TResult,
   signal?: AbortSignal,
   onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
-  timeoutMs?: number,
+  options?: SessionHistoryWorkerRequestOptions,
 ) => Promise<TResult>;
+
+/** Admission options stay in the host and do not enter the worker payload. */
+export type SessionHistoryWorkerRequestOptions = { timeoutMs?: number; pointRead?: true };

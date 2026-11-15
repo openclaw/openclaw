@@ -2,6 +2,21 @@ import {
   DEFAULT_WORKER_PENDING_BYTES,
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
+import { WorkerTaskError } from "./worker-task-error.js";
+
+type ClassedTask = {
+  inputBytes: number;
+  admitted: boolean;
+  options: { pointRead?: true; onRequest?: unknown; onRequestSync?: unknown };
+};
+
+/** Class 0 (point reads) keeps its own arrival order ahead of every queued bulk task. */
+export function enqueueWorkerTask<T extends Pick<ClassedTask, "options">>(queue: T[], task: T) {
+  const firstBulk = task.options.pointRead
+    ? queue.findIndex((queued) => !queued.options.pointRead)
+    : -1;
+  queue.splice(firstBulk === -1 ? queue.length : firstBulk, 0, task);
+}
 
 /** Owns a pool's admitted inputs and notifies rejected callers when their budget can fit. */
 export class WorkerTaskAdmission {
@@ -29,6 +44,22 @@ export class WorkerTaskAdmission {
 
   get pendingBytes(): number {
     return this.byteCount;
+  }
+
+  /** Class 0 skips bulk admission but cannot request callbacks into the host. */
+  admitTask(task: ClassedTask): Error | undefined {
+    const { pointRead, onRequest, onRequestSync } = task.options;
+    if (pointRead) {
+      return onRequest || onRequestSync
+        ? new TypeError("Point reads carry their facts and cannot call back into the host")
+        : undefined;
+    }
+    task.admitted = this.admit(task.inputBytes);
+    return task.admitted
+      ? undefined
+      : new WorkerTaskError("worker task capacity reached", "overloaded", {
+          capacityAvailable: this.waitForCapacity(task.inputBytes),
+        });
   }
 
   admit(inputBytes: number): boolean {

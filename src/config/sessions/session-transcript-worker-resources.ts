@@ -540,6 +540,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   }) => Promise<T>,
   lane: SessionHistoryWorkerLane = historyLane,
   signal?: AbortSignal,
+  pointRead?: true,
 ): Promise<T> {
   const capturedCandidates = candidates.map(
     ({ path: requestedPath, physicalPath, scope, identity }) => ({
@@ -691,7 +692,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
                 lane.native = true;
                 return input;
               },
-              { inputBytes, timeoutMs: 60_000, signal },
+              { inputBytes, timeoutMs: 60_000, signal, pointRead },
             ),
           admissionFamilies,
           signal,
