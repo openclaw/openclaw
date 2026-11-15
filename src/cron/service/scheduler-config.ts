@@ -20,42 +20,53 @@ export function preparingCronAgentIds(env: NodeJS.ProcessEnv): string[] {
 /**
  * Run slots automation may hold right now. Automation shares the agent concurrency limit with
  * conversations and yields to them: every conversation turn in progress takes one slot away, down
- * to the eight automation always keeps. Conversations are never held back by automation. Free
- * memory can lower this further; see {@link resolveCronFreeMemoryRuns}.
+ * to the eight automation always keeps. Conversations are never held back by automation. Memory
+ * can lower this further, down to one; see {@link resolveCronMemoryRunSlots}.
  */
 export function resolveCronRunSlots(): number {
   const conversations = getCommandLaneSnapshot(CommandLane.Main);
-  return Math.max(
-    DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-    conversations.maxConcurrent - conversations.activeCount,
+  return Math.min(
+    Math.max(
+      DEFAULT_CRON_MAX_CONCURRENT_RUNS,
+      conversations.maxConcurrent - conversations.activeCount,
+    ),
+    resolveCronMemoryRunSlots(),
   );
 }
 
 /**
  * The least memory one automation run is taken to use: its agent session, model streams, and the
- * tool processes it starts. Runs that use less let more start; see `cron.drainQueue`. When a
- * recent exec command held more, that is the figure instead, so a burst of jobs leaves their
- * commands room before those commands have started and show up as used.
+ * tool processes it starts. When a recent exec command held more, that is the figure instead.
  */
 const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
 
 /**
- * How many more runs the memory free now could hold, at the per-run figure. Host memory counts
- * reclaimable cache as free, and the commands jobs run as used. Under a container or cgroup limit,
- * the Gateway and its watched exec commands count against that limit: the cgroup's own usage
- * includes page cache the kernel would reclaim, so on a long-running Gateway it reads as nearly
- * full. Commands also stay within the exec memory budget, past which the exec guard kills them.
+ * Runs that fit in half of the memory open to automation, at the per-run figure; at least one, so
+ * automation always progresses, and runs already going are never stopped. Open memory is what is
+ * free plus what running exec commands hold, so it does not depend on how many runs are going:
+ * runs that just started, whose commands have not shown up as used yet, cannot use up the other
+ * half however many times the queue is drained before they do.
+ *
+ * Host memory counts reclaimable cache as free. Under a container or cgroup limit, open memory is
+ * that limit minus the Gateway's own: the cgroup's usage includes page cache the kernel would
+ * reclaim, so on a long-running Gateway it reads as nearly full. Commands also stay within the
+ * exec memory budget, past which the exec guard kills them.
+ *
+ * Accepted edge case: after a quiet period no recent command sets the figure, so a burst whose
+ * commands are much larger than 256 MiB can still exceed the exec budget. The exec guard then
+ * stops the largest command with an error naming the budget.
  */
-export function resolveCronFreeMemoryRuns(): number {
+function resolveCronMemoryRunSlots(): number {
   const exec = readHostExecMemory();
   const commands = exec?.usedBytes ?? 0;
   const limit = process.constrainedMemory();
-  const free = Math.min(
-    readHostFreeMemoryBytes(),
-    limit > 0 ? limit - process.memoryUsage.rss() - commands : Infinity,
-    exec ? exec.budgetBytes - commands : Infinity,
+  const open = Math.min(
+    readHostFreeMemoryBytes() + commands,
+    limit > 0 ? limit - process.memoryUsage.rss() : Infinity,
+    exec ? exec.budgetBytes : Infinity,
   );
-  return Math.max(0, free) / Math.max(RUN_MEMORY_BYTES, exec?.largestCommandBytes ?? 0);
+  const perRun = Math.max(RUN_MEMORY_BYTES, exec?.largestCommandBytes ?? 0);
+  return Math.max(1, Math.floor(open / 2 / perRun));
 }
 
 /** The conversation a job's run would have to wait for right now, if its turn is still running. */
@@ -93,7 +104,6 @@ export async function captureCronSchedulerSnapshot(
       preparingAgentIds: preparingCronAgentIds(state.deps.env),
       busyConversationJobIds: busyConversationCronJobIds(state),
       maxConcurrentRuns: resolveCronRunSlots(),
-      freeMemoryRuns: resolveCronFreeMemoryRuns(),
       cronConfig: state.deps.cronConfig,
       defaultAgentId: preparedOwner
         ? preparedOwner.defaultAgentId

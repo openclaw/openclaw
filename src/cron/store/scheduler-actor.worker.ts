@@ -586,7 +586,6 @@ export function runCronSchedulerInWorker(
         {
           requests: input.requests ?? [],
           maxConcurrentRuns: snapshot.config.maxConcurrentRuns ?? DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-          freeMemoryRuns: snapshot.config.freeMemoryRuns,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
           busyConversationJobIds: snapshot.config.busyConversationJobIds,

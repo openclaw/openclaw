@@ -100,25 +100,6 @@ function countRunSlotsInUse(
   }).length;
 }
 
-/**
- * Runs automation may hold in this drain: the host's limit, and no more than half of what memory
- * could hold, counting each run in use as holding one run's estimate. Runs that use less than the
- * estimate leave memory free, so later drains admit more; several drains before new runs have
- * allocated cannot add up past what free memory could hold. At least one, so automation always
- * progresses; runs already in use are never stopped.
- */
-function admittedRunSlots(
-  input: Pick<
-    CronRunQueueOperations["cron.drainQueue"]["input"],
-    "maxConcurrentRuns" | "freeMemoryRuns"
-  >,
-  inUse: number,
-): number {
-  const byMemory =
-    input.freeMemoryRuns === undefined ? Infinity : Math.floor((inUse + input.freeMemoryRuns) / 2);
-  return Math.max(1, Math.min(input.maxConcurrentRuns, byMemory));
-}
-
 function loadJobs(db: EngineConnection, storeKey: string) {
   const jobs = loadedCronStoreFromRows(
     loadCronRows(db, storeKey, undefined, { includeGrantDefinitionProjection: true }),
@@ -430,7 +411,6 @@ function drainCronQueueInDatabase(
     }));
   const receipts = rows.filter((row) => row.status === "running").map(receiptFromRow);
   let activeCount = countRunSlotsInUse(receipts, jobs);
-  const runSlots = admittedRunSlots(input, activeCount);
   // Fired conditions waiting for a run slot take their turn among queued runs by due time.
   const queued = receipts
     .filter(
@@ -457,7 +437,7 @@ function drainCronQueueInDatabase(
     const job = jobs.get(receipt.jobId)!;
     if (awaitsRunSlot(job, receipt.receiptId)) {
       // Its check already ran; the host waiting on it starts the payload once the mark is gone.
-      if (!input.schedulingPaused && activeCount < runSlots) {
+      if (!input.schedulingPaused && activeCount < Math.max(1, input.maxConcurrentRuns)) {
         delete job.state.runSlotWaitReceiptId;
         updateCronRuntimeRow(db, input.storeKey, job);
         activeCount += 1;
@@ -528,7 +508,7 @@ function drainCronQueueInDatabase(
     if (
       (input.schedulingPaused && context.mode === "scheduled") ||
       (checksCondition && checkingCount >= MAX_CONCURRENT_CONDITION_CHECKS) ||
-      (!withoutRunSlot && activeCount >= runSlots)
+      (!withoutRunSlot && activeCount >= Math.max(1, input.maxConcurrentRuns))
     ) {
       continue;
     }
@@ -613,7 +593,6 @@ export function requestAndDrainCronRunsInWorker(
     CronRunQueueOperations["cron.drainQueue"]["input"],
     | "requests"
     | "maxConcurrentRuns"
-    | "freeMemoryRuns"
     | "schedulingPaused"
     | "preparingAgentIds"
     | "busyConversationJobIds"

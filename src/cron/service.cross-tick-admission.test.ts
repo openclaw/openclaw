@@ -444,7 +444,7 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     await running.wake(state);
     expect(started).toHaveLength(1);
 
-    // 1 GiB free holds four runs at 256 MiB each; with one running, automation takes half of five.
+    // 1 GiB free: half of it holds two runs at 256 MiB each.
     stubFreeMemory(gib);
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(2));
@@ -470,6 +470,42 @@ it("starts fewer automations while free memory is short, and at least one", asyn
     exec.mockReturnValue({ budgetBytes: 16 * gib, usedBytes: 0, largestCommandBytes: 0 });
     await running.wake(state);
     await vi.waitFor(() => expect(started).toHaveLength(12));
+  } finally {
+    finish.resolve();
+    await waitForCronRunQueue(state);
+    stop(state);
+  }
+});
+
+it("keeps half of the open memory spare however often the queue is drained", async () => {
+  let nowMs = Date.parse("2026-02-06T10:08:00.000Z");
+  const dueAtMs = nowMs + 1_000;
+  const store = await seedJobs(
+    Array.from({ length: 12 }, (_, index) => dueJob(`job-${index}`, nowMs, dueAtMs)),
+  );
+  const finish = createDeferred();
+  const started: string[] = [];
+  const state = cron.createCronRegressionState({
+    storePath: store.storePath,
+    nowMs: () => nowMs,
+    runIsolatedAgentJob: async ({ job }: { job: CronJob }) => {
+      started.push(job.id);
+      await finish.promise;
+      return { status: "ok" as const, summary: job.id };
+    },
+  });
+  // 2 GiB free: half of it holds four runs at 256 MiB each.
+  stubFreeMemory(2 * 1024 ** 3);
+  setCommandLaneConcurrency(CommandLane.Main, 32);
+  const running = await captureCronSchedulerWakeForTest(() => start(state));
+  try {
+    nowMs = dueAtMs;
+    await running.wake(state);
+    await vi.waitFor(() => expect(started).toHaveLength(4));
+    // The new runs' memory has not shown up yet: further drains start no more.
+    await running.wake(state);
+    await running.wake(state);
+    expect(started).toHaveLength(4);
   } finally {
     finish.resolve();
     await waitForCronRunQueue(state);
