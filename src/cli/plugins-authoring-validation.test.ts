@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { defaultRuntime } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { runPluginsValidateCommand } from "./plugins-authoring-command.js";
+import { runPluginsBuildCommand, runPluginsValidateCommand } from "./plugins-authoring-command.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -36,20 +36,24 @@ async function expectFailure(
   }
 }
 
-it("reports a missing manifest before a missing default entry", async () => {
-  const homeDir = tempDirs.make("openclaw-plugin-missing-manifest-home-");
-  const rootDir = path.join(homeDir, "plugins", "missing-manifest");
-  fs.mkdirSync(rootDir, { recursive: true });
-  const packageBytes = '{"name":"validation-fixture"}\n';
-  fs.writeFileSync(path.join(rootDir, "package.json"), packageBytes);
+it("keeps missing-root diagnostics actionable for build and validation", async () => {
+  const homeDir = tempDirs.make("openclaw-plugin-missing-root-home-");
+  const rootDir = path.join(homeDir, "plugins", "absent");
+  const message = `Plugin root not found: ${rootDir}. Set --root to an existing plugin project directory containing package.json, then retry.`;
+  await expect(runPluginsBuildCommand({ root: rootDir })).rejects.toMatchObject({
+    humanOutput: message,
+  });
+  await expect(runPluginsValidateCommand({ root: rootDir })).rejects.toMatchObject({
+    humanOutput: message,
+  });
   await expectFailure(
     { root: rootDir },
     { OPENCLAW_HOME: homeDir },
-    `plugin manifest not found: ${path.join(rootDir, "openclaw.plugin.json")}`,
-    "plugin manifest not found: $OPENCLAW_HOME/plugins/missing-manifest/openclaw.plugin.json",
+    message,
+    message.replace(rootDir, "$OPENCLAW_HOME/plugins/absent"),
   );
-  expect(fs.readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(packageBytes);
-  expect(fs.readdirSync(rootDir)).toEqual(["package.json"]);
+  expect(fs.existsSync(rootDir)).toBe(false);
+  expect(fs.readdirSync(homeDir)).toEqual([]);
 });
 
 it.each(

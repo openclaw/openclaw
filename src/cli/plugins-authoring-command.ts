@@ -31,6 +31,7 @@ import {
   createConfigSchema,
   validateToolPluginProject,
 } from "./plugins-authoring-metadata.js";
+import { resolveRootPath } from "./plugins-authoring-root.js";
 import { buildPluginControlUi, writePluginBuildManifest } from "./plugins-control-ui-build.js";
 import { writeFeaturePluginScaffold } from "./plugins-feature-scaffold.js";
 
@@ -145,7 +146,7 @@ export async function loadToolPlugin(params: { rootDir: string; entryPath: strin
 }
 
 export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise<void> {
-  const rootDir = fs.realpathSync.native(opts.root ?? process.cwd());
+  const rootDir = resolveRootPath(opts.root);
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packagePath = path.join(rootDir, "package.json");
@@ -220,7 +221,7 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
 export async function collectPluginsValidationResult(
   opts: PluginsValidateOptions,
 ): Promise<PluginsValidationResult> {
-  const rootDir = fs.realpathSync.native(opts.root ?? process.cwd());
+  const rootDir = resolveRootPath(opts.root);
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);

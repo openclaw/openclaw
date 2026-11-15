@@ -25,11 +25,11 @@ export type PluginsPackOptions = { root?: string; out?: string; json?: boolean }
 
 /** Produce one reviewable import: bundled code, immutable UI assets, no install scripts. */
 async function packFeaturePlugin(opts: PluginsPackOptions) {
-  const rootDir = await fs.realpath(opts.root ?? process.cwd());
-  const validation = await collectPluginsValidationResult({ root: rootDir });
+  const validation = await collectPluginsValidationResult({ root: opts.root });
   if (!validation.valid) {
     throwExpectedCliError(validation.errors.join("\n"));
   }
+  const rootDir = await fs.realpath(opts.root ?? process.cwd());
   const source = await root(rootDir, { symlinks: "reject", hardlinks: "reject" });
   const packageManifest = await source.readJson("package.json");
   if (!isRecord(packageManifest) || !isRecord(packageManifest.openclaw)) {
