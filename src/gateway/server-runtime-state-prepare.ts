@@ -524,6 +524,7 @@ export async function prepareGatewayKernelState(params: {
   // Inert until the Labs switch is on; the switch is reconciled after ready. Saved
   // device-token bindings are read now, before any listener admits a connection.
   const openclawIdService = createOpenClawIdService({
+    memberRolePresets: bootstrap.memberRolePresets,
     getConfig: () => getRuntimeConfig().gateway?.openclawId,
     getStateDir: () => resolveStateDir(),
     getGatewayServer: () => transportBridge.current()?.httpServer,

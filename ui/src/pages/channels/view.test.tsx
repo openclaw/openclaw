@@ -211,6 +211,8 @@ describe("channels setup access", () => {
         channelMeta: [{ id: "slack", label: "Slack", detailLabel: "Slack Bot" }],
       },
     );
+    const onStartSetup = vi.fn();
+    props.onStartSetup = onStartSetup;
     const container = renderHub(props);
 
     const availableLabels = texts(container, ".channels-item__detail .settings-row__title");
@@ -223,6 +225,16 @@ describe("channels setup access", () => {
       "imessage",
       "nostr",
     ]);
+    const setupButtons = [
+      ...container.querySelectorAll<HTMLButtonElement>(
+        ".channels-item > .settings-row__control > button",
+      ),
+    ];
+    expect(setupButtons.map((button) => button.getAttribute("aria-label"))).toEqual(
+      availableLabels.map((label) => `Set up ${label}`),
+    );
+    setupButtons.forEach((button) => button.click());
+    expect(onStartSetup.mock.calls.map(([channelId]) => channelId)).toEqual(availableLabels);
   });
 
   it("replaces setup actions with an admin-required notice for non-admin viewers", () => {

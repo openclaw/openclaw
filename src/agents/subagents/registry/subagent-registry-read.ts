@@ -132,16 +132,16 @@ function resolveYieldWaitingChild(
     ) {
       continue;
     }
-    const childSource = isYieldedSubagentRun(child)
-      ? owesRequesterCompletion(child)
-        ? resolveSubagentYieldWaitSource(child, visited)
-        : undefined
-      : owesRequesterCompletion(child) &&
-          (isSubagentRunLive(child) ||
-            (child.execution.status === "terminal" &&
-              !subagentRuns.isCompletionAuthorityRetired(child)))
-        ? "waiting"
-        : "resume";
+    const childSource = subagentRuns.isCompletionAuthorityRetired(child)
+      ? "resume"
+      : isYieldedSubagentRun(child)
+        ? owesRequesterCompletion(child)
+          ? resolveSubagentYieldWaitSource(child, visited)
+          : undefined
+        : owesRequesterCompletion(child) &&
+            (isSubagentRunLive(child) || child.execution.status === "terminal")
+          ? "waiting"
+          : "resume";
     // Stopped descendants need root reconciliation, even beside a surviving wait.
     if (childSource === "resume") {
       return childSource;

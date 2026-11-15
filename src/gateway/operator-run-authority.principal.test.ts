@@ -37,9 +37,14 @@ import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
 import { makeContextParams } from "./server-request-context.test-support.js";
-import { prepareSessionPrincipalRunAuthority } from "./session-sharing-authorization-async.js";
+import {
+  prepareSessionPrincipalRunAuthority,
+  resolveSessionMutationAuthorizationAsync,
+} from "./session-sharing-authorization-async.js";
+import * as sharingPreparation from "./session-sharing-preparation.js";
 // mock-isolation: Only model execution and the final child launch are synthetic.
 vi.mock("../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 const spawn = vi.hoisted(() => vi.fn());
@@ -109,6 +114,46 @@ function fixture(cfg: OpenClawConfig = config) {
       }),
   };
 }
+
+it("reads an inherited principal's currency once per synchronous sharing validation", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const prepareFacts = sharingPreparation.prepareSessionMutationFacts;
+    const currencyReads: Array<ReturnType<typeof vi.fn>> = [];
+    const spy = vi
+      .spyOn(sharingPreparation, "prepareSessionMutationFacts")
+      .mockImplementation(async (params) => {
+        const facts = await prepareFacts(params);
+        const readCurrent = vi.fn(facts.readCurrent);
+        currencyReads.push(readCurrent);
+        return { ...facts, readCurrent };
+      });
+    try {
+      const { profile, admit } = fixture();
+      using principal = await admit();
+      const principalCurrency = currencyReads[0]!;
+      const client = createOperatorClient({ profileId: profile.id, scopes: [...writerScopes] });
+      client.internal = { operatorRunAuthority: principal.authority };
+      const result = await resolveSessionMutationAuthorizationAsync({
+        client,
+        context: principalContext(config),
+        method: "sessions.github.action",
+        requestParams: scope,
+      });
+      expect(result.error).toBeNull();
+      const authorization = result.authorization!;
+      try {
+        principalCurrency.mockClear();
+        authorization.assertCurrent();
+        expect(principalCurrency).toHaveBeenCalledTimes(1);
+        authorization.assertCurrent();
+        expect(principalCurrency).toHaveBeenCalledTimes(2);
+      } finally {
+        authorization.release?.();
+      }
+    } finally {
+      spy.mockRestore();
+    }
+  }));
 
 it("admits a recorded person's current role and refuses revoked, demoted, archived and foreign targets", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {

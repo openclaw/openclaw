@@ -15,6 +15,7 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { openDeviceDisclosures } from "../../test-helpers/devices-view.tsx";
 import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { waitForRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -81,9 +82,10 @@ describe("DevicesPage gateway lifecycle", () => {
     page.replaceGateway(
       gatewayFixture(gatewaySnapshot(replacement.client, true, [], ["operator.admin"])),
     );
-    await waitForSolid(() =>
-      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
-    );
+    await waitForSolid(() => {
+      openDeviceDisclosures(page.container);
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull();
+    });
     pending.reject(new Error("Retired read"));
     await waitForSolid(() => expect(page.container.textContent).not.toContain("Retired read"));
   });
@@ -175,9 +177,11 @@ describe("DevicesPage gateway lifecycle", () => {
       },
       execApprovalsForm: { version: 1, defaults: { security: "deny" } },
     });
-    await waitForSolid(() =>
-      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull(),
-    );
+    await waitForSolid(() => {
+      openDeviceDisclosures(page.container);
+      expect(page.container.querySelector('select[aria-label="Security"]')).not.toBeNull();
+    });
+    openDeviceDisclosures(page.container);
     const policy = page.container.querySelector<HTMLSelectElement>(
       'select[aria-label="Security"]',
     )!;
@@ -300,6 +304,7 @@ describe("DevicesPage gateway lifecycle", () => {
     await vi.waitFor(() =>
       expect(page.container.textContent?.includes("Gateway host")).toBe(scenario.read),
     );
+    openDeviceDisclosures(page.container);
     await Promise.resolve();
     flush();
     for (const methodName of ["system-presence", "node.list"]) {
@@ -409,11 +414,12 @@ describe("DevicesPage gateway lifecycle", () => {
         } else {
           page.replaceGateway(gatewayFixture(snapshot));
         }
-        await vi.waitFor(() =>
+        await vi.waitFor(() => {
+          openDeviceDisclosures(page.container);
           expect(page.container.querySelector(".device-resource--load")?.textContent).toContain(
             "8.0",
-          ),
-        );
+          );
+        });
       }
       systemInfo.resolve(deviceSystemInfo);
       environments.resolve({ environments: deviceDesktopEnvironments });

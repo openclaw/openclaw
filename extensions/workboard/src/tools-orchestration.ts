@@ -182,10 +182,11 @@ const toolSchemas = {
 export function createWorkboardOrchestrationTools(params: {
   store: WorkboardStore;
   ownerId: string;
+  runId: string | undefined;
 }): AnyAgentTool[] {
   const { store, ownerId } = params;
   const { readScopedCardToolParams, scopedCardMutation, claimedCardMutation } =
-    createWorkboardCardMutations(store, ownerId);
+    createWorkboardCardMutations(store, ownerId, params.runId);
   return [
     {
       name: "workboard_boards",

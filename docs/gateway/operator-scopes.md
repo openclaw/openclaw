@@ -361,6 +361,10 @@ not consume identity-scope grants and are unaffected by these edits. Pending han
 mutations recheck the policy before acquiring authority;
 already-admitted runs retain their normal completion and cancellation lifecycle,
 including cancellation when their original access-policy grant expires or is revoked.
+Temporary access-policy evaluation failures refuse the affected operation without
+revoking accepted work, including restart recovery and subagent completions.
+Completion delivery keeps its existing retry policy; definite denial or a changed
+original grant still cancels retained work.
 
 When `gateway.roles.default` is set, identity-authenticated operator connections do not
 receive reusable device or bootstrap tokens: those tokens are not bound to a
@@ -398,6 +402,37 @@ Discovery does not grant or revoke access to existing sessions: the role's
 separate session-read policy still governs which sessions the caller can read.
 The Control UI waits for a live agent roster after loading or reconnecting, so
 an older browser roster cannot restore agents excluded by the current role.
+
+### OpenClaw ID member roles
+
+OpenClaw ID member connections resolve the membership role directly from
+`gateway.roles.definitions`, even without `gateway.roles.default`. The membership
+role takes precedence over any profile assignment; other connection types retain
+their own authorization rules. Its `accessPolicyPlugin`, when set, is required
+even without named-role enforcement. `users.setRole` refuses assigning a named role to
+an OpenClaw ID member's profile and directs the owner to **Access**. Clearing a
+profile assignment with `role: null` remains allowed.
+
+Enabling OpenClaw ID, or starting a Gateway with it enabled, installs missing
+`operator` and `viewer` presets. Existing definitions, defaults, and assignments
+are preserved. Installing presets rewrites the config file as JSON through the
+standard config writer and removes JSON5 comments. Startup installs them before
+publishing runtime policy, even with `gateway.reload.mode: "off"`. A saved
+activation that cannot apply at runtime is reported in OpenClaw ID service status
+with a request to restart the Gateway.
+
+The operator preset grants read, write, approvals, questions, and
+talk scopes with all agents and writable shared sessions. The viewer preset
+allows all agents and viewable shared sessions but grants only
+`operator.sessions.read`: conversation browsing, not logs, `users.list`, or general
+Gateway diagnostics. These are editable definitions; custom member roles may
+include `operator.admin` and pairing scopes with no built-in ceiling.
+
+Missing role definitions deny member admission across WebSocket, HTTP, the tunnel
+API, and retained/recovered work. Definition changes apply through config reload;
+removed permissions cannot survive in a connected member or its retained work.
+Owner-device and node authority is independent of member definitions. See
+[OpenClaw ID remote access](/concepts/experimental-features#member-roles).
 
 ### Access program grants
 

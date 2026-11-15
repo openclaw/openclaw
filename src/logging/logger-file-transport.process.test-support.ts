@@ -230,6 +230,17 @@ await runWithWorkerStartObserver(
     assert.match(fs.readFileSync(failed, "utf8"), /recovered target/);
     assert.equal(starts.length, 1, "One serial logger worker owns all file targets");
 
+    const { readConfiguredLogTailInWorker } = await import("./log-tail-worker.js");
+    const { registerSecretValueForRedaction } = await import("./secret-redaction-registry.js");
+    const secret = "file-worker-secret-0123456789";
+    registerSecretValueForRedaction(secret);
+    getLogger().info({ value: secret }, "tail redaction proof");
+    await fileLogTransport.flush();
+    assert.match(fs.readFileSync(failed, "utf8"), new RegExp(secret));
+    const tail = await readConfiguredLogTailInWorker();
+    assert.match(tail.lines.join("\n"), /tail redaction proof/);
+    assert.doesNotMatch(tail.lines.join("\n"), new RegExp(secret));
+
     getLogger().info("lifecycle drain");
     await drainGlobalSingletonLifecycleState();
     assert.match(fs.readFileSync(failed, "utf8"), /lifecycle drain/);
