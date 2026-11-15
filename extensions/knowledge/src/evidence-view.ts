@@ -307,7 +307,9 @@ export function originalDownload(
         link.click();
         setTimeout(() => URL.revokeObjectURL(url), 60000);
       }
-      status.textContent = "Original file downloaded.";
+      status.textContent = writer
+        ? "Original file downloaded."
+        : "Download started. Check your browser downloads.";
     } catch (error) {
       await writer?.abort().catch(() => {});
       status.textContent = redact(String(error));

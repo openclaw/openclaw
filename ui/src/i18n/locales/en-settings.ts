@@ -1270,6 +1270,8 @@ const enSettings = {
       saved: "Added {provider}",
       verified: "Added {provider}. Access verified.",
       ready: "Added {provider}. {model} is ready to chat.",
+      billingFailed:
+        "API key saved, but the account couldn’t be used. {reason} Check the provider’s billing or quota, then save again.",
     },
     defaults: {
       title: "Defaults for all agents",

@@ -1,5 +1,6 @@
 import type { MessagePort } from "node:worker_threads";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import { settleWithCleanup } from "../../infra/error-graph-internal.js";
 import { assertStateDatabaseAccessAllowed } from "../../infra/gateway-state-owner.js";
 import { withSqliteDatabaseAdmissionExchange } from "../../infra/sqlite-database-admission.js";
 import { retainSqliteWriteAdmissionService } from "../../infra/sqlite-transaction.js";
@@ -123,31 +124,40 @@ export async function withSqliteWorkerLifecycleCoordination<T>(
         admission.service(),
       )
     : undefined;
-  try {
-    return await run({
-      actorId,
-      databasePath: context.admission.databasePath,
-      stateContext: { environment: context.environment },
-      ...(mode === "reconciliation" ? { reconciliation: { identity } } : {}),
-      ...(admission ? { databaseAdmission: admission.port } : {}),
-    });
-  } catch (error) {
-    try {
-      await settleFailure();
-    } catch (exitError) {
-      throw new AggregateError(
-        [admission?.failure ?? error, exitError],
-        "SQLite mutation and Worker exit failed",
-        { cause: exitError },
-      );
-    }
-    // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
-    throw admission?.failure ?? error;
-  } finally {
-    active = false;
-    admission?.finish();
-    releaseService?.();
-  }
+  return settleWithCleanup(
+    (async () => {
+      try {
+        return await run({
+          actorId,
+          databasePath: context.admission.databasePath,
+          stateContext: { environment: context.environment },
+          ...(mode === "reconciliation" ? { reconciliation: { identity } } : {}),
+          ...(admission ? { databaseAdmission: admission.port } : {}),
+        });
+      } catch (error) {
+        try {
+          await settleFailure();
+        } catch (exitError) {
+          throw new AggregateError(
+            [admission?.failure ?? error, exitError],
+            "SQLite mutation and Worker exit failed",
+            { cause: exitError },
+          );
+        }
+        // A refused grant retires the worker; confirmed exit must not hide the owner's refusal.
+        throw admission?.failure ?? error;
+      }
+    })(),
+    async () => {
+      active = false;
+      try {
+        await admission?.finish();
+      } finally {
+        releaseService?.();
+      }
+    },
+    "SQLite mutation and admission cleanup failed",
+  );
 }
 
 export async function runWithSqliteMutationWorkerCoordination<
@@ -169,16 +179,25 @@ export async function runWithSqliteMutationWorkerCoordination<
   }
   let active = true;
   try {
-    return await withSqliteDatabaseAdmissionExchange((facts, location, create) => {
-      if (!active) {
-        throw new Error("SQLite mutation file admission outlived its request");
-      }
-      if (create) {
-        // First-open creation can run inside this worker's live schema lease.
-        assertStateDatabaseAccessAllowed(coordination.databasePath);
-      }
-      return exchangeSqliteDatabaseAdmissions(admission, facts, location, create);
-    }, execute);
+    return await withSqliteDatabaseAdmissionExchange(
+      (facts, location, create, observedLocation) => {
+        if (!active) {
+          throw new Error("SQLite mutation file admission outlived its request");
+        }
+        if (create) {
+          // First-open creation can run inside this worker's live schema lease.
+          assertStateDatabaseAccessAllowed(coordination.databasePath);
+        }
+        return exchangeSqliteDatabaseAdmissions(
+          admission,
+          facts,
+          location,
+          create,
+          observedLocation,
+        );
+      },
+      execute,
+    );
   } finally {
     active = false;
     admission.close();

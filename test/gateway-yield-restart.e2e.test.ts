@@ -140,6 +140,11 @@ it
             rootResumes++;
           }
           if (action === "parked-message" && rootResumes === 0) {
+            if (text.includes("Waiting for the requester continuation.")) {
+              // A retained pause notice must finish before the later user input can run.
+              reply("REQUESTER_ACKNOWLEDGED_PAUSED_CHILD");
+              return;
+            }
             yieldRoot = () => call("sessions_yield", {});
             return;
           }
