@@ -1,3 +1,4 @@
+import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
@@ -27,6 +28,7 @@ import {
   readPositiveIntegerParam,
   readStringArrayParam,
   readToolStringParam,
+  ToolInputError,
 } from "./common.js";
 import {
   captureGatewayToolCallerAssertion,
@@ -178,7 +180,10 @@ export function createSessionsListTool(opts?: {
       const label = readToolStringParam(params, "label");
       const agentId = readToolStringParam(params, "agentId");
       const search = readToolStringParam(params, "search");
-      const archived = params.archived === "all" ? "all" : params.archived === true;
+      const archived = params.archived === "all" ? "all" : parseBoolean(params.archived);
+      if (params.archived !== undefined && archived === undefined) {
+        throw new ToolInputError("archived must be true, false, or all");
+      }
       const relationship = readToolStringParam(params, "relationship", {
         required: params.relationship !== undefined,
       });
@@ -261,7 +266,7 @@ export function createSessionsListTool(opts?: {
             label,
             agentId,
             search,
-            archived,
+            archived: archived ?? false,
             activeOnly: params.activeOnly === true,
             excludeSubagents: params.excludeSubagents === true,
             ownerId,

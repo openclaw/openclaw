@@ -232,37 +232,50 @@ describe("sessions-list-tool", () => {
     ]);
   });
 
-  it.each([true, "all"] as const)(
-    "forwards archived=%s and keeps management state",
+  it.each([
+    [true, true],
+    [false, false],
+    [undefined, false],
+    ["true", true],
+    ["false", false],
+    [" TRUE ", true],
+    ["all", "all"],
+  ] as const)("forwards archived=%s and keeps management state", async (input, archived) => {
+    const states = archived === "all" ? [false, true] : [archived];
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: states.map((state) => ({
+        ...sessionRow(`agent:main:dashboard:archived-${state}`),
+        archived: state,
+        archivedAt: state ? 20 : undefined,
+        pinned: false,
+        sidebarRoot: true,
+      })),
+    });
+    const tool = createTool();
+
+    expect(Value.Check(tool.parameters, { archived })).toBe(true);
+    const result = await tool.execute("call-archived", { archived: input });
+
+    expect(mocks.gatewayCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "sessions.list",
+        params: expect.objectContaining({ archived }),
+      }),
+    );
+    const rows = getSessionsListDetails(result).sessions;
+    expect(rows?.map(({ archived: state, pinned }) => ({ archived: state, pinned }))).toEqual(
+      states.map((state) => ({ archived: state, pinned: false })),
+    );
+    expect(rows?.every((row) => row.sidebarRoot === true)).toBe(true);
+    expect(rows?.every((row) => !Object.hasOwn(row, "archivedAt"))).toBe(true);
+  });
+
+  it.each([null, "invalid", 1])(
+    "rejects unsupported archived=%s before querying",
     async (archived) => {
-      const states = archived === "all" ? [false, true] : [archived];
-      mocks.gatewayCall.mockResolvedValue({
-        path: "/tmp/sessions.json",
-        sessions: states.map((state) => ({
-          ...sessionRow(`agent:main:dashboard:archived-${state}`),
-          archived: state,
-          archivedAt: state ? 20 : undefined,
-          pinned: false,
-          sidebarRoot: true,
-        })),
-      });
-      const tool = createTool();
-
-      expect(Value.Check(tool.parameters, { archived })).toBe(true);
-      const result = await tool.execute("call-archived", { archived });
-
-      expect(mocks.gatewayCall).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "sessions.list",
-          params: expect.objectContaining({ archived }),
-        }),
-      );
-      const rows = getSessionsListDetails(result).sessions;
-      expect(rows?.map(({ archived: state, pinned }) => ({ archived: state, pinned }))).toEqual(
-        states.map((state) => ({ archived: state, pinned: false })),
-      );
-      expect(rows?.every((row) => row.sidebarRoot === true)).toBe(true);
-      expect(rows?.every((row) => !Object.hasOwn(row, "archivedAt"))).toBe(true);
+      await expect(list({ archived })).rejects.toThrow("archived must be true, false, or all");
+      expect(mocks.gatewayCall).not.toHaveBeenCalled();
     },
   );
 
