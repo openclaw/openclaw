@@ -1,7 +1,5 @@
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installNativePluginMockGateway } from "../test-helpers/control-ui-plugin-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -101,7 +99,7 @@ suite.define(() => {
               requestHandlers: {
                 "plugins.sessionAction": (params) => {
                   const action = requireString(requireRecord(params).actionId, "feature action");
-                  if (action === "stores_change" || action === "stores_grant") {
+                  if (action === (kind === "assignment" ? "stores_change" : "stores_grant")) {
                     applied = true;
                     mutations += 1;
                     return {
@@ -159,19 +157,7 @@ suite.define(() => {
                 ? "Could not confirm the assignment."
                 : "Could not confirm the access change.",
             );
-          expect(applied).toBe(true);
           expect(mutations).toBe(1);
-          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-            const frame = await takeControlUiScreenshotFrame(page, panel, [feedback], {
-              animations: "disabled",
-              elements: [panel],
-            });
-            await writeFile(path.join(suite.artifactDir, "outcome-full.png"), frame.png);
-            await writeFile(
-              path.join(suite.artifactDir, "outcome-detail.png"),
-              frame.elements[0]!.png,
-            );
-          }
           if (kind === "assignment") {
             await panel.getByRole("button", { name: "Cancel", exact: true }).click();
           }
