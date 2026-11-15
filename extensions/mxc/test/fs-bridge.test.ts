@@ -119,6 +119,15 @@ test.each([true, false])("native tool paths (workspaceOnly=%s)", async (workspac
     });
     expect(await readText(agentWorkspaceDir, "note.txt")).toBe("patched\n");
   }
+  await writeFile(agentWorkspaceDir, " note.txt", "literal-data");
+  await writeFile(agentWorkspaceDir, "note.txt", "decoy-data");
+  await writeFile(agentWorkspaceDir, "control.txt", "control-data");
+  const literalRead = await rw("read", { path: " note.txt" });
+  await rw("write", { path: " note.txt", content: "literal-updated" });
+  expect(literalRead).toContain("literal-data");
+  expect(await readText(agentWorkspaceDir, " note.txt")).toBe("literal-updated");
+  expect(await readText(agentWorkspaceDir, "note.txt")).toBe("decoy-data");
+  expect(await rw("read", { path: "control.txt" })).toContain("control-data");
   for (const args of [{}, { path: "." }, { path: workspaceDir }]) {
     expect(await rw("ls", args)).toContain("note.txt");
   }
