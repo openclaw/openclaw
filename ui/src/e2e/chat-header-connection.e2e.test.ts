@@ -111,9 +111,10 @@ suite.define(() => {
                 return { x, y, width, height };
               }),
             );
+        // Earlier user rows can leave the virtualizer; keep measuring the cached tail.
         const footer = page
           .locator(".chat-pane-cache__pane--visible .chat-group.user .chat-group-footer__meta")
-          .first();
+          .last();
         const footerGeometry = () =>
           footer.evaluate((element) => {
             const box = element.getBoundingClientRect();
