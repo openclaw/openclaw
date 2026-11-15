@@ -29,7 +29,8 @@ local package directory, or `CLAW.md` with YAML frontmatter. The reference uses 
 publisher's ClawHub handle, as skill references do, including for a Template whose
 package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
-path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
+[project commands](/cli/templates#author-locally) require `CLAW.md` at the package root. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
 `CLAW.md` and `package.json` must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
@@ -91,9 +92,12 @@ openclaw templates build ./incident-triage --out ./incident-triage-1.0.0.tgz
 ```
 
 A package contains `package.json`, `CLAW.md`, and any files selected by its
-manifest. `create` writes only `package.json` and `CLAW.md` and refuses to merge
-into a nonempty directory. Project validation rejects package scripts and
-lifecycle hooks. `dev` builds the same package artifact and checks its Add
+manifest. `validate`, `dev` and `build` require a project whose `CLAW.md` sits
+beside `package.json`, with `openclaw.template` set to `"CLAW.md"`; move a nested
+`CLAW.md` to the package root before validating or building. `inspect` and `add`
+also read a package whose selector names a nested `CLAW.md`. `create` writes
+only `package.json` and `CLAW.md` and refuses to merge into a nonempty directory.
+Project validation rejects package scripts and lifecycle hooks. `dev` builds the same package artifact and checks its Add
 requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
@@ -343,6 +347,9 @@ a concise automation-failed notice; continue setup in the same agent. Successful
 skill and MCP setup, absent optional files, and empty categories stay silent. There
 is no final setup receipt or second model recap. Declared package bootstrap still
 follows shared setup; MCP configuration alone does not prove a working connection.
+When offline Add keeps an agent after a later step fails, the agent gets the default
+`AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
+back because its setup did not finish.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` selects an unused ID. `--workspace` selects a new path for local

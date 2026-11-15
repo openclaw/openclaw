@@ -3,6 +3,7 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { filterStringEntries } from "@openclaw/normalization-core";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
+import { seedDeferredWorkspaceDefaults } from "../agents/workspace-preparation.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { readCurrentConfigForPolicyCheck } from "../config/io.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
@@ -464,7 +465,7 @@ async function runTemplatesAddFromSource(
         });
         const { withLocalCronService } = await import("../cron/local-service.js");
         const { createTemplateCronGateway } = await import("../templates/cron-gateway.js");
-        return await withLocalCronService(getRuntimeConfig, async (cron) =>
+        const applied = await withLocalCronService(getRuntimeConfig, async (cron) =>
           applyTemplateAddPlanStateless(plan, {
             ...conversation,
             config,
@@ -482,6 +483,14 @@ async function runTemplatesAddFromSource(
             cronGateway: createTemplateCronGateway(cron, getRuntimeConfig, assertCurrent),
           }),
         );
+        if (applied.agentRetained && applied.status !== "complete") {
+          // Offline Add has no resume, so the package BOOTSTRAP.md stays held.
+          await seedDeferredWorkspaceDefaults(
+            plan.agent.workspace,
+            getRuntimeConfig().agents?.defaults,
+          );
+        }
+        return applied;
       },
     );
   } catch (error) {

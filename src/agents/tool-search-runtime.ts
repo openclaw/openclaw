@@ -298,15 +298,6 @@ export class ToolSearchRuntime {
       compactToolSearchCatalogEntry(entry),
     );
 
-  namespaceEntries = () =>
-    // Snapshot host metadata without rendering hints or retaining the executable tool.
-    resolveCatalog(this.ctx).entries.map(
-      ({ tool: _tool, outputSchema: _outputSchema, ...entry }) => {
-        entry.parameters ??= {};
-        return entry;
-      },
-    );
-
   describe = async (
     id: string,
     options?: CatalogVisibilityOptions & UnknownToolErrorOptions & { parentToolCallId?: string },

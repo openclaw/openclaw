@@ -349,7 +349,10 @@ it("restarts a turned-off scribe in its existing conversation with a fresh attem
   });
   const view = await render();
   buttonNamed(view, "Set up…").click();
-  buttonNamed(page.querySelector("dialog")!, "Start").click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.textContent).toContain("creating it if needed");
+  expect(dialog.textContent).toContain("This request uses the conversation’s model settings.");
+  buttonNamed(dialog, "Start").click();
   await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
   expect(create).not.toHaveBeenCalled();
   const send = calls.find(([method]) => method === "chat.send")![1]!;
