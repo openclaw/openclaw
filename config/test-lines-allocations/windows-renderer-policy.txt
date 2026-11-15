@@ -1,2 +1,0 @@
-# Covers renderer/analyzer CR/LF parity and preserves quoted metacharacter handling.
-14

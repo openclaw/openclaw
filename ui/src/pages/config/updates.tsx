@@ -421,7 +421,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
     props.update.updateStatusRefreshing && !props.updateBusy
       ? t("updates.page.checking")
       : !props.canAdmin
-        ? t("updates.adminRequired")
+        ? t("updates.adminRequiredTooltip")
         : checkRequired()
           ? t("updates.page.checkRequired")
           : "";
@@ -536,7 +536,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
                       ? t("updates.page.checking")
                       : props.canCheckStatus
                         ? ""
-                        : t("updates.adminRequired")
+                        : t("updates.adminRequiredTooltip")
                   }
                   disabled={
                     !props.canCheckStatus ||

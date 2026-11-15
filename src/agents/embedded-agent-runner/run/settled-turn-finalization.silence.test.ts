@@ -29,9 +29,9 @@ vi.mock("../../../plugin-sdk/session-transcript-runtime.js", () => ({
 describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
   const getContext = useFinalizationAdmission([backendMocks.finalize, transcriptMocks.append]);
 
-  it("makes an internal scheduled heartbeat optional rather than result-required", () => {
+  it("makes a scheduled WebChat heartbeat optional rather than required", () => {
     const source = { cfg: {}, ctx: { Provider: "webchat", SessionKey: "agent:main:main" } };
-    expect(resolveSourceReplyExpectation(source)).toBe("result-required");
+    expect(resolveSourceReplyExpectation(source)).toBe("required");
     expect(resolveSourceReplyExpectation({ ...source, scheduledAutomation: true })).toBe(
       "optional",
     );

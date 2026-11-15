@@ -161,7 +161,7 @@ async function createContainerSandboxBackend(
           const githubProfileDir = identity?.localIdentityEnv.GH_CONFIG_DIR;
           const externalCommandShell =
             githubProfileDir && process.platform === "win32"
-              ? (await import("../shell-utils.js")).getShellConfig()
+              ? await (await import("../shell-utils.js")).getShellConfig()
               : undefined;
           assertCurrent();
           const env = identity

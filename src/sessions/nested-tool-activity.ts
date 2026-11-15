@@ -4,6 +4,8 @@ import { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 export const NESTED_TOOL_ACTIVITY_CUSTOM_TYPE = "openclaw.nested-tool.v1";
 
+const omittedResultText = "[Nested tool output omitted: exceeds display limit]";
+
 const correlationId = z.string().min(1).max(1024);
 const activityDetails = z
   .object({
@@ -67,7 +69,7 @@ export function createNestedToolActivity(
   const result = boundedJsonUtf8Bytes(details.result, 32_768).complete
     ? details.result
     : {
-        content: [{ type: "text", text: "[Nested tool output omitted: exceeds display limit]" }],
+        content: [{ type: "text", text: omittedResultText }],
       };
   return getActivitySchema().parse({
     role: "custom",
@@ -78,6 +80,18 @@ export function createNestedToolActivity(
     details: { ...details, input, result },
     timestamp: details.startedAt,
   });
+}
+
+/** Display omission retains no evidence that the invocation finished. */
+export function isNestedToolActivityResultOmitted({ details }: NestedToolActivity): boolean {
+  const { result } = details;
+  const content = asOptionalRecord(result.content[0]);
+  return (
+    result.details === undefined &&
+    result.content.length === 1 &&
+    content?.type === "text" &&
+    content.text === omittedResultText
+  );
 }
 
 /** Tool-card content for public history. */

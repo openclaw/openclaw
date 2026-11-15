@@ -26,6 +26,8 @@ export type AgentDatabaseStartupVerifier = (input: {
   env: NodeJS.ProcessEnv;
   signal: AbortSignal;
   assertCurrent: () => void;
+  /** Runtime stores have already passed native admission, independently of the startup roster. */
+  configurationBound?: boolean;
 }) => Promise<void>;
 
 type IntegrityWork = {
@@ -37,7 +39,7 @@ type IntegrityWork = {
   completion?: Promise<void>;
 };
 
-// Retain completed attempts for the Gateway lifetime: native worker churn must not restart scans.
+// Retain attempts while their proof is current; inconclusive checks do not loop on worker churn.
 const pending = new Map<string, IntegrityWork>();
 
 function releaseAgentDatabaseStartupVerification(signal: AbortSignal): void {
@@ -146,8 +148,14 @@ export function prepareAgentDatabaseStartupVerification(
         if (previous.signal !== input.signal) {
           throw new Error(`Another Gateway owns agent database verification: ${pathname}`);
         }
-        owners.push(previous);
-        continue;
+        if (
+          !prepared ||
+          prepared.integrityVerifiedAt !== undefined ||
+          previous.status !== "settled"
+        ) {
+          owners.push(previous);
+          continue;
+        }
       }
       const owner: IntegrityWork = {
         pathname: identity.canonicalPath,
@@ -186,6 +194,7 @@ export function prepareAgentDatabaseStartupVerification(
               owner.assertCurrent();
               await verify({
                 ...input,
+                configurationBound: prepared === undefined,
                 paths: [owner.pathname],
                 assertCurrent: owner.assertCurrent,
               });

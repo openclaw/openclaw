@@ -10,6 +10,7 @@ export const gatewayPluginTestFiles = [
   "test/plugins/deep-research-recovery.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
   "test/plugins/deep-research-startup.gateway.test.ts",
+  "test/plugins/reef-shutdown.gateway.test.ts",
   "test/plugins/team-reports-http.gateway.test.ts",
 ];
 
@@ -93,6 +94,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/github-publication-imported-actions.test.ts",
   "src/gateway/github-publication-inspect.test.ts",
   "src/gateway/github-publication-legacy-options.test.ts",
+  "src/gateway/github-publication-native.test.ts",
   "src/gateway/github-publication-personal-pending.test.ts",
   "src/gateway/github-publication-reconciliation.test.ts",
   "src/gateway/github-publication-requester-aliases.test.ts",
@@ -171,9 +173,11 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-store.execution-identity.test.ts",
   "src/gateway/operator-approval-store.test.ts",
   "src/gateway/operator-approval-store.worker.test.ts",
+  "src/gateway/operator-run-authority.policy-recovery.test.ts",
   "src/gateway/operator-run-authority.principal.test.ts",
   "src/gateway/operator-run-authority.reconnect.test.ts",
   "src/gateway/operator-run-authority.worker.test.ts",
+  "src/gateway/operator-run-recovery.access-policy.test.ts",
   "src/gateway/operator-run-recovery.channel.test.ts",
   "src/gateway/operator-run-recovery.test.ts",
   "src/gateway/probe.device-auth-scope.test.ts",
@@ -255,6 +259,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/ws-connection/authenticated-request-dispatch.storage.test.ts",
   "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
+  "src/gateway/server/ws-connection/connect-role-catalog.test.ts",
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
   "src/gateway/server/ws-connection/message-handler.post-connect-health.test.ts",
   "src/gateway/server/ws-connection/message-handler.worker.test.ts",
@@ -299,6 +304,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-produced-media-delivery.test.ts",
   "src/gateway/session-repository-materialization.test.ts",
   "src/gateway/session-repository-publication-handoff.test.ts",
+  "src/gateway/session-restart-resume-custody.test.ts",
   "src/gateway/session-restart-resume.admission.test.ts",
   "src/gateway/session-restart-resume.test.ts",
   "src/gateway/session-row-event-ancestor-placement.test.ts",
@@ -377,6 +383,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/tools-invoke-authorization.test.ts",
   "src/gateway/tools-invoke-http.abort.test.ts",
   "src/gateway/tools-invoke-http.test.ts",
+  "src/gateway/trusted-proxy-git-coauthor.admission.test.ts",
   "src/gateway/tui-session-description-wire.test.ts",
   "src/gateway/update-recovery-cleanup.authority.integration.test.ts",
   "src/gateway/update-recovery-cleanup.destinations.integration.test.ts",
@@ -479,6 +486,9 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-allocation-cleanup.test.ts",
   "src/gateway/worker-environments/provider-bootstrap.test.ts",
   "src/gateway/worker-environments/provider-crabbox-runtime-preflight.test.ts",
+  "src/gateway/worker-environments/provider-create-authority.test.ts",
+  "src/gateway/worker-environments/provider-create-recovery.test.ts",
+  "src/gateway/worker-environments/provider-destroy-authority.test.ts",
   "src/gateway/worker-environments/provider-destroy-timeout.test.ts",
   "src/gateway/worker-environments/provider-image-intent.test.ts",
   "src/gateway/worker-environments/provider-intent.test.ts",
@@ -500,6 +510,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/provider-ssh-identity.test.ts",
   "src/gateway/worker-environments/repository-managed-identity.test.ts",
   "src/gateway/worker-environments/repository-project-access.test.ts",
+  "src/gateway/worker-environments/repository-publication-preparation.test.ts",
   "src/gateway/worker-environments/repository-retained-consumers.test.ts",
   "src/gateway/worker-environments/repository-workspace-snapshot.test.ts",
   "src/gateway/worker-environments/repository-workspace-startup.test.ts",
@@ -513,6 +524,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/session-repository-checkpoints.test.ts",
   "src/gateway/worker-environments/store-change-events.test.ts",
   "src/gateway/worker-environments/store-node-enrollment.test.ts",
+  "src/gateway/worker-environments/store-provision-source-migration.test.ts",
   "src/gateway/worker-environments/store-recovery.worker.test.ts",
   "src/gateway/worker-environments/store-resource-receipt-migration.test.ts",
   "src/gateway/worker-environments/store-resource-receipt.test.ts",
@@ -580,12 +592,12 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
   "src/gateway/workspace-icon-http.test.ts",
+  "src/node-host/node-worker-publication-merge.test.ts",
   "test/model-account-catalog-authority.integration.test.ts",
   "test/plugins/browser-session-authority.gateway.test.ts",
   "test/plugins/chat-abort-codex.gateway.test.ts",
   "test/plugins/codex-model-catalog.gateway.test.ts",
   "test/plugins/codex-native-search.gateway.test.ts",
-  "test/plugins/deep-research-recovery.gateway.test.ts",
   "test/plugins/deep-research-routing.gateway.test.ts",
 ];
 
@@ -647,12 +659,6 @@ export const gatewayMethodsTestInclude = [
   "src/gateway/server-methods/**/*.test.ts",
   ...gatewayPluginTestFiles,
 ];
-export const gatewayMethodsTestExclude = [
-  ...gatewayDatabaseWorkerTestFiles,
-  ...gatewayMethodsIsolatedTestFiles,
-  ...databaseWorkerCoreTestFiles,
-];
-
 // Gateway server tests that need private process state or a private module graph.
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
@@ -661,6 +667,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
   // Native provider imports must not retain a previous file's retired shared-state owner.
   "src/gateway/setup-inference.first-signin.integration.test.ts",
+  "test/plugins/deep-research-recovery.gateway.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.
@@ -701,6 +708,13 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server.placement-abandonment.test.ts",
   "src/gateway/server.sessions.compaction-read-errors.test.ts",
   "src/gateway/server.xai-fallback.test.ts",
+];
+
+export const gatewayMethodsTestExclude = [
+  ...gatewayDatabaseWorkerTestFiles,
+  ...gatewayMethodsIsolatedTestFiles,
+  ...gatewayServerIsolatedTestFiles,
+  ...databaseWorkerCoreTestFiles,
 ];
 
 export const gatewayCoreTestInclude = ["src/gateway/**/*.test.ts"];

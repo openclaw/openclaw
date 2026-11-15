@@ -1,2 +1,0 @@
-2
-# Remove both native metadata owners before asserting a bundle-only manifest needs a name; preserves native-first companion behavior and the existing invalid-bundle guard.

@@ -1,4 +1,3 @@
-import type { BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sameFileIdentity } from "@openclaw/fs-safe/advanced";
@@ -26,7 +25,6 @@ import {
 } from "./directory-durability.js";
 import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
-import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { isSqliteSnapshotFile } from "./sqlite-file-header.js";
 import { resolveSqliteDatabaseFilePaths } from "./sqlite-files.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
@@ -48,6 +46,10 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
+import {
+  inspectRestorableDatabaseFiles,
+  prepareRestorableDatabaseFiles,
+} from "./update-database-backup-files.js";
 import { checkUpdateDatabaseBackupSpace } from "./update-database-backup-space.js";
 import type { SqliteDatabaseGenerationReceipt } from "./update-database-generations.js";
 import {
@@ -116,6 +118,8 @@ type BackupInput = {
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
+  /** Rollback captures stay on the PostgreSQL server; the owner drops them on retirement. */
+  postgresSchemaCaptures?: boolean;
   /** Migration exporters may require a physical engine before any server export. */
   sourceEngine?: "sqlite";
   /** Manual recovery evidence: live commits after its coherent image change nothing it promises. */
@@ -137,52 +141,6 @@ let backupRuntime: ReturnType<typeof loadUpdateDatabaseBackupRuntime> | undefine
 /** Resolve the backup's lazy modules before an updater replaces its own dist tree. */
 export function prepareUpdateDatabaseBackupRuntime() {
   return (backupRuntime ??= loadUpdateDatabaseBackupRuntime());
-}
-
-async function inspectRestorableDatabaseFiles(
-  databases: readonly string[],
-  previous?: ReadonlyMap<string, BigIntStats>,
-  stopped = false,
-) {
-  const identities = new Map<string, BigIntStats>();
-  for (const database of databases) {
-    // Readers mutate/recreate the transient WAL index; only durable files fence capture.
-    for (const suffix of ["", "-wal", "-journal"]) {
-      const file = `${database}${suffix}`;
-      // Only sidecars may be absent; without a handler a missing main file still rejects.
-      const info = await fs
-        .lstat(file, { bigint: true })
-        .catch(suffix ? ignoreMissingPath : undefined);
-      if (!info) {
-        continue;
-      }
-      if (!info.isFile() || info.nlink !== 1n) {
-        throw new Error(
-          `Update database rollback requires a regular file with one link: ${file}. Resolve database aliases before retrying; the databases have not been migrated.`,
-        );
-      }
-      const before = previous?.get(file);
-      if (
-        before &&
-        !(stopped ? sameFileMutationFingerprint(before, info) : sameFileIdentity(before, info))
-      ) {
-        throw new Error(`Update database file changed during backup: ${file}.`);
-      }
-      // Readers can create an empty WAL beside a checkpointed database.
-      if (suffix !== "-wal" || info.size !== 0n) {
-        identities.set(file, info);
-      }
-    }
-  }
-  if (stopped && previous) {
-    const changed = [...previous.keys(), ...identities.keys()].find(
-      (file) => previous.has(file) !== identities.has(file),
-    );
-    if (changed) {
-      throw new Error(`Update database journal state changed during stopped backup: ${changed}.`);
-    }
-  }
-  return identities;
 }
 
 async function canonicalDatabaseInventory(
@@ -255,7 +213,7 @@ async function canonicalDatabaseInventory(
   };
 }
 
-/** Read-only capture; the caller separately decides whether automatic restoration is safe. */
+/** No logical writes; the caller separately decides whether automatic restoration is safe. */
 export async function createUpdateDatabaseBackupInProcess(
   input: BackupInput & {
     stagingRoot: string;
@@ -283,11 +241,15 @@ export async function createUpdateDatabaseBackupInProcess(
       input.excludedDatabasePaths,
     );
   const inventory = await inventoryFor(inspectionPlan);
-  const identities = await inspectRestorableDatabaseFiles(inventory.present);
+  // Preflight reserves no space; admit the complete family before checkpointing.
   const { warnings } = await checkUpdateDatabaseBackupSpace(
     directory,
     await measureUpdateStateFiles(inventory.present),
     input,
+  );
+  const { identities, checkpointed } = await prepareRestorableDatabaseFiles(
+    inventory.present,
+    input.stopped,
   );
   const { buildBackupArchivePath } = await import("./backup-archive-path-policy.js");
   const { createStoppedSqliteSnapshot, createVerifiedSqliteSnapshot } =
@@ -321,8 +283,8 @@ export async function createUpdateDatabaseBackupInProcess(
       return {};
     }
   };
-  const { readBackupEngine, readBackupEngineImage } =
-    await import("./database-engine/physical-store.js");
+  const { readBackupEngine } = await import("./database-engine/physical-store.js");
+  const { readBackupEngineImage } = await import("./database-engine/physical-store-inspection.js");
   const requestedOriginalSources = new Set(input.originalCaptureSourcePaths);
   const preserveSourceArtifacts = input.stopped || input.preserveSourceArtifacts;
   const stoppedSources = new Set(
@@ -418,6 +380,9 @@ export async function createUpdateDatabaseBackupInProcess(
                 sourcePath,
                 targetPath: snapshotPath,
                 sourceIdentity: identities.get(sourcePath)!,
+                integrity: checkpointed.has(sourcePath)
+                  ? { check: input.integrityCheck ?? "full", ftsSchemas: AGENT_FTS_SCHEMAS }
+                  : undefined,
               })
             : await createVerifiedSqliteSnapshot({
                 sourcePath,
@@ -452,6 +417,13 @@ export async function createUpdateDatabaseBackupInProcess(
           if (engine.engine === "postgres") {
             const { capturePostgresBackup } = await import("../snapshot/database-backup.js");
             const exportDirectory = `${snapshotPath}.postgres`;
+            // Client credential rollback reads the shared state family's portable image.
+            const schemaCapture =
+              input.postgresSchemaCaptures &&
+              resolvePathViaExistingAncestorSync(sourcePath) !==
+                resolvePathViaExistingAncestorSync(
+                  path.join(input.stateDir, "state", "openclaw.sqlite"),
+                );
             await capturePostgresBackup({
               sourcePath,
               directory: exportDirectory,
@@ -459,6 +431,7 @@ export async function createUpdateDatabaseBackupInProcess(
               config: input.config,
               pluginOwners: input.pluginOwners,
               assertCurrent: () => {},
+              ...(schemaCapture ? { carrier: "postgres-schema" as const } : {}),
             });
             postgres = { ...engine, exportDirectory };
           }
@@ -494,7 +467,16 @@ export async function createUpdateDatabaseBackupInProcess(
           });
         }
         const current = await inventoryFor(
-          await discoverUpdateStateSchemaInspectionInProcess({ ...input, preserveSourceArtifacts }),
+          await discoverUpdateStateSchemaInspectionInProcess({
+            ...input,
+            preserveSourceArtifacts,
+            sharedDatabaseImage: input.stopped
+              ? databases.find(
+                  (database) =>
+                    database.path === path.resolve(input.stateDir, "state", "openclaw.sqlite"),
+                )?.snapshotPath
+              : undefined,
+          }),
         );
         if (JSON.stringify(current) !== JSON.stringify(inventory)) {
           throw new Error(

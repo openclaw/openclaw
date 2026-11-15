@@ -12,7 +12,7 @@ import {
 import * as fsSafe from "../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import * as playback from "../media/playback-transcode.js";
-import { handleControlUiAssistantMediaRequest } from "./control-ui.js";
+import { handleControlUiAssistantMediaRequest } from "./control-ui-assistant-media-http.js";
 import * as httpAuth from "./http-auth-utils.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 

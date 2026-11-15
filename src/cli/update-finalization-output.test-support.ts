@@ -1,6 +1,6 @@
 // Keep CLI/output/lifecycle owners real; filesystem, plugins, and Doctor are synthetic.
 import fs from "node:fs/promises";
-import { createRequire, registerHooks } from "node:module";
+import nodeModule, { createRequire } from "node:module";
 import path from "node:path";
 import { mock } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -355,7 +355,7 @@ if (repairDeadline) {
         : "ready",
   );
 }
-registerHooks({
+nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
     if (specifier.startsWith(".") || specifier.startsWith("file:")) {
       const resolved = new URL(specifier, context.parentURL).href;

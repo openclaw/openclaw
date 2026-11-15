@@ -1,3 +1,0 @@
-# Real-entry retained title hit-testing and touch-readable refresh recovery.
-# Includes the typed browser-context option in the shared reader fixture.
-110

@@ -1,2 +1,0 @@
-# Exact net regression growth: cancelled worker tasks reclaim their nested private SQLite snapshot copy without minting new staging owners, while a live reader's copy is kept until release.
-58

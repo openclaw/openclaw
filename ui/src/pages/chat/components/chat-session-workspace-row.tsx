@@ -17,13 +17,17 @@ import {
   onSettled,
   Show,
 } from "solid-js";
+import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { formatUiError } from "../../../lib/format-error.ts";
+import { formatByteSize } from "../../../lib/format.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createLayoutMeasurement } from "../../../lib/reactive/layout-measurement.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import {
   splitWorkspaceFilename,
   type WorkspaceCatalogFile,
@@ -31,6 +35,18 @@ import {
 } from "./chat-session-workspace-catalog.ts";
 import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
 import { FileDisclosure } from "./file-disclosure.tsx";
+
+function formatWorkspaceFileSize(size: number | undefined): string {
+  return typeof size !== "number" || !Number.isFinite(size) || size < 0
+    ? ""
+    : formatByteSize(size, {
+        style: "legacy-binary",
+        maxUnit: "mega",
+        separator: " ",
+        fractionDigits: (value, unit) =>
+          unit === "byte" ? null : Math.round(value * 10) % 10 ? 1 : 0,
+      });
+}
 
 export function WorkspaceFilename(props: { name: string }) {
   const parts = createMemo(() => splitWorkspaceFilename(props.name));
@@ -128,10 +144,14 @@ export function RailRow(props: {
   /** Session files can render as tiles; tree rows and search results stay rows. */
   view?: "list" | "grid";
   onToggle?: (instant: boolean) => void;
+  onDownloadStart?: () => () => void;
 }) {
+  // Default session rows retain selection when a read publishes its canonical ID.
   const selected = createMemo(() =>
     props.file.artifactId ||
-    (props.file.origin === "session" && props.file.workspacePath === undefined)
+    (props.workspace.presentation !== undefined &&
+      props.file.origin === "session" &&
+      props.file.workspacePath === undefined)
       ? props.workspace.activeId === props.file.key
       : isSessionWorkspaceFileSelected(
           props.workspace.activeId,
@@ -141,7 +161,11 @@ export function RailRow(props: {
           props.file.workspacePath,
         ),
   );
-  const onOpen = (disposition: "preview" | "pinned" = "preview") => {
+  const onOpen = (
+    disposition: "preview" | "pinned" | undefined = props.workspace.presentation === "desktop"
+      ? "preview"
+      : undefined,
+  ) => {
     if (props.file.artifactId) {
       props.workspace.onOpenArtifact(props.file.artifactId, disposition);
     } else {
@@ -160,7 +184,13 @@ export function RailRow(props: {
       fallback={
         <div
           role="listitem"
-          class="workspace-desktop__item"
+          class={[
+            "workspace-desktop__item",
+            {
+              "workspace-desktop__item--actions":
+                props.workspace.presentation === undefined && !props.directory,
+            },
+          ]}
           aria-posinset={props.position}
           aria-setsize={props.setSize}
         >
@@ -173,7 +203,13 @@ export function RailRow(props: {
             aria-label={props.file.path}
             aria-description={activity()}
             aria-current={selected() ? "true" : undefined}
-            aria-expanded={props.directory ? (props.expanded ? "true" : "false") : undefined}
+            aria-expanded={
+              props.directory && props.workspace.presentation !== undefined
+                ? props.expanded
+                  ? "true"
+                  : "false"
+                : undefined
+            }
             onClick={(event) => {
               if (props.directory) {
                 props.onToggle?.(event.detail === 0);
@@ -220,15 +256,73 @@ export function RailRow(props: {
                   />
                 </Show>
               </span>
-              <Show when={props.searching}>
+              <Show when={props.searching || props.workspace.presentation === undefined}>
                 <span class="workspace-desktop__location">
                   {props.file.artifactId
                     ? t("chat.workspaceFiles.desktop.sessionFiles")
                     : (props.file.workspacePath ?? props.file.path)}
                 </span>
               </Show>
+              <Show when={props.workspace.presentation === undefined}>
+                <span class="workspace-desktop__location">
+                  {[
+                    props.file.artifactId ? props.file.mimeType : undefined,
+                    formatWorkspaceFileSize(props.file.size),
+                  ]
+                    .filter(Boolean)
+                    .join(" / ")}
+                </span>
+                <Show when={props.file.missing}>
+                  <span class="workspace-desktop__location">
+                    {t("chat.workspaceFiles.missing")}
+                  </span>
+                </Show>
+              </Show>
             </span>
           </button>
+          <Show when={props.workspace.presentation === undefined && !props.directory}>
+            <span
+              class="workspace-desktop__actions"
+              role="group"
+              aria-label={t("chat.workspaceFiles.actions")}
+            >
+              <button
+                class="workspace-desktop__action"
+                type="button"
+                aria-label={t("chat.workspaceFiles.preview")}
+                ref={nativeListener("click", (event) => {
+                  event.stopPropagation();
+                  onOpen();
+                })}
+              >
+                <Icon name="eye" />
+              </button>
+              <Show when={!props.file.artifactId}>
+                <Show when={props.workspace.onDownloadFile}>
+                  {(download) => (
+                    <FileDownloadButton
+                      scopeKey={JSON.stringify([
+                        props.workspace.sessionKey,
+                        props.file.origin,
+                        props.file.path,
+                        props.workspace.connectionEpoch,
+                      ])}
+                      download={(signal) => download()(props.file.path, props.file.origin, signal)}
+                      disabled={props.file.missing}
+                      onDownloadStart={props.onDownloadStart}
+                      class="workspace-desktop__action"
+                    />
+                  )}
+                </Show>
+                <span ref={nativeListener("click", (event) => event.stopPropagation())}>
+                  <CopyButton
+                    text={props.file.path}
+                    idleLabel={t("chat.workspaceFiles.copyPath")}
+                  />
+                </span>
+              </Show>
+            </span>
+          </Show>
         </div>
       }
     >
@@ -268,6 +362,16 @@ export function WorkspaceRows(props: {
   let list: HTMLDivElement;
   const mountedRows = new Set<HTMLDivElement>();
   const [focusedKey, setFocusedKey] = createSignal<string>();
+  const [downloads, setDownloads] = createSignal<ReadonlySet<string>>(new Set());
+  const retainDownload = (key: string) => {
+    setDownloads((keys) => new Set([...keys, key]));
+    return () =>
+      setDownloads((keys) => {
+        const next = new Set(keys);
+        next.delete(key);
+        return next;
+      });
+  };
   const [window, setWindow] = createSignal<{ items: VirtualItem[]; height: number }>();
   const rowsActive = createMemo(() => props.active);
   // Keep a 250 -> 125 Changed filter windowed; small and mixed lists stay eager.
@@ -301,6 +405,11 @@ export function WorkspaceRows(props: {
     // Endpoints admit native Tab from either direction; neighbors let it keep
     // advancing without intercepting keys or creating a second focus owner.
     const indexes = [0, props.rows.length - 1, selected];
+    // Pending actions pin only authoritative current rows; an admitted removal
+    // still disposes the button and cancels its request.
+    for (const key of downloads()) {
+      indexes.push(rowIndexes().get(key));
+    }
     if (focused !== undefined) {
       indexes.push(focused - 1, focused, focused + 1);
     }
@@ -456,12 +565,17 @@ export function WorkspaceRows(props: {
     return (
       <div class="workspace-desktop__branch">
         <Show
-          when={childProps.row.directory}
+          when={childProps.row.directory && props.workspace.presentation !== undefined}
           fallback={
             <RailRow
               file={childProps.row}
               workspace={props.workspace}
               depth={props.depth}
+              directory={childProps.row.directory}
+              onDownloadStart={() => retainDownload(childProps.row.key)}
+              onToggle={() =>
+                props.workspace.onBrowsePath(childProps.row.workspacePath ?? childProps.row.path)
+              }
               position={childProps.position}
               setSize={childProps.setSize}
             />

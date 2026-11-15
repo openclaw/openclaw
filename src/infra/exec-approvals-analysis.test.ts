@@ -13,33 +13,33 @@ import {
 } from "./exec-approvals-test-helpers.js";
 import { analyzeWindowsShellCommand, windowsEscapeArg } from "./windows-shell-command.js";
 
-const analyzeWindows = (command: string) =>
-  analyzeWindowsShellCommand({ command, platform: "win32" });
+const analyzeWindows = async (command: string) =>
+  await analyzeWindowsShellCommand({ command, platform: "win32" });
 const enforceWindows = (
   command: string,
-  segments: ReturnType<typeof analyzeWindows>["segments"] = [],
+  segments: Awaited<ReturnType<typeof analyzeWindows>>["segments"] = [],
 ) => buildEnforcedShellCommand({ command, segments, platform: "win32" });
 
-function expectWindowsArgv(command: string, argv: string[]) {
-  const result = analyzeWindows(command);
+async function expectWindowsArgv(command: string, argv: string[]) {
+  const result = await analyzeWindows(command);
   expect(result.ok).toBe(true);
   expect(result.segments[0]?.argv).toEqual(argv);
 }
 
 describe("exec command analysis", () => {
-  it("rejects empty argv commands", () => {
-    const result = analyzeArgvCommand({ argv: ["", "   "] });
+  it("rejects empty argv commands", async () => {
+    const result = await analyzeArgvCommand({ argv: ["", "   "] });
     expect(result).toEqual({ ok: false, reason: "empty argv", segments: [] });
   });
 
-  it("keeps shell multiplexer rebuilds as coherent execution argv", () => {
+  it("keeps shell multiplexer rebuilds as coherent execution argv", async () => {
     if (process.platform === "win32") {
       return;
     }
     const dir = makeExecApprovalsTempDir();
     const busybox = makeExecutable(dir, "busybox");
 
-    const analysis = analyzeArgvCommand({
+    const analysis = await analyzeArgvCommand({
       argv: [busybox, "sh", "-lc", "echo hi"],
       cwd: dir,
       env: { PATH: `/bin:/usr/bin${path.delimiter}${process.env.PATH ?? ""}` },
@@ -60,14 +60,14 @@ describe("exec command analysis", () => {
     expect(planned?.[0]).not.toBe(busybox);
   });
 
-  it("accepts shell metacharacters inside double-quoted arguments", () => {
+  it("accepts shell metacharacters inside double-quoted arguments", async () => {
     for (const command of [
       'node add_lifelog.js "2026-03-28" "2026-03-28 (土) - LifeLog" --markdown',
       'node tool.js "--filter=a|b" "--label=x>y" "--name=foo & bar"',
       'node tool.js "--pattern=a^b"',
       'node tool.js "--msg=Hello!"',
     ]) {
-      const res = analyzeWindows(command);
+      const res = await analyzeWindows(command);
       expect(res.ok).toBe(true);
       expect(res.segments[0]?.argv[0]).toBe("node");
     }
@@ -85,8 +85,8 @@ describe("exec command analysis", () => {
     "node tool.js '--msg=Hello!'",
     "node tool.js '--pattern=(x)'",
     "node tool.js '--label=%USERNAME%'",
-  ])("rejects unsafe Windows command: %s", (command) => {
-    expect(analyzeWindows(command).ok).toBe(false);
+  ])("rejects unsafe Windows command: %s", async (command) => {
+    expect((await analyzeWindows(command)).ok).toBe(false);
   });
 
   const toolPath = "C:\\Program Files\\Tool\\tool.exe";
@@ -105,11 +105,11 @@ describe("exec command analysis", () => {
     ["pwsh --command node a.js", ["node", "a.js"]],
   ] satisfies Array<[string, string[]]>)("parses Windows argv: %s", expectWindowsArgv);
 
-  it("builds enforced command for simple Windows command", () => {
+  it("builds enforced command for simple Windows command", async () => {
     // A fixture PATH keeps quoting independent of host Python installation paths.
     const dir = makeExecApprovalsTempDir();
     const python3 = makeExecutable(dir, "python3");
-    const analysis = analyzeWindowsShellCommand({
+    const analysis = await analyzeWindowsShellCommand({
       command: "python3 a.py",
       platform: "win32",
       env: makePathEnv(dir),
@@ -149,24 +149,24 @@ describe("exec command analysis", () => {
     "a\rb",
     "a\r\nb",
     'a"\nb',
-  ])("rejects unsafe Windows argument %j in analysis and rendering", (value) => {
-    expect(analyzeWindows(`node tool.js "${value.replaceAll('"', '""')}"`).ok).toBe(false);
+  ])("rejects unsafe Windows argument %j in analysis and rendering", async (value) => {
+    expect((await analyzeWindows(`node tool.js "${value.replaceAll('"', '""')}"`)).ok).toBe(false);
     expect(windowsEscapeArg(value)).toEqual({ ok: false });
   });
 
-  it("evaluates inline cmd payloads against the inner executable", () => {
+  it("evaluates inline cmd payloads against the inner executable", async () => {
     const dir = makeExecApprovalsTempDir();
     const nodePath = makeExecutable(dir, process.platform === "win32" ? "node" : "node.exe");
     makeExecutable(dir, process.platform === "win32" ? "cmd" : "cmd.exe");
     const env = makePathEnv(dir);
-    const analysis = analyzeArgvCommand({
+    const analysis = await analyzeArgvCommand({
       argv: ["cmd.exe", "/c", "node.exe", "app.js"],
       cwd: dir,
       env,
     });
 
     expect(analysis.ok).toBe(true);
-    const result = evaluateExecAllowlist({
+    const result = await evaluateExecAllowlist({
       analysis,
       allowlist: [{ pattern: nodePath }],
       safeBins: new Set(),

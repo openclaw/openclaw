@@ -491,6 +491,8 @@ export const en = {
       testAiProgress: "Testing AI access with a live completion…",
       testAiSuccess: "AI access works. Replied in {seconds}s.",
       testAiTitle: "AI access test",
+      utilityOnlyNote: "Pick a provider for your agent's conversations, or Skip for now.",
+      utilityOnlyTitle: "Choose your agent's model",
       whatSetup: "What do you want to set up?",
       workspaceConflictConfirm: "Move the existing agent fleet to the requested workspace?",
       workspaceConflictNotice:

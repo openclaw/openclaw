@@ -685,7 +685,7 @@ it("composes the complete source without registering runtime English", () => {
   expect(en).toEqual(before);
   expect(source).not.toBe(en);
   expect(source.configView).not.toBe(en.configView);
-  expect(flat.get("activity.title")).toBe("Activity");
+  expect(flat.get("activity.currentWork.title")).toBe("Active sessions");
   expect(flat.get("configView.sections.cron")).toBe("Automations");
 });
 
@@ -757,7 +757,7 @@ it("defers page and config-hint translations until their namespace loads", async
   const addWatchFile = vi.fn();
   const baseSource = await loadLocaleSource(load, resolvedBase as string, addWatchFile);
   const { catalog, loadNamespace } = await executeLocale(load, baseSource, true);
-  expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+  expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
   expect(catalog.configHints).toBeUndefined();
   const memoryPath = path.join(repoRoot, "ui/src/i18n/.i18n/fr.tm.jsonl");
   const loadingText = flattenTranslations(en).get("common.loading");
@@ -772,7 +772,7 @@ it("defers page and config-hint translations until their namespace loads", async
   expect(loadingEntry).toBeDefined();
   expect(flattenTranslations(catalog).get("common.loading")).toBe(loadingEntry?.translated);
   await loadNamespace("activity");
-  expect(flattenTranslations(catalog).get("activity.title")).toBeTypeOf("string");
+  expect(flattenTranslations(catalog).get("activity.currentWork.title")).toBeTypeOf("string");
   expect(catalog.configHints).toBeUndefined();
   expect(flattenTranslations(catalog).has("runtimeErrors.nativeTimeout")).toBe(false);
   expect(catalog.notificationErrors).toBeUndefined();
@@ -804,7 +804,7 @@ it("bootstraps only an absent locale memory from the English catalog", async () 
   await withoutMemory(async () => {
     const baseSource = await loadLocaleSource(load, baseId, addWatchFile);
     const { catalog, loadAll } = await executeLocale(load, baseSource, true);
-    expect(flattenTranslations(catalog).has("activity.title")).toBe(false);
+    expect(flattenTranslations(catalog).has("activity.currentWork.title")).toBe(false);
     expect(catalog.configHints).toBeUndefined();
     await loadAll();
     expect(flattenTranslations(catalog)).toEqual(flattenTranslations(loadControlUiSourceCatalog()));

@@ -318,8 +318,8 @@
 
 /* Real-palette previews. Colors mirror the :root[data-theme] blocks in base.css
    (claw = the default :root palette); keep both in sync when retuning a theme.
-   The custom card reads the live variables instead: it is only rendered with a
-   palette while the imported theme is active. */
+   Catalog cards supply their own mode-aware variables. The browser import card
+   reads the live palette only while that imported theme is active. */
 .settings-theme-card__palette {
   display: grid;
   align-content: space-between;
@@ -1038,4 +1038,9 @@
 
 .config-accordion-nav .config-accordion-group__item--active .settings-row__title {
   color: var(--text-strong);
+}
+
+/* Inherited values stay editable while remaining distinct from authored overrides. */
+.cfg-default-control {
+  opacity: 0.55;
 }

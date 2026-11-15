@@ -1,2 +1,0 @@
-# Exact net regression growth: Doctor reads a verified live WAL source in place instead of staging a full copy, with writer, recovery and hot-journal controls.
-147

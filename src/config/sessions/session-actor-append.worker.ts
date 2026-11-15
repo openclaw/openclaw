@@ -38,6 +38,10 @@ import { applySessionMessageRewrite } from "./session-message-rewrite.worker.js"
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
 import { SessionTranscriptWriterClaimReboundError } from "./session-transcript-writer-claim-error.js";
+import {
+  beginAgentToolUsageInDatabase,
+  flushAgentToolUsageInDatabase,
+} from "./tool-usage.kernel.js";
 import { transcriptSerializedBytes } from "./transcript-payload.js";
 
 /** Prepared SessionManager appends share the actor's transaction and its live admission. */
@@ -88,6 +92,17 @@ export function applySessionActorAppend(
     databasePath: database.path,
     admit,
     checkMessage: (facts: unknown) => context.admit("transaction", facts),
+  };
+  const applyToolUsage = () => {
+    const usage = append.toolUsage;
+    if (!usage) {
+      return undefined;
+    }
+    if (usage.kind === "begin") {
+      return beginAgentToolUsageInDatabase(database.db, usage.now, usage.runId).generation;
+    }
+    flushAgentToolUsageInDatabase(database.db, usage);
+    return usage.generation;
   };
   let initialEntry: InitialSessionEntryCommit | undefined;
   if (append.initialization) {
@@ -296,9 +311,11 @@ export function applySessionActorAppend(
     );
   }
   if (append.kind === "metadata") {
+    const value = metadata(append.input, appendScope);
     return {
       kind: "metadata",
-      value: metadata(append.input, appendScope),
+      value,
+      ...(value.snapshot.ok ? { toolUsageGeneration: applyToolUsage() } : {}),
       initialEntry,
       header,
       modelPromptProjection,
@@ -323,5 +340,12 @@ export function applySessionActorAppend(
       }),
   );
   finalizeProjection(result.value.snapshot);
-  return { kind: "message", value: result.value, initialEntry, header, modelPromptProjection };
+  return {
+    kind: "message",
+    value: result.value,
+    ...(result.value.snapshot.ok ? { toolUsageGeneration: applyToolUsage() } : {}),
+    initialEntry,
+    header,
+    modelPromptProjection,
+  };
 }

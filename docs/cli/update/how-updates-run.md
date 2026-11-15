@@ -362,6 +362,11 @@ literal dynamic imports to shared source modules include those modules and their
 package metadata in the private copy. Unrelated repository files remain outside
 the snapshot.
 
+When both the installed updater and the candidate support
+[candidate-owned rehearsal](/cli/update#candidate-owned-rehearsal), the candidate
+runs these checks itself with its own budgets and reports each step to the
+updater. Otherwise the installed updater runs them.
+
 Plugin snapshots verify inventoried bytes with SHA-256. Native companion captures
 may add or remove hard links while the old Gateway serves; link-only metadata
 changes do not invalidate unchanged files on Windows or POSIX, including

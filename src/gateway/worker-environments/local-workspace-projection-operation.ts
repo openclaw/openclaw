@@ -144,16 +144,23 @@ export async function runLocalWorkspaceProjection<T>(
           diagnostics,
         )
       : undefined;
-  await pause();
+  // The checkpoint probe selects snapshots only after excluding pending recovery.
+  // Atomic exports need no freeze; other callbacks retain frozen guest custody.
+  if (!capture || options.reason !== "checkpoint") {
+    await pause();
+  }
   let accepted = false;
   try {
     const result = await run(
       operations,
-      quiescence && {
+      (quiescence || capture) && {
         get retired() {
-          return quiescence!.retired;
+          return quiescence?.retired ?? false;
         },
-        retire: () => quiescence!.retire(),
+        retire: async () => {
+          await pause();
+          await quiescence?.retire();
+        },
         resume,
         markPhase,
       },

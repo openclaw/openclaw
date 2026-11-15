@@ -184,7 +184,7 @@ it.each(["value", "apiKey", "account"])(
     const scope = sessionScope(path.join(dir, "sessions.json"), "runtime-projection");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const sessionManager = SessionManager.open(scope, dir);
-    guardSessionManager(sessionManager, { config: {}, allowedToolNames: ["lookup"] });
+    guardSessionManager(sessionManager, { config: {} });
     const calls = vi.fn();
     const ids = client
       ? ["call_0", "call_1"]

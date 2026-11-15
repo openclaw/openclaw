@@ -69,9 +69,20 @@ const enOpenClawId = {
     error_open: "Could not open this. Try again.",
     menuTitle: "OpenClaw ID",
     approveNewDevice: "Approve a new device",
-    approvalNotice: "A new browser is asking for owner access",
+    approvalNotice: "A new device is asking for owner access",
+    memberDeviceAddedNotice: "A member added a device",
+    memberDeviceAddedNoticeBody:
+      "It has the member’s existing role. Review or remove member devices in Remote access.",
+    kitUsedNotice: "Your recovery kit was used to add {device}",
+    kitUsedNoticeUnknown: "Your recovery kit was used to add a device",
+    kitUsedNoticeBody:
+      "If this wasn’t you, remove it in Your devices. Your recovery kit can still add devices: to stop it, relink this claw as a new claw on the computer that runs it.",
     signIn: "Sign in with OpenClaw ID",
-    signInLocalOnly: "Sign in on the computer that runs this claw.",
+    signInLocalOnly:
+      "Sign in through Tailscale or another personal sign-in, or on the computer that runs this claw.",
+    errorSignInCancelled: "Sign-in was cancelled in OpenClaw ID.",
+    errorDeviceSignInUnsupported:
+      "OpenClaw ID can't sign in this browser yet. Sign in on the computer that runs this claw.",
     signInUnconfigured:
       "OpenClaw ID is not set up for this claw. Ask the person who manages it to finish setup.",
     signedIn: "Signed in to OpenClaw ID as {account}",
@@ -97,7 +108,8 @@ const enOpenClawId = {
     yourDevices: "Your devices",
     reachOffer: "Signed in as {account}. Reach this claw from anywhere?",
     makeReachableLocalOnly:
-      "To turn on remote access, open OpenClaw on the computer that runs this claw.",
+      "To turn on remote access, sign in as an admin through Tailscale or another personal sign-in, or open OpenClaw on the computer that runs this claw.",
+    makeReachableAdminOnly: "Only an admin can turn on remote access for this claw.",
     needsLoaderDomain:
       "Remote access is not set up for this claw. Ask the person who manages it to finish setup.",
     makeReachable: "Turn on remote access",

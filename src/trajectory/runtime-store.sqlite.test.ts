@@ -382,9 +382,13 @@ describe("SQLite trajectory runtime store", () => {
     expect(readRows()).toEqual([existing, ...events].map((event, seq) => ({ event, seq })));
   });
 
-  it.each(["UTF-8", "UTF-16le", "UTF-16be"])(
-    "reads only the expired prefix when a full %s window advances",
-    async (encoding) => {
+  it.each(
+    ["UTF-8", "UTF-16le", "UTF-16be"].flatMap((encoding) =>
+      ["warm", "cold", "cold-under-budget"].map((window) => ({ encoding, window })),
+    ),
+  )(
+    "reads only the expired prefix when a $window $encoding window advances",
+    async ({ encoding, window }) => {
       await seedEncoding(encoding);
       const database = openOpenClawAgentDatabase({
         agentId: "main",
@@ -392,6 +396,7 @@ describe("SQLite trajectory runtime store", () => {
       });
       const event = createTrajectoryEvent({ type: "rolling-window🦞" });
       const bytes = eventBytes([event]);
+      const underBudget = window === "cold-under-budget";
       const append = (
         events: TrajectoryEvent[],
         windowFacts?: { nextSeq: number; retainedBytes: number },
@@ -399,7 +404,7 @@ describe("SQLite trajectory runtime store", () => {
         appendSqliteTrajectoryRuntimeEventsWithWriter(
           {
             sessionId: "session-1",
-            maxRuntimeBytes: bytes * 128,
+            maxRuntimeBytes: bytes * (underBudget ? 129 : 128),
             events: events.map(serialized),
             windowFacts,
           },
@@ -439,14 +444,20 @@ describe("SQLite trajectory runtime store", () => {
         return statement;
       });
       try {
-        expect(append([event], initial)).toEqual({ nextSeq: 129, retainedBytes: bytes * 128 });
+        expect(append([event], window === "warm" ? initial : undefined)).toEqual({
+          nextSeq: 129,
+          retainedBytes: bytes * (underBudget ? 129 : 128),
+        });
       } finally {
         spy.mockRestore();
       }
       expect(readRows()).toEqual(
-        Array.from({ length: 128 }, (_, index) => ({ event, seq: index + 1 })),
+        Array.from({ length: underBudget ? 129 : 128 }, (_, index) => ({
+          event,
+          seq: index + (underBudget ? 0 : 1),
+        })),
       );
-      expect(visited).toBe(1);
+      expect(visited).toBe(encoding !== "UTF-8" && window !== "warm" ? 128 : underBudget ? 0 : 1);
     },
   );
 

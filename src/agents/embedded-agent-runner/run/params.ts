@@ -156,6 +156,11 @@ export type RunEmbeddedAgentParams = Pick<
   };
   /** Disable fallback from the user-selected auth profile for a verification run. */
   allowAuthProfileFallback?: boolean;
+  /**
+   * A scheduled candidate on a provider its job records no account for (a configured fallback):
+   * it selects credentials live, like an interactive run, instead of being refused as unrecorded.
+   */
+  scheduledLiveProviderAuth?: boolean;
   toolResultFormat?: ToolResultFormat;
   toolProgressDetail?: ToolProgressDetailMode;
   /** Bootstrap context mode for workspace file injection. */

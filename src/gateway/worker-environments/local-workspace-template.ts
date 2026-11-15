@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import {
   prepareSandboxDependencyTemplate,
   resolveSandboxDependencyTemplateIdentity,
+  type SandboxDependencyTemplateIdentity,
 } from "../../agents/sandbox/dependency-template.js";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
@@ -140,11 +141,17 @@ type LocalWorkspaceTemplateParams = {
   templateRoot: string;
   env: NodeJS.ProcessEnv;
   sandbox: SandboxConfig;
+  identity?: SandboxDependencyTemplateIdentity;
+  backgroundUsedAt?: number;
   buildCacheInputs?: string[];
   guard: Pick<WorktreeAllocationGuard, "commitGuard" | "rollbackGuard" | "requireDiskSpace"> & {
     signal: AbortSignal;
   };
 };
+
+export function sandboxTemplateCacheKey(commonDir: string, templateRoot: string, identity: string) {
+  return digest(`sandbox-v1\n${commonDir}\n${templateRoot}\n${identity}`);
+}
 
 /** The returned template retains its generation until the caller settles its clone. */
 export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTemplateParams) {
@@ -205,10 +212,12 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
     );
     return undefined;
   }
-  const identity = await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
-    signal: guard.signal,
-    assertCurrent: guard.commitGuard,
-  });
+  const identity =
+    params.identity ??
+    (await resolveSandboxDependencyTemplateIdentity(params.sandbox, {
+      signal: guard.signal,
+      assertCurrent: guard.commitGuard,
+    }));
   if (!identity) {
     log.debug("sandbox dependency template skipped: local image identity unavailable");
     return undefined;
@@ -299,8 +308,9 @@ export async function prepareLocalWorkspaceTemplate(params: LocalWorkspaceTempla
   const record = await prepareWorktreeTemplate({
     env: params.env,
     now: Date.now,
+    backgroundUsedAt: params.backgroundUsedAt,
     options: guard,
-    cacheKey: digest(`sandbox-v1\n${commonDir}\n${params.templateRoot}\n${identity.key}`),
+    cacheKey: sandboxTemplateCacheKey(commonDir, params.templateRoot, identity.key),
     contentKey: digest(`${params.baseCommit}\n${digest(lockfile.stdout)}\n${identity.key}`),
     repoRoot: params.repoRoot,
     commonDir,

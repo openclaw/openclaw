@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { runNodeScript } from "../../../../../test/helpers/run-node-script.js";
 import type { AgentMessage } from "../../types.js";
 import {
   buildCompactionFloor,
@@ -12,6 +13,23 @@ const assistant = (text: string): AgentMessage =>
   ({ role: "assistant", content: [{ type: "text", text }], timestamp: 1 }) as AgentMessage;
 
 describe("buildCompactionFloor", () => {
+  it("releases transcript payloads after preparing bounded floor facts", async ({ signal }) => {
+    const result = await runNodeScript(
+      [
+        "--max-old-space-size=256",
+        "--expose-gc",
+        "--import",
+        "./scripts/tsx.mjs",
+        "packages/agent-core/src/harness/compaction/compaction-floor.retention.test-support.ts",
+      ],
+      process.env,
+      15_000,
+      { cwd: process.cwd(), signal },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  });
+
   it("keeps attributed user-role words, identifiers, and the last reply", () => {
     const floor = buildCompactionFloor([
       user("Build acme/widget-oauth and never publish it", { __openclaw: { senderId: "u1" } }),

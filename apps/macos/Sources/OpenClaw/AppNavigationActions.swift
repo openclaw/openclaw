@@ -67,18 +67,6 @@ enum AppNavigationActions {
             search: DashboardRouteMap.custodianOnboardingSearch)
     }
 
-    static func openDashboardOnboardingAndWait() async throws {
-        let generation = self.presentationGeneration
-        let result = await DashboardManager.shared.show(
-            atPath: DashboardRouteMap.custodianPagePath,
-            search: DashboardRouteMap.custodianOnboardingSearch,
-            target: .primary,
-            ifCurrent: { generation == self.presentationGeneration },
-            waitForLoad: true,
-            reportErrors: false)
-        try result.get()
-    }
-
     static func openChat(sessionKey: String? = nil, agentID: String? = nil, draft: String? = nil) {
         AppActivation.shared.activate()
         if AppStateStore.shared.nativeExperienceEnabled {
@@ -123,7 +111,7 @@ enum AppNavigationActions {
                 guard isCurrent(), !(error is CancellationError) else { return }
                 let alert = NSAlert()
                 alert.messageText = "Could Not Open Chat"
-                alert.informativeText = "Connect to the Gateway, then select this conversation in the Dashboard."
+                alert.informativeText = "Connect to the Gateway, then select this conversation in OpenClaw."
                 AppActivation.shared.presentAlert(alert)
             }
         }

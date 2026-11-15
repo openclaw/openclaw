@@ -10,9 +10,18 @@ it("refuses fanout before writing its matrix when the current quota cannot cover
   const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-budget-"), "", 98);
   const result = f.preview();
   expect(result.status).toBe(1);
-  expect(result.stderr).toContain("requires 51200 requests for 98 packages; 5000 remain");
+  expect(result.stderr).toContain("requires 26112 requests for 98 packages; 5000 remain");
   expect(existsSync(result.output)).toBe(false);
   expect(existsSync(f.previewManifest)).toBe(false);
+});
+
+it("admits the full 101-package carrier-backed release within a fresh GitHub quota", async () => {
+  const f = await createNpmCliProcessFixture(tempDirs.make("npm-cli-full-budget-"), "", 101, false);
+  f.json("/rate_limit", { resources: { core: { remaining: 30000, reset: 4_070_908_800 } } });
+  f.save();
+  const result = f.preview();
+  expect(result.status, result.stderr).toBe(0);
+  expect(JSON.parse(readFileSync(f.previewManifest, "utf8")).packages).toHaveLength(101);
 });
 
 // Distinct processes are essential: an in-memory client spy misses the retained
@@ -34,6 +43,7 @@ it("replays recovery-backed preview evidence through two CLI consume/authorize p
       .filter((line) => line.startsWith('{"githubRequestAccounting"'))
       .map((line) => JSON.parse(line).githubRequestAccounting)
       .find((entry) => entry.scope === "prepared-npm-command");
+    expect(accounting?.limit).toBe(accounting.command === "load" ? 1024 : 128);
     expect(accounting?.used).toBe(
       f
         .records()
@@ -447,72 +457,88 @@ it("retains the ordinary CLI final authority after sharing acquisition reads", a
   expect(existsSync(revoked.output)).toBe(false);
 }, 60_000);
 
-// Parent dispatch runs before child preview, without a package or carrier.
-it("authorizes the recovery-backed parent within its unchanged request ceiling", async () => {
-  const f = await createNpmCliProcessFixture(
-    tempDirs.make("npm-parent-authorize-"),
-    "@openclaw/alpha",
-  );
-  const result = f.run("parent", ["authorize"], false);
-  expect(result.error, result.stderr).toBeUndefined();
-  expect(result.status, result.stderr).toBe(0);
-  const calls = f.records().filter((row) => row.kind === "request" && row.invocation === "parent");
-  const accounting = result.stderr
-    .split("\n")
-    .find((line) => line.startsWith('{"githubRequestAccounting"'));
-  if (!accounting) {
-    throw new Error("Missing parent authorization request accounting");
-  }
-  expect(JSON.parse(accounting).githubRequestAccounting).toEqual({
-    scope: "prepared-npm-command",
-    command: "authorize",
-    limit: 256,
-    used: calls.length,
-  });
-  expect(calls.length).toBeLessThan(256);
-  expect(existsSync(f.previewManifest)).toBe(false);
-  expect(calls.some((row) => row.route === "actions/artifacts/900/zip")).toBe(false);
-  for (const id of f.recovery.immutableArchiveIds) {
-    expect(calls.filter((row) => row.route === "actions/artifacts/" + id + "/zip")).toHaveLength(1);
-  }
-  console.log(
-    JSON.stringify({ scenario: "parent-authorize-no-carrier", requests: calls.length, limit: 256 }),
-  );
-
-  // Change authority at the final artifact read, after graph acquisition.
-  // Count the real request boundary rather than substituting an internal verdict.
-  const trigger = "actions/artifacts/70";
-  const triggerReads = calls.filter((row) => row.route === trigger).length;
-  expect(triggerReads).toBeGreaterThan(1);
-  const originalTrigger = f.responses[trigger]!;
-  const ref = "git/ref/" + f.f.publisherFullRef.slice(5);
-  for (const [route, changed, pattern] of [
-    ["collaborators/release-operator/permission", { permission: "read" }, /authority|permission/iu],
-    [ref, { object: { type: "commit", sha: "f".repeat(40) } }, /ref|SHA|identity/iu],
-    ["actions/runs/9900", { run_attempt: 2 }, /attempt|changed|identity/iu],
-  ] as const) {
-    const original = f.responses[route]!;
-    let response: typeof originalTrigger = {
-      ...originalTrigger,
-      after: {
-        route,
-        value: {
-          encoding: "utf8" as const,
-          data: JSON.stringify({ ...JSON.parse(original.data), ...changed }),
-        },
-      },
-    };
-    for (let index = 1; index < triggerReads; index += 1) {
-      response = { ...originalTrigger, after: { route: trigger, value: response } };
+// Parent dispatch and direct recovery have no preview carrier.
+it.each(["authorize", "consume"])(
+  "%s reuses carrierless evidence",
+  async (command) => {
+    const f = await createNpmCliProcessFixture(
+      tempDirs.make("npm-parent-authorize-"),
+      "@openclaw/alpha",
+    );
+    const run = (invocation: string) =>
+      command === "consume"
+        ? f.consume(invocation, 0, false)
+        : f.run(invocation, ["authorize"], false);
+    const result = run("parent");
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(0);
+    const calls = f
+      .records()
+      .filter((row) => row.kind === "request" && row.invocation === "parent");
+    const accounting = result.stderr
+      .split("\n")
+      .find((line) => line.startsWith('{"githubRequestAccounting"'));
+    if (!accounting) {
+      throw new Error("Missing publication request accounting");
     }
-    f.responses[trigger] = response;
-    f.save();
-    const rejected = f.run("parent-revoked-" + route.replaceAll("/", "-"), ["authorize"], false);
-    expect(rejected.error, rejected.stderr).toBeUndefined();
-    expect(rejected.status, rejected.stderr).not.toBe(0);
-    expect(rejected.stderr).toMatch(pattern);
-    expect(rejected.stderr).not.toContain("Unconfigured external fixture request");
-    f.responses[trigger] = originalTrigger;
-    f.responses[route] = original;
-  }
-}, 120_000);
+    expect(JSON.parse(accounting).githubRequestAccounting).toEqual({
+      scope: "prepared-npm-command",
+      command,
+      limit: 256,
+      used: calls.length,
+    });
+    expect(calls.length).toBeLessThan(256);
+    expect(existsSync(f.previewManifest)).toBe(false);
+    expect(calls.some((row) => row.route === "actions/artifacts/900/zip")).toBe(false);
+    for (const id of f.recovery.immutableArchiveIds) {
+      expect(calls.filter((row) => row.route === "actions/artifacts/" + id + "/zip")).toHaveLength(
+        1,
+      );
+    }
+    console.log(
+      JSON.stringify({ scenario: command + "-no-carrier", requests: calls.length, limit: 256 }),
+    );
+
+    // Change authority at the final artifact read, after graph acquisition.
+    // Count the real request boundary rather than substituting an internal verdict.
+    const trigger = "actions/artifacts/70";
+    const triggerReads = calls.filter((row) => row.route === trigger).length;
+    expect(triggerReads).toBeGreaterThan(1);
+    const originalTrigger = f.responses[trigger]!;
+    const ref = "git/ref/" + f.f.publisherFullRef.slice(5);
+    for (const [route, changed, pattern] of [
+      [
+        "collaborators/release-operator/permission",
+        { permission: "read" },
+        /authority|permission/iu,
+      ],
+      [ref, { object: { type: "commit", sha: "f".repeat(40) } }, /ref|SHA|identity/iu],
+      ["actions/runs/9900", { run_attempt: 2 }, /attempt|changed|identity/iu],
+    ] as const) {
+      const original = f.responses[route]!;
+      let response: typeof originalTrigger = {
+        ...originalTrigger,
+        after: {
+          route,
+          value: {
+            encoding: "utf8" as const,
+            data: JSON.stringify({ ...JSON.parse(original.data), ...changed }),
+          },
+        },
+      };
+      for (let index = 1; index < triggerReads; index += 1) {
+        response = { ...originalTrigger, after: { route: trigger, value: response } };
+      }
+      f.responses[trigger] = response;
+      f.save();
+      const rejected = run("revoked-" + route.replaceAll("/", "-"));
+      expect(rejected.error, rejected.stderr).toBeUndefined();
+      expect(rejected.status, rejected.stderr).not.toBe(0);
+      expect(rejected.stderr).toMatch(pattern);
+      expect(rejected.stderr).not.toContain("Unconfigured external fixture request");
+      f.responses[trigger] = originalTrigger;
+      f.responses[route] = original;
+    }
+  },
+  120_000,
+);

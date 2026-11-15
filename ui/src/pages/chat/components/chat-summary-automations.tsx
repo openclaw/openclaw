@@ -220,8 +220,10 @@ export function createSessionAutomationInventory(
           }
           const connection = createGatewayConnectionLifecycle(source.snapshot);
           let identity = JSON.stringify(resolveUiConversationIdentity(source.snapshot, key));
-          // Reject obsolete event delivery before queued binding cleanup runs.
-          const current = () => props.gateway === source && props.sessionKey === key;
+          // Reject obsolete event delivery before queued binding cleanup runs. Callbacks run
+          // untracked, so read the owned memos: a caller's prop getter may build a node with no
+          // committed value while an async frame holds the write, and reading it here throws.
+          const current = () => gateway() === source && sessionKey() === key;
           // Connection publications retire request scopes before the next cron event is delivered.
           const unsubscribe = source.subscribe((snapshot) => {
             if (!current()) {
@@ -426,7 +428,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   );
 
   async function reveal(button: HTMLButtonElement) {
-    const key = props.sessionKey;
+    const key = sessionKey();
     const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const first = jobs().length;
@@ -444,7 +446,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     // Cancel the old presentation before reading props held by an async frame.
     if (
       latest(() => props.presentationIdentity) !== presentationIdentity ||
-      props.sessionKey !== key ||
+      sessionKey() !== key ||
       props.gateway !== source ||
       !props.presented ||
       !host.isConnected
@@ -459,7 +461,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         const activeElement = host.ownerDocument.activeElement;
         if (
           latest(() => props.presentationIdentity) === presentationIdentity &&
-          props.sessionKey === key &&
+          sessionKey() === key &&
           props.gateway === source &&
           props.presented &&
           host.isConnected &&
@@ -473,14 +475,14 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
   }
 
   async function retry(button: HTMLButtonElement) {
-    const key = props.sessionKey;
+    const key = sessionKey();
     const presentationIdentity = props.presentationIdentity;
     const source = props.gateway;
     const focused = host.ownerDocument.activeElement === button;
     await inventory.refresh();
     if (
       latest(() => props.presentationIdentity) !== presentationIdentity ||
-      props.sessionKey !== key ||
+      sessionKey() !== key ||
       props.gateway !== source ||
       inventory.error() ||
       !props.presented ||
@@ -494,7 +496,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         const target = jobLinks.get(inventory.jobs()[0]?.id ?? "");
         if (
           latest(() => props.presentationIdentity) === presentationIdentity &&
-          props.sessionKey === key &&
+          sessionKey() === key &&
           props.gateway === source &&
           props.presented &&
           host.isConnected &&

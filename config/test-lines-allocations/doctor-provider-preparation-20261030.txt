@@ -1,2 +1,0 @@
-# Exact net coverage for asynchronous Doctor provider preparation, retained runtime owner selection, independent setup callbacks, and post-await metadata authority.
-940

@@ -9,9 +9,9 @@
  * use at least five alternating samples per side, timing and allocation separately.
  * Repeat with --flow prefix or --flow resolve. Defaults to the working-tree owner. For a baseline:
  *   git show <base>:packages/ai/src/transports/openai-responses-continuation.ts \
- *     > packages/ai/src/transports/.responses-continuation-baseline.ts
- * Pass that file to --module, then remove it after comparison. Keeping it beside
- * the owner preserves relative imports; dependencies must match both revisions.
+ *     > /path/to/baseline.ts
+ * Pass that file to --module; the loader replaces the original owner URL so
+ * relative imports stay intact. Dependencies must match both revisions.
  * Commit flow uses real claim/commit across each conversation, then cleanup.
  * Explicit previous_response_id isolates commit from history comparison; it is not a
  * Gateway or model-turn latency measurement. Prefix flow hashes full prefixes.
@@ -28,15 +28,17 @@
  * this process. --retention-gc --trace-gc-nvp is a separate major-marking diagnostic.
  * Ten tiny disposable histories warm the owner before the empty-heap measurement.
  * Measured histories resolve once each; ordinary heap runs exclude GC instrumentation.
+ * --retained-sampling reports objEquiv allocation before/after terminal full GC.
+ * Combine it with --snapshot for allocation-traced survivor inspection.
  */
 import assert from "node:assert/strict";
-import { hash } from "node:crypto";
+import { createHash, hash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { Session } from "node:inspector/promises";
+import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import { resolve } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { GCProfiler, writeHeapSnapshot } from "node:v8";
 import { configureAiTransportHost } from "../../packages/ai/src/host.js";
@@ -47,6 +49,7 @@ import type {
 } from "../../packages/ai/src/transports/openai-responses-continuation.js";
 import { freezeJsonSnapshot, isDeeplyFrozenPlainData } from "../../src/shared/immutable-data.js";
 import { summarizeGcByKind } from "../lib/gc-profile-summary.ts";
+import { registerPerfOwnerReplacement } from "../lib/perf-owner-replacement.ts";
 
 const { values } = parseArgs({
   options: {
@@ -62,19 +65,22 @@ const { values } = parseArgs({
     messages: { type: "string", default: "200" },
     snapshot: { type: "string" },
     "retention-gc": { type: "boolean", default: false },
+    "retained-sampling": { type: "boolean", default: false },
   },
 });
 assert(["commit", "prefix", "resolve", "retention"].includes(values.flow));
 const conversations = Number(values.conversations);
 assert(Number.isSafeInteger(conversations) && conversations > 0);
 assert(globalThis.gc, "Use --expose-gc");
-const modulePath = values.module
-  ? resolve(values.module)
-  : fileURLToPath(
-      new URL("../../packages/ai/src/transports/openai-responses-continuation.ts", import.meta.url),
-    );
+const ownerUrl = new URL(
+  "../../packages/ai/src/transports/openai-responses-continuation.ts",
+  import.meta.url,
+);
+const modulePath = values.module ? resolve(values.module) : fileURLToPath(ownerUrl);
+const replaced = registerPerfOwnerReplacement(ownerUrl.href, values.module);
 const owner: typeof import("../../packages/ai/src/transports/openai-responses-continuation.js") =
-  await import(pathToFileURL(modulePath).href);
+  await import(ownerUrl.href);
+assert.equal(replaced(), Boolean(values.module));
 if (values.flow === "retention") {
   const sessions = Number(values.sessions);
   const messages = Number(values.messages);
@@ -178,13 +184,41 @@ if (values.flow === "retention") {
     return [new WeakRef(input), new WeakRef(frozenMessage)];
   });
   const preparedHeap = await collect();
+  const sampling = values["retained-sampling"] ? new Session() : undefined;
+  function comparisonBytes(profile: HeapProfiler.SamplingHeapProfile): number {
+    function visit(node: HeapProfiler.SamplingHeapProfileNode, comparison = false): number {
+      const inComparison = comparison || node.callFrame.functionName === "objEquiv";
+      return (
+        (inComparison ? node.selfSize : 0) +
+        node.children.reduce((total, child) => total + visit(child, inComparison), 0)
+      );
+    }
+    return visit(profile.head);
+  }
+  if (sampling) {
+    sampling.connect();
+    if (values.snapshot) {
+      await sampling.post("HeapProfiler.startTrackingHeapObjects", { trackAllocations: true });
+    }
+    await sampling.post("HeapProfiler.startSampling", {
+      samplingInterval: 1024,
+      includeObjectsCollectedByMajorGC: false,
+      includeObjectsCollectedByMinorGC: false,
+    });
+  }
   resolveRetainedRequests(held);
+  const comparisonBeforeGc = sampling
+    ? comparisonBytes((await sampling.post("HeapProfiler.getSamplingProfile")).profile)
+    : undefined;
   const gc = values["retention-gc"] ? new GCProfiler() : undefined;
   gc?.start();
   if (gc) {
     console.log("retention:live-gc:start");
   }
   const liveHeap = await collect();
+  const comparisonAfterGc = sampling
+    ? comparisonBytes((await sampling.post("HeapProfiler.stopSampling")).profile)
+    : undefined;
   if (gc) {
     console.log("retention:live-gc:end");
   }
@@ -192,6 +226,7 @@ if (values.flow === "retention") {
   if (values.snapshot) {
     writeHeapSnapshot(resolve(values.snapshot));
   }
+  sampling?.disconnect();
   // Keep the source graphs live through GC/snapshot, then test WeakMap key release.
   assert.equal(
     held.reduce((sum, entry) => sum + (entry.state.lastRequest.input?.length ?? 0), 0),
@@ -209,13 +244,15 @@ if (values.flow === "retention") {
       sessions,
       messages,
       collectedReferences: collected,
-      diagnostic: values["retention-gc"] || Boolean(values.snapshot),
+      diagnostic: values["retention-gc"] || values["retained-sampling"] || Boolean(values.snapshot),
       toolResultBytes: 16_384,
       emptyHeap,
       preparedHeap,
       liveHeap,
       releasedHeap,
       retainedAfterRequest: liveHeap - preparedHeap,
+      comparisonBeforeGc,
+      comparisonAfterGc,
       retainedPerSession: (liveHeap - preparedHeap) / sessions,
       retainedPerThousandItems: (liveHeap - preparedHeap) / ((sessions * messages) / 1000),
       gc: summarizeGcByKind(collections),
@@ -324,6 +361,23 @@ const continuations = (values.flow === "resolve" ? fixtures : []).map(({ request
     ],
   },
 }));
+function requestHashes() {
+  const full = createHash("sha256");
+  const wire = createHash("sha256");
+  const decisions = createHash("sha256");
+  for (const { state, request } of continuations) {
+    const result = owner.resolveResponsesContinuationRequest(state, request);
+    full.update(JSON.stringify(request));
+    wire.update(JSON.stringify(result.request));
+    decisions.update(result.continuationStatus);
+  }
+  return {
+    full: full.digest("hex"),
+    wire: wire.digest("hex"),
+    decisions: decisions.digest("hex"),
+  };
+}
+const providerHashes = values.flow === "resolve" ? requestHashes() : undefined;
 let lastHash = "";
 function run(count: number): void {
   for (let conversation = 0; conversation < count; conversation++) {
@@ -391,6 +445,9 @@ if (values.allocation) {
   inspector.disconnect();
 }
 assert.equal(lastHash, expectedHash);
+if (providerHashes) {
+  assert.deepEqual(requestHashes(), providerHashes);
+}
 const iterations = turns * conversations;
 console.log(
   JSON.stringify({
@@ -419,5 +476,6 @@ console.log(
     hostLoadBefore,
     hostLoadAfter: loadavg(),
     finalPrefixHash: lastHash || undefined,
+    providerHashes,
   }),
 );

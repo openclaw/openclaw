@@ -152,7 +152,6 @@ export const progressCardStore: ProgressCardStore = {
             toAgentExecutionConstraints(identity),
           );
           const assertOwnerCurrent = () => {
-            assertCurrent();
             owner.assertCurrent();
             execution.assertCurrent();
           };

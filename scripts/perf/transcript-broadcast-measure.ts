@@ -1752,6 +1752,7 @@ if (isMainThread) {
     if (phase !== "completed") return;
     observe("worker-request", { kind, requestClass, queueDepth, queueWaitMs, durationMs,
       timing: numbers(timing, ["enqueued", "dispatched", "posted", "postFinished", "received", "inputReady",
+        "backendLoadStarted", "backendLoadFinished", "openGrantStarted", "openGrantFinished", "factoryStarted", "factoryFinished",
         "executeStarted", "executeFinished", "serialized", "replied", "replyReceived"]) });
   });
   const timer = setInterval(flush, 250);

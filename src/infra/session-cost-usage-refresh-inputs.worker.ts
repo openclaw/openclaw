@@ -1,10 +1,8 @@
-import { sql } from "kysely";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import type { SqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { listTranscriptArchiveIdentitiesFromDatabase } from "../config/sessions/session-accessor.sqlite-archive-read.js";
 import type { SessionTranscriptStats } from "../config/sessions/session-accessor.sqlite-contract.js";
 import { getSessionKysely } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { readTranscriptStatsBatchFromDatabase } from "../config/sessions/session-accessor.sqlite-transcript-stats.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   readWithCanonicalSessionAdmission,
@@ -19,13 +17,11 @@ import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
+  prepareSqliteQueryIterator,
 } from "./kysely-sync.js";
 import { LruCache } from "./lru-cache.js";
 import type { SessionCostUsageRollupRow } from "./session-cost-usage-cache.kernel.js";
-import {
-  listUsageCountedTranscriptStats,
-  type UsageCostCollectionAccess,
-} from "./session-cost-usage-collection.js";
+import type { UsageCostCollectionAccess } from "./session-cost-usage-collection.js";
 import type { UsageCostPartition } from "./session-cost-usage-partitions.js";
 import {
   USAGE_COST_ROLLUP_SCOPE,
@@ -61,52 +57,73 @@ const rollups = new LruCache<{ receipt: string; value: RollupInput }>(64, {
     ) ?? 0),
 });
 
-// Observe generation, storage and suffix in one statement. A rewrite recounts;
-// an append reuses the rollup's recorded prefix without rebuilding the SQL AST.
-const appendedTranscriptStats = createSqliteQueryCache((database) =>
-  prepareSqliteQueryTakeFirstSync<
-    { sessionId: string; afterSeq: number },
+// Capture a fixed tail before paging. Later appends belong to their next publication.
+const transcriptStatsQueries = createSqliteQueryCache((database) => ({
+  header: prepareSqliteQueryTakeFirstSync<
+    string,
     {
-      count: number;
       maxSeq: number | null;
-      bytes: number;
       generation: string | null;
-      cold: string | null;
       mtimeMs: number | null;
+      coldCount: number | null;
+      coldBytes: number | null;
+      coldLastSeq: number | null;
     }
   >(database, (parameter) => {
-    const sessionId = parameter((input) => input.sessionId);
+    const sessionId = parameter((id) => id);
     return getSessionKysely(database)
-      .selectFrom("transcript_events")
-      .select((eb) => [
-        eb.fn.countAll<number>().as("count"),
-        eb.fn.max<number>("seq").as("maxSeq"),
-        // kysely-allow-raw: recorded bytes plus JSONL separators for appended rows.
-        sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql()} + 1), 0)`.as("bytes"),
-        eb
-          .selectFrom("transcript_rewrite_watermarks")
-          .select("generation")
-          .where("session_id", "=", sessionId)
-          .as("generation"),
-        eb
-          .selectFrom("session_transcript_cold_archives")
-          .select("session_id")
-          .where("session_id", "=", sessionId)
-          .as("cold"),
-        eb
-          .selectFrom("session_windows")
-          .select("transcript_updated_at")
-          .where("session_id", "=", sessionId)
-          .as("mtimeMs"),
+      .selectFrom("session_windows as window")
+      .leftJoin(
+        "transcript_rewrite_watermarks as rewrite",
+        "rewrite.session_id",
+        "window.session_id",
+      )
+      .leftJoin("session_transcript_cold_archives as cold", "cold.session_id", "window.session_id")
+      .select([
+        "rewrite.generation",
+        "window.transcript_updated_at as mtimeMs",
+        "cold.event_count as coldCount",
+        "cold.raw_bytes as coldBytes",
+        "cold.last_seq as coldLastSeq",
       ])
-      .where("session_id", "=", sessionId)
+      .select((eb) =>
+        eb
+          .selectFrom("transcript_events")
+          .select("seq")
+          .where("session_id", "=", sessionId)
+          .where("seq", ">", -1)
+          .orderBy("seq", "desc")
+          .limit(1)
+          .as("maxSeq"),
+      )
+      .where("window.session_id", "=", sessionId);
+  }),
+  page: prepareSqliteQueryIterator<
+    { sessionId: string; afterSeq: number; maxSeq: number },
+    { seq: number; bytes: number }
+  >(database, (parameter) =>
+    getSessionKysely(database)
+      .selectFrom("transcript_events")
+      .select(["seq", transcriptEventReadBytesSql().as("bytes")])
+      .where(
+        "session_id",
+        "=",
+        parameter((input) => input.sessionId),
+      )
       .where(
         "seq",
         ">",
         parameter((input) => input.afterSeq),
-      );
-  }),
-);
+      )
+      .where(
+        "seq",
+        "<=",
+        parameter((input) => input.maxSeq),
+      )
+      .orderBy("seq", "asc")
+      .limit(128),
+  ),
+}));
 
 export function usageRefreshInputs(databasePath: string) {
   const key = (id: string) => JSON.stringify([databasePath, id]);
@@ -129,6 +146,7 @@ export function createUsageCostCollectionAccess(params: {
   input: UsageCostWorkerInput;
   target: (agentId: string, storePath: string) => UsageCostWorkerDatabase;
   readStore: <T>(agentId: string, storePath: string, read: () => T) => Promise<T>;
+  yieldRead: (bytes: number, startedAt: number) => Promise<void>;
   readCheckpoint?: (marker: SqliteSessionFileMarker) => UsageCostSqliteCheckpoint | undefined;
 }) {
   const { input, target, readStore } = params;
@@ -177,10 +195,9 @@ export function createUsageCostCollectionAccess(params: {
                   .select(["session_id", "session_key", "transcript_updated_at"])
                   .where("transcript_updated_at", "is not", null)
                   .$narrowType<{ transcript_updated_at: number }>()
-                  // Refresh orders its stale work by size; reporting preserves addition order.
-                  .$if(operation.kind !== "refresh", (query) =>
-                    query.orderBy("transcript_updated_at", "desc").orderBy("session_id", "asc"),
-                  ),
+                  // Admit recent transcripts before reading sizes; reports preserve this order.
+                  .orderBy("transcript_updated_at", "desc")
+                  .orderBy("session_id", "asc"),
               )
                 .rows.filter((row) => !isInternalSessionEffectsKey(row.session_key))
                 .map((row) => ({
@@ -198,12 +215,10 @@ export function createUsageCostCollectionAccess(params: {
       const result: Array<TranscriptStats | undefined> = Array(markers.length);
       const checkpoints = markers.map((marker) => params.readCheckpoint?.(marker));
       const mutations = checkpoints.some(Boolean) ? await readFreshness(markers) : [];
-      const groups = new Map<string, Array<{ marker: SqliteSessionFileMarker; index: number }>>();
       for (const [index, marker] of markers.entries()) {
         const checkpoint = checkpoints[index];
         const mutation = mutations[index];
-        // The transcript owner advances mutation time even for same-tick writes.
-        // Unchanged durable rollups already own the exact raw statistics.
+        // Unchanged durable rollups already own these exact statistics.
         if (
           checkpoint &&
           mutation &&
@@ -221,80 +236,76 @@ export function createUsageCostCollectionAccess(params: {
           continue;
         }
         const database = target(marker.agentId, marker.storePath);
-        const key = JSON.stringify(database);
-        const group = groups.get(key) ?? [];
-        group.push({ marker, index });
-        groups.set(key, group);
-      }
-      for (const group of groups.values()) {
-        const firstMarker = group[0]!.marker;
-        const database = target(firstMarker.agentId, firstMarker.storePath);
-        const loadedStats = await readStore(firstMarker.agentId, firstMarker.storePath, () => {
-          try {
-            const read = withOpenClawAgentDatabaseReadOnly(
-              (opened) => {
-                const stats = new Map<string, TranscriptStats>();
-                for (const { marker, index } of group) {
-                  const checkpoint = checkpoints[index];
-                  if (!checkpoint?.eventCount || mutations[index]?.cold) {
-                    continue;
-                  }
-                  const row = appendedTranscriptStats(opened.db)({
-                    sessionId: marker.sessionId,
-                    afterSeq: checkpoint.maxSeq,
-                  })!;
-                  if (
-                    row.cold !== null ||
-                    row.generation !== (checkpoint.generation ?? null) ||
-                    row.mtimeMs === null
-                  ) {
-                    continue;
-                  }
-                  stats.set(marker.sessionId, {
-                    eventCount: checkpoint.eventCount + row.count,
-                    maxSeq: row.maxSeq ?? checkpoint.maxSeq,
-                    sizeBytes: checkpoint.size + row.bytes,
-                    lastMutationAtMs: row.mtimeMs,
-                    generation: row.generation,
-                    cold: false,
-                  });
-                }
-                const missing = group.filter(({ marker }) => !stats.has(marker.sessionId));
-                if (missing.length > 0) {
-                  const full = readTranscriptStatsBatchFromDatabase(
-                    opened,
-                    missing.map(({ marker }) => marker.sessionId),
-                    { includeGeneration: true },
-                  );
-                  missing.forEach(({ marker }, index) => stats.set(marker.sessionId, full[index]!));
-                }
-                return group.map(({ marker }) => stats.get(marker.sessionId)!);
-              },
+        const read = async <T>(query: (queries: ReturnType<typeof transcriptStatsQueries>) => T) =>
+          readStore(marker.agentId, marker.storePath, () => {
+            const opened = withOpenClawAgentDatabaseReadOnly(
+              ({ db }) => [query(transcriptStatsQueries(db))],
               { ...database, env },
             );
-            if (!read.found) {
-              return sourceRows<TranscriptStats>(read);
-            }
-            for (const [index, item] of group.entries()) {
-              const facts = read.value[index]!;
-              transcriptFacts.set(transcriptKey(item.marker), {
-                generation: facts.generation ?? null,
-                cold: facts.cold,
-              });
-            }
-            return read.value;
-          } catch (error) {
-            if (
-              operation.kind === "refresh" ||
-              !(error instanceof SessionMetadataUnavailableError)
-            ) {
-              throw error;
-            }
-            return [];
+            return sourceRows(opened)[0];
+          });
+        try {
+          const header = await read((queries) => queries.header(marker.sessionId));
+          if (!header) {
+            continue;
           }
-        });
-        for (const [index, item] of group.entries()) {
-          result[item.index] = loadedStats[index] ?? undefined;
+          const cold = header.coldCount !== null;
+          const prefix =
+            !cold && checkpoint?.eventCount && (checkpoint.generation ?? null) === header.generation
+              ? checkpoint
+              : undefined;
+          let eventCount = cold ? header.coldCount! : (prefix?.eventCount ?? 0);
+          let sizeBytes = cold ? header.coldBytes! : (prefix?.size ?? 0);
+          let afterSeq = prefix?.maxSeq ?? -1;
+          const maxSeq = (cold ? header.coldLastSeq : header.maxSeq) ?? 0;
+          if (!cold && header.maxSeq !== null) {
+            while (afterSeq < maxSeq) {
+              const startedAt = performance.now();
+              const page = await read((queries) => {
+                let count = 0;
+                let bytes = 0;
+                let lastSeq = afterSeq;
+                // Finish the cursor before yielding: one oversized legacy row is the only exception.
+                for (const row of queries.page({ sessionId: marker.sessionId, afterSeq, maxSeq })) {
+                  count++;
+                  bytes += row.bytes + 1;
+                  lastSeq = row.seq;
+                  if (bytes >= 8 * 1024 * 1024) {
+                    break;
+                  }
+                }
+                return { count, bytes, lastSeq };
+              });
+              if (!page || page.lastSeq <= afterSeq) {
+                throw new Error("Usage transcript changed while reading statistics");
+              }
+              sizeBytes += page.bytes - (eventCount === 0 ? 1 : 0);
+              eventCount += page.count;
+              afterSeq = page.lastSeq;
+              // Scalar-page fallback; the worker uses physical read bytes where available.
+              await params.yieldRead(page.count * 4096, startedAt);
+            }
+          }
+          if (!cold) {
+            const latest = await read((queries) => queries.header(marker.sessionId));
+            if (!latest || latest.generation !== header.generation || latest.coldCount !== null) {
+              throw new Error("Usage transcript changed while reading statistics");
+            }
+          }
+          const facts = {
+            eventCount,
+            sizeBytes,
+            maxSeq,
+            lastMutationAtMs: header.mtimeMs ?? 0,
+            generation: header.generation,
+            cold,
+          };
+          transcriptFacts.set(transcriptKey(marker), facts);
+          result[index] = facts;
+        } catch (error) {
+          if (operation.kind === "refresh" || !(error instanceof SessionMetadataUnavailableError)) {
+            throw error;
+          }
         }
       }
       return result;
@@ -376,15 +387,8 @@ export function createUsageCostCollectionAccess(params: {
     }
     return result;
   };
-  const inventory = async (sessionsDir?: string) =>
-    listUsageCountedTranscriptStats(location.agentId, {
-      ...access,
-      storePath: location.storePath,
-      sessionsDir,
-    });
   return {
     access,
-    inventory,
     readFreshness,
     readFacts: (marker: SqliteSessionFileMarker) => transcriptFacts.get(transcriptKey(marker)),
   };

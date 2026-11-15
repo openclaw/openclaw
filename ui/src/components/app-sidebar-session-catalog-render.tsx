@@ -248,7 +248,6 @@ function renderCatalogHostGroup(
                 class="session-action"
                 data-catalog-session-menu="true"
                 type="button"
-                title={t("chat.sidebar.openSessionMenu")}
                 aria-label={`${t("chat.sidebar.openSessionMenu")}: ${label()}`}
                 aria-haspopup="menu"
                 aria-expanded={menuOpen() ? "true" : "false"}

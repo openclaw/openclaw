@@ -5,6 +5,7 @@ import type { Command } from "commander";
 import { normalizeImageGenerationResolution } from "../../image-generation/resolution.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { throwExpectedCliError } from "../expected-cli-error.js";
 import { parseOptionalPositiveInteger } from "../parse-positive-integer.js";
 import { collectOption } from "../program/helpers.js";
 import { isMissingMediaUnderstandingProvider } from "./media-understanding-result.js";
@@ -76,7 +77,9 @@ export function registerImageCapabilityCommands(capabilityCommand: Command): voi
           const { parseAspectRatioValue } =
             await import("../../../packages/media-generation-core/src/normalization.js");
           if (aspectRatio && !parseAspectRatioValue(aspectRatio)) {
-            throw new Error("--aspect-ratio must be a W:H ratio of positive numbers, like 16:9");
+            throwExpectedCliError(
+              "--aspect-ratio must be a W:H ratio of positive numbers, like 16:9",
+            );
           }
           const resolution = normalizeImageGenerationResolution(opts.resolution);
           const outputFormat = parseImageOption(

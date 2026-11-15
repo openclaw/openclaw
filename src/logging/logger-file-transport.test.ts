@@ -285,9 +285,9 @@ it("keeps failure streaks independent by file", async () => {
 // A deleted directory reached through its open descriptor mirrors a stale mounted
 // /tmp: children fail with ENOENT while the parent path still resolves, the shape
 // on which Node's recursive mkdirSync never returns.
-it.skipIf(process.platform !== "linux")(
-  "drops records with a warning when the log directory parent is deleted but still resolvable",
-  async () => {
+it.skipIf(process.platform !== "linux").each(["explicit", "default"])(
+  "drops %s records with a warning when the log directory parent is deleted but still resolvable",
+  async (target) => {
     const deletedDir = logPathTracker.nextPath();
     fs.mkdirSync(deletedDir);
     const fd = fs.openSync(deletedDir, "r");
@@ -295,7 +295,17 @@ it.skipIf(process.platform !== "linux")(
       fs.rmdirSync(deletedDir);
       logPath = `/proc/self/fd/${fd}/openclaw/openclaw.log`;
       const stderrSpy = captureStderr();
-      logTo(logPath, "only-record-after-deletion");
+      if (target === "explicit") {
+        logTo(logPath, "only-record-after-deletion");
+      } else {
+        logPath = "openclaw-deleted-state.log";
+        fileLogTransport.enqueue({
+          ...entry(logPath, "only-record-after-deletion\n"),
+          targetPreparation: fileLogTransport.prepareTarget(logPath, true, {
+            options: { stateDir: `/proc/self/fd/${fd}/state` },
+          }),
+        });
+      }
       await fileLogTransport.flush();
 
       const warnings = warningLines(stderrSpy);

@@ -89,6 +89,7 @@ describe("OpenClaw ID coexistence", () => {
           context: {
             openclawIdService: service,
             getRuntimeConfig: () => ({ gateway: { openclawId: { enabled: true } } }),
+            logGateway: { info: () => {}, warn: () => {} },
           },
         } as unknown as GatewayRequestHandlerOptions);
         expect(accepted, `${kind}: ${method} ${JSON.stringify(params.action)}`).toBe(false);

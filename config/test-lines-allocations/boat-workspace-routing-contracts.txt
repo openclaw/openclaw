@@ -1,2 +1,0 @@
-# Explicit singleton replacement and mixed-owner capacity contracts across inventory changes.
-29

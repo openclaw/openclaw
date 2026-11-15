@@ -307,6 +307,7 @@ export function SettingsToggleRow(
     description?: JSX.Element;
     /** Secondary actions beside the switch, such as opening related settings. */
     actions?: JSX.Element;
+    controlClass?: string;
   },
 ) {
   const titleId = nextSettingsRadioName();
@@ -330,7 +331,7 @@ export function SettingsToggleRow(
     >
       {props.icon}
       <SettingsRowText id={titleId} title={props.title} description={props.description} />
-      <div class="settings-row__control">
+      <div class={["settings-row__control", props.controlClass]}>
         {props.actions}
         <Switch
           {...props}
@@ -627,8 +628,6 @@ export function SettingsSecretInput(props: {
   placeholder?: string;
   visible: boolean;
   disabled?: boolean;
-  showLabel: string;
-  hideLabel: string;
   toggleLabel: string;
   onInput: (next: string) => void;
   onToggle: () => void;
@@ -646,18 +645,16 @@ export function SettingsSecretInput(props: {
         disabled={props.disabled}
         onInput={(event) => props.onInput(event.currentTarget.value)}
       />
-      <openclaw-tooltip prop:content={props.visible ? props.hideLabel : props.showLabel}>
-        <button
-          type="button"
-          class="settings-secret__toggle"
-          aria-label={props.toggleLabel}
-          aria-pressed={props.visible ? "true" : "false"}
-          disabled={props.disabled}
-          onClick={() => props.onToggle()}
-        >
-          <Icon name={props.visible ? "eye" : "eyeOff"} />
-        </button>
-      </openclaw-tooltip>
+      <button
+        type="button"
+        class="settings-secret__toggle"
+        aria-label={props.toggleLabel}
+        aria-pressed={props.visible ? "true" : "false"}
+        disabled={props.disabled}
+        onClick={() => props.onToggle()}
+      >
+        <Icon name={props.visible ? "eye" : "eyeOff"} />
+      </button>
     </span>
   );
 }
