@@ -744,3 +744,41 @@ it("ends a verified Git release's trial without the release's own settlement", a
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
+
+it("lets a switched Git release's Gateway restart itself instead of a native restart", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-restart-")));
+  const prefix = path.join(dir, "git-install");
+  try {
+    const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await fs.mkdir(releaseRoot, { recursive: true });
+    await publishGitRelease({ prefix, releaseRoot, trial: false });
+    gatewayFixture({}, { commandLine: "openclaw-gateway" });
+    restart.callGateway.mockImplementation(healthResponse("2026.9.8", "candidate", "successor"));
+    Object.assign(result, {
+      mode: "git",
+      root: gitReleaseSlot(prefix),
+      after: { version: "2026.9.8", buildId: "candidate" },
+    });
+    await listen();
+
+    const outcome = await restartGateway({
+      serviceUpdateVerdict: {
+        kind: "owned",
+        root: gitReleaseSlot(prefix),
+        fingerprint: "unit",
+        refreshDefinition: false,
+      },
+    });
+
+    expect(outcome).toBe("ok");
+    // Native restarts go through the updated install's gateway command.
+    expect(runUpdatedInstallGatewayCommand).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
