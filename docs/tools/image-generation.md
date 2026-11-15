@@ -19,6 +19,10 @@ session is inactive or its active wake fails, OpenClaw sends a
 direct fallback with the generated images so the result is not lost. Retries do
 not post the same images again.
 
+Cron runs are already background work, so there the tool waits for the provider
+and returns the generated images as its result. The cron run then uses or sends
+them itself before it finishes.
+
 You can send a follow-up while the completion agent is still working. The new
 turn waits for the completion and its delivery to settle before starting.
 On an external channel, the generated files are sent once the turn that

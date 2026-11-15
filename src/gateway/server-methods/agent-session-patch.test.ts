@@ -32,7 +32,6 @@ function buildCreationPatch(opts: PatchInput) {
     normalizedSpawned: {},
     requestDeliveryHint: undefined,
     expectedExistingSessionId: opts.freshEntry?.sessionId,
-    hasRestoredCronContinuation: false,
     resetPolicy: resolveSessionResetPolicy({ resetType: "direct" }),
     now: 1_000,
     isSystemGatewayRun: false,
