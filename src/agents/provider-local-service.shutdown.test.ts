@@ -1,8 +1,10 @@
 import { ChildProcess } from "node:child_process";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -128,12 +130,35 @@ describe("provider local service shutdown", () => {
       pid = captureServicePid(`http://127.0.0.1:${port}/v1/models`);
       descendantPid = Number(await fs.readFile(descendantPidPath, "utf8"));
 
+      const groupPid = -pid;
+      const kill = process.kill.bind(process);
+      vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+        // Deny only observation of our owned group and the impossible-group
+        // canary. Actual signals still reach only the spawned service tree.
+        if (
+          process.platform === "linux" &&
+          signal === 0 &&
+          (target === groupPid || target === -4_194_305)
+        ) {
+          throw Object.assign(new Error("denied group probe"), { code: "EPERM" });
+        }
+        return kill(target, signal);
+      });
+      const enumerate = vi.spyOn(syncFs, "readdirSync");
+      const read = vi.spyOn(syncFs, "readFileSync");
+      const readlink = vi.spyOn(syncFs, "readlinkSync");
+      syncBuiltinESMExports();
       await stopManagedProviderLocalServices();
 
+      expect(enumerate.mock.calls.filter(([file]) => String(file) === "/proc")).toHaveLength(0);
+      expect(read.mock.calls.filter(([file]) => String(file).startsWith("/proc/"))).toHaveLength(0);
+      expect(readlink.mock.calls.filter(([file]) => String(file) === "/proc/self")).toHaveLength(0);
       expect(isPidAlive(pid)).toBe(false);
       expect(isPidAlive(descendantPid)).toBe(false);
       lease.release();
     } finally {
+      vi.restoreAllMocks();
+      syncBuiltinESMExports();
       killPidIfAlive(descendantPid);
       killPidIfAlive(pid);
     }

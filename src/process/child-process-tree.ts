@@ -46,6 +46,11 @@ function probeProcessGroup(pgid: number): "gone" | "alive" | "denied" {
   }
 }
 
+/** A synchronous absence guard immediately before an already-authorized effect. */
+export function isProcessGroupGoneByKernel(pgid: number): boolean {
+  return probeProcessGroup(pgid) === "gone";
+}
+
 export function isProcessGroupGone(pgid: number): boolean {
   const probe = probeProcessGroup(pgid);
   return probe === "gone" || (probe === "denied" && isProcessGroupGoneByCensus(pgid));
