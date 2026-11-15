@@ -80,7 +80,7 @@ it("keeps every configured pin available and ignores unavailable saved agents", 
   ).toEqual(agents.agents.filter((agent) => agent.id !== "system").map((agent) => agent.id));
   expect(
     sidebar.querySelector('[data-pinned-agent="main"] [slot="content"]')?.textContent,
-  ).toContain("No assistant reply yet");
+  ).toContain("No agent reply yet");
   expect(context.navigation.snapshot.pinnedAgentIds).toContain("missing");
 });
 

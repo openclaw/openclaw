@@ -13,7 +13,9 @@ const admission = resolveGlobalSingleton<{ resolveHost?: ResolveHost }>(
 );
 
 export function bindPluginSharedStateAdmission(resolveHost: ResolveHost): void {
-  admission.resolveHost = resolveHost;
+  // The first host graph owns admission; a duplicate module instance evaluated later (a
+  // separately loaded plugin graph) must not replace it with its own, unbound host lookup.
+  admission.resolveHost ??= resolveHost;
 }
 
 export function getPluginSharedStateResourceHost(): PluginSharedStateResourceHost | undefined {

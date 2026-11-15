@@ -4,7 +4,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { releasePluginCacheInstance, withPluginCache, type PluginCache } from "./plugin-cache.js";
-import { createPluginBackgroundRunner } from "./plugin-instance-background.js";
+import { createPluginBackgroundRunner, createResumeSignal } from "./plugin-instance-background.js";
 import { createPluginInstanceBindings } from "./plugin-instance-bindings.js";
 import {
   PluginInstanceDrainTimeoutError,
@@ -73,6 +73,7 @@ export class PluginInstance {
   private readonly consumers = new Map<object, PluginInstanceConsumerState>();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
+  readonly onResume = createResumeSignal();
   private readonly bindings = createPluginInstanceBindings({
     instance: this,
     enter: (token, run) => this.enter(token, run),
@@ -361,16 +362,18 @@ export class PluginInstance {
       wrap: this.bindings.create(run, run),
       close: (cleanup) => {
         if (!closing && this.consumers.has(token)) {
-          // Close operation callbacks before entering a separate host teardown token.
-          // Its release must not join the disposal waiting on this physical hold.
+          // Host teardown outlives the caller scope, but must revoke operation callbacks first.
+          // Its separate token must not join disposal waiting on this physical hold.
           token.active = false;
           reference.cleanupState = "pending";
           closing = new Promise<void>((resolve) => {
             resolve(
-              this.invoke(
-                cleanup,
-                this.lease({ cleanup: true, registry: token.registry }),
-                this.disposalFailures,
+              pluginInvocationContext.exit(() =>
+                this.invoke(
+                  cleanup,
+                  this.lease({ cleanup: true, registry: token.registry }),
+                  this.disposalFailures,
+                ),
               ),
             );
           }).finally(release);
@@ -617,7 +620,11 @@ export class PluginInstance {
   }
 
   resume(): void {
-    this.accepting ||= !this.disposal && !this.controller.signal.aborted && !this.owner?.revoked;
+    if (this.accepting || this.disposal || this.controller.signal.aborted || this.owner?.revoked) {
+      return;
+    }
+    this.accepting = true;
+    this.onResume.notify();
   }
 
   dispose(

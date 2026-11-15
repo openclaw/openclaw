@@ -1,5 +1,8 @@
 import { isProxy } from "node:util/types";
-import { modelRequestBodyState } from "@openclaw/ai/internal/model-request-body";
+import {
+  markModelPayloadObserver,
+  modelRequestBodyState,
+} from "@openclaw/ai/internal/model-request-body";
 import {
   responsesPromptObserver,
   type ResponsesPromptObservation,
@@ -12,6 +15,7 @@ import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.
 import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import type { Message } from "../../llm/types.js";
+import type { PreparedProviderRequest } from "../../sessions/session-fork-context.types.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
 import { log } from "./logger.js";
@@ -57,6 +61,14 @@ export function getProviderPromptState(runId: string): ProviderPromptState {
   const state = providerPromptStates.get(runId) ?? {};
   providerPromptStates.set(runId, state);
   return state;
+}
+
+// Request content never joins the serialized identity state; it lives and dies with it.
+const preparedRequests = new WeakMap<ProviderPromptState, PreparedProviderRequest>();
+
+export function readPreparedProviderRequest(runId: string): PreparedProviderRequest | undefined {
+  const state = providerPromptStates.get(runId);
+  return state && preparedRequests.get(state);
 }
 
 export function clearProviderPromptState(runId: string): void {
@@ -210,6 +222,10 @@ export function wrapStreamFnWithProviderPromptState(params: {
       onPayload: async (payload, payloadModel) => {
         const replacement = await originalOnPayload?.(payload, payloadModel);
         const finalPayload = replacement === undefined ? payload : replacement;
+        if (finalPayload && typeof finalPayload === "object" && !Array.isArray(finalPayload)) {
+          // Shallow: transports reassign top-level fields after the hook; items stay shared.
+          preparedRequests.set(params.state, { model: payloadModel, body: { ...finalPayload } });
+        }
         if (modelRequestBodyState(observedOptions).enabled) {
           return finalPayload;
         }
@@ -254,6 +270,7 @@ export function wrapStreamFnWithProviderPromptState(params: {
         await options?.onResponse?.(response, responseModel);
       },
     };
+    markModelPayloadObserver(observedOptions.onPayload!, originalOnPayload);
     modelRequestBodyState(observedOptions).encode = async (payload) => {
       const encoded = await recordProviderPrompt({
         state: params.state,

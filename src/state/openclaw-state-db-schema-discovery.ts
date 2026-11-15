@@ -7,9 +7,28 @@ import type {
   OpenClawStateDatabaseSchemaMigration,
 } from "./openclaw-state-db-contract.js";
 import { isStatePostgres } from "./openclaw-state-db-engine.js";
-import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnly } from "./openclaw-state-db-readonly.js";
+import {
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
+  withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync,
+} from "./openclaw-state-db-readonly.js";
 import { detectOpenClawStateDatabaseSchemaMigrationsFromDatabase } from "./openclaw-state-db-schema-repair.js";
 import { resolveDatabasePath } from "./openclaw-state-db.paths.js";
+
+/** Doctor prepares its private source before entering synchronous schema inspection. */
+export async function detectOpenClawStateDatabaseSchemaMigrationsAsync(
+  options: OpenClawStateDatabaseOptions = {},
+): Promise<OpenClawStateDatabaseSchemaMigration[]> {
+  const pathname = resolveDatabasePath(options);
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      ({ db }) =>
+        isPostgresSqlConnection(db)
+          ? []
+          : detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(db, pathname),
+      { ...options, path: pathname },
+    )) ?? []
+  );
+}
 
 export function detectOpenClawStateDatabaseSchemaMigrations(
   options: OpenClawStateDatabaseOptions = {},

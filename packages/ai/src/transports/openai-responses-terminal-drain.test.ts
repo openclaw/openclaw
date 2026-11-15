@@ -130,9 +130,9 @@ describe("Responses SSE decoding", () => {
     }
     if (!process.versions.bun) {
       expect(promises).toBeGreaterThan(expected.length);
-      // The HTTP source, recovery owner and consumer need about ten promises/event.
-      // An extra asynchronous framing iterator adds another four.
-      expect(promises).toBeLessThan(expected.length * 11);
+      // The HTTP source, error observer, recovery owner and consumer need about nine
+      // promises/event. A forwarding generator for error observation adds another one.
+      expect(promises).toBeLessThan(expected.length * 10);
     }
     expect(events).toEqual(expected);
     expect(delimiterMatches).toBe(0);

@@ -17,7 +17,7 @@ import type { ModelProviderRequestTransportOverrides } from "./provider-request-
 import {
   collectRequestHeaderSecretValues,
   createExactSecretValueMatcher,
-  redactExactSecretValues,
+  createExactSecretValueRedactor,
   redactProviderResponseErrorText,
 } from "./provider-request-header-redaction.js";
 export { asFiniteNumber } from "../../packages/normalization-core/src/number-coercion.js";
@@ -89,12 +89,11 @@ export function createProviderErrorTextRedactor(
   params: ProviderRequestCredentialContext,
 ): (text: string, context?: ProviderErrorTextRedactionContext) => string {
   const credentials = collectProviderRequestCredentialValues(params);
+  // Unused redactors must not prepare patterns on successful request paths.
+  let redactCredentials: ReturnType<typeof createExactSecretValueRedactor> | undefined;
   return (text, context) => {
-    const withoutActiveCredential = redactExactSecretValues(
-      text,
-      credentials,
-      context?.truncated === true,
-    );
+    const withoutActiveCredential = (redactCredentials ??=
+      createExactSecretValueRedactor(credentials))(text, context?.truncated === true);
     return redactToolPayloadText(withoutActiveCredential).replace(
       SHORT_BEARER_TOKEN_PATTERN,
       "$1 ***",

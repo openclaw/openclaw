@@ -408,8 +408,10 @@ When a history request needs a read-only snapshot, the Gateway prepares it
 asynchronously so other requests can continue. The snapshot preserves the source
 database and its sidecar files. The Gateway's `update.status` reads its two run
 records through the already-open database when available, avoiding full-database
-copies on each poll. Cold status reads prepare one private snapshot. When
-diagnostics are enabled, status requests lasting at least one second log phase
+copies on each poll. Ordinary status reads use a native read-only connection;
+explicit artifact-preserving inspection, including `openclaw update status`,
+retains private snapshots when required. When diagnostics are enabled, status
+requests lasting at least one second log phase
 durations for sentinel refresh, checkout refresh, install identity, reconciliation,
 history, and response.
 
@@ -443,6 +445,12 @@ version is not proof of the version currently serving requests. Optional Doctor
 diagnostic failures remain warnings, while refused config writes and incomplete
 required migrations remain errors. Historical runs cannot recover facts that
 their updater never recorded.
+
+Reviewed public failure reports keep known ledger diagnostics when a matching
+restart sentinel has no exit code or failure facts. Supplied errors use the same
+bounded public diagnostic redaction as failed steps; private paths, commands, and
+arbitrary error text remain excluded. The reporting Gateway or CLI must contain
+this fix; it does not repair the failed update itself.
 
 If a candidate check exits by signal, its failed step retains `termination`,
 `signal`, and a redacted `stderrTail` (up to 80 lines, 512 characters per line,

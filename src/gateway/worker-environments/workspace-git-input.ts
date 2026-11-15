@@ -55,6 +55,7 @@ export async function writeWorkspaceGitInput(params: {
   existingObjects?: ReadonlyMap<string, string>;
   message?: { chunks: readonly Uint8Array[]; byteLength: number };
   parentCommit?: string;
+  result?: "tree";
   assertBeforeMutation?: () => void;
 }): Promise<void> {
   const entries = params.entries.toSorted((left, right) => left.path.localeCompare(right.path));
@@ -89,7 +90,9 @@ export async function writeWorkspaceGitInput(params: {
           .join(""),
       );
     }
-    yield Buffer.from(`\nget-mark :${entries.length + 1}\ndone\n`);
+    yield Buffer.from(
+      `\n${params.result === "tree" ? `ls :${entries.length + 1} ""` : `get-mark :${entries.length + 1}`}\ndone\n`,
+    );
   }
   const directory = await fsRoot(path.dirname(params.inputPath));
   await directory.create(path.basename(params.inputPath), chunks(), {

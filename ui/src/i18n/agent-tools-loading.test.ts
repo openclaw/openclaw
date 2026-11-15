@@ -18,11 +18,11 @@ it.each([
 
   expect(en.agentTools).toBe(agentTools);
   expect(manager.t("agentTools.title")).toBe("Werkzeugzugriff");
-  expect(manager.t("agentTools.disableAll")).toBe("Disable All");
+  expect(manager.t("agentTools.disableAll")).toBe("Disable all");
   expect(manager.t("agentTools.previewTitle")).toBe("Tool preview");
   expect(manager.t("agentTools.githubVerify")).toBe("Verify");
 
   registerGitHubConnectionsEnglish();
   expect(en.agentTools).toBe(agentTools);
-  expect(manager.t("agentTools.disableAll")).toBe("Disable All");
+  expect(manager.t("agentTools.disableAll")).toBe("Disable all");
 });

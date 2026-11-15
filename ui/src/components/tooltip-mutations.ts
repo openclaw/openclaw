@@ -6,29 +6,34 @@ type Registration = {
 };
 const documents = new WeakMap<Document, ReturnType<typeof createContentObserver>>();
 
+/** Create a fresh lookup per delivery so DOM moves cannot reuse cached parents. */
+export function createMutationTargetLookup(targets: ReadonlyMap<Node, unknown>) {
+  const nearest = new Map<Node, Node | null>();
+  const trail: Node[] = [];
+  return (start: Node | null): Node | null => {
+    let node = start;
+    trail.length = 0;
+    while (node && !targets.has(node)) {
+      const cached = nearest.get(node);
+      if (cached !== undefined) {
+        node = cached;
+        break;
+      }
+      trail.push(node);
+      node = node.parentNode;
+    }
+    for (const skipped of trail) {
+      nearest.set(skipped, node);
+    }
+    return node;
+  };
+}
+
 function createContentObserver(document: Document) {
   const targets = new Map<Node, Set<Registration>>();
   let rebuildQueued = false;
   const deliver = (records: MutationRecord[]) => {
-    const nearest = new Map<Node, Node | null>();
-    const trail: Node[] = [];
-    const findTarget = (start: Node | null): Node | null => {
-      let node = start;
-      trail.length = 0;
-      while (node && !targets.has(node)) {
-        const cached = nearest.get(node);
-        if (cached !== undefined) {
-          node = cached;
-          break;
-        }
-        trail.push(node);
-        node = node.parentNode;
-      }
-      for (const skipped of trail) {
-        nearest.set(skipped, node);
-      }
-      return node;
-    };
+    const findTarget = createMutationTargetLookup(targets);
     const pending = new Set<Registration>();
     for (const record of records) {
       for (let node = findTarget(record.target); node; node = findTarget(node.parentNode)) {

@@ -18,6 +18,14 @@ When an agent schema needs an upgrade, Doctor defers legacy session-entry
 inspection until its stopped-writer schema repair finishes. This applies to
 PostgreSQL as well as SQLite.
 
+Before rewriting stored auth profiles, Doctor saves a verified backup of the
+owning database. SQLite stores keep a single-file backup; PostgreSQL stores keep
+an exact export directory with its matching anchor and original credential rows.
+Doctor checks the captured credentials and rotation state against its migration
+plan before rewriting either store. Keep the reported backup for recovery.
+This repair runs in the candidate Doctor during an update; the installed updater
+needs no change.
+
 Legacy text imports require valid UTF-8. If a source contains malformed bytes,
 Doctor warns and skips that source instead of storing replacement characters.
 Independent migrations continue. The original bytes remain in the source or its
@@ -434,6 +442,8 @@ This includes retired MCP OAuth files under `<state-dir>/mcp-oauth/*.json`. Stop
 After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime schema readiness for existing configured, default-layout, and registered databases before reporting completion, including stores whose migration failed before registration. A blocked required migration exits nonzero; stop the Gateway and other OpenClaw processes, then rerun repair. Unrelated advisory warnings, including archived transcript repair failures, do not make a ready database fail this check. Missing databases are not created by the readiness check.
 
 Doctor also discovers retired setup state and interrupted migration claims in every resolved agent workspace, active sandbox workspace, and explicitly configured `agents.defaults.workspace` root. That shared root is included even when an explicit multi-agent roster uses only its subdirectories. Doctor imports `<workspace>/openclaw-workspace-state.json` through the existing migration; it does not assign the root to an agent or move persona and memory files.
+
+Gateway startup and config reloads refuse while a configured workspace still has any of these sources. Sandboxed code can write inside its sandbox workspace, so for a sandbox workspace only a state-directory attestation blocks the Gateway. A setup file inside the sandbox copy never blocks the Gateway. If it exists when that sandbox is first prepared in a Gateway process, that sandbox's turns refuse until `openclaw doctor --fix` repairs it; a file written later takes effect when the Gateway process next starts. An in-process restart keeps the earlier result.
 
 Doctor no longer scans, imports, or removes the older
 `<workspace>/.openclaw/workspace-state.json` layout. Its files remain untouched. Upgrade

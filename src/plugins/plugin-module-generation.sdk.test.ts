@@ -73,14 +73,9 @@ it("preserves real host command authority and Gateway execution frames in the SD
   );
 });
 
-it.each([
-  ["src", false],
-  ["dist", false],
-  ["src", true],
-  ["dist", true],
-] as const)(
-  "shares the native %s host owner across plugin generations and recovered workers (legacy loader=%s)",
-  async (preference, legacyLoader) => {
+it.each(["src", "dist"] as const)(
+  "shares the native %s host owner across plugin generations and recovered workers",
+  async (preference) => {
     const root = fs.realpathSync(temp.make("plugin-sdk-generation-"));
     const host = path.join(root, "host");
     const hostLink = path.join(root, "host-link");
@@ -150,7 +145,7 @@ it.each([
     await probe(
       `import fs from 'node:fs';
          import Module from 'node:module';
-         ${legacyLoader ? 'Object.defineProperty(Module, "registerHooks", { value: undefined, configurable: true });' : 'if (!process.versions.bun) assert.equal(typeof Module.registerHooks, "function");'}
+         if (!process.versions.bun) assert.equal(typeof Module.registerHooks, "function");
          const { bindPluginInstanceModuleLoader } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance-module-loader.ts"))});
          const { PluginInstance } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-instance.ts"))});
          const { withPluginSourceCaptureDirectory } = await import(${JSON.stringify(moduleUrl("src/plugins/plugin-package-metadata-capture.ts"))});

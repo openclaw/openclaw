@@ -83,7 +83,12 @@ it("keeps reloaded-ledger budget refusals non-retryable", async () => {
 });
 
 it("keeps subscription management free", async () => {
-  const body = { data: [{ event_type: "post.mention.create", filter: { user_id: "9" } }] };
+  const body = {
+    data: ["post.mention.create", "post.reply.create"].map((event_type) => ({
+      event_type,
+      filter: { user_id: "9" },
+    })),
+  };
   const api = client(async () => Response.json(body), 0);
   await api.ensureActivitySubscriptions("9");
   expect(api.request).toHaveBeenCalledOnce();

@@ -80,7 +80,7 @@ inventories and selected evidence, and reports acquisition time and object bytes
 2. The workflow derives the Gateway version from the root `package.json`, selects the Android revision from source refs and current public releases, and chooses the next sequential phone/Wear codes above the uploaded codes and pinned floor. It refuses a version regression, an exhausted revision or native code range, and uploaded new-format codes whose source refs are missing.
 3. Planning identifies the public releases in `production` and `wear:production`. OpenAI generates separate phone and Wear notes from changes since those releases. Internal uploads do not advance the public baseline. Staged, halted, or ambiguous public releases stop preparation.
 4. The workflow saves the plan and generated notes for the selected clean source commit. Fastlane and Gradle consume those artifacts at runtime. No tracked release files, preparation commits, or follow-up PRs are needed.
-5. The upload lane validates auth, signing, version metadata, and generated notes; captures phone and Wear screenshots; and builds the signed phone and Wear AABs together in one Gradle invocation. It rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
+5. The upload lane validates auth, signing, and version metadata, then captures phone and Wear screenshots. It generates the phone and Wear notes while building both signed AABs together in one Gradle invocation. Both operations must succeed before upload; the lane validates the saved notes and rechecks the public baselines before uploading both AABs, metadata, and screenshots in one Google Play edit. A changed baseline stops the upload.
 6. Before the first new-format upload, the lane records the immutable legacy-code cutover marker. The phone and Wear bundles go to `internal` and `wear:internal`. Production promotion remains manual in Google Play Console. A successful upload records the unchanged source SHA and planned identity in its immutable release ref.
 
 Both release operations omit `changesNotSentForReview` when the selected Play
@@ -98,6 +98,11 @@ isolate those staged changes. See Google's
 `pnpm android:release:upload` runs the same planning, note generation, and upload
 flow from a clean local `main` matching `origin/main`, with no
 required arguments.
+Notes generation and bundle building share the same selected source and saved
+plan. Screenshots finish before either starts. If the build fails, the lane waits
+for the notes process to finish within its existing budget before retaining the
+attempt. Building an archive from a saved plan does not require release notes;
+standalone release preflight and upload still validate both audiences' notes.
 The read-only Fastlane `release_plan` lane accepts an `output_path` for its JSON
 plan. It opens a temporary Play edit to inspect both artifact inventories and
 aborts that edit before returning. It never uploads or commits a Play edit.

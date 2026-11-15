@@ -6,7 +6,7 @@ import {
 } from "../agents/agent-scope.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { findModelInCatalog } from "../agents/model-catalog.js";
+import { findModelInCatalog } from "../agents/model-catalog-lookup.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { supportsModelTools } from "../agents/model-tool-support.js";
 import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";

@@ -36,6 +36,7 @@ import {
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { refreshChatCommands } from "./chat-session-commands.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
 import { refreshPageChat } from "./chat-state-refresh.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
@@ -51,7 +52,6 @@ import {
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.tsx";

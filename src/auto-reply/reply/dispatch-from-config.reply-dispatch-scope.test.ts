@@ -19,7 +19,10 @@ import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-co
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js";
-import type { PluginHookReplyDispatchResult } from "../../plugins/hooks.test-fixtures.js";
+import {
+  createHookRunnerWithRegistry,
+  type PluginHookReplyDispatchResult,
+} from "../../plugins/hooks.test-fixtures.js";
 import {
   captureSessionTarget,
   runSessionMutation,
@@ -98,6 +101,64 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
     sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
   });
+
+  it.each(["error", "timeout"] as const)(
+    "surfaces a started ACP hook %s without trying another runtime",
+    async (failure) => {
+      vi.useFakeTimers();
+      const started = createDeferred();
+      const release = createDeferred();
+      const effects: string[] = [];
+      const { runner } = createHookRunnerWithRegistry([
+        {
+          hookName: "reply_dispatch",
+          pluginId: "first-runtime",
+          priority: 10,
+          timeoutMs: 5,
+          handler: async () => {
+            effects.push("first-runtime");
+            started.resolve();
+            if (failure === "timeout") {
+              await release.promise;
+            }
+            throw new Error("ACP post hook failed");
+          },
+        },
+        {
+          hookName: "reply_dispatch",
+          pluginId: "next-runtime",
+          handler: async () => {
+            effects.push("next-runtime");
+          },
+        },
+      ]);
+      hookMocks.runner.hasHooks.mockImplementation((name) => name === "reply_dispatch");
+      hookMocks.runner.runReplyDispatch.mockImplementation(runner.runReplyDispatch);
+      const replyResolver = vi.fn<InternalGetReplyFromConfig>(async () => {
+        effects.push("ordinary-runtime");
+        return { text: "replayed task" };
+      });
+      const pending = dispatch({
+        ctx: { ...createHookCtx(), SessionKey: "agent:test:acp:hook-failure" },
+        replyResolver,
+      });
+      const outcome = pending.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await awaitGateBeforeSettlement(started.promise, pending, "ACP runtime did not start");
+        await vi.advanceTimersByTimeAsync(5);
+        expect(await outcome).toBeInstanceOf(Error);
+        expect(effects).toEqual(["first-runtime"]);
+        expect(replyResolver).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await outcome;
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each([
     ["local command target from ACP source", false, false],

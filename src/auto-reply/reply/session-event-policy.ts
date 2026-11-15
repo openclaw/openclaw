@@ -20,8 +20,15 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronJobToolPolicyContext } from "../../cron/execution-context-admission.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { CronStoredJob } from "../../cron/types.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseConcreteConfigPathTokens } from "../../shared/dot-path.js";
+import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { SessionEventTarget } from "./session-event-contract.js";
+
+type PolicySelection = Omit<
+  Parameters<NonNullable<GetReplyOptions["onModelSelected"]>>[0],
+  "thinkLevel"
+>;
 
 /** A delayed producer can retain restrictions, never replace current session authority. */
 export function narrowSessionEventSettings(
@@ -48,14 +55,14 @@ export function captureSessionEventConfigPolicy(
   let checkedConfig = config;
   let checkedPublication = publication;
   let changed = false;
-  let matches = job ? captureScheduledSessionEventConfigPolicy(captured, agentId, job) : undefined;
+  let matches = captureSessionEventConfigRelevance(captured, agentId, job);
   return {
     get changed() {
       return changed;
     },
-    selectModel(selection: { provider: string; model: string }) {
+    selectModel(selection: PolicySelection) {
       if (job) {
-        matches = captureScheduledSessionEventConfigPolicy(captured, agentId, job, selection);
+        matches = captureSessionEventConfigRelevance(captured, agentId, job, selection);
         // A fallback may consume auth that an earlier provider did not need.
         checkedConfig = config;
         checkedPublication = publication;
@@ -66,7 +73,7 @@ export function captureSessionEventConfigPolicy(
       if (current === checkedConfig && currentPublication === checkedPublication) {
         return;
       }
-      if (!matches?.(current, routeChannels)) {
+      if (!matches(current, routeChannels)) {
         // Only this recorded refusal permits the handoff owner to re-admit unstarted work.
         changed = true;
         throw new Error("Session event configuration changed; inspect the run before retrying");
@@ -78,17 +85,23 @@ export function captureSessionEventConfigPolicy(
 }
 
 /** Scheduled message actions re-admit their destination policy at each invocation. The
- * turn still owns its creator's channel ceilings and its automatic delivery route. */
-export function captureScheduledSessionEventConfigPolicy(
+ * turn still owns its creator's channel ceilings and its automatic delivery route.
+ * Unscheduled events use the same facts without a creator, so a publication that only
+ * changes another agent does not refuse this agent's event. */
+export function captureSessionEventConfigRelevance(
   config: OpenClawConfig,
   agentId: string,
-  job: CronStoredJob,
-  selection?: { provider: string; model: string },
+  job: CronStoredJob | undefined,
+  selection?: PolicySelection,
 ) {
   const captured = captureRuntimeConfig(config);
-  const creatorChannel = resolveScheduledToolCallerContext({
-    scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
-  }).channel;
+  const runtimeOwnsMcpServers =
+    selection?.agentRuntime === "openclaw" && selection.cliExecution === false;
+  const creatorChannel =
+    job &&
+    resolveScheduledToolCallerContext({
+      scheduledToolPolicy: resolveCronJobToolPolicyContext(job, resolveCronRunToolsAllow(job)),
+    }).channel;
   const authProvider =
     selection &&
     resolveProviderIdForAuth(selection.provider, {
@@ -146,14 +159,20 @@ export function captureScheduledSessionEventConfigPolicy(
         agents,
         auth,
         models,
+        mcp,
         channels: channelConfig,
         logging: _logging,
         meta: _meta,
+        // Plugin reloads own their admitted turns: they hand over at a step boundary or
+        // stay pinned to the admitted generation (src/agents/plugin-turn-handover.ts).
+        plugins: _plugins,
         ...global
       }: OpenClawConfig,
       profiles: ReadonlySet<string>,
     ) => ({
       ...global,
+      // OpenClaw's MCP owner revokes exact servers; native runtimes can retain raw config.
+      mcp: runtimeOwnsMcpServers ? { ...mcp, servers: undefined } : mcp,
       models: selection
         ? {
             ...models,
@@ -184,22 +203,32 @@ export function captureScheduledSessionEventConfigPolicy(
         },
         agent: {
           ...resolveAgentEntry({ agents }, agentId),
+          // Display identity does not change an admitted event's authority.
+          identity: undefined,
           modelPolicy: selection ? undefined : resolveAgentEntry({ agents }, agentId)?.modelPolicy,
         },
       },
-      channels: {
-        defaults: channelConfig?.defaults,
-        selected: channels.map((id) => [
-          id,
-          channelConfig?.[id],
-          channelConfig?.modelByChannel?.[id],
-        ]),
-      },
+      // Only scheduled message invocations re-admit off-route channel policy.
+      // Unscheduled tools retain config, so every channel remains authority-bearing.
+      channels: job
+        ? {
+            defaults: channelConfig?.defaults,
+            selected: channels.map((id) => [
+              id,
+              channelConfig?.[id],
+              channelConfig?.modelByChannel?.[id],
+            ]),
+          }
+        : channelConfig,
       activation: resolveChannelConfigActivationFacts({ channels: channelConfig }),
     });
     const relevantPath = (path: string, profiles: ReadonlySet<string>) => {
       const tokens = parseConcreteConfigPathTokens(path);
-      if (tokens?.[0] === "logging") {
+      if (
+        tokens?.[0] === "logging" ||
+        tokens?.[0] === "plugins" ||
+        (runtimeOwnsMcpServers && tokens?.[0] === "mcp" && tokens[1] === "servers")
+      ) {
         return false;
       }
       if (tokens?.[0] === "models" && tokens[1] === "providers" && selection) {
@@ -214,7 +243,14 @@ export function captureScheduledSessionEventConfigPolicy(
             : tokens[1] !== "order" || relevantAuthProvider(key))
         );
       }
+      if (tokens?.[0] === "agents" && tokens[1] === "entries" && typeof tokens[2] === "string") {
+        // Matches the projection: only this agent's non-display settings.
+        return (
+          tokens[3] !== "identity" && normalizeAgentId(tokens[2]) === normalizeAgentId(agentId)
+        );
+      }
       return (
+        !job ||
         tokens?.[0] !== "channels" ||
         typeof tokens[1] !== "string" ||
         tokens[1] === "defaults" ||

@@ -53,9 +53,24 @@ export function formatNodeSecurityWarning(value) {
   }
   return (
     `Node.js ${value} is below the recommended security patch level. ` +
-    "Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+ to reject the public keys " +
-    "compromised in the October 2026 eMudhra incident."
+    "TLS may trust certificates signed with keys compromised in the October 2026 eMudhra incident. " +
+    "Upgrade to Node 24.22.1+ on the 24.x line or Node 26.12.1+."
   );
+}
+
+// Bundled and package-root entry points share one warning in the admitted process.
+const securityWarningPrinted = Symbol.for("openclaw.nodeSecurityWarningPrinted");
+export function emitNodeSecurityWarning(
+  value,
+  write = (message) => {
+    process.stderr.write(`${message}\n`);
+  },
+) {
+  const warning = formatNodeSecurityWarning(value);
+  if (warning && !globalThis[securityWarningPrinted]) {
+    globalThis[securityWarningPrinted] = true;
+    write(`openclaw: SECURITY WARNING: ${warning}`);
+  }
 }
 
 const ROOT_BOOLEAN_OPTIONS = ["--dev", "--no-color"];

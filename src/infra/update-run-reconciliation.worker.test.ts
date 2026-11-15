@@ -17,6 +17,7 @@ import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { prepareStagedPackageInstall } from "./package-update-lifecycle.js";
 import { createNpmTarget } from "./package-update-steps.test-support.js";
+import * as sqliteSnapshots from "./sqlite-snapshot-source.js";
 import { holdForeignWriter } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
 import { createRetainedUpdateRecovery } from "./update-retained-recovery.test-support.js";
@@ -121,6 +122,7 @@ it("preserves an owner that adopts dead-driver work before reconciliation commit
 it("status projects recent driver loss until explicit reconciliation", async () => {
   const run = await deadDriverRun();
   vi.stubEnv("OPENCLAW_STATE_DIR", run.options.env.OPENCLAW_STATE_DIR);
+  const snapshot = vi.spyOn(sqliteSnapshots, "startSqliteReadOnlyLocationAsync");
   expect(await readUpdateRunStatus()).toMatchObject({
     activeRun: { runId: run.id, status: "running", phase: "activating" },
     abandonedRun: {
@@ -128,6 +130,8 @@ it("status projects recent driver loss until explicit reconciliation", async () 
       rule: "inactive-driver-dead",
     },
   });
+  expect(snapshot).not.toHaveBeenCalled();
+  snapshot.mockRestore();
   expect(await run.readAsync()).toEqual(run.recorded);
   await run.reconcile({ explicit: true });
   expect(await run.readAsync()).toMatchObject({

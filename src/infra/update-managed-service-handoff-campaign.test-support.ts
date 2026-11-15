@@ -130,7 +130,7 @@ export function registerManagedCampaignFailureTests(
         gatewayHealth === "ready"
           ? "Recorded recovery: verified serving 1.0.0"
           : gatewayHealth === "exited"
-            ? "Recorded recovery: not serving (service-not-running)"
+            ? "Recorded recovery: readiness unverified (service-not-running)"
             : "Recorded recovery: recovery check failed (gateway-probe-failed)",
       );
       expect(state.triageInput).toMatchObject({

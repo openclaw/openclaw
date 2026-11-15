@@ -1,7 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,6 +11,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { forceFullGc } from "../../test-utils/retention.js";
 import { createWebFetchTool } from "./web-fetch.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 
@@ -513,6 +513,16 @@ describe("web_fetch", () => {
       );
     });
 
+    it("preserves literal HTML text in HTTP failure diagnostics", async () => {
+      mockHttpResponse("<title># Error</title><p>Use <code>[report](draft)</code>.</p>", {
+        status: 500,
+        headers: { "content-type": "text/html" },
+      });
+      await expect(fetchContract("literal-html-error")).rejects.toThrow(
+        "# Error\nUse [report](draft).",
+      );
+    });
+
     it("releases discarded provider strings while caching bounded protocol metadata", async () => {
       const fields = Object.entries({ contentType: 256, extractor: 128, fetchedAt: 64 });
       const modes = [true, false];
@@ -525,7 +535,7 @@ describe("web_fetch", () => {
       await tool?.execute("warm-retention", { url: "https://example.com/metadata-retention-warm" });
       async function heapUsed() {
         await nextTurn();
-        queryObjects(WeakRef);
+        forceFullGc();
         return process.memoryUsage().heapUsed;
       }
       const before = await heapUsed();

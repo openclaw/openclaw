@@ -394,7 +394,7 @@ suite.define(() => {
         });
         const initialRunId = (initial.params as { idempotencyKey: string }).idempotencyKey;
         expect(initialRunId).not.toBe("");
-        await pane.getByRole("button", { name: "Stop generating" }).waitFor();
+        await pane.getByRole("button", { name: "Stop", exact: true }).waitFor();
 
         const followUpText = attachment ? "" : "Submit this follow-up once per key press.";
         const fileName = "held-enter.txt";

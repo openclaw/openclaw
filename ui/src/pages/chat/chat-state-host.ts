@@ -42,6 +42,9 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   Omit<SessionWorkspaceHost, "handleOpenSidebar"> & {
+    inlineCommandPresentation?: import("./chat-inline-command-presentation.ts").InlineCommandPresentation;
+    prepareInlineCommands: (isCurrent: () => boolean, onReady: () => void) => Promise<void>;
+    clearInlineCommandError: () => void;
     handleOpenSidebar: (content: SidebarSelection | null) => SidebarOpenResult;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
@@ -87,6 +90,7 @@ export type ChatPageHost = ChatHost &
     selectedChatSessionArchived: boolean;
     selectedChatSessionIncognito: boolean;
     agentsList: AgentsListResult | null;
+    readChatAgentsList: () => AgentsListResult | null;
     agentsSelectedId: string | null;
     pendingAbort: PendingChatAbort | null;
     pendingSessionMessageReloadSessionKey: string | null;

@@ -145,6 +145,18 @@ export function readModelPromptProjection(message: unknown): string | undefined 
   return projection.text;
 }
 
+/** For a reader that uses visible content, such as a side question. */
+export function omitRecordedModelPrompt<T extends Extract<AgentMessage, { role: "user" }>>(
+  message: T,
+): T {
+  const metadata = readOpenClawMessageMeta(message);
+  if (!metadata || !Object.hasOwn(metadata, "modelPromptProjection")) {
+    return message;
+  }
+  const { modelPromptProjection: _projection, ...retained } = metadata;
+  return { ...message, __openclaw: retained };
+}
+
 export function prepareModelPromptProjection(
   message: unknown,
   text: string,
@@ -183,12 +195,17 @@ export function projectRecordedModelPrompt(
   if (!isUserMessage(message)) {
     return message;
   }
-  const text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
-  if (text === undefined) {
-    return message;
+  let text: string | undefined;
+  try {
+    text = readModelPromptProjection(transcript) ?? readModelPromptProjection(message);
+    if (text === undefined) {
+      return message;
+    }
+  } catch {
+    // An unreadable historical hint must not hide the original user input.
   }
   let content = message.content;
-  if (Array.isArray(content)) {
+  if (text !== undefined && Array.isArray(content)) {
     let replaced = false;
     content = content.map((block) => {
       if (block.type !== "text" || replaced) {
@@ -200,7 +217,7 @@ export function projectRecordedModelPrompt(
     if (!replaced) {
       content = [{ type: "text", text }, ...content];
     }
-  } else {
+  } else if (text !== undefined) {
     content = text;
   }
   const metadata = { ...message["__openclaw"] };

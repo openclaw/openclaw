@@ -1,5 +1,5 @@
 /** Canonical route-capability schema for provider-owned manifest augmentation. */
-export { ModelInferenceCapabilitiesSchema } from "../../packages/model-catalog-core/src/model-inference-capabilities.js";
+export { ModelInferenceCapabilitiesSchema } from "@openclaw/model-catalog-core/model-inference-capabilities";
 
 export type { JsonValue, DecisionEntry, DecisionQuestion } from "../decisions/input-types.js";
 export type { DecisionBatch, DecisionAnswer, DecisionBatchResult } from "../decisions/types.js";

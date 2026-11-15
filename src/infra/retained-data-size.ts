@@ -34,6 +34,31 @@ export function estimateRetainedDataSize(roots: Iterable<unknown>): {
         truncated = true;
         return;
       }
+      if (value instanceof Map) {
+        const entries: IterableIterator<[unknown, unknown]> = Map.prototype.entries.call(value);
+        for (const [key, item] of entries) {
+          if (remaining < 0) {
+            truncated = true;
+            break;
+          }
+          approximateBytes += 24;
+          visit(key, depth + 1);
+          visit(item, depth + 1);
+        }
+        return;
+      }
+      if (value instanceof Set) {
+        const values: IterableIterator<unknown> = Set.prototype.values.call(value);
+        for (const item of values) {
+          if (remaining < 0) {
+            truncated = true;
+            break;
+          }
+          approximateBytes += 16;
+          visit(item, depth + 1);
+        }
+        return;
+      }
       const array = Array.isArray(value);
       const prototype = Object.getPrototypeOf(value);
       if (prototype !== null && prototype !== (array ? Array.prototype : Object.prototype)) {

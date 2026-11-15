@@ -49,6 +49,7 @@ const processList = (pid = 4242) => `"node.exe","${pid}","Console","1","1 K"`;
 const jsonResult = (value: object) => spawnSyncResult(JSON.stringify(value));
 function mockGracefulStop(stop: () => void) {
   callGatewayCli.mockImplementation(async (options) => {
+    await options.prepareDispatchCurrent?.();
     options.assertDispatchCurrent();
     stop();
     return { ok: true, pid: GATEWAY_OWNER.pid, status: "scheduled" };
@@ -294,6 +295,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       return spawnSyncResult("", exe.endsWith("taskkill.exe") ? 0 : 1);
     });
     callGatewayCli.mockImplementation(async (options) => {
+      await options.prepareDispatchCurrent?.();
       options.assertDispatchCurrent();
       const error = new GatewayProtocolRequestError({
         code: "UNAVAILABLE",
@@ -351,6 +353,7 @@ describe("Scheduled Task shutdown and SQLite handle release", () => {
       }
       const onMutation = vi.fn();
       callGatewayCli.mockImplementation(async (options) => {
+        await options.prepareDispatchCurrent?.();
         options.assertDispatchCurrent();
         expect(taskAction("/End")).toBe(false);
         readGatewayOwnerLease.mockReturnValue(undefined);

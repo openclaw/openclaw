@@ -109,9 +109,9 @@ async function expectDefaults(page: Page) {
       settingsRow(page, "Color mode").getByRole("radiogroup").locator("input:checked").inputValue(),
     )
     .toBe("system");
-  await expectPressed(
-    page.locator("#settings-appearance-text-size .settings-text-scale__btn", { hasText: "100%" }),
-  );
+  await expect
+    .poll(() => page.locator("#settings-appearance-text-size input:checked").inputValue())
+    .toBe("100");
 }
 
 async function expectAccent(page: Page, accent: string, foreground: string) {
@@ -186,13 +186,7 @@ suite.define(() => {
       await expect.poll(() => pickerValue(languageSelect)).toBe("en");
       await expectPressed(themeCard(page, "knot"));
       await expect.poll(() => colorModeGroup.locator("input:checked").inputValue()).toBe("dark");
-      await expectPressed(
-        textSizeSection.locator(".settings-text-scale__btn", { hasText: "110%" }),
-      );
-      await expectText(languageRow, "Default: System");
-      await expectText(themeSection, "Default: Claw");
-      await expectText(colorModeRow, "Default: System");
-      await expectText(textSizeSection, "Default: 100%");
+      await expect.poll(() => textSizeSection.locator("input:checked").inputValue()).toBe("110");
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
 
       const resets = [
@@ -219,7 +213,7 @@ suite.define(() => {
         });
       }
 
-      await textSizeSection.locator(".settings-text-scale__btn", { hasText: "100%" }).click();
+      await textSizeSection.getByRole("radio", { name: "100%", exact: true }).click();
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expectDefaults(page);
       await page.reload();
@@ -227,7 +221,7 @@ suite.define(() => {
       await gateway.waitForRequest("config.get");
       await expectDefaults(page);
       for (const section of [languageRow, themeSection, colorModeRow, textSizeSection]) {
-        await expect.poll(() => section.textContent()).not.toContain("Using default:");
+        await expect.poll(() => section.textContent()).not.toContain("Default:");
       }
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expectAttribute(page.locator("html"), "data-theme-mode", "dark");
@@ -338,7 +332,7 @@ suite.define(() => {
       });
       await openAppearance(page, gateway);
       const themeSection = page.locator("#settings-appearance-theme");
-      const themeDescription = themeSection.locator(":scope > .settings-section__desc");
+      const themeDescription = themeSection.locator(":scope > .settings-section__scope");
       await themeSection.locator(".settings-theme-card--claw").click();
       await expectPressed(themeCard(page, "claw"));
       await expectText(themeDescription, "Stored in this browser only");
@@ -355,8 +349,6 @@ suite.define(() => {
 
       await themeSection.locator(".settings-theme-card--knot").click();
       await expectPressed(themeCard(page, "knot"));
-      await expectText(themeDescription, "Default: Claw");
-      await expectText(themeDescription, "Stored in this browser only", true);
       await page.waitForTimeout(100);
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
@@ -430,7 +422,7 @@ suite.define(() => {
       await importer.locator("button.primary").click();
       await expect
         .poll(async () => (await importer.getByRole("alert").textContent())?.trim())
-        .toBe("tweakcn import failed (503).");
+        .toBe("Couldn’t import the theme. Check the link and try again.tweakcn returned HTTP 503.");
       expect(await gateway.getRequests("config.patch")).toHaveLength(0);
 
       await gateway.setMethodResponse(
@@ -439,7 +431,7 @@ suite.define(() => {
       );
       await importer.locator("input").fill("https://tweakcn.com/themes/retry-theme");
       await importer.locator("button.primary").click();
-      await expectText(importer.getByRole("status"), "Imported");
+      await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
       await expectAttribute(page.locator("html"), "data-theme", "custom");
       const importedSettings = await readPersistedSettings(page);
       expect(importedSettings).toMatchObject({
@@ -505,8 +497,8 @@ suite.define(() => {
             };
           })
           .toEqual({ hasCustomTheme: true, theme: "knot" });
-        await expectText(importer.locator(".settings-theme-import__message"), "Imported");
-        await expect.poll(() => importer.getByRole("status").count()).toBe(1);
+        await expectText(importer.locator(".settings-theme-import__meta-value"), "Light Green");
+        await expect.poll(() => importer.locator("input").inputValue()).toBe("");
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
       } finally {
         releaseImport();
@@ -544,7 +536,7 @@ suite.define(() => {
         // The generic UI prefs form must not re-render it as a bare text box.
         await page.getByRole("tab", { name: "UI", exact: true }).click();
         const panel = page.locator("#config-section-panel");
-        await expect.poll(() => panel.textContent()).toContain("Prefs");
+        await expect.poll(() => panel.locator(".settings-row").count()).toBeGreaterThan(0);
         expect(await panel.locator('input[aria-label="Locale"]').count()).toBe(0);
         expect(await panel.locator('input[aria-label="Interface language"]').count()).toBe(0);
       },

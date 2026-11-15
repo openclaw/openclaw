@@ -2,9 +2,11 @@ import type { JSX } from "@solidjs/web";
 import {
   createSignal,
   createUniqueId,
+  Errored,
   For,
   isPending,
   latest,
+  lazy,
   Loading,
   onSettled,
   Show,
@@ -36,6 +38,11 @@ import {
 registerEnglishCatalog(registerChatSessionSharingEnglish);
 
 registerEnglishCatalog(registerSessionPeopleEnglish);
+
+// Loaded only once a public link is shown, so the encoder stays out of the sharing chunk.
+const ChatSessionPublicQr = lazy(() => import("./chat-session-public-qr.tsx"), {
+  export: "ChatSessionPublicQr",
+});
 
 export type ChatSessionSharingMobileLabels = {
   sessionAccess: string;
@@ -182,6 +189,16 @@ export function ChatSessionSharingMobile(props: ChatSessionSharingMobileProps) {
                     <Icon name="copy" />
                   </button>
                 </Show>
+                <Show when={link().enabled && link().url}>
+                  {(url) => (
+                    // A failed load or an unencodable URL drops the code; copy still works.
+                    <Errored fallback={null}>
+                      <Loading>
+                        <ChatSessionPublicQr url={url()} />
+                      </Loading>
+                    </Errored>
+                  )}
+                </Show>
               </SharingDisclosure>
             </div>
           </section>
@@ -211,10 +228,10 @@ function SharingPermissions(props: {
   let input: HTMLInputElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const matches = () => {
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return props.data.rows.filter(({ identity }) =>
       terms.every((term) =>
-        [identity.label, identity.id].join(" ").toLocaleLowerCase().includes(term),
+        [identity.label, identity.id].join(" ").toLocaleLowerCase().normalize("NFC").includes(term),
       ),
     );
   };

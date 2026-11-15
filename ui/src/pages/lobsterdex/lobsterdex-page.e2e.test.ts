@@ -77,14 +77,16 @@ suite.define(() => {
         await page.keyboard.press("Enter");
         await blue.tap();
         await rejectWrite(1);
-        await expect.poll(() => pageRoot.getByRole("alert").textContent()).toBe("Copy failed");
+        await expect
+          .poll(() => pageRoot.getByRole("alert").textContent())
+          .toBe("Couldn’t copy. Try again.");
         await blue.tap();
         await expect.poll(() => pageRoot.getByRole("alert").count()).toBe(0);
 
         await rejectWrite(2);
         await blue.locator(checkmark).waitFor();
         await expectNewestCopy();
-        await expect.poll(() => pageRoot.getByRole("status").textContent()).toContain("Copied!");
+        await expect.poll(() => pageRoot.getByRole("status").textContent()).toContain("Copied");
 
         await rejectWrite(0);
         await expectNewestCopy();

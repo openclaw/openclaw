@@ -5,16 +5,21 @@ import { en } from "./en.ts";
 const enAgentsHome = {
   agentsHome: {
     pinnedAgents: "Pinned agents",
-    noAssistantMessage: "No assistant reply yet",
+    noAssistantMessage: "No agent reply yet",
     viewSessions: "Sessions",
     deleteAgentConfirm: "Delete {agent}?",
     deleteAgentDetails:
-      "Its workspace, agent state, and session transcripts move to Trash. Its channel accounts remain configured.",
+      "Its workspace, agent state, and chat history move to Trash. Its channel accounts remain configured.",
     agentOptions: "Options for {agent}",
     working: "Working now",
   },
   templatesDraft: {
-    title: "Create Template",
+    title: "Create template",
+    reviewDisabled:
+      "Your private draft is saved. Turn on Templates in Settings → Labs to review it.",
+    reviewUnavailable:
+      "Your private draft is saved. Template review requires a connected administrator session with Template creation and chat access.",
+    openLabs: "Open Labs",
   },
 } satisfies TranslationMap;
 

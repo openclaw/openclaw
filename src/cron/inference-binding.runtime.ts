@@ -8,7 +8,7 @@ import { resolveSessionAuthSelection } from "../agents/auth-profiles/session-ove
 import { ensureAuthProfileStoreAsync } from "../agents/auth-profiles/store-runtime.js";
 import {
   cliBackendAcceptsAuthProfileForwarding,
-  resolveCliExecutionAuthProfileId,
+  resolveCliExecutionAuthSelection,
 } from "../agents/cli-execution-auth.js";
 import { resolveAgentHarnessSelectionDecision } from "../agents/harness/selection-decision.js";
 import { resolveProviderModelAuthPolicy } from "../agents/model-auth-policy.js";
@@ -21,14 +21,14 @@ import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { workerInferencePlacement } from "../gateway/worker-environments/inference-placement.js";
-import { type CronInferenceBinding, describeCronInferenceBinding } from "./inference-binding.js";
+import type { CronInferenceBinding } from "./inference-binding.js";
 import { resolveCronCandidateExecution } from "./isolated-agent/candidate-execution.js";
 import {
   resolveCronModelSelection,
   resolveCronModelSelectionOwner,
 } from "./isolated-agent/model-selection.js";
 
-/** Capture only a selected, current credential owner; never infer a legacy job's history. */
+/** Capture a current owner; null means an explicit, validated native CLI account selection. */
 export async function captureCronInferenceBinding(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -41,9 +41,11 @@ export async function captureCronInferenceBinding(params: {
    * `session:` job, or what a `current` job carries from its creating conversation.
    */
   runtimeSessionEntry?: Pick<SessionEntry, "agentRuntimeOverride">;
+  /** Existing stored-account edits retain this runtime; native adoption must also work without it. */
+  recordedRuntime?: string;
   authorizeProfile?: (profileId: string, inherited: boolean) => Promise<(() => void) | undefined>;
   retainAuthorization?: (authority: AuthProfileAuthorization) => void;
-}): Promise<CronInferenceBinding | undefined> {
+}): Promise<CronInferenceBinding | null | undefined> {
   const owner = await resolveCronModelSelectionOwner({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -73,25 +75,23 @@ export async function captureCronInferenceBinding(params: {
     modelId: model.model,
     authProfileId: model.configuredProfileId,
   });
-  // The runtime is resolved the way the run resolves it: the override its cron session
-  // carries, then config policy. The binding records it, and runs execute on it.
-  const runtimeEntry = params.runtimeSessionEntry;
-  const { runtime } = resolveCronCandidateExecution(
-    {
-      cfg,
-      agentId,
-      provider: model.provider,
-      model: model.model,
-      sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
-        provider: model.provider,
-        entry: runtimeEntry,
+  const resolveExecution = (runtimeEntry: typeof params.runtimeSessionEntry) =>
+    resolveCronCandidateExecution(
+      {
         cfg,
-      }),
-      sessionEntry: runtimeEntry,
-      authProfileId: model.configuredProfileId,
-    },
-    { isCliProvider, resolveEffectiveAgentRuntime },
-  );
+        agentId,
+        provider: model.provider,
+        model: model.model,
+        sessionRuntimeOverride: resolveSessionRuntimeOverrideForProvider({
+          provider: model.provider,
+          entry: runtimeEntry,
+          cfg,
+        }),
+        sessionEntry: runtimeEntry,
+        authProfileId: model.configuredProfileId,
+      },
+      { isCliProvider, resolveEffectiveAgentRuntime },
+    );
   // Backends that never forward a stored profile own their login; nothing here can bind it.
   if (
     cliExecutionProvider &&
@@ -112,7 +112,7 @@ export async function captureCronInferenceBinding(params: {
   if (cliExecutionProvider) {
     // Record the account the CLI backend forwards, not a separate inferred owner.
     const selectedProfileId = model.configuredProfileId ?? creatorSession?.authProfileOverride;
-    const profileId = await resolveCliExecutionAuthProfileId({
+    const selected = await resolveCliExecutionAuthSelection({
       cliExecutionProvider,
       authProfileProvider: model.provider,
       config: cfg,
@@ -129,11 +129,33 @@ export async function captureCronInferenceBinding(params: {
           }
         : undefined,
     });
-    if (!profileId) {
+    if (selected?.kind === "native" && model.configuredProfileId) {
+      // Clearing the binding also releases its runtime pin. Validate the session the next
+      // run will actually inherit, not the pin that this transition removes.
+      const { runtime, executionProvider, cliExecution } = resolveExecution(
+        params.runtimeSessionEntry,
+      );
+      if (
+        !cliExecution ||
+        executionProvider !== cliExecutionProvider ||
+        runtime !== cliExecutionProvider
+      ) {
+        throw new Error(
+          `The selected native account is unavailable on automation runtime ${runtime}.`,
+        );
+      }
+      if (params.recordedRuntime && params.recordedRuntime !== runtime) {
+        throw new Error(
+          `The automation runs on runtime ${params.recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${runtime}.`,
+        );
+      }
+      return null;
+    }
+    if (selected?.kind !== "stored") {
       return undefined;
     }
     selection = {
-      profileId,
+      profileId: selected.profileId,
       source: model.configuredProfileId ? "user" : "auto",
       routeRequirement: undefined,
     };
@@ -222,6 +244,12 @@ export async function captureCronInferenceBinding(params: {
   if (!authRequirement) {
     throw new Error("Automation requires a supported stored inference authentication route.");
   }
+  // Stored-account edits preserve their captured runtime; new jobs follow the target session.
+  const { runtime } = resolveExecution(
+    params.recordedRuntime
+      ? { agentRuntimeOverride: params.recordedRuntime }
+      : params.runtimeSessionEntry,
+  );
   const authority = await captureAuthProfileAuthorization({
     profileId: selection.profileId,
     agentDir,
@@ -260,7 +288,13 @@ export async function acquireCronInferenceAuthorization(params: {
   binding: CronInferenceBinding;
   cfg: OpenClawConfig;
   agentDir: string;
+  /** Names the automation and its real id in the recovery command. */
+  job?: { id: string; name?: string };
 }) {
+  const label = params.job
+    ? `Automation ${params.job.name?.trim() ? `"${params.job.name.trim()}" (${params.job.id})` : params.job.id}`
+    : "This automation";
+  const jobId = params.job?.id ?? "<jobId>";
   let authority: AuthProfileAuthorization | undefined;
   try {
     authority = await captureAuthProfileAuthorization({
@@ -271,7 +305,7 @@ export async function acquireCronInferenceAuthorization(params: {
     });
     if (authority.authorizationId !== params.binding.authorizationId) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was replaced. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was signed in again or replaced since the job recorded it. To keep using it: openclaw automations edit ${jobId} --model <provider/model>@${params.binding.profileId}.`,
       );
     }
     authority.assertCurrent();
@@ -285,7 +319,7 @@ export async function acquireCronInferenceAuthorization(params: {
       error.code === "MCP_AUTHORIZATION_RETIRED"
     ) {
       throw new Error(
-        `Automation inference ${describeCronInferenceBinding(params.binding)} was removed or signed out. Explicitly select an authorized account again.`,
+        `${label} runs on account ${params.binding.profileId}, which was removed or signed out. Sign in again, or choose another account: openclaw automations edit ${jobId} --model <provider/model>@<profileId> (list accounts: openclaw models auth list).`,
         { cause: error },
       );
     }

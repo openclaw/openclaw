@@ -19,7 +19,7 @@ const SERVICE_INSPECTION_MESSAGES = {
   "windows-task-inspection-failed":
     "Effective Scheduled Task service command could not be inspected. Verify that Windows Task Scheduler is available and that this account can query the task, then run openclaw gateway status --deep before retrying.",
   "launchd-gui-domain-unavailable":
-    "The launchd GUI domain is unavailable for this account. Manage its LaunchAgent from the target user's logged-in macOS desktop session.",
+    "Could not inspect the macOS launchd GUI domain for this account; it may be missing or inaccessible. From the Gateway owner's account, check launchctl print gui/$(id -u). If the domain is missing, log in to the macOS desktop as that user, then retry over SSH. SSH alone does not create a GUI session.",
   "launchd-system-domain-unavailable":
     "The launchd system domain cannot be queried by this account. Ask root to inspect it with sudo launchctl print system/<label>. OpenClaw manages user LaunchAgents, not custom system LaunchDaemons.",
   "launchd-system-owned":

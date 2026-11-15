@@ -55,20 +55,16 @@ import {
 } from "../infra/host-env-security.js";
 import { buildExecRoutingEnv, SUBAGENT_EXEC_ENV_VAR } from "../infra/openclaw-exec-env.js";
 import {
-  APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
   prepareSystemRunExecutableIdentityBinding,
-  revalidateSystemRunMutableFileBinding,
-  resolveMutableFileOperandSnapshotSync,
+  resolveMutableFileOperandSnapshot,
   type SystemRunMutableFileBinding,
 } from "../infra/system-run-approval-binding.js";
 import { normalizeSystemRunApprovalPlan } from "../infra/system-run-approval-plan.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "../infra/system-run-command.js";
 import {
   APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-  captureApprovedCwdSnapshotSync,
-  revalidateApprovedCwdSnapshot,
+  captureApprovedCwdSnapshot,
 } from "../infra/system-run-cwd-binding.js";
-import { revalidateApprovedMutableFileOperand } from "../infra/system-run-file-snapshot.js";
 import { logWarn } from "../logger.js";
 import {
   evaluateSystemRunPolicy,
@@ -91,6 +87,7 @@ import {
 import {
   buildEnvOverrideRejectionMessage,
   hardenApprovedExecutionPaths,
+  revalidateApprovedExecutionPaths,
 } from "./invoke-system-run-plan.js";
 import type { ExecEventPayload, RunResult, SystemRunParams } from "./invoke-types.js";
 import type { SkillBinsProvider } from "./runtime-skill-bins.js";
@@ -363,7 +360,7 @@ async function evaluateSystemRunPolicyPhase(
     : baseSecurity;
   const ask = fallbackRequest ? "off" : effectivePolicy.ask;
   const autoAllowSkills = approvals.agent.autoAllowSkills;
-  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
+  const { safeBins, safeBinProfiles, trustedSafeBinDirs } = await resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
     onWarning: warnWritableTrustedDirOnce,
@@ -456,7 +453,7 @@ async function evaluateSystemRunPolicyPhase(
       security === "allowlist" ||
       effectivePolicy.autoReview)
   ) {
-    const prepared = prepareSystemRunExecutableIdentityBinding({
+    const prepared = await prepareSystemRunExecutableIdentityBinding({
       segments,
       cwd: parsed.cwd,
       env: parsed.env,
@@ -474,7 +471,7 @@ async function evaluateSystemRunPolicyPhase(
     );
     const autoReviewEligibility = resolveUnpinnedAutoApprovalEligibility({
       authorizationPlan: await planExecAuthorization({
-        analysis: analyzeArgvCommand({ argv: parsed.argv, cwd: parsed.cwd, env: parsed.env }),
+        analysis: await analyzeArgvCommand({ argv: parsed.argv, cwd: parsed.cwd, env: parsed.env }),
         command: parsed.commandText,
         cwd: parsed.cwd,
         env: parsed.env,
@@ -591,7 +588,7 @@ async function evaluateSystemRunPolicyPhase(
   });
 
   const approvalContextBound = policy.approvedByAsk || fallbackRequest;
-  const hardenedPaths = hardenApprovedExecutionPaths({
+  const hardenedPaths = await hardenApprovedExecutionPaths({
     approvedByAsk: approvalContextBound,
     argv: parsed.argv,
     shellCommand: parsed.shellPayload,
@@ -603,7 +600,7 @@ async function evaluateSystemRunPolicyPhase(
   let executionCwd = hardenedPaths.cwd;
   let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
   if (security === "allowlist" && !approvedCwdSnapshot) {
-    const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
+    const capturedCwd = await captureApprovedCwdSnapshot(executionCwd ?? process.cwd());
     if (!capturedCwd.ok) {
       return parsed.deny(capturedCwd.message);
     }
@@ -653,35 +650,19 @@ async function evaluateSystemRunPolicyPhase(
 async function revalidateSystemRunApprovedPathBindings(
   phase: SystemRunPolicyPhase,
 ): Promise<boolean> {
-  if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
-    logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
-    await phase.deny(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
-    return false;
+  const failure = await revalidateApprovedExecutionPaths({
+    argv: phase.argv,
+    cwd: phase.cwd,
+    approvedCwdSnapshot: phase.approvedCwdSnapshot,
+    executableBinding: phase.executableBinding,
+    mutableFileOperand: phase.approvalPlan?.mutableFileOperand,
+  });
+  if (!failure) {
+    return true;
   }
-  if (
-    phase.approvalPlan?.mutableFileOperand &&
-    !revalidateApprovedMutableFileOperand({
-      snapshot: phase.approvalPlan.mutableFileOperand,
-      argv: phase.argv,
-      cwd: phase.cwd,
-    })
-  ) {
-    logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
-    await phase.deny(APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE);
-    return false;
-  }
-  if (phase.executableBinding) {
-    const revalidated = await revalidateSystemRunMutableFileBinding({
-      binding: phase.executableBinding,
-      cwd: phase.cwd,
-    });
-    if (!revalidated.ok) {
-      logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
-      await phase.deny(revalidated.message);
-      return false;
-    }
-  }
-  return true;
+  logWarn(`security: system.run approval ${failure.kind} drift blocked (runId=${phase.runId})`);
+  await phase.deny(failure.message);
+  return false;
 }
 
 async function executeSystemRunPhase(
@@ -696,7 +677,7 @@ async function executeSystemRunPhase(
     (phase.policy.approvedByAsk ||
       phase.approvalSource !== undefined ||
       phase.security === "allowlist")
-      ? resolveMutableFileOperandSnapshotSync({
+      ? await resolveMutableFileOperandSnapshot({
           argv: phase.argv,
           cwd: phase.cwd,
           shellCommand: phase.shellPayload,
@@ -791,7 +772,7 @@ async function executeSystemRunPhase(
 
   const allowAlwaysDecision =
     phase.policy.approvalDecision === "allow-always"
-      ? resolveAllowAlwaysPersistenceDecision({
+      ? await resolveAllowAlwaysPersistenceDecision({
           segments: phase.segments,
           cwd: phase.cwd,
           env: phase.env,
@@ -827,7 +808,10 @@ async function executeSystemRunPhase(
       agentId: phase.agentId,
       matches: phase.allowlistMatches,
       command: phase.commandText,
-      resolvedPath: resolveApprovalAuditTrustPath(phase.segments[0]?.resolution ?? null, phase.cwd),
+      resolvedPath: await resolveApprovalAuditTrustPath(
+        phase.segments[0]?.resolution ?? null,
+        phase.cwd,
+      ),
       authorization,
       ...(allowAlwaysDecision ? { allowAlwaysDecision } : {}),
     });

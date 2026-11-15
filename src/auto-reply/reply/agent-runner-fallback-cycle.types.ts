@@ -4,7 +4,7 @@ import type { RunEntryCandidateOptions } from "../../agents/embedded-agent-runne
 import type { DeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.types.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronRunInference } from "../../cron/run-inference.js";
@@ -58,7 +58,10 @@ export type AgentFallbackCandidateCommonParams = RunEntryCandidateOptions &
     signalExecutionPhaseForTyping: NonNullable<RunEmbeddedAgentParams["onExecutionPhase"]>;
     prepareAgentRunStart: () => void | Promise<void>;
     notifyAgentRunStart: (transcriptStart?: PreparedReplyTranscriptStart | null) => void;
-    hasAgentRunStarted: () => boolean;
+    notifyScheduledExecutionStarted: (
+      lifecycleBackstop: AgentLifecycleTerminalBackstop,
+      resolveSessionKey: () => string | undefined,
+    ) => Promise<void>;
     preserveProgressCallbackStartOrder: boolean;
     onLifecycleBackstop: (backstop: AgentLifecycleTerminalBackstop) => void;
     deferredLifecycle: DeferredEmbeddedRunLifecycleManager;
@@ -107,11 +110,8 @@ export type AgentFallbackCycleParams = AgentFallbackRunContext & {
   directBlockDeliveries: DirectBlockDelivery[];
   createAgentRunStartCallbacks: () => Pick<
     AgentFallbackCandidateCommonParams,
-    | "prepareAgentRunStart"
-    | "notifyAgentRunStart"
-    | "hasAgentRunStarted"
-    | "signalExecutionPhaseForTyping"
-  > & { close: () => void };
+    "prepareAgentRunStart" | "notifyAgentRunStart" | "signalExecutionPhaseForTyping"
+  > & { hasAgentRunStarted: () => boolean; close: () => void };
   notifyUserAboutCompaction: boolean;
   modelPatch: {
     captureFallbackFailure: (attempts: RuntimeFallbackAttempt[]) => boolean | undefined;

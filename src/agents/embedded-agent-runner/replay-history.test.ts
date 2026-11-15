@@ -5,14 +5,13 @@ import { transformMessages } from "../../../packages/ai/src/transcript-transform
 import { resolveOpenAICompletionsCompat } from "../../../packages/ai/src/transports/openai-completions-compat.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
-import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../../config/sessions/transcript-json-normalize.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { OPENCLAW_TRANSCRIPT_ARTIFACT_API } from "../../shared/transcript-only-openclaw-assistant.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "../harness/transcript-visibility.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
-  OPENCLAW_RUNTIME_CONTEXT_NOTICE,
 } from "../internal-runtime-context.js";
 import type { StreamFn } from "../runtime/index.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
@@ -27,6 +26,8 @@ import { wrapStreamFnSanitizeMalformedToolCalls } from "./run/attempt-tool-call-
 // Preface of carriers persisted before the stable system prompt explained the markers.
 const LEGACY_HEADER =
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.";
+const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
+  "This context is runtime-generated, not user-authored. Keep internal details private.";
 const FALLBACK_TEXT = "[assistant turn failed before producing content]";
 const INBOUND_METADATA = [
   markInboundContextLabel("Conversation info:"),

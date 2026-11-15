@@ -115,22 +115,32 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     neutral.models.push(extra);
     connected.models.push(extra);
   }
-  const select = (value: string) => {
-    if (!find("account-option", value)) {
-      find("account-group-toggle")!.click();
+  const accountToggle = () =>
+    draw().querySelector<HTMLButtonElement>(".chat-controls__account-trigger")!;
+  const openAccounts = () => {
+    const picker = draw().querySelector<HTMLDetailsElement>(".chat-controls__model-picker")!;
+    if (!picker.open) {
+      picker.querySelector<HTMLElement>("summary")!.click();
       flush();
     }
+    if (accountToggle().getAttribute("aria-expanded") !== "true") {
+      accountToggle().click();
+      flush();
+    }
+  };
+  const select = (value: string) => {
+    openAccounts();
     find("account-option", value)!.click();
   };
   const chooseAccount = async () => {
-    await vi.waitFor(() => expect(blocked()).toContain("No provider credential"));
+    await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
     await waitForModelControl(control, context, "main", agent);
-    find("account-group-toggle")!.click();
+    await vi.waitFor(() => expect(accountToggle()).not.toBeNull());
+    openAccounts();
     await vi.waitFor(() => expect(draw().textContent).toContain(account.label));
     select(`account:${account.authProfileId}`);
-    return {
-      completion: vi.waitFor(() => expect(blocked()).not.toBe("Loading models…")),
-    };
+    expect(control.metadataRead).toBeDefined();
+    return { completion: control.metadataRead };
   };
   return {
     ...fixture,
@@ -140,6 +150,8 @@ function retainedAccountDraft(mode?: "retire" | "permitted-default" | "provider-
     connected,
     select,
     chooseAccount,
+    accountToggle,
+    openAccounts,
     connect: async () => {
       const { completion } = await chooseAccount();
       preview.resolve(connected);
@@ -155,7 +167,7 @@ it("retires a consumed personal-account model before the next configured draft",
   expect(f.model()).toContain("anthropic/alternate@");
   f.control.retireDraftSelection();
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("keeps a personal account when Default uses the role-permitted provider rather than the agent default", async () => {
@@ -172,6 +184,8 @@ it("keeps a deliberate provider switch when leaving a personal account for a cac
   const f = retainedAccountDraft("provider-switch");
   await f.connect();
   const reads = f.request.mock.calls.filter(([method]) => method === "models.list").length;
+  f.find("model-provider-toggle", "openai")!.click();
+  flush();
   f.find("model-option", "openai/other")!.click();
   expect(f.model()).toBe("openai/other");
   expect(f.savePreference).toHaveBeenLastCalledWith(
@@ -242,7 +256,7 @@ it("does not complete a retained account preview before its replacement is accep
   const f = retainedAccountDraft();
   await f.connect();
   f.select("automatic");
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   invalidateModelCatalogCache(f.context.gateway.snapshot.client!, {
     agentId: "main",
     authProfileId: f.account.authProfileId,
@@ -254,11 +268,11 @@ it("does not complete a retained account preview before its replacement is accep
       : Promise.resolve({ profileId: "person-a", accounts: [f.account], links: [] }),
   );
 
-  f.find("account-group-toggle")!.click();
+  f.openAccounts();
   await vi.waitFor(() => expect(f.draw().textContent).toContain(f.account.label));
   f.select(`account:${f.account.authProfileId}`);
   expect(modelOption(f.draw(), "anthropic/model")).not.toBeNull();
-  expect(f.blocked()).toBe("Loading models…");
+  expect(f.blocked()).toBe("Models unavailable");
   expect(f.ready()).toBe(false);
   expect(f.find("account-selection")?.dataset.chatAccountSelection).toBe("automatic");
   replacement.resolve(f.connected);
@@ -329,7 +343,7 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   const option = () => find("model-option", "example/model");
   onTestFinished(() => clock.mockRestore());
   load();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(true));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBe("true"));
   request.mockResolvedValueOnce({
     models: [
       { ...model, available: true, unavailableReason: undefined, unavailableUntil: undefined },
@@ -337,25 +351,25 @@ it("enables a cooled-down model on reopen without a catalog event", async () => 
   });
   clock.mockReturnValue(12_000);
   find("model-select", "true")!.click();
-  await vi.waitFor(() => expect(option()?.disabled).toBe(false));
+  await vi.waitFor(() => expect(option()?.getAttribute("aria-disabled")).toBeNull());
 });
 
 it("selects a usable retained account after refresh failure without changing saved preferences", async () => {
   const f = retainedAccountDraft();
   const { completion } = await f.chooseAccount();
-  expect(f.blocked()).toBe("Loading models…");
+  expect(f.blocked()).toBe("Models unavailable");
   f.preview.resolve({ ...f.connected, refreshFailed: true });
   await completion;
   expect(f.blocked()).toBeUndefined();
   expect(f.ready()).toBe(true);
   expect(f.find("model-catalog-state")).toBeNull();
-  expect(f.find("account-group-toggle")?.textContent).toContain(f.account.label);
+  expect(f.accountToggle()?.textContent).toContain(f.account.label);
   expect(f.model()).toBe(`anthropic/model@${f.account.authProfileId}`);
   expect(f.control.selected).toBe("");
   f.select("automatic");
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
   expect(f.savePreference).not.toHaveBeenCalled();
   expect(
     f.request.mock.calls.some(([method]) => /users\.(selectModelAccount|prefs\.set)/.test(method)),
@@ -386,9 +400,9 @@ it("retires a pending personal-account preview when the user identity changes", 
   f.control.load(f.context, "main", true, { agent: f.agent });
   f.preview.resolve(f.connected);
   await completion;
-  await vi.waitFor(() => expect(f.blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(f.blocked()).toContain("No account is available for this model."));
   expect(f.model()).toBe("");
-  expect(f.find("account-group-toggle")?.textContent).toContain("Automatic");
+  expect(f.accountToggle()?.textContent).toContain("Account: Auto");
 });
 
 it("retains its neutral auth gate through pending, rejected and failed refreshes, isolated from a session projection", async () => {
@@ -403,18 +417,18 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   );
   const client = context.gateway.snapshot.client!;
   load();
-  await vi.waitFor(() => expect(blocked()).toContain("No provider credential"));
+  await vi.waitFor(() => expect(blocked()).toContain("No account is available for this model."));
   const scope = { agentId: "main", sessionKey: "agent:main:locked" };
   const release = subscribeChatMetadata(client, scope, () => {});
   beginChatMetadataPublication(client, scope).publish({
     commands: [],
     models: [{ ...model, available: true, unavailableReason: undefined }],
   });
-  expect(blocked()).toContain("No provider credential");
+  expect(blocked()).toContain("No account is available for this model.");
   const pending = deferred<{ models: ModelCatalogEntry[] }>();
   request.mockReturnValueOnce(pending.promise);
   emitCatalogChanged();
-  expect(blocked()).toContain("No provider credential");
+  expect(blocked()).toContain("No account is available for this model.");
   pending.resolve({ models: [{ ...model, unavailableReason: "auth-failed" }] });
   await vi.waitFor(() => expect(blocked()).toContain("Authentication failed"));
   request.mockRejectedValueOnce(new Error("transport failed"));
@@ -422,7 +436,9 @@ it("retains its neutral auth gate through pending, rejected and failed refreshes
   await vi.waitFor(() => {
     const container = draw();
     expect(find("model-select", "true")?.getAttribute("aria-busy")).toBe("false");
-    expect(container.textContent).toContain("No models available");
+    expect(container.querySelector("[data-chat-model-auth-state]")?.textContent).toContain(
+      "Authentication failed",
+    );
   });
   expect(blocked()).toContain("Authentication failed");
   request.mockResolvedValueOnce({
@@ -487,7 +503,11 @@ describe("model selection policy", () => {
   });
 
   it.each([
-    { event: "config.changed" as const, payload: {}, clearsChoices: false },
+    {
+      event: "chat.metadata.changed" as const,
+      payload: { modelCatalogChanged: true },
+      clearsChoices: false,
+    },
     {
       event: "chat.metadata.changed" as const,
       payload: { modelSelectionChanged: true },
@@ -513,10 +533,11 @@ describe("model selection policy", () => {
         }
         if (attempt === 1) {
           expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
-          expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          expect(checking.querySelector('[data-chat-model-catalog-state="loading"]')).toBeNull();
+          expect(checking.querySelector(".btn__spinner")).toBeNull();
         }
         if (clearsChoices) {
-          expect(blocked()).toBe("Loading models…");
+          expect(blocked()).toBe("Models unavailable");
         }
         wire.reject(new Error("Catalog unavailable"));
         await expect(control.metadataRead).rejects.toThrow("Catalog unavailable");
@@ -552,7 +573,7 @@ describe("model selection policy", () => {
         control.load(next.context, "main", true, { agent });
         const pending = control.metadataRead;
         expect(model()).toBe("fixture/previous");
-        expect(blocked()).toBe("Loading models…");
+        expect(blocked()).toBe("Models unavailable");
         const waiting = draw();
         expect(waiting.textContent).not.toContain("previous");
         expect(waiting.textContent).not.toContain("Previous model");

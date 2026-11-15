@@ -4,6 +4,10 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, expect, it, onTestFinished } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  createCompactionNoticePayload,
+  resolveCompactionCompletionNotice,
+} from "../../auto-reply/reply/compaction-notice.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadAndActivateRootPluginRegistry } from "../../plugins/loader.js";
@@ -17,7 +21,7 @@ import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.li
 import { SessionManager } from "../sessions/session-manager.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { compactEmbeddedAgentSessionDirect } from "./compact.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
+import { compactQueuedEmbeddedAgentSession as compactEmbeddedAgentSession } from "./compact.queued.js";
 
 // Real queued compaction, native delegate, AgentSession, and SQLite transcript; only the
 // provider is a local OpenAI-compatible endpoint whose summary requests stall, fail, or answer.
@@ -28,6 +32,8 @@ type SummaryMode =
   | "server-error"
   | "auth-error"
   | "error"
+  | "refusal"
+  | "refusal-primary"
   | "ok";
 type SessionTarget = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 type Fixture = { state: OpenClawTestState; config: OpenClawConfig; target: SessionTarget };
@@ -47,7 +53,42 @@ beforeAll(async () => {
     req.on("end", () => {
       summaryRequests.push(body);
       summaryArrived.resolve();
-      const mode: SummaryMode = body.includes('"model":"fallback-model"') ? "ok" : summaryMode;
+      const fallbackRoute = body.includes('"model":"fallback-model"');
+      if (summaryMode === "refusal" || summaryMode === "refusal-primary") {
+        const answer = summaryMode === "refusal-primary" && fallbackRoute;
+        const text = "## Goal\nFallback route summary.";
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(
+          [
+            { type: "message_start", message: { id: "summary", usage: { input_tokens: 2 } } },
+            ...(answer
+              ? [
+                  { type: "content_block_start", index: 0, content_block: { type: "text" } },
+                  { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
+                ]
+              : []),
+            {
+              type: "message_delta",
+              delta: answer
+                ? { stop_reason: "end_turn" }
+                : {
+                    stop_reason: "refusal",
+                    stop_details: {
+                      type: "refusal",
+                      category: "reasoning_extraction",
+                      explanation: "Synthetic summary refusal.",
+                    },
+                  },
+              usage: { output_tokens: 0 },
+            },
+            { type: "message_stop" },
+          ]
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+        );
+        return;
+      }
+      const mode: SummaryMode = fallbackRoute ? "ok" : summaryMode;
       if (mode === "stall") {
         res.writeHead(200, { "content-type": "text/event-stream" });
         return;
@@ -140,6 +181,8 @@ async function createFixture(
   options: {
     modelFallback?: boolean;
     safeguard?: boolean;
+    refusal?: boolean;
+    fallbackRuntime?: string;
   } = {},
 ) {
   const state = await createOpenClawTestState({ prefix: "openclaw-summary-fallback-" });
@@ -174,10 +217,16 @@ async function createFixture(
     models: {
       providers: {
         fixture: {
-          api: "openai-completions",
+          api: options.refusal ? "anthropic-messages" : "openai-completions",
           apiKey: "synthetic-fixture",
           baseUrl,
-          models: [model("model"), model("fallback-model")],
+          models: [
+            model("model"),
+            {
+              ...model("fallback-model"),
+              ...(options.fallbackRuntime ? { agentRuntime: { id: options.fallbackRuntime } } : {}),
+            },
+          ],
         },
       },
     },
@@ -195,7 +244,11 @@ async function createFixture(
   return { ...fixture, seeded: appendToolTurns(fixture, 0, 8) };
 }
 
-function compactSession(fixture: Fixture, abortSignal?: AbortSignal) {
+function compactSession(
+  fixture: Fixture,
+  abortSignal?: AbortSignal,
+  trigger: "manual" | "budget" = "budget",
+) {
   return compactEmbeddedAgentSession(
     {
       ...fixture.target,
@@ -206,7 +259,7 @@ function compactSession(fixture: Fixture, abortSignal?: AbortSignal) {
       config: fixture.config,
       provider: "fixture",
       model: "model",
-      trigger: "budget",
+      trigger,
       force: true,
       abortSignal,
       enqueue: async (task) => await task(),
@@ -230,6 +283,83 @@ function expectFallbackSummary(fixture: Fixture) {
     expect.stringContaining("removed without a summary"),
   ]);
 }
+
+const requestedModels = () => summaryRequests.map((body) => JSON.parse(body).model);
+
+it.each([
+  { safeguard: true, trigger: "manual", modelFallback: true },
+  { safeguard: true, trigger: "budget", modelFallback: false },
+  { safeguard: false, trigger: "budget", modelFallback: true },
+  // Fallback setup throws before any request: its harness is not registered.
+  { safeguard: false, trigger: "budget", modelFallback: true, fallbackRuntime: "missing" },
+] as const)(
+  "trims a refused summary once with a visible notice ($trigger, safeguard=$safeguard, fallback=$modelFallback)",
+  async ({ safeguard, trigger, modelFallback, ...options }) => {
+    const fallbackRuntime = "fallbackRuntime" in options ? options.fallbackRuntime : undefined;
+    const fixture = await createFixture({
+      safeguard,
+      refusal: true,
+      modelFallback,
+      fallbackRuntime,
+    });
+    const seeded = [...fixture.seeded, ...appendToolTurns(fixture, 8, 43)];
+    summaryMode = "refusal";
+
+    const result = await compactSession(fixture, undefined, trigger);
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: { details: { summaryRefused: true } },
+    });
+    // The fallback route refuses too; neither route is asked twice.
+    expect(requestedModels()).toEqual(
+      modelFallback && !fallbackRuntime ? ["model", "fallback-model"] : ["model"],
+    );
+    expect(result.result?.tokensAfter).toBeLessThan(24_000);
+    expect(result.result?.tokensBefore).toBeGreaterThan(24_000);
+    expectFallbackSummary(fixture);
+    const session = openSession(fixture);
+    expect(
+      session
+        .getBranch()
+        .filter((entry) => entry.type === "message")
+        .map((entry) => entry.id),
+    ).toEqual(seeded);
+    expect(session.buildSessionContext().messages.at(-1)).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-50",
+    });
+    expect(
+      createCompactionNoticePayload(resolveCompactionCompletionNotice(result, false)).text,
+    ).toContain("Context trimmed because the summarizer refused");
+    expect(
+      createCompactionNoticePayload(resolveCompactionCompletionNotice(result, true)).text,
+    ).toContain("Continuing with bounded recent context");
+  },
+);
+
+it.each([false, true])(
+  "retries a refused summary once on the next fallback route (safeguard=%s)",
+  async (safeguard) => {
+    const fixture = await createFixture({ safeguard, refusal: true, modelFallback: true });
+    summaryMode = "refusal-primary";
+
+    const result = await compactSession(fixture);
+
+    expect(result).toMatchObject({
+      ok: true,
+      compacted: true,
+      result: { details: { summaryRoute: "fixture/fallback-model" } },
+    });
+    // The refusing route is asked once; split-turn and quality requests stay on the fallback.
+    expect(requestedModels().lastIndexOf("model")).toBe(0);
+    expect(requestedModels()[1]).toBe("fallback-model");
+    expect(getCompactions(fixture).map((entry) => entry.summary)).toEqual([
+      expect.stringContaining("Fallback route summary."),
+    ]);
+  },
+);
 
 it("commits a deterministic reduction after a bodyless 408 summary timeout", async () => {
   const fixture = await createFixture();

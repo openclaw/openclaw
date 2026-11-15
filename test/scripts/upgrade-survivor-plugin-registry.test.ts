@@ -1,6 +1,14 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -423,6 +431,7 @@ it("isolates each projects-doctor run from retained evidence and preserves a fai
     if (exitCode !== "0") {
       expect(result.stderr).toContain("Preserved failed synthetic worker-cell state:");
       for (const runtime of runtimes) {
+        expect(statSync(join(directory, runtime)).mode & 0o1777).toBe(0o1777);
         expect(read(join(directory, runtime), "runtime/state-marker")).toBe("synthetic state");
       }
     }

@@ -19,6 +19,7 @@ import {
   requireGitCommand as requireGit,
   requireGitCommandOutput,
 } from "../infra/git-exec.js";
+import { lstatIfExists } from "../infra/path-existence.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { assertNotUpdateCapturePath } from "../infra/update-capture-paths.js";
 import { formatCommandOutput, formatCommandResult } from "../process/command-error.js";
@@ -54,6 +55,14 @@ import type { SnapshotDatabaseRef } from "./snapshot-provider.js";
 const GIT_BACKUP_DIAGNOSTIC_MAX_LENGTH = 500;
 const GIT_BACKUP_NON_BACKUP_HISTORY_WARNING =
   "repository history contains non-backup commits; use a dedicated backup repository";
+
+function gitBackupContentTimeout(bytes: number): number {
+  // Allow 1 MiB/s for local content work, bounded to stop wedged Git processes.
+  return Math.min(
+    24 * 60 * 60 * 1000,
+    Math.max(GIT_TIMEOUT_MS, Math.ceil(bytes / 1024 ** 2) * 1000),
+  );
+}
 
 type GitBackupCreateResult = {
   repositoryPath: string;
@@ -214,6 +223,10 @@ async function commitGitBackup(params: {
   head?: string;
   paths: string[];
 }): Promise<string | undefined> {
+  let bytes = 0;
+  for (const file of params.paths) {
+    bytes += (await lstatIfExists(path.join(params.repositoryPath, file)))?.size ?? 0;
+  }
   const indexWorkspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-backup-index-",
@@ -240,6 +253,7 @@ async function commitGitBackup(params: {
       {
         env,
         input: params.paths.join("\0") + "\0",
+        timeoutMs: gitBackupContentTimeout(bytes),
       },
     );
     const changed = await runGit(params.repositoryPath, ["diff", "--cached", "--quiet"], { env });
@@ -460,7 +474,9 @@ async function materializeGitBackupRef(params: {
     `${params.ref?.trim() || "HEAD"}^{commit}`,
   ]);
   const scope = gitBackupScopePath(params.identity).split(path.sep).join("/");
-  const entries = (await requireGit(repositoryPath, ["ls-tree", "-r", "-z", commit, "--", scope]))
+  const entries = (
+    await requireGit(repositoryPath, ["ls-tree", "-r", "-l", "-z", commit, "--", scope])
+  )
     .split("\0")
     .filter(Boolean);
   const files = new Map(entries.map((entry) => [entry.slice(entry.indexOf("\t") + 1), entry]));
@@ -472,6 +488,7 @@ async function materializeGitBackupRef(params: {
     if (!entry.startsWith("100644 blob ") && !entry.startsWith("100755 blob ")) {
       throw new Error(`Git backup ref contains a non-regular artifact: ${file}`);
     }
+    return Number(entry.slice(0, entry.indexOf("\t")).trim().split(/\s+/).at(-1));
   };
   const manifestPath = `${scope}/${GIT_BACKUP_MANIFEST}`;
   assertRegularArtifact(manifestPath);
@@ -479,12 +496,10 @@ async function materializeGitBackupRef(params: {
     await requireGit(repositoryPath, ["show", `${commit}:${manifestPath}`]),
     manifestPath,
   );
-  const artifacts = gitBackupArtifactFiles(manifest).map(
-    (file) => `${scope}/${file.split(path.sep).join("/")}`,
-  );
-  for (const file of artifacts) {
-    assertRegularArtifact(file);
-  }
+  const artifacts = gitBackupArtifactFiles(manifest).map((file) => {
+    const gitPath = `${scope}/${file.split(path.sep).join("/")}`;
+    return { file: gitPath, timeout: gitBackupContentTimeout(assertRegularArtifact(gitPath)) };
+  });
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-git-restore-",
@@ -493,7 +508,7 @@ async function materializeGitBackupRef(params: {
   try {
     // A ref may contain unrelated documents or filesystem metadata. Only the
     // manifest's artifacts enter restore staging and database verification.
-    for (const file of artifacts) {
+    for (const { file, timeout } of artifacts) {
       const relative = file.slice(scope.length + 1);
       const destination = path.join(outputPath, relative);
       await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
@@ -505,7 +520,7 @@ async function materializeGitBackupRef(params: {
         stdout: { file: destination },
         buffer: { stdout: false },
         maxBuffer: { stderr: 1024 * 1024 },
-        timeout: GIT_TIMEOUT_MS,
+        timeout,
       });
     }
     return {

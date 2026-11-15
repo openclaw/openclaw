@@ -127,7 +127,7 @@ export function createPersonalSessionGroupActions(
         reconcile(result.session ?? undefined);
       }
       if (selectedKey && !eligible(selectedKey)) {
-        showToast({ message: t("sessionsView.personalGroupUnavailable") });
+        showToast({ severity: "error", message: t("sessionsView.personalGroupUnavailable") });
         return;
       }
       const available = candidates().filter((row) => row.pinnable && !row.archived);
@@ -144,7 +144,7 @@ export function createPersonalSessionGroupActions(
           : controller.signal,
       });
     } catch {
-      showToast({ message: t("sessionsView.actionUnavailable") });
+      showToast({ severity: "error", message: t("sessionsView.actionUnavailable") });
     } finally {
       observation?.dispose();
       stop();
@@ -246,7 +246,10 @@ export function createPersonalSessionGroupActions(
       }
       const updated = { ...group, sessionKeys: [...group.sessionKeys, key] };
       const error = write(groups().map((item) => (item.id === id ? updated : item)));
-      showToast({ message: error ?? t("sessionsView.personalGroupReferenceAdded") });
+      showToast({
+        severity: error ? "error" : "success",
+        message: error ?? t("sessionsView.personalGroupReferenceAdded"),
+      });
     });
   return { write, edit, add };
 }

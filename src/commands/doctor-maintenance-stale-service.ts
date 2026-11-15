@@ -78,7 +78,6 @@ export async function inspectStaleDoctorGateway(params: {
         expectedVersion: version,
         expectedBuildId: buildId,
         openStateSchemaReadAdmission: openDoctorStateSchemaReadAdmission,
-        requirePluginHealth: false,
       });
   params.assertCurrent?.();
   const stale =

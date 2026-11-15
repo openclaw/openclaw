@@ -23,6 +23,7 @@ import { t } from "../../i18n/index.ts";
 import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../avatar.ts";
 import { buildCatalogDisplayLookup, buildChatModelOptionFromLookup } from "../chat/model-ref.ts";
 import { resolveAgentConfigEntryTarget } from "../config/config-state-model.ts";
+import { normalizeAgentId } from "../sessions/session-key.ts";
 
 type AgentRosterEntry = {
   id: string;
@@ -36,6 +37,13 @@ export function listSelectableAgents<T extends AgentRosterEntry>(agents: readonl
   return agents.filter((agent) => agent.kind !== "system");
 }
 
+export function findSelectableAgent<T extends AgentRosterEntry>(agents: readonly T[], id: string) {
+  const selectedId = normalizeAgentId(id);
+  return agents.find(
+    (agent) => agent.kind !== "system" && normalizeAgentId(agent.id) === selectedId,
+  );
+}
+
 export function selectableAgentsList(agentsList: AgentsListResult): AgentsListResult {
   return { ...agentsList, agents: listSelectableAgents(agentsList.agents) };
 }
@@ -47,7 +55,7 @@ type AgentDisplayTools = Pick<ToolsConfig, "allow" | "alsoAllow" | "deny"> & {
 
 type AgentConfigEntry = Pick<
   AgentConfig,
-  "name" | "workspace" | "agentDir" | "decisionModel" | "skills"
+  "name" | "workspace" | "agentDir" | "decisionModel" | "utilityModel" | "skills"
 > & {
   model?: unknown;
   models?: Record<string, { alias?: unknown }>;
@@ -58,7 +66,7 @@ type ConfigSnapshot = {
   agents?: {
     defaults?: Pick<
       AgentConfigEntry,
-      "workspace" | "model" | "decisionModel" | "models" | "skills"
+      "workspace" | "model" | "decisionModel" | "utilityModel" | "models" | "skills"
     >;
     entries?: Record<string, AgentConfigEntry>;
   };
@@ -409,7 +417,7 @@ export function buildModelOptions(
     const separator = current.indexOf("/");
     options.unshift({
       value: current,
-      label: `Current (${current})`,
+      label: current,
       provider: separator > 0 ? current.slice(0, separator) : undefined,
     });
   }

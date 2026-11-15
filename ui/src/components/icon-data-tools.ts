@@ -244,6 +244,16 @@ export const toolIconData = {
       },
     ],
   ]),
+  // Lucide compass (ISC).
+  compass: strokeIconData([
+    [
+      "path",
+      {
+        d: "m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z",
+      },
+    ],
+    ["circle", { cx: "12", cy: "12", r: "10" }],
+  ]),
   spark: strokePathData(
     "M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z",
   ),
@@ -344,6 +354,9 @@ export const toolIconData = {
   trash: strokePathData(
     "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6",
   ),
+  trashSimple: strokePathData(
+    "M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2",
+  ),
   eye: strokeIconData([
     [
       "path",
@@ -363,9 +376,13 @@ export const toolIconData = {
   ]),
   // Session chrome has its own approved silhouettes; generic panel icons stay unchanged.
   sessionMenu: strokePathData("M4 8h16M4 16h10"),
+  // Lucide message-circle opened at the lower right for the plus overlay.
+  sessionNew: strokePathData(
+    "M2.992 16.342a2 2 0 0 1 .094 1.167l-1.065 3.29a1 1 0 0 0 1.236 1.168l3.413-.998a2 2 0 0 1 1.099.092A10 10 0 0 0 11.981 22M22 11.981A10 10 0 1 0 2.992 16.342M18.5 15v7M15 18.5h7",
+  ),
   sessionPanels: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
-    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
   ]),
   // Dock is a destination action, so it has no open/close chevron or active fill.
   sessionPanelDockBottom: strokeIconData([
@@ -383,7 +400,7 @@ export const toolIconData = {
       },
     ],
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],
-    ["path", { d: "M15 3v18", "stroke-width": "1.8" }],
+    ["path", { d: "M15 3v18", "stroke-width": "1.8", "stroke-linecap": "butt" }],
   ]),
   sessionSidebarOpen: strokeIconData([
     ["rect", { x: "3", y: "3", width: "18", height: "18", rx: "3", "stroke-width": "1.8" }],

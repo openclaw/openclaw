@@ -53,7 +53,7 @@ export function registerNativePluginPolicyCases(options: NativePluginSpawnTestOp
       const { parentSessionKey, parentRunId } = bound;
       const { context, runtime } = await createBoundGateway(bound);
       const failures: unknown[] = [];
-      const agentTools = await import("../../agent-tools.js");
+      const agentTools = await import("../../agent-tools.async.js");
       const original = agentTools.createOpenClawCodingToolsInternalAsync;
       const preparation =
         reader === "absent"

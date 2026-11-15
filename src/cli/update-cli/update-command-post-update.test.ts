@@ -294,7 +294,8 @@ describe("successful update finalization ordering", () => {
         },
       );
       const recovery = taskRecovery((phase) => events.push(phase));
-      mocks.restartService.mockImplementationOnce(async () => {
+      mocks.restartService.mockImplementationOnce(async ({ onGatewayStartAttempted }) => {
+        onGatewayStartAttempted?.();
         events.push("start");
         return "ok";
       });
@@ -325,8 +326,8 @@ describe("successful update finalization ordering", () => {
       } finally {
         identity.restore();
       }
-      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("activation-attempt"));
-      expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("doctor")).toBeLessThan(events.indexOf("restore"));
+      expect(events.indexOf("restore")).toBeLessThan(events.indexOf("activation-attempt"));
       expect(events.indexOf("activation-attempt")).toBeLessThan(events.indexOf("start"));
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.stopService).not.toHaveBeenCalled();
@@ -505,7 +506,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: expect.arrayContaining([retained]),
+        steps: expect.arrayContaining([{ ...retained, durationMs: expect.any(Number) }]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
@@ -570,7 +571,6 @@ describe("successful update finalization ordering", () => {
           env: serviceEnv,
         };
         const clock = { origin: Date.now(), elapsed: 1_000 };
-        vi.spyOn(Date, "now").mockImplementation(() => clock.origin + clock.elapsed);
         const events: string[] = [];
         const windowsEvents: string[] = [];
         const oldRecovery = taskRecovery((phase) => {
@@ -589,7 +589,7 @@ describe("successful update finalization ordering", () => {
             return "restart-health-failed";
           }
           recordVerifiedGatewayRun(run);
-          params.onVerified?.(Date.now());
+          params.onVerified?.(clock.origin + clock.elapsed);
           return "ok";
         });
         const plugins = { ...successfulPluginUpdate, changed };
@@ -640,7 +640,7 @@ describe("successful update finalization ordering", () => {
                       },
               },
               rolledBack: outcome === "rolled-back",
-              ...(outcome === "rolled-back" ? { verifiedAtMs: Date.now() } : {}),
+              ...(outcome === "rolled-back" ? { verifiedAtMs: clock.origin + clock.elapsed } : {}),
             };
           },
         );
@@ -952,7 +952,9 @@ process.exitCode = 1;
       );
 
       expect(events).toEqual(["restart"]);
-      const steps = mocks.printResult.mock.lastCall?.[0].steps;
+      const steps = mocks.printResult.mock.lastCall?.[0].steps.filter(
+        (step: { name: string }) => !step.name.endsWith("-timing"),
+      );
       if (!runs) {
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual(initialSteps);

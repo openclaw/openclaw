@@ -137,7 +137,7 @@ describe("transcripts CLI", () => {
     });
     expect(await runJson("path", "active-session")).toMatchObject({ exists: false });
     for (const command of ["show", "path"]) {
-      await expect(runCli([command, "active-session"])).rejects.toThrow("summary.md not found");
+      await expect(runCli([command, "active-session"])).rejects.toHaveProperty("humanOutput");
     }
   });
 

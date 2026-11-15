@@ -108,7 +108,7 @@ it("recovers after stopping a service whose pending runtime construction rejects
     return pending.promise;
   });
   const { request, service, serviceContext } = registerPlugin(true);
-  if (!service?.stop || service.apiVersion === 2) {
+  if (!service?.stop || service.apiVersion === 2 || service.apiVersion === 3) {
     throw new Error("expected registered FaceTime service with shutdown");
   }
   const starting = service.start(serviceContext);

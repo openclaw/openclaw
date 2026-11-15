@@ -10,6 +10,7 @@ import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity
 import { sampleTrackedWorkerMemory } from "../../infra/worker-cpu.js";
 import { flushLogger, setLoggerOverride } from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -123,6 +124,7 @@ function maintenanceFixture(state: OpenClawTestState) {
   const active = seed(state, "active");
   const victim = seed(state, "victim", 1);
   const databaseOptions = databaseFor(state);
+  const identity = readOpenClawAgentDatabaseIdentity(openOpenClawAgentDatabase(databaseOptions));
   const input = {
     activeSessionKeys: [active.sessionKey],
     archiveDirectory: state.path("archives"),
@@ -131,6 +133,12 @@ function maintenanceFixture(state: OpenClawTestState) {
     storePath: databaseOptions.path,
   };
   const request = {
+    source: {
+      kind: "file" as const,
+      physicalIdentity: identity.identity,
+      birthtime: identity.birthtime,
+      nativeLocation: identity.canonicalPath,
+    },
     activeSessionKey: active.sessionKey,
     archiveDirectory: input.archiveDirectory,
     maintenanceConfig: input.maintenance,

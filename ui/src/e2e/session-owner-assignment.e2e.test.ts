@@ -228,6 +228,7 @@ async function expandAssignment(assignTo: Locator, compact: boolean) {
     await assignTo.click();
   } else {
     await assignTo.hover();
+    await expectBrowser(sessionMenuSubmenu(assignTo)).toHaveAttribute("data-phase", "open");
   }
 }
 
@@ -244,7 +245,7 @@ suite.define(() => {
         await expectBrowser(search).toBeVisible();
         await page.keyboard.type("zz");
         await expectBrowser(search).toHaveValue("zz");
-        await expectBrowser(panel).toContainText("No matching people or agents");
+        await expectBrowser(panel).toContainText("No people or agents match your search.");
         await page.keyboard.press("Escape");
         await expectBrowser(search).toHaveValue("");
         await page.keyboard.type("carol");
@@ -632,14 +633,15 @@ suite.define(() => {
           await search.clear();
           await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 1005 : 1004);
           await search.fill("Teammate 0999");
+          // Escape clears the query and keeps the field; the next Escape leaves the list.
           await search.press("Escape");
+          await expectBrowser(search).toHaveValue("");
+          await page.keyboard.press("Escape");
           if (width < 560) {
             await expectBrowser(page.locator(".session-actions-page")).toBeHidden();
             await expectBrowser(trigger).toBeFocused();
           } else {
-            await expectBrowser(search).toHaveValue("");
             await expectBrowser(trigger).toHaveAttribute("aria-expanded", "true");
-            await search.press("Escape");
             const assignment = menuItem(page, "Assign to…");
             await expectBrowser(assignment).toHaveAttribute("aria-expanded", "false");
             await page.keyboard.press("Escape");
@@ -659,6 +661,9 @@ suite.define(() => {
           await expectBrowser(match).toBeVisible();
           await expectBrowser(ownerChoices(page, compact)).toHaveCount(compact ? 2 : 1);
           await search.press(width < 560 ? "Tab" : "ArrowDown");
+          if (width < 560) {
+            await page.keyboard.press("Tab");
+          }
           await expectBrowser(match).toBeFocused();
           await page.keyboard.press("Enter");
           await expectAssignmentRequest(gateway, "profile-teammate-0999");

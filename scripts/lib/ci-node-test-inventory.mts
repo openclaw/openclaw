@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { matchesGlob } from "node:path";
 import {
   agentVitestProjectOwners,
@@ -26,6 +27,7 @@ import {
   filterFilesByPatterns,
   isPlainRepoRelativePath,
 } from "../../test/vitest/vitest.include-patterns.ts";
+import { markdownTestFiles } from "../../test/vitest/vitest.markdown-paths.mjs";
 import {
   autoReplyCoreTestInclude,
   autoReplyCoreTestExclude,
@@ -45,6 +47,30 @@ import { getCommandFilesByOwner } from "./ci-command-test-plan.mts";
 import { isStripeEligibleTestFile, listTrackedTestFiles } from "./list-test-files.mts";
 
 export const COMPACT_EMBEDDED_BASE_GROUP_NAME = "agentic-agents-embedded-base";
+
+export type NodeTestVolume = {
+  version: 1;
+  revision: string;
+  policy: "node" | "bun-all" | "dual-all";
+  entries: {
+    config: string;
+    runtime: "node" | "bun";
+    engine: "vitest" | "bun-test";
+    profile: string;
+    environment: string;
+    argsDigest: string;
+    full: { id: string; count: number; digest: string } | null;
+    selected: { count: number; digest: string } | null;
+  }[];
+};
+
+export function summarizeNodeTestFiles(files: readonly string[]) {
+  const unique = [...new Set(files)].toSorted();
+  return {
+    count: unique.length,
+    digest: createHash("sha256").update(JSON.stringify(unique)).digest("hex"),
+  };
+}
 
 export function listScopedOwnerTestFiles(owner: {
   root: string;
@@ -151,6 +177,7 @@ const CONFIG_FILE_OWNERS = new Map<string, Parameters<typeof listScopedOwnerTest
   ],
 ]);
 const EXACT_CONFIG_FILES = new Map<string, string[]>([
+  ["test/vitest/vitest.markdown.config.ts", markdownTestFiles],
   ["test/vitest/vitest.boundary.config.ts", boundaryTestFiles],
   ["test/vitest/vitest.tui-pty.config.ts", tuiPtyTestFiles],
   ["test/vitest/vitest.gateway-server-isolated.config.ts", gatewayServerIsolatedTestFiles],
@@ -184,6 +211,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
   string,
   { listFiles: () => string[]; splitByFile?: false }
 >([
+  ["core-markdown", { listFiles: () => markdownTestFiles }],
   [
     "agentic-agents-tools",
     {
@@ -322,7 +350,7 @@ const WHOLE_CONFIG_FILE_OWNERS = new Map<
           include: ["src/gateway/server-methods/**/*.test.ts"],
           exclude: [...databaseWorkerCoreTestFiles, ...gatewayDatabaseWorkerTestFiles],
         }),
-        ...gatewayPluginTestFiles.filter((file) => !gatewayDatabaseWorkerTestFiles.includes(file)),
+        ...gatewayPluginTestFiles.filter((file) => !gatewayMethodsTestExclude.includes(file)),
       ],
     },
   ],

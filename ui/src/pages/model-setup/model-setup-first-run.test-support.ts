@@ -197,7 +197,7 @@ export function mountDetection(
 
 export function modalButton(page: ParentNode, label: string) {
   return [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
-    (button) => button.textContent?.trim() === label,
+    (button) => (button.getAttribute("aria-label") ?? button.textContent?.trim()) === label,
   );
 }
 

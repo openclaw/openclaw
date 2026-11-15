@@ -245,7 +245,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       reportRegistrationError(record, `compaction provider "${id}" registration missing summarize`);
       return;
     }
-    const existing = registry.compactionProviders.find((entry) => entry.provider.id === id);
+    const existing = registry.compactionProviders.find((entry) => entry.provider.id.trim() === id);
     if (existing) {
       const ownerDetail = existing.ownerPluginId ? ` (owner: ${existing.ownerPluginId})` : "";
       reportRegistrationError(
@@ -280,13 +280,11 @@ export function createPluginRegistrars(state: PluginRegistryState) {
         capability.providerRuntime !== undefined ||
         capability.recallToolNames !== undefined ||
         capability.deterministicRecallToolName !== undefined ||
-        capability.supportsPrivateTranscriptRecall !== undefined ||
-        capability.learnToolNames !== undefined ||
-        capability.learnGuidanceBuilder !== undefined);
+        capability.supportsPrivateTranscriptRecall !== undefined);
     if (dropsSlotOwnerFacts) {
       reportRegistrationWarning(
         record,
-        "memory plugin not selected for the memory slot; skipping its indexing runtime, recall and learn registration (consolidation lifecycle preserved)",
+        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
       );
     }
     const {
@@ -295,8 +293,6 @@ export function createPluginRegistrars(state: PluginRegistryState) {
       recallToolNames: _droppedRecallToolNames,
       deterministicRecallToolName: _droppedRecallToolName,
       supportsPrivateTranscriptRecall: _droppedPrivateRecall,
-      learnToolNames: _droppedLearnToolNames,
-      learnGuidanceBuilder: _droppedLearnGuidanceBuilder,
       ...consolidationCapability
     } = capability;
     if (memorySlotSelected && capability.runtime) {
@@ -649,7 +645,7 @@ export function createPluginRegistrars(state: PluginRegistryState) {
     if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       reportRegistrationWarning(
         record,
-        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
+        `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptModification=false`,
       );
       return;
     }

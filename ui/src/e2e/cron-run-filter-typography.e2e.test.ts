@@ -40,7 +40,7 @@ suite.define(() => {
           });
 
           await page.goto(`${suite.server.baseUrl}cron`);
-          await page.getByRole("tab", { name: "Run history", exact: true }).click();
+          await page.getByRole("tab", { name: "Activity history", exact: true }).click();
           const labels = page.locator(
             ".cron-run-filters .cron-filter-dropdown__trigger > .oc-menu-item__label > span",
           );

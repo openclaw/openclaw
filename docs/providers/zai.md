@@ -258,6 +258,9 @@ Setting thinking to `off` avoids responses that spend the output budget on
     Unknown `glm-5*` ids still forward-resolve on the provider path by
     synthesizing provider-owned metadata from the `glm-4.7` template when the id
     matches the current GLM-5 family shape.
+    If live discovery is unavailable, retained catalog metadata still uses your
+    selected Coding Plan, regional, or custom endpoint; model-level endpoint
+    overrides remain authoritative.
   </Accordion>
 
   <Accordion title="Tool-call streaming">

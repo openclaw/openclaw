@@ -1,7 +1,22 @@
 // One real connected client; optional config reloads precede the idle window.
+// --fs-census records per-thread filesystem API calls, stream creation/read sizes,
+// and worker births (including retired nested workers). API calls are not native
+// syscall totals; readFile/open can overlap and SQLite bypasses these wrappers.
+// --compile-cache enables the launcher's worker cache and native read diagnostics.
+// Keep both counting options separate from uninstrumented CPU/latency acceptance.
+// --write-interval-ms exercises real shared-state commits through voicewake.set.
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -15,7 +30,7 @@ import {
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
 import { stopChild } from "../lib/gateway-bench-child.ts";
-import { readProcessTreeCpuMs } from "../lib/gateway-bench-probes.ts";
+import { readGatewayBenchHostCounters, readProcessTreeCpuMs } from "../lib/gateway-bench-probes.ts";
 import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
@@ -46,6 +61,10 @@ const { values } = parseArgs({
     "start-at": { type: "string" },
     port: { type: "string", default: "41563" },
     timers: { type: "boolean", default: false },
+    "fs-census": { type: "boolean", default: false },
+    "compile-cache": { type: "boolean", default: false },
+    "write-interval-ms": { type: "string" },
+    "host-samples": { type: "boolean", default: false },
     profile: { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     subscribe: { type: "boolean", default: false },
@@ -78,13 +97,20 @@ if (sqlOutput) {
   sqlPhase("boot");
 }
 const output = path.resolve(values.output);
+const instrumented = values.timers || values["fs-census"];
 const integer = (raw: string, label: string, min: number) =>
   parseStrictIntegerOption({ raw, label, min, fallback: min });
 const minutes = integer(values.minutes, "--minutes", 1);
 const settleSeconds = integer(values["settle-seconds"], "--settle-seconds", 0);
 const readyTimeoutSeconds = integer(values["ready-timeout-seconds"], "--ready-timeout-seconds", 1);
 const configReloads = integer(values["config-reloads"], "--config-reloads", 0);
-const needsDevice = values.subscribe || configReloads > 0 || values["watcher-failure"];
+const writeIntervalMs =
+  values["write-interval-ms"] === undefined
+    ? 0
+    : integer(values["write-interval-ms"], "--write-interval-ms", 1);
+const scopes = ["operator.read", ...(writeIntervalMs ? ["operator.write"] : [])];
+const needsDevice =
+  values.subscribe || configReloads > 0 || values["watcher-failure"] || writeIntervalMs > 0;
 const traceGc = configReloads === 0;
 const port = integer(values.port, "--port", 40000);
 const startAt = values["start-at"] ? integer(values["start-at"], "--start-at", 1) : undefined;
@@ -108,6 +134,10 @@ const config: OpenClawConfig = state
   : { ...BASE_GATEWAY_BENCH_CONFIG };
 mkdirSync(output); // Never overwrite artifacts from an earlier run.
 mkdirSync(path.join(output, "tmp"));
+const censusDirectory = values["fs-census"] ? path.join(output, "fs-census") : undefined;
+if (censusDirectory) {
+  mkdirSync(censusDirectory);
+}
 const configPath = path.join(output, "openclaw.json");
 const origin = "https://idle-measure.example";
 writeFileSync(
@@ -126,9 +156,7 @@ writeFileSync(
           userHeader: "x-forwarded-user",
           requiredHeaders: ["x-forwarded-proto"],
           allowUsers: ["idle-measure"],
-          ...(needsDevice
-            ? { deviceAutoApprove: { enabled: true, scopes: ["operator.read"] } }
-            : {}),
+          ...(needsDevice ? { deviceAutoApprove: { enabled: true, scopes } } : {}),
         },
       },
     },
@@ -150,9 +178,19 @@ const env = createGatewayBenchEnv(path.join(state ?? output, "home"), configPath
     OPENCLAW_SYSTEMD_UNIT: `openclaw-idle-measure-${port}`,
     OPENCLAW_IDLE_MEASURE_CHANNEL: channel,
     OPENCLAW_IDLE_MEASURE_TIMERS: values.timers ? "1" : "0",
+    ...(censusDirectory ? { OPENCLAW_IDLE_MEASURE_FS_CENSUS: censusDirectory } : {}),
     OPENCLAW_IDLE_MEASURE_WATCHER_FAILURE: values["watcher-failure"] ? "1" : "0",
     OPENCLAW_BENCH_TRACE_GC: traceGc ? "1" : "0",
-    NODE_DISABLE_COMPILE_CACHE: "1",
+    ...(values["compile-cache"]
+      ? {
+          NODE_COMPILE_CACHE: path.join(output, "compile-cache"),
+          NODE_DEBUG_NATIVE: "COMPILE_CACHE",
+          // Enter the launcher's post-respawn state: cache worker isolates while
+          // preserving this fixture's IPC descriptor and uncached main thread.
+          NODE_DISABLE_COMPILE_CACHE: "1",
+          OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "gateway",
+        }
+      : { NODE_DISABLE_COMPILE_CACHE: "1" }),
   },
 });
 const args = [
@@ -161,7 +199,7 @@ const args = [
   path.resolve("scripts/tsx.mjs"),
   "--import",
   path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
-  ...(values.timers || values["watcher-failure"]
+  ...(instrumented || values["watcher-failure"]
     ? ["--import", path.resolve("scripts/perf/idle-gateway-measure-preload.mjs")]
     : []),
   path.resolve(values.entry),
@@ -183,6 +221,8 @@ process.once("SIGINT", interrupt);
 process.once("SIGTERM", interrupt);
 const wait = (ms: number) => delay(ms, undefined, { signal: abort.signal });
 const samples: unknown[] = [];
+const hostSamples: ReturnType<typeof readGatewayBenchHostCounters>[] = [];
+let hostTimer: ReturnType<typeof setInterval> | undefined;
 async function watcherCommand(action: "watcher-fail" | "watcher-count") {
   const id = randomUUID();
   const reply = Promise.withResolvers<{ watchNotifications?: number; error?: string }>();
@@ -236,6 +276,12 @@ async function sample() {
     load: loadavg(),
     processTreeCpuMs: readProcessTreeCpuMs(child!.pid),
     rows,
+    // Files retain final snapshots from workers that exited between samples.
+    fsCensus: censusDirectory
+      ? readdirSync(censusDirectory)
+          .filter((name) => name.endsWith(".json"))
+          .map((name) => JSON.parse(readFileSync(path.join(censusDirectory, name), "utf8")))
+      : undefined,
   };
   samples.push(value);
   writeFileSync(path.join(output, "samples.json"), JSON.stringify(samples, null, 2));
@@ -301,7 +347,6 @@ try {
     platform: process.platform,
     mode: "ui",
   };
-  const scopes = ["operator.read"];
   let device;
   if (needsDevice) {
     const { nonce, ts } = await Promise.race([
@@ -414,14 +459,14 @@ try {
     }
     await wait(startAt - Date.now());
   }
-  if (values.timers) {
+  if (instrumented) {
     child.send({ channel, action: "enable" });
     await sample();
   }
   const heapProfilePath = path.join(output, "idle.heapprofile");
   const diagnosticsId = path.join(output, "idle-diagnostics");
   if (values.profile && !values["watcher-failure"]) {
-    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath);
+    await controlGatewayProfile(child, "cpu", "start", cpuProfilePath, { includeWorkers: true });
   }
   if (values.allocations) {
     await controlGatewayProfile(child, "heap", "start", heapProfilePath, {
@@ -435,18 +480,68 @@ try {
       : await startGatewayDiagnostics(child, diagnosticsId);
   const cpuBefore = await readGatewayCpuUsage(child);
   const start = Date.now();
+  const compileLogStart = values["compile-cache"] ? statSync(logPath).size : 0;
+  const writeRequests: Array<{
+    scheduledAtEpochMs: number;
+    startedAtEpochMs: number;
+    endedAtEpochMs: number;
+    elapsedMs: number;
+  }> = [];
+  let lastTrigger: string | undefined;
+  let nextWrite = start;
+  if (values["host-samples"]) {
+    hostSamples.push(readGatewayBenchHostCounters());
+    hostTimer = setInterval(() => hostSamples.push(readGatewayBenchHostCounters()), 1000);
+    hostTimer.unref();
+  }
   console.log(JSON.stringify({ ready: true, pid: child.pid, start, minutes, output }));
   for (let minute = 1; minute <= minutes; minute++) {
     sqlPhase(`steady-${minute}`);
-    await wait(Math.max(0, start + minute * 60_000 - Date.now()));
+    const until = start + minute * 60_000;
+    if (writeIntervalMs) {
+      while (Date.now() < until) {
+        await wait(Math.max(0, Math.min(nextWrite, until) - Date.now()));
+        if (Date.now() >= until) {
+          break;
+        }
+        const trigger = `synthetic-wake-${writeRequests.length % 2}`;
+        const began = performance.now();
+        const reply = await client.request("voicewake.set", { triggers: [trigger] });
+        if (
+          !reply.ok ||
+          !isRecord(reply.payload) ||
+          !Array.isArray(reply.payload.triggers) ||
+          reply.payload.triggers.length !== 1 ||
+          reply.payload.triggers[0] !== trigger
+        ) {
+          throw new Error(`Shared-state write failed: ${JSON.stringify(reply)}`);
+        }
+        const ended = performance.now();
+        writeRequests.push({
+          scheduledAtEpochMs: nextWrite,
+          startedAtEpochMs: performance.timeOrigin + began,
+          endedAtEpochMs: performance.timeOrigin + ended,
+          elapsedMs: ended - began,
+        });
+        lastTrigger = trigger;
+        nextWrite = Math.max(nextWrite + writeIntervalMs, Date.now());
+      }
+    } else {
+      await wait(Math.max(0, until - Date.now()));
+    }
     if (failure) {
       throw failure;
     }
     console.log(
-      JSON.stringify({ minute, load: loadavg(), ...(values.timers ? await sample() : {}) }),
+      JSON.stringify({ minute, load: loadavg(), ...(instrumented ? await sample() : {}) }),
     );
   }
   const endedAt = Date.now();
+  clearInterval(hostTimer);
+  if (values["host-samples"]) {
+    hostSamples.push(readGatewayBenchHostCounters());
+  }
+  const compileLogEnd = values["compile-cache"] ? statSync(logPath).size : 0;
   const cpuAfter = await readGatewayCpuUsage(child);
   if (values.allocations) {
     await controlGatewayProfile(child, "heap", "stop", heapProfilePath);
@@ -472,6 +567,20 @@ try {
           values.allocations ? heapProfilePath : diagnosticsId,
           values.allocations ? "heap" : "diagnostics",
         );
+  if (lastTrigger !== undefined) {
+    const reply = await client.request("voicewake.get", {});
+    if (
+      !reply.ok ||
+      !isRecord(reply.payload) ||
+      !Array.isArray(reply.payload.triggers) ||
+      reply.payload.triggers.length !== 1 ||
+      reply.payload.triggers[0] !== lastTrigger
+    ) {
+      throw new Error("Shared-state write readback did not match the final acknowledged trigger");
+    }
+  }
+  const writeLatencies = writeRequests.map((request) => request.elapsedMs);
+  const sortedWriteLatencies = writeLatencies.toSorted((a, b) => a - b);
   writeFileSync(
     path.join(output, "result.json"),
     JSON.stringify(
@@ -494,6 +603,32 @@ try {
         endedAtEpochMs: endedAt,
         durationMs: endedAt - start,
         timers: values.timers,
+        fsCensus: values["fs-census"],
+        writes: writeIntervalMs
+          ? {
+              intervalMs: writeIntervalMs,
+              count: writeLatencies.length,
+              readbackVerified: lastTrigger !== undefined,
+              latenciesMs: writeLatencies,
+              requests: writeRequests,
+              medianMs: sortedWriteLatencies[Math.floor(sortedWriteLatencies.length / 2)],
+              p95Ms: sortedWriteLatencies[Math.ceil(sortedWriteLatencies.length * 0.95) - 1],
+            }
+          : undefined,
+        // Native compile-cache reads bypass JS filesystem wrappers. This diagnostic
+        // count covers the measured log byte range and excludes boot/shutdown.
+        compileCache: values["compile-cache"]
+          ? {
+              reads: (
+                readFileSync(logPath)
+                  .subarray(compileLogStart, compileLogEnd)
+                  .toString()
+                  .match(/\[compile cache\] reading cache from /g) ?? []
+              ).length,
+              logStart: compileLogStart,
+              logEnd: compileLogEnd,
+            }
+          : undefined,
         cpu: { ...measureGatewayCpuUsage(cpuBefore, cpuAfter), before: cpuBefore, after: cpuAfter },
         diagnostics,
         promotion,
@@ -507,6 +642,7 @@ try {
             }
           : undefined,
         samples,
+        hostSamples: values["host-samples"] ? hostSamples : undefined,
       },
       null,
       2,
@@ -515,6 +651,7 @@ try {
 } catch (error) {
   failure = error instanceof Error ? error : new Error(String(error));
 } finally {
+  clearInterval(hostTimer);
   sqlPhase("shutdown");
   closing = true;
   client?.close();

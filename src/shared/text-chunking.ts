@@ -8,6 +8,9 @@ import { resolveIntegerOption } from "@openclaw/normalization-core/number-coerci
 const CJK_PUNCTUATION_BREAK_AFTER_RE = /[、。，．！？；：）］｝〉》」』】〕〗〙]/u;
 
 export function normalizeChunkLimit(limit: number): number {
+  if (Number.isNaN(limit)) {
+    return 0;
+  }
   // String slicing truncates fractional indexes, so positive limits need an integer progress step.
   return Number.isFinite(limit) && limit > 0 ? resolveIntegerOption(limit, 1, { min: 1 }) : limit;
 }

@@ -377,7 +377,7 @@ it.each([
       usage: makeUsage({ input: 11, output: 3, cost: 0.5 }),
     },
     expectedUsage(11, 3, 0, true),
-    11,
+    14,
   ],
   [
     "authoritative zero token report",
@@ -397,7 +397,7 @@ it.each([
       usage: makeUsage({ cost: 0, billed: true }),
     },
     expectedUsage(7, 5, 0, true),
-    7,
+    12,
   ],
   [
     "streamed usage before a zero error result",
@@ -423,7 +423,7 @@ it.each([
       reasoningTokens: 2,
       total: 16,
     },
-    11,
+    16,
   ],
   [
     "explicitly unknown context",

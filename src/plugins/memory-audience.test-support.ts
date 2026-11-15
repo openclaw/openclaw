@@ -2,9 +2,12 @@
 // the captured incarnation against the fake committed rows, as the real owner's
 // publication-updated facts do, without SQLite or worker threads.
 import { ok, type Result } from "@openclaw/normalization-core/result";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 
-export type FakeSessionRow = Partial<SessionEntry> & { sessionId: string; updatedAt: number };
+export type FakeSessionRow = Partial<InternalSessionEntry> & {
+  sessionId: string;
+  updatedAt: number;
+};
 
 export const fakeSessionOwner = {
   rows: new Map<string, FakeSessionRow>(),

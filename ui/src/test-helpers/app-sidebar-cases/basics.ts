@@ -113,7 +113,7 @@ it.each(["chip", "roster"] as const)(
     find<HTMLButtonElement>(".sidebar-rail .sidebar-brand__search")?.click();
     expect(onToggleSidebar).toHaveBeenCalledOnce();
     expect(onOpenPalette).toHaveBeenCalledOnce();
-    expect(newSessionLink?.getAttribute("aria-label")).toBe("New conversation");
+    expect(newSessionLink?.getAttribute("aria-label")).toBe("New session");
     expect(newSessionLink).toBeInstanceOf(HTMLAnchorElement);
     expect(newSessionLink?.getAttribute("aria-disabled")).toBe("true");
     expect(newSessionLink?.hasAttribute("href")).toBe(false);
@@ -124,7 +124,7 @@ it.each(["chip", "roster"] as const)(
     sidebar.connected = true;
     await sidebar.updateComplete;
     const link = find<HTMLAnchorElement>(".sidebar-rail .sidebar-new-session")!;
-    expect(link.getAttribute("aria-label")).toBe("New conversation");
+    expect(link.getAttribute("aria-label")).toBe("New session");
     expect(link.getAttribute("href")).toBe("/control/new?agent=research");
     expect(link.hasAttribute("aria-disabled")).toBe(false);
     for (const modifiers of [

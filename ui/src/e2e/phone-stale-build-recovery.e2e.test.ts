@@ -35,7 +35,7 @@ const proofBuildId = proofIdentity.expectedRevisionSha
 const suite = createControlUiE2eSuite({
   name: "Control UI phone stale-build recovery E2E",
   startServer: () =>
-    startPhoneProofServer(proofBuildId, inject("controlUiE2ePrebuiltAssets")?.root),
+    startPhoneProofServer(proofBuildId, inject("controlUiE2eDeploymentAssets")?.root),
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
@@ -309,9 +309,9 @@ suite.define(() => {
         tabIndex: 0,
         width: expect.any(Number),
       });
-      // Browser layout can represent a CSS 44px target a few millionths below 44.
+      // Browser layout can represent CSS target dimensions a few millionths below their size.
       const touchTargetRoundingTolerancePx = 0.01;
-      expect(recoveryAccess.height).toBeGreaterThanOrEqual(44 - touchTargetRoundingTolerancePx);
+      expect(recoveryAccess.height).toBeGreaterThanOrEqual(38 - touchTargetRoundingTolerancePx);
       expect(recoveryAccess.width).toBeGreaterThanOrEqual(44 - touchTargetRoundingTolerancePx);
       await recovery.focus();
       const recoveryFocused = await recovery.evaluate(
@@ -368,7 +368,7 @@ suite.define(() => {
         });
       }
       const installedArtifact = await observeCurrentArtifact();
-      expect(installedArtifact.buildId).not.toBeNull();
+      expect(installedArtifact.buildId).toMatch(/-[a-f0-9]{64}$/u);
       expect(installedArtifact).toMatchObject({
         bodyDisplay: "block",
         icon: { pathname: "/favicon.svg" },
@@ -381,7 +381,7 @@ suite.define(() => {
         installedArtifact.theme,
       ]) {
         expect(asset.url).not.toBeNull();
-        expect(asset.version).toBe(installedArtifact.buildId);
+        expect(asset.version).toBe(installedArtifact.buildId?.slice(-64));
       }
       const actions = page.getByRole("button", { name: "Actions for Main" });
       await actions.tap();

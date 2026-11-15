@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -128,6 +129,8 @@ export async function restoreUpdateDatabaseBackup(params: {
   assertCurrent: () => void;
   expectedGenerations?: UpdateDatabaseGenerations;
   pluginCohortRecovery?: PluginCohortRecoveryBinding;
+  /** Fires before the first live database changes; a failure before it left them untouched. */
+  onLiveMutation?: () => void;
 }): Promise<string[] | null> {
   if (!/^[a-zA-Z0-9_-]{1,128}$/u.test(params.runId)) {
     throw new Error("Database rollback requires its original update run identity.");
@@ -204,8 +207,10 @@ export async function restoreUpdateDatabaseBackup(params: {
             pluginValidation: "core-only",
             shellEnvFallback: "defer",
           }).readConfigFileSnapshot();
+          params.onLiveMutation?.();
           const { preparePostgresRestore } = await import("../snapshot/database-backup.js");
-          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}`;
+          // Keep prior recovery preparations intact without occupying a retry's fresh target.
+          const snapshotPath = `${entry.snapshotPath}.restored-${params.runId}-${randomUUID()}`;
           const prepared = await preparePostgresRestore({
             directory: entry.exportDirectory,
             anchorPath: snapshotPath,
@@ -309,6 +314,7 @@ export async function restoreUpdateDatabaseBackup(params: {
           );
           assertOwned();
         }
+        params.onLiveMutation?.();
         for (const move of moves) {
           assertOwned();
           try {

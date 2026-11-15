@@ -157,7 +157,7 @@ it.each(["activity", "work"] as const)(
       onToggle,
     });
     const container = summaryContainer;
-    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "2 reads");
+    expect(activity?.textContent).toContain(kind === "work" ? "Worked for 1s" : "2 reads");
     if (kind === "work") {
       expect(activity?.textContent).not.toContain("tool calls");
       expect(activity?.textContent).not.toContain("failed");
@@ -197,7 +197,7 @@ it.each([
   );
   for (const expanded of [false, true]) {
     const summary = await renderSummary([message], kind, { expanded });
-    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
     expect(summary?.textContent).not.toContain("failed");
     if (kind === "work") {
       expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
@@ -230,7 +230,7 @@ it.each(["activity", "work"] as const)(
       },
     );
     const summary = await renderSummary([message], kind);
-    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1 second" : "1 read");
+    expect(summary?.textContent).toContain(kind === "work" ? "Worked for 1s" : "1 read");
     expect(summary?.textContent).not.toContain("failed");
     if (kind === "work") {
       expect(summary?.textContent).not.toContain("tool call");
@@ -247,7 +247,7 @@ it.each(["blocked", "skipped", undefined] as const)(
     });
     for (const expanded of [false, true]) {
       const summary = await renderSummary([message], "work", { expanded });
-      expect(summary?.textContent).toContain("Worked for 1 second");
+      expect(summary?.textContent).toContain("Worked for 1s");
       expect(summary?.textContent?.includes("1 tool call")).toBe(expanded);
       if (status === "skipped") {
         expect(summary?.textContent).not.toMatch(/skipped|blocked|failed/);

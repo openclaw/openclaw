@@ -30,14 +30,13 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     vi.spyOn(host.sessions, "refresh").mockResolvedValue(undefined);
     vi.spyOn(host.sessions, "listBranches").mockResolvedValue([]);
   }
-  const state = {
-    ...host,
+  const state = Object.assign(host, {
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
     ...overrides,
-  } as unknown as ChatPageHost;
+  }) as unknown as ChatPageHost;
   return { request, state };
 }
 

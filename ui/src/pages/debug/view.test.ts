@@ -138,6 +138,21 @@ it("tolerates out-of-range event timestamps", async () => {
   expect(h.page.textContent).not.toContain("Invalid Date");
 });
 
+it("keeps the security row present while snapshots load and Manual RPC remains available", async () => {
+  const status = hold<unknown>({});
+  const h = mountPage({ status: () => status.promise });
+  await waitForSolid(() =>
+    expect(h.query(".debug-security-status")?.textContent).toContain("Loading"),
+  );
+  const row = h.query(".debug-security-status")?.closest(".settings-row");
+  expect(row?.textContent).toContain("openclaw security audit --deep");
+  expect(h.page.querySelector('select[aria-label="Method"]')).not.toBeNull();
+  status.resolve({ securityAudit: { summary: { critical: 0, warn: 0, info: 0 } } });
+  await h.ready();
+  expect(h.query(".debug-security-status")?.closest(".settings-row")).toBe(row);
+  expect(row?.textContent).toContain("No critical issues");
+});
+
 it("updates security audit labels with the locale and keeps the command monospace", async () => {
   const h = mountPage({
     status: () => ({ securityAudit: { summary: { critical: 0, warn: 1, info: 2 } } }),
@@ -334,10 +349,10 @@ it.each(["reconnecting", "offline"] as const)("disables refresh while %s", async
   expect(h.refreshButton().disabled).toBe(true);
   const text = normalizedText(h.query(".settings-section"));
   if (phase === "offline") {
-    expect(text).toContain("Offline");
-    expect(text).toContain("Connect to the Gateway to refresh diagnostics.");
+    expect(text).toContain("Disconnected");
+    expect(text).toContain("Reconnect to refresh diagnostics.");
   } else {
-    expect(text).not.toContain("Offline");
+    expect(text).not.toContain("Disconnected");
   }
 });
 

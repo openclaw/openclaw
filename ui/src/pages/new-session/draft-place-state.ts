@@ -3,7 +3,7 @@ import type { FsListDirResult } from "../../../../packages/gateway-protocol/src/
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import { listSelectableAgents } from "../../lib/agents/display.ts";
+import { findSelectableAgent, listSelectableAgents } from "../../lib/agents/display.ts";
 import type { SessionCreateParams } from "../../lib/sessions/create.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
@@ -170,7 +170,7 @@ export class DraftPlaceState {
         folder: this.folderValue,
         workspace: this.workspacePath(),
         workspaceGit: this.selectedAgent()?.workspaceGit === true,
-        gateway: this.read().context?.gateway.snapshot,
+        gateway: this.read().context?.gateway,
       }),
       {
         changed: callbacks.changed,
@@ -233,14 +233,7 @@ export class DraftPlaceState {
   }
 
   get currentCheckoutUnavailableReason(): string | undefined {
-    const reason = this.repositoryState.currentCheckoutUnavailable;
-    return reason === "checking"
-      ? t("newSession.checkingPlace")
-      : reason === "worktree"
-        ? t("newSession.checkoutRequiresWorktree")
-        : reason === "unavailable"
-          ? t("newSession.checkoutCheckUnavailable")
-          : undefined;
+    return this.repositoryState.currentCheckoutUnavailableReason;
   }
 
   get checkoutVisible(): boolean {
@@ -249,7 +242,7 @@ export class DraftPlaceState {
       !this.hostedEnvironment &&
       !this.freshWorkspace &&
       (this.repository.kind !== "direct" || Boolean(this.browser.projectId)) &&
-      (this.worktreeAvailable() || this.worktree || Boolean(this.browser.projectId))
+      (this.repositoryState.checkoutVisible || Boolean(this.browser.projectId))
     );
   }
 
@@ -350,8 +343,8 @@ export class DraftPlaceState {
   }
 
   selectedAgent() {
-    const agentId = normalizeAgentId(this.agentIdValue);
-    return this.agents().find((agent) => normalizeAgentId(agent.id) === agentId);
+    const agents = this.read().context?.agents.state.agentsList?.agents ?? [];
+    return findSelectableAgent(agents, this.agentIdValue);
   }
 
   devicePlacementRuntime() {

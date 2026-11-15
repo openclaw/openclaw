@@ -6,52 +6,69 @@ import type {
   WorkerEnvironmentStartStatus,
 } from "../../packages/gateway-protocol/src/schema/environments.js";
 import type { SecretRef } from "../config/types.secrets.js";
-import type { ImageGenerationProvider } from "../image-generation/types.js";
-import type { MediaUnderstandingProvider } from "../media-understanding/types.js";
-import type { MusicGenerationProvider } from "../music-generation/types.js";
+import type { ImageGenerationProvider } from "../image-generation/provider-types.js";
+import type { MediaUnderstandingProvider } from "../media-understanding/provider-types.js";
+import type { MusicGenerationProvider } from "../music-generation/provider-types.js";
 import type { SpawnResult } from "../process/exec.js";
 import type {
-  RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderConfiguredContext,
-  RealtimeTranscriptionProviderId,
   RealtimeTranscriptionProviderResolveConfigContext,
-  RealtimeTranscriptionSession,
   RealtimeTranscriptionSessionCreateRequest,
+} from "../realtime-transcription/provider-contexts.js";
+import type {
+  RealtimeTranscriptionProviderConfig,
+  RealtimeTranscriptionProviderId,
+  RealtimeTranscriptionSession,
 } from "../realtime-transcription/provider-types.js";
+import type {
+  RealtimeVoiceBrowserSessionCreateRequest,
+  RealtimeVoiceBridgeCreateRequest,
+  RealtimeVoiceProviderConfiguredContext,
+  RealtimeVoiceProviderResolveConfigContext,
+} from "../talk/provider-contexts.js";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceBrowserSession,
-  RealtimeVoiceBrowserSessionCreateRequest,
-  RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceProviderCapabilities,
   RealtimeVoiceProviderConfig,
-  RealtimeVoiceProviderConfiguredContext,
   RealtimeVoiceProviderId,
-  RealtimeVoiceProviderResolveConfigContext,
 } from "../talk/provider-types.js";
 import type { TranscriptSourceProvider as TranscriptsSourceProviderCapability } from "../transcripts/provider-types.js";
 import type {
   SpeechDirectiveTokenParseContext,
-  SpeechDirectiveTokenParseResult,
   SpeechProviderConfiguredContext,
-  SpeechProviderConfig,
   SpeechProviderResolveConfigContext,
   SpeechProviderResolveTalkConfigContext,
   SpeechProviderResolveTalkOverridesContext,
   SpeechListVoicesRequest,
   SpeechProviderPrepareSynthesisContext,
+  SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
+  SpeechTelephonySynthesisRequest,
+} from "../tts/provider-types.js";
+import type {
+  SpeechDirectiveTokenParseResult,
+  SpeechProviderConfig,
   SpeechProviderPreparedSynthesis,
   SpeechProviderId,
-  SpeechSynthesisRequest,
-  SpeechSynthesisResult,
-  SpeechSynthesisStreamRequest,
-  SpeechSynthesisStreamResult,
-  SpeechTelephonySynthesisRequest,
-  SpeechTelephonySynthesisResult,
   SpeechVoiceOption,
-} from "../tts/provider-types.js";
-import type { VideoGenerationProvider } from "../video-generation/types.js";
+  SpeechSynthesisResult,
+  SpeechSynthesisStreamResult,
+  SpeechTelephonySynthesisResult,
+} from "../tts/tts-runtime-types.js";
+import type { VideoGenerationProvider } from "../video-generation/provider-types.js";
 import type { PluginJsonValue } from "./host-hook-json.js";
+import type {
+  WorkerRetentionObservation,
+  WorkerRetentionOperation,
+  WorkerRetentionPolicy,
+} from "./worker-retention.types.js";
+
+export type {
+  WorkerRetentionObservation,
+  WorkerRetentionOperation,
+  WorkerRetentionPolicy,
+} from "./worker-retention.types.js";
 
 export type WorkerProfile = Readonly<Record<string, PluginJsonValue>>;
 
@@ -195,16 +212,27 @@ export type WorkerNodeEnrollment = WorkerNodeBootstrapAccess & {
     | { mode: "resume"; deviceId: string }
   );
 
+/** Nonsecret immutable provider identity. The provider owns the identity keys and their meaning. */
+export type WorkerResourceReceipt = {
+  version: 1;
+  leaseId: string;
+  identity: Record<string, string>;
+};
+
 /** Durable lease identity and endpoint returned by a successful provision operation. */
 export type WorkerLease = {
   leaseId: string;
+  resourceReceipt?: WorkerResourceReceipt;
   /** The SSH account also owns processes unrelated to this worker lease. */
   sharedHost?: boolean;
   desktop?: WorkerDesktopEndpoint;
 } & ({ ssh: WorkerSshEndpoint; node?: never } | { node: { deviceId: string }; ssh?: never });
 
 /** Authoritative inspection result for an already-known worker lease. */
-export type WorkerLeaseStatus =
+export type WorkerLeaseStatus = {
+  resourceReceipt?: WorkerResourceReceipt;
+  retention?: WorkerRetentionObservation;
+} & (
   | {
       status: "active";
       /** Explicit provider fact used to reconcile leases persisted before this metadata existed. */
@@ -212,7 +240,8 @@ export type WorkerLeaseStatus =
     }
   | { status: "dormant" }
   | { status: "destroyed" }
-  | { status: "unknown" };
+  | { status: "unknown" }
+);
 
 /** Provision failed after allocation and the provider could not prove cleanup completed. */
 class WorkerProvisionCleanupError extends AggregateError {
@@ -295,6 +324,17 @@ export type WorkerRecipePreparation = {
   ignoredPropertiesNote?: string;
   note?: string;
   phaseDurationsMs?: {
+    retainedGit?: number;
+    retainedManifest?: number;
+    inspection?: number;
+    seedPreparation?: number;
+    seedTransfer?: number;
+    seedVerification?: number;
+    seedCheckout?: number;
+    seedManifest?: number;
+    gitUpdate?: number;
+    toolchainPreparation?: number;
+    preparedManifest?: number;
     onCreate?: number;
     updateContent?: number;
     detectedInstall?: number;
@@ -305,6 +345,8 @@ export type WorkerRecipePreparation = {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /** Honors exact receipts during provision replay, inspection and confirmed destruction. */
+  supportsResourceReceipts?: true;
   /**
    * Nonsecret backend display ID, never a routing or allocation identity.
    * Synchronous local presentation only: no commands, network, or credential reads.
@@ -383,6 +425,12 @@ export type WorkerProvider = {
       signal?: AbortSignal;
       /** Modern hosts supply authority; legacy optionality is source compatibility only. */
       assertCurrent?: () => void;
+      /** Original committed resource on replay; never adopt a replacement. */
+      resourceReceipt?: WorkerResourceReceipt;
+      /** Immutable acquisition policy; activity and inspection never extend compute. */
+      retention?: WorkerRetentionPolicy;
+      /** Await before setup/enrollment or cleanup affects a newly identified resource. */
+      recordResourceReceipt?: (receipt: WorkerResourceReceipt) => Promise<void>;
       executionMode?: WorkerExecutionMode;
       machineClass?: string;
       os?: string;
@@ -409,8 +457,9 @@ export type WorkerProvider = {
         /** Verify an already enrolled allocation without transferring, running setup, or capturing it. */
         inspectPreparedWorkspace?: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
+          recordRecipePreparation?: (value: WorkerRecipePreparation) => Promise<void>;
         }) => Promise<void>;
-        /** Bound to this provision attempt; retained callbacks reject after it closes. */
+        /** Bound to this preparation attempt; retained callbacks reject after it closes. */
         prepare: (transport: {
           runScript: (script: string, signal: AbortSignal) => Promise<string>;
           /** Render using this provider command's remaining budget before repository code runs. */
@@ -441,6 +490,15 @@ export type WorkerProvider = {
       };
     },
   ) => Promise<WorkerLease>;
+  /**
+   * Refresh an available, unbound enrolled worker through the same project preparation owner.
+   * Never allocate, capture, or enroll. Honor project authority and settle commands on abort.
+   * Core publishes the refreshed prepared workspace before binding it to a session.
+   */
+  refreshPreparedProject?: (
+    lease: { leaseId: string; profile: WorkerProfile },
+    project: NonNullable<NonNullable<Parameters<WorkerProvider["provision"]>[2]>["project"]>,
+  ) => Promise<void>;
   /** Provider-owned transport for repository lifecycle commands on an enrolled lease. */
   runSetupCommand?: (
     lease: { leaseId: string; profile: WorkerProfile },
@@ -453,6 +511,23 @@ export type WorkerProvider = {
       signal?: AbortSignal;
     },
   ) => Promise<SpawnResult | undefined>;
+  /**
+   * Restart only the same enrolled node on this dedicated lease after proving its
+   * process is absent. A live process owns reconnect. Never allocate, install, pair,
+   * change repository contents, or replay input. Settle commands on cancellation.
+   */
+  resumeNode?: (request: {
+    leaseId: string;
+    profile: WorkerProfile;
+    deviceId: string;
+    nodeBootstrapSha256: string;
+    openclawVersion: string;
+    /** Saved preparation target, not the profile's current default. */
+    platform: string;
+    signal: AbortSignal;
+    /** Required live owner authority; call after awaits and immediately before effects. */
+    assertCurrent: () => void;
+  }) => Promise<void>;
   /**
    * Prepare without allocating, renewing, enrolling, or changing a provider resource. The
    * returned operation carries prepared facts; core records allocation intent before calling it.
@@ -474,8 +549,23 @@ export type WorkerProvider = {
   inspect: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    resourceReceipt?: WorkerResourceReceipt;
+    retention?: WorkerRetentionPolicy;
     signal?: AbortSignal;
   }) => Promise<WorkerLeaseStatus>;
+  /**
+   * Converge one durably recorded operation on the exact retained resource. A lost
+   * reply retains that same operation; success requires independent readback.
+   * Policy and receipts are facts, not authority: recheck assertCurrent before effects.
+   */
+  setRetainedState?: (
+    lease: Parameters<WorkerProvider["inspect"]>[0] & {
+      resourceReceipt: WorkerResourceReceipt;
+      retention: WorkerRetentionPolicy;
+      operation: WorkerRetentionOperation;
+      assertCurrent: () => void;
+    },
+  ) => Promise<WorkerRetentionObservation>;
   /**
    * Resolves provider-owned dynamic identities. When absent, the gateway uses its generic
    * SecretRef resolver; when present, failures are authoritative and never fall back.
@@ -498,6 +588,10 @@ export type WorkerProvider = {
   destroy: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    resourceReceipt?: WorkerResourceReceipt;
+    retention?: WorkerRetentionPolicy;
+    /** Recheck current authority after waits and immediately before effects. */
+    assertCurrent?: () => void;
     /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
     signal?: AbortSignal;
     /**

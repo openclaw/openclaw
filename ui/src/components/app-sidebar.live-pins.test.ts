@@ -176,6 +176,43 @@ it("keeps live pins across query replacement until their descriptors confirm abs
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+it("excludes a deleted pin before its retained descriptor settles", async () => {
+  const retained = { key: "agent:main:retained", sessionId: "retained", kind: "direct" as const };
+  const deleted = { key: "agent:main:deleted", sessionId: "deleted", kind: "direct" as const };
+  const pending = createDeferred<{ session: null }>();
+  const mounted = await mountRoster(
+    (method) =>
+      method === "sessions.list"
+        ? sessionsResult([retained, deleted])
+        : method === "sessions.describe"
+          ? pending.promise
+          : {},
+    { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [{ id: "main" }] },
+  );
+  const { sidebar, harness, context } = mounted;
+  try {
+    Object.assign(context.plugins, { registryStatus: "complete" });
+    sidebar.connected = true;
+    sidebar.sidebarEntries = [retained, deleted].map(({ key }) => `session:${key}`);
+    await settleLitElement(sidebar);
+    expect(sidebar.reconciledSidebarZone().sessionRows.has(deleted.key)).toBe(true);
+
+    harness.publishEvent("sessions.changed", {
+      agentId: "main",
+      sessionKey: deleted.key,
+      sessionId: deleted.sessionId,
+      reason: "delete",
+    });
+    const captured = sidebar.captureSidebarSnapshot();
+    expect(captured?.roster?.result.sessions.map(({ key }) => key)).toEqual([retained.key]);
+    expect(captured?.pinnedSessions.map(({ key }) => key)).toEqual([retained.key]);
+    expect(captured?.entries).toEqual([`session:${retained.key}`]);
+  } finally {
+    pending.resolve({ session: null });
+    disposeRoster(mounted);
+  }
+});
+
 it("hides unused sections but retains deliberately empty sections", async () => {
   const gateway = createGatewayHarness({} as GatewayBrowserClient);
   const sessions = createSessionsHarness("main", []);

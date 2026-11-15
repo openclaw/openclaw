@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createEffect, createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import { i18n } from "../../i18n/index.ts";
@@ -18,6 +18,7 @@ import {
   createInspectResult,
   createGateway,
   createPlugin,
+  createPluginCapabilities,
   createPluginsRouteData,
   createPluginsRouteLocation,
   createResult,
@@ -84,18 +85,79 @@ beforeEach(async () => {
   await i18n.setLocale("en");
 });
 
+it("does not republish the page when an iconless tile joins the rendered inventory", async () => {
+  const inventory = createResult([createPlugin({ id: "first" }), createPlugin({ id: "second" })]);
+  const { gateway } = iconGateway(async (method) =>
+    method === "plugins.list" ? inventory : requestResult(method),
+  );
+  const routeData = createPluginsRouteData(
+    gateway,
+    null,
+    createPluginsRouteLocation("/settings/plugins"),
+  );
+  const published = vi.fn();
+  let showSecond!: (visible: boolean) => void;
+  const host = document.createElement("div");
+  const mounted = mountSolid(
+    () => {
+      const [second, setSecond] = createSignal(false);
+      showSecond = setSecond;
+      const page = createPluginsPage({
+        context: createContext(gateway),
+        element: () => host,
+        routeData: () => routeData,
+        surface: () => "settings",
+      });
+      createEffect(() => page.read(), published);
+      return [
+        createComponent(PluginArtTile, {
+          slug: "first",
+          name: "First",
+          registerIcon: page.icons.register,
+        }),
+        createComponent(Show, {
+          get when() {
+            return second();
+          },
+          children: (_visible) => {
+            return createComponent(PluginArtTile, {
+              slug: "second",
+              name: "Second",
+              registerIcon: page.icons.register,
+            });
+          },
+        }),
+      ];
+    },
+    { container: host },
+  );
+  try {
+    await settlePlugins();
+    published.mockClear();
+    showSecond(true);
+    await settlePlugins();
+    expect(host.querySelectorAll(".plugins-tile")).toHaveLength(2);
+    expect(published).not.toHaveBeenCalled();
+  } finally {
+    mounted.unmount();
+  }
+});
+
 it("loads artwork when a retained tile changes identity without a page refresh", async () => {
   let nextUrl = 0;
   const { revoke } = stubUrls(() => `blob:icon-${++nextUrl}`);
   const fetchMock = vi.fn(async (_url: string) => iconResponse());
   vi.stubGlobal("fetch", fetchMock);
-  const { gateway } = iconGateway();
+  const inventory = createResult([
+    createPlugin({ id: "first", hasIcon: true }),
+    createPlugin({ id: "second", hasIcon: true }),
+  ]);
+  const { gateway } = iconGateway(async (method) =>
+    method === "plugins.list" ? inventory : requestResult(method),
+  );
   const routeData = createPluginsRouteData(
     gateway,
-    createResult([
-      createPlugin({ id: "first", hasIcon: true }),
-      createPlugin({ id: "second", hasIcon: true }),
-    ]),
+    null,
     createPluginsRouteLocation("/settings/plugins"),
   );
   let changeSlug!: (slug: string) => void;
@@ -420,7 +482,7 @@ it("reuses installed artwork across navigation and retires it on a new plugin ge
       }),
   );
   vi.stubGlobal("fetch", fetchMock);
-  const result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
+  let result = { ...createResult(createPlugin({ hasIcon: true })), generation: 1 };
   const { client } = createClient(async (method) =>
     method === "plugins.inspect" ? createInspectResult() : result,
   );
@@ -440,11 +502,8 @@ it("reuses installed artwork across navigation and retires it on a new plugin ge
   expect(page.querySelector(".plugin-catalog-detail__hero img")?.getAttribute("src")).toBe(
     "blob:icon-1",
   );
-  page.routeData = createPluginsRouteData(
-    harness.gateway,
-    { ...result, generation: 2 },
-    detailRoute,
-  );
+  result = { ...result, generation: 2 };
+  harness.emit(client, true, { pluginCapabilities: createPluginCapabilities(2) });
   await vi.advanceTimersByTimeAsync(0);
   expect(revokeObjectURL).toHaveBeenCalledWith("blob:icon-1");
   expect(fetchMock).toHaveBeenCalledTimes(2);

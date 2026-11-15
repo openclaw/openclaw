@@ -2,7 +2,7 @@ import type { File as TelegramFile } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as keyedAsyncQueue from "openclaw/plugin-sdk/keyed-async-queue";
 import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { setLoggerOverride, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   holdTelegramMediaTimeouts,
@@ -460,6 +460,23 @@ describe("createTelegramBot channel_post media", () => {
     expectTelegramDownloadWarning(testCase.messageId, undefined, -100456);
     expect(replySpy).toHaveBeenCalledOnce();
     expectUnavailableMediaPayload("image", "caption" in testCase ? testCase.caption : "");
+  });
+
+  it("prints a failed media save on the console, not only in the log file", async () => {
+    // Container operators read stdout; the file log is often out of reach.
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "compact" });
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      setTelegramIngestGroupConfig({ groups: { "*": { requireMention: false } } });
+      saveRemoteMedia.mockRejectedValueOnce(new Error("EINVAL: invalid argument, rename"));
+      await createTelegramBot();
+      await dispatchTelegramGroupPhoto({ messageId: 193172 });
+      await waitForTelegramMockCalls(sendMessageSpy, 1);
+      expectTelegramDownloadWarning(193172, undefined, -100456);
+      expect(consoleWarn.mock.calls.flat().join("\n")).toMatch(/media fetch failed.*EINVAL/su);
+    } finally {
+      setLoggerOverride(null);
+    }
   });
 
   it.each([

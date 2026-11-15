@@ -18,6 +18,14 @@ import { gatewayDatabaseWorkerTestFiles } from "./vitest/vitest.gateway-server-p
 import { createGatewayServerVitestConfig } from "./vitest/vitest.gateway-server.config.ts";
 import { createGatewayVitestConfig } from "./vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
+import { filterUnitConfigTestFiles } from "./vitest/vitest.unit-paths.mjs";
+
+it("assigns publication integration to one canonically sorted native worker lane", () => {
+  const file = "src/node-host/node-worker-publication-merge.test.ts";
+  expect(gatewayDatabaseWorkerTestFiles).toContain(file);
+  expect(filterUnitConfigTestFiles([file])).toEqual([]);
+  expect(gatewayDatabaseWorkerTestFiles).toEqual(gatewayDatabaseWorkerTestFiles.toSorted());
+});
 
 const patternFiles = createPatternFileHelper("gateway-watch-ownership-");
 afterEach(() => patternFiles.cleanup());

@@ -245,7 +245,7 @@ export async function buildDynamicTools(
       config: params.config,
       skillsSnapshot: params.skillsSnapshot,
       ...(params.skillLibraryAuthoring
-        ? { skillWorkshop: { libraryAuthoring: params.skillLibraryAuthoring } }
+        ? { skillLibraryAuthoring: params.skillLibraryAuthoring }
         : {}),
       authProfileStore: params.toolAuthProfileStore ?? params.authProfileStore,
       abortSignal: input.runAbortController.signal,

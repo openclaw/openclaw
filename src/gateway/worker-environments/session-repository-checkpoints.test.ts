@@ -28,7 +28,6 @@ import * as workspaceResultGit from "./workspace-result-git.js";
 import { requireWorkspaceResultGit as git } from "./workspace-result-git.js";
 import {
   hasWorkerWorkspaceResultRef,
-  readStagedWorkerWorkspaceResult,
   workerWorkspaceResultRef,
 } from "./workspace-result-staging.js";
 
@@ -388,7 +387,10 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   expect((await f.current())?.checkpointRef).toBeNull();
   await first.verify();
   await first.publish();
-  const parent = await readStagedWorkerWorkspaceResult(f.artifact, first.checkpointRef);
+  const parent = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    first.checkpointRef,
+  );
   const firstObject = await git(f.artifact, ["rev-parse", first.checkpointRef + ":first.bin"]);
   const delta = path.join(f.root, "delta-only");
   await fs.mkdir(delta);
@@ -417,7 +419,10 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
   expect(importBytes[0]).toBeGreaterThan(large.length);
   expect(importBytes[1]).toBeLessThan(16 * 1024);
   console.info("Checkpoint import bytes", importBytes);
-  const stored = await readStagedWorkerWorkspaceResult(f.artifact, second.checkpointRef);
+  const stored = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    second.checkpointRef,
+  );
   expect(stored.baseManifestRef).toBe(f.base.manifestRef);
   expect(stored.base.baseCommit).toBe(baseCommit);
   const guard = authority();
@@ -465,6 +470,56 @@ it("reuses accepted blobs while preserving cumulative provenance, deletions and 
     }),
   ).rejects.toThrow();
   expect(await f.current()).toEqual(accepted);
+});
+
+it("publishes queued aliases and companions from a reused accepted checkpoint with current authority", async () => {
+  const f = await fixture("working tree\r\n");
+  const { sha, input } = await publicationFixture(f.root);
+  const first = await f.stage("accepted-publication", input);
+  const accepted = await first.publish();
+  const guard = authority();
+  const selected = workerWorkspaceResultRef("queued-selected");
+  const alias = workerWorkspaceResultRef("queued-alias");
+  const reused = await f.stage("queued-selected", { ...input, assertCurrent: guard.assertCurrent });
+  expect(reused.checkpointRef).toBe(first.checkpointRef);
+  const beforeRefs = await listRefs(f.artifact, "");
+  const run = processExec.runCommandWithTimeout;
+  const runner = vi
+    .spyOn(processExec, "runCommandWithTimeout")
+    .mockImplementation((argv, options) => {
+      if (
+        argv.includes("update-ref") &&
+        typeof options !== "number" &&
+        options.input?.toString().includes("create " + selected + "\0")
+      ) {
+        guard.current = false;
+      }
+      return run(argv, options);
+    });
+  await expect(reused.publishArtifacts([alias])).rejects.toThrow("checkpoint authority closed");
+  expect(await listRefs(f.artifact, "")).toBe(beforeRefs);
+  runner.mockRestore();
+  guard.current = true;
+  await reused.publishArtifacts([alias, selected, alias]);
+  await reused.publishArtifacts([alias]);
+  expect((await listRefs(f.artifact, "")).split("\n")).toHaveLength(
+    beforeRefs.split("\n").length + 4,
+  );
+  expect(await f.current()).toEqual(accepted);
+  for (const ref of [selected, alias]) {
+    expect(await git(f.artifact, ["rev-parse", ref])).toBe(
+      await git(f.artifact, ["rev-parse", first.checkpointRef]),
+    );
+    await withCheckpoint(f.read(ref), async (snapshot) => {
+      expect(await readText(snapshot.stagingRoot, "edit.txt")).toBe("working tree\r\n");
+      expect(snapshot.publicationDigest).toBe(input.publicationDigest);
+      expect(await readText(snapshot.publicationStagingRoot!, "blobs/" + sha)).toBe(
+        "working tree\n",
+      );
+    });
+  }
+  await reused.discard();
+  expect(await hasRef(f.artifact, first.checkpointRef)).toBe(true);
 });
 
 it("recovers a published artifact after the acceptance transaction fails, without accepting a closed claim", async () => {
@@ -632,7 +687,7 @@ it.each(["recovery", "publication"])(
       refs.map(async (ref) => ({
         ref,
         objectId: await git(artifact, ["rev-parse", `${ref}^{commit}`]),
-        snapshot: await readStagedWorkerWorkspaceResult(artifact, ref),
+        snapshot: await workspaceManifestWorker.loadStagedWorkspaceManifest(artifact, ref),
       })),
     );
     expect(candidates).toHaveLength(2);
@@ -683,7 +738,10 @@ it("keeps new Git lineage and publication bytes when checkpoint files are unchan
   const f = await fixture("working edit\n", true);
   const first = await f.stage("before-empty-commit");
   const accepted = await first.publish();
-  const previous = await readStagedWorkerWorkspaceResult(f.artifact, first.checkpointRef);
+  const previous = await workspaceManifestWorker.loadStagedWorkspaceManifest(
+    f.artifact,
+    first.checkpointRef,
+  );
   const empty = path.join(f.root, "empty-delta");
   await fs.mkdir(empty);
   await git(f.remote, [

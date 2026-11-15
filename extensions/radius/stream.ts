@@ -10,6 +10,7 @@ import {
 import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
 import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";
 import {
+  applyProviderPayloadHook,
   buildGuardedModelFetch,
   buildAssistantMessage,
   createEmptyTransportUsage,
@@ -270,10 +271,7 @@ export function createRadiusStreamFn(): StreamFunction<string, RadiusStreamOptio
             toolChoice: options.toolChoice,
           },
         };
-        const replacement = await options.onPayload?.(payload, model);
-        if (replacement !== undefined) {
-          payload = replacement;
-        }
+        payload = await applyProviderPayloadHook(options, payload, model);
         options.signal?.throwIfAborted();
         const guardedFetch = buildGuardedModelFetch(model, options.timeoutMs, {
           sanitizeSse: false,

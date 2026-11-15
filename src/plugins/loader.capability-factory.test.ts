@@ -164,6 +164,29 @@ it("retains the creating cache generation when broad services initialize later",
   expect(createPluginRuntime).toHaveBeenCalledTimes(1);
 });
 
+it("keeps system reads cold and resolves synchronous event admission in its creating cache", () => {
+  const owner = createPluginCache();
+  const replacement = createPluginCache();
+  const receipt = { id: "event", cancel: () => false, accepted: Promise.resolve({ ok: true }) };
+  const enqueueSessionEventForHost = vi.fn(() => receipt);
+  const load = vi.spyOn(nativeModuleRequire, "tryNativeRequireModule").mockImplementation(() => {
+    expect(getPluginCache()).toBe(owner);
+    return { ok: true, moduleExport: { enqueueSessionEventForHost } };
+  });
+  const runtime = withPluginCache(owner, () => createLazyPluginRuntime({}));
+  const system = { ...runtime.system };
+  expect(load).not.toHaveBeenCalled();
+  withPluginCache(replacement, () => {
+    for (let i = 0; i < 2; i++) {
+      expect(system.enqueueSessionEvent("done", { agentId: "main", sessionKey: "main" })).toBe(
+        receipt,
+      );
+    }
+  });
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(enqueueSessionEventForHost).toHaveBeenCalledTimes(2);
+});
+
 describe("capability factory registration", () => {
   it("composes native capability factories with a restricted runtime", async () => {
     await withFactoryPlugin(registerFactories, (options) => {

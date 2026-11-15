@@ -19,7 +19,7 @@ import {
   type PersistedUserTurnMessage,
 } from "../../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { SKILL_WORKSHOP_CHANGE_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
+import { PLUGIN_NOTICE_KIND } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
 import { runWithModelFallback } from "../../model-fallback-runner.js";
 import { createAgentRunRestartAbortError } from "../../run-termination.js";
@@ -183,10 +183,10 @@ describe("interrupted canonical user replay", () => {
               idempotencyKey: `skill-workshop-notice:${attempt.runId}`,
               text: "One skill changed after review",
               deliveryMirror: {
-                kind: SKILL_WORKSHOP_CHANGE_NOTICE_KIND,
-                agentId: target.agentId,
-                runId: "background-review",
-                skills: [{ name: "some-skill", action: "updated" }],
+                kind: PLUGIN_NOTICE_KIND,
+                pluginId: "skill-workshop",
+                type: "skills-changed",
+                data: { agentId: target.agentId, runId: "background-review" },
               },
             });
             expect(appended.ok).toBe(true);

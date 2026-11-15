@@ -487,10 +487,12 @@ it.each(["operator.admin", "operator.read"])(
   },
 );
 
-it("captures metadata refreshed during preparation without rereading it during consumption", () => {
+it("shares captured metadata during consumption while reading current policy", () => {
   const owner = createSessionRowProjectionFixture({ cfg, store: {} });
   const initial = owner.state;
   let current = initial;
+  let policy: OpenClawConfig = cfg;
+  vi.spyOn(owner, "getPolicyConfig").mockImplementation(() => policy);
   const state = vi.fn(() => current);
   Object.defineProperty(owner, "state", { get: state });
   vi.spyOn(owner, "describe").mockImplementation(() => {
@@ -505,6 +507,12 @@ it("captures metadata refreshed during preparation without rereading it during c
   });
   const consume = vi.fn((read: SessionRowReadView) => {
     state.mockClear();
+    const captured = read.state;
+    expect(read.state).toBe(captured);
+    expect(captured.policyConfig).toBe(cfg);
+    policy = { ...cfg, session: { scope: "global" } };
+    expect(read.state.policyConfig).toBe(policy);
+    expect(captured.policyConfig).toBe(cfg);
     expect(read.state.rowContext.configuredDefaultModelByAgent.get("main")).toEqual({
       provider: "fixture",
       model: "fresh",

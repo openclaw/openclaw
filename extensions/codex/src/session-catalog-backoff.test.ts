@@ -288,9 +288,7 @@ it.each(["cold", "refresh"])(
     await vi.advanceTimersByTimeAsync(24 * 60 * 60_000);
     await expect(control.initialize()).rejects.toBe(failure);
     expectCalls(phase === "cold" ? 1 : 2);
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("Codex catalog updater cannot run"),
-    );
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Codex cannot run"));
   },
 );
 

@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   SqliteCoordinatorError,
@@ -21,15 +20,13 @@ import type {
   RetainedReadScope,
 } from "./openclaw-state-read.types.js";
 
-/** The report owns immutable bytes and their page cache until its readers drain. */
+/** Retain the selected reader until admission drains; live reads pin one transaction per operation. */
 export function readRetainedStateSnapshot<T>(
   scope: RetainedReadScope & { reader?: ReturnType<typeof openOpenClawStateReadOnlyLocation> },
-  source: { location: string; cleanClose?: boolean },
+  source: { location: string },
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
 ): T {
-  const location = source.cleanClose
-    ? resolveImmutableSqliteFileUri(source.location)
-    : source.location;
+  const { location } = source;
   if (isStatePostgres()) {
     return withOpenClawStateReadOnlyLocation(operation, scope.path, location);
   }

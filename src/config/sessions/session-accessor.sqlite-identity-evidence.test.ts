@@ -17,7 +17,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-it("bounds participant reads for 32 session identity probes", () => {
+it("reads recorded identities without entry payloads or participant projections", () => {
   const count = 32;
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-session-identity-batch-") };
   const scope = { agentId: "worker-1", env };
@@ -29,7 +29,11 @@ it("bounds participant reads for 32 session identity probes", () => {
     storePath: database.path,
   }));
   for (const probe of probes) {
-    replaceSessionEntrySync(probe, { sessionId: probe.sessionId, updatedAt: 1 });
+    replaceSessionEntrySync(probe, {
+      sessionId: probe.sessionId,
+      updatedAt: 1,
+      label: "synthetic session ".repeat(1024),
+    });
     recordSessionParticipant(probe, {
       identity: { type: "profile", id: "alice" },
       promptedAt: 1,
@@ -39,14 +43,19 @@ it("bounds participant reads for 32 session identity probes", () => {
   expect(readSessionIdentityEvidenceBatch(probes)).toEqual(expected);
   const queries = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(database.db),
-    ["participants"],
-    (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+    ["participants", "nodes"],
+    (sql) =>
+      sql.includes('from "session_participants"')
+        ? "participants"
+        : sql.includes('from "session_nodes"')
+          ? "nodes"
+          : null,
   );
   try {
     expect(readSessionIdentityEvidenceBatch(probes)).toEqual(expected);
-    expect(queries.rowCounts.participants).toBe(count);
-    expect(queries.counts.participants).toBeGreaterThan(0);
-    expect(queries.counts.participants).toBeLessThanOrEqual(2);
+    expect(queries.rowCounts.nodes).toBe(count);
+    expect(queries.textBytes.nodes).toBeLessThan(count * 100);
+    expect(queries.counts.participants).toBe(0);
   } finally {
     queries.restore();
   }

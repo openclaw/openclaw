@@ -71,10 +71,11 @@ async function seal() {
     workflowSha,
   };
   validateReleaseChildRunProvenance(run, expected);
+  // Partial reruns can stay queued while the exact publisher job below is running.
   if (
     run.run_attempt !== runAttempt ||
     run.head_repository?.full_name !== repository ||
-    run.status !== "in_progress" ||
+    !["queued", "in_progress"].includes(run.status) ||
     run.conclusion !== null
   ) {
     throw new Error("Child evidence publisher is not in the current active workflow attempt");

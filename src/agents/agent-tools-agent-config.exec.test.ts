@@ -9,8 +9,10 @@ import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
+import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { getFinishedSession } from "./bash-process-registry.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -214,32 +216,97 @@ describe("Agent-specific exec tool defaults", () => {
     ).toBe(0);
   });
 
-  it("should run exec synchronously when process is denied", async () => {
-    const cfg: OpenClawConfig = {
+  describe("tools.byProvider exec ceiling", () => {
+    const ceilingConfig = (mode: "deny" | "auto"): OpenClawConfig => ({
       tools: {
-        deny: ["process"],
-        exec: {
-          host: "gateway",
-          mode: "full",
-        },
+        exec: { host: "gateway", mode: "full" },
+        byProvider: { "local-llm/small": { exec: { mode } } },
       },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      ...createTempAgentDirs("test-main"),
     });
-    const execTool = requireExecTool(tools);
+    const reviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "deny",
+      risk: "high",
+      rationale: "fixture denial",
+    }));
+    const toolsForModel = (config: OpenClawConfig, modelProvider: string, modelId: string) =>
+      createOpenClawCodingTools({
+        config,
+        sessionKey: "agent:main:main",
+        modelProvider,
+        modelId,
+        exec: { backgroundMs: 0, notifyOnExit: false, autoReviewer: reviewer },
+        ...createTempAgentDirs(`ceiling-${modelProvider}-${modelId}`),
+      });
 
-    const result = await execTool.execute("call1", {
-      command: "echo done",
-      yieldMs: 10,
+    it("denies exec only for the capped model", async () => {
+      const config = ceilingConfig("deny");
+      await expect(
+        requireExecTool(toolsForModel(config, "local-llm", "small")).execute("capped", {
+          command: "echo capped",
+        }),
+      ).rejects.toThrow("exec denied");
+      const other = await requireExecTool(toolsForModel(config, "anthropic", "big")).execute(
+        "uncapped",
+        { command: "echo uncapped" },
+      );
+      expect(other.details).toMatchObject({ status: "completed" });
     });
 
-    const resultDetails = result?.details as { status?: string } | undefined;
-    expect(resultDetails?.status).toBe("completed");
+    it("sends only the capped model's exec misses to the reviewer before any process starts", async () => {
+      const config = ceilingConfig("auto");
+      const marker = (name: string) => path.join(tempDirs.make("ceiling-marker-"), name);
+      const capped = marker("capped");
+      const result = await requireExecTool(toolsForModel(config, "local-llm", "small")).execute(
+        "capped-review",
+        { command: `touch ${capped}` },
+      );
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(JSON.stringify(result)).toContain("fixture denial");
+      expect(fs.existsSync(capped)).toBe(false);
+      const uncapped = marker("uncapped");
+      await requireExecTool(toolsForModel(config, "anthropic", "big")).execute("uncapped-run", {
+        command: `touch ${uncapped}`,
+      });
+      expect(reviewer).toHaveBeenCalledTimes(1);
+      expect(fs.existsSync(uncapped)).toBe(true);
+    });
   });
+
+  it.each(["configuration", "turn"])(
+    "runs exec synchronously when process is denied by %s",
+    async (restriction) => {
+      const cfg: OpenClawConfig = {
+        tools: {
+          deny: restriction === "configuration" ? ["process"] : [],
+          exec: {
+            host: "gateway",
+            mode: "full",
+          },
+        },
+      };
+
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        ...createTempAgentDirs("test-main"),
+      });
+      const offered = requireExecTool(tools).parameters;
+      if (restriction === "turn") {
+        finalizeAgentToolAvailability(tools, { toolExecutionAllow: ["exec"] });
+      }
+      const execTool = requireExecTool(tools);
+      expect(execTool.parameters).toEqual(offered);
+      expect(schemaPropertyNames(execTool).includes("background")).toBe(restriction === "turn");
+
+      const result = await execTool.execute("call1", {
+        command: "echo done",
+        background: true,
+      });
+
+      const resultDetails = result?.details as { status?: string } | undefined;
+      expect(resultDetails?.status).toBe("completed");
+    },
+  );
 
   it("makes exec completion-only when the final runtime allowlist removes process", async () => {
     const tools = createOpenClawCodingTools({

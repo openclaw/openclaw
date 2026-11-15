@@ -123,7 +123,7 @@ suite.define(() => {
       const alert = dashboards.getByRole("alert");
       const alertText = await alert.textContent();
       expect(alertText).toContain("Dashboard refresh unavailable");
-      expect(alertText).toContain("Showing stale data");
+      expect(alertText).toContain("Showing last known data");
       expect(await alert.getByRole("button").count()).toBe(0);
 
       await setList(gateway, sessionsResult(key, "Updated deploy monitor", 2));
@@ -174,7 +174,7 @@ suite.define(() => {
         expect(await dashboards.getByRole("button", { name: "Retry", exact: true }).count()).toBe(
           0,
         );
-        expect(await dashboards.textContent()).not.toContain("Showing stale data");
+        expect(await dashboards.textContent()).not.toContain("Showing last known data");
         expect(await dashboards.locator("[data-dashboards-empty]").count()).toBe(0);
         const emptyResult = { ...sessionsResult("", "", 1), count: 0, sessions: [] };
         await setList(gateway, emptyResult);
@@ -260,9 +260,7 @@ suite.define(() => {
         // The profileless roster has no ownership identities, so its title stays plain.
         await expect
           .poll(() =>
-            sidebar
-              .locator(".sidebar-session-toolbar .sidebar-recent-sessions__label-text")
-              .textContent(),
+            sidebar.locator(".sidebar-session-toolbar .sidebar-panel-header__title").textContent(),
           )
           .toBe("Sessions");
         await sidebar.getByText(canonicalLabel, { exact: true }).waitFor();

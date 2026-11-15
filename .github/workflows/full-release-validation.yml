@@ -84,6 +84,7 @@ on:
           - windows-node
           - live-e2e
           - package
+          - qualified-package
           - qa-parity
           - qa-live
           - npm-telegram
@@ -151,6 +152,11 @@ on:
         required: false
         default: ""
         type: string
+      npm_preflight_use_github_hosted_runners:
+        description: Run npm artifact preflight jobs on GitHub-hosted ubuntu-24.04 instead of Blacksmith
+        required: false
+        default: false
+        type: boolean
 permissions:
   actions: write
   contents: read
@@ -170,6 +176,7 @@ env:
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
   FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
+  FULL_RELEASE_QUALIFICATION_EXEMPTION_CONTRACT: "1"
   FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
@@ -180,20 +187,19 @@ env:
 jobs:
   resolve_target:
     name: Resolve target ref
-    # Hosted admission delays compound along this serial release path.
-    runs-on: &linux_runner_hybrid_small >-
+    runs-on: &linux_runner_ubuntu >-
       ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(github.repository == 'openclaw/openclaw' &&
-      vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04')))
-      || (github.repository == 'openclaw/openclaw' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' &&
-      'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
-    timeout-minutes: 10
+      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    # About 4.5 minutes normally; the headroom keeps degraded GitHub Git operations
+    # (slow checkouts and object fetches into the blob:none target) from cancelling the FRV.
+    timeout-minutes: 15
     outputs:
       sha: ${{ steps.resolve.outputs.sha }}
       release_tag: ${{ steps.release_inputs.outputs.release_tag }}
       npm_dist_tag: ${{ steps.release_inputs.outputs.npm_dist_tag }}
       release_candidate_branch: ${{ steps.release_inputs.outputs.release_candidate_branch }}
       trusted_workflow_json: ${{ steps.tooling_identity.outputs.json }}
+      performance_exempt: ${{ steps.tooling_identity.outputs.performance_exempt }}
       extension_test_exclude_patterns_json: ${{ steps.publication_dispatch.outputs.extension_test_exclude_patterns_json }}
       qualification_baselines_json: ${{ steps.publication_dispatch.outputs.qualification_baselines_json }}
       live_suite_filter: ${{ steps.filters.outputs.live_suite_filter }}
@@ -337,7 +343,8 @@ jobs:
               --qualification-inputs-json "$QUALIFICATION_INPUTS_JSON" --candidate-sha "$CANDIDATE_SHA")
           fi
           identity="$(
-            node workflow/scripts/release-tooling-identity.mjs resolve "${admission_args[@]}" \
+            node workflow/scripts/release-tooling-identity.mjs resolve \
+              ${admission_args[@]+"${admission_args[@]}"} \
               --repository "$GITHUB_REPOSITORY" \
               --workflow-contract "$WORKFLOW_CONTRACT" \
               --workflow-ref "$WORKFLOW_REF" \
@@ -440,7 +447,7 @@ jobs:
           if [[ "$RERUN_GROUP" =~ ^(all|cross-os|windows-node)$ &&
                 -z "${RELEASE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
-          elif [[ "$RERUN_GROUP" =~ ^(all|package)$ &&
+          elif [[ "$RERUN_GROUP" =~ ^(all|package|qualified-package)$ &&
                   -z "${RELEASE_PACKAGE_SPEC// }" &&
                   -z "${PACKAGE_ACCEPTANCE_PACKAGE_SPEC// }" ]]; then
             release_artifact_required=true
@@ -747,13 +754,30 @@ jobs:
             .toString('latin1').split('\0').filter(record =>
               /^(?:package\.json|apps\/android\/version\.json|extensions\/[^/]+\/(?:package\.json|README\.md)|packages\/[^/]+\/package\.json)$/.test(record.slice(record.indexOf('\t') + 1)));
           if (records.length > 4096) throw new Error('publication metadata count exceeds limit');
-          let bytes = 0;
-          for (const record of records) {
+          const oids = records.map(record => {
             const tab = record.indexOf('\t');
             const header = record.slice(0, tab), path = record.slice(tab + 1);
             const [mode, type, oid] = header.split(' ');
             new TextDecoder('utf-8', { fatal: true }).decode(Buffer.from(path, 'latin1'));
             if (!['100644', '100755'].includes(mode) || type !== 'blob') throw new Error('publication metadata must be regular committed files');
+            return oid;
+          });
+          // The target is a blob:none checkout, so each missing blob read below would be its own
+          // lazy promisor fetch. Fetch them in one batch with git's own lazy-fetch arguments first;
+          // if that fails, the reads below still fall back to lazy fetches.
+          const missing = oids.length === 0 ? [] : git('rev-list', '--objects', '--no-walk', '--missing=print', ...new Set(oids))
+            .toString().split('\n').filter(line => line.startsWith('?')).map(line => line.slice(1));
+          if (missing.length > 0) {
+            try {
+              execFileSync('git', ['--no-replace-objects', '-C', root, '-c', 'fetch.negotiationAlgorithm=noop', 'fetch', 'origin',
+                '--no-tags', '--no-write-fetch-head', '--recurse-submodules=no', '--filter=blob:none', '--stdin'],
+                { timeout: 120000, input: `${missing.join('\n')}\n`, stdio: ['pipe', 'ignore', 'pipe'] });
+            } catch (error) {
+              console.log(`::warning::Batched publication metadata prefetch failed; falling back to per-blob fetches: ${error.message}`);
+            }
+          }
+          let bytes = 0;
+          for (const oid of oids) {
             const size = Number(git('cat-file', '-s', oid).toString());
             if (!Number.isSafeInteger(size) || size > 16 * 1024 * 1024 || (bytes += size) > 64 * 1024 * 1024) throw new Error('publication metadata byte limit exceeded');
             git('cat-file', 'blob', oid);
@@ -914,7 +938,7 @@ jobs:
             else
               echo "- Plugin prerelease: skipped by rerun group"
             fi
-            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
+            if [[ "$RERUN_GROUP" == "all" || "$RERUN_GROUP" == "install-smoke" || "$RERUN_GROUP" == "cross-os" || "$RERUN_GROUP" == "windows-node" || "$RERUN_GROUP" == "live-e2e" || "$RERUN_GROUP" == "package" || "$RERUN_GROUP" == "qualified-package" || "$RERUN_GROUP" == "qa-parity" || "$RERUN_GROUP" == "qa-live" ]]; then
               echo "- Release/live/Docker/package/QA: \`OpenClaw Release Checks\`"
             else
               echo "- Release/live/Docker/package/QA: skipped by rerun group"
@@ -953,10 +977,9 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   plugin_compatibility_readiness:
-    name: Enforce plugin compatibility release readiness
+    name: Check release source readiness
     needs: [resolve_target]
-    if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
-    runs-on: *linux_runner_hybrid_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     steps:
       - name: Checkout target source
@@ -992,14 +1015,24 @@ jobs:
           CI: "true"
         run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
+      - name: Check target mock exports
+        env:
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+        run: |
+          set -euo pipefail
+          # Keep trusted setup files outside the target's untracked-source scan.
+          mv .release-harness "$RUNNER_TEMP/source-preflight-harness"
+          pnpm check:test-mock-exports --base "$TARGET_SHA"
+
       - name: Enforce target compatibility readiness
+        if: needs.resolve_target.outputs.plugin_compatibility_required == 'true'
         run: pnpm plugins:boundary-report:ci
 
   evidence_reuse:
     name: Check for reusable validation evidence
     needs: [resolve_target, plugin_compatibility_readiness]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
-    runs-on: *linux_runner_hybrid_small
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     outputs:
       reuse: ${{ steps.find.outputs.reuse }}
@@ -1079,7 +1112,7 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
           VALIDATION_PURPOSE: ${{ needs.resolve_target.outputs.validation_purpose }}
@@ -1209,7 +1242,7 @@ jobs:
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           QUALIFICATION_INPUTS_JSON: ${{ toJSON(inputs) }}
           PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/workflow/scripts/release-ci-summary.mjs', github.workspace) }}
         run: node workflow/scripts/full-release-artifacts.mjs reuse
 
       - name: Summarize evidence reuse
@@ -1236,10 +1269,8 @@ jobs:
   normal_ci:
     name: Run normal full CI
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: &linux_runner_ubuntu >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","ci"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1498,6 +1529,7 @@ jobs:
               args=(-f stage="$stage" -f dispatch_id="$dispatch_id" -f source_sha="$TARGET_SHA" -f release_tag="$RELEASE_TAG" -f preflight_phase="$PREFLIGHT_PHASE")
               if [[ "$stage" == "npm" ]]; then
                 args+=(-f npm_dist_tag="$NPM_DIST_TAG" -f release_candidate_branch="$RELEASE_CANDIDATE_BRANCH")
+                args+=(-f npm_preflight_use_github_hosted_runners="$NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS")
               elif [[ "$stage" == "candidate" ]]; then
                 args+=(-f request_json="$CANDIDATE_REQUEST_JSON" -f prepared_npm_bundle_json="$PREPARED_NPM_BUNDLE_JSON")
               fi
@@ -1672,7 +1704,7 @@ jobs:
   plugin_prerelease_independent:
     name: Run plugin prerelease independent validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1736,12 +1768,8 @@ jobs:
   release_checks_independent:
     name: Run release checks independent validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: &linux_runner_small >-
-      ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}',
-      toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' &&
-      'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github'
-      && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && contains(fromJSON('["all","install-smoke","live-e2e","qa-parity","qa-live"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1783,8 +1811,8 @@ jobs:
   release_checks_candidate:
     name: Run release checks candidate validation
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse, candidate_acquisition]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: *linux_runner_small
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (needs.resolve_target.outputs.release_candidate_artifact_required != 'true' || (needs.candidate_acquisition.result == 'success' && needs.candidate_acquisition.outputs.state == 'ready')) && (contains(fromJSON('["all","cross-os","windows-node","package","qualified-package"]'), inputs.rerun_group) || (inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1826,7 +1854,7 @@ jobs:
   npm_telegram:
     name: Run package Telegram E2E
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || inputs.release_package_spec != '') && needs.evidence_reuse.outputs.reuse != 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
@@ -1854,8 +1882,8 @@ jobs:
   performance:
     name: Run product performance evidence
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
-    runs-on: *linux_runner_small
+    if: ${{ always() && github.run_attempt == 1 && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.coverage_policy != 'npm-beta-v1' && needs.resolve_target.outputs.performance_exempt != 'true' && contains(fromJSON('["all","performance"]'), inputs.rerun_group) && needs.evidence_reuse.outputs.reuse != 'true' }}
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
@@ -1880,7 +1908,7 @@ jobs:
   prepare_npm_package:
     name: Prepare release npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
+    if: ${{ always() && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && (inputs.rerun_group == 'all' || needs.resolve_target.outputs.candidate_required == 'true') }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -1898,6 +1926,7 @@ jobs:
       RELEASE_TAG: ${{ needs.resolve_target.outputs.release_tag }}
       NPM_DIST_TAG: ${{ needs.resolve_target.outputs.npm_dist_tag }}
       RELEASE_CANDIDATE_BRANCH: ${{ needs.resolve_target.outputs.release_candidate_branch }}
+      NPM_PREFLIGHT_USE_GITHUB_HOSTED_RUNNERS: ${{ inputs.npm_preflight_use_github_hosted_runners }}
       PREFLIGHT_PHASE: ${{ inputs.rerun_group == 'all' && 'all' || 'prepare' }}
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
@@ -1992,7 +2021,7 @@ jobs:
   prepare_plugin_npm:
     name: Prepare exact plugin npm artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) && needs.resolve_target.outputs.plugin_npm_preflight_required == 'true' }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 150
     outputs:
@@ -2010,6 +2039,10 @@ jobs:
       CHILD_WORKFLOW_REF: ${{ github.ref_name }}
       PARENT_WORKFLOW_SHA: ${{ github.sha }}
       DISPATCH_ID: full-release-validation-${{ github.run_id }}-1-plugin-npm-preflight
+      # The normal publish route repacks with the admitted publisher tooling P;
+      # the preflight child packs with this run's tooling.
+      PUBLISHER_SHA: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission.workflowSha || '' }}
+      PUBLICATION_ROUTE: ${{ fromJSON(needs.resolve_target.outputs.publication_selection_json || '{}').route || '' }}
     steps:
       - name: Retain original plugin npm artifact descriptor
         id: reused
@@ -2022,6 +2055,62 @@ jobs:
         id: dispatch
         if: github.run_attempt == 1 && env.PUBLICATION_ARTIFACTS_REUSED != 'true'
         run: *full_release_child_dispatch
+
+      # While the child runs, pack and scan as Plugin NPM Release will: candidate
+      # source at the root, P's tooling, scripts, and inventory at .release-tooling.
+      # A P-only bundler or inventory drift then fails here instead of at publish.
+      - name: Checkout target source for publisher scan
+        if: &publisher_tooling_scan env.PUBLISHER_SHA != '' && env.PUBLISHER_SHA != github.sha && env.PUBLICATION_ROUTE == 'normal'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Checkout publisher tooling
+        if: *publisher_tooling_scan
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.PUBLISHER_SHA }}
+          path: .release-tooling
+          fetch-depth: 1
+          persist-credentials: false
+          submodules: false
+
+      - name: Setup Node environment for publisher tooling scan
+        if: *publisher_tooling_scan
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          node-version: ${{ env.NODE_VERSION }}
+          install-bun: "false"
+
+      - name: Install publisher tooling dependencies
+        if: *publisher_tooling_scan
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
+      - name: Scan plugin npm packs with publisher tooling
+        if: *publisher_tooling_scan
+        env:
+          TSX_TSCONFIG_PATH: ${{ github.workspace }}/.release-tooling/tsconfig.json
+        run: |
+          set -euo pipefail
+          if [[ ! -f .release-tooling/scripts/check-plugin-npm-security-scan.mts ]]; then
+            echo "::warning::Publisher tooling ${PUBLISHER_SHA} predates this scan; Plugin NPM Release scans at publish."
+            exit 0
+          fi
+          plan_args=(--selection-mode "$PLUGIN_PUBLISH_SCOPE")
+          [[ -z "$PLUGINS" ]] || plan_args+=(--plugins "$PLUGINS")
+          [[ "$NPM_DIST_TAG" != extended-stable ]] || plan_args+=(--npm-dist-tag "$NPM_DIST_TAG")
+          node --import tsx .release-tooling/scripts/plugin-npm-release-plan.ts "${plan_args[@]}" > "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
+          echo "Packing with publisher tooling ${PUBLISHER_SHA}."
+          node --import tsx .release-tooling/scripts/check-plugin-npm-security-scan.mts \
+            --tooling-root .release-tooling \
+            --plan "$RUNNER_TEMP/plugin-npm-publisher-plan.json"
 
       - name: Resolve and seal exact plugin npm artifact descriptor
         id: prepared
@@ -2091,7 +2180,7 @@ jobs:
   prepare_docker_release:
     name: Prepare release Docker artifacts
     needs: [resolve_target, plugin_compatibility_readiness, evidence_reuse]
-    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
+    if: ${{ always() && inputs.rerun_group == 'all' && needs.resolve_target.result == 'success' && needs.plugin_compatibility_readiness.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.evidence_reuse.result) }}
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 360
     outputs:
@@ -2210,7 +2299,7 @@ jobs:
         performance,
       ]
     if: always()
-    runs-on: *linux_runner_small
+    runs-on: *linux_runner_ubuntu
     timeout-minutes: 15
     outputs:
       sha256: ${{ steps.plan.outputs.sha256 }}
@@ -2278,7 +2367,7 @@ jobs:
         if: github.run_attempt == 1
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2486,7 +2575,7 @@ jobs:
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -2539,8 +2628,8 @@ jobs:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
-  release_decision:
-    name: Release Decision
+  boat_release_runners:
+    name: Provision Boat release runners
     needs:
       [
         resolve_target,
@@ -2550,81 +2639,89 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always()
-    runs-on: *linux_runner_small
-    timeout-minutes: 720
-    env:
-      RELEASE_STATE_SCRIPT: &release_state_script ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
+    if: always() && !cancelled() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat' && needs.resolve_target.result == 'success'
+    runs-on: ubuntu-24.04
+    # Two sequential runners: each can take 15 minutes to provision and 10 to register.
+    timeout-minutes: 55
     outputs:
-      state: ${{ steps.state.outputs.state }}
+      decision_vm: ${{ steps.decision.outputs.vm }}
+      decision_runner: ${{ steps.decision.outputs.runner }}
+      decision_label: ${{ steps.decision.outputs.label }}
+      drain_vm: ${{ steps.drain.outputs.vm }}
+      drain_runner: ${{ steps.drain.outputs.runner }}
+      drain_label: ${{ steps.drain.outputs.label }}
+    permissions:
+      contents: read
     steps:
-      - name: Checkout release decision tooling
+      - name: Checkout Boat runner tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
           persist-credentials: false
-
-      - *qualification_evidence_verifier_checkout
-
-      - name: Download immutable release execution plan
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
         with:
-          name: full-release-execution-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/full-release-execution-plan
-
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Provision decision runner
+        id: decision
+        uses: ./.github/actions/boat-release-runner
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Evaluate release decision
-        id: state
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
-          FAIL_FAST: ${{ inputs.fail_fast }}
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RERUN_GROUP: ${{ inputs.rerun_group }}
-          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
-          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
-          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
-          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
-          FULL_RELEASE_STATE_MODE: decision
-          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
-          FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
-        run: &full_release_state |
-          set -euo pipefail
-          node "$RELEASE_STATE_SCRIPT" "$FULL_RELEASE_STATE_MODE"
-
-      - name: Upload release decision
-        if: always() && steps.state.outputs.state != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+          operation: provision
+          role: decision
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+      - name: Provision drain runner
+        id: drain
+        uses: ./.github/actions/boat-release-runner
         with:
-          name: full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-decision
-          if-no-files-found: error
+          operation: provision
+          role: drain
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
 
-      - name: Enforce release decision
-        if: always()
-        env:
-          RELEASE_DECISION_STATE: ${{ steps.state.outputs.state }}
-        run: |
-          set -euo pipefail
-          if [[ "$RELEASE_DECISION_STATE" == "passed" ]]; then
-            exit 0
-          fi
-          echo "::error::Release Decision ended in ${RELEASE_DECISION_STATE:-orchestration_error}."
-          exit 1
+  release_decision:
+    name: Release Decision
+    needs:
+      [
+        boat_release_runners,
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
+    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    with:
+      mode: decision
+      runner_label: ${{ needs.boat_release_runners.outputs.decision_label }}
+      fail_fast: ${{ inputs.fail_fast }}
+      release_profile: ${{ inputs.release_profile }}
+      rerun_group: ${{ inputs.rerun_group }}
+      target_sha: ${{ needs.resolve_target.outputs.sha }}
+      qualification_workflow_sha: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha || '' }}
+      npm_preparation_result: ${{ needs.prepare_npm_package.result }}
+      npm_qualification_result: ${{ needs.qualify_npm_package.result }}
+      plugin_npm_preparation_result: ${{ needs.prepare_plugin_npm.result }}
+      docker_preparation_result: ${{ needs.prepare_docker_release.result }}
 
   diagnostic_drain:
     name: Diagnostic Drain
     needs:
       [
+        boat_release_runners,
         resolve_target,
         prepare_npm_package,
         qualify_npm_package,
@@ -2632,106 +2729,20 @@ jobs:
         prepare_docker_release,
         release_execution_plan,
       ]
-    if: always()
-    runs-on: *linux_runner_small
-    timeout-minutes: 720
-    env:
-      RELEASE_STATE_SCRIPT: *release_state_script
-    outputs:
-      state: ${{ steps.state.outputs.state }}
-      normal_ci_conclusion: ${{ steps.state.outputs.normalCi_conclusion }}
-      plugin_prerelease_independent_conclusion: ${{ steps.state.outputs.pluginPrereleaseIndependent_conclusion }}
-      plugin_prerelease_candidate_conclusion: ${{ steps.state.outputs.pluginPrereleaseCandidate_conclusion }}
-      release_checks_independent_conclusion: ${{ steps.state.outputs.releaseChecksIndependent_conclusion }}
-      release_checks_candidate_conclusion: ${{ steps.state.outputs.releaseChecksCandidate_conclusion }}
-      npm_telegram_conclusion: ${{ steps.state.outputs.npmTelegram_conclusion }}
-      performance_conclusion: ${{ steps.state.outputs.productPerformance_conclusion }}
-    steps:
-      - name: Checkout diagnostic drain tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.sha }}
-          sparse-checkout: scripts
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
-      - *qualification_evidence_verifier_checkout
-
-      - name: Download immutable release execution plan
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: full-release-execution-plan-${{ github.run_id }}
-          path: ${{ runner.temp }}/full-release-execution-plan
-
-      - name: Setup supported Node runtime
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-          package-manager-cache: false
-
-      - name: Drain child diagnostics
-        id: state
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FAIL_FAST: "false"
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
-          RERUN_GROUP: ${{ inputs.rerun_group }}
-          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
-          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
-          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
-          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
-          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
-          FULL_RELEASE_STATE_MODE: drain
-          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
-          FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-        run: *full_release_state
-
-      - name: Summarize locale validation
-        if: always() && steps.state.outputs.state != ''
-        env:
-          DIAGNOSTIC_DRAIN_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
-        run: |
-          node <<'NODE'
-          const fs = require("node:fs");
-          const diagnostics = JSON.parse(fs.readFileSync(process.env.DIAGNOSTIC_DRAIN_PATH, "utf8"));
-          const jobs = diagnostics.children.normalCi?.timing.jobs ?? [];
-          const lines = ["## Generated locale validation", "", "| Job | Result |", "| --- | --- |"];
-          const warnings = [];
-          for (const name of ["control-ui-i18n", "native-i18n"]) {
-            const result = jobs.find((job) => job.name === name)?.conclusion || "not recorded";
-            lines.push(`| ${name} | ${result} |`);
-            if (!["success", "skipped", "not recorded"].includes(result)) {
-              console.log(`::warning::${name}: ${result}. Inspect the strict locale job; generated-locale drift must not prevent FRV dispatch.`);
-              warnings.push("", "> [!WARNING]", `> ${name}: ${result}. Generated-locale drift does not block dispatch; the strict job still fails validation.`);
-            }
-          }
-          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, [...lines, ...warnings].join("\n") + "\n");
-          NODE
-
-      - name: Upload diagnostic drain manifest
-        if: always() && steps.state.outputs.state != ''
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: full-release-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/full-release-diagnostics
-          if-no-files-found: error
-
-      - name: Enforce diagnostic drain integrity
-        if: always()
-        env:
-          DIAGNOSTIC_DRAIN_STATE: ${{ steps.state.outputs.state }}
-        run: |
-          set -euo pipefail
-          case "$DIAGNOSTIC_DRAIN_STATE" in
-            passed|blocked_complete)
-              exit 0
-              ;;
-            *)
-              echo "::error::Diagnostic Drain ended in ${DIAGNOSTIC_DRAIN_STATE:-orchestration_error}."
-              exit 1
-              ;;
-          esac
+    if: always() && (vars.OPENCLAW_CI_RUNNER_BACKEND != 'boat' || needs.boat_release_runners.result == 'success')
+    uses: openclaw/openclaw/.github/workflows/full-release-state-watcher.yml@ad1621f7e9d896dfdcc202d007e766e6c30153df
+    with:
+      mode: drain
+      runner_label: ${{ needs.boat_release_runners.outputs.drain_label }}
+      fail_fast: ${{ inputs.fail_fast }}
+      release_profile: ${{ inputs.release_profile }}
+      rerun_group: ${{ inputs.rerun_group }}
+      target_sha: ${{ needs.resolve_target.outputs.sha }}
+      qualification_workflow_sha: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && fromJSON(needs.resolve_target.outputs.source_admission_json).qualificationAdmission.workflowSha || '' }}
+      npm_preparation_result: ${{ needs.prepare_npm_package.result }}
+      npm_qualification_result: ${{ needs.qualify_npm_package.result }}
+      plugin_npm_preparation_result: ${{ needs.prepare_plugin_npm.result }}
+      docker_preparation_result: ${{ needs.prepare_docker_release.result }}
 
   summary:
     name: Verify full validation
@@ -2759,7 +2770,7 @@ jobs:
     runs-on: *linux_runner_ubuntu
     timeout-minutes: 10
     env:
-      RELEASE_STATE_SCRIPT: *release_state_script
+      RELEASE_STATE_SCRIPT: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/full-release-validation-state.mjs', github.workspace) || format('{0}/scripts/full-release-validation-state.mjs', github.workspace) }}
       NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
       NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
       PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
@@ -2957,7 +2968,7 @@ jobs:
         if: ${{ success() }}
         env:
           GH_TOKEN: ${{ github.token }}
-          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ needs.resolve_target.result == 'success' && fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
           TARGET_REF: ${{ startsWith(github.ref, 'refs/heads/release-ci/') && needs.resolve_target.outputs.sha || inputs.ref }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
           RELEASE_PROFILE: ${{ inputs.release_profile }}
@@ -3017,3 +3028,55 @@ jobs:
           path: ${{ runner.temp }}/full-release-validation
           if-no-files-found: error
           overwrite: true
+
+  cleanup_boat_release_runners:
+    name: Remove Boat release runners
+    needs: [boat_release_runners, release_decision, diagnostic_drain]
+    if: always() && vars.OPENCLAW_CI_RUNNER_BACKEND == 'boat'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Boat runner tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+      - name: Setup Boat
+        uses: ./.github/actions/setup-boat
+      - name: Setup Crabbox
+        run: node --import ./scripts/tsx.mjs scripts/crabbox-setup.mts
+      - name: Cleanup decision runner
+        id: decision
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: decision
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_release_runners.outputs.decision_vm }}
+          runner: ${{ needs.boat_release_runners.outputs.decision_runner }}
+      - name: Cleanup drain runner
+        id: drain
+        if: always()
+        uses: ./.github/actions/boat-release-runner
+        with:
+          operation: cleanup
+          role: drain
+          api-key: ${{ secrets.BOAT_API_KEY }}
+          boat-org: ${{ vars.BOAT_ORG }}
+          runner-group: ${{ vars.BOAT_RELEASE_RUNNER_GROUP }}
+          app-id: ${{ vars.BOAT_RUNNER_APP_ID }}
+          app-private-key: ${{ secrets.BOAT_RUNNER_APP_PRIVATE_KEY }}
+          vm: ${{ needs.boat_release_runners.outputs.drain_vm }}
+          runner: ${{ needs.boat_release_runners.outputs.drain_runner }}

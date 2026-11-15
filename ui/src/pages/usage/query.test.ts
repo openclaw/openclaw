@@ -21,39 +21,22 @@ it.each(['label:"Team  Planning"', '"label:Team  Planning"'])(
   },
 );
 
-it("limits suggestions before matching while preserving raw option spelling", () => {
-  const values = [
-    "OpenAI",
-    "OpenAI",
-    "openai",
-    " ",
-    "",
-    undefined,
-    "four",
-    "five",
-    "six",
-    "seventh",
-  ];
-  const sessions = values.map((value, index) => ({
-    key: `session-${index}`,
-    agentId: value,
-    channel: value,
-    modelProvider: value,
-    model: value,
-    usage: null,
-  }));
-  const options = buildUsageFilterOptions(sessions);
+it("matches the full catalog before capping suggestions and preserves raw spelling", () => {
+  const values = ["first", "second", "third", "fourth", "fifth", "sixth", "OpenAI", "openai"];
+  const options = { agent: values, channel: values, provider: values, model: values, tool: values };
   const suggest = (query: string) =>
     buildQuerySuggestions(query, extractQueryTerms(query), options);
-  expect(options.agent).toEqual(["OpenAI", "openai", " ", "four", "five", "six"]);
-  for (const key of ["agent", "channel", "provider", "model"]) {
+  for (const key of ["agent", "channel", "provider", "model", "tool"]) {
     for (const query of [`${key}:OPEN`, `"${key}:OPEN"`, `${key}:"OPEN"`]) {
       expect(suggest(query).map((entry) => entry.value)).toEqual([
         `${key}:OpenAI`,
         `${key}:openai`,
       ]);
     }
-    expect(suggest(`${key}:seventh`)).toEqual([]);
+    expect(suggest(`${key}:`).map((entry) => entry.value)).toEqual(
+      ["first", "second", "third", "fourth", "fifth", "sixth"].map((value) => `${key}:${value}`),
+    );
+    expect(suggest(`${key}:missing`)).toEqual([]);
   }
   expect(suggest("constructor:")).toEqual([]);
   expect(suggest("has:err")).toEqual([{ label: "has:errors", value: "has:errors" }]);

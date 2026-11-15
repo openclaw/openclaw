@@ -1,5 +1,6 @@
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { afterAll, beforeAll, expect, it, onTestFinished } from "vitest";
 import type { PluginDiscoveryDetailResult } from "../../lib/plugins/index.ts";
@@ -53,6 +54,90 @@ async function setup(
 describeControlUiE2e("Plugin overview", () => {
   beforeAll(setupPluginsE2e);
   afterAll(teardownPluginsE2e);
+
+  it("shows the official publisher for an installed bundled plugin", async () => {
+    const bundled = {
+      ...calendarPlugin,
+      id: "huggingface",
+      name: "Hugging Face",
+      description: "Run models through Hugging Face Inference Providers.",
+      packageName: "@openclaw/huggingface-provider",
+      version: "2026.11.3",
+      catalogId: "local_aHVnZ2luZ2ZhY2U",
+      origin: "bundled" as const,
+      removable: false,
+    };
+    const catalog: PluginDiscoveryDetailResult = {
+      plugin: {
+        id: bundled.catalogId,
+        catalog: { name: bundled.name, official: true, categories: ["models"] },
+        local: {
+          present: true,
+          installed: true,
+          enabled: true,
+          state: "enabled",
+          pluginId: bundled.id,
+          action: "manage",
+        },
+      },
+      detail: {
+        origin: "local",
+        author: { handle: "openclaw", displayName: "OpenClaw", official: true },
+        topics: [],
+        configuration: [],
+        mcpServers: [],
+        skills: [],
+        versions: [],
+      },
+    };
+    const context = await newContext();
+    onTestFinished(() => context.close());
+    const page = await context.newPage();
+    const gateway = await installMockGateway(
+      page,
+      {
+        featureMethods: pluginMethods,
+        methodResponses: {
+          ...pluginMethodResponses(),
+          "plugins.list": inventory([bundled]),
+          "plugins.inspect": {
+            ...calendarInspection,
+            plugin: bundled,
+            source: { kind: "npm", packageName: bundled.packageName },
+            declared: { ...calendarInspection.declared, tools: [] },
+            overview: {
+              readme: "# Hugging Face\n\nUse hosted models through Inference Providers.",
+            },
+          },
+        },
+      },
+      {
+        requestHandlers: {
+          "plugins.catalog.get": (params) =>
+            asNullableRecord(params)?.version
+              ? {
+                  __mockError: {
+                    code: "INVALID_REQUEST",
+                    message: "Local plugin details do not select releases.",
+                  },
+                }
+              : catalog,
+        },
+      },
+    );
+    await page.goto(server.baseUrl + "plugins/" + bundled.catalogId);
+    await role(page, "button", "Disable Hugging Face").waitFor();
+    await gateway.waitForRequest("plugins.catalog.get");
+    await page.locator(".plugin-metadata__loading").waitFor({ state: "hidden" });
+    await captureScreenshot(page, "bundled-publisher.png", "viewport");
+    expect(await role(page, "link", "@openclaw").count()).toBe(1);
+    expect(
+      await page.locator(".plugin-catalog-detail__publisher .plugin-official-badge").count(),
+    ).toBe(1);
+    expect((await gateway.getRequests("plugins.catalog.get"))[0]?.params).toEqual({
+      id: bundled.catalogId,
+    });
+  });
 
   it("gives failed plugin actions shared callout padding and space before capabilities", async () => {
     const message =
@@ -118,7 +203,7 @@ describeControlUiE2e("Plugin overview", () => {
       const config = pluginEntries({
         enabled: true,
         config: { timeZone: "Europe/Paris" },
-        hooks: { allowPromptInjection: false },
+        hooks: { allowPromptModification: false },
       });
       const { page, gateway } = await setup(
         {
@@ -143,7 +228,7 @@ describeControlUiE2e("Plugin overview", () => {
                     config: objectSchema({ timeZone: { type: "string", title: "Time zone" } }),
                     hooks: {
                       ...objectSchema({
-                        allowPromptInjection: { type: "boolean", title: "Allow prompt changes" },
+                        allowPromptModification: { type: "boolean", title: "Allow prompt changes" },
                       }),
                       additionalProperties: false,
                     },
@@ -175,15 +260,36 @@ describeControlUiE2e("Plugin overview", () => {
       await timeZone.waitFor();
       expect(await timeZone.inputValue()).toBe("Europe/Paris");
       expect(await timeZone.isEnabled()).toBe(true);
-      const permission = role(page, "checkbox", "Add context to prompts");
+      const permission = role(page, "checkbox", "Modify prompts");
       expect(await permission.isEnabled()).toBe(true);
       expect(await gateway.getRequests("config.set")).toEqual([]);
+      if (process.env.OPENCLAW_UPDATE_E2E_SCREENSHOTS === "1" && entry === "fresh") {
+        const dir = createControlUiE2eArtifactDir("prompt-permission-settings");
+        for (const width of [1440, 393]) {
+          const frame = await takeControlUiScreenshotFrame(
+            page,
+            page.locator(".plugin-editor"),
+            [permission],
+            {
+              animations: "disabled",
+              viewport: { width, height: 1000 },
+              scrollTo: permission,
+            },
+          );
+          writeFileSync(path.join(dir, `settings-${width}.png`), frame.png);
+        }
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
       const inspections = (await gateway.getRequests("plugins.inspect")).length;
       await gateway.deferNext("plugins.inspect");
       await permission.press("Space");
       await expect.poll(() => permission.isChecked()).toBe(true);
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
       await gateway.waitForRequest("plugins.inspect", { after: inspections });
+      const grantWrite = (await gateway.getRequests("config.set"))[0]!.params as { raw: string };
+      expect(JSON.parse(grantWrite.raw).plugins.entries[plugin.id].hooks).toEqual({
+        allowPromptModification: true,
+      });
       expect(await permission.isVisible()).toBe(true);
       await captureScreenshot(page, `direct-settings-${entry}-refresh.png`, "viewport");
       await gateway.resolveDeferred("plugins.inspect");
@@ -191,9 +297,9 @@ describeControlUiE2e("Plugin overview", () => {
       await page.reload();
       await role(page, "textbox", "Time zone").waitFor();
       await expect.poll(() => permission.isChecked()).toBe(true);
-      const permissionRow = page.locator('[data-setting="hooks.allowPromptInjection"]');
+      const permissionRow = page.locator('[data-setting="hooks.allowPromptModification"]');
       await permissionRow.hover();
-      await role(permissionRow, "button", "Actions for Add context to prompts").click();
+      await role(permissionRow, "button", "Actions for Modify prompts").click();
       const resetInspections = (await gateway.getRequests("plugins.inspect")).length;
       await role(permissionRow, "menuitem", "Reset value").click();
       await expect.poll(async () => (await gateway.getRequests("config.set")).length).toBe(1);
@@ -224,6 +330,7 @@ describeControlUiE2e("Plugin overview", () => {
     const linear = {
       ...calendarPlugin,
       id: "linear",
+      catalogId: "ch_bGluZWFy",
       name: "Linear",
       packageName: "@openclaw/linear",
       description: summary,
@@ -348,7 +455,7 @@ describeControlUiE2e("Plugin overview", () => {
     };
     const { page } = await setup(
       {
-        "plugins.list": inventory([calendarPlugin]),
+        "plugins.list": inventory([plugin]),
         "plugins.catalog.get": catalog,
         "plugins.inspect": {
           ...calendarInspection,
@@ -402,9 +509,9 @@ describeControlUiE2e("Plugin overview", () => {
     expect(await content(".plugin-metadata__repository")).toContain("Acme/calendar");
     expect(await content(".plugin-catalog-detail__readme")).toContain("README_TAIL");
     expect(await page.locator(".plugin-capabilities h2").allTextContents()).toEqual([
-      "Skills1",
-      "Tools2",
-      "MCP Server1",
+      "Skills",
+      "Tools",
+      "MCP server",
     ]);
     await page.getByRole("button", { name: /calendar_search/ }).click();
     await page.getByRole("dialog", { name: "calendar_search" }).waitFor();
@@ -424,6 +531,15 @@ describeControlUiE2e("Plugin overview", () => {
     expect(modalBounds!.height).toBeLessThanOrEqual(804);
     await captureScreenshot(page, "overview-tool-mobile.png", "viewport");
     const body = page.locator(".plugin-tool-preview__body");
+    // Inputs lead, so a long description never pushes them out of the first view.
+    expect(
+      await body.evaluate(
+        (element) =>
+          element.scrollTop === 0 &&
+          element.querySelector(".plugin-tool-preview__parameters")!.getBoundingClientRect()
+            .bottom <= element.getBoundingClientRect().bottom,
+      ),
+    ).toBe(true);
     await body.evaluate((element) => {
       element.scrollTop = element.scrollHeight;
     });

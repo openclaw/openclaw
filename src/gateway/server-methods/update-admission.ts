@@ -190,6 +190,9 @@ export async function resolveGatewayUpdateAdmission(runId: string, timeoutMs?: n
   const installSurface = await resolveUpdateInstallSurface({
     root,
     installKind: status.installKind,
+    ...(status.installKind === "package" && status.packageManager !== "unknown"
+      ? { packageManager: status.packageManager }
+      : {}),
     timeoutMs,
   });
   await recordUpdateRunPhase(runId, "requested", {

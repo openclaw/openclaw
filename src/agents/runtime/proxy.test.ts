@@ -117,29 +117,44 @@ describe("streamProxy", () => {
     vi.unstubAllGlobals();
   });
 
-  it("accepts data lines without a space after the colon", async () => {
-    const proxyEvents = [
-      { type: "text_start", contentIndex: 0, contentSignature: "sig" },
-      { type: "text_delta", contentIndex: 0, delta: "Working..." },
-      { type: "text_end", contentIndex: 0 },
-      done,
-    ];
-    const body = proxyEvents
-      .map((event, index) => `data:${index === 1 ? " " : ""}${JSON.stringify(event)}\n`)
-      .join("\n");
-    const stream = startStream(responseFromText(body));
-    const events = await collect(stream);
+  it.each([undefined, 1])(
+    "accepts data lines without a space after the colon (chunk size %s)",
+    async (chunkSize) => {
+      const proxyEvents = [
+        { type: "text_start", contentIndex: 0, contentSignature: "sig" },
+        { type: "text_delta", contentIndex: 0, delta: "Working... 🦞\uFFFD" },
+        { type: "text_end", contentIndex: 0 },
+        done,
+      ];
+      const body = proxyEvents
+        .map((event, index) => `data:${index === 1 ? " " : ""}${JSON.stringify(event)}\n`)
+        .join("\n");
+      const bytes = new TextEncoder().encode(body);
+      const stream = startStream(
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              for (let offset = 0; offset < bytes.length; offset += chunkSize ?? bytes.length) {
+                controller.enqueue(bytes.subarray(offset, offset + (chunkSize ?? bytes.length)));
+              }
+              controller.close();
+            },
+          }),
+        ),
+      );
+      const events = await collect(stream);
 
-    expect(events.map((event) => event.type)).toEqual([
-      "text_start",
-      "text_delta",
-      "text_end",
-      "done",
-    ]);
-    await expect(stream.result()).resolves.toMatchObject({
-      content: [{ type: "text", text: "Working...", textSignature: "sig" }],
-    });
-  });
+      expect(events.map((event) => event.type)).toEqual([
+        "text_start",
+        "text_delta",
+        "text_end",
+        "done",
+      ]);
+      await expect(stream.result()).resolves.toMatchObject({
+        content: [{ type: "text", text: "Working... 🦞\uFFFD", textSignature: "sig" }],
+      });
+    },
+  );
 
   it("delays tool argument previews while preserving exact terminal arguments", async () => {
     const initialContent = "a".repeat(128);
@@ -258,8 +273,20 @@ describe("streamProxy", () => {
 
   it.each([
     { name: "JSON error", prefix: '{"error":"', delimiter: "", status: 502, kind: "error body" },
-    { name: "pending SSE", prefix: "data: ", delimiter: "", status: 200, kind: "SSE stream" },
-    { name: "delimited SSE", prefix: "data: ", delimiter: "\n", status: 200, kind: "SSE stream" },
+    {
+      name: "pending SSE",
+      prefix: "data: ",
+      delimiter: "",
+      status: 200,
+      kind: "SSE pending buffer",
+    },
+    {
+      name: "delimited SSE",
+      prefix: "data: ",
+      delimiter: "\n",
+      status: 200,
+      kind: "SSE pending buffer",
+    },
   ])("bounds $name bytes", async ({ prefix, delimiter, status, kind }) => {
     const cancel = vi.fn(async (_reason?: unknown) => {});
     stubResponse(
@@ -422,6 +449,53 @@ describe("streamProxy loopback /api/stream", () => {
     expect(request).toEqual(["POST", "/api/stream", "Bearer token"]);
     return result;
   }
+
+  it("accepts cumulative SSE traffic above 16 MiB over native HTTP", async () => {
+    const delta = "x".repeat(64 * 1024);
+    const frame = sseFrame({ type: "text_delta", contentIndex: 0, delta });
+    const port = await listen((req, res) => {
+      req.resume();
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write(sseFrame({ type: "text_start", contentIndex: 0 }));
+      for (let index = 0; index < 288 && !res.destroyed; index++) {
+        res.write(frame);
+      }
+      res.end(sseFrame(done));
+    });
+
+    const result = await streamProxy(model, context, loopbackOptions(port)).result();
+    expect(result).toMatchObject({ stopReason: "stop", usage });
+    expect(result.errorMessage).toBeUndefined();
+    expect(result.content).toHaveLength(1);
+    const text = result.content[0];
+    expect(text?.type).toBe("text");
+    if (text?.type === "text") {
+      expect(text.text.length).toBe(18 * 1024 * 1024);
+      expect(text.text.endsWith(delta)).toBe(true);
+    }
+  });
+
+  it("rejects an oversized pending SSE line and closes native HTTP", async () => {
+    const closed = Promise.withResolvers<void>();
+    const port = await listen((req, res) => {
+      req.resume();
+      res.once("close", () => closed.resolve());
+      res.writeHead(200, { "Content-Type": "text/event-stream" });
+      res.write("data: ");
+      const chunk = Buffer.alloc(64 * 1024, "x");
+      for (let index = 0; index < 257 && !res.destroyed; index++) {
+        res.write(chunk);
+      }
+      // Leave the response open: only reader cancellation can close this body.
+    });
+
+    const result = await streamProxy(model, context, loopbackOptions(port)).result();
+    await closed.promise;
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy SSE pending buffer exceeded 16777216 bytes",
+    });
+  });
 
   it.each([
     {

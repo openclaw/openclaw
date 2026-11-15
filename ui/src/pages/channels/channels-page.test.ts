@@ -69,7 +69,7 @@ const findButton = (root: ParentNode, selector: string) =>
   root.querySelector<HTMLButtonElement>(selector)!;
 const text = (root: ParentNode, selector: string) => root.querySelector(selector)?.textContent;
 async function closeDetail(page: HTMLElement) {
-  findButton(page, ".channels-detail__close").click();
+  findButton(page, ".channels-detail .oc-dialog__close").click();
   await settle();
 }
 function expectUpdate(mount: PackagedChannel["mounts"][number], expected: object) {
@@ -184,7 +184,7 @@ describe("ChannelsPage lifecycle", () => {
       details.click();
       await settle();
       expect(page.querySelector(".channels-detail")).not.toBeNull();
-      const runSetup = profileButton(page, "Run setup");
+      const runSetup = profileButton(page, "Set up");
       expect(runSetup.disabled).toBe(true);
       runSetup.click();
       await settle();
@@ -400,6 +400,50 @@ describe("ChannelsPage lifecycle", () => {
     ]);
   });
 
+  it.each([
+    {
+      notification: "failed",
+      commandOwnerBootstrap: "not-requested",
+      notice: "DM access approved. Couldn’t notify the requester.",
+    },
+    {
+      notification: "sent",
+      commandOwnerBootstrap: "unavailable",
+      notice: "DM access approved. Couldn’t set the command owner. Ask an admin to set one.",
+    },
+    {
+      notification: "failed",
+      commandOwnerBootstrap: "unavailable",
+      notice:
+        "DM access approved. Couldn’t notify the requester or set the command owner. Ask an admin to set the owner.",
+    },
+  ] as const)(
+    "keeps approval successful when follow-ups fail: $notification / $commandOwnerBootstrap",
+    async ({ notification, commandOwnerBootstrap, notice }) => {
+      const approved = {
+        requestId: "opaque-request-id",
+        senderId: "12345",
+        notification,
+        commandOwnerBootstrap,
+      };
+      const gateway = createGateway(["operator.pairing", "operator.admin"], {
+        "channels.pairing.approve": () => approved,
+        "channels.pairing.list": () => pairingSnapshot({ requests: [] }),
+      });
+      const source = createContext(gateway);
+      source.channels.state.pairingSnapshot = pairingSnapshot();
+      const approve = vi.spyOn(source.channels, "approvePairing");
+      const page = mountPage(source.context);
+      profileButton(page, "Approve").click();
+      await settle();
+      findButton(page, ".channels-pairing-dialog button.primary").click();
+      await waitForSolid(() => expect(page.textContent).toContain(notice));
+      expect(approve).toHaveBeenCalledTimes(1);
+      expect(page.querySelector(".channels-pairing-dialog")).toBeNull();
+      expect(page.textContent).toContain("No DM access requests yet.");
+    },
+  );
+
   it.each(["cancel", "disconnect"] as const)(
     "releases a held pairing presentation on %s without cancelling its owner",
     async (retirement) => {
@@ -440,12 +484,12 @@ describe("ChannelsPage lifecycle", () => {
   it("keeps rejected channel configuration visible in its editor without reloading the draft", async () => {
     const pending = createDeferred<never>();
     const gateway = createGateway(undefined, {
-      "config.set": () => pending.promise,
+      "config.patch": () => pending.promise,
     });
     gateway.emit({
       hello: {
         auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
-        features: { methods: ["config.set", "config.schema"] },
+        features: { methods: ["config.patch", "config.schema"] },
       } as unknown as ApplicationGatewaySnapshot["hello"],
     });
     const source = createContext(gateway);
@@ -480,7 +524,10 @@ describe("ChannelsPage lifecycle", () => {
 
     findButton(page, ".channels-item").click();
     await settle();
-    source.runtimeConfig.patchForm(["channels", "whatsapp", "enabled"], false);
+    source.channels.editConfig("whatsapp", {
+      path: ["channels", "whatsapp", "enabled"],
+      value: false,
+    });
     await settle();
     const save = findButton(page, ".channels-detail .btn.primary");
     expect(save.disabled).toBe(false);
@@ -505,10 +552,12 @@ describe("ChannelsPage lifecycle", () => {
       expect(alert?.textContent).not.toContain("sk-1234567890abcdef");
       expect(alert?.querySelector("img")).toBeNull();
     });
-    expect(source.runtimeConfig.state.configFormDirty).toBe(true);
-    expect(source.runtimeConfig.state.configForm).toEqual({
-      channels: { whatsapp: { enabled: false } },
-    });
+    // The edit stays in its own draft: nothing can autosave it after the rejection.
+    expect(source.runtimeConfig.state.configFormDirty).toBe(false);
+    expect(source.runtimeConfig.state.configForm).toEqual(config);
+    expect(source.channels.state.configEdits.whatsapp).toEqual([
+      { path: ["channels", "whatsapp", "enabled"], value: false },
+    ]);
     expect(refreshConfig).not.toHaveBeenCalled();
     expect(refreshChannels).not.toHaveBeenCalled();
     expect(page.querySelector(".channels-detail .btn.primary")).toBe(save);
@@ -639,7 +688,7 @@ it("retires a real host configuration slot and rejects mounting through its old 
   const container = document.createElement("div");
   f.mounts[0]!.input.parentElement!.append(container);
   const dispose = f.context.mountConfig(container);
-  await waitForSolid(() => expect(container.textContent).toContain("Reload"));
+  await waitForSolid(() => expect(container.querySelector("form")).not.toBeNull());
   f.gateway.emit({ client: createGateway().snapshot.client });
   expect(f.context.signal.aborted).toBe(true);
   expect(container.childNodes).toHaveLength(0);

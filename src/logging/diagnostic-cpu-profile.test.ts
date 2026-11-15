@@ -1,7 +1,10 @@
+import fs from "node:fs/promises";
 import type { Profiler } from "node:inspector";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { diagnosticProfileEntrypoints } from "./diagnostic-profile-runtime.test-support.js";
 
@@ -18,7 +21,10 @@ const native = vi.hoisted(() => ({
   stop: vi.fn(),
   dispose: vi.fn(),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let stateDir: string;
 const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
+const nodeVersion = Object.getOwnPropertyDescriptor(process.versions, "node")!;
 vi.mock("node:v8", async (original) => ({
   ...(await original<typeof import("node:v8")>()),
   startCpuProfile: native.start,
@@ -85,9 +91,31 @@ function profile(): ProfileFixture {
   };
 }
 
-async function capture(signal = new AbortController().signal, hasAuthority = () => true) {
+async function capture(
+  signal = new AbortController().signal,
+  hasAuthority = () => true,
+  params: { windows?: number; windowMs?: number } = {},
+) {
   const { captureDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
-  return captureDiagnosticCpuProfile({ signal, hasAuthority });
+  return captureDiagnosticCpuProfile({ ...params, signal, hasAuthority });
+}
+
+async function readArtifact(
+  outcome: Awaited<ReturnType<typeof capture>>,
+): Promise<Profiler.Profile> {
+  assert(outcome.status === "complete" && "path" in outcome.result);
+  const result = outcome.result;
+  expect(result).not.toHaveProperty("profile");
+  expect(path.dirname(result.path)).toBe(path.join(stateDir, "diagnostics"));
+  expect(path.basename(result.path)).toMatch(/^cpu-.+\.cpuprofile$/);
+  const content = await fs.readFile(result.path, "utf8");
+  expect(Buffer.byteLength(content)).toBe(result.sizeBytes);
+  expect(content).not.toMatch(/fixture|private/);
+  if (process.platform !== "win32") {
+    expect((await fs.stat(result.path)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(path.dirname(result.path))).mode & 0o777).toBe(0o700);
+  }
+  return JSON.parse(content);
 }
 
 function returnProfile(value: Profiler.Profile = profile()) {
@@ -99,6 +127,8 @@ function returnProfile(value: Profiler.Profile = profile()) {
 beforeEach(() => {
   vi.resetModules();
   vi.resetAllMocks();
+  stateDir = tempDirs.make("cpu-profile-artifact-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("NODE_OPTIONS", "");
   vi.stubEnv("NODE_V8_COVERAGE", "");
   vi.stubEnv("BUN_INSPECT", "");
@@ -127,6 +157,7 @@ beforeEach(() => {
   native.wait.mockResolvedValue(undefined);
 });
 afterEach(() => {
+  Object.defineProperty(process.versions, "node", nodeVersion);
   if (bunVersion) {
     Object.defineProperty(process.versions, "bun", bunVersion);
   } else {
@@ -137,6 +168,71 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it.each(["24.22.1", "26.12.1"])(
+    "returns contiguous batch windows without losing signed-delta samples on Node %s",
+    async (version) => {
+      Object.defineProperty(process.versions, "node", { configurable: true, value: version });
+      Reflect.deleteProperty(process.versions, "bun");
+      const value = {
+        ...profile(),
+        endTime: 3_110_000,
+        samples: [2, 3, 2, 3, 2],
+        timeDeltas: [1_000_000, -500, 500, 1_000_000, 1_000_000],
+      };
+      returnProfile(value);
+      native.stop.mockReturnValue(JSON.stringify(value));
+      native.wait.mockImplementationOnce(async () => {
+        expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
+      });
+      const outcome = await capture(undefined, undefined, { windows: 3, windowMs: 1_000 });
+      expect(outcome).toMatchObject({
+        status: "complete",
+        result: {
+          requestedDurationMs: 3_000,
+          windowBoundariesMicros: [10_000, 1_010_000, 2_010_000, 3_110_000],
+          summary: { nodeCount: 3, sampleCount: 5 },
+        },
+      });
+      const saved = await readArtifact(outcome);
+      expect(saved.samples).toEqual(value.samples);
+      expect(saved.timeDeltas).toEqual(value.timeDeltas);
+      assert(outcome.status === "complete" && "windowBoundariesMicros" in outcome.result);
+      const boundaries = outcome.result.windowBoundariesMicros!;
+      let timestamp = saved.startTime;
+      const timestamps = saved.timeDeltas!.map((delta) => (timestamp += delta));
+      const counts = boundaries
+        .slice(1)
+        .map(
+          (end, index) =>
+            timestamps.filter(
+              (at) =>
+                at >= boundaries[index]! &&
+                (at < end || (index === boundaries.length - 2 && at === end)),
+            ).length,
+        );
+      expect(counts).toEqual([1, 2, 2]);
+      expect(counts.reduce((total, count) => total + count, 0)).toBe(value.samples.length);
+      expect(native.wait).toHaveBeenCalledExactlyOnceWith(3_000, undefined, {
+        signal: expect.any(AbortSignal),
+      });
+      if (version.startsWith("24")) {
+        expect(native.start).not.toHaveBeenCalled();
+        expect(native.post.mock.calls.map(([method]) => method)).toEqual([
+          "Profiler.enable",
+          "Profiler.setSamplingInterval",
+          "Profiler.start",
+          "Profiler.stop",
+          "Profiler.disable",
+        ]);
+        expect(native.post).toHaveBeenCalledWith("Profiler.setSamplingInterval", {
+          interval: 10_000,
+        });
+      } else {
+        expect(native.start).toHaveBeenCalledOnce();
+        expect(native.stop).toHaveBeenCalledOnce();
+      }
+    },
+  );
   it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
     const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
     const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
@@ -185,7 +281,7 @@ describe("diagnostic CPU profile owner", () => {
     expect((await capture()).status).toBe("complete");
     expect(native.start).toHaveBeenCalledTimes(2);
   });
-  it("reports synchronous start blocking separately from awaited capture time", async () => {
+  it("reports elapsed capture time including native startup and stop completion", async () => {
     let now = 100;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     native.post.mockImplementation((method: string) => {
@@ -204,7 +300,7 @@ describe("diagnostic CPU profile owner", () => {
     });
     expect(await capture()).toMatchObject({
       status: "complete",
-      result: { startBlockedMs: 2_100, actualDurationMs: 5_500 },
+      result: { startBlockedMs: 2_100, actualDurationMs: 7_820 },
     });
   });
   it("returns a complete sanitized graph only after native cleanup", async () => {
@@ -215,10 +311,13 @@ describe("diagnostic CPU profile owner", () => {
     }
     expect(outcome.result).toMatchObject({
       requestedDurationMs: 5_000,
-      actualDurationMs: 5_500,
       samplingIntervalMicros: 10_000,
       sampleLossCount: null,
       redactedNodeCount: 1,
+    });
+    assert("profile" in outcome.result);
+    await expect(fs.readdir(path.join(stateDir, "diagnostics"))).rejects.toMatchObject({
+      code: "ENOENT",
     });
     expect(outcome.result.profile).toEqual({
       ...profile(),
@@ -454,7 +553,7 @@ describe("diagnostic CPU profile owner", () => {
       returnProfile(value);
       const outcome = await capture();
       expect(outcome.status).toBe("complete");
-      if (outcome.status === "complete" && outcome.result.profile) {
+      if (outcome.status === "complete" && "profile" in outcome.result && outcome.result.profile) {
         expect(outcome.result.profile.nodes[1]?.callFrame).toEqual({
           ...value.nodes[1].callFrame,
           functionName: "[redacted]",
@@ -486,44 +585,26 @@ describe("diagnostic CPU profile owner", () => {
     },
   );
 
-  it("summarizes an oversized profile without losing zero-hit samples or exposing labels", async () => {
-    const template = profile().nodes[1];
-    const root: Profiler.ProfileNode = {
-      ...template,
-      id: 1,
-      callFrame: { ...template.callFrame, functionName: "x".repeat(256) },
-    };
-    const children = Array.from({ length: 2_999 }, (_, index) => ({ ...root, id: index + 2 }));
-    children[1] = {
-      ...children[1]!,
+  it("persists an oversized profile without losing zero-hit samples or exposing labels", async () => {
+    const value = profile();
+    const nodes: Profiler.ProfileNode[] = Array.from({ length: 3_000 }, (_, index) => ({
+      ...value.nodes[1],
+      id: index + 1,
       hitCount: 0,
-      callFrame: { ...template.callFrame, functionName: "private payload" },
-    };
-    root.children = children.map((node) => node.id);
-    const value: Profiler.Profile = { ...profile(), nodes: [root, ...children] };
-    returnProfile(value);
+      callFrame: { ...value.nodes[1].callFrame, functionName: "x".repeat(256) },
+    }));
+    nodes[0] = { ...nodes[0]!, children: nodes.slice(1).map((node) => node.id) };
+    nodes[2]!.callFrame.functionName = "private payload";
+    returnProfile({ ...value, nodes });
     const outcome = await capture();
-    expect(outcome).toMatchObject({
-      status: "complete",
-      result: {
-        truncated: true,
-        originalNodeCount: 3_000,
-        sampleCount: 3,
-        omittedSampleCount: 0,
-        summary: [
-          {
-            sampleCount: 2,
-            stack: [expect.objectContaining({ functionName: "x".repeat(256) }), expect.any(Object)],
-          },
-          {
-            sampleCount: 1,
-            stack: [expect.objectContaining({ functionName: "[redacted]" }), expect.any(Object)],
-          },
-        ],
-      },
-    });
-    expect(JSON.stringify(outcome)).not.toContain("private payload");
-    expect(Buffer.byteLength(JSON.stringify(outcome))).toBeLessThan(1024 * 1024);
+    const saved = await readArtifact(outcome);
+    expect(Buffer.byteLength(JSON.stringify(saved))).toBeGreaterThan(1024 * 1024);
+    expect(saved.nodes).toHaveLength(3_000);
+    expect(saved.nodes[2]?.callFrame.functionName).toBe("[redacted]");
+    expect(saved.nodes[2]?.hitCount).toBe(0);
+    expect(saved.samples).toEqual(value.samples);
+    expect(saved.timeDeltas).toEqual(value.timeDeltas);
+    expect(outcome).toMatchObject({ result: { summary: { nodeCount: 3_000, sampleCount: 3 } } });
     expect(native.disconnect).toHaveBeenCalledOnce();
   });
 
@@ -566,12 +647,14 @@ describe("diagnostic CPU profile owner", () => {
           callFrame: { ...value.nodes[1].callFrame, functionName: "x".repeat(256) },
         });
       }
-      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
-      const outcome = await capture();
-      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
-        throw new Error("expected a bounded summary");
-      }
-      expect(outcome.result.summary).toEqual(
+      const { sanitizeDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
+      const result = sanitizeDiagnosticCpuProfile(
+        { ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) },
+        "/fixture/openclaw",
+        { durationMs: 5_000, startBlockedMs: 0 },
+      );
+      assert("summary" in result);
+      expect(result.summary).toEqual(
         ["dist/second.js", "src/first.ts"].map((url, index) => ({
           sampleCount: 2 - index,
           elidedFrameCount: dependencyDepth - 8 + 1,
@@ -583,9 +666,9 @@ describe("diagnostic CPU profile owner", () => {
           ],
         })),
       );
-      expect(outcome.result.omittedSampleCount).toBe(0);
-      expect(JSON.stringify(outcome)).not.toMatch(/fixture|private|runBoot/);
-      expect(Buffer.byteLength(JSON.stringify(outcome.result))).toBeLessThanOrEqual(1024 * 1024);
+      expect(result.omittedSampleCount).toBe(0);
+      expect(JSON.stringify(result)).not.toMatch(/fixture|private|runBoot/);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(1024 * 1024);
     },
   );
 
@@ -617,13 +700,13 @@ describe("diagnostic CPU profile owner", () => {
       }
       // The hottest stack is last in native order; ranking must retain it first.
       samples.push(...Array<number>(20).fill(samples.at(-1)!));
-      returnProfile({ ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) });
-      const outcome = await capture();
-      expect(outcome.status).toBe("complete");
-      if (outcome.status !== "complete" || !("summary" in outcome.result)) {
-        throw new Error("expected a bounded summary");
-      }
-      const result = outcome.result;
+      const { sanitizeDiagnosticCpuProfile } = await import("./diagnostic-cpu-profile.js");
+      const result = sanitizeDiagnosticCpuProfile(
+        { ...value, nodes, samples, timeDeltas: samples.map(() => 10_000) },
+        "/fixture/openclaw",
+        { durationMs: 5_000, startBlockedMs: 0 },
+      );
+      assert("summary" in result);
       expect(result.profile).toBeUndefined();
       expect(result.summary[0]).toMatchObject({ sampleCount: 21 });
       expect(result.summary.every((row) => row.stack.length === 8)).toBe(true);
@@ -638,17 +721,109 @@ describe("diagnostic CPU profile owner", () => {
   );
 
   it.each(["nodes", "samples"] as const)(
-    "retains the native %s processing limit",
+    "persists the complete graph above the inline %s limit",
     async (limit) => {
       const value: Profiler.Profile = profile();
       if (limit === "nodes") {
-        value.nodes = Array<Profiler.ProfileNode>(16_385).fill(value.nodes[0]!);
+        value.nodes = Array.from({ length: 16_385 }, (_, index) => ({
+          ...profile().nodes[1],
+          id: index + 1,
+          ...(index < 16_384 ? { children: [index + 2] } : {}),
+        }));
       } else {
         value.samples = Array<number>(65_537).fill(2);
         value.timeDeltas = value.samples.map(() => 10_000);
+        value.endTime = value.startTime + value.samples.length * 10_000;
       }
       returnProfile(value);
-      expect(await capture()).toMatchObject({ status: "unavailable", reason: "profile-too-large" });
+      const saved = await readArtifact(await capture());
+      expect(saved.nodes.map(({ id, children }) => ({ id, children }))).toEqual(
+        value.nodes.map(({ id, children }) => ({ id, children })),
+      );
+      expect(saved.samples).toEqual(value.samples);
+      expect(saved.timeDeltas).toEqual(value.timeDeltas);
+    },
+  );
+
+  it("refuses files above 64 MiB and removes the partial artifact", async () => {
+    const value = profile();
+    const positionTicks = Array.from({ length: 40_000 }, (_, line) => ({ line, ticks: 1 }));
+    returnProfile({
+      ...value,
+      nodes: Array.from({ length: 80 }, (_, index) => ({
+        id: index + 1,
+        callFrame: value.nodes[1].callFrame,
+        positionTicks,
+        ...(index < 79 ? { children: [index + 2] } : {}),
+      })),
+    });
+    expect(await capture(undefined, undefined, { windows: 1 })).toMatchObject({
+      status: "unavailable",
+      reason: "profile-too-large",
+      cleanupFailed: false,
+    });
+    expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
+    expect(native.post.mock.calls.filter(([method]) => method === "Profiler.start")).toHaveLength(
+      1,
+    );
+  });
+
+  it.each(["disk budget", "unwritable destination"])(
+    "refuses a batch with %s before starting the profiler",
+    async (failure) => {
+      if (failure === "disk budget") {
+        const space = await fs.statfs(stateDir);
+        space.bsize = 4096;
+        space.bavail = 16_383;
+        vi.spyOn(fs, "statfs").mockResolvedValue(space);
+      } else {
+        await fs.writeFile(path.join(stateDir, "diagnostics"), "not a directory");
+      }
+      expect(await capture(undefined, undefined, { windows: 12 })).toMatchObject({
+        status: "unavailable",
+        reason: failure === "disk budget" ? "insufficient-disk-space" : "capture-failed",
+      });
+      expect(native.start).not.toHaveBeenCalled();
+      expect(native.post.mock.calls.some(([method]) => method === "Profiler.start")).toBe(false);
+      if (failure === "disk budget") {
+        expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
+      }
+    },
+  );
+
+  it.each(["abort", "authority", "write failure"])(
+    "retains busy ownership and removes partial output after %s during artifact writing",
+    async (failure) => {
+      const controller = new AbortController();
+      let authority = true;
+      const open = fs.open.bind(fs);
+      let writes = 0;
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const file = await open(...args);
+        const write = file.writeFile.bind(file);
+        vi.spyOn(file, "writeFile").mockImplementation(async (...writeArgs) => {
+          writes++;
+          await write(...writeArgs);
+          expect(await capture()).toMatchObject({ status: "unavailable", reason: "busy" });
+          if (failure === "abort") {
+            controller.abort();
+          } else if (failure === "authority") {
+            authority = false;
+          } else {
+            throw new Error("synthetic write failure");
+          }
+        });
+        return file;
+      });
+      expect(await capture(controller.signal, () => authority, { windows: 1 })).toMatchObject({
+        status: "unavailable",
+        reason: failure === "write failure" ? "capture-failed" : "cancelled",
+        cleanupFailed: false,
+      });
+      expect(writes).toBeGreaterThan(0);
+      expect(await fs.readdir(path.join(stateDir, "diagnostics"))).toEqual([]);
+      expect(native.disconnect).toHaveBeenCalledOnce();
+      expect((await capture()).status).toBe("complete");
     },
   );
 
@@ -680,7 +855,7 @@ const pid = process.pid;
 const outcome = await captureDiagnosticCpuProfile({ signal: new AbortController().signal, hasAuthority: () => true });
 assert.equal(outcome.status, 'complete', JSON.stringify(outcome));
 const result = outcome.result;
-assert.ok(result.actualDurationMs > 0);
+assert.ok(result.actualDurationMs >= result.requestedDurationMs - 1_000);
 assert.ok(result.profile.samples.length > 0);
 assert.equal(result.profile.samples.length, result.profile.timeDeltas.length);
 assert.ok(result.profile.timeDeltas.every(delta => Number.isFinite(delta)));

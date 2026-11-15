@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatChatSelectionQuote } from "../../lib/chat/chat-selection-quote.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
@@ -12,6 +13,29 @@ import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftStartupResumption } from "./draft-session-startup.ts";
 import type { PendingSessionPlacementRecoveryState } from "./session-placement-recovery-state.ts";
+
+/** Transcript excerpts travel as quoted message text, like chat; only real files upload. */
+function quoteSelectionAttachments(
+  submitted: { text: string; mentions?: readonly HumanMention[] },
+  attachments: readonly ChatAttachment[],
+) {
+  const quotes = attachments.flatMap((item) =>
+    item.selectionAnnotation ? [formatChatSelectionQuote(item.selectionAnnotation)] : [],
+  );
+  if (!quotes.length) {
+    return submitted;
+  }
+  const text = [...quotes, submitted.text].filter(Boolean).join("\n\n");
+  const offset = text.length - submitted.text.length;
+  return {
+    text,
+    mentions: submitted.mentions?.map((mention) => ({
+      ...mention,
+      start: mention.start + offset,
+      end: mention.end + offset,
+    })),
+  };
+}
 
 /** Freeze the selected or recovered input before creation can yield to another draft. */
 export function prepareDraftSubmission(
@@ -29,16 +53,19 @@ export function prepareDraftSubmission(
 ) {
   const pending = draft.pendingPlacement;
   const pendingPlacement = !startup && Boolean(pending.sessionKey);
-  const submitted = trimHumanMentions(draft.message, draft.mentions);
+  const submitted = quoteSelectionAttachments(
+    trimHumanMentions(draft.message, draft.mentions),
+    draft.attachmentDraft.attachments,
+  );
   const message = startup?.params.message ?? (pendingPlacement ? pending.message : submitted.text);
   const mentions = (
     startup ? startup.params.mentions : pendingPlacement ? pending.mentions : submitted.mentions
   )?.map(({ profileId, start, end }) => ({ profileId, start, end }));
-  const attachments = draft.attachmentDraft.attachments;
+  const attachments = draft.attachmentDraft.attachments.filter((item) => !item.selectionAnnotation);
   if (!startup && !pendingPlacement) {
     const error = attachmentBatchRejection(attachments, context.gateway.snapshot.hello?.policy);
     if (error !== undefined) {
-      showToast({ message: error });
+      showToast({ severity: "error", message: error });
       return null;
     }
   }

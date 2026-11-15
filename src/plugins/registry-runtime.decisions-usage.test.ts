@@ -7,6 +7,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DecisionEvaluateOptionsV2 } from "../decisions/execution-types.js";
+import type { PreparedDecisionBillingFacts } from "../decisions/host-billing.js";
 import type { ProviderDecisionOutcomeV2 } from "../decisions/provider-outcomes.js";
 import { prepareDecisionProviderReload } from "../decisions/provider-reload.js";
 import type { DecisionProviderV2 } from "../decisions/provider-types.js";
@@ -25,7 +26,6 @@ import { createPluginRecord } from "./loader-records.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import type { PreparedDecisionBillingFacts } from "./runtime/runtime-model-usage.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 const preparation = vi.hoisted(() => ({

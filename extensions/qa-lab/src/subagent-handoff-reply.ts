@@ -32,7 +32,14 @@ export async function findSubagentHandoffReply(
       continue;
     }
     const meta = message["__openclaw"];
-    if (!isRecord(meta) || typeof meta.id !== "string" || !meta.id) {
+    if (!isRecord(meta)) {
+      continue;
+    }
+    const identities = [
+      typeof meta.id === "string" && meta.id ? `id:${meta.id}` : undefined,
+      typeof meta.runId === "string" && meta.runId ? `run:${meta.runId}` : undefined,
+    ].filter((value): value is string => Boolean(value));
+    if (identities.length === 0) {
       continue;
     }
     const text = extractGatewayMessageText(message);
@@ -47,7 +54,9 @@ export async function findSubagentHandoffReply(
           result.startsWith(value) && /^[ \t]*\r?\n\s*Evidence:/i.test(result.slice(value.length)),
       )
     ) {
-      visible.set(meta.id, text);
+      for (const identity of identities) {
+        visible.set(identity, text);
+      }
     }
   }
   if (visible.size === 0) {
@@ -99,7 +108,10 @@ export async function findSubagentHandoffReply(
         }
       }
     } else if (delivered && typeof id === "string") {
-      const reply = visible.get(id);
+      const meta = isRecord(message["__openclaw"]) ? message["__openclaw"] : undefined;
+      const reply =
+        visible.get(`id:${id}`) ??
+        (typeof meta?.runId === "string" ? visible.get(`run:${meta.runId}`) : undefined);
       if (reply && message.role === "assistant" && extractGatewayMessageText(message) === reply) {
         return reply;
       }

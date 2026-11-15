@@ -142,9 +142,15 @@ it.each([
   // fail after the same Doctor park; only final recovery restarts the latter.
   { platform: "linux" as const, dataAtRisk: false, failure: "lint" as const },
   { platform: "linux" as const, dataAtRisk: false, failure: "fresh-finalizer" as const },
+  ...(["reinstall", "reinstall-admitted"] as const).map((failure) => ({
+    platform: "win32" as const,
+    dataAtRisk: false,
+    failure,
+  })),
 ])(
   "recovers a Gateway after a failed $failure on $platform unless data is at risk ($dataAtRisk)",
   async ({ platform, dataAtRisk, failure }) => {
+    const reinstall = failure.startsWith("reinstall");
     const [
       { createMockGatewayService },
       { withUpdateCommandExecutor },
@@ -274,11 +280,14 @@ it.each([
       });
     const facts = [
       {
-        check: "fixture-check",
-        code: "step-refused",
+        check: reinstall ? "update" : "fixture-check",
+        code: reinstall ? "update-failed" : "step-refused",
       },
     ];
     mocks.converge.mockImplementationOnce(async ({ beforeDoctor, result }) => {
+      if (reinstall) {
+        throw new Error("Post-update verification failed during same-version npm reinstall");
+      }
       await beforeDoctor?.();
       return {
         resultWithPostUpdate: {
@@ -362,6 +371,23 @@ it.each([
             state: state(),
             root,
           });
+        if (reinstall) {
+          params.coreAlreadyCurrent = false;
+          params.mutationStarted = true;
+          params.result.status = "ok";
+          delete params.result.reason;
+          params.result.recovery =
+            failure === "reinstall-admitted"
+              ? { serviceRestartSafe: true, version: "2026.9.5" }
+              : undefined;
+          params.preManagedServiceStop = await stop({
+            updateInstallKind: "package",
+            root,
+            shouldRestart: true,
+            jsonMode: true,
+          });
+          params.preManagedServiceStop.windowsTaskAutoStartRecovery?.beginMutation();
+        }
         await expect(finishUpdate(params)).rejects.toMatchObject({
           result: {
             status: "error",

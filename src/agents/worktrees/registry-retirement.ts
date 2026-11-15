@@ -12,13 +12,13 @@ import {
 } from "./run-end-lifecycle.js";
 import type { WorktreeRemovalDeferral } from "./types.js";
 
-export function isWorktreeRemovalTimeout(error: unknown): boolean {
+export function removalDeferralReason(error: unknown): string | undefined {
   for (let cause = error; cause instanceof Error; cause = cause.cause) {
     if (cause instanceof GitCommandTimeoutError) {
-      return true;
+      return "Git removal timed out; cleanup deferred";
     }
   }
-  return false;
+  return undefined;
 }
 
 /** Keep a failed attempt with the registry revision that still owns its checkout. */
