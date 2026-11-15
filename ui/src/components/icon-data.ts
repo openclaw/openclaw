@@ -638,6 +638,24 @@ export const iconData = {
 
 export type IconName = keyof typeof iconData;
 
+/** Navigation icons swap to these filled forms while their page is current. */
+export const filledIconNames: Partial<Record<IconName, IconName>> = {
+  access: "accessFilled",
+  atSign: "atSignFilled",
+  automations: "automationsFilled",
+  clawrouter: "clawrouterFilled",
+  customize: "customizeFilled",
+  dashboards: "dashboardsFilled",
+  knowledge: "knowledgeFilled",
+  meetings: "meetingsFilled",
+  portals: "portalsFilled",
+  sessions: "sessionsFilled",
+  systems: "systemsFilled",
+  usage: "usageFilled",
+  users: "usersFilled",
+  workboard: "workboardFilled",
+};
+
 export function isIconName(name: string | undefined): name is IconName {
   return Object.hasOwn(iconData, name ?? "");
 }

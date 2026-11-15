@@ -557,13 +557,15 @@ export function renderAppSidebarPluginTab(
       ? (icon as IconName) // SAFETY: The preceding own-key guard admits only keys of iconData.
       : "plug";
   });
+  const active = () =>
+    host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab());
   const link = (
     <SidebarNavLink
       ref={triggerRef}
       href={`${location().pathname}${location().search}`}
-      icon={<Icon name={iconName()} />}
+      icon={<Icon name={iconName()} filled={active()} />}
       label={tab().label}
-      active={host.activeRouteId === "plugin" && host.activePluginTabId === pluginTabKey(tab())}
+      active={active()}
       onNavigate={() => host.onNavigate?.("plugin", location())}
     />
   );

@@ -637,13 +637,14 @@ export function createSidebarMenus(deps: {
           : null;
       });
       // Menus retain this anchor as their return-focus target across sidebar updates.
+      const active = () => isSidebarRouteActive(view.activeRouteId, routeId);
       const link = (
         <SidebarNavLink
           ref={triggerRef}
-          icon={<Icon name={navigationIconForRoute(routeId)} />}
+          icon={<Icon name={navigationIconForRoute(routeId)} filled={active()} />}
           label={titleForRoute(routeId, t)}
           href={sessionTarget()?.href ?? pathForRoute(routeId, view.basePath)}
-          active={isSidebarRouteActive(view.activeRouteId, routeId)}
+          active={active()}
           onNavigate={() => view.onNavigate?.(routeId, sessionTarget()?.options)}
         />
       );

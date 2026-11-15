@@ -59,6 +59,11 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       : view === "sessions"
         ? titleForRoute("sessions")
         : t("presence.usersTitle");
+  const viewPressed = (view: (typeof views)[number]) =>
+    host.navigationVisible &&
+    !host.onExitSettings &&
+    !host.navigationCollapsed &&
+    host.navigationView === view;
   return (
     <nav
       class="sidebar-rail"
@@ -101,14 +106,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                   class="sidebar-rail__button"
                   data-navigation-view={view}
                   aria-label={viewLabel(view)}
-                  aria-pressed={
-                    host.navigationVisible &&
-                    !host.onExitSettings &&
-                    !host.navigationCollapsed &&
-                    host.navigationView === view
-                      ? "true"
-                      : "false"
-                  }
+                  aria-pressed={viewPressed(view) ? "true" : "false"}
                   onClick={() => {
                     const active = host.navigationView === view;
                     host.navigationView = view;
@@ -131,6 +129,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                           ? "messageCircle"
                           : "users"
                     }
+                    filled={viewPressed(view)}
                   />
                 </button>
               </openclaw-tooltip>
