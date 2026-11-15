@@ -20,6 +20,7 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
+  requireRecord,
   sessionsListResponse,
   waitForMobileSidebarDrawerOpen,
   waitForSessionRosterHydration,
@@ -360,9 +361,10 @@ suite.define(() => {
             .click();
           await expect
             .poll(async () =>
-              (await gateway.getRequests("sessions.patch")).some(
-                (request) => request.params?.key === parentKey && request.params?.archived === true,
-              ),
+              (await gateway.getRequests("sessions.patch")).some((request) => {
+                const params = requireRecord(request.params);
+                return params.key === parentKey && params.archived === true;
+              }),
             )
             .toBe(true);
         }
