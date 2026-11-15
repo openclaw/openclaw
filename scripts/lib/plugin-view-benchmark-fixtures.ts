@@ -1,5 +1,5 @@
 import type { ControlUiMockGateway } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import { createControlUiMockSessionRow } from "../../ui/src/test-helpers/control-ui-session-fixtures.ts";
+import { createControlUiMockSessionRow } from "../../ui/src/test-helpers/control-ui-mock-session-row.ts";
 
 export const remainingPluginIds = [
   "x",

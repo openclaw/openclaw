@@ -4,6 +4,7 @@ import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { GatewayOperatorAccessUnavailableError } from "../infra/operator-authority-error.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -120,7 +121,11 @@ export function authorizeControlUiPluginCookieRequest(
       }
     : checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
-    if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
+    const unavailable = profileAuth.authResult.reason === "operator_access_unavailable";
+    if (unavailable && !params.res) {
+      throw new GatewayOperatorAccessUnavailableError();
+    }
+    if (params.res && (unavailable || profileAuth.authResult.reason === "operator_access_denied")) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
     }
     return null;

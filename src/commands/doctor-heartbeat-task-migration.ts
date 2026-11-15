@@ -19,10 +19,8 @@ import {
   upsertCronJobRow,
   projectCronJobThroughStorageCodec,
 } from "../cron/store/row-codec.js";
-import {
-  loadCronRuntimeAuthorities,
-  replaceCronRuntimeAuthorityRows,
-} from "../cron/store/runtime-authority-store.js";
+import { loadCronRuntimeAuthorities } from "../cron/store/runtime-authority-store.js";
+import { replaceCronRuntimeAuthorityRows } from "../cron/store/save.kernel.js";
 import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";

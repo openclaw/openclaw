@@ -43,7 +43,7 @@ const enLabs = {
     usageRankedToolIndex: {
       title: "Usage-ranked tool index",
       description:
-        "Prefer frequently and recently used tools in Code Mode and Tool Search prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
+        "Prefer frequently and recently used tools in Code Mode, Tool Search, and MCP tool directory prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
     },
     composerPredictions: {
       title: "Composer predictions",

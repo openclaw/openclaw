@@ -1,5 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
-import { commandError, listGitWorktrees, requireGit, runGit } from "./git.js";
+import { commandError, listGitWorktrees, requireGit, requireGitPath, runGit } from "./git.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { readRegistryWorktrees } from "./registry-read.js";
 import type { ManagedWorktreeRecord } from "./types.js";
@@ -136,7 +136,7 @@ export async function collectOrphanWorktreeBranches(params: {
     }
   }
   if (candidates.length > 0) {
-    options.refMutationDirectory = await requireGit(
+    options.refMutationDirectory = await requireGitPath(
       repoRoot,
       ["rev-parse", "--git-common-dir"],
       options,

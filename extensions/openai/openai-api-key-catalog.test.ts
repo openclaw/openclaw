@@ -69,15 +69,22 @@ it("lists configured API-key models without loading profile auth runtimes", asyn
     "text-embedding-3-small omni-moderation-latest tts-1-hd whisper-1 sora-2"
   ).split(" ");
   const data = [
-    ...modelRows(["gpt-5.5", ...admittedIds, ...unadmittedIds]),
+    ...modelRows(["gpt-5.5", ...unadmittedIds]),
+    ...admittedIds.map((id) => ({ id, object: "model", capabilities: { chat: true } })),
     // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
     { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
   ];
   const { provider } = await runCatalog(Response.json({ data }));
 
-  expect(provider.models.map((model) => model.id).toSorted()).toEqual(
-    ["gpt-5.5", ...admittedIds].toSorted(),
-  );
+  expect(
+    provider.models
+      .filter((model) => model.inference?.chat !== false)
+      .map((model) => model.id)
+      .toSorted(),
+  ).toEqual(["gpt-5.5", ...admittedIds].toSorted());
+  expect(provider.models.find((model) => model.id === "tts-1-hd")?.inference).toEqual({
+    chat: false,
+  });
   for (const id of ["gpt-5.3-codex", "gpt-6.2"]) {
     expect(provider.models.find((model) => model.id === id)).toEqual({
       id,
@@ -111,7 +118,9 @@ it.each([
       : Response.json({ data: modelRows(["text-embedding-3-small"]) }, { status: httpStatus }),
     { apiKey, profileId: "openai:api-key" },
   );
-  expect(provider.models.map((model) => model.id)).toEqual(
+  expect(
+    provider.models.filter((model) => model.inference?.chat !== false).map((model) => model.id),
+  ).toEqual(
     status === "unavailable"
       ? manifest.modelCatalog.providers.openai.models.map((model) => model.id)
       : [],

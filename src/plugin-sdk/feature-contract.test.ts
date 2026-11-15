@@ -42,17 +42,21 @@ it("accepts more than 64 operations without imposing a tool limit", () => {
   expect(defineFeatureContract({ ...contract, operations }).operations).toBe(operations);
 });
 
+it("accepts more than 64 declared event types", () => {
+  const events = Object.fromEntries(
+    Array.from({ length: 80 }, (_, index) => [
+      `event-${index}`,
+      Type.Object({ value: Type.String() }),
+    ]),
+  );
+  expect(defineFeatureContract({ ...contract, events }).events).toBe(events);
+});
+
 it("retains plugin, operation, and event validation", () => {
   for (const invalid of [
     { ...contract, pluginId: " " },
     { ...contract, operations: { "Invalid id": contract.operations.inspect } },
     { ...contract, events: { "invalid.event": Type.Object({}) } },
-    {
-      ...contract,
-      events: Object.fromEntries(
-        Array.from({ length: 65 }, (_, i) => [`event-${i}`, Type.Object({})]),
-      ),
-    },
   ]) {
     expect(() => defineFeatureContract(invalid)).toThrow();
   }

@@ -71,7 +71,7 @@ export function useSessionMenuDetails(
     ) {
       options.push({ ...currentOwner, type: "human", id });
     }
-    const terms = query().trim().toLocaleLowerCase().split(/\s+/u);
+    const terms = query().trim().toLocaleLowerCase().normalize("NFC").split(/\s+/u);
     return options.filter((owner) =>
       terms.every((term) =>
         [
@@ -82,6 +82,7 @@ export function useSessionMenuDetails(
         ]
           .join(" ")
           .toLocaleLowerCase()
+          .normalize("NFC")
           .includes(term),
       ),
     );
@@ -135,7 +136,7 @@ export function useSessionMenuDetails(
           ) : undefined,
         };
       }),
-      ...(options.length === 0
+      ...(options.length === 0 && !ownerSnapshot().loading && !ownerSnapshot().error
         ? [
             {
               kind: "content" as const,

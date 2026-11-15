@@ -371,7 +371,7 @@ actor MacNodeRuntime {
             [
                 "threadId is invalid",
                 "catalog cursor is invalid",
-                "transcript cursor is invalid",
+                "chat history cursor is invalid",
                 "Claude session is unavailable",
             ].contains(message)
         {
@@ -382,7 +382,7 @@ actor MacNodeRuntime {
         if let parameterError {
             return Self.errorResponse(req, code: .invalidRequest, message: "INVALID_REQUEST: \(parameterError)")
         }
-        if message == "Claude transcript page exceeded the safe scan limit" {
+        if message == "Claude chat history page exceeded the safe scan limit" {
             return Self.errorResponse(
                 req, code: .unavailable, message: "UNAVAILABLE: Claude session item exceeded the size limit")
         }

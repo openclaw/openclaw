@@ -60,8 +60,12 @@ describe("openclaw pair", () => {
   it("shows who is asking and approves only after the operator agrees", async () => {
     setTty(true);
     mocks.prompt.mockResolvedValue(true);
-    await run("abcd-efgh");
+    // Startup already selected the profile the code names; the CLI sends only the random code.
+    vi.stubEnv("OPENCLAW_PROFILE", "work");
+    await run("work:abcd-efgh");
+    vi.unstubAllEnvs();
     expect(mocks.call).toHaveBeenCalledWith("device.pair.code", { code: "ABCDEFGH" });
+    expect(output()).toMatch(/Gateway profile +work/u);
     expect(output()).toMatch(/Address +203\.0\.113\.7/u);
     expect(output()).toMatch(/Page \(reported\) +https:\/\/gateway\.example/u);
     expect(output()).toMatch(/Browser \(reported\) +Safe Browser/u);

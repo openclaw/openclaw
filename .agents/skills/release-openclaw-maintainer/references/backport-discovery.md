@@ -149,7 +149,8 @@ pnpm release:backport-companions -- \
 ```
 
 Disposition every reported later same-path commit, later mention of the
-selected PR number, existing neighbor test, selected-file reference/registry,
+selected PR number or commit SHA (whole 7–40-character tokens, case-insensitive),
+existing neighbor test, selected-file reference/registry,
 candidate file-set difference, and candidate content difference. A whole-file
 difference is inspection evidence, not a failure: a release adaptation or the
 final selected companion sequence can differ legitimately. This scan is

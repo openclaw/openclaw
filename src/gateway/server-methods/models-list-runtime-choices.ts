@@ -28,7 +28,10 @@ export function prepareModelPickerRuntimeChoices(params: {
   variants: readonly ModelCatalogEntry[];
   requestedRuntimes: readonly string[];
   baseEvaluation: ModelAuthAvailabilityEvaluation;
-  decisions: Pick<CatalogDecisions, "runtimeChoices" | "evaluateEntry" | "pluginRegistry">;
+  decisions: Pick<
+    CatalogDecisions,
+    "runtimeChoices" | "evaluateEntry" | "pluginRegistry" | "resolveOpenAIProviderRoutes"
+  >;
   evaluateNative: CatalogDecisions["evaluateNative"];
   projectPublic: (
     entry: ModelCatalogEntry,
@@ -53,6 +56,7 @@ export function prepareModelPickerRuntimeChoices(params: {
     entry,
     evaluation: baseEvaluation,
     pluginRegistry: decisions.pluginRegistry,
+    resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
   });
   const alternatives = requestedRuntimes
     .filter((runtimeId) => runtimeId !== (selected?.id ?? "openclaw"))

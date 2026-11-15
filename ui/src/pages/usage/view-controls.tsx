@@ -235,7 +235,7 @@ export function createUsageControls(
         <UsageQueryFilter
           filterKey={filterKey}
           label={t(`usage.filters.${filterKey}`)}
-          options={filterOptions()[filterKey]}
+          options={props.data.filterOptions?.[filterKey]}
           counts={
             props.data.readChartSnapshot("filterOptions")?.overview?.filterOptionCounts?.[filterKey]
           }
@@ -268,7 +268,6 @@ export function createUsageControls(
   const hasAppliedFilters = () =>
     queryTerms().length > 0 ||
     props.filters.selectedDays.length > 0 ||
-    props.filters.selectedHours.length > 0 ||
     props.filters.selectedSessions.length > 0;
   const showPhoneCount = () =>
     ctx.hasOverviewData() && (hasQuery() || totalSessions() !== ctx.displaySessionCount());
@@ -282,18 +281,16 @@ export function createUsageControls(
             return (
               <span class="usage-query-chip">
                 {label}
-                <openclaw-tooltip prop:content={removeLabel()}>
-                  <button
-                    aria-label={removeLabel()}
-                    onClick={() =>
-                      props.callbacks.filters.onQueryDraftChange(
-                        removeQueryToken(props.filters.queryDraft, label),
-                      )
-                    }
-                  >
-                    <Icon name="x" />
-                  </button>
-                </openclaw-tooltip>
+                <button
+                  aria-label={removeLabel()}
+                  onClick={() =>
+                    props.callbacks.filters.onQueryDraftChange(
+                      removeQueryToken(props.filters.queryDraft, label),
+                    )
+                  }
+                >
+                  <Icon name="x" />
+                </button>
               </span>
             );
           }}
