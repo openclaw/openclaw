@@ -675,6 +675,12 @@ turn. Normal delivery records the receipt so another restart cannot deliver it
 again. Archived, replaced, reset, or unauthorized requesters cannot acquire this
 custody.
 
+If shutdown interrupts the requester while it is processing a captured child
+result, that settle input keeps its completion obligation. Startup resumes the
+same input under fresh authority instead of also sending a generic restart
+input. Its original transcript entry and completion receipt prevent duplicate
+handoffs across later restarts. An intentional Stop still ends the obligation.
+
 When an external continuation source is gone, such as a requester that finished
 or was released without continuing its message-waiting child, the wait closes
 with a visible recorded failure. Its transcript remains available. A permanently
