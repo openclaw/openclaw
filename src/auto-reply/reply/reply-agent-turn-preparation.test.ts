@@ -595,13 +595,51 @@ it("keeps the model selected at admission when preferences change during source 
 });
 
 it.each([
-  { kind: "queued_followup", saved: "standard", expected: "standard", provided: false },
-  { kind: "queued_followup", saved: undefined, expected: undefined, provided: false },
-  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: false },
-  { kind: "visible", saved: "standard", expected: "daybreak_blue", provided: true },
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "standard",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: undefined,
+    expected: undefined,
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: undefined,
+  },
+  {
+    kind: "visible",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: true,
+    scheduled: undefined,
+  },
+  {
+    kind: "queued_followup",
+    saved: "standard",
+    expected: "daybreak_blue",
+    provided: false,
+    scheduled: "daybreak_blue",
+  },
+  {
+    kind: "queued_followup",
+    saved: "daybreak_red",
+    expected: "standard",
+    provided: false,
+    scheduled: "standard",
+  },
 ] as const)(
   "binds $kind Access at admission (saved=$saved, provided=$provided)",
-  async ({ kind, saved, expected, provided }) => {
+  async ({ kind, saved, expected, provided, scheduled }) => {
     const replyOperation = createReplyOperation({
       sessionKey: "main",
       sessionId: "queued-session",
@@ -610,6 +648,17 @@ it.each([
     });
     const queued = createRun();
     queued.run.cyberAccessProgram = "daybreak_blue";
+    if (scheduled) {
+      queued.run.scheduledAutomation = {
+        occurrence: TEST_SCHEDULED_OCCURRENCE,
+        job: {
+          id: "scheduled-access",
+          cyberAccessProgram: scheduled,
+        } as ScheduledSessionAutomation["job"],
+        admissionSource: "operator-schedule",
+        assertCurrent: () => {},
+      };
+    }
     const initialEntry = makeEntry({
       cyberAccessProgram: provided ? saved : "daybreak_blue",
     });

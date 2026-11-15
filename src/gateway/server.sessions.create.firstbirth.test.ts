@@ -82,14 +82,14 @@ test.for(["new database", "interrupted empty database"])(
       dispatched: number;
     }>();
     let observeDiscovery = false;
-    const run = vi.spyOn(sessionReaders.targetDiscoveryLane.pool, "run");
+    const run = vi.spyOn(sessionReaders.sessionStoreLane.pool, "run");
     const original = sessionReaders.withSessionHistoryWorkerReadCandidates;
     const readCandidates = vi
       .spyOn(sessionReaders, "withSessionHistoryWorkerReadCandidates")
       .mockImplementation((candidates, operation, lane, requestSignal) => {
         const observe =
           observeDiscovery &&
-          lane === sessionReaders.targetDiscoveryLane &&
+          lane === sessionReaders.sessionStoreLane &&
           candidates.some((candidate) => candidate.physicalPath === databasePath);
         return original(
           candidates,

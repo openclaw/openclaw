@@ -654,7 +654,6 @@ export function createChatComposerContext(
     queuedSubmitDue: queuedSubmit.queuedSubmitDue,
     flushQueuedSubmit: queuedSubmit.flushQueuedSubmit,
     predictionText: prediction?.text ?? null,
-    acceptPrediction,
     dismissPrediction: () => prediction?.dismiss(),
     runStatusAnnouncement,
     cancellationCaveat,

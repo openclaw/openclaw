@@ -731,6 +731,15 @@ Ordinary removal first creates a synthetic commit containing tracked and non-ign
 
 For an ordinary clean checkout, the snapshot reuses the original HEAD tree after checking working files with a private index that clears hidden status flags. It checks object availability in one batch before creating the same recovery commit and snapshot ref. Missing objects preserve the checkout with a repository-repair error, including in partial clones. Exact-state snapshots continue capturing their complete recorded state.
 
+The removal diagnostic's `snapshotMs` measures this Git recovery capture, not a
+Btrfs subvolume snapshot. A retry before checkout deletion replaces the same
+worktree snapshot ref. Once deletion starts, its pending removal ref preserves
+the completed capture for explicit recovery. Slow failed removals include a
+bounded error class and message with paths removed; the worktree ID identifies
+the affected checkout. A pending workspace integration is rejected before Git
+snapshot capture; finish the original `github_publish prepare_pr` or
+`refresh_base` action before retrying removal.
+
 Sandbox-created ignored files (including symlinks) and empty directories already accepted by reconciliation remain in the existing projection owner’s custody. Before removal, OpenClaw retains their missing snapshot delta in its pending-result receipt and private recovery refs. Restore replays that receipt before another turn can synchronize the workspace. This does not force ignored paths into publication or import unrelated ignored host files. The receipt follows the same snapshot retention period, and unaccepted private edits defer cleanup. The legacy provisioned-file ledger remains regular-file-only. Older versions can restore that ledger and the Git snapshot, but do not apply the projection receipt; return to a supporting version to recover accepted guest data.
 
 Ordinary removal is archival: after a successful snapshot it uses Git's forced checkout removal so dirty files can be restored later. The CLI's `--force` option permits snapshot loss; omitting it does **not** select non-force Git removal. Use `openclaw worktrees remove <id> --if-lossless` when deletion must be non-force. This uses the same owner as run-end cleanup, retains dirty or unpublished work, and never retries a Git refusal with force. It cannot be combined with `--force`.
@@ -772,7 +781,8 @@ not establish disposal authority. Put future disposable landing clones under
 `.openclaw/tmp/` to opt into automatic expiry.
 
 Gateway idle cleanup starts at most one removal attempt per minute, including
-across archive-triggered sweeps. On Linux, btrfs commits taking at least one second, a one-second delay in the
+across archive-triggered sweeps. On Linux, btrfs commits totaling at least one second
+between samples (or a single current or fresh last commit taking that long), a one-second delay in the
 Gateway’s own asynchronous kernel-counter reads (including event-loop and IO-pool
 wait), or IO PSI `some avg60` of at least 50% pause admission for five minutes
 before checking again. These derive distress from filesystem latency, local

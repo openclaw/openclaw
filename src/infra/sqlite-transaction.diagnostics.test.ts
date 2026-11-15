@@ -107,6 +107,11 @@ it("names the admitted writer in a contending BEGIN and clears it after rollback
 it.each([
   "session.lifecycle.delete",
   "session.transcript.append-turn",
+  "session.transcript.prepare-rewrite",
+  "session.metadata.append",
+  "trajectory.runtime.append",
+  "session context snapshot read",
+  "sessions.transcript-maintenance",
   "sessions.transcript-hydration.cron-model",
 ])(
   "attributes and bounds %s statements without counting consumers or exposing SQL",

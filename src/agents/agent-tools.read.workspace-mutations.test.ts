@@ -5,11 +5,9 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { projectMemoryFlushWriteTool } from "./agent-tools.memory-flush.test-support.js";
 import { afterFileRead, asSource, hostFileTools } from "./agent-tools.mutation.test-support.js";
-import {
-  createHostWorkspaceWriteTool,
-  wrapToolMemoryFlushAppendOnlyWrite,
-} from "./agent-tools.read.js";
+import { createHostWorkspaceWriteTool } from "./agent-tools.read.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -59,7 +57,7 @@ describe("workspace mutation authority", () => {
       const options = { workspaceOnly: true, abortSignal: generation.signal };
       const execute = () => {
         if (kind === "append") {
-          return wrapToolMemoryFlushAppendOnlyWrite(createHostWorkspaceWriteTool(root, options), {
+          return projectMemoryFlushWriteTool(createHostWorkspaceWriteTool(root, options), {
             root,
             relativePath: "memory.md",
           }).execute(

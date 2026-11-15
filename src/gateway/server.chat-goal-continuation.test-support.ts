@@ -153,7 +153,7 @@ export function registerGoalAutomaticContinuationCases(
     const caller = { agentId, sessionKey, requesterOrigin };
     await withGatewayToolCallerIdentity(
       silent ? { ...caller, sessionEventDelivery: false as const } : caller,
-      () => prepareExecExitNotification(process, false),
+      () => prepareExecExitNotification(process, false, false),
     );
     addSession(process);
     try {

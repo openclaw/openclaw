@@ -17,14 +17,14 @@ import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { registerSessionMenuEnglish } from "../../i18n/locales/en-session-menu.ts";
-import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
+import { registerSessionOrganizationSharedEnglish } from "../../i18n/locales/en-session-organization-shared.ts";
 import { registerEnglishCatalog } from "../reactive/i18n.ts";
 
 registerChatCommandsEnglish();
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatGoalsEnglish);
 registerEnglishCatalog(registerSessionMenuEnglish);
-registerEnglishCatalog(registerSessionOrganizationEnglish);
+registerEnglishCatalog(registerSessionOrganizationSharedEnglish);
 registerEnglishCatalog(registerModelControlsEnglish);
 
 export type SlashCommandCategory = "session" | "model" | "agents" | "tools";

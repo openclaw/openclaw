@@ -46,6 +46,7 @@ import { telegramExtensionTestRoots } from "../test/vitest/vitest.extension-tele
 import {
   gatewayDatabaseWorkerTestFiles,
   gatewayPluginTestFiles,
+  gatewayServerIsolatedTestFiles,
   isGatewayServerTestFile,
 } from "../test/vitest/vitest.gateway-server-paths.mjs";
 import { intersectIncludePatterns } from "../test/vitest/vitest.include-patterns.ts";
@@ -5123,7 +5124,7 @@ function classifyTarget(arg: string, cwd: string, beforeDatabaseWorkerOwnership 
     gatewayPluginTestFiles.includes(relative) &&
     (beforeDatabaseWorkerOwnership || !gatewayDatabaseWorkerTestFiles.includes(relative))
   ) {
-    return "gatewayMethods";
+    return gatewayServerIsolatedTestFiles.includes(relative) ? "gateway" : "gatewayMethods";
   }
   if (beforeDatabaseWorkerOwnership) {
     const formerFastKind = databaseWorkerCoreFormerFastKinds.get(relative);
