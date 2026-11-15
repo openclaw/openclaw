@@ -232,6 +232,8 @@ function createPreparationSession(context: CaptureCommand) {
         if (command.operation === "capture") {
           const state = nativeAdmissionStateFor();
           state.createRoot = createNativeRoot;
+          // Dependency indexes are global, but only the selected package's receipts are imported.
+          state.receiptInventoryComplete = false;
           for (const key of [
             "owners",
             "managedRoots",

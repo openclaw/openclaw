@@ -200,6 +200,26 @@ it("scopes worker admission metadata while reusing native captures from another 
   });
 });
 
+it.each(["content", "source-path"] as const)(
+  "keeps one native namespace while worker receipts replace %s",
+  async (change) => {
+    await withWorkerFixture("worker-namespace-retention", async ({ fixture }) => {
+      let filename = fixture.filename;
+      for (const edit of [1, 2, 3]) {
+        if (change === "source-path") {
+          const next = path.join(fixture.root, `native-${edit}.so`);
+          fs.renameSync(filename, next);
+          filename = next;
+        }
+        fs.writeFileSync(filename, Buffer.alloc(fixture.bytes.length, String(edit)));
+        await withPrepared(prepare(fixture), () => undefined);
+        expect(nativeAdmissionStateFor().namespaces.size).toBe(1);
+        expect([...nativeAdmissionStateFor().files.keys()]).toEqual([filename]);
+      }
+    });
+  },
+);
+
 it("keeps a native-only recovery fork after its worker and admission cache retire", async () => {
   await withWorkerFixture("worker-native-fork", async ({ fixture, cache }) => {
     preparePluginNativeAdmissions(fixture.index, cache);
