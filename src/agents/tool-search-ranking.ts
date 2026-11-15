@@ -294,7 +294,12 @@ function normalizeTrigger(word: string): string {
   if (word.length > 4 && word.endsWith("ies")) {
     return `${word.slice(0, -3)}y`;
   }
-  return word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word;
+  return word.length > 3 &&
+    word.endsWith("s") &&
+    !word.endsWith("ss") &&
+    !NON_PLURAL_S_WORDS.has(word)
+    ? word.slice(0, -1)
+    : word;
 }
 
 const NORMALIZED_EXPANSIONS: ReadonlyArray<{

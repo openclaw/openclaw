@@ -104,8 +104,12 @@ it.each([
   expect(tokenizeDocument(word)).toEqual([root]);
 });
 
-it("fires expansions for -ies plurals of a trigger word", () => {
-  expect(queryTerms("list directories")).toContain(tokenizeDocument("file")[0]);
+it.each([
+  ["list directories", "file"],
+  ["read these urls", "fetch"],
+  ["retry the failed runs", "exec"],
+])("fires expansions for plurals of a trigger word: %s", (query, expansion) => {
+  expect(queryTerms(query)).toContain(tokenizeDocument(expansion)[0]);
 });
 
 it("keeps capability verbs that name real operations", () => {
