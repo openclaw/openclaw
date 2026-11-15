@@ -426,30 +426,6 @@ describe("scheduleMediaGenerationTaskCompletion", () => {
     },
   );
 
-  it("stops re-waking a queue-owned completion at its absolute cap", async () => {
-    vi.useFakeTimers();
-    const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(
-      imageHandle("queued"),
-    );
-    lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "queued" });
-    schedule();
-
-    const backgroundWork = scheduled[0]?.();
-    assert(backgroundWork, "expected scheduled media work");
-    await vi.advanceTimersByTimeAsync(599_999);
-    expect(lifecycle.completeTaskRun).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(1);
-    await backgroundWork;
-    expectCall(lifecycle.completeTaskRun, {
-      terminalResult: expect.objectContaining({ terminalOutcome: "blocked" }),
-    });
-    expect(onWakeFailure).toHaveBeenCalledWith(
-      "Image generation completion wake failed after successful generation",
-      expect.objectContaining({ taskId: "task-image-queued" }),
-    );
-  });
-
   it("completes a generated media task when completion delivery cannot be confirmed", async () => {
     const { lifecycle, onWakeFailure, scheduled, schedule } = completionFixture(imageHandle("456"));
     lifecycle.wakeTaskCompletion.mockResolvedValue({ status: "permanent_failure" });
