@@ -31,7 +31,8 @@ extension AppThemeFamily {
             .subtle: self == .claw ? (dark ? 0xFF8B_8B94 : 0xFF78_7885) : Self.alpha(seed.muted, 0.82),
             .codeBackground: self == .claw ? (dark ? 0xFF0A_0C10 : 0xFFF1_F1F4) : seed.canvas,
             .userMessageSurface: Self.composite(
-                accent, alpha: self == .claw && !dark && override == nil ? 38 / 255.0 : (dark ? 0.12 : 0.15),
+                accent,
+                alpha: self == .claw && !dark && override == nil ? 38 / 255.0 : (dark ? 0.12 : 0.15),
                 over: seed.canvas),
         ]
         if override != nil {

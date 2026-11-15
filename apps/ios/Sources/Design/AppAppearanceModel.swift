@@ -8,7 +8,10 @@ import SwiftUI
 @Observable
 final class AppAppearanceModel {
     enum Key: String, Codable, CaseIterable { case family = "ui.theme", mode = "ui.themeMode", accent = "ui.accent" }
-    struct Scope: Codable, Equatable { let gatewayID: String; let profileID: String }
+    struct Scope: Codable, Equatable { let gatewayID: String
+        let profileID: String
+    }
+
     struct Pending: Codable, Equatable {
         let scope: Scope
         let key: Key
@@ -31,11 +34,14 @@ final class AppAppearanceModel {
         let savedMode = userDefaults.string(forKey: AppAppearancePreference.storageKey)
             .flatMap(AppAppearancePreference.init(rawValue:))
         self.preference = AppAppearancePreference.launchArgumentPreference ?? savedMode ?? .system
-        self.family = userDefaults.string(forKey: "appearance.themeFamily").flatMap(AppThemeFamily.init(rawValue:)) ?? .claw
+        self.family = userDefaults.string(forKey: "appearance.themeFamily")
+            .flatMap(AppThemeFamily.init(rawValue:)) ?? .claw
         self.accentHex = GatewayUserPreferences.normalizedAccentHex(userDefaults.string(forKey: "appearance.accentHex"))
         self.pending = userDefaults.data(forKey: "appearance.pendingPreferences")
             .flatMap { try? PropertyListDecoder().decode([Pending].self, from: $0) } ?? []
-        self.localOnly = Set((userDefaults.stringArray(forKey: "appearance.localOnlyKeys") ?? []).compactMap(Key.init(rawValue:)))
+        self
+            .localOnly = Set((userDefaults.stringArray(forKey: "appearance.localOnlyKeys") ?? [])
+                .compactMap(Key.init(rawValue:)))
         // Preserve the device-only appearance chosen before profile synchronization existed.
         if !userDefaults.bool(forKey: "appearance.syncInitialized") {
             if savedMode != nil { self.localOnly.insert(.mode) }
@@ -48,7 +54,10 @@ final class AppAppearanceModel {
     }
 
     var appearance: OpenClawNativeAppearance {
-        OpenClawNativeAppearance(themeID: self.family.rawValue, light: self.palette(dark: false), dark: self.palette(dark: true))
+        OpenClawNativeAppearance(
+            themeID: self.family.rawValue,
+            light: self.palette(dark: false),
+            dark: self.palette(dark: true))
     }
 
     func palette(dark: Bool) -> OpenClawNativePalette {
@@ -59,7 +68,9 @@ final class AppAppearanceModel {
         self.edit(.mode, value: preference.rawValue, defaults: userDefaults)
     }
 
-    func selectFamily(_ family: AppThemeFamily) { self.edit(.family, value: family.rawValue) }
+    func selectFamily(_ family: AppThemeFamily) {
+        self.edit(.family, value: family.rawValue)
+    }
 
     func selectAccent(_ hex: String?) {
         self.edit(.accent, value: GatewayUserPreferences.normalizedAccentHex(hex))
@@ -79,7 +90,9 @@ final class AppAppearanceModel {
         self.persistSyncState()
     }
 
-    func prepareSync(scope: Scope?) { self.editScope = scope }
+    func prepareSync(scope: Scope?) {
+        self.editScope = scope
+    }
 
     func connectionChanged(gatewayID: String?, connected: Bool) {
         if connected || self.editScope?.gatewayID != gatewayID { self.editScope = nil }
@@ -99,7 +112,7 @@ final class AppAppearanceModel {
         for key in Key.allCases where !self.localOnly.contains(key) && !protected.contains(key) &&
             self.revisions[key, default: 0] == revisions[key, default: 0]
         {
-            self.apply(key, value: values[key] ?? nil, defaults: self.defaults)
+            self.apply(key, value: values[key].flatMap(\.self), defaults: self.defaults)
         }
     }
 

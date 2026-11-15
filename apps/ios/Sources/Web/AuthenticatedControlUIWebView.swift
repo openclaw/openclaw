@@ -1,6 +1,6 @@
 import Foundation
-import OpenClawChatUI
 import Observation
+import OpenClawChatUI
 import OpenClawKit
 import SwiftUI
 import WebKit
@@ -531,7 +531,12 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     func installUserScripts(in controller: WKUserContentController) {
         controller.removeAllUserScripts()
         let embedScript = self.usesNativeEmbed ? Self.embedScript(url: self.url) : nil
-        for script in [self.authScript, embedScript, self.appearanceScript, self.deviceSettingsBridge?.seedScript(for: self.url)] {
+        for script in [
+            self.authScript,
+            embedScript,
+            self.appearanceScript,
+            self.deviceSettingsBridge?.seedScript(for: self.url),
+        ] {
             guard let script else { continue }
             controller.addUserScript(WKUserScript(
                 source: script,
@@ -1008,9 +1013,10 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
         guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]),
               let json = String(data: data, encoding: .utf8)
         else { return nil }
+        let origin = AuthenticatedControlUI.jsStringLiteral(AuthenticatedControlUI.originString(for: self.url))
         return """
         (() => {
-          if (location.origin !== \(AuthenticatedControlUI.jsStringLiteral(AuthenticatedControlUI.originString(for: self.url)))) return;
+          if (location.origin !== \(origin)) return;
           const appearance = \(json);
           window.__OPENCLAW_NATIVE_APPEARANCE__ = appearance;
           for (const [name, value] of Object.entries(appearance.variables)) {

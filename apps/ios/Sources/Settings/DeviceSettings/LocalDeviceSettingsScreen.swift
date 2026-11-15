@@ -65,15 +65,14 @@ struct LocalDeviceSettingsScreen: View {
                 set: {
                     self.appearanceModel.selectFamily($0)
                     Task { await self.appModel.syncAppearancePreferences() }
-                }))
-            {
-                ForEach(AppThemeFamily.allCases) { family in
-                    Text(verbatim: family.displayName).font(OpenClawType.body).tag(family)
+                })) {
+                    ForEach(AppThemeFamily.allCases) { family in
+                        Text(verbatim: family.displayName).font(OpenClawType.body).tag(family)
+                    }
+                } label: {
+                    Text("Theme").font(OpenClawType.body)
                 }
-            } label: {
-                Text("Theme").font(OpenClawType.body)
-            }
-            .accessibilityIdentifier("LocalDeviceSettings.Theme")
+                .accessibilityIdentifier("LocalDeviceSettings.Theme")
             Picker(selection: Binding(
                 get: { snapshot.app?.appearance?.rawValue ?? "system" },
                 set: { self.perform(.set(.appearance, .string($0))) }))
@@ -91,30 +90,46 @@ struct LocalDeviceSettingsScreen: View {
                 set: {
                     self.appearanceModel.selectAccent($0.isEmpty ? nil : $0)
                     Task { await self.appModel.syncAppearancePreferences() }
-                }))
-            {
-                Text("Default").font(OpenClawType.body).tag("")
-                ForEach(["#ffc233", "#ff5c5c", "#ff7f6b", "#f2b84b", "#5ccfa5", "#3cb8b0", "#5a9bef", "#9b7aef", "#e96cb7"], id: \.self) { hex in
-                    Label {
-                        Text(verbatim: hex).font(OpenClawType.body)
-                    } icon: {
-                        // Menu pickers bridge symbols to UIKit; bake in the swatch color
-                        // so template rendering cannot replace every option with one tint.
-                        Image(uiImage: (UIImage(systemName: "circle.fill") ?? UIImage())
-                            .withTintColor(
-                                UIColor(ColorHexSupport.color(fromHex: hex) ?? OpenClawBrand.accent),
-                                renderingMode: .alwaysOriginal))
-                            .renderingMode(.original)
-                    }.tag(hex)
+                })) {
+                    Text("Default").font(OpenClawType.body).tag("")
+                    ForEach(
+                        [
+                            "#ffc233",
+                            "#ff5c5c",
+                            "#ff7f6b",
+                            "#f2b84b",
+                            "#5ccfa5",
+                            "#3cb8b0",
+                            "#5a9bef",
+                            "#9b7aef",
+                            "#e96cb7",
+                        ],
+                        id: \.self)
+                    { hex in
+                        Label {
+                            Text(verbatim: hex).font(OpenClawType.body)
+                        } icon: {
+                            // Menu pickers bridge symbols to UIKit; bake in the swatch color
+                            // so template rendering cannot replace every option with one tint.
+                            Image(uiImage: (UIImage(systemName: "circle.fill") ?? UIImage())
+                                .withTintColor(
+                                    UIColor(ColorHexSupport.color(fromHex: hex) ?? OpenClawBrand.accent),
+                                    renderingMode: .alwaysOriginal))
+                                .renderingMode(.original)
+                        }.tag(hex)
+                    }
+                } label: {
+                    Text("Accent color").font(OpenClawType.body)
                 }
-            } label: {
-                Text("Accent color").font(OpenClawType.body)
-            }
-            .accessibilityIdentifier("LocalDeviceSettings.Accent")
+                .accessibilityIdentifier("LocalDeviceSettings.Accent")
         } header: {
             Text("Appearance").font(OpenClawType.captionSemiBold)
         } footer: {
-            Text("Appearance syncs with your Gateway profile when writable. Offline changes stay on this device until that profile reconnects.")
+            Text(
+                """
+                Appearance syncs with your Gateway profile when writable. \
+                Offline changes stay on this device until that profile reconnects.
+                """)
                 .font(OpenClawType.footnote)
         }
     }

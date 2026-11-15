@@ -1101,7 +1101,9 @@ final class NodeAppModel {
         didSet {
             if oldValue?.controlUIInputs != self.activeGatewayConnectConfig?.controlUIInputs {
                 self.operatorAuthorityGeneration &+= 1
-                self.appearanceModel.connectionChanged(gatewayID: self.activeGatewayConnectConfig?.effectiveStableID, connected: true)
+                self.appearanceModel.connectionChanged(
+                    gatewayID: self.activeGatewayConnectConfig?.effectiveStableID,
+                    connected: true)
             }
         }
     }
@@ -1765,7 +1767,9 @@ final class NodeAppModel {
         let fallback = ui?["prefs"] as? [String: Any]
         self.appearanceModel.gatewayAccentHex = ColorHexSupport.gatewayUserAccentHex(configUI: ui)
         do {
-            let supportsPreferences = await self.operatorGateway.supportsServerMethod("users.prefs.get", ifCurrentRoute: route) != false
+            let supportsPreferences = await self.operatorGateway.supportsServerMethod(
+                "users.prefs.get",
+                ifCurrentRoute: route) != false
             var entries: [String: Any] = [:]
             var noIdentity = false
             var scope: AppAppearanceModel.Scope?
@@ -1773,7 +1777,8 @@ final class NodeAppModel {
                 let data = try await self.operatorGateway.request(
                     method: "users.prefs.get",
                     paramsJSON: #"{"keys":["ui.theme","ui.themeMode","ui.accent"]}"#,
-                    timeoutSeconds: 8, ifCurrentRoute: route)
+                    timeoutSeconds: 8,
+                    ifCurrentRoute: route)
                 guard let response = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let status = response["status"] as? String
                 else { return }
@@ -1783,7 +1788,8 @@ final class NodeAppModel {
                           let access = await self.operatorGateway.currentReactionAccess(ifCurrentRoute: route)
                     else { return }
                     entries = values
-                    let writable = access.scopes?.contains("operator.write") == true || access.scopes?.contains("operator.admin") == true
+                    let writable = access.scopes?.contains("operator.write") == true || access.scopes?
+                        .contains("operator.admin") == true
                     if let profileID = access.userID, writable {
                         scope = AppAppearanceModel.Scope(gatewayID: gatewayID, profileID: profileID)
                     } else if writable { return }
@@ -1809,18 +1815,26 @@ final class NodeAppModel {
             let family = (entries["ui.theme"] as? String).flatMap(AppThemeFamily.init(rawValue:))?.rawValue
                 ?? (fallback?["theme"] as? String).flatMap(AppThemeFamily.init(rawValue:))?.rawValue ?? "claw"
             let mode = (entries["ui.themeMode"] as? String).flatMap(AppAppearancePreference.init(rawValue:))?.rawValue
-                ?? (fallback?["themeMode"] as? String).flatMap(AppAppearancePreference.init(rawValue:))?.rawValue ?? "system"
+                ?? (fallback?[
+                    "themeMode",
+                ] as? String).flatMap(AppAppearancePreference.init(rawValue:))?.rawValue ?? "system"
             self.appearanceModel.applyRemote(
-                [.family: family, .mode: mode,
-                 .accent: GatewayUserPreferences.normalizedAccentHex(entries["ui.accent"] as? String)],
-                revisions: revisions, protected: protected)
+                [
+                    .family: family,
+                    .mode: mode,
+                    .accent: GatewayUserPreferences.normalizedAccentHex(entries["ui.accent"] as? String),
+                ],
+                revisions: revisions,
+                protected: protected)
         } catch {
             // An unavailable profile is not permission to overwrite offline edits with fallback values.
         }
     }
 
     func syncAppearancePreferences() async {
-        if let task = self.appearanceWriteTask { await task.value; return }
+        if let task = self.appearanceWriteTask { await task.value
+            return
+        }
         let task = Task { @MainActor [weak self] in
             guard let self else { return }
             defer { self.appearanceWriteTask = nil }
@@ -1834,12 +1848,15 @@ final class NodeAppModel {
                     let value: Any = entry.value.map { $0 as Any } ?? NSNull()
                     let data = try JSONSerialization.data(withJSONObject: ["entries": [entry.key.rawValue: value]])
                     let result = try await self.operatorGateway.request(
-                        method: "users.prefs.set", paramsJSON: String(decoding: data, as: UTF8.self),
-                        timeoutSeconds: 8, ifCurrentRoute: route)
+                        method: "users.prefs.set",
+                        paramsJSON: String(bytes: data, encoding: .utf8),
+                        timeoutSeconds: 8,
+                        ifCurrentRoute: route)
                     guard let response = try JSONSerialization.jsonObject(with: result) as? [String: Any],
                           response["status"] as? String == "ok"
                     else { return }
-                    guard self.operatorAuthorityGeneration == authority, self.appearanceModel.editScope == scope else { continue }
+                    guard self.operatorAuthorityGeneration == authority,
+                          self.appearanceModel.editScope == scope else { continue }
                     self.appearanceModel.complete(entry)
                 } catch {
                     if self.appearancePreferenceRoute == route { return }
@@ -1849,7 +1866,6 @@ final class NodeAppModel {
         self.appearanceWriteTask = task
         await task.value
     }
-
 
     private func refreshAgentsFromGateway(shouldApply: () -> Bool = { true }) async {
         do {

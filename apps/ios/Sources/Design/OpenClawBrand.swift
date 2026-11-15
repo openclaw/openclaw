@@ -31,7 +31,6 @@ enum AppAppearancePreference: String, CaseIterable, Identifiable {
     }
 }
 
-
 enum OpenClawBrand {
     // Carapace semantic palette: these tokens are shared by voice surfaces that
     // need the web system's quieter ink/paper hierarchy in native SwiftUI.
@@ -40,13 +39,27 @@ enum OpenClawBrand {
     static let carapaceSea = Color(red: 79 / 255.0, green: 200 / 255.0, blue: 174 / 255.0)
     // Accent fills stay dark enough for white content; foreground accents adapt
     // separately so small labels retain 4.5:1 contrast on dark surfaces and tinted pills.
-    static let uiAccentFill = OpenClawNativePalette.color(.primary, fallback: adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56)))
-    static let uiAccent = OpenClawNativePalette.color(.accent, fallback: adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102)))
-    static let uiAccentHot = OpenClawNativePalette.color(.accent, fallback: adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86)))
-    static let uiAccentHotForeground = OpenClawNativePalette.color(.accent, fallback: adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115)))
-    static let uiVoid = OpenClawNativePalette.color(.canvas, fallback: adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17)))
-    static let uiObsidian = OpenClawNativePalette.color(.surface, fallback: adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28)))
-    static let uiTextSecondary = OpenClawNativePalette.color(.muted, fallback: adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191)))
+    static let uiAccentFill = OpenClawNativePalette.color(
+        .primary,
+        fallback: adaptiveUIColor(light: (183, 56, 51), dark: (198, 62, 56)))
+    static let uiAccent = OpenClawNativePalette.color(
+        .accent,
+        fallback: adaptiveUIColor(light: (183, 56, 51), dark: (255, 107, 102)))
+    static let uiAccentHot = OpenClawNativePalette.color(
+        .accent,
+        fallback: adaptiveUIColor(light: (204, 75, 69), dark: (232, 92, 86)))
+    static let uiAccentHotForeground = OpenClawNativePalette.color(
+        .accent,
+        fallback: adaptiveUIColor(light: (166, 55, 50), dark: (255, 123, 115)))
+    static let uiVoid = OpenClawNativePalette.color(
+        .canvas,
+        fallback: adaptiveUIColor(light: (246, 247, 249), dark: (11, 12, 17)))
+    static let uiObsidian = OpenClawNativePalette.color(
+        .surface,
+        fallback: adaptiveUIColor(light: (255, 255, 255), dark: (19, 21, 28)))
+    static let uiTextSecondary = OpenClawNativePalette.color(
+        .muted,
+        fallback: adaptiveUIColor(light: (90, 94, 110), dark: (168, 170, 191)))
     static let uiOK = adaptiveUIColor(light: (19, 122, 62), dark: (48, 209, 88))
     static let uiWarn = adaptiveUIColor(light: (154, 87, 0), dark: (255, 214, 10))
     static let uiDanger = adaptiveUIColor(light: (185, 28, 28), dark: (252, 165, 165))
@@ -77,19 +90,31 @@ enum OpenClawBrand {
     static let providerOpenAI = Color(red: 16 / 255.0, green: 163 / 255.0, blue: 127 / 255.0)
     static let providerAnthropic = Color(red: 217 / 255.0, green: 119 / 255.0, blue: 87 / 255.0)
     static let providerGoogle = Color(red: 66 / 255.0, green: 133 / 255.0, blue: 244 / 255.0)
-    static let activationCanvas = Color(uiColor: OpenClawNativePalette.color(.canvas, fallback: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15))))
-    static let activationSurface = Color(uiColor: OpenClawNativePalette.color(.surface, fallback: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30))))
-    static let activationInsetSurface = Color(uiColor: OpenClawNativePalette.color(.raised, fallback: adaptiveUIColor(light: (246, 241, 238), dark: (44, 37, 38))))
-    static let activationNeutralSurface = Color(uiColor: OpenClawNativePalette.color(.surface, fallback: adaptiveUIColor(light: (242, 242, 247), dark: (34, 34, 37))))
+    static let activationCanvas = Color(uiColor: OpenClawNativePalette.color(
+        .canvas,
+        fallback: adaptiveUIColor(light: (255, 255, 255), dark: (18, 14, 15))))
+    static let activationSurface = Color(uiColor: OpenClawNativePalette.color(
+        .surface,
+        fallback: adaptiveUIColor(light: (255, 253, 252), dark: (33, 29, 30))))
+    static let activationInsetSurface = Color(uiColor: OpenClawNativePalette.color(
+        .raised,
+        fallback: adaptiveUIColor(light: (246, 241, 238), dark: (44, 37, 38))))
+    static let activationNeutralSurface = Color(uiColor: OpenClawNativePalette.color(
+        .surface,
+        fallback: adaptiveUIColor(light: (242, 242, 247), dark: (34, 34, 37))))
     static let activationNeutralInsetSurface = Color(uiColor: OpenClawNativePalette.color(
         .raised,
         fallback: adaptiveUIColor(light: (247, 247, 249), dark: (42, 42, 45))))
     static let activationNeutralStroke = border
     static let activationNeutralDivider = border
-    static let activationPrimaryAction = Color(uiColor: OpenClawNativePalette.color(.primary, fallback: adaptiveUIColor(light: (209, 54, 51), dark: (238, 82, 76))))
+    static let activationPrimaryAction = Color(uiColor: OpenClawNativePalette.color(
+        .primary,
+        fallback: adaptiveUIColor(light: (209, 54, 51), dark: (238, 82, 76))))
     static let activationPrimaryActionText = Color(uiColor: OpenClawNativePalette.color(.primaryText, fallback: .white))
     static let activationHairline = border
-    static let activationGlow = Color(uiColor: OpenClawNativePalette.color(.accent, fallback: adaptiveUIColor(light: (228, 78, 67), dark: (255, 111, 96))))
+    static let activationGlow = Color(uiColor: OpenClawNativePalette.color(
+        .accent,
+        fallback: adaptiveUIColor(light: (228, 78, 67), dark: (255, 111, 96))))
 
     static var sheetBackground: LinearGradient {
         LinearGradient(

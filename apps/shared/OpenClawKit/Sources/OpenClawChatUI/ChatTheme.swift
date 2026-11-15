@@ -140,13 +140,16 @@ public enum OpenClawChatTheme {
                 colors: [
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasTop,
-                        dark: IOSPalette.darkCanvasTop, token: .canvas),
+                        dark: IOSPalette.darkCanvasTop,
+                        token: .canvas),
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasMiddle,
-                        dark: IOSPalette.darkCanvasMiddle, token: .canvas),
+                        dark: IOSPalette.darkCanvasMiddle,
+                        token: .canvas),
                     self.adaptiveColor(
                         light: IOSPalette.lightCanvasBottom,
-                        dark: IOSPalette.darkCanvasBottom, token: .canvas),
+                        dark: IOSPalette.darkCanvasBottom,
+                        token: .canvas),
                 ],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing)
@@ -158,7 +161,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .tertiarySystemBackground, dark: IOSPalette.darkPanelRaised, token: .raised))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .tertiarySystemBackground,
+            dark: IOSPalette.darkPanelRaised,
+            token: .raised))
         #endif
     }
 
@@ -170,7 +176,8 @@ public enum OpenClawChatTheme {
         #else
         self.adaptiveColor(
             light: IOSPalette.lightAccent,
-            dark: IOSPalette.darkAccent, token: .userMessageSurface)
+            dark: IOSPalette.darkAccent,
+            token: .userMessageSurface)
         #endif
     }
 
@@ -278,7 +285,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.ultraThinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemGroupedBackground, dark: IOSPalette.darkPanel, token: .surface))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .secondarySystemGroupedBackground,
+            dark: IOSPalette.darkPanel,
+            token: .surface))
         #endif
     }
 
@@ -286,7 +296,10 @@ public enum OpenClawChatTheme {
         #if os(macOS)
         AnyShapeStyle(.thinMaterial)
         #else
-        AnyShapeStyle(self.adaptiveColor(light: .secondarySystemBackground, dark: IOSPalette.darkComposer, token: .pressed))
+        AnyShapeStyle(self.adaptiveColor(
+            light: .secondarySystemBackground,
+            dark: IOSPalette.darkComposer,
+            token: .pressed))
         #endif
     }
 

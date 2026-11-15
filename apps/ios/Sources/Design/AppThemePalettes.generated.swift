@@ -14,7 +14,9 @@ enum AppThemeFamily: String, CaseIterable, Identifiable, Sendable {
     case rose
     case miami
 
-    var id: String { self.rawValue }
+    var id: String {
+        self.rawValue
+    }
 
     var displayName: String {
         switch self {
@@ -33,315 +35,332 @@ enum AppThemeFamily: String, CaseIterable, Identifiable, Sendable {
     }
 
     func seed(dark: Bool) -> AppThemePaletteSeed {
-        switch (self, dark) {
-        case (.claw, true):
+        dark ? self.darkSeed() : self.lightSeed()
+    }
+
+    private func darkSeed() -> AppThemePaletteSeed {
+        switch self {
+        case .claw:
+            Self.darkClawSeed()
+        case .knot:
             AppThemePaletteSeed(
-                canvas: 0xFF0E1015,
-                surface: 0xFF161920,
-                raised: 0xFF191C24,
-                pressed: 0xFF1F2330,
-                accent: 0xFFFF5C5C,
-                border: 0xFF1E2028,
-                borderStrong: 0xFF2E3040,
-                text: 0xFFF4F4F5,
-                muted: 0xFFBCBCC0,
-                primary: 0xFFD13C3C,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF14B8A6)
-        case (.claw, false):
+                canvas: 0xFF08_0808,
+                surface: 0xFF11_1113,
+                raised: 0xFF14_1416,
+                pressed: 0xFF1A_1A1E,
+                accent: 0xFFE5_243B,
+                border: 0xFF20_2026,
+                borderStrong: 0xFF30_3038,
+                text: 0xFFC6_C6CB,
+                muted: 0xFF8A_8A94,
+                primary: 0xFFD9_2A3F,
+                primaryText: 0xFFFA_FAFA,
+                secondary: 0xFFB8_BDC4)
+        case .dash:
             AppThemePaletteSeed(
-                canvas: 0xFFF7F7F9,
-                surface: 0xFFFFFFFF,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFEFEFF3,
-                accent: 0xFFC23434,
-                border: 0xFFE4E4EA,
-                borderStrong: 0xFFCFCFD8,
-                text: 0xFF101014,
-                muted: 0xFF52525B,
-                primary: 0xFFC23434,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF0F8F81)
-        case (.knot, true):
+                canvas: 0xFF1A_1210,
+                surface: 0xFF22_1A16,
+                raised: 0xFF28_201C,
+                pressed: 0xFF30_2822,
+                accent: 0xFFCF_8B4D,
+                border: 0xFF36_2A1C,
+                borderStrong: 0xFF4C_3E2C,
+                text: 0xFFD8_C8B8,
+                muted: 0xFFA1_8F80,
+                primary: 0xFFCF_8B4D,
+                primaryText: 0xFF1A_1210,
+                secondary: 0xFFDC_B878)
+        case .absolutely:
             AppThemePaletteSeed(
-                canvas: 0xFF080808,
-                surface: 0xFF111113,
-                raised: 0xFF141416,
-                pressed: 0xFF1A1A1E,
-                accent: 0xFFE5243B,
-                border: 0xFF202026,
-                borderStrong: 0xFF303038,
-                text: 0xFFC6C6CB,
-                muted: 0xFF8A8A94,
-                primary: 0xFFD92A3F,
-                primaryText: 0xFFFAFAFA,
-                secondary: 0xFFB8BDC4)
-        case (.knot, false):
+                canvas: 0xFF1C_1C1A,
+                surface: 0xFF23_2320,
+                raised: 0xFF29_2825,
+                pressed: 0xFF30_2F2B,
+                accent: 0xFFD9_7757,
+                border: 0xFF2E_2C27,
+                borderStrong: 0xFF3D_3A33,
+                text: 0xFFE4_DFD4,
+                muted: 0xFFAB_A498,
+                primary: 0xFFD9_7757,
+                primaryText: 0xFF24_1F1B,
+                secondary: 0xFFB8_926A)
+        case .tide:
             AppThemePaletteSeed(
-                canvas: 0xFFF9F9FB,
-                surface: 0xFFF2F2F5,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFEAEAEF,
-                accent: 0xFFC41E30,
-                border: 0xFFE2E2E8,
-                borderStrong: 0xFFCCCCD4,
-                text: 0xFF3A3A42,
-                muted: 0xFF68676F,
-                primary: 0xFFC41E30,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF5A626E)
-        case (.dash, true):
+                canvas: 0xFF10_151B,
+                surface: 0xFF16_1D25,
+                raised: 0xFF1B_232C,
+                pressed: 0xFF21_2B36,
+                accent: 0xFF5A_B6D8,
+                border: 0xFF22_2C37,
+                borderStrong: 0xFF33_414F,
+                text: 0xFFC9_D2DA,
+                muted: 0xFF9D_ABB9,
+                primary: 0xFF5A_B6D8,
+                primaryText: 0xFF0B_1116,
+                secondary: 0xFF7F_9BB5)
+        case .beacon:
             AppThemePaletteSeed(
-                canvas: 0xFF1A1210,
-                surface: 0xFF221A16,
-                raised: 0xFF28201C,
-                pressed: 0xFF302822,
-                accent: 0xFFCF8B4D,
-                border: 0xFF362A1C,
-                borderStrong: 0xFF4C3E2C,
-                text: 0xFFD8C8B8,
-                muted: 0xFFA18F80,
-                primary: 0xFFCF8B4D,
-                primaryText: 0xFF1A1210,
-                secondary: 0xFFDCB878)
-        case (.dash, false):
+                canvas: 0xFF00_0000,
+                surface: 0xFF0A_0A0A,
+                raised: 0xFF14_1414,
+                pressed: 0xFF1C_1C1C,
+                accent: 0xFFFF_C233,
+                border: 0xFF4A_4A4A,
+                borderStrong: 0xFF6E_6E6E,
+                text: 0xFFFF_FFFF,
+                muted: 0xFFC9_C9C9,
+                primary: 0xFFFF_C233,
+                primaryText: 0xFF00_0000,
+                secondary: 0xFF8E_CDFF)
+        case .phosphor:
             AppThemePaletteSeed(
-                canvas: 0xFFF7F2EC,
-                surface: 0xFFF0E8E0,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFE8DDD2,
-                accent: 0xFF8A512C,
-                border: 0xFFDDD0C2,
-                borderStrong: 0xFFC8B8A6,
-                text: 0xFF4A3828,
-                muted: 0xFF725D4D,
-                primary: 0xFF8A512C,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF7D6027)
-        case (.absolutely, true):
+                canvas: 0xFF0A_0F0A,
+                surface: 0xFF0E_150E,
+                raised: 0xFF12_1A12,
+                pressed: 0xFF18_221A,
+                accent: 0xFF4A_DE80,
+                border: 0xFF1D_291F,
+                borderStrong: 0xFF2C_3D2F,
+                text: 0xFFCF_E0CF,
+                muted: 0xFF93_AC95,
+                primary: 0xFF4A_DE80,
+                primaryText: 0xFF07_120A,
+                secondary: 0xFF8F_D6A5)
+        case .crt:
             AppThemePaletteSeed(
-                canvas: 0xFF1C1C1A,
-                surface: 0xFF232320,
-                raised: 0xFF292825,
-                pressed: 0xFF302F2B,
-                accent: 0xFFD97757,
-                border: 0xFF2E2C27,
-                borderStrong: 0xFF3D3A33,
-                text: 0xFFE4DFD4,
-                muted: 0xFFABA498,
-                primary: 0xFFD97757,
-                primaryText: 0xFF241F1B,
-                secondary: 0xFFB8926A)
-        case (.absolutely, false):
+                canvas: 0xFF09_0A09,
+                surface: 0xFF0D_0F0D,
+                raised: 0xFF11_1412,
+                pressed: 0xFF17_1B18,
+                accent: 0xFF3A_FF7D,
+                border: 0xFF20_2521,
+                borderStrong: 0xFF30_3833,
+                text: 0xFFC2_CAC3,
+                muted: 0xFF90_A094,
+                primary: 0xFF3A_FF7D,
+                primaryText: 0xFF05_2B12,
+                secondary: 0xFFFF_CF5C)
+        case .manuscript:
             AppThemePaletteSeed(
-                canvas: 0xFFFAF9F5,
-                surface: 0xFFF3F1E9,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFEDEAE0,
-                accent: 0xFFA8452A,
-                border: 0xFFE3DFD2,
-                borderStrong: 0xFFCDC7B6,
-                text: 0xFF3D3A33,
-                muted: 0xFF6B655B,
-                primary: 0xFFA8452A,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF8A6A44)
-        case (.tide, true):
+                canvas: 0xFF21_1E18,
+                surface: 0xFF26_2218,
+                raised: 0xFF2A_271F,
+                pressed: 0xFF36_3126,
+                accent: 0xFF8F_A8E0,
+                border: 0xFF3B_3527,
+                borderStrong: 0xFF4F_4732,
+                text: 0xFFD8_D0BC,
+                muted: 0xFFAB_9F84,
+                primary: 0xFF8F_A8E0,
+                primaryText: 0xFF10_1C33,
+                secondary: 0xFFCF_A85E)
+        case .rose:
             AppThemePaletteSeed(
-                canvas: 0xFF10151B,
-                surface: 0xFF161D25,
-                raised: 0xFF1B232C,
-                pressed: 0xFF212B36,
-                accent: 0xFF5AB6D8,
-                border: 0xFF222C37,
-                borderStrong: 0xFF33414F,
-                text: 0xFFC9D2DA,
-                muted: 0xFF9DABB9,
-                primary: 0xFF5AB6D8,
-                primaryText: 0xFF0B1116,
-                secondary: 0xFF7F9BB5)
-        case (.tide, false):
+                canvas: 0xFF19_1724,
+                surface: 0xFF1D_1B2A,
+                raised: 0xFF1F_1D2E,
+                pressed: 0xFF26_233A,
+                accent: 0xFFEB_BCBA,
+                border: 0xFF29_263C,
+                borderStrong: 0xFF3D_3958,
+                text: 0xFFD5_D2EB,
+                muted: 0xFF97_93B0,
+                primary: 0xFFEB_BCBA,
+                primaryText: 0xFF3F_2224,
+                secondary: 0xFFF6_C177)
+        case .miami:
             AppThemePaletteSeed(
-                canvas: 0xFFF7F9FB,
-                surface: 0xFFEEF2F7,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFE8EDF2,
-                accent: 0xFF1F6F8F,
-                border: 0xFFDFE5EC,
-                borderStrong: 0xFFC5CFD9,
-                text: 0xFF333C45,
-                muted: 0xFF5F6B76,
-                primary: 0xFF1F6F8F,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF3D6D88)
-        case (.beacon, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF000000,
-                surface: 0xFF0A0A0A,
-                raised: 0xFF141414,
-                pressed: 0xFF1C1C1C,
-                accent: 0xFFFFC233,
-                border: 0xFF4A4A4A,
-                borderStrong: 0xFF6E6E6E,
-                text: 0xFFFFFFFF,
-                muted: 0xFFC9C9C9,
-                primary: 0xFFFFC233,
-                primaryText: 0xFF000000,
-                secondary: 0xFF8ECDFF)
-        case (.beacon, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFFFFFFF,
-                surface: 0xFFF4F4F4,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFEDEDED,
-                accent: 0xFF6E4A00,
-                border: 0xFF8A8A8A,
-                borderStrong: 0xFF5A5A5A,
-                text: 0xFF000000,
-                muted: 0xFF3A3A3A,
-                primary: 0xFF6E4A00,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF09428D)
-        case (.phosphor, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF0A0F0A,
-                surface: 0xFF0E150E,
-                raised: 0xFF121A12,
-                pressed: 0xFF18221A,
-                accent: 0xFF4ADE80,
-                border: 0xFF1D291F,
-                borderStrong: 0xFF2C3D2F,
-                text: 0xFFCFE0CF,
-                muted: 0xFF93AC95,
-                primary: 0xFF4ADE80,
-                primaryText: 0xFF07120A,
-                secondary: 0xFF8FD6A5)
-        case (.phosphor, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFF4F7F4,
-                surface: 0xFFECF1EC,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFE4EBE5,
-                accent: 0xFF10693A,
-                border: 0xFFDBE4DC,
-                borderStrong: 0xFFBFCDC1,
-                text: 0xFF2A352B,
-                muted: 0xFF566B58,
-                primary: 0xFF10693A,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF2F6B47)
-        case (.crt, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF090A09,
-                surface: 0xFF0D0F0D,
-                raised: 0xFF111412,
-                pressed: 0xFF171B18,
-                accent: 0xFF3AFF7D,
-                border: 0xFF202521,
-                borderStrong: 0xFF303833,
-                text: 0xFFC2CAC3,
-                muted: 0xFF90A094,
-                primary: 0xFF3AFF7D,
-                primaryText: 0xFF052B12,
-                secondary: 0xFFFFCF5C)
-        case (.crt, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFF5F5F4,
-                surface: 0xFFECECEA,
-                raised: 0xFFFFFFFF,
-                pressed: 0xFFE3E4E1,
-                accent: 0xFF0A612B,
-                border: 0xFFDCDEDB,
-                borderStrong: 0xFFC0C5BF,
-                text: 0xFF343A34,
-                muted: 0xFF5B655C,
-                primary: 0xFF0A612B,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF7A5D10)
-        case (.manuscript, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF211E18,
-                surface: 0xFF262218,
-                raised: 0xFF2A271F,
-                pressed: 0xFF363126,
-                accent: 0xFF8FA8E0,
-                border: 0xFF3B3527,
-                borderStrong: 0xFF4F4732,
-                text: 0xFFD8D0BC,
-                muted: 0xFFAB9F84,
-                primary: 0xFF8FA8E0,
-                primaryText: 0xFF101C33,
-                secondary: 0xFFCFA85E)
-        case (.manuscript, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFF6F1E4,
-                surface: 0xFFEFE8D6,
-                raised: 0xFFFDFBF3,
-                pressed: 0xFFE7DDC4,
-                accent: 0xFF31549B,
-                border: 0xFFDDD2B8,
-                borderStrong: 0xFFC0B28A,
-                text: 0xFF322D22,
-                muted: 0xFF6A604E,
-                primary: 0xFF31549B,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF7D6118)
-        case (.rose, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF191724,
-                surface: 0xFF1D1B2A,
-                raised: 0xFF1F1D2E,
-                pressed: 0xFF26233A,
-                accent: 0xFFEBBCBA,
-                border: 0xFF29263C,
-                borderStrong: 0xFF3D3958,
-                text: 0xFFD5D2EB,
-                muted: 0xFF9793B0,
-                primary: 0xFFEBBCBA,
-                primaryText: 0xFF3F2224,
-                secondary: 0xFFF6C177)
-        case (.rose, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFFAF4ED,
-                surface: 0xFFF5ECE2,
-                raised: 0xFFFFFAF3,
-                pressed: 0xFFEEE3D5,
-                accent: 0xFF9C4F66,
-                border: 0xFFE3D9CB,
-                borderStrong: 0xFFC8BBA7,
-                text: 0xFF3E3857,
-                muted: 0xFF665D87,
-                primary: 0xFF9C4F66,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF286983)
-        case (.miami, true):
-            AppThemePaletteSeed(
-                canvas: 0xFF140F1E,
-                surface: 0xFF181226,
-                raised: 0xFF1C1530,
-                pressed: 0xFF251B40,
-                accent: 0xFFF472B6,
-                border: 0xFF2C2150,
-                borderStrong: 0xFF453471,
-                text: 0xFFCFC7E8,
-                muted: 0xFF968BBD,
-                primary: 0xFFF472B6,
-                primaryText: 0xFF3C0A24,
-                secondary: 0xFF5FD7E8)
-        case (.miami, false):
-            AppThemePaletteSeed(
-                canvas: 0xFFF7F3F6,
-                surface: 0xFFF1E9F0,
-                raised: 0xFFFEFCFE,
-                pressed: 0xFFE6DBE4,
-                accent: 0xFFB0246F,
-                border: 0xFFE2D7E0,
-                borderStrong: 0xFFC4B4C2,
-                text: 0xFF3C3244,
-                muted: 0xFF6B5F74,
-                primary: 0xFFB0246F,
-                primaryText: 0xFFFFFFFF,
-                secondary: 0xFF0F6F7D)
+                canvas: 0xFF14_0F1E,
+                surface: 0xFF18_1226,
+                raised: 0xFF1C_1530,
+                pressed: 0xFF25_1B40,
+                accent: 0xFFF4_72B6,
+                border: 0xFF2C_2150,
+                borderStrong: 0xFF45_3471,
+                text: 0xFFCF_C7E8,
+                muted: 0xFF96_8BBD,
+                primary: 0xFFF4_72B6,
+                primaryText: 0xFF3C_0A24,
+                secondary: 0xFF5F_D7E8)
         }
+    }
+
+    private static func darkClawSeed() -> AppThemePaletteSeed {
+        AppThemePaletteSeed(
+            canvas: 0xFF0E_1015,
+            surface: 0xFF16_1920,
+            raised: 0xFF19_1C24,
+            pressed: 0xFF1F_2330,
+            accent: 0xFFFF_5C5C,
+            border: 0xFF1E_2028,
+            borderStrong: 0xFF2E_3040,
+            text: 0xFFF4_F4F5,
+            muted: 0xFFBC_BCC0,
+            primary: 0xFFD1_3C3C,
+            primaryText: 0xFFFF_FFFF,
+            secondary: 0xFF14_B8A6)
+    }
+
+    private func lightSeed() -> AppThemePaletteSeed {
+        switch self {
+        case .claw:
+            Self.lightClawSeed()
+        case .knot:
+            AppThemePaletteSeed(
+                canvas: 0xFFF9_F9FB,
+                surface: 0xFFF2_F2F5,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFEA_EAEF,
+                accent: 0xFFC4_1E30,
+                border: 0xFFE2_E2E8,
+                borderStrong: 0xFFCC_CCD4,
+                text: 0xFF3A_3A42,
+                muted: 0xFF68_676F,
+                primary: 0xFFC4_1E30,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF5A_626E)
+        case .dash:
+            AppThemePaletteSeed(
+                canvas: 0xFFF7_F2EC,
+                surface: 0xFFF0_E8E0,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFE8_DDD2,
+                accent: 0xFF8A_512C,
+                border: 0xFFDD_D0C2,
+                borderStrong: 0xFFC8_B8A6,
+                text: 0xFF4A_3828,
+                muted: 0xFF72_5D4D,
+                primary: 0xFF8A_512C,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF7D_6027)
+        case .absolutely:
+            AppThemePaletteSeed(
+                canvas: 0xFFFA_F9F5,
+                surface: 0xFFF3_F1E9,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFED_EAE0,
+                accent: 0xFFA8_452A,
+                border: 0xFFE3_DFD2,
+                borderStrong: 0xFFCD_C7B6,
+                text: 0xFF3D_3A33,
+                muted: 0xFF6B_655B,
+                primary: 0xFFA8_452A,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF8A_6A44)
+        case .tide:
+            AppThemePaletteSeed(
+                canvas: 0xFFF7_F9FB,
+                surface: 0xFFEE_F2F7,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFE8_EDF2,
+                accent: 0xFF1F_6F8F,
+                border: 0xFFDF_E5EC,
+                borderStrong: 0xFFC5_CFD9,
+                text: 0xFF33_3C45,
+                muted: 0xFF5F_6B76,
+                primary: 0xFF1F_6F8F,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF3D_6D88)
+        case .beacon:
+            AppThemePaletteSeed(
+                canvas: 0xFFFF_FFFF,
+                surface: 0xFFF4_F4F4,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFED_EDED,
+                accent: 0xFF6E_4A00,
+                border: 0xFF8A_8A8A,
+                borderStrong: 0xFF5A_5A5A,
+                text: 0xFF00_0000,
+                muted: 0xFF3A_3A3A,
+                primary: 0xFF6E_4A00,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF09_428D)
+        case .phosphor:
+            AppThemePaletteSeed(
+                canvas: 0xFFF4_F7F4,
+                surface: 0xFFEC_F1EC,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFE4_EBE5,
+                accent: 0xFF10_693A,
+                border: 0xFFDB_E4DC,
+                borderStrong: 0xFFBF_CDC1,
+                text: 0xFF2A_352B,
+                muted: 0xFF56_6B58,
+                primary: 0xFF10_693A,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF2F_6B47)
+        case .crt:
+            AppThemePaletteSeed(
+                canvas: 0xFFF5_F5F4,
+                surface: 0xFFEC_ECEA,
+                raised: 0xFFFF_FFFF,
+                pressed: 0xFFE3_E4E1,
+                accent: 0xFF0A_612B,
+                border: 0xFFDC_DEDB,
+                borderStrong: 0xFFC0_C5BF,
+                text: 0xFF34_3A34,
+                muted: 0xFF5B_655C,
+                primary: 0xFF0A_612B,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF7A_5D10)
+        case .manuscript:
+            AppThemePaletteSeed(
+                canvas: 0xFFF6_F1E4,
+                surface: 0xFFEF_E8D6,
+                raised: 0xFFFD_FBF3,
+                pressed: 0xFFE7_DDC4,
+                accent: 0xFF31_549B,
+                border: 0xFFDD_D2B8,
+                borderStrong: 0xFFC0_B28A,
+                text: 0xFF32_2D22,
+                muted: 0xFF6A_604E,
+                primary: 0xFF31_549B,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF7D_6118)
+        case .rose:
+            AppThemePaletteSeed(
+                canvas: 0xFFFA_F4ED,
+                surface: 0xFFF5_ECE2,
+                raised: 0xFFFF_FAF3,
+                pressed: 0xFFEE_E3D5,
+                accent: 0xFF9C_4F66,
+                border: 0xFFE3_D9CB,
+                borderStrong: 0xFFC8_BBA7,
+                text: 0xFF3E_3857,
+                muted: 0xFF66_5D87,
+                primary: 0xFF9C_4F66,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF28_6983)
+        case .miami:
+            AppThemePaletteSeed(
+                canvas: 0xFFF7_F3F6,
+                surface: 0xFFF1_E9F0,
+                raised: 0xFFFE_FCFE,
+                pressed: 0xFFE6_DBE4,
+                accent: 0xFFB0_246F,
+                border: 0xFFE2_D7E0,
+                borderStrong: 0xFFC4_B4C2,
+                text: 0xFF3C_3244,
+                muted: 0xFF6B_5F74,
+                primary: 0xFFB0_246F,
+                primaryText: 0xFFFF_FFFF,
+                secondary: 0xFF0F_6F7D)
+        }
+    }
+
+    private static func lightClawSeed() -> AppThemePaletteSeed {
+        AppThemePaletteSeed(
+            canvas: 0xFFF7_F7F9,
+            surface: 0xFFFF_FFFF,
+            raised: 0xFFFF_FFFF,
+            pressed: 0xFFEF_EFF3,
+            accent: 0xFFC2_3434,
+            border: 0xFFE4_E4EA,
+            borderStrong: 0xFFCF_CFD8,
+            text: 0xFF10_1014,
+            muted: 0xFF52_525B,
+            primary: 0xFFC2_3434,
+            primaryText: 0xFFFF_FFFF,
+            secondary: 0xFF0F_8F81)
     }
 }
