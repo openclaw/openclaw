@@ -48,8 +48,7 @@ const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 const controlUiPerformanceBudgets = {
   // Coordinator-approved full locale hints plus the warm-frame admission hint
   // (#195865): measured 13,962 B plus 64 B headroom.
-  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 14,039 B plus 64 B.
-  documentGzipBytes: 14_103,
+  documentGzipBytes: 14_026,
   // Consolidated eager/route partitions measure 5/20/17 requests over HTTP/1.1.
   // Preserve the initial two-request headroom; route limits match their measured graphs.
   startupJsRequests: 7,
@@ -62,12 +61,12 @@ const controlUiPerformanceBudgets = {
   // Coordinator-accepted shipped feature cost after paydown #199196.
   // Measured on main 5328b275: exact route totals, with no added headroom.
   // Coordinator-accepted native signing (#199136): +235 B in the shared lazy signer.
-  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,311,331 B
-  // (+1,605 B over main 00585072) plus 64 B headroom.
-  chatBootJsGzipBytes: 1_311_395,
+  // Josh approved the #198491 member-welcome cost (2026-11-14): measured 1,311,932 B
+  // (+1,066 B over main 5dbf569b) plus 64 B headroom.
+  chatBootJsGzipBytes: 1_311_996,
   // The same shared lazy signer adds the coordinator-accepted +235 B here.
-  // Same #198491 approval: measured 814,742 B (+1,306 B over main) plus 64 B headroom.
-  newBootJsGzipBytes: 814_806,
+  // Same #198491 approval: measured 815,727 B (+1,107 B over main) plus 64 B headroom.
+  newBootJsGzipBytes: 815_791,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
   // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
@@ -79,9 +78,9 @@ const controlUiPerformanceBudgets = {
   // Same snapshot-save repair, measured shared chunk plus 64 B.
   // The same shared-chunk trade, measured plus 64 B.
   // Josh approved the #196456 key-warning delta: +2,527 B; inherited debt stays.
-  // Same #198491 approval, absorbing inherited debt: measured 571,306 B (+1,321 B over main)
+  // Same #198491 approval, absorbing inherited debt: measured 572,065 B (+995 B over main)
   // plus 64 B headroom.
-  largestJsGzipBytes: 571_370,
+  largestJsGzipBytes: 572_129,
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
