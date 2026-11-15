@@ -125,7 +125,6 @@ suite.define(() => {
         await expect
           .poll(async () => !(await editor.isVisible()) || (await confirmation.isVisible()))
           .toBe(true);
-        await page.screenshot({ path: suite.artifactDir + "/reverted-edit-close.png" });
         expect(await confirmation.count()).toBe(0);
         expect(await editor.isVisible()).toBe(false);
       },
