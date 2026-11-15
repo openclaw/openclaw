@@ -626,6 +626,9 @@ export async function resolveGatewayScopedTools(
     workspaceDir,
     toolDenylist: catalogDenylist,
   });
+  // A turn that grants no tools cannot make any configured allowlist entry available, so
+  // skip the unknown-entry analysis instead of warning (or caching a warning) for it.
+  const toolLessTurn = Array.isArray(params.toolsAllow) && params.toolsAllow.length === 0;
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],
@@ -652,7 +655,9 @@ export async function resolveGatewayScopedTools(
           groupPolicy,
           senderPolicy,
           agentId: policyAgentId,
-        }),
+        }).map((step) =>
+          toolLessTurn ? Object.assign(step, { stripPluginOnlyAllowlist: false }) : step,
+        ),
         { policy: sandboxPolicy, label: "sandbox tools.allow" },
         { policy: subagentPolicy, label: "subagent tools.allow" },
         {

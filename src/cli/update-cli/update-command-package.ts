@@ -21,10 +21,7 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import type { UpdateDatabaseBackup } from "../../infra/update-database-backup.js";
-import {
-  getUpdateDoctorConfigFailureReason,
-  type UpdateDoctorConfigChange,
-} from "../../infra/update-doctor-config.js";
+import { getUpdateDoctorConfigFailureReason } from "../../infra/update-doctor-config.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import {
   consumeUpdatePostInstallDoctorResult,
@@ -79,7 +76,6 @@ type PackageDoctorContext = {
   executorFence: UpdateRecoveryFence;
   requester?: Readonly<UpdateRequester>;
   inputHash: string;
-  changes: UpdateDoctorConfigChange[];
   databaseBackup?: UpdateDatabaseBackup;
   originalRecoveryCapture?: UpdateRecoveryBaselineRef;
   assertCurrent: () => void;
