@@ -7,6 +7,8 @@ import { loadPluginCatalog } from "../lib/plugins/index.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
+import { pluginFallbackGradient, pluginMonogram } from "../pages/plugins/presentation.ts";
 import { renderSidebarNavLink as SidebarNavLink } from "./app-sidebar-nav-menus.tsx";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import type { IconName } from "./icon-data.ts";
@@ -19,11 +21,43 @@ const CUSTOMIZE_PAGES: ReadonlyArray<readonly [NavigationRouteId, IconName, stri
   ["templates", "blobster", "tabs.templates"],
 ];
 
+/** A plugin's icon, or the Plugins page's gradient monogram while it has none. */
+function PluginIcon(props: { id: string; name: string; url?: string }) {
+  const gradient = () => pluginFallbackGradient(props.id);
+  return (
+    <Show
+      when={props.url}
+      fallback={
+        <span
+          class="sidebar-customize__plugin-icon sidebar-customize__plugin-icon--fallback"
+          style={{ "--plugins-art-a": gradient()[0], "--plugins-art-b": gradient()[1] }}
+          aria-hidden="true"
+        >
+          {pluginMonogram(props.name).slice(0, 1)}
+        </span>
+      }
+    >
+      {(url) => <img class="sidebar-customize__plugin-icon" src={url()} alt="" />}
+    </Show>
+  );
+}
+
 /** The Customize section: the hub's pages, then one row per installed plugin. */
 export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Element {
   const app = useApplication();
   const gateway = projectGateway(app.gateway);
   const [revision, setRevision] = createSignal(0);
+  const [iconUrls, setIconUrls] = createSignal<Record<string, string>>({});
+  let mounted = true;
+  const icons = new PluginIconOwner({
+    getFetchContext: () => pluginIconFetchContext(app),
+    isConnected: () => mounted,
+    onUrlsChange: setIconUrls,
+  });
+  onSettled(() => () => {
+    mounted = false;
+    icons.reset();
+  });
   onSettled(() =>
     app.gateway.subscribeEvents((event) => {
       if (event.event === "plugins.changed") {
@@ -39,9 +73,16 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
       return [];
     }
     const result = await loadPluginCatalog(snapshot.client).catch(() => null);
-    return (result?.plugins ?? [])
+    const plugins = (result?.plugins ?? [])
       .filter((plugin) => plugin.installed)
       .toSorted((left, right) => left.name.localeCompare(right.name));
+    // Each listed plugin shows its own icon, read the way the Plugins page reads it.
+    const withIcons = plugins.filter((plugin) => plugin.hasIcon).map((plugin) => plugin.id);
+    icons.reconcileKeys(new Set(withIcons));
+    for (const id of withIcons) {
+      icons.load(id);
+    }
+    return plugins;
   });
   // Enabled routes leave out Templates unless its experimental flag is on.
   const pages = () =>
@@ -72,7 +113,7 @@ export function SidebarCustomize(props: { host: AppSidebarRenderHost }): JSX.Ele
               <SidebarNavLink
                 href={`${pathForPluginSettings(plugin.id, props.host.basePath)}?from=plugins`}
                 active={false}
-                icon={<Icon name="plug" />}
+                icon={<PluginIcon id={plugin.id} name={plugin.name} url={iconUrls()[plugin.id]} />}
                 label={plugin.name}
                 onNavigate={() =>
                   props.host.onNavigate?.("plugin-settings", {
