@@ -126,6 +126,8 @@ The same `provider/model` behaves differently depending on where it came from:
 
 Other selection rules:
 
+- Missing capability metadata or an unfamiliar model name does not block chat. Names containing `cyber`, `alpha`, `exp`, or `live` do not create global restrictions. Known non-chat endpoints and explicit provider incompatibilities remain excluded. Your model policy, operator role, authentication, and provider entitlements still apply.
+
 - When a wildcard model policy excludes the configured default, automatic selection uses the first permitted catalog model and logs a warning naming the requested and selected models. Explicit overrides still fail when the policy disallows them.
 - Changing the global or per-agent primary does not rewrite existing session pins, including automatic creation pins. Select the effective agent default with `/model`, the model picker, `session_status(model=...)`, or `sessions.patch`, or reset with `/model default` or `sessions.patch {model: null}`, to follow subsequent default changes. If status reports `This session is pinned to X; config primary Y will apply to new/unpinned sessions.`, run `/model default` to clear the pin.
 - CLI default-model and allowlist pickers respect `models.mode: "replace"` by listing only `models.providers.*.models` instead of the full built-in catalog.

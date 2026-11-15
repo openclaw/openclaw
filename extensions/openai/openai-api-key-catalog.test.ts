@@ -57,20 +57,30 @@ it("lists configured API-key models without loading profile auth runtimes", asyn
   vi.doMock("openclaw/plugin-sdk/provider-auth-runtime", () => {
     throw new Error("Configured API-key catalogs must not load profile auth runtime");
   });
-  const admittedIds = ["gpt-5.3-codex", "gpt-5.5-2026-04-23", "gpt-5.6-cyber", "gpt-6.2"];
-  // Include pre-GPT-5, non-chat, subscription-only and experimental model families.
+  const admittedIds = [
+    "gpt-5.3-codex",
+    "gpt-5.5-2026-04-23",
+    "gpt-5.6-cyber",
+    "gpt-6.2",
+    "gpt-unknown-cyber-fixture",
+    "gpt-7-alpha",
+    "kepler-alpha",
+    "vendor-live",
+    "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment",
+    "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment",
+    "gpt-live-1",
+    "novel-model",
+  ];
+  // Known incompatible endpoint families remain excluded.
   const unadmittedIds = (
     "gpt-4-0613 gpt-4.1-mini o3 ft:gpt-4.1-mini:acme::abc123 gpt-5.3-codex-spark " +
-    "gpt-unknown-cyber-fixture gpt-7-alpha kepler-alpha " +
-    "gpt-5.5-codex-1p-exp-p-0618-b2fcc1-ev3-text-1-treatment " +
-    "gpt5-5-1p-exp-p-0628-2069ab-ev3-text-1-treatment " +
-    "gpt-4o-mini-search-preview gpt-5-search-api gpt-live-1 gpt-4o-transcribe-diarize " +
+    "gpt-4o-mini-search-preview gpt-5-search-api gpt-4o-transcribe-diarize " +
     "gpt-image-2 gpt-realtime-2.1-mini gpt-audio-mini gpt-3.5-turbo-instruct babbage-002 " +
     "text-embedding-3-small omni-moderation-latest tts-1-hd whisper-1 sora-2"
   ).split(" ");
   const data = [
     ...modelRows(["gpt-5.5", ...unadmittedIds]),
-    ...admittedIds.map((id) => ({ id, object: "model", capabilities: { chat: true } })),
+    ...modelRows(admittedIds),
     // OpenAI keeps retired models listed with a past shutdown date; requests to them 404.
     { id: "gpt-5.2-chat-latest", object: "model", shutdown_date: "2026-01-01" },
   ];

@@ -9,12 +9,13 @@ export const OPENAI_UNKNOWN_MODEL_COST = {
   cacheWrite: 0,
 } satisfies ModelDefinitionConfig["cost"];
 
-// API-key turns use /v1/responses. These account-listed chat ids cannot run there:
-// search models are Chat Completions only, and unrecognized live, cyber, experiment
-// and alpha codename ids can fail even when listed. The documented Daybreak Red
-// model is supported on Responses; listing it still does not grant program access.
-const OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN =
-  /(?:^|-)(?:search|live|cyber|exp|alpha)(?:-|$)/;
+// These known search endpoints require Chat Completions, not Responses.
+// An unfamiliar model name alone does not establish transport incompatibility.
+const OPENAI_RESPONSES_UNSUPPORTED_MODEL_IDS = new Set([
+  "gpt-4o-search-preview",
+  "gpt-4o-mini-search-preview",
+  "gpt-5-search-api",
+]);
 // Listings advertise the modern tool surface; many pre-GPT-5 models reject hosted
 // web search. Explicitly selected refs still resolve with function tools.
 export const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
@@ -57,8 +58,7 @@ export function projectOpenAIAccountModels(params: {
       return [model];
     }
     if (
-      (model.id !== "gpt-5.6-cyber" &&
-        OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN.test(model.id)) ||
+      OPENAI_RESPONSES_UNSUPPORTED_MODEL_IDS.has(model.id) ||
       isOpenAISubscriptionOnlyRouteModelId(model.id)
     ) {
       return [];
