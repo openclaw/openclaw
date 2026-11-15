@@ -16,11 +16,11 @@ const AGENT_STALL_RECOVERY_GUIDANCE: Record<string, string[]> = {
   ],
   stalled_agent_run: [
     "The agent run made no recoverable progress.",
-    "Review the run transcript for a loop or ambiguous instruction, then rerun with a narrower task if needed.",
+    "Review the chat for this run for a loop or ambiguous instruction, then rerun with a narrower task if needed.",
   ],
   semantic_stall: [
     "The agent made no semantic progress before the stall deadline.",
-    "Review the run transcript and simplify the task, then rerun.",
+    "Review the chat for this run and simplify the task, then rerun.",
   ],
   execution_deadline: [
     "The run exceeded its execution deadline.",

@@ -3527,6 +3527,7 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   font-size: 12.5px;
 }
 .scribe-detail-head .scribe-actions {
+  max-width: 100%;
   flex-wrap: wrap;
   justify-content: flex-end;
   margin-left: auto;

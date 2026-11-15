@@ -20,13 +20,13 @@ import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import {
-  applySwarmCollectorToolContract,
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
 import { resolveSandboxRuntimeStatusAsync } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
 import { resolveScheduledToolCallerContext } from "../agents/scheduled-tool-policy.js";
+import { applySwarmCollectorToolContract } from "../agents/subagents/swarm/swarm-collector-capability.js";
 import { resolveCoreToolFactoryFamily } from "../agents/tool-catalog.js";
 import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import { filterToolsByPolicy } from "../agents/tool-policy-match.js";
@@ -626,6 +626,9 @@ export async function resolveGatewayScopedTools(
     workspaceDir,
     toolDenylist: catalogDenylist,
   });
+  // A turn that grants no tools cannot make any configured allowlist entry available, so
+  // skip the unknown-entry analysis instead of warning (or caching a warning) for it.
+  const toolLessTurn = Array.isArray(params.toolsAllow) && params.toolsAllow.length === 0;
   function filterGatewayToolPolicies(
     config: OpenClawConfig,
     onFilter?: Parameters<typeof applyToolPolicyPipeline>[0]["onFilter"],
@@ -652,7 +655,9 @@ export async function resolveGatewayScopedTools(
           groupPolicy,
           senderPolicy,
           agentId: policyAgentId,
-        }),
+        }).map((step) =>
+          toolLessTurn ? Object.assign(step, { stripPluginOnlyAllowlist: false }) : step,
+        ),
         { policy: sandboxPolicy, label: "sandbox tools.allow" },
         { policy: subagentPolicy, label: "subagent tools.allow" },
         {

@@ -3,6 +3,7 @@
  * progress, polling, and completion surfaces.
  */
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
+import { isOneShotRunSessionKey } from "../sessions/session-key-utils.js";
 
 export type ExecProcessFailureKind =
   | "shell-command-not-found"
@@ -59,26 +60,37 @@ type ExitWakeFacts = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   notifySessionTarget?: object;
-  assertExitNotificationAcceptanceCurrent?: () => void;
+  sessionKey?: string;
+  exitWakeAfterYield?: true;
+  processActivity?: { deadlineAtMs?: number };
 };
 
-/** Whether every exit, silent success included, wakes the conversation after the originating turn ends. */
+/**
+ * Whether every exit, silent success included, wakes the conversation after the originating turn
+ * ends. In a one-shot run the exit resumes the run only after sessions_yield awaits the command,
+ * so the command's deadline must bound that wait.
+ */
 export function hasExitWake(session: ExitWakeFacts): boolean {
   return (
     session.notifyOnExit === true &&
     // An explicit tools.exec.notifyOnExitEmptySuccess=false opt-out leaves silent success unannounced.
     session.notifyOnExitEmptySuccess === true &&
     session.notifySessionTarget !== undefined &&
-    // Cron completion admission still requires its originating run.
-    session.assertExitNotificationAcceptanceCurrent === undefined
+    (session.exitWakeAfterYield === true
+      ? session.processActivity?.deadlineAtMs !== undefined
+      : // A one-shot run's exit resumes it only through sessions_yield.
+        !isOneShotRunSessionKey(session.sessionKey))
   );
 }
 
 /** Exit-wake fact plus the condition for ending the turn, or undefined when the exit starts no turn. */
 export function describeExitWake(session: ExitWakeFacts): string | undefined {
-  return hasExitWake(session)
-    ? "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn"
-    : undefined;
+  if (!hasExitWake(session)) {
+    return undefined;
+  }
+  return session.exitWakeAfterYield
+    ? "This run resumes with its result when it exits, silent success included, if you call sessions_yield. If only waiting remains, call sessions_yield"
+    : "Its exit wakes this conversation with the result, silent success included. If only waiting remains, end this turn";
 }
 
 /** Guidance for a running background handle, read when the handle is returned. */

@@ -91,6 +91,17 @@ describe("bundled Template project sources", () => {
       }
     },
   );
+  it("validates a bundled folder within the documented file limit", async () => {
+    const root = await project();
+    await Promise.all(
+      Array.from({ length: 4094 }, (_, index) =>
+        writeFile(join(root, "bundles", "checked", `ref-${index}.txt`), "x\n"),
+      ),
+    );
+    const result = await validateTemplateProject(root);
+    assert(result.ok, JSON.stringify(result.diagnostics));
+    expect(result.template.snapshot?.bundledSources?.[0]?.snapshot.files).toHaveLength(4095);
+  });
   it("packs deterministic binary contents while excluding repository and installed dependencies", async () => {
     const root = await project();
     const skill = join(root, "bundles", "checked");

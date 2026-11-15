@@ -15,7 +15,13 @@ import {
   PREEMPTIVE_OVERFLOW_ERROR_TEXT,
   estimateLlmBoundaryTokenPressure,
   estimateToolSchemaTokenPressure,
+  shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
+import {
+  beginRunAttempt,
+  createRunRetryBudget,
+  isRunRetryBudgetExhausted,
+} from "./retry-budget.js";
 
 const attempt = {
   provider: "test-provider",
@@ -98,6 +104,43 @@ function checkpoint(discarded: boolean, windowText?: string) {
 }
 
 describe("attempt prompt preflight", () => {
+  it("compacts on the second precheck when a projected result outlives its persisted reduction", async () => {
+    const sessionManager = SessionManager.inMemory();
+    const projected = makeToolResult("synthetic tool output ".repeat(25_000));
+    await sessionManager.appendMessageAsync(projected);
+    const projectionState = createToolResultPromptProjectionState();
+    const budget = createRunRetryBudget(32);
+    const routes: string[] = [];
+    while (!isRunRetryBudgetExhausted(budget)) {
+      beginRunAttempt(budget);
+      const decision = shouldPreemptivelyCompactBeforePrompt({
+        messages: [projected],
+        contextTokenBudget: 1_000_000,
+        reserveTokens: 78_000,
+        prompt: "",
+        toolResultMaxChars: 64_000,
+        llmBoundaryTokenPressure: { estimatedPromptTokens: 932_476, source: "synthetic" },
+      });
+      expect(decision.route).toBe("truncate_tool_results_only");
+      expect(decision.toolResultReducibleChars).toBeGreaterThan(0);
+      const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
+        attempt: { ...attempt, contextTokenBudget: 1_000_000 },
+        request: { ...decision, route: "truncate_tool_results_only" },
+        sessionAgentId: "test",
+        sessionManager,
+        toolResultPromptProjectionState: projectionState,
+        prePromptMessageCount: 1,
+        replaceSessionMessages: () => {},
+      });
+      routes.push(outcome.preflightRecovery.route);
+      if (outcome.promptError) {
+        break;
+      }
+    }
+    expect(routes).toEqual(["truncate_tool_results_only", "compact_only"]);
+    expect(isRunRetryBudgetExhausted(budget)).toBe(false);
+  });
+
   it.each([
     "oversized",
     "unwindowed-tools",
@@ -188,7 +231,7 @@ describe("attempt prompt preflight", () => {
   it.each([
     ["compaction", "compact_only", "", undefined, undefined],
     ["fallback", "truncate_tool_results_only", "", undefined, undefined],
-    ["capped", "truncate_tool_results_only", "already capped tool output", undefined, 0],
+    ["capped", "truncate_tool_results_only", "already capped tool output", undefined, undefined],
     ["truncation", "truncate_tool_results_only", "large tool output ".repeat(5_000), 100, 1],
   ] as const)(
     "handles mid-turn %s",

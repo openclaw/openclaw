@@ -799,12 +799,14 @@ describe("direct compactor through the context-engine delegate", () => {
             storePath: fixture.target.storePath,
           });
           preparedSession = prepared.preparedSession;
-          // Gateway preflight must not hydrate the large summary/current window.
-          // The compaction owner acquires complete inputs only after runtime selection.
-          expect(preparedSession?.metadataOnly).toBe(true);
-          expect(JSON.stringify(preparedSession?.sessionManager.getBranch()).length).toBeLessThan(
-            1024 * 1024,
+          expect(preparedSession?.sessionManager.getBranch()).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ type: "compaction", summary: previousSummary }),
+            ]),
           );
+          expect(
+            preparedSession?.sessionManager.getBranch().filter((event) => event.type === "message"),
+          ).toHaveLength(7);
         }
         const result = await compactQueued(
           { ...fixture.queuedParams, trigger, contextTokenBudget: 32_000 },
@@ -814,10 +816,9 @@ describe("direct compactor through the context-engine delegate", () => {
       } finally {
         observed.restore();
       }
-      // The legacy provider/native contract still acquires the complete current window,
-      // after the Gateway's bounded metadata-only preflight when present.
-      expect(observed.hydrations.at(-1)).toMatchObject({ kind: "streamed-bounded", events: 9 });
-      expect(observed.hydrations.at(-1)?.totalEvents).toBeGreaterThan(80);
+      // Header, retained request, full summary, and all six current message entries.
+      expect(observed.hydrations[0]).toMatchObject({ kind: "streamed-bounded", events: 9 });
+      expect(observed.hydrations[0]?.totalEvents).toBeGreaterThan(80);
       const requests = fixture.stream.mock.calls.map((call) => JSON.stringify(call[1]));
       expect(requests.some((request) => request.includes(marker))).toBe(true);
       expect(requests.join("\n")).not.toContain("Archived request");

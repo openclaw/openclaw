@@ -484,9 +484,11 @@ and [Linux](/platforms/linux) desktop apps, the
 [Chrome extension](/tools/chrome-extension), the in-app Plugins hub with
 [ClawHub](https://clawhub.ai), and the Discord community and docs.
 
-If the app catalog needs a backing session while its agent is still starting,
-closing the catalog or changing its agent or conversation cancels that pending
-creation. Keeping the catalog open lets creation finish when the agent is ready.
+Plugin apps appear directly in the sidebar’s **Pages** view, not in this
+companion-app directory. Opening a plugin app still uses its dedicated app
+conversation. If it needs a backing session while its agent is still starting,
+closing the app or changing its agent or conversation cancels that pending
+creation. Keeping the app open lets creation finish when the agent is ready.
 
 ## Settings
 

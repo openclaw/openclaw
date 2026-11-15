@@ -44,6 +44,22 @@ export type DiagnosticOwnerRegistration = {
 
 export const activityByRef = new Map<string, SessionActivity>();
 export const activityByRunId = new Map<string, SessionActivity>();
+
+/** Retire aliases only after the session's producers and diagnostic queue have drained. */
+export function clearDiagnosticSessionActivity(sessionId: string): void {
+  const retired = activityByRef.get(`id:${sessionId}`);
+  if (!retired) {
+    return;
+  }
+  for (const index of [activityByRef, activityByRunId]) {
+    index.forEach((activity, ref) => {
+      if (activity === retired) {
+        index.delete(ref);
+      }
+    });
+  }
+}
+
 export const embeddedRunIndex = {
   remove(activity: SessionActivity, workKey: string): void {
     const embeddedRun = activity.activeEmbeddedRuns.get(workKey);

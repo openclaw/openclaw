@@ -165,16 +165,15 @@ async function awaitProbe<T>(entered: Promise<T>, verification: Promise<boolean>
 }
 
 it.each([
-  [false, 300_000, undefined, 5_400_000],
-  [true, 300_000, undefined, 5_400_000],
-  [false, 600_000, 7_200_000, 7_200_000],
-  [false, undefined, 1_000, 1_000],
+  [false, undefined, 5_400_000],
+  [true, undefined, 5_400_000],
+  [false, 1_000, 1_000],
 ] as const)(
-  "records the bounded observation budget (json=%s, startup=%s, timeout=%s)",
-  async (json, observedStartupMs, timeoutMs, budgetMs) => {
+  "records the bounded observation budget (json=%s, timeout=%s)",
+  async (json, timeoutMs, budgetMs) => {
     const f = fixture();
     const probe = holdRuntimeProbe();
-    const { pending } = f.observe(probe.release, { observedStartupMs, timeoutMs }, json);
+    const { pending } = f.observe(probe.release, { timeoutMs }, json);
     await awaitProbe(probe.entered, pending);
     expect(f.read()).toMatchObject({ phase: "validating", status: "running" });
     expect(f.wait()).toMatchObject({
@@ -183,9 +182,7 @@ it.each([
       detail: expect.stringContaining(`Budget ${budgetMs}ms`),
     });
     if (timeoutMs === undefined) {
-      expect(f.wait()?.detail).toMatch(
-        new RegExp(`${observedStartupMs}.*10|10.*${observedStartupMs}`),
-      );
+      expect(f.wait()?.detail).toContain("startup floor");
     }
 
     const elapsedMs = timeoutMs === 1_000 ? 1_000 : 30_000;

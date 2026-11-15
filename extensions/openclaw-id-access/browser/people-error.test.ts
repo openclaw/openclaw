@@ -62,12 +62,18 @@ describe("People error copy", () => {
     expect(peopleError(refusal("not_an_owner"), "update", unchanged).message).toContain(
       "owner access was removed",
     );
-    expect(peopleError(refusal("limit_reached"), "update", unchanged).message).toContain(
-      "Remove one to add another",
-    );
     expect(peopleError(refusal("missing_capability"), "update", unchanged).message).toContain(
       "approved owner browser",
     );
+  });
+
+  it("preserves invitation-duration details without prescribing removal", () => {
+    const detail = "an invite lasts at most 7 days";
+    const result = peopleError(refusal("limit_reached", detail), "update", unchanged);
+    expect(result.message).toBe(
+      "This access request exceeds a limit. Review the error details before changing access.",
+    );
+    expect(result.diagnostic).toBe("limit_reached: an invite lasts at most 7 days");
   });
 
   it("separates load failures from uncertain updates even when retryable is true", () => {

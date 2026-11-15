@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
+import { isMainThread } from "node:worker_threads";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import {
@@ -8,7 +9,10 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import * as transcriptWorkers from "../config/sessions/session-transcript-worker-resources.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
@@ -21,6 +25,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   withOpenClawTestState,
@@ -317,75 +322,131 @@ it.each([false, true])(
         env: state.env,
         path: path.join(storeDir, "main", "history.sqlite"),
       });
+      const gate = recovers ? holdRegistryRead() : undefined;
       const pending = prepareSourcesAsync(sourceParams(source(main), cfg));
-      if (recovers) {
-        fs.unlinkSync(blockedPath);
-        fs.mkdirSync(blockedPath);
+      void pending.catch(() => undefined);
+      try {
+        if (gate) {
+          await awaitGateBeforeSettlement(
+            gate.entered.promise,
+            pending,
+            "Registry read not reached",
+          );
+          fs.unlinkSync(blockedPath);
+          fs.mkdirSync(blockedPath);
+          gate.resume.resolve();
+        }
+        const prepared = await pending;
+        expect(sourcesOf(prepared)).toEqual({
+          main: [{ agentId: "main", path: main.path }],
+          blocked: [],
+        });
+      } finally {
+        gate?.resume.resolve();
+        gate?.spy.mockRestore();
+        await pending.catch(() => undefined);
       }
-      const prepared = await pending;
-      expect(sourcesOf(prepared)).toEqual({
-        main: [{ agentId: "main", path: main.path }],
-        blocked: [],
-      });
     });
   },
 );
 
 it("retains source preparation until directory or registry ownership changes", async () => {
   await withState(async () => {
-    const { main, params, alias, replacement } = aliasSources();
-    const first = await prepareSourcesAsync(params);
-    const realpath = vi.spyOn(fs.realpathSync, "native");
-    const stat = vi.spyOn(fs, "statSync");
-    const readdir = vi.spyOn(fs, "readdirSync");
-    syncBuiltinESMExports();
-    const warm = await prepareSourcesAsync(params);
-    expect(warm.request).toEqual(first.request);
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+    expect(isMainThread).toBe(true);
+    const gateway = acquireGatewayStateOwner({
+      databasePath: resolveOpenClawStateSqlitePath(state.env),
+      payload: {
+        pid: process.pid,
+        createdAt: new Date().toISOString(),
+        configPath: state.configPath,
+        role: "gateway",
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    try {
+      const { main, params, alias, replacement } = aliasSources();
+      const realpath = vi.spyOn(fs.realpathSync, "native");
+      const stat = vi.spyOn(fs, "statSync");
+      const readdir = vi.spyOn(fs, "readdirSync");
+      syncBuiltinESMExports();
+      const prepare = transcriptWorkers.prepareSessionStoreCandidatesInWorker;
+      let notified = false;
+      const validation = vi
+        .spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+        .mockImplementation(async (input) => {
+          const result = await prepare(input);
+          if (
+            "observePaths" in input &&
+            input.observePaths.observations &&
+            !input.observePaths.paths &&
+            !input.observePaths.inventory
+          ) {
+            // An unchanged path notification can arrive after native validation completed.
+            notifyAlias(alias);
+            notified = true;
+          }
+          return result;
+        });
+      const first = await prepareSourcesAsync(params).finally(() => validation.mockRestore());
+      expect(notified).toBe(true);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+      const warm = await prepareSourcesAsync(params);
+      expect(warm.request).toEqual(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
 
-    // Registry commits publish their own revision; file activity must not rescan agent paths.
-    for (const entry of observedDirectories) {
-      if (entry.active && entry.directory === path.dirname(params.registryPath)) {
-        entry.notify(path.basename(params.registryPath));
-      }
-    }
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
-    await Promise.resolve();
-
-    const directory = observedDirectories.find(
-      (entry) => entry.active && entry.directory === path.dirname(main.path),
-    );
-    expect(directory).toBeDefined();
-    directory!.notify("unrelated.txt");
-    for (let index = 0; index < 100; index++) {
-      directory!.notify(path.basename(main.path), "change");
-      directory!.notify(`${path.basename(main.path)}-wal`, "change");
-    }
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
-    // Separate turns must not repeatedly resolve the same unchanged source paths.
-    for (let turn = 0; turn < 5; turn++) {
-      directory!.notify(path.basename(main.path), "rename");
+      // Registry commits publish their own revision; file activity must not rescan agent paths.
       for (const entry of observedDirectories) {
-        if (entry.active && entry.directory.startsWith(state.root)) {
-          entry.notify();
+        if (entry.active && entry.directory === path.dirname(params.registryPath)) {
+          entry.notify(path.basename(params.registryPath));
         }
       }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
       await Promise.resolve();
+
+      const directory = observedDirectories.find(
+        (entry) => entry.active && entry.directory === path.dirname(main.path),
+      );
+      expect(directory).toBeDefined();
+      directory!.notify("unrelated.txt");
+      for (let index = 0; index < 100; index++) {
+        directory!.notify(path.basename(main.path), "change");
+        directory!.notify(`${path.basename(main.path)}-wal`, "change");
+      }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls)).toEqual([[], [], []]);
+      // Separate turns must not repeatedly resolve the same unchanged source paths.
+      for (let turn = 0; turn < 5; turn++) {
+        directory!.notify(path.basename(main.path), "rename");
+        for (const entry of observedDirectories) {
+          if (entry.active && entry.directory.startsWith(state.root)) {
+            entry.notify();
+          }
+        }
+        expect((await prepareSourcesAsync(params)).request).toBe(first.request);
+      }
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      expect((await prepareSourcesAsync(params)).request).toBe(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      realpath.mockClear();
+      stat.mockClear();
+      readdir.mockClear();
+      await prepareSourcesAsync(params);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      releasedDirectories.length = 0;
+      replaceAlias(alias, replacement);
+      expect(sourcesOf(first).main).toEqual([]);
+      realpath.mockClear();
+      stat.mockClear();
+      readdir.mockClear();
+      expect((await prepareSourcesAsync(params)).request).not.toBe(first.request);
+      expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
+      expect(releasedDirectories).not.toContain(path.dirname(alias));
+    } finally {
+      try {
+        await closeOpenClawAgentDatabasesAsync();
+      } finally {
+        gateway.release();
+      }
     }
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
-    expect((await prepareSourcesAsync(params)).request).toBe(first.request);
-    expect(realpath).toHaveBeenCalled();
-    realpath.mockClear();
-    stat.mockClear();
-    readdir.mockClear();
-    await prepareSourcesAsync(params);
-    expect([realpath, stat, readdir].map((spy) => spy.mock.calls.length)).toEqual([0, 0, 0]);
-    releasedDirectories.length = 0;
-    replaceAlias(alias, replacement);
-    expect(sourcesOf(first).main).toEqual([]);
-    expect((await prepareSourcesAsync(params)).request).not.toBe(first.request);
-    expect(realpath).toHaveBeenCalled();
-    expect(releasedDirectories).not.toContain(path.dirname(alias));
   });
 });
 
@@ -425,27 +486,89 @@ it("reuses shared watches, prunes retired sources, and closes only with its stat
   });
 });
 
-it("does not resume directory observation after its root closes during preparation", async () => {
-  await withState(async () => {
-    const { params } = mainSources();
-    const { entered, resume, spy } = holdRegistryRead();
-    const pending = prepareSourcesAsync(params);
-    void pending.catch(() => undefined);
-    try {
-      await awaitGateBeforeSettlement(entered.promise, pending, "Registry read not reached");
-      await closeOpenClawStateDatabaseAsync();
-      const observationCount = observedDirectories.length;
-      expect(observedDirectories.some((entry) => entry.active)).toBe(false);
-      resume.resolve();
-      await expect(pending).rejects.toThrow("Session store changed");
-      expect(observedDirectories).toHaveLength(observationCount);
-    } finally {
-      resume.resolve();
-      spy.mockRestore();
-      await pending.catch(() => undefined);
-    }
-  });
-});
+it.each(["inventory", "registry", "registered-extension", "validation"] as const)(
+  "does not resume directory observation after its root closes during %s preparation",
+  async (phase) => {
+    await withState(async () => {
+      const { params } = mainSources();
+      if (phase === "validation") {
+        await prepareSourcesAsync(params);
+        notifyAlias(params.currentSource.path);
+      }
+      const gate = (() => {
+        if (phase === "registry") {
+          return holdRegistryRead();
+        }
+        const entered = createDeferred();
+        const resume = createDeferred();
+        const prepare = transcriptWorkers.prepareSessionStoreCandidatesInWorker;
+        let calls = 0;
+        const spy = vi
+          .spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+          .mockImplementation(async (...args) => {
+            const call = ++calls;
+            const result = await prepare(...args);
+            if (call !== (phase === "registered-extension" ? 2 : 1)) {
+              return result;
+            }
+            if (phase === "registered-extension") {
+              expect(args[0]).toMatchObject({
+                observePaths: { paths: expect.arrayContaining([params.currentSource.path]) },
+              });
+              expect(result.candidates).toEqual(
+                expect.arrayContaining([
+                  expect.objectContaining({ path: params.currentSource.path }),
+                ]),
+              );
+            }
+            entered.resolve();
+            await resume.promise;
+            return result;
+          });
+        return { entered, resume, spy };
+      })();
+      const registry =
+        phase === "registry"
+          ? gate.spy
+          : vi.spyOn(registryListing, "prepareOpenClawAgentDatabaseRegistrySnapshotRead");
+      const preparations =
+        phase === "registry"
+          ? vi.spyOn(transcriptWorkers, "prepareSessionStoreCandidatesInWorker")
+          : gate.spy;
+      const pending = prepareSourcesAsync(params);
+      void pending.catch(() => undefined);
+      try {
+        await awaitGateBeforeSettlement(
+          gate.entered.promise,
+          pending,
+          "Source preparation not reached",
+        );
+        if (phase === "validation") {
+          // A notification during validation requires replacement preparation, not warm reuse.
+          notifyAlias(params.currentSource.path);
+        }
+        await closeOpenClawStateDatabaseAsync();
+        const observationCount = observedDirectories.length;
+        const registryCount = registry.mock.calls.length;
+        const preparationCount = preparations.mock.calls.length;
+        if (phase === "registered-extension") {
+          expect(preparationCount).toBe(2);
+        }
+        expect(observedDirectories.some((entry) => entry.active)).toBe(false);
+        gate.resume.resolve();
+        await expect(pending).rejects.toThrow("Session store changed");
+        expect(observedDirectories).toHaveLength(observationCount);
+        expect(registry).toHaveBeenCalledTimes(registryCount);
+        expect(preparations).toHaveBeenCalledTimes(preparationCount);
+      } finally {
+        gate.resume.resolve();
+        registry.mockRestore();
+        preparations.mockRestore();
+        await pending.catch(() => undefined);
+      }
+    });
+  },
+);
 
 it.for([false, true])(
   "shares pending source outcomes and recovers (invalidated: %s)",

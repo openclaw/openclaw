@@ -1,4 +1,5 @@
 import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { throwExpectedCliError } from "../cli/expected-cli-error.js";
 import { registerSignalExitGate } from "../cli/signal-exit-barrier.js";
 import { createBackupArchive, type BackupCreateOptions } from "../infra/backup-create.js";
 import { createBackupProgressLogger } from "../infra/backup-progress.js";
@@ -28,7 +29,9 @@ export async function backupCreateCommand(
       (value) => value !== undefined,
     )
   ) {
-    throw new Error("--namespace, --claim-namespace, and retention flags require --to <location>.");
+    throwExpectedCliError(
+      "--namespace, --claim-namespace, and retention flags require --to <location>.",
+    );
   }
   let archivePath = opts.output ?? (opts.to === undefined ? process.cwd() : `storage://${opts.to}`);
   const releaseCustody = opts.dryRun ? undefined : beginLifecycleWriteCustody("backup");

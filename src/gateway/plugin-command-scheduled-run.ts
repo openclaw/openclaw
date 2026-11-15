@@ -267,14 +267,16 @@ export async function runPluginCommandScheduledTurn(params: {
     try {
       assertSource();
       const entry = currentSession.entry;
-      if (
-        !entry ||
-        entry.archivedAt ||
-        entry.sessionId !== schedule.parent.sessionId ||
-        entry.lifecycleRevision !== schedule.parent.lifecycleRevision
-      ) {
-        throw new Error("Scheduled plugin command parent was deleted, reset or archived.");
+      // The parent is linked by key: its edits and resets keep the schedule.
+      if (!entry || entry.archivedAt) {
+        throw new Error("Scheduled plugin command parent was deleted or archived.");
       }
+      // Turn admission, dispatch and persistence all target the parent's current transcript.
+      const parent = {
+        ...schedule.parent,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      };
       const assertParent = composeSessionSourceAssertion(
         [currentSession.source],
         (assertSession) => {
@@ -346,7 +348,7 @@ export async function runPluginCommandScheduledTurn(params: {
       );
       const upstream = signals.length ? AbortSignal.any(signals) : undefined;
       return await withSessionTurn(
-        { ...schedule.parent, storePath, abortSignal: upstream },
+        { ...parent, storePath, abortSignal: upstream },
         async (_operation, signal): Promise<ScheduledResult> => {
           turnSignal = signal;
           const assertTurn = composeSessionSourceAssertion([assertCurrent], (assertSources) => {
@@ -373,12 +375,12 @@ export async function runPluginCommandScheduledTurn(params: {
                 jobId: job.id,
                 runId,
                 sourceSessionKey: schedule.parent.sessionKey,
-                originSessionId: schedule.parent.sessionId,
+                originSessionId: parent.sessionId,
                 sourceChannel: schedule.channel,
               },
             },
             target: {
-              ...schedule.parent,
+              ...parent,
               sessionEntry: entry,
               expectedSessionId: entry.sessionId,
               storePath,
@@ -518,7 +520,7 @@ export async function runPluginCommandScheduledTurn(params: {
                     senderIsOwner: false,
                     assertOwnerCurrent: assertTurn,
                     gatewayClientScopes: [...operatorAuthority.scopes],
-                    ...schedule.parent,
+                    ...parent,
                     authProfileId: job.inferenceBinding?.profileId,
                     commandBody,
                     config: cfg,
@@ -538,7 +540,7 @@ export async function runPluginCommandScheduledTurn(params: {
           const text = result.text ?? result.fallbackText?.text;
           if (text || mediaUrls?.length) {
             const appended = await appendAssistantMessageToSessionTranscript({
-              ...schedule.parent,
+              ...parent,
               storePath,
               config: cfg,
               expectedSessionId: entry.sessionId,

@@ -607,13 +607,29 @@ function formatIssuePath(path: PropertyKey[]): string {
 }
 
 function diagnosticsFromZodError(error: z.ZodError): TemplateDiagnostic[] {
-  return error.issues.map((issue) => ({
-    level: "error",
-    code: "invalid_manifest",
-    phase: "schema",
-    path: formatIssuePath(issue.path),
-    message: issue.message,
-  }));
+  return error.issues.flatMap((issue) => {
+    let closest: z.core.$ZodIssue[] | undefined;
+    let tied = false;
+    if (issue.code === "invalid_union") {
+      // Only expose an existing branch's reasons when it is the uniquely closest shape.
+      for (const branch of issue.errors) {
+        if (!closest || branch.length < closest.length) {
+          closest = branch;
+          tied = false;
+        } else if (branch.length === closest.length) {
+          tied = true;
+        }
+      }
+    }
+    const branch = !tied && closest?.length ? closest : undefined;
+    return (branch ?? [issue]).map(({ path, message }) => ({
+      level: "error",
+      code: "invalid_manifest",
+      phase: "schema",
+      path: formatIssuePath(branch ? [...issue.path, ...path] : path),
+      message,
+    }));
+  });
 }
 
 export function parseTemplateManifest(

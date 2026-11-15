@@ -65,7 +65,6 @@ export async function prepareGatewaySessionCompaction(
   }
   const prepared = await SessionManager[sessionManagerOpenCompaction](transcriptTarget, {
     signal: params.abortSignal,
-    metadataOnly: true,
   });
   const { entry, runtimeEntry, sessionManager } = prepared;
   if (!entry || !runtimeEntry) {
@@ -79,9 +78,6 @@ export async function prepareGatewaySessionCompaction(
   }
   if (!preparedSession) {
     return { entry };
-  }
-  if (prepared.metadataOnly) {
-    return { entry, preparedSession };
   }
   try {
     const preflight = preflightManualSessionCompaction(sessionManager.getBranch(), {

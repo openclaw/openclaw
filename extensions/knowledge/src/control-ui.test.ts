@@ -19,7 +19,7 @@ const answers: Record<string, unknown> = {
 
 // Mounts the page on a fake host. Each `held` answer ("scribes" is the Scribes count's job
 // list) waits until the test releases it; each `failing` action is refused.
-function mount(held: string[] = [], failing: string[] = []) {
+function mount(held: string[] = [], failing: string[] = [], props: Record<string, string> = {}) {
   const calls: string[] = [];
   const gates = new Map(held.map((name) => [name, Promise.withResolvers<void>()]));
   const request = vi.fn(
@@ -53,7 +53,7 @@ function mount(held: string[] = [], failing: string[] = []) {
   void plugin.activate(host);
   const view = registerPage.mock.calls[0]![0].mount(document.body, {
     host,
-    props: {},
+    props,
     signal: controller.signal,
     presented: true,
     mountDefault: () => () => {},
@@ -92,6 +92,28 @@ it("checks status beside store facts and shows both tab counts at once", async (
   release("scribes");
   await vi.waitFor(() => expect(tab("Browse").textContent).toBe("Browse410"));
   expect($(".knowledge-tab-count-pending")).toBeNull();
+});
+
+it.each([
+  ["filter", "Project Orion"],
+  ["type", "company"],
+  ["origin", "agent_inference"],
+])("distinguishes an empty filtered result from an empty store: %s", async (field, value) => {
+  mount([], [], {
+    view: "browse",
+    [field]: value,
+    ...(field === "origin" ? { kind: "claim" } : {}),
+  });
+  await shows("No matching records");
+  expect($(".knowledge-content")!.textContent).toContain(
+    "Try a different search or clear the filters.",
+  );
+  expect($(".knowledge-content")!.textContent).not.toContain("Tell your agent in chat");
+});
+
+it("ignores an inactive claim-origin filter when browsing pages", async () => {
+  mount([], [], { view: "browse", origin: "agent_inference" });
+  await shows("Nothing here yet");
 });
 
 it("shows a tab's last view again while it refreshes on return", async () => {
