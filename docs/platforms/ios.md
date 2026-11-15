@@ -61,10 +61,10 @@ remains available during a response, while session settings are saving, and when
 no models are listed. Model choices still respect their existing permission and
 busy-state restrictions; opening sign-in does not grant permission to change them.
 
-When the selected model cannot send because its credentials are missing or invalid,
-a **Model sign-in** link also appears beside the composer. The link stays available
-when camera or voice-note capture replaces the model menu. Provider authentication
-and Gateway permissions are unchanged.
+When credentials are missing or invalid, use **Model sign-in** in the model menu.
+The authentication warning remains visible, and Send stays disabled until authentication
+is restored. A separate **Model sign-in** link appears only when camera or voice-note
+capture replaces the model menu. Provider authentication and Gateway permissions are unchanged.
 
 ## Settings
 
