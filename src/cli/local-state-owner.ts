@@ -404,8 +404,7 @@ export async function runWithLocalStateOwner<T>(params: {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
-        uncertainCleanup ||=
-          params.retainAfterUncertainCleanup === true && cleanup.outcome === "uncertain";
+        uncertainCleanup ||= cleanup.outcome === "uncertain";
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.
