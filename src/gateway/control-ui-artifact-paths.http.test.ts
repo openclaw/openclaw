@@ -21,7 +21,7 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
   let server: Awaited<ReturnType<typeof startControlUiFixture>>;
 
   beforeAll(async () => {
-    const root = tempDirs.make("openclaw-ui-artifact-paths-");
+    const root = await fs.realpath(tempDirs.make("openclaw-ui-artifact-paths-"));
     await fs.mkdir(path.join(root, "assets"));
     for (const [name, body] of Object.entries(files)) {
       await fs.writeFile(path.join(root, "assets", name), body);
@@ -29,12 +29,18 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
     await fs.writeFile(path.join(root, "payload"), scriptBody);
     await fs.writeFile(path.join(root, "payload.gz"), gzipSync(scriptBody));
     await fs.symlink("../payload", path.join(root, "assets", "app.js"));
+    await fs.symlink("../payload", path.join(root, "assets", "alias-AbCd1234.js"));
+    await fs.writeFile(path.join(root, "assets", "direct-AbCd1234.js"), scriptBody);
+    await fs.symlink("../payload.gz", path.join(root, "assets", "direct-AbCd1234.js.gz"));
     await fs.writeFile(path.join(root, "document"), documentBody);
     await fs.symlink("document", path.join(root, "index.html"));
     await fs.mkdir(path.join(root, "nested"));
     await fs.writeFile(path.join(root, "nested", "index.html"), documentBody);
     await fs.symlink("../nested/index.html", path.join(root, "assets", "document.js"));
-    server = await startControlUiFixture({ basePath, root: { kind: "bundled", path: root } });
+    server = await startControlUiFixture({
+      basePath,
+      root: { kind: "bundled", path: root, realPath: root },
+    });
   });
 
   afterAll(async () => {
@@ -57,19 +63,22 @@ describe.each(["", "/dashboard"])("Control UI artifact names under %j", (basePat
     }
   });
 
-  it("preserves the logical script type and canonical sidecar for contained aliases", async () => {
-    for (const method of ["GET", "HEAD"]) {
-      const identity = await read("/assets/app.js", method);
-      expect(identity.status).toBe(200);
-      expect(identity.headers["content-type"]).toBe("application/javascript; charset=utf-8");
-      expect(identity.body.toString()).toBe(method === "HEAD" ? "" : scriptBody);
-      const compressed = await read("/assets/app.js", method, "gzip, identity;q=0");
-      expect(compressed.status).toBe(200);
-      expect(compressed.headers["content-encoding"]).toBe("gzip");
-      expect(compressed.headers["content-type"]).toBe(identity.headers["content-type"]);
-      expect(compressed.body).toEqual(method === "HEAD" ? Buffer.alloc(0) : gzipSync(scriptBody));
-    }
-  });
+  it.each(["app.js", "alias-AbCd1234.js", "direct-AbCd1234.js"])(
+    "preserves the logical script type and canonical sidecar for %s",
+    async (file) => {
+      for (const method of ["GET", "HEAD"]) {
+        const identity = await read(`/assets/${file}`, method);
+        expect(identity.status).toBe(200);
+        expect(identity.headers["content-type"]).toBe("application/javascript; charset=utf-8");
+        expect(identity.body.toString()).toBe(method === "HEAD" ? "" : scriptBody);
+        const compressed = await read(`/assets/${file}`, method, "gzip, identity;q=0");
+        expect(compressed.status).toBe(200);
+        expect(compressed.headers["content-encoding"]).toBe("gzip");
+        expect(compressed.headers["content-type"]).toBe(identity.headers["content-type"]);
+        expect(compressed.body).toEqual(method === "HEAD" ? Buffer.alloc(0) : gzipSync(scriptBody));
+      }
+    },
+  );
 
   it("prepares a symlinked index for direct and fallback documents", async () => {
     for (const route of ["/", "/chat", "/settings/appearance", "/assets/document.js"]) {

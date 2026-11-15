@@ -80,7 +80,8 @@ function nextOccurrenceParentState(job: CronStoredJob, entry: SessionEntry | und
   if ("error" in principal || principal.kind !== "parent") {
     throw new Error("expected a parent-linked job");
   }
-  return classifyScheduledParent(principal.parent, parentRowFactsFromEntry(entry, false));
+  const state = classifyScheduledParent(parentRowFactsFromEntry(entry, false));
+  return typeof state === "string" ? state : "current";
 }
 
 afterEach(() => {

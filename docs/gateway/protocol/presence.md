@@ -232,6 +232,33 @@ Each client connection keeps its own per-client sequence number, so broadcasts
 stay monotonically ordered on that socket even when different clients see
 different scope-filtered subsets of the event stream.
 
+### Optional live tool output
+
+`sessions.messages.subscribe` accepts `includeLiveToolOutput: true` to request
+the cumulative live stdout updates produced by the Codex harness. These updates
+use `stream: "tool"`, `data.phase: "update"`, and `data.outputOnly: true` on
+`agent` or `session.tool` events. Omitting the option declines only this marked
+stream. Tool starts, input deltas, reviews, results, and legacy unmarked updates
+keep their existing delivery rules. Channel verbosity remains independent.
+
+Interest belongs to the existing session-message subscription. Independent
+`subscriptionId` owners on one connection combine their interests; removing one
+owner does not withdraw another owner's request. Every delivery still requires
+current session disclosure authority, including run-targeted and hidden-session
+delivery. A client with multiple presentation modes on one connection must also
+filter marked updates locally for views that did not request live stdout.
+
+The Gateway still processes every admitted producer update and maintains its
+existing bounded in-flight snapshot without live-output subscribers. Full
+recovery snapshots may include output bodies; summary snapshots omit bodies.
+Both retain `outputOnly` so clients can apply the same presentation policy after
+recovery. Opting in mid-run should be followed by history/in-flight recovery to
+adopt the current invocation state. This contract does not add durable output
+history, change capture limits or the wire publication cadence, or guarantee
+display of every transient output state. The WebUI schedules its existing 80 ms
+publication window from the previous publication; this does not change the wire
+contract.
+
 `hello-ok.features.capabilities` advertises additive wire contracts. Native clients
 send `sessionKey` in `chat.metadata` only when `session-scoped-chat-metadata` is present;
 otherwise they retain the agent-only request supported by stable `v2026.7.1-2`.

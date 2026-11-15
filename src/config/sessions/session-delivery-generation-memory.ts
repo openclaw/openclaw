@@ -11,6 +11,28 @@ import type {
   SessionGenerationFacts,
 } from "./session-delivery-generation.types.js";
 
+/**
+ * A stored reference names its conversation by key, plus its incarnation when it carries a
+ * lifecycle revision, so it follows message edits and branch switches to the current
+ * transcript. Live-writer fences (`exactTranscript`) also pin the transcript id. A null
+ * session id leases the row's absence.
+ */
+export function matchesSessionGeneration(
+  input: SessionGenerationFacts,
+  entry: Pick<SessionGenerationEntry, "sessionId" | "lifecycleRevision"> | null | undefined,
+): boolean {
+  if (!entry || input.sessionId === null) {
+    return Boolean(entry) !== (input.sessionId === null);
+  }
+  if (input.exactTranscript && entry.sessionId !== input.sessionId) {
+    return false;
+  }
+  return (
+    (!input.exactTranscript && input.lifecycleRevision === null) ||
+    (entry.lifecycleRevision ?? null) === input.lifecycleRevision
+  );
+}
+
 /** Actor close owns revocation; every transport effect still reads current owner-held policy. */
 export async function prepareMemorySessionGeneration(
   source: CapturedSessionActorStorageOwner,
@@ -45,7 +67,7 @@ export async function prepareMemorySessionGeneration(
   let initial: SessionGenerationEntry | undefined;
   try {
     initial = readEntry();
-    if ((initial?.sessionId ?? null) !== input.sessionId) {
+    if (!matchesSessionGeneration(input, initial)) {
       throw new SessionDeliveryGenerationRevokedError();
     }
   } catch (error) {
@@ -77,8 +99,9 @@ export async function prepareMemorySessionGeneration(
   };
   return {
     assertCurrent,
+    assertNativeTransactionCurrent: Object.assign(() => assertCurrent(), { nativeSource: true }),
     assertDeliveryCurrent() {
-      if (isSessionMutationActive(source.path, [input.sessionKey, input.sessionId ?? undefined])) {
+      if (isSessionMutationActive(source.path, [input.sessionKey, initial?.sessionId])) {
         throw new SessionDeliveryGenerationUnavailableError();
       }
       assertCurrent();

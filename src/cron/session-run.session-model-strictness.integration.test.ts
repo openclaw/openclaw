@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { getAiTransportHost } from "@openclaw/ai";
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { installPrivateUpdateHandoffStore } from "../../test/helpers/private-update-handoff-store.js";
@@ -517,6 +518,11 @@ describe("stored session model selections in scheduled session turns", () => {
             }
           : {}),
       };
+      // All turns in this fixture share the baseline; the next store starts fresh.
+      using sessionResources = {
+        [Symbol.dispose]: () => cleanupSessionResources(conversation.sessionId),
+      };
+      void sessionResources;
       const entryFor = (
         pin: { provider: string; model: string } | null,
         selection: Pick<SessionEntry, "modelOverrideSource"> = userSelection,

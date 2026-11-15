@@ -4,9 +4,8 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createAgentCleanupScope } from "../../agents/run-cleanup-timeout.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as embeddedStateLock from "../../infra/embedded-state-lock.js";
-import { captureNativeSignalBridge } from "../../infra/embedded-state-lock.test-support.js";
-import * as gatewayLockProcessModule from "../../infra/gateway-lock-process.js";
+import { readActiveGatewayLockIdentity } from "../../infra/gateway-lock.js";
+import * as stateOwner from "../../infra/gateway-state-owner.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as agentDatabaseDisposal from "../../state/openclaw-agent-db-disposal.js";
@@ -20,37 +19,18 @@ const runner = vi.hoisted(() =>
 // mock-isolation: Controlled completion tails exercise cleanup without starting inference.
 vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: runner }));
 
-const createNativeBridge = embeddedStateLock.createEmbeddedStateSignalBridge;
-const acquireNativeStateLock = embeddedStateLock.acquireEmbeddedStateLock;
 let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
-let signals: ReturnType<typeof captureNativeSignalBridge>;
 const provider = { apiKey: "config-key", baseUrl: "https://probe.invalid", models: [] };
-const lockPath = () => state.path("locks", "gateway.state.lock");
-function expectOwnership(held: boolean) {
-  expect(fs.existsSync(lockPath())).toBe(held);
-  expect(signals.listenerCount("SIGTERM")).toBe(Number(held));
+async function expectOwnership(held: boolean) {
+  const owner = await readActiveGatewayLockIdentity({ env: state.env, includeEmbedded: true });
+  expect(owner?.pid).toBe(held ? process.pid : undefined);
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
-  signals = captureNativeSignalBridge(createNativeBridge);
-  vi.spyOn(embeddedStateLock, "createEmbeddedStateSignalBridge").mockImplementationOnce(
-    signals.create,
-  );
-  vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockReturnValue(123456);
-  const options = {
-    allowInTests: true,
-    env: state.env,
-    lockDir: state.path("locks"),
-    timeoutMs: 100,
-  };
-  vi.spyOn(embeddedStateLock, "acquireEmbeddedStateLock").mockImplementation((params) =>
-    acquireNativeStateLock({ ...params, options }),
-  );
 });
 afterEach(async () => {
-  signals.dispose();
   vi.restoreAllMocks();
   runner.mockReset();
   await state.cleanup();
@@ -77,7 +57,7 @@ async function probeParams(concurrency: number) {
   };
 }
 
-it("holds state ownership for an in-flight sibling after progress rejects the probe batch", async () => {
+it("holds state ownership until an in-flight sibling settles after progress rejects the batch", async () => {
   const params = await probeParams(2);
   const profile = { type: "api_key", provider: "probe-control", key: "stored-key" };
   await state.writeAuthProfiles({ version: 1, profiles: { "probe-control:stored": profile } });
@@ -103,15 +83,12 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
         },
       }),
     );
-    await expect(operation).rejects.toBe(original);
-    const firstSignal = await firstStarted.promise;
-    expectOwnership(true);
-    signals.emit("SIGTERM");
-    expect(firstSignal?.aborted).toBe(true);
-    expect(fs.existsSync(lockPath())).toBe(true);
+    await firstStarted.promise;
+    await expectOwnership(true);
     finishFirst.resolve();
+    await expect(operation).rejects.toBe(original);
     await parent.drain();
-    expectOwnership(false);
+    await expectOwnership(false);
   } finally {
     finishFirst.resolve();
     await operation?.catch(() => {});
@@ -119,7 +96,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   }
 });
 
-it("retains the staged directory and releases state ownership when database disposal reports failure", async () => {
+it("retains failed probe custody until disposal is explicitly settled", async () => {
   const params = await probeParams(1);
   const original = new Error("synthetic database disposal failure");
   let stagedDir: string | undefined;
@@ -137,26 +114,50 @@ it("retains the staged directory and releases state ownership when database disp
       }
       return closed;
     });
+  const borrow = stateOwner.tryBorrowGatewayStateOwner;
+  let retained: ReturnType<typeof borrow>;
+  vi.spyOn(stateOwner, "tryBorrowGatewayStateOwner").mockImplementation((databasePath) => {
+    const lease = borrow(databasePath);
+    if (lease) {
+      retained = lease;
+    }
+    return lease;
+  });
   const cleanup = createAgentCleanupScope();
   try {
     await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
       cause: original,
     });
     expect(fs.existsSync(stagedDir!)).toBe(true);
-    expect(
-      agentDatabase
-        .listOpenClawRegisteredAgentDatabases({ env: state.env })
-        .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
-    ).toBe(false);
-    expectOwnership(false);
+    await expectOwnership(true);
     expect(cleanup.outcome).toBe("uncertain");
+    expect(() => agentDatabase.listOpenClawRegisteredAgentDatabases({ env: state.env })).toThrow(
+      "maintenance ownership without an active schema lease or maintenance scope",
+    );
+    if (!retained) {
+      throw new Error("Failed probe cleanup did not retain its actual state lease");
+    }
+    expect(
+      retained.run(() =>
+        agentDatabase
+          .listOpenClawRegisteredAgentDatabases({ env: state.env })
+          .some((entry) => entry.path.startsWith(stagedDir! + path.sep)),
+      ),
+    ).toBe(false);
   } finally {
     close.mockRestore();
-    if (stagedDir) {
-      await dispose(path.join(stagedDir, "openclaw-agent.sqlite"), { env: state.env });
-      await fs.promises.rm(stagedDir, { recursive: true, force: true });
+    const directory = stagedDir;
+    if (directory) {
+      const settle = async () => {
+        await dispose(path.join(directory, "openclaw-agent.sqlite"), { env: state.env });
+        await fs.promises.rm(directory, { recursive: true, force: true });
+      };
+      // The fixture observes the real retained lease; only settled disposal releases it.
+      await (retained ? retained.run(settle) : settle());
     }
+    retained?.release();
   }
+  await expectOwnership(false);
 });
 
 it("does not acquire probe state from a closed caller scope", async () => {
@@ -168,5 +169,5 @@ it("does not acquire probe state from a closed caller scope", async () => {
     inParent(() => withAuthProbeStateOwnership({ mode: "exclusive" }, run)),
   ).rejects.toThrow("Async work scope is closed");
   expect(run).not.toHaveBeenCalled();
-  expectOwnership(false);
+  await expectOwnership(false);
 });

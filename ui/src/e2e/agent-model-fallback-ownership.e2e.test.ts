@@ -106,7 +106,7 @@ suite.define(() => {
         );
       }
 
-      await expectText(page.locator(".agent-overview__workspace")).toContain(writerWorkspace);
+      await page.getByText(writerWorkspace, { exact: true }).waitFor();
       const primaryTrigger = page.locator(
         'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"]) .picker-select__trigger',
       );

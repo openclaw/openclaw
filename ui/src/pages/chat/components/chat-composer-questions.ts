@@ -1,5 +1,6 @@
 import { createMemo, createStore, merge } from "solid-js";
 import { pathForSession } from "../../../app-session-path-builder.ts";
+import { composerInputHasFocus } from "../../../lib/composer-input.ts";
 import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { projectSource } from "../../../lib/reactive/projection.ts";
@@ -63,8 +64,8 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       merge(props, {
         queue: props.getQueue?.() ?? props.queue,
         onReopen: (itemId, scope) => {
-          state.restoreComposerFocus ||= state.questionTakeoverActive;
-          state.questionTakeoverActive = false;
+          state.restoreComposerFocus ||= state.questionFocusActive;
+          state.questionFocusActive = false;
           select(JSON.stringify([scope, itemId]));
         },
       } satisfies Partial<Parameters<typeof createAsyncQuestionPresentation>[1]>),
@@ -84,7 +85,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
               return {
                 key: `gateway:${prompt.id}`,
                 asyncIdentity: null,
-                takesOverComposer: requestedBySession === undefined,
+                restoreComposerOnClose: requestedBySession === undefined,
                 panel: (options: QuestionPanelOptions) =>
                   createGatewayQuestionPanelProps(prompt, {
                     ...options,
@@ -113,7 +114,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
               ? asyncQuestions.pending.map((question) => ({
                   key: JSON.stringify([asyncQuestions.scope, question.itemId]),
                   asyncIdentity: asyncIdentity(question.itemId),
-                  takesOverComposer: false,
+                  restoreComposerOnClose: false,
                   panel: (options: QuestionPanelOptions) =>
                     createAsyncQuestionPanelProps(question, asyncQuestions, options),
                 }))
@@ -128,7 +129,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       draftKey: composerDraftKey(props),
       editing:
         Boolean((props.draftSource?.read().draft ?? props.draft).trim()) ||
-        (state.composerTextarea !== null && document.activeElement === state.composerTextarea),
+        (state.composerTextarea !== null && composerInputHasFocus(state.composerTextarea)),
     };
   });
   const [disclosure, update] = createStore<QuestionDisclosure>(

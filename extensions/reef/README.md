@@ -13,6 +13,10 @@ handle, friend-request policy, and guard model authentication.
 Check the connection with `openclaw channels status`. Compare safety
 fingerprints with a friend before approving pairing.
 
+Stopping the account or Gateway closes the inbox connection without waiting for
+the relay to acknowledge closure. In-flight inbox handling and cursor writes
+finish before the account stops.
+
 A working guard model is required. Guard errors stop outgoing messages and hold
 incoming messages for later delivery; friendship alone does not bypass guards.
 

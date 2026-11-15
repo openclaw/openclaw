@@ -1,3 +1,0 @@
-# 95-line Real-Git regression proves isolated depth-one predecessor inspection;
-# 65 lines reconcile inherited main debt without adding headroom.
-160

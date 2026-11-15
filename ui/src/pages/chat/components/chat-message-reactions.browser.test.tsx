@@ -89,10 +89,8 @@ it.each([320, 800])(
     const view = mountSolid(() => (
       <div class="chat-message-reactions" style={{ margin: "24px", width: "272px" }}>
         <MessageReactionPicker
-          class="chat-reaction-chip chat-reaction-chip--add"
           activeEmoji={new Set(["👍"])}
           placement="bottom-start"
-          compact
           onSelect={onSelect}
         />
       </div>

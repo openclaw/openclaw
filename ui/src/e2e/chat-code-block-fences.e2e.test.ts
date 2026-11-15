@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
@@ -37,6 +40,176 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { width: 1180, theme: "dark" },
+    { width: 390, theme: "light" },
+  ] as const)(
+    "lets a human fence switch off its default wrap at $width px",
+    async ({ width, theme }) => {
+      await suite.withPage({ ...desktop, viewport: { width, height: 900 } }, async ({ page }) => {
+        const source = [
+          "Requested generator: high quality. Keep the composition readable at small sizes and retain the original line breaks.",
+          "",
+          "The design direction is a chip-die lobster on the back, with clean technical details and a minimal front mark.",
+          "",
+          "https://example.com/design/" + "reference-".repeat(14),
+        ].join("\n");
+        const prompt = "```text\n" + source + "\n```";
+        const gateway = await installMockGateway(page, {
+          featureMethods: ["sessions.create"],
+          agentModel: "openai/gpt-4o",
+          models: [{ id: "gpt-4o", name: "gpt-4o", provider: "openai" }],
+          presenceUsers: [
+            {
+              id: "profile-morgan",
+              name: "Morgan",
+              self: true,
+              identity: { type: "profile", id: "profile-morgan" },
+            },
+          ],
+          historyMessages: [
+            chatMessage("assistant", "Paste the design brief here and I’ll check the layout.", {
+              __openclaw: { id: "brief-intro", seq: 1 },
+            }),
+            chatMessage("user", prompt, {
+              __openclaw: {
+                id: "user-wrap",
+                seq: 2,
+                senderId: "profile-casey",
+                senderName: "Casey",
+                senderIdentity: { type: "profile", id: "profile-casey" },
+              },
+            }),
+            chatMessage("assistant", "Got it. Which size should I check first?", {
+              __openclaw: { id: "brief-response", seq: 3 },
+            }),
+            chatMessage("user", "Start with this one:\n\n```text\nsmall\n```", {
+              __openclaw: { id: "user-short", seq: 4 },
+            }),
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await setThemeMode(page, theme);
+        const bubble = page.locator('[data-entry-id="user-wrap"]');
+        const code = bubble.locator("pre code");
+        const toggle = bubble.locator(".code-block-wrap");
+        const viewport = bubble.locator(".code-block-viewport");
+        const overflow = () =>
+          viewport.evaluate((element) => element.scrollWidth - element.clientWidth);
+        const capture = async (stage: string) => {
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+            return;
+          }
+          await page.locator(".agent-chat__composer-combobox textarea").click();
+          const frame = await takeControlUiScreenshotFrame(page, bubble, [code], {
+            animations: "disabled",
+          });
+          await writeFile(
+            path.join(suite.artifactDir, `user-wrap-${stage}-${width}.png`),
+            frame.png,
+          );
+        };
+
+        // Wrapped is the resting state; the toggle shows only where it changes the layout.
+        await bubble.getByRole("button", { name: "Disable word wrap", exact: true }).waitFor();
+        await polledAttribute(toggle, "aria-pressed").toBe("true");
+        expect(await overflow()).toBeLessThanOrEqual(1);
+        expect(await code.textContent()).toBe(source + "\n");
+        expect(
+          await bubble
+            .locator(".code-block-copy, .code-block-expand, .code-block-json-modes")
+            .count(),
+        ).toBe(0);
+        expect(
+          await page.locator('[data-entry-id="user-short"] .code-block-wrap').isVisible(),
+        ).toBe(false);
+        // No toolbar row, and no wrapped text under the control.
+        const layout = await bubble.locator(".code-block-wrapper").evaluate((block) => {
+          const control = block.querySelector(".code-block-wrap")!.getBoundingClientRect();
+          const range = document.createRange();
+          range.selectNodeContents(block.querySelector("code")!);
+          const rows = Array.from(range.getClientRects());
+          return {
+            inset: Math.min(...rows.map((row) => row.top)) - block.getBoundingClientRect().top,
+            covered: rows.some(
+              (row) =>
+                row.width > 0 &&
+                row.right > control.left &&
+                row.top < control.bottom - 4 &&
+                row.bottom > control.top,
+            ),
+          };
+        });
+        expect(layout.inset).toBeLessThanOrEqual(12);
+        expect(layout.covered).toBe(false);
+        await capture("wrapped");
+
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        await polledAttribute(toggle, "aria-pressed").toBe("false");
+        await bubble.getByRole("button", { name: "Enable word wrap", exact: true }).waitFor();
+        expect(await overflow()).toBeGreaterThan(1);
+        expect(await code.textContent()).toBe(source + "\n");
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          ),
+        ).toBeLessThanOrEqual(1);
+        await capture("unwrapped");
+
+        // A scrollable box is not enough: its last character must clear the faded control gutter.
+        await viewport.hover();
+        await page.mouse.wheel(10_000, 0);
+        await expect
+          .poll(() =>
+            viewport.evaluate(
+              (element) => element.scrollWidth - element.clientWidth - element.scrollLeft,
+            ),
+          )
+          .toBeLessThanOrEqual(1);
+        const end = await bubble.evaluate((element) => {
+          const sourceElement = element.querySelector("code")!;
+          const walker = document.createTreeWalker(sourceElement, NodeFilter.SHOW_TEXT);
+          let tail = walker.nextNode()!;
+          for (let next = walker.nextNode(); next; next = walker.nextNode()) {
+            tail = next;
+          }
+          const range = document.createRange();
+          const length = tail.textContent!.trimEnd().length;
+          range.setStart(tail, length - 1);
+          range.setEnd(tail, length);
+          return {
+            text: range.getBoundingClientRect().right,
+            gutter: element.querySelector(".code-block-wrap")!.getBoundingClientRect().left,
+          };
+        });
+        expect(end.text).toBeLessThanOrEqual(end.gutter);
+
+        await toggle.focus();
+        await page.keyboard.press("Space");
+        await polledAttribute(toggle, "aria-pressed").toBe("true");
+        expect(await overflow()).toBeLessThanOrEqual(1);
+
+        await page.goto(`${suite.server.baseUrl}new`);
+        await page.locator(".new-session-page__message").fill(prompt);
+        await gateway.deferNext("sessions.create");
+        await page.getByRole("button", { name: "Start session", exact: true }).click();
+        expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
+          message: prompt,
+        });
+        // The pending preview shares Chat's wrapped layout and stays passive until handoff.
+        const pending = page.locator(".new-session-page__starting .code-block-wrapper");
+        expect(await pending.locator("pre code").textContent()).toBe(source + "\n");
+        expect(await pending.locator(".code-block-wrap").isVisible()).toBe(false);
+        expect(
+          await pending
+            .locator(".code-block-viewport")
+            .evaluate((element) => element.scrollWidth - element.clientWidth),
+        ).toBeLessThanOrEqual(1);
+      });
+    },
+  );
+
   it.each([
     { key: "Enter", theme: "dark", width: 1440, overflow: true },
     { key: "Space", theme: "light", width: 390, overflow: false },
@@ -76,14 +249,15 @@ suite.define(() => {
             expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
               true,
             );
-            const scrolled = viewport.evaluate(
-              (element) =>
-                new Promise<void>((resolve) => {
-                  element.addEventListener("scrollend", () => resolve(), { once: true });
-                }),
-            );
+            // A locator resolves asynchronously; arm the listener before sending the key.
+            const scrolled = await viewport.evaluateHandle((element) => ({
+              finished: new Promise<void>((resolve) => {
+                element.addEventListener("scrollend", () => resolve(), { once: true });
+              }),
+            }));
             await page.keyboard.press("ArrowRight");
-            await scrolled;
+            await scrolled.evaluate((state) => state.finished);
+            await scrolled.dispose();
             before = await viewport.evaluate((element) => element.scrollLeft);
             expect(before).toBeGreaterThan(0);
             await page.keyboard.press("Tab");

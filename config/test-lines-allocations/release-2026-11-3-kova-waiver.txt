@@ -1,2 +1,0 @@
-# Exact-version Kova waiver regression coverage: preserve failed evidence, reject other versions/jobs/roles and incomplete evidence, and require measured qualification.
-33

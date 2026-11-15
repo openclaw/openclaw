@@ -1,6 +1,9 @@
+import fs from "node:fs";
+import { registerHooks } from "node:module";
 /** Native operation timings shared by the synthetic close measurement and its workers. */
 import { DatabaseSync } from "node:sqlite";
-import { isMainThread, workerData, threadId } from "node:worker_threads";
+import { isMainThread, workerData, threadId, Worker } from "node:worker_threads";
+import { transformSync } from "esbuild";
 export const labels = [
   "sql",
   "prepare",
@@ -12,9 +15,76 @@ export const labels = [
   "checkpoint-truncate",
   "integrity",
   "native-close",
+  "begin",
+  "commit",
+  "rollback",
+  "lease-delete",
+  "lease-read",
+  "wal-stop",
+  "resource-close",
+  "worker-terminate",
 ];
-export function install(buffer, root) {
+export function install(buffer, root, databasePath) {
   const view = new Int32Array(buffer);
+  const traceAsync = async (label, run) => {
+    if (!Atomics.load(view, 0)) {
+      return await run();
+    }
+    const start = performance.now();
+    try {
+      return await run();
+    } finally {
+      const index = Atomics.add(view, 1, 1);
+      if (index < 2048) {
+        view.set(
+          [
+            threadId,
+            labels.indexOf(label),
+            Math.round((performance.now() - start) * 1000),
+            -1,
+            Math.round(start * 1000),
+            0,
+          ],
+          2 + index * 6,
+        );
+      }
+    }
+  };
+  globalThis.agentCloseTraceAsync = traceAsync;
+  registerHooks({
+    load(url, context, next) {
+      if (
+        /\/src\/state\/openclaw-agent-(?:db-close|db-lifecycle|execution-close|db-resources)\.ts$/.test(
+          url,
+        )
+      ) {
+        const source = fs
+          .readFileSync(new URL(url), "utf8")
+          .replaceAll(
+            "await database.walMaintenance.stop()",
+            'await globalThis.agentCloseTraceAsync("wal-stop", () => database.walMaintenance.stop())',
+          )
+          .replaceAll(
+            "await state.database?.walMaintenance.stop()",
+            'await globalThis.agentCloseTraceAsync("wal-stop", () => state.database?.walMaintenance.stop())',
+          )
+          .replaceAll(
+            ".then(() => resource.close())",
+            '.then(() => globalThis.agentCloseTraceAsync("resource-close", () => resource.close()))',
+          );
+        return {
+          format: "module",
+          source: transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+          shortCircuit: true,
+        };
+      }
+      return next(url, context);
+    },
+  });
+  const terminate = Reflect.get(Worker.prototype, "terminate");
+  Worker.prototype.terminate = function () {
+    return traceAsync("worker-terminate", () => terminate.call(this));
+  };
   const kind = (sql) =>
     /integrity_check|quick_check|foreign_key_check/i.test(sql)
       ? 8
@@ -30,12 +100,22 @@ export function install(buffer, root) {
                 ? 7
                 : /busy_timeout/i.test(sql)
                   ? 2
-                  : 0;
+                  : /^BEGIN\b/i.test(sql)
+                    ? 10
+                    : /^COMMIT\b/i.test(sql)
+                      ? 11
+                      : /^ROLLBACK\b/i.test(sql)
+                        ? 12
+                        : /delete from "?agent_database_leases/i.test(sql)
+                          ? 13
+                          : /agent_database_leases/i.test(sql)
+                            ? 14
+                            : 0;
   const measure = (db, type, run) => {
     if (!Atomics.load(view, 0) || !db.location()?.startsWith(root)) {
       return run();
     }
-    const store = db.location().endsWith("/agent.sqlite") ? 1 : 2;
+    const store = db.location() === databasePath ? 1 : 2;
     const start = performance.now();
     const cpu = process.threadCpuUsage();
     try {
@@ -51,7 +131,7 @@ export function install(buffer, root) {
             type,
             Math.round((performance.now() - start) * 1000),
             used.user + used.system,
-            -1,
+            Math.round(start * 1000),
             store,
           ],
           off,
@@ -83,5 +163,5 @@ export function install(buffer, root) {
   };
 }
 if (!isMainThread && workerData?.agentCloseTrace) {
-  install(workerData.agentCloseTrace, workerData.agentCloseRoot);
+  install(workerData.agentCloseTrace, workerData.agentCloseRoot, workerData.agentClosePath);
 }

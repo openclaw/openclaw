@@ -23,7 +23,6 @@ import {
 import {
   checkGlobalPackageUpdateAdmission,
   classifyPackageUpdatePermissionFailure,
-  resolveCanonicalPath,
   runPnpmPreflightProbe,
   validatePnpmIsolatedUpdate,
 } from "./package-update-manager-preflight.js";
@@ -41,6 +40,7 @@ import {
   createPackageVerificationFailureStep,
   type PackagePostInstallVerifier,
 } from "./package-update-verification-step.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { createUpdateFailureFact } from "./update-failure-facts.js";
 import { readBuiltGatewayBuildId, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
@@ -313,7 +313,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         const reportedPath = probe.result && readPackageManagerProbeValue(probe.result.stdout);
         if (
           !reportedPath ||
-          (await resolveCanonicalPath(reportedPath)) !== (await resolveCanonicalPath(expectedPath))
+          (await realpathOrResolve(reportedPath)) !== (await realpathOrResolve(expectedPath))
         ) {
           const failedStep = probe.failedStep ?? {
             name: "pnpm-staging-preflight",

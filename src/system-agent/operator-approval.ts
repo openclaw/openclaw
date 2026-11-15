@@ -7,7 +7,7 @@ import { isPersistentSystemAgentOperation } from "./operations-parse.js";
 export type SystemAgentProposalRef = { current?: string; operation?: SystemAgentOperation };
 
 const APPROVAL_RETRY_GUIDANCE =
-  "If the change is still needed, submit a fresh request and approve it in the Control UI or OpenClaw apps, or through the approval prompt in the requesting chat. Retrying alone does not approve the change.";
+  "If the change is still needed, submit a fresh request and approve it in the OpenClaw app, or through the approval prompt in the requesting chat. Retrying alone does not approve the change.";
 
 export const SYSTEM_AGENT_APPROVAL_APPLICATION_UNCONFIRMED_TEXT =
   "The approved change's application status is unconfirmed. Check the current settings and OpenClaw status before retrying.";

@@ -86,12 +86,15 @@ export function createHeldAnchorPreparation(
     process.on("message", () => process.disconnect());
     process.once("disconnect", () => process.exit(0));
   `;
+  const anchorArgv = resolveRuntimeWorkerArgv(
+    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
+  );
   const preload = path.join(root, "held-lineage-loader.mjs");
   fs.writeFileSync(
     preload,
     `
       import childProcess from "node:child_process";
-      import { registerFixtureSourceTransform, syncFixtureBuiltinExports } from ${JSON.stringify(
+      import { fixtureSourceFileFilter, registerFixtureSourceTransform, syncFixtureBuiltinExports } from ${JSON.stringify(
         new URL("../../../test/scripts/fixtures/ci-fixture-runtime.cjs", import.meta.url).href,
       )};
       import { Socket } from "node:net";
@@ -125,7 +128,7 @@ export function createHeldAnchorPreparation(
       });
       registerFixtureSourceTransform({
         name: "held-lineage-preparation",
-        filter: /[/\\\\]service-child-group-anchor(?:-[A-Za-z0-9_-]+)?\\.[cm]?[jt]s$/,
+        filter: fixtureSourceFileFilter([${JSON.stringify(pathToFileURL(anchorArgv.at(-1)!).href)}]),
         transform(_url, readSource) {
           const original = readSource();
           const gate = 'globalThis[Symbol.for("openclaw.anchor-preparation-test")]';
@@ -140,9 +143,6 @@ export function createHeldAnchorPreparation(
         },
       });
     `,
-  );
-  const anchorArgv = resolveRuntimeWorkerArgv(
-    resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor),
   );
   const child = spawn(
     process.execPath,

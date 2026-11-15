@@ -5,7 +5,7 @@ import { asFiniteNumber, isRecord } from "openclaw/plugin-sdk/string-coerce-runt
 import {
   resolveTelegramNonTextBody,
   resolveTelegramPrimaryMedia,
-  resolveTelegramRichMessageBody,
+  resolveTelegramRichMessagePlaceholder,
   type TelegramMediaKind,
 } from "./bot/body-helpers.js";
 import {
@@ -105,7 +105,7 @@ export function normalizeMessageNode(
     body = preserveWhitespace ? text : text.trim();
   } else {
     const nonText = resolveTelegramNonTextBody(msg);
-    body = nonText ? nonText.text : resolveTelegramRichMessageBody(msg);
+    body = nonText ? nonText.text : resolveTelegramRichMessagePlaceholder(msg);
   }
   const threadBinding = normalizeTelegramMessageThreadBinding(params.threadBinding);
   const threadId =

@@ -370,7 +370,7 @@ describe("google provider plugin hooks", () => {
       modelId: "gemini-2.5-flash",
     } as never);
 
-    expect(gemini3Profile?.levels).toEqual(levels(["off", "low", "adaptive", "high"]));
+    expect(gemini3Profile?.levels).toEqual(levels(["off", "low", "medium", "adaptive", "high"]));
     expect(gemini25Profile?.levels).toEqual(
       levels(["off", "minimal", "low", "medium", "adaptive", "high"]),
     );

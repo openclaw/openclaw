@@ -661,7 +661,7 @@ describe("plugin state committed facts", () => {
           expect(published.mock.calls[0]?.[0].facts.facts.size).toBe(Number(changed));
         } finally {
           sent.mockRestore();
-          transport.finish();
+          await transport.finish();
         }
       }
     });

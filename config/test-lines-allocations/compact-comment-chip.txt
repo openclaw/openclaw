@@ -1,2 +1,0 @@
-# Browser geometry regression for 30px composer comments, 16px icons and exact 4px localized word spacing; reuses the annotation suite.
-46

@@ -122,6 +122,7 @@ function preparePolicyRuntime(input: ReturnType<typeof turn>) {
     agentId: input.agentId,
     agentDir: resolveAgentDir(input.config, input.agentId),
     workspaceDir: input.workspaceDir,
+    runtimePluginSelections: [{ provider: input.provider, modelId: input.model }],
   });
 }
 

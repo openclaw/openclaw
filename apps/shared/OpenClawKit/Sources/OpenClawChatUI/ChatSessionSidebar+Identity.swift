@@ -53,7 +53,7 @@ extension ChatSessionSidebar {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
-                    .help(String(localized: "Retry thread groups"))
+                    .help(String(localized: "Retry"))
                     .accessibilityLabel(String(localized: "Retry thread groups"))
                 }
                 if let summary = self.attentionSummary(

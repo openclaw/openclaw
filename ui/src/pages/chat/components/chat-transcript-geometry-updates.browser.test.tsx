@@ -333,7 +333,9 @@ it.each([
   const slot = document.body.appendChild(document.createElement("div"));
   const viewport = slot.appendChild(document.createElement("div"));
   viewport.style.cssText = "width: 600px; height: 400px; overflow: auto; overflow-anchor: none";
-  const content = viewport.appendChild(document.createElement("div"));
+  const column = viewport.appendChild(document.createElement("div"));
+  column.className = "chat-thread-content";
+  const content = column.appendChild(document.createElement("div"));
   const changed = vi.fn();
   const layout = new TranscriptLayoutOwner(changed);
   layout.connect(viewport);
@@ -598,8 +600,8 @@ it("parks retained rows at zero size and restores their resized geometry and nes
     await expect.poll(() => row.hasAttribute("data-prepared-row")).toBe(true);
     await settleLayout();
     expect(row.isConnected).toBe(true);
-    // Parked DOM keeps a zero-height box, while its cached height still
-    // contributes to the native scroll extent after the real zero-size receipt.
+    // Parked DOM retains its cached extent even when WebKit releases its box.
+    expect(row.getClientRects().length).toBe(CSS.supports("-webkit-nbsp-mode", "space") ? 0 : 1);
     expect(row.getBoundingClientRect().height).toBe(0);
     expect(deliveredHeights).toContain(0);
     expect(virtualizer.itemSizeCache.get(key)).toBeCloseTo(height, 1);

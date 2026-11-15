@@ -30,7 +30,7 @@ inputs:
     description: Current-run artifact published by the boundary producer.
 outputs:
   cache-key:
-    value: ${{ steps.identity.outputs.cache-key || steps.pack.outputs.cache-key || steps.restore.outputs.cache-key }}
+    value: ${{ steps.identity.outputs.cache-key || steps.pack.outputs.cache-key || steps.main-pack.outputs.cache-key || steps.restore.outputs.cache-key }}
     description: Content and native-toolchain cache identity.
   cache-hit:
     value: ${{ steps.cache.outputs.cache-hit || 'false' }}
@@ -54,9 +54,9 @@ runs:
           exit 0
         fi
         echo "enabled=true" >> "$GITHUB_OUTPUT"
-        # Run artifacts compute their identity during authoritative pack/restore.
+        # Only cache lookup needs identity before authoritative pack/restore.
         case "$SDK_OPERATION" in
-          restore-main|save-main) node scripts/ci-sdk-declarations.mts key ;;
+          restore-main) node scripts/ci-sdk-declarations.mts key ;;
         esac
 
     - name: Restore main SDK declarations
@@ -130,4 +130,4 @@ runs:
       uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: .artifacts/ci-sdk-declarations/sdk.json.gz
-        key: ${{ steps.identity.outputs.cache-key }}
+        key: ${{ steps.main-pack.outputs.cache-key }}

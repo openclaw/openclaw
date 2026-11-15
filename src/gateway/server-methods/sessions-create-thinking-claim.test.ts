@@ -106,12 +106,16 @@ const waitFor = <T>(promise: Promise<T>, label: string) =>
 
 vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/worker-cpu.js")>();
-  // The same-version claim regression needs one clock across the host and real workers.
+  const { workerScriptName } = await import("../../infra/worker-diagnostic-script.js");
+  // Keep the ownership heartbeat on its real clock while freezing session timestamps.
   const preload = `Date.now = () => ${fixedNow};`;
   return {
     ...actual,
     createCpuTrackedWorker(...args: Parameters<typeof actual.createCpuTrackedWorker>) {
       const [filename, options] = args;
+      if (workerScriptName(filename) === "gateway-state-owner-heartbeat.worker.js") {
+        return actual.createCpuTrackedWorker(...args);
+      }
       return actual.createCpuTrackedWorker(filename, {
         ...options,
         execArgv: [

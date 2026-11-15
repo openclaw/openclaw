@@ -2,6 +2,9 @@
 
 # Publishing and retrying Knowledge records
 
+The complete publication reference. Skills link the sections they need; read a
+section when a skill sends you to it, not the whole file up front.
+
 ## Prepare
 
 1. Confirm `knowledge_status` is non-sample and `writesEnabled: true`. Retain the
@@ -36,8 +39,8 @@ from raw/frontmatter or overwrite unread prose. Each edit is a complete normal
 revision, not a staged upload. Retain exact payloads for replay; reread/reconcile
 on stale fences. Attach sources rather than copying large originals into profiles.
 Page bodies also have a size budget, smaller for hub pages; growth past it is
-rejected with section sizes and connected candidates. Extract sections with
-`knowledge_extract_section` rather than trimming prose (see
+rejected with section sizes and connected candidates. Retire dated sections or
+extract a section that has its own subject rather than trimming prose (see
 [page budgets](publish.md#page-budgets)).
 
 Record, revision and recovery reads remain paginated. Follow returned offsets;

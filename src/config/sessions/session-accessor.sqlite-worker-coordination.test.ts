@@ -1,13 +1,24 @@
+import assert from "node:assert/strict";
 import { once } from "node:events";
+import fs from "node:fs";
 import { Worker } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
-import { createSqliteDatabaseAdmissionRelay } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  awaitGateBeforeSettlement,
+  nextEventLoopTurn,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import * as sqliteTransactions from "../../infra/sqlite-transaction.js";
+import { holdCreatedFileCallback } from "../../infra/sqlite-worker-fixture.test-support.js";
+import * as operationAdmissions from "../../infra/sqlite-worker-operation-admission.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { resolveQuarantineStorePath } from "../../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import {
@@ -60,7 +71,7 @@ it("admits a host profile write while reconciliation publishes a cold quarantine
     const release = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
     // Task workers also have a general metadata relay. The lifecycle channel
     // must win when a synchronous host write needs to service the lock holder.
-    const fallback = createSqliteDatabaseAdmissionRelay(() => {});
+    const fallback = operationAdmissions.createSqliteDatabaseAdmissionRelay(() => {});
     const worker = createCoordinationWorker(
       state,
       "cold-quarantine",
@@ -100,7 +111,7 @@ it("admits a host profile write while reconciliation publishes a cold quarantine
       Atomics.store(release, 0, 1);
       Atomics.notify(release, 0);
       await worker.terminate();
-      fallback.finish();
+      await fallback.finish();
     }
   });
 });
@@ -188,3 +199,117 @@ it("joins native worker exit before rejecting failed dispatch", async () => {
     }
   });
 });
+
+it.for([false, true])(
+  "joins an accepted companion CREATE after worker exit (run fails: %s)",
+  async (failRun, { signal }) => {
+    await withWorkerState("coordination-accepted-create", async (state) => {
+      const context = captureOpenClawStateWorkerContext();
+      const quarantinePath = resolveQuarantineStorePath(context.environment);
+      expect(fs.existsSync(quarantinePath)).toBe(false);
+      using creation = holdCreatedFileCallback(quarantinePath);
+      const createAdmission = operationAdmissions.createSqliteWorkerOperationAdmission;
+      let admission: ReturnType<typeof createAdmission> | undefined;
+      using construction = vi
+        .spyOn(operationAdmissions, "createSqliteWorkerOperationAdmission")
+        .mockImplementation((...args) => {
+          admission = createAdmission(...args);
+          return admission;
+        });
+      const release = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+      const worker = createCoordinationWorker(state, "create-quarantine", release);
+      const runEnded = createDeferredCore();
+      const failure = new Error("Synthetic coordination operation failure");
+      const completed = vi.fn();
+      const serviceReleased = vi.fn();
+      const retainService = sqliteTransactions.retainSqliteWriteAdmissionService;
+      using registration = vi
+        .spyOn(sqliteTransactions, "retainSqliteWriteAdmissionService")
+        .mockImplementation((locations, service) => {
+          const releaseService = retainService(locations, service);
+          return () => {
+            releaseService();
+            serviceReleased();
+          };
+        });
+      const operation = coordinateLifecycle(
+        context,
+        "accepted-companion-creation",
+        async (coordination) => {
+          const exited = once(worker, "exit");
+          worker.postMessage(
+            coordination,
+            coordination.databaseAdmission ? [coordination.databaseAdmission] : [],
+          );
+          await awaitGateBeforeSettlement(
+            creation.entered,
+            exited,
+            "Worker exited before requesting actual companion creation",
+          );
+          await worker.terminate();
+          await exited;
+          runEnded.resolve();
+          if (failRun) {
+            throw failure;
+          }
+          return "completed run";
+        },
+        async () => {
+          await worker.terminate();
+        },
+        "retained",
+        () => context.admission.assertCurrent(),
+      );
+      const outcome = Promise.allSettled([operation]).then((result) => {
+        completed();
+        return result;
+      });
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            creation.entered,
+            operation,
+            "Coordination bypassed actual companion creation",
+          ),
+          signal,
+        );
+        assert(creation.descriptor !== undefined, "Expected the actual successful wx descriptor");
+        expect(fs.fstatSync(creation.descriptor).size).toBe(0);
+        expect(fs.statSync(quarantinePath).size).toBe(0);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            runEnded.promise,
+            operation,
+            "Coordination settled before its worker exited",
+          ),
+          signal,
+        );
+        await nextEventLoopTurn();
+        expect(worker.threadId).toBe(-1);
+        expect(construction).toHaveBeenCalledOnce();
+        expect(registration).toHaveBeenCalledOnce();
+        expect(completed).not.toHaveBeenCalled();
+        expect(serviceReleased).not.toHaveBeenCalled();
+        creation.release();
+        if (failRun) {
+          await expect(withinTest(operation, signal)).rejects.toBe(failure);
+        } else {
+          await expect(withinTest(operation, signal)).resolves.toBe("completed run");
+        }
+        await outcome;
+        expect(serviceReleased).toHaveBeenCalledOnce();
+        expect(fs.existsSync(quarantinePath)).toBe(true);
+        expect(fs.statSync(quarantinePath).size).toBe(0);
+      } finally {
+        creation.release();
+        await worker.terminate();
+        try {
+          await outcome;
+        } finally {
+          // The old coordinator drops this join; the negative control must not leak its CREATE.
+          await admission?.finish();
+        }
+      }
+    });
+  },
+);

@@ -817,6 +817,10 @@ connection SecretRef before restoring; point that secret at the recovery server
 when recovering to another server. The live installation's selections do not
 override the archive. Restore publishes the recovered configuration last, after
 all stores and their matching anchors pass verification.
+`openclaw backup restore <archive> --target <dir> --postgres-connection-env <name>`
+imports into the server named by the DSN in that environment variable instead,
+for restore drills against a staging database; the restored configuration keeps
+the archived connection.
 `openclaw backup sqlite restore` remains SQLite-only.
 
 Git restore supports `--global`, `--agent <id>`, and `--store <id>` for recorded
@@ -997,6 +1001,11 @@ preserves current update-run history. Independent writes, changed recovery
 generations, or uncertain custody/commit outcomes prevent automatic restore and
 retain captures for recovery. This is not an unconditional rollback guarantee.
 See [update compatibility and recovery](/reference/database-engines#updates-and-target-compatibility).
+These captures are portable SQLite images by default. To keep their rows on the
+server and skip the local export, set `database.postgres.recoveryCaptures: "server"`;
+see [server recovery captures](/reference/database-engines#server-recovery-captures)
+for the durability and cleanup trade. [Original state captures](/cli/update/repair-and-recovery#original-state-captures)
+stay portable either way.
 
 Store owners run consecutive forward schema migrations under a writer transaction.
 Admission verifies the generated destination schema before publication. Missing

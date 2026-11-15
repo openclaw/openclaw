@@ -287,51 +287,63 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
 });
 
 describe("subagent-progress", () => {
-  it("projects native subagent activity into tool progress", async () => {
-    const update = vi.fn((_text: string) => true);
-    const progress = createChannelProgressDraftCompositor({
-      active: true,
-      mode: "progress",
-      entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
-      seed: "subagent-progress",
-      update,
-    });
-    const itemEvents: Array<Record<string, unknown>> = [];
-    const { events } = await createConfiguredProjection({
-      onAgentEvent: async (event) => {
-        if (event.stream === "item") {
-          itemEvents.push(event.data);
-          await progress.pushItemEvent(event.data);
+  it.each([
+    ["00000000-0000-4000-8000-000000002633", "…2633"],
+    ["00000000-0000-4000-8000-00000000a4f0", "…a4f0"],
+  ])(
+    "projects native subagent %s activity into tool progress",
+    async (agentThreadId, reference) => {
+      const update = vi.fn((_text: string) => true);
+      const progress = createChannelProgressDraftCompositor({
+        active: true,
+        mode: "progress",
+        entry: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+        seed: "subagent-progress",
+        update,
+      });
+      const itemEvents: Array<Record<string, unknown>> = [];
+      const { events } = await createConfiguredProjection({
+        onAgentEvent: async (event) => {
+          if (event.stream === "item") {
+            itemEvents.push(event.data);
+            await progress.pushItemEvent(event.data);
+          }
+        },
+      });
+      try {
+        for (const kind of ["started", "interrupted", "completed", "interacted"]) {
+          const item = {
+            id: `activity-${kind}`,
+            type: "subAgentActivity",
+            kind,
+            agentThreadId,
+            agentPath: "/root/research",
+          };
+          await events.started(item);
+          await events.completed(item);
+          await progress.start();
+          const latest = itemEvents.at(-1);
+          expect(latest).toMatchObject({
+            title: "Subagent",
+            meta: expect.stringContaining(reference),
+            status:
+              kind === "interrupted" ? "failed" : kind === "started" ? "running" : "completed",
+          });
+          expect(progress.getSnapshot().lines).toHaveLength(kind === "interacted" ? 2 : 1);
+          expect(update.mock.lastCall?.[0]).toContain("Working");
+          expect(update.mock.lastCall?.[0]).toContain("research");
+          expect(update.mock.lastCall?.[0]).toContain(
+            kind === "interacted" ? "message sent" : kind,
+          );
         }
-      },
-    });
-    try {
-      for (const kind of ["started", "interrupted", "completed", "interacted"]) {
-        const item = {
-          id: `activity-${kind}`,
-          type: "subAgentActivity",
-          kind,
-          agentThreadId: "child-thread",
-          agentPath: "/root/research",
-        };
-        await events.started(item);
-        await events.completed(item);
-        await progress.start();
-        const latest = itemEvents.at(-1);
-        expect(latest).toMatchObject({
-          status: kind === "interrupted" ? "failed" : kind === "started" ? "running" : "completed",
-        });
-        expect(progress.getSnapshot().lines).toHaveLength(kind === "interacted" ? 2 : 1);
-        expect(update.mock.lastCall?.[0]).toContain("Working");
-        expect(update.mock.lastCall?.[0]).toContain("research");
-        expect(update.mock.lastCall?.[0]).toContain(kind === "interacted" ? "message sent" : kind);
+        expect(itemEvents[0]?.itemId).toBe(`subagent:${agentThreadId}`);
+        expect(new Set(itemEvents.slice(0, -1).map((event) => event.itemId)).size).toBe(1);
+        expect(itemEvents.at(-1)?.itemId).not.toBe(itemEvents[0]?.itemId);
+      } finally {
+        progress.cancel();
       }
-      expect(new Set(itemEvents.slice(0, -1).map((event) => event.itemId)).size).toBe(1);
-      expect(itemEvents.at(-1)?.itemId).not.toBe(itemEvents[0]?.itemId);
-    } finally {
-      progress.cancel();
-    }
-  });
+    },
+  );
 
   it("projects native collaboration calls without exposing their prompts", async () => {
     const onAgentEvent = vi.fn();
@@ -342,12 +354,16 @@ describe("subagent-progress", () => {
       tool: "spawnAgent",
       status: "inProgress",
       senderThreadId: "thread-1",
-      receiverThreadIds: ["child-thread"],
+      receiverThreadIds: ["00000000-0000-4000-8000-000000002633"],
       prompt: "Private delegation instructions",
       agentsStates: {},
     };
     await events.started(item);
     expectSubagentStatus(onAgentEvent, "running");
+    expect(streamData(onAgentEvent, "item")[0]).toMatchObject({
+      meta: expect.stringContaining("…2633"),
+    });
+    expect(item.receiverThreadIds).toEqual(["00000000-0000-4000-8000-000000002633"]);
     await events.completed({ ...item, status: "failed" });
     expectSubagentStatus(onAgentEvent, "failed");
     expect(JSON.stringify(onAgentEvent.mock.calls)).not.toContain(item.prompt);

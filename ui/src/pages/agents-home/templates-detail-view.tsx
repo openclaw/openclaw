@@ -12,7 +12,7 @@ import { PluginInstallAction } from "../plugins/install-action.tsx";
 import { renderPluginCapabilitySection, renderPublisherIdentity } from "../plugins/overview.tsx";
 import { TemplateArtwork } from "./template-artwork.tsx";
 import type { TemplateAddReviewPlan } from "./templates-catalog-client.ts";
-import "../../styles/templates-trust-warning.css";
+import "../../styles/templates-catalog.css";
 import type { TemplatesCatalogViewProps } from "./templates-catalog-view-props.ts";
 import { TemplateWorkspaceFiles } from "./templates-workspace-files.tsx";
 
@@ -197,7 +197,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
         t("templatesCatalog.automations"),
         contents().automations.map((item) => ({
           name: item.name,
-          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationPaused")}`,
+          description: `${item.schedule} · ${item.timezone} · ${t(item.enabled ? "templatesCatalog.automationEnabled" : "templatesCatalog.automationDisabled")}`,
           details: (
             <p>
               {item.schedule} · {item.timezone}
@@ -205,7 +205,7 @@ function TemplateContents(props: { view: TemplatesCatalogViewProps }) {
               {t(
                 item.enabled
                   ? "templatesCatalog.automationEnabled"
-                  : "templatesCatalog.automationPaused",
+                  : "templatesCatalog.automationDisabled",
               )}
             </p>
           ),

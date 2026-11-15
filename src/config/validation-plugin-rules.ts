@@ -451,7 +451,8 @@ export function validatePreparedConfigWithPlugins(
     const suppressedModels = new Map<string, (typeof suppressions)[number]>();
     for (const suppression of suppressions) {
       const key = `${suppression.provider}/${suppression.model}`;
-      if (!suppression.when && !suppressedModels.has(key)) {
+      // Retired refs stay valid config: runtime refuses them and Doctor repairs them.
+      if (!suppression.when && !suppression.retirement && !suppressedModels.has(key)) {
         suppressedModels.set(key, suppression);
       }
     }

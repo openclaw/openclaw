@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -36,10 +36,10 @@ export async function runUpdateLeaseChild(): Promise<void> {
     import.meta.url,
   ).href;
   // These short-lived Doctor fixtures never replace directories externally.
-  // Keep real discovery and repair, without unrelated native watcher setup.
+  // Hooks only omit unrelated watcher setup; real observation preserves the lease proof.
   const observationHook =
     process.argv[2] === "doctor"
-      ? registerHooks({
+      ? nodeModule.registerHooks?.({
           load(url, context, nextLoad) {
             return url === observationUrl || url.startsWith(`${observationUrl}?`)
               ? {

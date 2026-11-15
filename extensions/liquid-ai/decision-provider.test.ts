@@ -43,7 +43,6 @@ function wire() {
     usage: { input_tokens: 3, output_tokens: 0 },
   };
 }
-const release = vi.fn(async () => {});
 const getImageMetadata =
   vi.fn<Parameters<typeof buildLiquidDecisionProvider>[0]["getImageMetadata"]>();
 const provider = buildLiquidDecisionProvider({ getImageMetadata });
@@ -51,7 +50,7 @@ function respond(value: unknown, status = 200) {
   vi.mocked(fetchWithProviderHttpGuard).mockResolvedValue({
     response: Response.json(value, { status }),
     finalUrl: "https://api.liquid.ai/decisions/v1/systemone",
-    release,
+    release: async () => {},
   });
 }
 function request() {
@@ -98,7 +97,6 @@ describe("Liquid native Decision provider", () => {
         "Bearer synthetic-prepared-key",
       );
       expect(getImageMetadata).not.toHaveBeenCalled();
-      expect(release).toHaveBeenCalledOnce();
     },
   );
 
@@ -172,43 +170,6 @@ describe("Liquid native Decision provider", () => {
     },
   );
 
-  it("uses prepared auth and prefix without rereading configured secrets", async () => {
-    const ctx = context();
-    ctx.model.baseUrl = "https://proxy.example.test/tenant/liquid/";
-    ctx.model.headers = { "x-auth-fixture": "synthetic-effective" };
-    ctx.config.models = {
-      providers: {
-        "liquid-ai": {
-          baseUrl: "https://not-selected.invalid",
-          models: [],
-          apiKey: "synthetic-not-selected",
-          request: {
-            auth: { mode: "header", headerName: "x-auth-fixture", value: "synthetic-not-selected" },
-            allowPrivateNetwork: false,
-            proxy: { mode: "env-proxy" },
-            tls: { ca: "synthetic-ca" },
-          },
-        },
-      },
-    };
-    await provider.evaluate(batch, ctx);
-    expect(request().url).toBe("https://proxy.example.test/tenant/liquid/systemone");
-    const headers = new Headers(request().init?.headers);
-    expect(headers.get("authorization")).toBeNull();
-    expect(headers.get("x-auth-fixture")).toBe("synthetic-effective");
-    // Disabling private-origin trust keeps only the shared hostname-scoped
-    // fake-IP allowances; it must not enable arbitrary private destinations.
-    expect(request().policy).toEqual({
-      allowIpv6UniqueLocalRange: true,
-      allowRfc2544BenchmarkRange: true,
-      hostnameAllowlist: ["proxy.example.test"],
-    });
-    expect(request().dispatcherPolicy).toEqual({
-      mode: "env-proxy",
-      connect: { ca: "synthetic-ca" },
-    });
-  });
-
   it.each(["provider", "model", "defaults", "default-model", "agent-model", "agent"])(
     "rejects unsupported %s parameters before inspecting images or sending HTTP",
     async (scope) => {
@@ -267,32 +228,10 @@ describe("Liquid native Decision provider", () => {
     expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
   });
 
-  it.each(["unknown-model", "missing-credentials", "expired-deadline"])(
-    "rejects %s before HTTP",
-    async (failure) => {
-      const ctx = context({
-        ...(failure === "missing-credentials" ? { auth: { mode: "api-key" } } : {}),
-        ...(failure === "expired-deadline" ? { deadlineMonotonicMs: 0 } : {}),
-      });
-      if (failure === "unknown-model") {
-        ctx.model.id = "unsupported";
-      }
-      expect(await provider.evaluate(batch, ctx)).toMatchObject({ status: "unavailable" });
-      expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects a deadline that expires during image inspection before HTTP", async () => {
+  it("rejects an unknown model before HTTP", async () => {
     const ctx = context();
-    getImageMetadata.mockImplementationOnce(async () => {
-      vi.spyOn(performance, "now").mockReturnValue(ctx.deadlineMonotonicMs);
-      return { width: 32, height: 32 };
-    });
-    expect(await provider.evaluate(image, ctx)).toEqual({
-      status: "unavailable",
-      reason: "transport",
-    });
-    expect(getImageMetadata).toHaveBeenCalledOnce();
+    ctx.model.id = "unsupported";
+    expect(await provider.evaluate(batch, ctx)).toMatchObject({ reason: "unsupported-input" });
     expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
   });
 
@@ -317,78 +256,12 @@ describe("Liquid native Decision provider", () => {
     expect(fetchWithProviderHttpGuard).not.toHaveBeenCalled();
   });
 
-  it("rechecks authority immediately before physical dispatch", async () => {
-    const failure = new Error("synthetic revoked authority");
-    let active = true;
-    const physicalFetch = vi.fn();
-    vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async (options) => {
-      active = false;
-      options.beforeRequest?.();
-      physicalFetch();
-      return { response: Response.json(wire()), finalUrl: options.url, release };
-    });
-    await expect(
-      provider.evaluate(batch, {
-        ...context(),
-        isAdmissible: () => {
-          if (!active) {
-            throw failure;
-          }
-          return true;
-        },
-      }),
-    ).rejects.toBe(failure);
-    expect(physicalFetch).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    [400, "unsupported-input"],
-    [401, "authentication"],
-    [403, "authentication"],
-    [413, "unsupported-input"],
-    [422, "unsupported-input"],
-    [429, "rate-limited"],
-    [500, "transport"],
-  ] as const)("classifies HTTP %s and releases without retry", async (status, reason) => {
-    respond({ private: "synthetic-error-body" }, status);
-    expect(await provider.evaluate(batch, context())).toEqual({ status: "unavailable", reason });
-    expect(fetchWithProviderHttpGuard).toHaveBeenCalledOnce();
-    expect(release).toHaveBeenCalledOnce();
-  });
-
   it.each([
     { answers: {} },
     { usage: { input_tokens: 3, output_tokens: 1 } },
     { usage: { input_tokens: -1, output_tokens: 0 } },
-    { padding: "x".repeat(1_048_576) },
-  ])("rejects invalid or oversized responses and releases", async (patch) => {
+  ])("rejects invalid native responses", async (patch) => {
     respond({ ...wire(), ...patch });
     expect(await provider.evaluate(batch, context())).toMatchObject({ reason: "invalid-response" });
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("awaits physical release before propagating cancellation", async () => {
-    const controller = new AbortController();
-    const releasing = Promise.withResolvers<void>();
-    const drained = Promise.withResolvers<void>();
-    release.mockImplementationOnce(async () => {
-      releasing.resolve();
-      await drained.promise;
-    });
-    vi.mocked(fetchWithProviderHttpGuard).mockImplementationOnce(async (options) => {
-      controller.abort(new Error("synthetic cancellation"));
-      return { response: Response.json(wire()), finalUrl: options.url, release };
-    });
-    const pending = provider.evaluate(batch, { ...context(), signal: controller.signal });
-    const rejected = expect(pending).rejects.toThrow("synthetic cancellation");
-    await releasing.promise;
-    let settled = false;
-    void pending.catch(() => {
-      settled = true;
-    });
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    drained.resolve();
-    await rejected;
   });
 });

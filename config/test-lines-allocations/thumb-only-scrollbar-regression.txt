@@ -1,2 +1,0 @@
-# Real palette overflow/drag, explicit inset overrides, and shadow-root scrollbar geometry.
-80

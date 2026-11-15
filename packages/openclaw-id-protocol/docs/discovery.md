@@ -180,7 +180,16 @@ device in the latest snapshot), or one device fingerprint (`fp:<hex>`). Payload 
 Notice events are `MAILBOX_NOTICE_EVENTS`. `seq_conflict` goes only to the one device fingerprint
 whose `root_statement` the Gateway refused for a stale seq (`noticeRecipientAllowed`); its `ref` is
 the Gateway's current seq in decimal (`parseSeqConflictRef`). Discovery delivers it only to a
-device of the claw's owner account, in the control lane. Every other event goes to `owners`.
+device of the claw's owner account, in the control lane. The Gateway sends every other event
+through its owner-notification path.
+
+There is no per-redemption success/refusal response to the redeeming browser. A mailbox ACK
+only settles delivery; `redemption_resolved` carries an invite reference, not an outcome.
+Although the generic notice recipient validator permits a device fingerprint for that hint,
+it does not define a redeeming-browser outcome contract. An approved same-account/key replay
+is therefore accepted silently; a refused reused invite is diagnosed in Gateway logs. Clients
+must confirm admission from the current membership snapshot rather than treat mailbox
+submission as a fresh pending request.
 
 The Gateway accepts only `GATEWAY_MAILBOX_KINDS` (`invite_redemption`, `root_statement`,
 `node_redemption`, `revocation`) from the mailbox. **A device-signed MembershipChange that arrives through the
@@ -288,3 +297,18 @@ the Gateway's live authority always decides tunnel admission and node principal 
 `POST /iroh/admit` also admits `node_peer_keys` from verified current-binding snapshots.
 Pending requests/invites alone never authorize relay admission. This remains an abuse filter,
 not a membership authority; a removed node cannot keep a tunnel alive using a stale snapshot.
+
+## Member device self-mail
+
+`MailboxRecipient` includes `"self"`: the sender's own account's devices at this claw.
+A user sender must have a bound device and be the owner or a listed member; unrelated
+accounts receive the same uniform 404 as other hidden claws. Discovery stores this mail for
+the sender's account. A device reader receives it only while still bound to that same
+account, never for another account. Existing mailbox rate limits apply. The Gateway cannot
+send to `"self"`, including notices.
+
+Member SAS sends `start` to `"self"`, with the existing accept/key/sealed/abort messages
+replied to the same-account device fingerprint. Payloads, commitments and codes are unchanged.
+The approving member submits its signed `add_member_device` directly over the tunnel before
+sending `sealed`; the mailbox never accepts member-signed authority changes.
+`member_device_added` is an owner notice with the added peer key's fingerprint as `ref`.

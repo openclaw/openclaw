@@ -242,7 +242,9 @@ export function createFetchServiceWorker(
             `${scope}__openclaw__/assistant-media?source=media://inbound/image`,
           method: requestOptions.method ?? "GET",
           mode: requestOptions.mode ?? "cors",
-          cache: requestOptions.cache ?? "default",
+          get cache() {
+            return requestOptions.cache ?? "default";
+          },
           headers: requestOptions.headers ?? new Headers(),
         },
         clientId: requestOptions.clientId ?? "requesting-window",

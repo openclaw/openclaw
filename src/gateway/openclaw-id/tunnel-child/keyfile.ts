@@ -43,7 +43,7 @@ export function loadKeyFile(file: string): Buffer | undefined {
 }
 
 /** Creates a new key at `file` (directory 0700, file 0600). */
-export function createKeyFile(file: string): Buffer {
+function createKeyFile(file: string): Buffer {
   const key = randomBytes(KEY_BYTES);
   fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
   const tmp = `${file}.${randomBytes(4).toString("hex")}.tmp`;

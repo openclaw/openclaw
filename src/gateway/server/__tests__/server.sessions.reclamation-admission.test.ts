@@ -31,7 +31,11 @@ vi.mock("node:worker_threads", async (importOriginal) => {
           options.workerData?.operation === "reclaim" &&
           options.workerData.databaseOptions.path === reclamation.invalidateAtStart
         ) {
-          // Expire executor preparation before the reclaimer opens its native handle.
+          // Require unique-index repair after preparation, before the reclaimer opens.
+          db.openOpenClawAgentDatabase({
+            agentId: "main",
+            path: reclamation.invalidateAtStart,
+          }).db.exec("DROP INDEX idx_agent_transcript_message_idempotency");
           invalidateOpenClawAgentDatabaseValidation(reclamation.invalidateAtStart);
           reclamation.invalidateAtStart = undefined;
         }
@@ -245,12 +249,12 @@ test("sessions.delete rejects revoked authority before repair", async ({ signal 
   const readLeases = () => leases.all(database.path);
   const originalLeases = readLeases();
   expect(originalLeases).toHaveLength(1);
-  database.db.exec("DROP INDEX idx_agent_cache_expiry");
+  database.db.exec("DROP INDEX idx_agent_transcript_message_idempotency");
   invalidateOpenClawAgentDatabaseValidation(database.path);
   const readRepairIndex = () =>
     database.db
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'index' AND name = ?")
-      .get("idx_agent_cache_expiry");
+      .get("idx_agent_transcript_message_idempotency");
   expect(readRepairIndex()).toBeUndefined();
   await using validation = holdReclamationValidation(database.path);
   const revoked = "caller authority revoked during Worker validation";

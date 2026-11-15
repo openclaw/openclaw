@@ -1,4 +1,0 @@
-# PR #193795: preserve qualified Q npm artifacts under distinct P tooling.
-# Exact net regression growth: real CLI adoption/revocation, original-byte
-# authentication/consumption, and affected workflow fixture coverage.
-505

@@ -164,7 +164,7 @@ it("publishes a login whose check outlives the triggering read's plugin scope", 
   const readScope = {
     lookup: () => {
       if (!readOpen) {
-        throw new Error("Plugin invocation scope is closed");
+        throw new Error("Plugin fixture was reloaded or disabled");
       }
       return undefined;
     },

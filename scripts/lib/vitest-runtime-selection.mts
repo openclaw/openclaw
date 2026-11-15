@@ -16,10 +16,10 @@ import type { VitestWorkerPreset } from "./vitest-worker-descriptor.mts";
 export const TUI_PTY_BUILT_CLI_CANARY_PATTERN =
   "launches openclaw chat as local mode through a real PTY";
 
-// These built-CLI proofs still read source owners, but their only compiled
-// declarations belong to the production runtime registry.
-const runtimeOnlyBuiltCliFiles = new Set([
+// These E2E proofs need only production declarations in compiled workers.
+const runtimeOnlyE2eFiles = new Set([
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
+  "src/agents/bash-tools.exec-gateway-approval.e2e.test.ts",
   "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
   "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
   "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
@@ -49,16 +49,29 @@ const runtimeOnlyUnitFiles = new Set([
   "src/commands/doctor-plugin-package-consent.test.ts",
   "src/config/io.load-async.test.ts",
   "src/cron/session-run.session-model-strictness.integration.test.ts",
+  "src/flows/doctor-health.managed-admission.test.ts",
+  "src/flows/doctor-health.managed-approvals.test.ts",
+  "src/flows/doctor-health.managed-settlement.test.ts",
+  "src/flows/doctor-health.migration-refusal.test.ts",
+  "src/flows/doctor-health.nocow.test.ts",
+  "src/flows/doctor-health.plugin-load.test.ts",
+  "src/flows/doctor-health.readonly-config.test.ts",
+  "src/flows/doctor-health.readonly-filesystem.test.ts",
   "src/flows/doctor-health.update-schema.test.ts",
   "src/gateway/client-callsites.guard.test.ts",
   "src/gateway/server-methods/session-catalog-privacy.test.ts",
   "src/gateway/server-methods/sessions-lifecycle-dormant.test.ts",
   "src/gateway/server.beam-owned-view.test.ts",
+  "src/gateway/server.plugin-reload-send-continuation.product.test.ts",
+  "src/gateway/server.plugin-reload-send-revocation.product.test.ts",
+  "src/gateway/server.sessions.fixture-lifecycle.test.ts",
+  "src/gateway/server.startup-fixture-lifetime.test.ts",
   "src/gateway/server.subagent-transcript-conflict.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",
   "src/gateway/session-subagent-resume.test.ts",
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/talk/client-permission-parity.test.ts",
+  "src/gateway/test-helpers.acquisition.test.ts",
   "src/gateway/tool-resolution.swarm-collector.test.ts",
   "src/plugins/doctor-repair-setup.test.ts",
   "src/plugins/loader.runtime-registry.test.ts",
@@ -101,6 +114,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/control-ui-import-boundary.test.ts",
   "test/extension-test-boundary.test.ts",
   "test/plugin-extension-import-boundary.test.ts",
+  "test/vitest-pr-exempt-retention.test.ts",
   "test/scripts/vitest-prebuilt-ai.test.ts",
   "test/scripts/check-database-worker-ratchet.test.ts",
   "test/scripts/ci-changed-build-selection.test.ts",
@@ -108,6 +122,7 @@ const toolingOnlyUnitFiles = new Set([
   "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
   "test/scripts/ci-changed-node-test-plan.integration.test.ts",
   "test/scripts/ci-workflow-cost.test.ts",
+  "test/scripts/ci-test-timings.test.ts",
   "test/scripts/ci-ui-e2e-selection.test.ts",
   "test/scripts/database-worker-compat.test.ts",
   "test/scripts/eager-import-closure.test.ts",
@@ -174,7 +189,12 @@ export function resolveCiVitestWorkerPreset(
           ),
     );
   return selectVitestWorkerPreset(
-    supports(areRuntimeOnlyVitestUnitFiles, shouldUseRuntimeOnlyVitestWorkers),
+    supports(
+      (files) =>
+        files.length > 0 &&
+        files.every((file) => runtimeOnlyUnitFiles.has(file) || runtimeOnlyE2eFiles.has(file)),
+      shouldUseRuntimeOnlyVitestWorkers,
+    ),
     supports(areToolingOnlyVitestUnitFiles, shouldUseToolingOnlyVitestWorkers),
   );
 }
@@ -230,7 +250,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
     return false;
   }
   if (config === "test/vitest/vitest.e2e.config.ts") {
-    return files.every((file) => runtimeOnlyBuiltCliFiles.has(file));
+    return files.every((file) => runtimeOnlyE2eFiles.has(file));
   }
   if (
     (config === "test/vitest/vitest.agents-core.config.ts" ||
@@ -245,6 +265,7 @@ export function shouldUseRuntimeOnlyVitestWorkers(
       config === "test/vitest/vitest.plugins.config.ts" ||
       config === "test/vitest/vitest.tooling.config.ts" ||
       config === "test/vitest/vitest.tooling-isolated.config.ts" ||
+      config === "test/vitest/vitest.unit.config.ts" ||
       config === "test/vitest/vitest.unit-fast.config.ts" ||
       config === "test/vitest/vitest.unit-fast-isolated.config.ts" ||
       config === "test/vitest/vitest.gateway-client.config.ts" ||
@@ -300,6 +321,9 @@ export function shouldPrepareVitestCoreWorkers(
   }
   const configs = [config];
   const workers = [
+    ...(includesRuntimeConfig(configs, "test/vitest/vitest.unit-fast.config.ts")
+      ? ["src/agents/sessions/windows-git-bash-path.test.ts"]
+      : []),
     ...(includesRuntimeConfig(configs, "test/vitest/vitest.infra.config.ts")
       ? databaseWorkerCoreTestFiles
       : []),

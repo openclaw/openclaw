@@ -174,6 +174,7 @@ export async function prepareSubagentKillSession(
           agentId,
           sessionId: entry?.sessionId ?? null,
           lifecycleRevision: entry?.lifecycleRevision ?? null,
+          exactTranscript: true,
         });
         // The reader can reject after consumption; custody transfers only when it returns.
         releaseLifetime = lifetime.release;

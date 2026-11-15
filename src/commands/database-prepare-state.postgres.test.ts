@@ -101,7 +101,7 @@ describe.skipIf(!connection)("database prepare-state against PostgreSQL", () => 
     expect(await run(storeId, namespace)).toMatchObject({
       ok: true,
       status: "prepared",
-      schemaVersion: 39,
+      schemaVersion: 40,
       storeId,
       namespace,
     });
@@ -112,7 +112,7 @@ describe.skipIf(!connection)("database prepare-state against PostgreSQL", () => 
     expect(await run(storeId, namespace)).toMatchObject({
       ok: true,
       status: "ready",
-      schemaVersion: 39,
+      schemaVersion: 40,
     });
     expect(
       (
