@@ -11,7 +11,7 @@ const NPM_CHECK = resolve("scripts/plugin-npm-release-check.ts");
 const REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 const PACKAGE_NAME = "@openclaw/demo-plugin";
 const INITIAL_VERSION = "2026.8.3";
-const tsxImport = import.meta.resolve("tsx");
+const tsxImport = import.meta.resolve("../../../../scripts/tsx.mjs");
 const tempDirs: string[] = [];
 
 type FixtureOptions = {
@@ -85,7 +85,7 @@ function runCheck(scriptPath: string, cwd: string, args: string[] = []) {
   return spawnSync(process.execPath, ["--import", tsxImport, scriptPath, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1" },
+    env: { ...process.env, FORCE_COLOR: undefined, NO_COLOR: "1" },
   });
 }
 

@@ -1,5 +1,7 @@
 /**
- * Synthetic trajectory-owner proof; no Gateway, model calls, or persisted state.
+ * Synthetic trajectory-owner proof; no Gateway, model calls, or database writes.
+ * Includes metadata building plus recorder capture with 40 plugins and 10 skills.
+ * persistedHash covers exact sink bytes with only clocks and event sequences normalized.
  * node --expose-gc --import ./scripts/tsx.mjs \
  *   scripts/perf/trajectory-attempt-metadata-measure.ts --mode timing --iterations 2000
  * Repeat with --mode allocation; alternate five base/candidate passes per mode.
@@ -15,6 +17,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { registerHooks } from "node:module";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { PerformanceObserver } from "node:perf_hooks";
@@ -28,7 +31,6 @@ import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../src/plugins/runtime.js";
 import { createPluginRecord } from "../../src/plugins/status.test-helpers.js";
 import { buildTrajectoryRunMetadata } from "../../src/trajectory/metadata.js";
-import { toTrajectoryToolDefinitions } from "../../src/trajectory/runtime.js";
 import { startCollectedHeapSampling } from "../lib/heap-sampling.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
@@ -47,6 +49,30 @@ const iterations = parseStrictIntegerOption({
   label: "--iterations",
 });
 assert(iterations <= 100_000, "Use at most 100000 iterations");
+// Capture the exact serialized persistence handoff; only SQLite is excluded.
+const sinkUrl = `data:text/javascript,${encodeURIComponent(`
+let line;
+export const readLine = () => line;
+export const createSqliteTrajectoryRuntimeSink = async () => ({
+  write: (_event, next) => { line = next; }, flush: async () => {},
+  describeFlushState: () => undefined,
+});`)}`;
+const hook = registerHooks({
+  resolve(specifier, context, nextResolve) {
+    return specifier.endsWith("/runtime-store-writer.js")
+      ? { url: sinkUrl, shortCircuit: true }
+      : nextResolve(specifier, context);
+  },
+});
+const sink: { readLine(): string } = await import(sinkUrl);
+const { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } =
+  await import("../../src/trajectory/runtime.js");
+hook.deregister();
+const recorder = await createTrajectoryRuntimeRecorder({
+  sessionId: "synthetic",
+  env: { OPENCLAW_TRAJECTORY: "1" },
+});
+assert(recorder);
 const pluginCount = 40;
 const toolCount = 60;
 const registry = createEmptyPluginRegistry();
@@ -129,10 +155,16 @@ function tools(revision: number) {
 
 const configs = [config(1), config(2)];
 const catalogs = [tools(1), tools(2)] as const;
+const skillsSnapshot = {
+  prompt: "Synthetic skill catalog. ".repeat(100),
+  version: 1,
+  skills: Array.from({ length: 10 }, (_, index) => ({ name: `skill-${index}` })),
+};
 const metadata = (index: number) =>
   buildTrajectoryRunMetadata({
     env,
     config: configs[index % configs.length],
+    skillsSnapshot,
     workspaceDir: "/synthetic/workspace",
     sessionKey: "agent:synthetic:benchmark",
     provider: "synthetic",
@@ -145,6 +177,19 @@ const golden = [0, 1, 0].map((index) => ({
   metadata: { ...metadata(index), capturedAt: "<timestamp>" },
   tools: toolDefinitions(index),
 }));
+const captureMetadata = (index: number) => {
+  recorder.recordEvent("trace.metadata", metadata(index));
+  return sink.readLine();
+};
+const persisted = [0, 1, 0].map((index) => {
+  const event = JSON.parse(captureMetadata(index));
+  event.ts = "<timestamp>";
+  event.seq = event.sourceSeq = 1;
+  event.data.capturedAt = "<timestamp>";
+  return JSON.stringify(event);
+});
+assert.equal(persisted[0], persisted[2]);
+assert.notEqual(persisted[0], persisted[1]);
 const goldenJson = JSON.stringify(golden);
 assert(!goldenJson.includes("synthetic-secret-"), "Config credential redaction failed");
 assert(!goldenJson.includes("synthetic-token-"), "Nested credential redaction failed");
@@ -154,6 +199,7 @@ assert.deepEqual(golden[0], golden[2], "Interleaved identities must retain their
 const scenarios = [];
 for (const [name, capture] of [
   ["metadata-40-plugins", metadata],
+  ["session-start-metadata-capture", captureMetadata],
   ["tool-definitions-60-tools", toolDefinitions],
 ] as const) {
   for (let warmup = 0; warmup < 100; warmup++) {
@@ -249,6 +295,8 @@ console.log(
       ]),
     ),
     outputHash: createHash("sha256").update(goldenJson).digest("hex"),
+    persistedHash: createHash("sha256").update(JSON.stringify(persisted)).digest("hex"),
+    persistedBytes: persisted.map((line) => Buffer.byteLength(line)),
     scenarios,
   }),
 );

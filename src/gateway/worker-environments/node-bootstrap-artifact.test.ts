@@ -433,6 +433,11 @@ describe("node bootstrap distribution", () => {
     { name: "public plugin ownership", extensions: ["remote-runtime"], entry: "ownership" },
     { name: "a current root import", extensions: ["qa-lab"], entry: "root" },
     { name: "a current root createRequire", extensions: ["qa-lab"], entry: "require" },
+    {
+      name: "an optional literal-template loader",
+      extensions: ["qa-lab"],
+      entry: "optional-require",
+    },
     { name: "a transitive current root import", extensions: ["qa-lab"], entry: "transitive" },
     { name: "the CLI launcher", extensions: ["qa-lab"], entry: "launcher" },
     { name: "a declared install script", extensions: ["qa-lab"], entry: "install" },
@@ -458,13 +463,15 @@ describe("node bootstrap distribution", () => {
         ? ""
         : entry === "require"
           ? 'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load("./opaque-A1b2C3.mjs");\n'
-          : entry === "transitive"
-            ? 'import "./bridge.js";\n'
-            : entry === "launcher"
-              ? 'await import(new URL("./dist/opaque-A1b2C3.mjs", import.meta.url));\n'
-              : entry === "install"
-                ? 'await import(new URL("../dist/opaque-A1b2C3.mjs", import.meta.url));\n'
-                : 'import "./opaque-A1b2C3.mjs";\n';
+          : entry === "optional-require"
+            ? 'import { createRequire } from "node:module"; const load = createRequire(import.meta.url); load?.(`./opaque-A1b2C3.mjs`);\n'
+            : entry === "transitive"
+              ? 'import "./bridge.js";\n'
+              : entry === "launcher"
+                ? 'await import(new URL("./dist/opaque-A1b2C3.mjs", import.meta.url));\n'
+                : entry === "install"
+                  ? 'await import(new URL("../dist/opaque-A1b2C3.mjs", import.meta.url));\n'
+                  : 'import "./opaque-A1b2C3.mjs";\n';
     await write(packageRoot, importer, importSource + original);
     if (entry === "transitive") {
       await write(packageRoot, "dist/bridge.js", 'import "./opaque-A1b2C3.mjs";\n');
@@ -478,6 +485,16 @@ describe("node bootstrap distribution", () => {
     for (const [file, chunk] of Object.entries(chunks)) {
       await expectFiles(target, { [`dist/${file}`]: chunk.source });
     }
+  });
+
+  it("does not treat ordinary literal path arguments as required imports", async () => {
+    const { packageRoot, provider } = await fixture();
+    await writeOwnedChunks(packageRoot, {
+      "opaque-A1b2C3.mjs": { source: "export {};\n", extensions: ["qa-lab"] },
+    });
+    const entry = await readText(packageRoot, "dist/entry.js");
+    await write(packageRoot, "dist/entry.js", `String("./absent-user-directory");\n${entry}`);
+    await expect(provider.prepare()).resolves.toMatchObject({ buildId });
   });
 
   it.each([
@@ -626,7 +643,7 @@ describe("node bootstrap distribution", () => {
   );
 
   it("rejects source/built plugin dependency drift and nonexact native pins", async () => {
-    const { packageRoot, provider, pluginPackage } = await fixture();
+    const { packageRoot, provider, pluginPackage } = await fixture("package");
     const changed = { ...pluginPackage, dependencies: { "native-runtime": "^1.3.0" } };
     await write(packageRoot, "extensions/remote-runtime/package.json", changed);
     await expect(provider.prepare()).rejects.toThrow("does not match source metadata");

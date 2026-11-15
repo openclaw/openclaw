@@ -13,8 +13,14 @@ import { rememberBoundedKey } from "../infra/dedupe.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import { settleCurrentReadPreparations } from "../shared/current-read-authority.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+  resolveSessionAgentId,
+} from "./agent-scope.js";
 import type { BootstrapContextRunKind } from "./bootstrap-mode.js";
 import { buildBootstrapContextForFiles } from "./embedded-agent-helpers/bootstrap.js";
 import type { EmbeddedContextFile } from "./embedded-agent-helpers/context-file.js";
@@ -199,10 +205,24 @@ async function resolveIneligibleAutomaticMemoryFiles(params: {
   const origins = new Map(
     classificationResult.classifications.map((entry) => [entry.relativePath, entry.originClass]),
   );
-  return candidates.filter(
-    (_file, index) =>
-      !isMemoryOriginEligibleForAutomaticInjection(origins.get(relativePaths[index]!)),
-  );
+  return candidates.filter((_file, index) => {
+    const relativePath = relativePaths[index]!;
+    const originClass = origins.get(relativePath);
+    if (isMemoryOriginEligibleForAutomaticInjection(originClass)) {
+      return false;
+    }
+    // Quarantine persists across turns: report each excluded file once per process.
+    const warningKey = `memory-provenance-exclusion\u0000${resolveUserPath(params.workspaceDir)}\u0000${relativePath}\u0000${originClass ?? ""}`;
+    if (
+      params.warn &&
+      rememberBoundedKey(seenBootstrapWarnings, warningKey, BOOTSTRAP_WARNING_DEDUPE_LIMIT)
+    ) {
+      params.warn(
+        `excluding ${relativePath} from automatic memory context: memory provenance is ${originClass ?? "unclassified"}; run \`openclaw doctor\` for the last recorded write`,
+      );
+    }
+    return true;
+  });
 }
 
 /** Resolves hook-adjusted, session-filtered bootstrap files for a run. */
@@ -240,8 +260,9 @@ export async function resolveBootstrapFilesForRun(
   if (executionWorkspaceDir && executionWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
     const executionAgentsPath = path.join(executionWorkspaceDir, DEFAULT_AGENTS_FILENAME);
     // Execution projects contribute instructions, never agent identity or memory.
+    // This pass keeps only the project's AGENTS.md, so it skips the personal file read.
     for (const file of await resolveBootstrapFiles(
-      { ...params, workspaceDir: executionWorkspaceDir },
+      { ...params, workspaceDir: executionWorkspaceDir, bootstrapUserProfileId: undefined },
       "registered",
     )) {
       if (
@@ -262,36 +283,53 @@ async function resolveBootstrapFiles(
   hooks: BootstrapHookApplication,
 ): Promise<WorkspaceBootstrapFile[]> {
   const access = getAgentWorkspaceAccess(params.workspaceDir);
+  // Personal instructions belong to the editor's configured agent workspace,
+  // independently of the worktree that owns project bootstrap files.
+  const personalWorkspaceDir = resolveUserPath(
+    params.bootstrapUserProfileId && params.config
+      ? resolveAgentWorkspaceDir(params.config, resolveSessionAgentId(params))
+      : params.workspaceDir,
+  );
+  const personalAccess = getAgentWorkspaceAccess(personalWorkspaceDir);
   const sessionKey = params.sessionKey ?? params.sessionId;
   const session = {
     sessionKey,
     chatType: params.chatType,
     workspaceDir: params.workspaceDir,
   };
-  const workspaceSetupCompleted = await isWorkspaceSetupCompletedForContext(
-    params.workspaceDir,
-    params.readOnlyState,
-  );
-  const rawFiles = await loadWorkspaceBootstrapFiles(params.workspaceDir);
+  const [workspaceSetupCompleted, rawFiles, personalFile] = await settleCurrentReadPreparations([
+    isWorkspaceSetupCompletedForContext(params.workspaceDir, params.readOnlyState),
+    loadWorkspaceBootstrapFiles(params.workspaceDir),
+    loadPersonalUserBootstrapFile(personalWorkspaceDir, params.bootstrapUserProfileId, params.warn),
+  ] as const);
   for (const file of rawFiles) {
     file.origin = { kind: "agent-workspace", rootPath: resolveUserPath(params.workspaceDir) };
   }
-  const personalFile = await loadPersonalUserBootstrapFile(
-    params.workspaceDir,
-    params.bootstrapUserProfileId,
-    params.warn,
-  );
   const userIndex = rawFiles.findIndex((file) => file.name === DEFAULT_USER_FILENAME);
   if (personalFile) {
     rawFiles.splice(userIndex < 0 ? rawFiles.length : userIndex + 1, 0, personalFile);
   }
   const ineligibleAutomaticMemoryFiles = await resolveIneligibleAutomaticMemoryFiles({
-    files: rawFiles,
+    files:
+      personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)
+        ? rawFiles.filter((file) => file !== personalFile)
+        : rawFiles,
     workspaceDir: params.workspaceDir,
     config: params.config,
     agentId: params.agentId,
     warn: params.warn,
   });
+  if (personalFile && personalWorkspaceDir !== resolveUserPath(params.workspaceDir)) {
+    ineligibleAutomaticMemoryFiles.push(
+      ...(await resolveIneligibleAutomaticMemoryFiles({
+        files: [personalFile],
+        workspaceDir: personalWorkspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        warn: params.warn,
+      })),
+    );
+  }
   const rootMemoryFile = rawFiles.find(
     (file) => file.name === DEFAULT_MEMORY_FILENAME && !file.missing,
   );
@@ -361,7 +399,10 @@ async function resolveBootstrapFiles(
     workspaceSetupCompleted,
     params.workspaceDir,
   );
-  if (getAgentWorkspaceAccess(params.workspaceDir) !== access) {
+  if (
+    getAgentWorkspaceAccess(params.workspaceDir) !== access ||
+    getAgentWorkspaceAccess(personalWorkspaceDir) !== personalAccess
+  ) {
     throw new Error("Workspace access changed while preparing bootstrap context");
   }
   const { workspaceDir, warn } = params;

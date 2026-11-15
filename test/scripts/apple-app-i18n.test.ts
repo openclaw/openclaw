@@ -4,11 +4,6 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import * as apple from "../../scripts/apple-app-i18n.ts";
-import { parseNativeI18nInventory } from "../../scripts/native-i18n-inventory.ts";
-import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
-
-const readInventory = async () =>
-  parseNativeI18nInventory(await readFile("apps/.i18n/native-source.json", "utf8"));
 type Entry = Parameters<typeof apple.buildIosCatalog>[1][number];
 const emptyCatalog = { sourceLanguage: "en", strings: {}, version: "1.0" };
 const unit = (value: string, state = "translated") => ({ stringUnit: { state, value } });
@@ -27,6 +22,7 @@ function artifact(translations: Record<string, string>) {
 const probe = vi.hoisted(() => ({
   source: "",
   catalogs: new Map<string, string>(),
+  captureWrites: false,
   paths: [
     "apps/macos/Sources/OpenClaw/OnboardingAISetupView.swift",
     "apps/ios/Sources/Gateway/ExecApprovalPromptDialog.swift",
@@ -48,6 +44,13 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         probe.paths.some((entry) => file.endsWith("/" + entry))
         ? source + "\n" + probe.source
         : source;
+    },
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      if (probe.captureWrites && typeof args[0] === "string" && typeof args[1] === "string") {
+        probe.catalogs.set(path.resolve(args[0]), args[1]);
+        return;
+      }
+      await actual.writeFile(...args);
     },
   };
 });
@@ -90,26 +93,20 @@ it("verification and compile-macos reject raw macOS interpolation and retain sha
 });
 
 it("warns only when obsolete Apple keys are the entire catalog drift", async () => {
-  const inventory = await readInventory();
-  const translations = await Promise.all(
-    NATIVE_I18N_LOCALES.map(async (locale) =>
-      JSON.parse(await readFile(`apps/.i18n/native/${locale}.json`, "utf8")),
-    ),
-  );
-  const catalogs = await Promise.all(
-    Object.entries({
-      "apps/ios/Resources/Localizable.xcstrings": apple.buildIosCatalog,
-      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings": apple.buildMacosCatalog,
-    }).map(async ([file, buildCatalog]) => {
-      const filePath = path.resolve(file);
-      const existing = JSON.parse(await readFile(filePath, "utf8"));
-      return { filePath, catalog: buildCatalog(existing, inventory, translations).catalog };
-    }),
-  );
   try {
-    for (const { filePath, catalog } of catalogs) {
-      probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
-    }
+    // Source PRs defer generated locale files; normalize all sibling artifacts in memory.
+    probe.captureWrites = true;
+    const { build, macosBuild } = await apple.syncAppleAppI18n();
+    const catalogs = [
+      {
+        filePath: path.resolve("apps/ios/Resources/Localizable.xcstrings"),
+        catalog: build.catalog,
+      },
+      {
+        filePath: path.resolve("apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"),
+        catalog: macosBuild.catalog,
+      },
+    ];
     for (const { filePath, catalog } of catalogs) {
       const warnings: string[] = [];
       const options = { reportObsolete: (message: string) => warnings.push(message) };
@@ -176,6 +173,7 @@ it("warns only when obsolete Apple keys are the entire catalog drift", async () 
       probe.catalogs.set(filePath, apple.serializeAppleCatalog(catalog));
     }
   } finally {
+    probe.captureWrites = false;
     probe.catalogs.clear();
   }
 });

@@ -9,8 +9,9 @@ import { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-ha
 import type { CliDeps } from "../cli/deps.types.js";
 import { resolveControlUiAutomationRunUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { CronAgentSelectionRequiredError } from "../cron/agent-id.js";
+import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { redactCronCommandSummaryForExternalDelivery } from "../cron/command-output-summary.js";
+import { commitCronConversationResult } from "../cron/conversation-result.js";
 import { resolveCronDeliveryPlan, sendCronAnnouncePayloadStrict } from "../cron/delivery.js";
 import { retryTransientDirectCronDelivery } from "../cron/isolated-agent/delivery-dispatch-policy.js";
 import { resolveDeliveryTarget } from "../cron/isolated-agent/delivery-target.js";
@@ -30,6 +31,7 @@ import { formatZonedTimestamp } from "../infra/format-time/format-datetime.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { SsrFBlockedError, type SsrFPolicy } from "../infra/net/ssrf.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import {
   runWithGatewayDetachedWorkContinuation,
   runWithGatewayIndependentRootWorkContinuation,
@@ -38,6 +40,7 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { assertSecretOwnerAvailable } from "../secrets/runtime-degraded-state.js";
 import { captureCronJobTurnTarget } from "./cron-job-turn-target.js";
 import type { GatewayContextResolver } from "./server-methods/shared-types.js";
+import { loadGatewaySessionEntryReadOnlyInWorker } from "./session-utils-store-worker.js";
 
 const CRON_WEBHOOK_TIMEOUT_MS = 10_000;
 
@@ -115,6 +118,8 @@ async function runGatewayCronFailureRepair(
         expectedTarget: target,
         // Only the agent's authored reply reaches the chat; the next alert owns escalation.
         suppressErrorDelivery: true,
+        // The scheduler's repair brief permits silence; public provenance does not grant it.
+        replyExpectation: "optional",
       });
       const accepted = await receipt.accepted;
       if (!accepted.ok) {
@@ -151,6 +156,13 @@ function redactWebhookUrl(url: string): string {
 function redactOptionalWebhookUrl(url: unknown): string | undefined {
   const normalized = normalizeOptionalString(url);
   return normalized ? redactWebhookUrl(normalized) : undefined;
+}
+
+function stripCronJobDiagnostics(job: NonNullable<CronEvent["job"]>) {
+  const state = { ...job.state };
+  delete state.lastDiagnostics;
+  delete state.lastDiagnosticSummary;
+  return { ...job, state };
 }
 
 function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob): CronEvent {
@@ -197,13 +209,7 @@ function redactCommandCronEventForExternalDelivery(evt: CronEvent, job?: CronJob
     }
   }
   if (stripEmbeddedJobDiagnostics && evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
-    redacted.job = {
-      ...evt.job,
-      state,
-    };
+    redacted.job = stripCronJobDiagnostics(evt.job);
   }
   return redacted;
 }
@@ -241,15 +247,9 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
   }
   const { summary: _summary, diagnostics: _diagnostics, ...payload } = evt;
   if (evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
     return {
       ...payload,
-      job: {
-        ...evt.job,
-        state,
-      },
+      job: stripCronJobDiagnostics(evt.job),
     };
   }
   return payload;
@@ -450,12 +450,10 @@ async function sendGatewayCronFailureAlertUnderAdmission(
     mayHaveReachedRecipient ||= reachedRecipient;
   };
   try {
-    const requestedAgentId =
-      normalizeOptionalString(params.job.agentId) ??
-      normalizeOptionalString(params.routing.defaultAgentId);
-    if (!requestedAgentId) {
-      throw new CronAgentSelectionRequiredError();
-    }
+    const requestedAgentId = resolveCronJobEffectiveAgentId(
+      params.job,
+      params.routing.defaultAgentId,
+    );
     const { agentId, cfg: runtimeConfig } = params.resolveCronAgent(requestedAgentId);
     if (params.mode === "webhook") {
       if (!params.to) {
@@ -565,14 +563,73 @@ async function sendGatewayCronFailureAlertUnderAdmission(
   }
 }
 
-/** Fans out completion webhooks after a cron run finishes. */
+/** Records unstarted outcomes and fans out completion webhooks. */
 export function dispatchGatewayCronFinishedNotifications(params: {
   evt: CronEvent;
   job?: CronJob;
+  runNotStarted?: boolean;
+  quietTrigger?: boolean;
+  resolveCronAgent?: CronAgentResolver;
   logger: CronLogger;
   webhookToken?: unknown;
   ssrfPolicy?: SsrFPolicy;
 }): void {
+  if (
+    params.job &&
+    params.resolveCronAgent &&
+    !params.quietTrigger &&
+    (params.evt.status === "skipped" || (params.evt.status === "error" && params.runNotStarted))
+  ) {
+    const job = params.job;
+    const resolveCronAgent = params.resolveCronAgent;
+    void runWithGatewayIndependentRootWorkContinuation(async () => {
+      const { agentId, cfg } = resolveCronAgent(job.owner?.agentId ?? job.agentId);
+      const sessionKey = job.owner?.sessionKey ?? resolveCronDeliverySessionKey(job);
+      if (
+        !sessionKey ||
+        params.evt.runAtMs === undefined ||
+        (params.evt.status === "skipped" && params.evt.triggerFired === false)
+      ) {
+        return;
+      }
+      const { entry } = await loadGatewaySessionEntryReadOnlyInWorker({
+        cfg,
+        agentId,
+        key: sessionKey,
+      });
+      if (!entry) {
+        throw new Error("Automation owner conversation is unavailable");
+      }
+      const reason = params.evt.error ?? params.evt.summary ?? "The run was skipped.";
+      const result = await commitCronConversationResult({
+        config: cfg,
+        agentId,
+        jobId: job.id,
+        runStartedAt: params.evt.runAtMs,
+        conversation: {
+          sessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+        payloads: [
+          {
+            text: redactSensitiveText(
+              `Automation "${job.name}" did not start: ${reason} Check automation history, resolve the cause, then run it again.`,
+            ),
+          },
+        ],
+        deliveryAttemptFence: null,
+      });
+      if (!result.ok) {
+        throw new Error(result.reason);
+      }
+    }, "cron:run-outcome-notice").catch((error: unknown) => {
+      params.logger.warn(
+        { jobId: job.id, err: formatErrorMessage(error) },
+        "cron: run outcome notice failed",
+      );
+    });
+  }
   const webhookToken = normalizeOptionalString(params.webhookToken);
   const redactedWebhookEvent = redactCommandCronEventForExternalDelivery(params.evt, params.job);
   const completionSummary =

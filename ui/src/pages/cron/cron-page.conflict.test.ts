@@ -91,7 +91,7 @@ it.each(["save", "toggle"] as const)(
       authoritativeJob.description,
     );
     expect(page.querySelector(dom.testId("cron-detail-tab-history"))).not.toBeNull();
-    expect(dom.text(page, ".cron-error-banner")).toContain("review it before retrying");
+    expect(dom.text(page, ".callout.danger")).toContain("review it before retrying");
     expect(updates).toBe(1);
     await harness.waitForCronPage(() => expect(page.cron.cronBusy).toBe(false));
     dom.click(page, action);
@@ -103,7 +103,7 @@ it.each(["save", "toggle"] as const)(
       expect.objectContaining({ expectedConfigRevision: "revision-stale" }),
       expect.objectContaining({ expectedConfigRevision: "revision-current" }),
     ]);
-    expect(page.querySelector(".cron-error-banner")).toBeNull();
+    expect(page.querySelector(".callout.danger")).toBeNull();
 
     dom.click(page, dom.testId("cron-back"));
     await harness.waitForCronPage(() => expect(page.cron.cronEditingJob).toBeNull());
@@ -163,7 +163,7 @@ it.each(["another automation", "reopened editor", "Gateway source"] as const)(
       expect(page.cron.cronEditingJob).toBe(selected);
       expect(page.cron.cronForm).toBe(draft);
       expect(dom.inputValue(page, "#cron-name")).toBe("Newer unsaved intent");
-      expect(dom.text(page, ".cron-error-banner")).toBe("Newer editor feedback");
+      expect(dom.text(page, ".callout.danger")).toBe("Newer editor feedback");
       dom.expectCalls(request, ["cron.update"], 1);
     } finally {
       pending.resolve(latest);

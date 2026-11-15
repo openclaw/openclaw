@@ -111,7 +111,16 @@ it("preserves legacy cron history on runtime refusal, then Doctor imports it onc
         limit: 50,
         sortDir: "asc",
       }).entries;
-      expect(ledgerEntries.map(publicFields)).toEqual(entries.map(publicFields));
+      const receiptBackedRunIds = new Map<number, string>([
+        [1, "cron-runlog-import:legacy-history-job:2100:1"],
+        [2, "cron-runlog-import:legacy-history-job:2100:2"],
+        [5, "cron:legacy-history-job:4000:mirrored"],
+      ]);
+      expect(ledgerEntries.map(publicFields)).toEqual(
+        entries.map((logEntry, index) =>
+          publicFields({ ...logEntry, runId: logEntry.runId ?? receiptBackedRunIds.get(index) }),
+        ),
+      );
       expect(
         db
           .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cron_run_logs'")

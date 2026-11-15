@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/index.js";
 import {
   replayChatDisplay,
@@ -12,6 +12,7 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import * as backoff from "../infra/backoff.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
@@ -19,6 +20,7 @@ import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.
 import { buildOpenAiResponsesTestModel } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.restoreAllMocks());
 const primaryModel = "grok-4.6";
 const fallbackModel = "fallback-proof";
 const marker = "XAI_FALLBACK_REPLY";
@@ -33,7 +35,7 @@ const rejections = new Map<
     code?: string;
     type?: string;
     message: string;
-    reason: "auth" | "billing" | "rate_limit";
+    reason: "auth" | "billing" | "rate_limit" | "server_error";
   }
 >([
   ...[400, 401, 403, 404, 410, 422].map(
@@ -42,6 +44,11 @@ const rejections = new Map<
   ["auth-code", { code: "credential_rejected", message: authError, reason: "auth" }],
   ["auth-type", { type: "upstream_error", message: authError, reason: "auth" }],
   ["auth-text", { message: authError, reason: "auth" }],
+  [
+    "token-generation-event",
+    { type: "error", message: tokenGenerationError, reason: "server_error" },
+  ],
+  ["auth-event", { type: "error", message: authError, reason: "auth" }],
   [
     "billing",
     {
@@ -67,8 +74,6 @@ const scenarios = [
   "exhausted",
   ...rejections.keys(),
 ] as const;
-type Scenario = (typeof scenarios)[number];
-const model = (id: string) => buildOpenAiResponsesTestModel(id, 16_000, 256);
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 const responseMessage = (id: string, text: string) => ({
   type: "message",
@@ -97,6 +102,8 @@ it(
     timeout: 180_000,
   },
   async ({ signal }) => {
+    // Retry timing is covered by the retry owner; keep Gateway I/O timers real.
+    vi.spyOn(backoff, "sleepWithAbort").mockImplementation(async (_, sig) => sig?.throwIfAborted());
     const root = tempDirs.make("openclaw-xai-fallback-");
     const state = path.join(root, "state");
     const workspace = path.join(root, "workspace");
@@ -126,12 +133,12 @@ it(
     for (const [key, value] of Object.entries(env)) {
       setTestEnvValue(key, value);
     }
-    let scenario: Scenario = "fallback";
+    let scenario = "fallback";
     let requests: string[] = [];
     const events: ChatEvent[] = [];
     const displayFrames: ChatDisplayFrame[] = [];
     const terminalEvents = new Map<string, (event: ChatEvent) => void>();
-    const publishedMessages = new Map<string, unknown[]>();
+    const lastPublishedMessages = new Map<string, unknown>();
     const fallbackEvents: unknown[] = [];
     const provider = createServer((request, response) => {
       void (async () => {
@@ -149,7 +156,7 @@ it(
         const payload: { model: string } = JSON.parse(body);
         requests.push(payload.model);
         const rejection = rejections.get(scenario);
-        if (payload.model === primaryModel && rejection) {
+        if (payload.model === primaryModel && rejection && rejection.type !== "error") {
           const error = {
             message: rejection.message,
             code: rejection.code,
@@ -184,16 +191,25 @@ it(
             writeEvent("response.output_item.done", { output_index: 0, item });
           }
           response.end(
-            encodeEvent({
-              type: "response.failed",
-              response: {
-                id: `failure-${requests.length}`,
-                status: "failed",
-                error: { code: null, message: tokenGenerationError },
-                output: scenario === "fallback" ? [] : [item],
-                usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
-              },
-            }),
+            encodeEvent(
+              rejection?.type === "error"
+                ? {
+                    type: "error",
+                    code: null,
+                    sequence_number: 2,
+                    message: rejection.message,
+                  }
+                : {
+                    type: "response.failed",
+                    response: {
+                      id: `failure-${requests.length}`,
+                      status: "failed",
+                      error: { code: null, message: tokenGenerationError },
+                      output: scenario === "fallback" ? [] : [item],
+                      usage: { input_tokens: 21, output_tokens: 4, total_tokens: 25 },
+                    },
+                  },
+            ),
           );
           return;
         }
@@ -252,13 +268,14 @@ it(
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [model(primaryModel)],
+                // The fixture's full prompt/tool surface estimates 18k tokens.
+                models: [buildOpenAiResponsesTestModel(primaryModel, 128_000, 256)],
               },
               openai: {
                 baseUrl,
                 apiKey: "test",
                 api: "openai-responses",
-                models: [model(fallbackModel)],
+                models: [buildOpenAiResponsesTestModel(fallbackModel, 128_000, 256)],
               },
             },
           },
@@ -288,9 +305,7 @@ it(
             isRecord(event.payload.message) &&
             event.payload.message.role === "assistant"
           ) {
-            const messages = publishedMessages.get(event.payload.sessionKey) ?? [];
-            messages.push(event.payload.message);
-            publishedMessages.set(event.payload.sessionKey, messages);
+            lastPublishedMessages.set(event.payload.sessionKey, event.payload.message);
           }
           if (
             event.event === "agent" &&
@@ -321,13 +336,10 @@ it(
           idempotencyKey: `xai-${scenario}`,
         });
         const terminalReceived = createDeferred();
-        const expectsSuccess = selected !== "no-fallback" && selected !== "exhausted";
         const receiveTerminal = (event: ChatEvent) => {
           if (
             event.sessionKey === sessionKey &&
-            (expectsSuccess
-              ? event.state === "final" && event.stopReason === "stop"
-              : event.state === "error")
+            ((event.state === "final" && event.stopReason === "stop") || event.state === "error")
           ) {
             terminalReceived.resolve();
           }
@@ -362,7 +374,9 @@ it(
         const runEvents = events.filter((event) => event.runId === started.runId);
         check(requests[0]).toBe(primaryModel);
         check(requests.filter((requested) => requested === primaryModel)).toHaveLength(
-          rejection && rejection.reason !== "rate_limit" ? 1 : 2,
+          rejection && rejection.reason !== "rate_limit" && rejection.reason !== "server_error"
+            ? 1
+            : 2,
         );
         const terminal = runEvents
           .filter((event) => event.state === "final")
@@ -400,7 +414,7 @@ it(
         } else {
           check(completed.status).toBe("error");
           check(messageText(assistant)).toBe(prefix);
-          check(messageText(publishedMessages.get(sessionKey)?.at(-1))).toBe(prefix);
+          check(messageText(lastPublishedMessages.get(sessionKey))).toBe(prefix);
           const display = replayChatDisplay(displayFrames, sessionKey, started.runId);
           check(display.chatRunId).toBeNull();
           check(display.chatStream).toBeNull();

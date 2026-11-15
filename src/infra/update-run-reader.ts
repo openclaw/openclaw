@@ -13,7 +13,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
-import { withUpdateRunRead } from "./update-run-admission.js";
+import { withUpdateRunRead } from "./update-run-read-admission.js";
 import {
   decodeRun,
   readActiveUpdateRun,
@@ -185,13 +185,12 @@ async function readUpdateRunStatusAsync(
   type: "updateRuns.status" | "updateRuns.historyStatus",
   options: OpenClawStateDatabaseOptions,
 ) {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
+  const reply = await executeExistingOpenClawStateRead(
+    options,
+    { type },
+    { preferIndependentWarmRead: true },
   );
-  if (!reply) {
-    return {};
-  }
-  return reply.status;
+  return reply?.status ?? {};
 }
 
 /** Doctor retains its maintenance owner while the worker reads the private snapshot. */

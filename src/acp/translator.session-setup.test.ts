@@ -1,5 +1,5 @@
 import type { NewSessionResponse, SessionUpdate } from "@agentclientprotocol/sdk";
-import { expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { isAcpSessionKey } from "../sessions/session-key-utils.js";
 import {
   createNewSessionRequest,
@@ -15,6 +15,8 @@ import {
 } from "./translator.bridge-test-helpers.js";
 import type { GatewaySessionPresentationRow } from "./translator.presentation.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const sessionId = "bridge-session";
 const row: GatewaySessionPresentationRow = {
@@ -152,13 +154,18 @@ it("loads controls with an empty transcript when sessions.get fails", async () =
   expect(sessionUpdatePayloads(sessionUpdate, "user_message_chunk")).toEqual([]);
 });
 
-it("rate limits new session IDs without counting loadSession refreshes", async () => {
+it("rate limits new IDs, not load refreshes, across wall-clock steps", async () => {
+  const wall = vi.spyOn(Date, "now").mockReturnValue(100_000);
+  const elapsed = vi.spyOn(performance, "now").mockReturnValue(100);
   const { agent } = harness({ sessionCreateRateLimit: { maxRequests: 1, windowMs: 60_000 } });
   await agent.loadSession(createLoadSessionRequest(sessionId));
   await agent.loadSession(createLoadSessionRequest(sessionId));
   await expect(agent.loadSession(createLoadSessionRequest("new-session"))).rejects.toThrow(
     /session creation rate limit exceeded/i,
   );
+  wall.mockReturnValue(40_000);
+  elapsed.mockReturnValue(60_100);
+  await expect(agent.newSession(createNewSessionRequest())).resolves.toHaveProperty("sessionId");
 });
 
 it("streams partial tool output and retains file locations through completion", async () => {

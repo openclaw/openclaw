@@ -419,6 +419,10 @@ it.each([
         expect(ack).toMatchObject({ ok: true, enqueued: true });
       }
       await payload.started.promise;
+      const receipt = expectDefined(
+        inspectActiveCronRunReceipt({ storePath, jobId: original.id }),
+        "original run receipt",
+      );
 
       await expect(cron.remove(original.id)).resolves.toEqual({
         ok: true,
@@ -460,9 +464,11 @@ it.each([
       expect(finishedEvents).toMatchObject([
         { ...removed, job: { name: "removed original one-shot" } },
       ]);
-      expect(historyFor(original.id)).toMatchObject([
-        { ...removed, runId: finishedEvents[0]?.runId },
-      ]);
+      // Direct runs have no public request ID; history still identifies the canceled run.
+      const runId =
+        finishedEvents[0]?.runId ??
+        `cron:${original.id}:${receipt.startedAtMs}:${receipt.receiptId}`;
+      expect(historyFor(original.id)).toMatchObject([{ ...removed, runId }]);
       const receipts = openOpenClawStateDatabase()
         .db.prepare(
           "SELECT status, error_text AS error FROM cron_run_receipts WHERE store_key = ? AND job_id = ?",

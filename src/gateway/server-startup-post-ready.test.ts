@@ -69,6 +69,8 @@ it.each(["settles", "closes", "repair-closes"] as const)(
     const startupModule = await import("./server-startup-finish.js");
     const finishStartup = startupModule.finishGatewayStartup;
     vi.spyOn(startupModule, "finishGatewayStartup").mockImplementation(async (params) => {
+      // Keep scheduler ordering independent of native Cron worker startup.
+      vi.spyOn(params.kernelRuntime.runtimeState.cronState.cron, "start").mockResolvedValue();
       const result = await finishStartup(params);
       realStartup = result.startupSettled;
       const owner = params.kernelRuntime;

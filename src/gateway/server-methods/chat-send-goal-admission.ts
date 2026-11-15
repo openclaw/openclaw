@@ -39,37 +39,43 @@ export function requiresRuntimeApprovedChatInput(
   return hasGlobalHooks("before_agent_run") || isAcpBridgeClient(client);
 }
 
-/** Placement input stays pending until setup and the native writer admit it. */
-export function isWorkerGoalChatAdmission(
+/** Codex Goal input stays pending until its native writer admits it. */
+export function resolveCodexGoalAdmission(
   params: ChatSendAdmissionParams,
   current: { entry?: SessionEntry; canonicalKey: string },
   placement: WorkerSessionPlacementRecord | undefined,
   acpMeta: SessionEntry["acp"] | null,
-): boolean {
+): "local" | "worker" | undefined {
   const { session, request, context, client } = params;
-  return Boolean(
+  const cfg = context.getRuntimeConfig();
+  const harness = getRegisteredAgentHarness("codex")?.harness;
+  const local = !placement || placement.state === "local";
+  const eligible = Boolean(
     request.goalOperation &&
     current.entry &&
     isDirectGatewayUserClient(client) &&
-    placement?.executionMode === "remote-exec" &&
-    placement.state !== "local" &&
+    harness &&
+    (local
+      ? !cfg.cloudWorkers?.requiredProfile
+      : placement.executionMode === "remote-exec" &&
+        harness.cloudPlacement?.mode === "remote-exec") &&
     isDirectChatGoalSession({
       entry: current.entry,
-      allowAborted: request.goalOperation?.action === "resume",
+      allowAborted: request.goalOperation.action === "resume",
       acpMeta,
       requestedSessionId: session.requestedSessionId,
       sessionKey: current.canonicalKey,
     }) &&
     resolveEffectiveAgentRuntime({
-      cfg: context.getRuntimeConfig(),
+      cfg,
       agentId: session.agentId,
       sessionKey: current.canonicalKey,
       sessionEntry: current.entry,
       provider: session.resolvedSessionModel.provider,
       modelId: session.resolvedSessionModel.model,
-    }) === "codex" &&
-    getRegisteredAgentHarness("codex")?.harness.cloudPlacement?.mode === "remote-exec",
+    }) === "codex",
   );
+  return eligible ? (local ? "local" : "worker") : undefined;
 }
 
 export function isDirectChatGoalSession(params: {
@@ -191,7 +197,7 @@ export function createChatSendGoalCommitGuard(
   > & {
     admission: {
       initialSessionEntry?: SessionEntry;
-      workerGoalAdmission?: boolean;
+      codexGoalAdmission?: "local" | "worker";
       assertInitialSkillSelection?: () => void;
       activeRunAbort: Pick<ReturnType<typeof registerChatAbortController>, "controller">;
       lifecycleGeneration: ReturnType<typeof getAgentEventLifecycleGeneration>;
@@ -261,7 +267,7 @@ export function createChatSendGoalCommitGuard(
     }
   };
   const sources = [sessionMutationCommitGuard, sessionMutationAuthorization?.assertCurrent];
-  const assertCurrent = admission.workerGoalAdmission
+  const assertCurrent = admission.codexGoalAdmission
     ? composeSessionSourceAssertion(sources, check)
     : () => check(() => sources.forEach((source) => source?.()));
   return { assertCurrent, routingPredicate };

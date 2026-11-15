@@ -191,6 +191,30 @@ it.each([true, false])("separates saved and current health (responding=%s)", (re
   expect(report.headline).not.toContain("gateway is running");
 });
 
+it.each(["restart-unhealthy", "service-not-running", "timeout"])(
+  "does not claim a responding Gateway is absent after %s",
+  (code) => {
+    const report = renderRecord(
+      failed({
+        reason: "doctor-failed",
+        steps: [
+          failedStep("gateway recovery verification", {
+            exitCode: 1,
+            failureFacts: [{ check: "settled", code }],
+          }),
+        ],
+        verification: { serviceRunning: false },
+      }),
+      { currentHealth: { kind: "responding", version: "2026.9.2" } },
+    );
+    expectText(report.markdown, [
+      `Recorded recovery: readiness unverified (${code}).`,
+      "Current health: Gateway answered on the recorded port (2026.9.2).",
+    ]);
+    expect(report.markdown).not.toContain("not serving");
+  },
+);
+
 it("preserves recorded restart constraints over newer healthy recovery facts", async () => {
   const record = observedFailure(serving("2026.9.5", "runtime-verification-failed"), {
     reason: "post-update-plugins",
@@ -378,6 +402,22 @@ it.each([
   expect(report.headline).toBe(`✅ OpenClaw updated to ${expected}.`);
   expect(report.markdown).toContain(report.headline);
   expect(report.lines).toContain("Phases: staging (300ms)");
+});
+
+it("states the total when work ran outside the recorded phases", () => {
+  const steps = [
+    { step: "activating", status: "completed" as const, startedAtMs: 61_000, endedAtMs: 121_000 },
+  ];
+  const finished = render({ steps, createdAtMs: 1_000, finishedAtMs: 301_000 });
+  expect(finished.lines).toContain("Phases: activating (60s)");
+  expect(finished.lines).toContain("Total: 300s, including work outside these phases.");
+  const covered = render({ steps, createdAtMs: 61_000, finishedAtMs: 121_000 });
+  const { createdAtMs, finishedAtMs } = updateRunReportInputFromResult(
+    { status: "ok", mode: "npm", steps: [], durationMs: 0 },
+    { createdAtMs: 1_000, finishedAtMs: 301_000 },
+  );
+  expect({ createdAtMs, finishedAtMs }).toEqual({ createdAtMs: 1_000, finishedAtMs: 301_000 });
+  expect(covered.lines.join("\n")).not.toContain("Total:");
 });
 
 it("bounds chat failures but preserves full CLI guidance", () => {

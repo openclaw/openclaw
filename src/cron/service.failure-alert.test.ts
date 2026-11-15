@@ -13,6 +13,17 @@ const timeoutFailure = { status: "error", error: "timeout", provider: "anthropic
 const telegramRoute = { channel: "telegram", to: "19098680" };
 
 const { withFailureAlertCron } = setupFailureAlertSuite();
+
+it("passes an explicit failure thread to the delivery hook", () =>
+  withAlerts(async ({ addJob, runJob, sendCronFailureAlert }) => {
+    const job = await addJob("threaded failure", {
+      failureAlert: { ...telegramRoute, threadId: 42 },
+    });
+    await runJob(job, 1, timeoutFailure);
+    expect(sendCronFailureAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ ...telegramRoute, threadId: 42 }),
+    );
+  }));
 type AlertParams = Parameters<typeof withFailureAlertCron>;
 type AlertContext = Parameters<AlertParams[1]>[0];
 type RunResult = NonNullable<AlertParams[0]["runResult"]>;
@@ -214,7 +225,12 @@ describe("CronService failure alerts", () => {
 
         expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining('Automation "work-owned failure" failed 1 times'),
-          { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+          {
+            agentId: "work",
+            sessionKey,
+            contextKey: `cron:${job.id}:failure-alert`,
+            jobId: job.id,
+          },
         );
         expect(requestHeartbeat).not.toHaveBeenCalled();
       },

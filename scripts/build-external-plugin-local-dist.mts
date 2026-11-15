@@ -50,6 +50,8 @@ export async function buildExternalPluginLocalDist(
   const startedAt = performance.now();
   const pluginDirs: string[] = [];
   const generatedAssets = listGeneratedExtensionAssetSources({ rootDir: repoRoot });
+  // Plugin graphs share most SDK and core sources; read each file once per run.
+  const sourceDigests = new Map<string, string>();
   const env = params.env ?? process.env;
   const cacheEnabled = env.OPENCLAW_BUILD_CACHE !== "0";
   const sharedSignature = cacheEnabled
@@ -138,6 +140,7 @@ export async function buildExternalPluginLocalDist(
           step.cache!.env,
           env,
           sharedSignature,
+          sourceDigests,
         );
       },
     };
@@ -195,6 +198,13 @@ export async function buildExternalPluginLocalDist(
       fs.rmdirSync(result.outDir);
     }
     if (cacheState) {
+      // The build may regenerate files in its own package; record their new bytes.
+      const packageRoot = `${path.resolve(repoRoot, packageDir)}${path.sep}`;
+      for (const file of sourceDigests.keys()) {
+        if (file.startsWith(packageRoot)) {
+          sourceDigests.delete(file);
+        }
+      }
       cacheState.signature = cacheParams.inputSignature(result.inputFiles);
       cacheState.consumedInputs = result.inputFiles;
       finalizeBuildStepCache(step, cacheState, cacheParams);

@@ -17,6 +17,7 @@ import { constants, monitorEventLoopDelay, PerformanceObserver } from "node:perf
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import { recordGcCollections } from "../lib/perf-gc-collections.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -120,16 +121,9 @@ const loop = monitorEventLoopDelay({ resolution: 1 });
 const collections: Array<{ kind: number; ms: number }> = [];
 let start = Infinity;
 let end = Infinity;
-const observer = new PerformanceObserver((list) => {
-  for (const entry of list.getEntries()) {
-    if (entry.startTime >= start && entry.startTime < end) {
-      collections.push({
-        kind: (entry as typeof entry & { detail: { kind: number } }).detail.kind,
-        ms: entry.duration,
-      });
-    }
-  }
-});
+const observer = new PerformanceObserver((list) =>
+  recordGcCollections(list.getEntries(), collections, start, end),
+);
 try {
   global.gc();
   await nextTurn();

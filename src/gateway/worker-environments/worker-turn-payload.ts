@@ -50,6 +50,7 @@ import { capturePresenceToolAuthority } from "../../agents/tools/presence-tool-a
 import { hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { withSessionTranscriptHydrationCaller } from "../../config/sessions/session-transcript-hydration-caller.js";
 import { runWithoutOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context-store.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { emitTrustedDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
@@ -205,6 +206,7 @@ export async function prepareWorkerAgentRuntimeIdentity(
     } satisfies AgentRuntimeIdentityTokenParams;
   });
   return {
+    capability,
     admittedRunContext,
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
@@ -392,7 +394,9 @@ export async function finalizeWorkerTurnResult(
   const workerTurnFailed = runtimeResult.status === "failed";
 
   // A terminal result settles under its pending-result owner, even after execution ends.
-  const completed = await SessionManager.openAsync(transcriptTarget);
+  const completed = await withSessionTranscriptHydrationCaller("worker-result", () =>
+    SessionManager.openAsync(transcriptTarget),
+  );
   const resultTarget = { ...transcriptTarget, expectedWriterRunId: undefined };
   const assertResultCurrent = () => {
     if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
@@ -470,7 +474,9 @@ export async function finalizeWorkerTurnResult(
   const finalizeContext = async () => {
     const finalizationManager = turn.onContextEngineTurnCandidate
       ? completed
-      : await SessionManager.openAsync(resultTarget);
+      : await withSessionTranscriptHydrationCaller("worker-result", () =>
+          SessionManager.openAsync(resultTarget),
+        );
     assertResultCurrent();
     const userEntry = params.baseLeafId
       ? finalizationManager.getEntry(params.baseLeafId)

@@ -22,9 +22,17 @@ export type GatewayPluginRuntimePreparation = (
   loaded: Awaited<ReturnType<typeof prepareGatewayPluginLoad>>,
   trackActivationCleanup: (completion: Promise<void>) => void,
 ) => Promise<{
-  publish: () => void;
+  publish: (retirePrevious?: () => Promise<void>) => void;
   afterCommit: () => void;
 }>;
+
+export type GatewayPluginReloadRuntime = {
+  runtime: Awaited<ReturnType<typeof import("./server-lifecycle.js").prepareGatewayLifecycle>>;
+  port: number;
+  log: ReturnType<typeof import("../logging/subsystem.js").createSubsystemLogger>;
+  loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
+  prepareAttachedPluginRuntime: GatewayPluginRuntimePreparation;
+};
 
 export async function prepareGatewayPluginLoad(
   params: Omit<Parameters<typeof loadGatewayPlugins>[0], "autoEnabledReasons"> & {

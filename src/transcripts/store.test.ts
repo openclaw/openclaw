@@ -414,7 +414,7 @@ it("retains admitted ID origins across updates, reopen, and Doctor restoration",
     await import("../infra/state-migrations.meeting-transcripts.js");
   const env = { ...process.env, OPENCLAW_STATE_DIR: restoredState };
   const migrated = await migrateLegacyMeetingTranscripts({
-    detected: detectLegacyMeetingTranscripts({
+    detected: await detectLegacyMeetingTranscripts({
       stateDir: restoredState,
       doctorOnlyStateMigrations: true,
     }),

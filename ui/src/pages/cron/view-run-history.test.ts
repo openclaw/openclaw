@@ -23,9 +23,9 @@ function entryText(entry: Element | undefined, part: string) {
 describe("cron view run history", () => {
   it("renders execution errors and delivery labels without overriding execution status", async () => {
     const cases: Array<[Partial<CronRunLogEntry>, string, string, string?]> = [
-      [{ completionStatus: "succeeded", deliveryStatus: "delivered" }, "OK", "Delivered"],
-      [{ deliveryStatus: "not-requested" }, "OK", "Not requested"],
-      [{}, "OK", "Not requested"],
+      [{ completionStatus: "succeeded", deliveryStatus: "delivered" }, "Completed", "Delivered"],
+      [{ deliveryStatus: "not-requested" }, "Completed", "Not requested"],
+      [{}, "Completed", "Not requested"],
       [
         { status: "error", completionStatus: "failed", error: "Execution failed" },
         "Error",
@@ -86,8 +86,8 @@ describe("cron view run history", () => {
       for (const runsQuery of ["", "fail"]) {
         const onRefresh = vi.fn();
         const container = await renderView({ runsState, runsQuery, onRefresh });
-        expect(container.textContent).not.toContain("No runs yet");
-        expect(container.textContent).not.toContain("No matching runs.");
+        expect(container.textContent).not.toContain("No activity yet.");
+        expect(container.textContent).not.toContain("No activity matches the current filters.");
         expect(container.querySelector('[data-test-id="cron-runs-loading"]') !== null).toBe(
           runsState === "pending",
         );
@@ -112,10 +112,12 @@ describe("cron view run history", () => {
     );
     expect(retained.textContent).toContain("History unavailable");
     const empty = await renderView();
-    expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No runs yet");
+    expect(empty.querySelector(".cron-empty-state")?.textContent).toContain("No activity yet.");
 
     const filtered = await renderView({ runsQuery: "fail" });
-    expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain("No matching runs.");
+    expect(filtered.querySelector(".cron-runs__empty")?.textContent).toContain(
+      "No activity matches the current filters.",
+    );
   });
 
   it("redacts and escapes server-provided suppression text in run facts", async () => {

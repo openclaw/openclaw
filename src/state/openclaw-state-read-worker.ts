@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { stat } from "node:fs/promises";
 import { getDatabaseProcessRole } from "../infra/database-engine/admission-scope.js";
 import { getPostgresPool } from "../infra/postgres-sync/pool.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
@@ -6,13 +7,16 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
-import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
+import { assertDatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { getPluginExecutionFrame } from "../plugins/plugin-instance-invocation.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { isDeeplyFrozenPlainData } from "../shared/immutable-data.js";
 import {
   registerOpenClawStateDatabaseAsyncResource,
   registerOpenClawStateDatabaseLifecycleListener,
@@ -275,8 +279,8 @@ class StateReadTransport {
     private readonly onChunkAsync?: OpenClawStateReadOptions["onChunkAsync"],
     private readonly awaitedOnly = false,
   ) {
-    // Capture nested input before the read owner can yield during snapshot preparation.
-    this.capturedCommand = structuredClone(command);
+    // Immutable owner snapshots can cross preparation waits without another private copy.
+    this.capturedCommand = isDeeplyFrozenPlainData(command) ? command : structuredClone(command);
   }
 
   private async closeTask(task: ReadTask): Promise<void> {
@@ -313,6 +317,7 @@ class StateReadTransport {
           environment: { ...context.environment },
           existingSchemaPath: context.existingSchemaPath,
           stateIntegrity: context.stateIntegrity,
+          liveStateReads: context.liveStateReads,
         },
         databasePath: context.admission.databasePath,
         location,
@@ -320,37 +325,47 @@ class StateReadTransport {
         expectedIdentity,
         snapshotRoot,
         postgresSnapshot,
-        command: { ...readCommand },
+        command: readCommand,
       };
       const pool = readPool(this.source.state, this.source.ownsAdmission(), this.awaitedOnly);
+      if (
+        getDatabaseProcessRole() === "gateway" &&
+        !getPluginExecutionFrame()?.canUseInteractiveStateReadCapacity
+      ) {
+        const { pendingTasks, maxWorkers } = pool.pool.getSnapshot();
+        // Leave two reads per worker for authenticated UI requests; the pool keeps its hard caps.
+        if (pendingTasks >= DEFAULT_WORKER_PENDING_TASKS - 2 * maxWorkers) {
+          throw new WorkerTaskError(
+            "worker task capacity reached (shared-state interactive reserve)",
+            "overloaded",
+          );
+        }
+      }
       // Maintenance reuses this reader; standalone inspection releases it before metadata loads.
       const retireAfterRead =
         !pool.retained && !context.maintenanceScope && readCommand.type !== "admit";
       const task = pool.pool.runTask(
-        () => {
+        async () => {
           const physicalLocation = resolveSqliteDatabaseFilePath(location);
-          const requestForDispatch = () => {
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          if (turn) {
+            releaseAdmission = await turn;
+          }
+          try {
             authority.assertCurrent();
             // Queue admission can outlive the captured file at this pathname.
             if (expectedIdentity !== undefined) {
-              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+              assertDatabaseFileIdentity(await stat(physicalLocation, { bigint: true }), {
+                key: expectedIdentity,
+              });
+              authority.assertCurrent();
             }
             return request;
-          };
-          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
-          if (!turn) {
-            return requestForDispatch();
+          } catch (error) {
+            releaseAdmission?.();
+            releaseAdmission = undefined;
+            throw error;
           }
-          return turn.then((release) => {
-            releaseAdmission = release;
-            try {
-              return requestForDispatch();
-            } catch (error) {
-              releaseAdmission();
-              releaseAdmission = undefined;
-              throw error;
-            }
-          });
         },
         {
           signal: authority.signal,

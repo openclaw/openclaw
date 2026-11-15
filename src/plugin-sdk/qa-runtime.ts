@@ -1,11 +1,21 @@
 import { createServer } from "node:net";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { selectSessionTranscriptActiveEntries } from "../config/sessions/transcript-tree.js";
 import { monotonicNow } from "../shared/monotonic-time.js";
 import { runExec } from "./process-runtime.js";
 import { loadQaRuntimeModule as loadQaRunnerRuntimeModule } from "./qa-runner-runtime.js";
 import { fetchWithSsrFGuard } from "./ssrf-runtime.js";
 import { normalizeStringEntries } from "./string-coerce-runtime.js";
+
+/** Select the history owner's active transcript branch while retaining physical row order. */
+export function selectQaActiveSessionTranscriptEvents(events: readonly unknown[]) {
+  return selectSessionTranscriptActiveEntries({
+    entries: events.map((event, index) => ({ event, index })),
+    recordOf: (row) => row.event,
+    failClosedOnInvalidLeafControl: true,
+  });
+}
 
 export { mergeAttemptToolMediaPayloads } from "../agents/embedded-agent-runner/run/tool-media-payloads.js";
 export { wrapPromptDataBlock } from "../agents/sanitize-for-prompt.js";

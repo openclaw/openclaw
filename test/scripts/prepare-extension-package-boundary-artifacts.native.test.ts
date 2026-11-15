@@ -14,6 +14,7 @@ import {
   resolveNativeFixtureShortPath,
   writeNativeFixtureFile,
 } from "./native-boundary-fixture.js";
+import { resolveNativeDeclarationFixtureSources } from "./native-declaration-fixture-sources.js";
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
@@ -100,19 +101,27 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   const selected = (env?: NodeJS.ProcessEnv) => run(root, root, ["chosen"], env);
   write("package.json", '{"name":"openclaw","type":"module"}');
   write("pnpm-workspace.yaml", "packages: []\n");
+  const declarationSources = resolveNativeDeclarationFixtureSources();
   json("tsconfig.json", {
     compilerOptions: { ...moduleOptions, lib: ["es5"] },
   });
   json(sdkConfig, {
     extends: "../../tsconfig.json",
     include: ["../../src/**/*.ts"],
-    exclude: ["../../src/shared/deferred.ts"],
+    // Runtime tools must be present without joining the synthetic SDK program.
+    exclude: [
+      "../../src/shared/deferred.ts",
+      ...declarationSources
+        .filter((file) => file.startsWith("src/"))
+        .map((file) => `../../${file}`),
+    ],
   });
   write(sdkCore, 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
   copyFixtureFiles(root, [
     // Selected-consumer fixtures install their extra src/ tools with a narrowed SDK config.
     ...resolvePreparationSources().filter((file) => !file.startsWith("src/")),
+    ...declarationSources,
     "src/shared/deferred.ts",
     "packages/normalization-core/package.json",
   ]);
@@ -295,6 +304,61 @@ describe("native declaration preparation", () => {
       }),
   );
 
+  it("emits directly selected declaration producers", { timeout: 30_000 }, ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      writeSelectedConsumer(f);
+      f.files({
+        "extensions/discord/package.json": {
+          name: "@openclaw/discord",
+          type: "module",
+          openclaw: { extensions: ["./index.ts"] },
+        },
+        "extensions/discord/openclaw.plugin.json": { id: "discord" },
+        "extensions/discord/tsconfig.json": {
+          extends: "../tsconfig.package-boundary.base.json",
+          include: ["**/*.ts"],
+          compilerOptions: { strict: true },
+        },
+        "extensions/discord/index.ts": "export const plugin = 1;",
+        "extensions/discord/api.ts": "export const api = 1;",
+        "extensions/discord/readiness.test-support.ts":
+          "export function createDiscordReadinessFixture() { return { ready: true }; }",
+      });
+      await f.run(f.root, f.root, ["discord"]);
+      expect(f.read(`${boundaryRoot}/plugins/discord/readiness.test-support.d.ts`)).toContain(
+        "createDiscordReadinessFixture",
+      );
+      expect(f.has(`${boundaryRoot}/plugins/memory-core/api.d.ts`)).toBe(false);
+
+      // Only the full producer config reaches these dependencies; its packaged
+      // index stays independent. SDK discovery and producer ordering must expand.
+      f.files({
+        "src/plugin-sdk/extra.ts": "export const extra = 7;",
+        "scripts/lib/plugin-sdk-entrypoints.json": ["core", "extra"],
+        "extensions/discord/readiness.test-support.ts":
+          'export type { ChannelValue } from "@openclaw/qa-channel/api.js";',
+        "extensions/qa-channel/api.ts":
+          'export type { MemoryValue as ChannelValue } from "@openclaw/memory-core/api.js";',
+        "extensions/memory-core/api.ts":
+          'export type MemoryValue = typeof import("openclaw/plugin-sdk/extra").extra;',
+      });
+      for (const id of ["qa-channel", "memory-core"]) {
+        f.json(`extensions/${id}/tsconfig.json`, {
+          extends: "../tsconfig.package-boundary.base.json",
+          files: ["api.ts"],
+          include: [],
+        });
+      }
+      await f.run(f.root, f.root, ["discord"]);
+      expect(f.has(`${f.output}/src/plugin-sdk/extra.d.ts`)).toBe(true);
+      for (const id of ["discord", "qa-channel", "memory-core"]) {
+        expect(readArtifactRecord(path.join(f.root, `${boundaryRoot}/${id}.json`))).toBeDefined();
+      }
+      expect(f.has(`${boundaryRoot}/plugins/matrix/test-api.d.ts`)).toBe(false);
+    }),
+  );
+
   it.for([false, true])(
     "prepares transitive producers reached only through emitted SDK declarations (shared=%s)",
     { timeout: 30_000 },
@@ -432,13 +496,15 @@ describe("native declaration preparation", () => {
         };
         const producer = setup();
         const consumer = setup();
+        const outputPath = ".artifacts/sdk-command.outputs";
         const cli = (f: typeof producer, operation: string, ...args: string[]) => {
           signal.throwIfAborted();
+          fs.rmSync(path.join(f.root, outputPath), { force: true });
           return command(
             f.root,
             process.execPath,
             ["scripts/ci-sdk-declarations.mts", operation, ...args],
-            { ...process.env, GITHUB_OUTPUT: undefined },
+            { ...process.env, GITHUB_OUTPUT: path.join(f.root, outputPath) },
           );
         };
         const success = (f: typeof producer, operation: string, ...args: string[]) => {
@@ -456,9 +522,37 @@ describe("native declaration preparation", () => {
         const narrowPack = cli(producer, "pack");
         expect(narrowPack.status, narrowPack.stdout + narrowPack.stderr).toBe(1);
         expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
+        expect(producer.has(outputPath)).toBe(false);
         await producer.run();
-        success(producer, "pack");
+        const readGuard = ".artifacts/sdk-pack-read-guard.cjs";
+        producer.write(
+          readGuard,
+          `const fs = require("node:fs");
+const path = require("node:path");
+const output = path.join(process.cwd(), "packages/plugin-sdk/dist") + path.sep;
+const read = fs.readFileSync;
+const seen = new Set();
+fs.readFileSync = function (file, ...args) {
+  if (typeof file === "string" && path.resolve(file).startsWith(output)) {
+    if (seen.has(file)) throw new Error("SDK pack reread a validated output");
+    seen.add(file);
+  }
+  return Reflect.apply(read, this, [file, ...args]);
+};
+`,
+        );
+        expectExit(
+          command(
+            producer.root,
+            process.execPath,
+            ["--require", `./${readGuard}`, "scripts/ci-sdk-declarations.mts", "pack"],
+            { ...process.env, GITHUB_OUTPUT: path.join(producer.root, outputPath) },
+          ),
+          0,
+        );
+        const packedOutput = producer.read(outputPath);
         const published = identity(producer);
+        expect(packedOutput).toBe(`cache-key=${published["cache-key"]}\n`);
         const empty = identity(consumer);
         expect(published.fresh).toBe("true");
         expect(empty.fresh).toBe("false");
@@ -469,6 +563,7 @@ describe("native declaration preparation", () => {
         fs.mkdirSync(path.dirname(targetArchive), { recursive: true });
         fs.writeFileSync(targetArchive, archive);
         success(consumer, "restore", "--required");
+        expect(consumer.read(outputPath)).toBe(packedOutput);
         success(consumer, "validate");
         const restored = consumer.snapshot(consumer.recordPath);
         await consumer.selected({ OPENCLAW_CI_SHARED_SDK: "1" });
@@ -501,6 +596,7 @@ describe("native declaration preparation", () => {
           const rejected = cli(consumer, "restore", "--required");
           expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
           expect(rejected.stderr).toMatch(/SDK (?:archive|receipt)/u);
+          expect(consumer.has(outputPath)).toBe(false);
           expect(consumer.has(consumer.recordPath)).toBe(false);
         }
 
@@ -512,7 +608,13 @@ describe("native declaration preparation", () => {
         const stale = cli(consumer, "restore", "--required");
         expect(stale.status, stale.stdout + stale.stderr).toBe(1);
         expect(stale.stderr).toContain("different source or toolchain inputs");
-        expect(success(consumer, "restore").stdout).toContain("native preparation will run");
+        expect(consumer.has(outputPath)).toBe(false);
+        const fallback = success(consumer, "restore").stdout;
+        expect(fallback).toContain("native preparation will run");
+        expect(fallback).toContain(
+          "compiler signature changed (inputs, config, toolchain or runtime)",
+        );
+        expect(consumer.has(outputPath)).toBe(false);
         expect(consumer.has(consumer.recordPath)).toBe(false);
         await consumer.run();
         success(consumer, "validate");

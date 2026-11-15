@@ -159,7 +159,7 @@ it("@openclaw/ai packed package installs externally with public exports and shar
       if (legacy.encodedModelRequestBodyStream(prepared.body) !== true) {
         throw new Error("encoded request-body stream metadata was split across package entries");
       }
-      if (await prepared.body.text() !== '{"stream":true,"input":"hello"}') {
+      if (await new Response(prepared.body).text() !== '{"stream":true,"input":"hello"}') {
         throw new Error("request-body encoding changed across package entries");
       }
     `;

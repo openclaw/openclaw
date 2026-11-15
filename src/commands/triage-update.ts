@@ -322,13 +322,16 @@ export function sanitizeTriageUpdateFailure(
     : undefined;
   takePluginErrors(pluginWarnings?.slice(0, -1), true, warnings);
   const failedSteps = result.steps.filter(isFailedUpdateStep);
-  const latest = new Set(failedSteps.slice(-3));
+  // Recovery steps fail after the first failure; keep the step that started them.
+  const trigger = failedSteps.length > 1 ? failedSteps[0] : undefined;
+  const latest = new Set([...(trigger ? [trigger] : []), ...failedSteps.slice(-2)]);
   const retained = new Set(
     result.steps.filter(
       (step) => latest.has(step) || (preserveFindings && step.doctorLintFindings !== undefined),
     ),
   );
   omittedDetails += failedSteps.filter((step) => !retained.has(step)).length;
+  const retainedSteps = Array.from(retained);
   const sanitized = {
     ...(error ? { error } : {}),
     result: {
@@ -386,15 +389,22 @@ export function sanitizeTriageUpdateFailure(
     omittedDetails,
   };
   // Fit whole records, retaining the latest failed step and at least one plugin cause.
+  // The triggering failure goes last among older records.
   // Field caps reserve room for these plus identity and restart safety even after JSON escaping.
   if (format === "inventory" && preserveFindings) {
     return sanitized;
   }
   const maxBytes =
     format === "artifact" ? UPDATE_FAILURE_MAX_BYTES - 1 : UPDATE_FAILURE_PROMPT_MAX_BYTES;
+  const recordOf = (step: (typeof result.steps)[number] | undefined) =>
+    step ? sanitized.result.steps[retainedSteps.indexOf(step)] : undefined;
+  const latestRecord = recordOf(failedSteps.at(-1));
+  const protectedRecords = new Set([recordOf(trigger), latestRecord]);
   while (Buffer.byteLength(JSON.stringify(sanitized)) > maxBytes) {
-    if (sanitized.result.steps.length > 1) {
-      sanitized.result.steps.shift();
+    const steps = sanitized.result.steps;
+    if (steps.length > 1) {
+      const older = steps.findIndex((step) => !protectedRecords.has(step));
+      steps.splice(older === -1 ? steps.findIndex((step) => step !== latestRecord) : older, 1);
     } else if (removePluginDetails.length > 1) {
       removePluginDetails.pop()?.();
     } else if ((sanitized.result.steps[0]?.failureFacts?.length ?? 0) > 1) {

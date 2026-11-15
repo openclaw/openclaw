@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { expectBytesEqual, expectFilesEqual } from "../../test/helpers/file-snapshots.js";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
@@ -21,7 +22,7 @@ import type { OpenClawConfigWithLegacyRoster } from "../config/legacy.roster.js"
 import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-session-migration.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
-import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
+import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-read.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
@@ -39,8 +40,8 @@ import {
 } from "../plugins/provider-auth-persistence.js";
 import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-discovery.js";
 import { AGENT_DELETION_RECOVERY_SOURCE_KEY } from "../state/agent-deletion-journal-recovery.kernel.js";
-import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import { readAgentDeletionJournalStatusInWorker } from "../state/agent-deletion-journal.read.js";
+import { completeDeletion } from "../state/agent-deletion-journal.test-support.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   isOpenClawAgentDatabaseOpen,
@@ -48,10 +49,7 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-} from "../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { executeSystemAgentOperation } from "../system-agent/operations-execute.js";
 import { createSystemAgentTestRuntime } from "../system-agent/system-agent.runtime.test-support.js";
@@ -72,24 +70,6 @@ import { resolveSharedAuthStorePath } from "./auth-profiles/path-resolve.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { readWorkspaceStateSnapshot } from "./workspace-state-store.js";
-
-function completeDeletion(
-  state: Awaited<ReturnType<typeof createState>>,
-  agentId: string,
-  workspaceDir: string,
-) {
-  const deletion = beginAgentDeletionJournal({
-    agentId,
-    operationId: randomUUID(),
-    agentDir: state.agentDir(agentId),
-    workspaceDir,
-    sessionsDir: state.sessionsDir(agentId),
-    deleteFiles: false,
-  });
-  runOpenClawStateWriteTransaction((database) =>
-    completeAgentDeletionJournalInDatabase(database, deletion.agentId, deletion.operationId),
-  );
-}
 
 function assertAuthority(authority: Parameters<typeof validateAgentRunDelegatedAuthority>[0]) {
   if (!validateAgentRunDelegatedAuthority(authority)) {
@@ -191,7 +171,10 @@ it("restores only the configured held store after explicit creation, never throu
   expect(
     isHeld(resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }), "main"),
   ).toBeFalsy();
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
   expect(readAgentDeletionJournal("main", { env: state.env })).toBeUndefined();
   expect(await readAgentDeletionJournalStatusInWorker("main", { env: state.env })).toBe("absent");
   expect(isAgentDeletionBlocked("main", { env: state.env })).toBe(false);
@@ -287,7 +270,7 @@ it("restores a held custom filename only after its session store configuration s
   await state.writeConfig({ ...config, session: { store: target.path } });
   await expectCreation(params, { status: "created", agentId: target.agentId });
   expect(recovery.readHolds()).toEqual([]);
-  expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
 });
 
 it.each(["missing", "un-authored"] as const)(
@@ -323,7 +306,7 @@ it.each(["missing", "un-authored"] as const)(
     }
     await expectMissing(workspace, state.agentDir());
     expect(recovery.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery.bytes[0]!, target.path);
   },
 );
 
@@ -367,7 +350,7 @@ it.each(["bootstrap", "explicit"])(
     expect(commit).not.toHaveBeenCalled();
     await expectMissing(stagedFile, state.agentDir(target.agentId));
     expect(recovery?.readHolds()).toEqual([target]);
-    expect(await fs.readFile(target.path)).toEqual(recovery?.bytes[0]);
+    expectBytesEqual(await fs.readFile(target.path), recovery!.bytes[0]!, target.path);
   },
 );
 
@@ -413,7 +396,7 @@ it.each([
   });
   expect(result).toMatchObject(duplicate);
   expect(recovery.readHolds()).toEqual([target]);
-  expect(await fs.readFile(moved)).toEqual(recovery.bytes[0]);
+  expectBytesEqual(await fs.readFile(moved), recovery.bytes[0]!, moved);
   if (change.endsWith("after publication")) {
     expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
     expect(rollback).not.toHaveBeenCalled();
@@ -458,7 +441,10 @@ it("keeps a restored main agent held until its new config entry is published", a
   expect(created).toMatchObject({ status: "created", agentId: "main" });
   expect(await state.readJsonConfig()).toHaveProperty("agents.entries.main");
   expect(recovery.readHolds()).toEqual(recovery.held.slice(1));
-  expect(await recovery.readBytes()).toEqual(recovery.bytes);
+  expectFilesEqual(
+    (await recovery.readBytes()).map((bytes) => ({ bytes })),
+    recovery.bytes.map((bytes) => ({ bytes })),
+  );
 });
 
 it("does not create an agent after delegated authority closes while awaiting the config lock", async () => {

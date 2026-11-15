@@ -170,9 +170,6 @@
       "openclaw/plugin-sdk/agent-runtime-test-contracts": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/agent-runtime-test-contracts.d.ts"
       ],
-      "openclaw/plugin-sdk/channel-target-testing": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-target-testing.d.ts"
-      ],
       "openclaw/plugin-sdk/channel-test-helpers": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/channel-test-helpers.d.ts"
       ],
@@ -986,6 +983,15 @@
       ],
       "openclaw/plugin-sdk/memory-core-host-transcript-stats": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/memory-core-host-transcript-stats.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-authoring-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-authoring-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-workshop-host-runtime": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-workshop-host-runtime.d.ts"
+      ],
+      "openclaw/plugin-sdk/skill-workshop-host-cli": [
+        "../../packages/plugin-sdk/dist/src/plugin-sdk/skill-workshop-host-cli.d.ts"
       ]
     }
   }

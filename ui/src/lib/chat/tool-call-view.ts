@@ -2,6 +2,8 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
 import { resolveExecCode, resolveExecTitle } from "../../../../src/agents/tool-display-exec.js";
+import { t } from "../../i18n/index.ts";
+import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
 import {
   MAX_DIFF_RENDER_LINES,
   buildWriteDiffLines,
@@ -140,12 +142,11 @@ function appendHunk(
 }
 
 function sectionLabel(section: PatchSection): string {
+  registerChatToolLabelsEnglish();
   if (section.operation === "update" && section.path !== section.sourcePath) {
-    return `Move ${section.sourcePath} → ${section.path}`;
+    return t("chat.toolCards.patch.move", { source: section.sourcePath, path: section.path });
   }
-  const verb =
-    section.operation === "add" ? "Add" : section.operation === "delete" ? "Delete" : "Update";
-  return `${verb} ${section.path}`;
+  return t(`chat.toolCards.patch.${section.operation}`, { path: section.path });
 }
 
 function finish(collector: PatchCollector): PatchViewData | null {

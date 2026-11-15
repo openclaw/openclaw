@@ -181,12 +181,14 @@ export function resolveVisibleActiveSessionRunState(
     projectedAgentRunIndex?: ProjectedAgentRunIndex;
     includeTerminalPersistence?: boolean;
   },
+  matchesGateway = captureGatewayScopeMatcher(params.resolveGatewayContext),
 ): VisibleActiveSessionRunState {
+  const { canonicalKey, requestedKey, defaultAgentId } = params;
   const sessionId = params.sessionId?.trim();
   const resolvedAgentId =
     params.agentId ??
-    parseAgentSessionKey(params.canonicalKey)?.agentId ??
-    parseAgentSessionKey(params.requestedKey)?.agentId;
+    parseAgentSessionKey(canonicalKey)?.agentId ??
+    parseAgentSessionKey(requestedKey)?.agentId;
   // SDK publication callbacks may select by logical identity; core rows supply their exact store.
   const storePaths =
     params.storePath === undefined
@@ -194,47 +196,41 @@ export function resolveVisibleActiveSessionRunState(
       : (params.physicalPaths?.(params.storePath, resolvedAgentId) ?? [params.storePath]);
   const matchesStore = (paths: readonly string[]) =>
     storePaths === undefined || paths.some((storePath) => storePaths.includes(storePath));
-  const matchesRequestedSession = (active: TrackedActiveSessionRun) =>
-    matchesStore(active.storePaths) &&
-    (isTrackedActiveSessionRunForKey(
-      active,
-      params.canonicalKey,
-      resolvedAgentId,
-      params.defaultAgentId,
-    ) ||
-      isTrackedActiveSessionRunForKey(
-        active,
-        params.requestedKey,
-        resolvedAgentId,
-        params.defaultAgentId,
-      ) ||
-      (sessionId !== undefined &&
-        isTrackedActiveSessionRunForSessionId(
-          active,
-          sessionId,
-          resolvedAgentId,
-          params.defaultAgentId,
-        )));
-  const matchingTrackedRuns = (
+  const trackedRuns =
     params.trackedActiveRuns ??
     collectTrackedActiveSessionRuns(
       params.includeTerminalPersistence,
-      {
-        requestedKey: params.requestedKey,
-        canonicalKey: params.canonicalKey,
-        sessionId,
-      },
+      { requestedKey, canonicalKey, sessionId },
       undefined,
-      captureGatewayScopeMatcher(params.resolveGatewayContext),
+      matchesGateway,
       params.physicalPaths,
-    )
-  ).filter(matchesRequestedSession);
-  const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
-  const runIds = matchingTrackedRuns
-    .filter((active) => !active.terminalPersistence)
-    .map((active) => active.runId);
+    );
+  const runIds: string[] = [];
+  let hasTerminalPersistence = false;
+  let trackedRunning = false;
+  let trackedQueued = false;
+  for (const active of trackedRuns) {
+    if (
+      !matchesStore(active.storePaths) ||
+      !(
+        isTrackedActiveSessionRunForKey(active, canonicalKey, resolvedAgentId, defaultAgentId) ||
+        isTrackedActiveSessionRunForKey(active, requestedKey, resolvedAgentId, defaultAgentId) ||
+        (sessionId !== undefined &&
+          isTrackedActiveSessionRunForSessionId(active, sessionId, resolvedAgentId, defaultAgentId))
+      )
+    ) {
+      continue;
+    }
+    if (active.terminalPersistence) {
+      hasTerminalPersistence = true;
+    } else {
+      runIds.push(active.runId);
+    }
+    trackedRunning ||= active.progress === "running" && !isAgentRunWaitingForCapacity(active.runId);
+    trackedQueued ||= active.progress === "queued";
+  }
   const directSubagent = getLatestLiveSubagentRunByChildSessionKey(
-    params.canonicalKey,
+    canonicalKey,
     undefined,
     resolvedAgentId,
   );
@@ -242,9 +238,9 @@ export function resolveVisibleActiveSessionRunState(
     directSubagent &&
     isTrackedActiveSessionRunForKey(
       { sessionKey: directSubagent.childSessionKey },
-      params.canonicalKey,
+      canonicalKey,
       resolvedAgentId,
-      params.defaultAgentId,
+      defaultAgentId,
     ),
   );
   const hasLiveSubagent = matchesDirectSubagentSession && isSubagentRunLive(directSubagent);
@@ -265,14 +261,13 @@ export function resolveVisibleActiveSessionRunState(
         getSubagentRunRuntimeKey(directSubagent),
       ));
   const projectedRunState = resolveProjectedAgentRunProgressState({
-    sessionKeys: [params.requestedKey, params.canonicalKey],
-    ...(sessionId ? { sessionId } : {}),
-    ...(resolvedAgentId ? { agentId: resolvedAgentId } : {}),
-    ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
-    ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
+    sessionKeys: [requestedKey, canonicalKey],
+    sessionId: sessionId || undefined,
+    agentId: resolvedAgentId || undefined,
+    defaultAgentId: defaultAgentId || undefined,
+    index: params.projectedAgentRunIndex,
   });
   const localResolution = sessionId ? resolveReplyRunForCurrentSessionId(sessionId) : undefined;
-  const matchesGateway = captureGatewayScopeMatcher(params.resolveGatewayContext);
   const localOperations = (
     localResolution?.kind === "one"
       ? [localResolution.operation]
@@ -293,9 +288,9 @@ export function resolveVisibleActiveSessionRunState(
         {
           agentId: operation.agentId,
           sessionKey: operation.key,
-          defaultAgentId: params.defaultAgentId,
+          defaultAgentId,
         },
-        resolvedAgentId ?? params.defaultAgentId ?? "",
+        resolvedAgentId ?? defaultAgentId ?? "",
       ) &&
       entry.attachment?.projectSessionActive !== false &&
       !operation.result
@@ -323,9 +318,7 @@ export function resolveVisibleActiveSessionRunState(
   // Remote lifecycle/subagent facts remain separately attributed projections.
   const running =
     ((hasLiveSubagent || hasQueuedSubagent) && !subagentCapacityWait) ||
-    matchingTrackedRuns.some(
-      (active) => active.progress === "running" && !isAgentRunWaitingForCapacity(active.runId),
-    ) ||
+    trackedRunning ||
     projectedRunState === "running" ||
     embeddedRunState === "running";
   const active =
@@ -348,7 +341,7 @@ export function resolveVisibleActiveSessionRunState(
     !running &&
     (embeddedRunState === "queued" ||
       subagentCapacityWait ||
-      matchingTrackedRuns.some((run) => run.progress === "queued") ||
+      trackedQueued ||
       projectedRunState === "queued" ||
       projectedRunState === "capacity-wait")
       ? { status: "queued" as const }
@@ -431,20 +424,23 @@ export function createVisibleActiveSessionRunProjector(
     ) {
       return { active: false, runIds: [] };
     }
-    return resolveVisibleActiveSessionRunState({
-      ...params,
-      resolveGatewayContext,
-      physicalPaths,
-      projectedAgentRunIndex,
-      trackedRpcSourceRefs,
-      trackedActiveRuns: [
-        ...new Set([
-          ...(byKey.get(params.canonicalKey) ?? []),
-          ...(byKey.get(params.requestedKey) ?? []),
-          ...(byId.get(sessionId) ?? []),
-        ]),
-      ],
-    });
+    return resolveVisibleActiveSessionRunState(
+      {
+        ...params,
+        resolveGatewayContext,
+        physicalPaths,
+        projectedAgentRunIndex,
+        trackedRpcSourceRefs,
+        trackedActiveRuns: [
+          ...new Set([
+            ...(byKey.get(params.canonicalKey) ?? []),
+            ...(byKey.get(params.requestedKey) ?? []),
+            ...(byId.get(sessionId) ?? []),
+          ]),
+        ],
+      },
+      matchesGateway,
+    );
   };
   const candidateSessionIdsOrKeys = (): ReadonlySet<string> =>
     new Set(

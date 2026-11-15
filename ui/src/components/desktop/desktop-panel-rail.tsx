@@ -85,7 +85,7 @@ export function DesktopOpenWindow(props: { href: string; inline?: boolean }) {
       href={props.href}
       target="_blank"
       rel="noopener"
-      title={t("desktop.openWindow")}
+      title={t("desktop.openWindowTooltip")}
       aria-label={t("desktop.openWindow")}
     >
       <Icon name="externalLink" />
@@ -519,7 +519,7 @@ export function DesktopSizing(
       when={props.presentation === "menu"}
       fallback={
         <select
-          class="desktop-sizing"
+          class="settings-select desktop-sizing"
           aria-label={t("desktop.sizing")}
           title={t("desktop.matchRequirement")}
           onChange={(event) => {

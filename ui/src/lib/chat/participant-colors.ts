@@ -88,7 +88,7 @@ function identityOklchHue(hue: number): number {
   return rgbToOklch([channel(0), channel(8), channel(4)]).h;
 }
 
-export function participantColors(palette: ParticipantPalette, identityHue: number | null) {
+function participantColors(palette: ParticipantPalette, identityHue: number | null) {
   const tones = PARTICIPANT_TONES[palette.mode];
   const viewer = identityHue === null;
   const h = viewer ? palette.accent.h : identityOklchHue(identityHue);

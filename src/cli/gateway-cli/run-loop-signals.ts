@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isGatewayStateProcessOwnerRetiredError } from "../../infra/gateway-state-owner-errors.js";
 import {
   consumeGatewaySuspendHandoff,
   type GatewaySuspendHandoffOwner,
@@ -39,6 +38,7 @@ export function createGatewayRunSignals(params: {
   isTerminal: () => boolean;
   isForcedExitStarted: () => boolean;
   isForegroundUpdateClosed: () => boolean;
+  getRequest: () => GatewayRunSignalRequest | null;
   isRuntimeResetPending: () => boolean;
   isShuttingDown: () => boolean;
   getExternalRestartOwner: () => GatewaySuspendHandoffOwner | undefined;
@@ -61,6 +61,8 @@ export function createGatewayRunSignals(params: {
   let signalStoreOpening: Promise<void> | undefined;
   let reopenSignalStore: (() => void) | undefined;
   let signalsActive = true;
+  let sigtermIteration: object | undefined;
+  let duplicateSigtermLogged = false;
   const sealSignalStore = () => {
     signalStoreOpen = false;
     signalStoreOpening ??= new Promise<void>((resolve) => {
@@ -174,7 +176,6 @@ export function createGatewayRunSignals(params: {
     if (!signalsActive || params.isTerminal()) {
       return;
     }
-    observeSignal("SIGTERM");
     const terminalHostedStop = params.getTerminalHostedStop();
     if (terminalHostedStop) {
       // Kernel cleanup is already joined. A native stop signal belongs to this
@@ -186,19 +187,32 @@ export function createGatewayRunSignals(params: {
       updateSuccessor.stop("SIGTERM");
       return;
     }
+    const iteration = params.getIteration();
+    if (params.isShuttingDown() && sigtermIteration === iteration) {
+      if (!duplicateSigtermLogged) {
+        duplicateSigtermLogged = true;
+        gatewayLog.info("duplicate SIGTERM ignored");
+      }
+      return;
+    }
+    sigtermIteration = iteration;
+    duplicateSigtermLogged = false;
     if (params.isForcedExitStarted()) {
       request("stop", "SIGTERM");
       return;
     }
-    // Transfer this in-memory authority before even the reversible signal fence.
+    if (params.isShuttingDown() && !params.getRequest()?.foregroundUpdate) {
+      // Only a foreground updater's first SIGTERM can carry another restart intent.
+      // Ordinary shutdown owns the sealed store; in-place restart stops directly.
+      request("stop", "SIGTERM");
+      return;
+    }
+    observeSignal("SIGTERM");
     let suspendHandoff: ReturnType<typeof consumeGatewaySuspendHandoff> | undefined;
-    const duringShutdown = params.isShuttingDown();
-    if (!duringShutdown) {
-      try {
-        suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
-      } catch (error) {
-        suspendHandoff = { ok: false, error: formatErrorMessage(error) };
-      }
+    try {
+      suspendHandoff = consumeGatewaySuspendHandoff(params.getExternalRestartOwner());
+    } catch (error) {
+      suspendHandoff = { ok: false, error: formatErrorMessage(error) };
     }
     enqueueSignal(
       true,
@@ -214,15 +228,7 @@ export function createGatewayRunSignals(params: {
         );
       },
       (err, acceptedAtMs) => {
-        if (duringShutdown && isGatewayStateProcessOwnerRetiredError(err)) {
-          // A closing iteration (e.g. an in-process restart) already released
-          // state; no restart intent can be read, and stopping is the outcome.
-          gatewayLog.info(
-            "received SIGTERM after shutdown released Gateway state; stopping without a restart intent",
-          );
-        } else {
-          gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
-        }
+        gatewayLog.error(`failed to handle SIGTERM: ${String(err)}`);
         request("stop", "SIGTERM", undefined, undefined, undefined, {
           acceptedAtMs,
           suspendHandoff,

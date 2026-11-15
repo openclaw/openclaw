@@ -33,6 +33,10 @@ import {
 } from "../plugin-sdk/session-store-runtime.js";
 import { readSessionTranscriptEvents } from "../plugin-sdk/session-transcript-runtime.js";
 import { appendSqliteSessionTranscriptEventForTest } from "../plugin-sdk/sqlite-runtime-testing.js";
+import {
+  bindLegacyPluginSdkResourceHost,
+  LegacyPluginSdkResourceHost,
+} from "../plugins/legacy-sdk-resource-host.js";
 import { getPluginInstance, getPluginOriginalValue } from "../plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../plugins/registry.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
@@ -90,6 +94,8 @@ const disabledCron = {
 
 function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginApi["logger"]) {
   const runtime = createTestPluginApi().runtime;
+  const resourceHost = new LegacyPluginSdkResourceHost();
+  onTestFinished(() => resourceHost.close());
   Object.assign(runtime, { config: { current: () => config } });
   const owner = createPluginRegistry({ logger, runtime, activateGlobalSideEffects: false });
   const record = createPluginRecord({
@@ -106,7 +112,9 @@ function createManagedMemoryCore(config: OpenClawConfig, logger: OpenClawPluginA
     api,
     bindGateway() {
       const gateway = createGatewayRequestContext(makeContextParams());
-      bindGatewayContextResolver(runtime, () => gateway);
+      const resolver = () => gateway;
+      bindLegacyPluginSdkResourceHost(resolver, resourceHost);
+      bindGatewayContextResolver(runtime, resolver);
     },
     dispose: () => getPluginInstance(record)!.dispose(),
   };
@@ -125,7 +133,7 @@ function dreamingFixture(state: OpenClawTestState, config: OpenClawConfig) {
   const hook = owner.registry.typedHooks.find(
     (entry) => entry.hookName === "gateway_start",
   )?.handler;
-  assert(service && service.apiVersion !== 2 && hook, "Missing Memory Core startup lifecycle");
+  assert(service && service.apiVersion === 2 && hook, "Missing Memory Core startup lifecycle");
   const scheduler = createTestPluginServiceScheduler();
   const context = {
     config,
@@ -241,7 +249,7 @@ it.for(["inspection", "preparation"] as const)(
           async (admission, activate) => {
             const joining = createDeferredCore();
             const observer = admission.observation;
-            const wait = observer.waitForAgentPreparation.bind(observer);
+            const wait = observer.waitForAgentPreparation;
             vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
               expect(getAgentDatabaseStartupAdmission()).toBeUndefined();
               const preparation = wait(...args);
@@ -295,7 +303,7 @@ it("does not wait for unrelated pending agents when the selected agent is prepar
       await expect(
         cleanupSessionLifecycleArtifacts({ ...cleanupParams, agentId: "healthy" }),
       ).resolves.toEqual(emptyCleanup);
-      expect(admission.hasPendingAgents).toBe(true);
+      expect(admission.observation.hasPendingAgents).toBe(true);
     });
   });
 });
@@ -434,7 +442,10 @@ it.for([
     const service = owner.registry.services.find(
       (entry) => entry.service.id === "memory-core-index",
     )?.service;
-    assert(registeredRuntime && service && service.apiVersion !== 2, "Missing indexing lifecycle");
+    assert(
+      registeredRuntime && service && service.apiVersion !== 2 && service.apiVersion !== 3,
+      "Missing indexing lifecycle",
+    );
     const runtime = (getPluginOriginalValue(registeredRuntime, instance) ??
       registeredRuntime) as typeof registeredRuntime;
     // Service restarts reopen indexes only after a manager has run in this process.
@@ -456,7 +467,7 @@ it.for([
         async (admission, activate) => {
           const joined = createDeferredCore();
           const observer = admission.observation;
-          const wait = observer.waitForAgentPreparation.bind(observer);
+          const wait = observer.waitForAgentPreparation;
           let joinedPreparation = false;
           vi.spyOn(observer, "waitForAgentPreparation").mockImplementation((...args) => {
             const preparation = wait(...args);

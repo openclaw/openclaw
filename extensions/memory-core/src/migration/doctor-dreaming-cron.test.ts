@@ -205,3 +205,17 @@ it.each([true, false])("plans historical inventory repairs when enabled=%s", asy
 it("plans no edits for an authored declared job", async () => {
   await checkMigration(createInput([makeJob("declared", AUTHORED_FIELDS)]), []);
 });
+
+it("reports the host's retained-backup registration warning after repair", async () => {
+  const { input, repairCronJobs } = createInput([makeJob("legacy")]);
+  repairCronJobs.mockResolvedValue({
+    changed: 1,
+    backupPath: "/state/original.bak",
+    warnings: ["Migration backups remain protected; cleanup registration failed: denied"],
+  });
+  expect(await dreamingCronMigration.migrateLegacyState(input)).toMatchObject({
+    changes: [expect.stringContaining("Repaired 1 historical dreaming cron row")],
+    warnings: ["Migration backups remain protected; cleanup registration failed: denied"],
+    warningDisposition: "recoverable",
+  });
+});

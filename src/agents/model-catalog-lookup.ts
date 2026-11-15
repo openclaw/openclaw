@@ -7,7 +7,8 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isModelThinkingFormat, type ModelCompatConfig } from "../config/types.models.js";
+import { isModelThinkingFormat } from "../config/types.models.js";
+import type { ModelCompatConfig } from "../config/zod-schema.model-compat.js";
 import type { Model } from "../llm/types.js";
 import {
   resolveProviderModelCatalogId,
@@ -201,6 +202,26 @@ export function findModelInCatalog<T extends Pick<ModelCatalogEntry, "provider" 
   return matches.length === 1 ? matches[0] : undefined;
 }
 
+/**
+ * Finds the row a CLI-native selector (for example Claude Code's `fable`)
+ * resolves to, as published by the CLI's own model menu in `params.nativeModelAliases`.
+ */
+export function findModelByNativeAlias<
+  T extends Pick<ModelCatalogEntry, "provider" | "id" | "params">,
+>(catalog: readonly T[], provider: string, alias: string): T | undefined {
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmed = alias.trim();
+  const matches = catalog.filter((entry) => {
+    const aliases = entry.params?.nativeModelAliases;
+    return (
+      normalizeProviderId(entry.provider) === normalizedProvider &&
+      Array.isArray(aliases) &&
+      aliases.includes(trimmed)
+    );
+  });
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
 /** Finds a model entry, requiring uniqueness when provider is omitted. */
 export function findModelCatalogEntry(
   catalog: ModelCatalogEntry[],
@@ -225,4 +246,11 @@ export function findModelCatalogEntry(
     ? exact
     : catalog.filter((entry) => normalizeLowercaseStringOrEmpty(entry.id) === normalizedModelId);
   return matches.length === 1 ? matches[0] : undefined;
+}
+
+/**
+ * Check if a model supports image input based on its catalog entry.
+ */
+export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
+  return modelSupportsInput(entry, "image");
 }

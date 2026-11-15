@@ -12,6 +12,7 @@ export type SessionEntryCurrentFacts = {
   agentHarnessId?: SessionEntry["agentHarnessId"];
   agentRuntimeOverride?: SessionEntry["agentRuntimeOverride"];
   initializationPending?: SessionEntry["initializationPending"];
+  templateInitialization?: SessionEntry["templateInitialization"];
   execHost?: SessionEntry["execHost"];
   execNode?: SessionEntry["execNode"];
   deviceFolder?: SessionEntry["deviceFolder"];

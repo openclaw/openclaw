@@ -171,23 +171,23 @@ it("backs off shared-repository snapshots after a missing-object failure", async
 });
 
 it.each([
-  "promised",
-  "promised-retry",
-  "unpromised",
-  "checksum",
-  "byte-limited",
-  "index-limited",
+  ["promised", 1],
+  ["promised-retry", 2],
+  ["unpromised", 0],
+  ["checksum", 1],
+  ["byte-limited", 1],
+  ["index-limited", 1],
 ] as const)(
   "consolidates healthy pack batches independently of missing snapshot objects (%s)",
-  async (damage) => {
+  async (damage, expectedFetches) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
-    // Fixture materialization is an explicit checkout, not a Gateway inspection.
     await git(repo, "config", "gc.auto", "0");
     await git(repo, "config", "maintenance.auto", "false");
     const records = await materialize(["partial-a", "partial-b"], { stateDir: root });
     await editRecords(records);
     if (damage === "promised-retry") {
-      // Persist the snapshot failure before explicitly retrying with an offline remote.
+      // Persist a failed hydration before explicitly retrying with an offline remote.
+      await git(repo, "remote", "set-url", "origin", path.join(root, "unavailable.git"));
       await makeService(env).gc();
     }
     const directory = path.join(repo, ".git", "objects", "pack");
@@ -233,9 +233,9 @@ it.each([
         const file = String(args[0]);
         if (stat && path.dirname(file) === directory) {
           if (damage === "byte-limited" && file.endsWith(".pack")) {
-            stat.size = 40 * 1024 * 1024;
+            stat.size = 1280 * 1024 * 1024;
           } else if (damage === "index-limited" && file.endsWith(".idx")) {
-            stat.size = 8 * 1024 * 1024;
+            stat.size = 32 * 1024 * 1024;
           }
         }
         return stat;
@@ -283,9 +283,9 @@ it.each([
     }
     const traceOutput = await fs.readFile(trace, "utf8");
     expect(traceOutput).not.toContain('"fsck"');
-    if (damage !== "promised-retry") {
-      expect(traceOutput).not.toContain("upload-pack");
-    }
+    const fetches = traceOutput.match(/"name":"fetch"/g)?.length ?? 0;
+    // Git may detect checksum damage before hydration or after its single batch.
+    expect(damage === "checksum" ? [0, 1] : [expectedFetches]).toContain(fetches);
     if (damage === "unpromised") {
       await git(repo, "remote", "set-url", "origin", source);
       const repaired = await service.gc({ retryDeferred: true });
@@ -326,57 +326,64 @@ it("records an admitted deletion timeout after its caller cancels and loses sess
   expect(getRegistryWorktree(env, record.id)?.removedAt).toBeUndefined();
 });
 
-it("persists timeout backoff across restart and retries only when due or explicitly requested", async () => {
-  const { env, materialize } = await fixture();
-  const record = (await materialize(["timed-out"]))[0]!;
-  await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
-  let attempts = 0;
-  let fail = true;
-  const execute = gitExec.executeGitCommandBytes;
-  vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-    if (args.includes("write-tree")) {
-      attempts++;
-      if (fail) {
-        return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+it.each(["idle", "retired"] as const)(
+  "persists timeout backoff for %s owners across restart and retries only when due or explicitly requested",
+  async (ownerState) => {
+    const { env, materialize } = await fixture();
+    const record = (await materialize(["timed-out"], { ownerId: "fixture-owner" }))[0]!;
+    await fs.writeFile(path.join(record.path, "README.md"), "retained changes\n");
+    let attempts = 0;
+    let fail = true;
+    const execute = gitExec.executeGitCommandBytes;
+    vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
+      if (args.includes("write-tree")) {
+        attempts++;
+        if (fail) {
+          return { ...timedOut(Buffer.alloc(0), 120_000), windowsEncoding: null };
+        }
       }
+      return await execute(cwd, args, options);
+    });
+    const gc = (retryDeferred = false) =>
+      makeService(env).gc({ retryDeferred, readOwnerState: () => ownerState });
+    const attemptStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    const first = retryState(env, record.id);
+    expect(first).toEqual({
+      stage: "snapshot",
+      elapsedMs: expect.any(Number),
+      attempts: 1,
+      retryAt: expect.any(Number),
+    });
+    expect(await read(record.path)).toBe("retained changes\n");
+    if (ownerState === "retired") {
+      expect(getRegistryWorktree(env, record.id)?.runEndCleanup?.outcome).toBe("failed");
     }
-    return await execute(cwd, args, options);
-  });
-  const gc = () => makeService(env).gc();
-  const attemptStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  const first = retryState(env, record.id);
-  expect(first).toEqual({
-    stage: "snapshot",
-    elapsedMs: expect.any(Number),
-    attempts: 1,
-    retryAt: expect.any(Number),
-  });
-  expect(await read(record.path)).toBe("retained changes\n");
 
-  expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
-  expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
-  const delayed = await setRetryAt(env, record.id, Date.now() + hour);
-  await closeOpenClawStateDatabaseAsync();
-  expect((await gc()).outcome).toBe("deferred");
-  expect(attempts).toBe(1);
-  expect(retryState(env, record.id)).toEqual(delayed);
+    expect(first?.retryAt).toBeGreaterThanOrEqual(attemptStarted + 2 * hour);
+    expect(first?.retryAt).toBeLessThanOrEqual(Date.now() + 2 * hour);
+    const delayed = await setRetryAt(env, record.id, Date.now() + hour);
+    await closeOpenClawStateDatabaseAsync();
+    expect((await gc()).outcome).toBe("deferred");
+    expect(attempts).toBe(1);
+    expect(retryState(env, record.id)).toEqual(delayed);
 
-  await setRetryAt(env, record.id, Date.now() - 1);
-  const secondStarted = Date.now();
-  expect((await gc()).outcome).toBe("partial");
-  expect(attempts).toBe(2);
-  expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
-  expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
-  expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
-  fail = false;
-  const retried = await makeService(env).gc({ retryDeferred: true });
-  expect(retried.removed).toEqual([record.id]);
-  expect(attempts).toBe(3);
-  expect(retryState(env, record.id)).toBeUndefined();
-  const restored = await makeService(env).restore({ id: record.id });
-  expect(await read(restored.path)).toBe("retained changes\n");
-});
+    await setRetryAt(env, record.id, Date.now() - 1);
+    const secondStarted = Date.now();
+    expect((await gc()).outcome).toBe("partial");
+    expect(attempts).toBe(2);
+    expect(retryState(env, record.id)).toMatchObject({ attempts: 2, retryAt: expect.any(Number) });
+    expect(retryState(env, record.id)?.retryAt).toBeGreaterThanOrEqual(secondStarted + 4 * hour);
+    expect(retryState(env, record.id)?.retryAt).toBeLessThanOrEqual(Date.now() + 4 * hour);
+    fail = false;
+    const retried = await gc(true);
+    expect(retried.removed).toEqual([record.id]);
+    expect(attempts).toBe(3);
+    expect(retryState(env, record.id)).toBeUndefined();
+    const restored = await makeService(env).restore({ id: record.id });
+    expect(await read(restored.path)).toBe("retained changes\n");
+  },
+);
 
 describe("nested eviction", () => {
   let root: string;

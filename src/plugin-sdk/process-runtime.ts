@@ -1,4 +1,5 @@
 export { createBoundedLineFramer } from "../process/bounded-line-framer.js";
+export { stripGatewayAllocatorEnv } from "../process/child-env.js";
 export { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 export { resolveNodeRuntimeExecutable } from "../infra/node-runtime-executable.js";
 export { resolveLaunchableNodePath } from "../infra/stable-node-path.js";
@@ -49,6 +50,7 @@ export { prepareSecretInputStdio, type SpawnStdioEntry } from "../process/spawn-
 export {
   createOwnedStdioProcess,
   closeOwnedStdioProcess,
+  OwnedStdioCleanupError,
   type OwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "../process/owned-stdio.js";

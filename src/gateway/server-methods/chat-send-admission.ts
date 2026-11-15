@@ -57,7 +57,7 @@ import {
 } from "./chat-send-admission-errors.js";
 import {
   isLocalChatInputAdmission,
-  isWorkerGoalChatAdmission,
+  resolveCodexGoalAdmission,
   withGoalChatPlacement,
   type PreparedGoalChatPlacement,
 } from "./chat-send-goal-admission.js";
@@ -193,7 +193,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   let gatewayWorkAdmission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   let localGoalAdmission = false;
   let localInputAdmission = false;
-  let workerGoalAdmission = false;
+  let codexGoalAdmission: "local" | "worker" | undefined;
   let initialSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionEntry: InternalSessionEntry | undefined;
   let admittedSessionSettings: ReturnType<typeof captureAdmittedChatSendSessionSettings>;
@@ -235,8 +235,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     ...(progressRefresh ? { controlUiVisible: false, projectSessionActive: false } : {}),
     lifecycleGeneration,
   });
+  // A message to people never interrupts or steers the active run.
   const runInterruptCapture =
-    admittedRunAbort.entry?.input.policy.mode === "interrupt"
+    admittedRunAbort.entry?.input.policy.mode === "interrupt" && !request.humanAddressed
       ? captureSessionControllerInterruptBefore(admittedRunAbort.entry.input)
       : undefined;
   const placementService = context.workerSessionPlacementService;
@@ -357,8 +358,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedSessionId = latestSessionId ?? backingSessionId ?? clientRunId;
         if (!replyTargetsCaptured) {
           // Retain original opaque targets, including absence, across placement waits.
+          // A message to people never steers the active run.
           messageInjectionTarget =
-            p.queueMode === "steer"
+            p.queueMode === "steer" && !request.humanAddressed
               ? captureCurrentReplyMessageInjectionTarget(
                   admittedRunAbort.entry?.input.mailbox.owner.id ?? activeRunScopeKey,
                 )
@@ -388,7 +390,9 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }
         const placement = preparedPlacement?.facts.current();
         const acpMeta = acp?.meta ?? null;
+        codexGoalAdmission = resolveCodexGoalAdmission(params, latestSession, placement, acpMeta);
         localInputAdmission =
+          !codexGoalAdmission &&
           isLocalChatInputAdmission(
             params,
             latestSession,
@@ -403,11 +407,10 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
             sessionKeys: [sessionKey],
           }) === undefined;
         localGoalAdmission = Boolean(request.goalOperation && localInputAdmission);
-        workerGoalAdmission = isWorkerGoalChatAdmission(params, latestSession, placement, acpMeta);
-        if (request.goalOperation && !localGoalAdmission && !workerGoalAdmission) {
+        if (request.goalOperation && !localGoalAdmission && !codexGoalAdmission) {
           throw new SessionGoalOperationError(
             "invalid",
-            "Goal start or resume requires an idle built-in local session with recoverable history or a supported Codex cloud-worker session.",
+            "Goal start or resume requires an idle built-in local session with recoverable history or a supported local or cloud-worker Codex session.",
           );
         }
       }).catch((error: unknown) => {
@@ -440,7 +443,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
     using workPhase = diagnostics?.scope("detail.admission.work");
     using admissionPhase = diagnostics?.scope("detail.admission.operator");
     const preparedInterrupt = await prepareChatSendInterruptAdmission({
-      operator: { ...params, runId: clientRunId, spawnedBy: session.entry?.spawnedBy },
+      operator: { ...params, runId: clientRunId },
       interruptCapture: runInterruptCapture,
       entry: admittedRunAbort.entry,
       assertCurrent: params.assertCurrent,
@@ -471,8 +474,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         admittedRunAbort.controller.abort(reason);
       },
     });
-    if (workerGoalAdmission && !capturedOperator.authority) {
-      throw new Error("Worker Goals require a current authenticated operator request.");
+    if (codexGoalAdmission && !capturedOperator.authority) {
+      throw new Error("Codex Goals require a current authenticated operator request.");
     }
     admittedRunAbort.initializeTiming({ now: Date.now(), timeoutMs });
     workPhase?.finish();
@@ -706,7 +709,7 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
         }),
       localGoalAdmission,
       localInputAdmission,
-      workerGoalAdmission,
+      codexGoalAdmission,
       setDiscardAbandonedPreparedMedia: setDiscardPreparedMedia,
     },
   };

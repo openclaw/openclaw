@@ -26,6 +26,20 @@ export function pluginTabKey(ref: PluginTabRef): string {
   return `${ref.pluginId}/${ref.id}`;
 }
 
+/** The page's own label: its native page registration, else the Gateway-advertised tab. */
+export function pluginPageLabel(
+  context: Pick<ApplicationContext, "basePath" | "gateway" | "plugins">,
+  location: { search: string; pathname: string } | undefined,
+): string | undefined {
+  const key = pluginTabKey(
+    pluginTabRefFromSearch(location?.search ?? "", location?.pathname, context.basePath),
+  );
+  return (
+    context.plugins.registrations("pages").find((entry) => entry.key === key)?.value.label ||
+    context.gateway.snapshot.hello?.controlUiTabs?.find((tab) => pluginTabKey(tab) === key)?.label
+  );
+}
+
 function pluginPageParams(search: string): Readonly<Record<string, string>> {
   return Object.fromEntries(
     [...new URLSearchParams(search)]

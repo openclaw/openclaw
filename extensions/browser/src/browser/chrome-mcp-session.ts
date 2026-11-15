@@ -3,12 +3,13 @@ import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { createChromeMcpSession, waitForChromeMcpReady } from "./chrome-mcp-connect.js";
 import type {
   ChromeMcpCallOptions,
+  ChromeMcpProfileOptions,
   ChromeMcpSession,
   ChromeMcpSessionLease,
   NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
 import { redactChromeMcpProfileLabelForDiagnostic } from "./chrome-mcp-diagnostics.js";
-import { buildChromeMcpSessionCacheKey } from "./chrome-mcp-options.js";
+import { buildChromeMcpSessionCacheKey, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import { cleanupTarget, closeChromeMcpSessionHandle } from "./chrome-mcp-process.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 
@@ -57,6 +58,13 @@ class ChromeMcpSessionOwner {
     const retained = this.retired.keys().next().value;
     const target = retained?.processCleanup && cleanupTarget(retained.processCleanup);
     return target?.root.pid ?? retained?.transport.pid ?? null;
+  }
+
+  get status(): { running: boolean; tabCount: number | null } {
+    if (this.pending || this.session?.transport.pid == null) {
+      return { running: false, tabCount: null };
+    }
+    return { running: true, tabCount: this.session.routing?.targetIdByPageId.size ?? null };
   }
 
   close(session: ChromeMcpSession): Promise<void> {
@@ -292,6 +300,12 @@ async function stopOwners(profileName: string, keep?: ChromeMcpSessionOwner): Pr
     throw toErrorObject(failed.reason, "Chrome MCP session cleanup failed.");
   }
   return results.some((result) => result.status === "fulfilled" && result.value);
+}
+
+/** Read the selected session's last observation without creating or probing an attachment. */
+export function getChromeMcpStatus(profileName: string, profile?: ChromeMcpProfileOptions) {
+  const key = buildChromeMcpSessionCacheKey(profileName, normalizeChromeMcpOptions(profile));
+  return owners.get(key)?.status ?? { running: false, tabCount: null };
 }
 
 export function getChromeMcpPid(profileName: string): number | null {

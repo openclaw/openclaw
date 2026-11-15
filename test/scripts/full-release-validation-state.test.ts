@@ -126,6 +126,8 @@ function collectorArtifact(
   const cancellation = options.cancellation ?? {};
   const decision = classifyReleaseSnapshot({
     cancelled: cancellation.requested === true,
+    targetSha: sealedPlan.targetSha,
+    targetVersion: sealedPlan.targetVersion,
     children,
     extraBlockers: options.extraBlockers,
     extraErrors: options.extraErrors,
@@ -140,7 +142,7 @@ function collectorArtifact(
     expected: {
       parentRunAttempt,
       parentRunId: "77",
-      targetSha: TARGET_SHA,
+      targetSha: sealedPlan.targetSha,
       workflowRef: "release-ci/tooling",
       workflowSha: SHA,
     },
@@ -250,13 +252,31 @@ describe("full release execution plan", () => {
       ],
     });
     writeFileSync(gh, "#!/bin/sh\nprintf '%s\\n' 'HTTP 503: Service unavailable' >&2\nexit 1\n");
+    const clock = join(root, "retry-clock.mjs");
+    const sleeps = join(root, "retry-sleeps.txt");
+    writeFileSync(
+      clock,
+      `import { appendFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
+import timers from "node:timers/promises";
+let now = Date.now();
+Date.now = () => now;
+timers.setTimeout = async (delay) => {
+  now += delay;
+  appendFileSync(${JSON.stringify(sleeps)}, delay + "\\n");
+};
+syncBuiltinESMExports();
+`,
+    );
     const unavailable = runPlanSubprocess(
       { childPhaseVersion: 3, childReuse },
       {
+        NODE_OPTIONS: `--import=${pathToFileURL(clock).href}`,
         PATH: `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
       },
     );
     expect(unavailable.result.status).toBe(2);
+    expect(readFileSync(sleeps, "utf8")).toBe("2000\n4000\n8000\n");
     expect(JSON.parse(readFileSync(unavailable.output, "utf8"))).toMatchObject({
       blockers: [],
       errors: [expect.objectContaining({ kind: "api_error" })],
@@ -818,7 +838,7 @@ describe("full release execution plan", () => {
     });
   });
 
-  it("does not require candidate acquisition when reusing release evidence", () => {
+  it("routes candidate acquisition for fresh qualified packages but not reused evidence", () => {
     expect(
       plan({
         candidateAcquisitionResult: "skipped",
@@ -831,6 +851,16 @@ describe("full release execution plan", () => {
       required: false,
       result: "skipped",
     });
+
+    const result = plan({
+      candidateRequired: true,
+      childPhaseVersion: 3,
+      rerunGroup: "qualified-package",
+    });
+    const selected = result.children.filter((entry) => entry.selected);
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.key).toBe("releaseChecksCandidate");
+    expect(result.gates.at(-1)?.required).toBe(true);
   });
 
   it("retains every required artifact qualification result as a parent gate", () => {
@@ -1101,9 +1131,9 @@ describe("release child attempt composition", () => {
       runAttempt: 2,
     };
 
-    it("ignores never-executed copies beside a completed job in a superseded attempt", () => {
-      const result = composeReleaseAttemptJobs(
-        [
+    it.each([
+      {
+        attempts: [
           {
             jobs: [
               job("checks-node-core-runtime-infra-process", "failure"),
@@ -1114,40 +1144,25 @@ describe("release child attempt composition", () => {
           ghostAttempt,
           { jobs: [job("checks-ui", "success")], runAttempt: 3 },
         ],
-        { effectiveRunAttempt: 3, plannedRunAttempt: 1 },
-      );
-      expect(result.jobs).toEqual([
-        expect.objectContaining({
-          acceptedRunAttempt: 2,
-          conclusion: "success",
-          name: "checks-node-core-runtime-infra-process",
-        }),
-        expect.objectContaining({
-          acceptedRunAttempt: 3,
-          conclusion: "success",
-          name: "checks-ui",
-        }),
-      ]);
-    });
-
-    it("ignores never-executed copies beside a completed job in the effective attempt", () => {
-      const result = composeReleaseAttemptJobs([ghostAttempt], {
+        effectiveRunAttempt: 3,
+        plannedRunAttempt: 1,
+      },
+      {
+        attempts: [ghostAttempt],
         effectiveRunAttempt: 2,
         plannedRunAttempt: 2,
-      });
-      expect(result.jobs).toEqual([
-        expect.objectContaining({
-          acceptedRunAttempt: 2,
-          conclusion: "success",
-          name: "checks-node-core-runtime-infra-process",
-        }),
-        expect.objectContaining({
-          acceptedRunAttempt: 2,
-          conclusion: "failure",
-          name: "checks-ui",
-        }),
-      ]);
-    });
+      },
+    ])(
+      "marks a duplicate-contaminated attempt unsealable even when another attempt is effective",
+      ({ attempts, effectiveRunAttempt, plannedRunAttempt }) => {
+        expect(() =>
+          composeReleaseAttemptJobs(attempts, {
+            effectiveRunAttempt,
+            plannedRunAttempt,
+          }),
+        ).toThrow("is unsealable due to duplicate job identity");
+      },
+    );
 
     it.each<{
       label: string;
@@ -1437,6 +1452,64 @@ describe("release decision policy", () => {
     expect(classifyReleaseSnapshot({ children: [snapshot] }).state).toBe("blocked_complete");
   });
 
+  it("binds Decision and Drain policy to the plan target and authenticated aggregate attempt", async () => {
+    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const targetVersion = "2026.11.4";
+    const planned = child("normalCi");
+    const leaf = {
+      id: 50,
+      name: "macos-swift (tests)",
+      status: "completed",
+      conclusion: "failure",
+    };
+    const gate = {
+      id: 51,
+      name: "openclaw/ci-gate",
+      status: "completed",
+      conclusion: "failure",
+      steps: [{ name: "Verify selected CI lanes", conclusion: "failure" }],
+    };
+    const fetched: number[] = [];
+    const options = {
+      targetSha,
+      targetVersion,
+      readRun: async () =>
+        githubRun(planned, {
+          conclusion: "failure",
+          run_attempt: 2,
+          triggering_actor: { login: "release-operator" },
+        }),
+      readAttemptJobs: async (_id: string, attempt: number) =>
+        attempt === 1
+          ? [leaf, gate]
+          : [{ name: "receipt", status: "completed", conclusion: "success" }],
+      readJobLog: (id: number) => {
+        fetched.push(id);
+        return "2026-11-15T04:00:00.0000000Z ##[error]macos-swift finished with failure (selected=true)";
+      },
+    };
+    const observed = await readChild(planned, undefined, undefined, options);
+    expect(observed.errors).toEqual([]);
+    expect(fetched).toEqual([51]);
+    expect(observed.conclusion).toBe("failure");
+    expect(observed.jobs).toContainEqual(
+      expect.objectContaining({ name: gate.name, acceptedRunAttempt: 1, conclusion: "failure" }),
+    );
+    expect(classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha }).state).toBe(
+      "passed",
+    );
+    expect(
+      classifyReleaseSnapshot({ children: [observed], targetVersion, targetSha: TARGET_SHA }).state,
+    ).toBe("blocked_complete");
+    const invalid = await readChild(planned, undefined, undefined, {
+      ...options,
+      readJobLog: () => "##[error]unknown",
+    });
+    expect(classifyReleaseSnapshot({ children: [invalid], targetVersion, targetSha }).state).toBe(
+      "orchestration_error",
+    );
+  });
+
   it("accepts a human child rerun with retained earlier jobs in a reused plan", async () => {
     const original = child("normalCi");
     const planned = hydrateReusedPlan([original], {
@@ -1481,7 +1554,7 @@ describe("release decision policy", () => {
   });
 
   it.each(["queued", "in_progress"])(
-    "keeps a %s rerun pending beside runnerless queued copies, then accepts its result",
+    "marks a %s rerun with runnerless duplicate copies unsealable",
     async (runStatus) => {
       const planned = child("normalCi");
       const name = "checks-node-core-fast-isolated";
@@ -1493,13 +1566,12 @@ describe("release decision policy", () => {
         runner_id: null,
         runner_name: null,
       };
-      let completed = false;
-      const options = {
+      const contaminated = await readChild(planned, undefined, undefined, {
         readRun: async () =>
           githubRun(planned, {
-            conclusion: completed ? "success" : null,
+            conclusion: null,
             run_attempt: 2,
-            status: completed ? "completed" : runStatus,
+            status: runStatus,
             triggering_actor: { login: "release-operator" },
           }),
         readAttemptJobs: async (_runId: string, attempt: number) =>
@@ -1509,44 +1581,26 @@ describe("release decision policy", () => {
                 { name, status: "completed", conclusion: "failure" },
               ]
             : [
-                ...Array.from({ length: 7 }, () => ghost),
+                ghost,
                 {
                   name,
-                  status: completed ? "completed" : "in_progress",
-                  conclusion: completed ? "success" : null,
+                  status: "in_progress",
+                  conclusion: null,
                   runner_id: 42,
                   runner_name: "GitHub Actions 42",
                   started_at: "2026-10-15T10:49:05Z",
                 },
-                ...Array.from({ length: 7 }, () => ghost),
               ],
-      };
-      const pending = await readChild(planned, undefined, undefined, options);
-      expect(pending.errors).toEqual([]);
-      expect(pending.status).toBe(runStatus);
-      expect(terminalPolicyPass(pending)).toBe(false);
-      expect(classifyReleaseSnapshot({ children: [pending] })).toMatchObject({
-        activeRunIds: ["101"],
-        blockers: [],
-        errors: [],
-        state: "qualifying",
       });
-      expect(pending.jobs).toEqual([
-        expect.objectContaining({ name, acceptedRunAttempt: 2, status: "in_progress" }),
-        expect.objectContaining({ name: "lint", acceptedRunAttempt: 1, conclusion: "success" }),
+      expect(contaminated.errors).toEqual([
+        expect.objectContaining({
+          kind: "api_error",
+          message: expect.stringContaining("is unsealable due to duplicate job identity"),
+        }),
       ]);
-
-      completed = true;
-      const settled = await readChild(planned, pending, undefined, options);
-      expect(classifyReleaseSnapshot({ children: [settled] })).toMatchObject({
-        activeRunIds: [],
-        blockers: [],
-        errors: [],
-        state: "passed",
+      expect(classifyReleaseSnapshot({ children: [contaminated] })).toMatchObject({
+        state: "orchestration_error",
       });
-      expect(settled.jobs).toContainEqual(
-        expect.objectContaining({ name, acceptedRunAttempt: 2, conclusion: "success" }),
-      );
     },
   );
 
@@ -1904,6 +1958,32 @@ describe("release state artifacts", () => {
       decision: { state: "passed" },
       drain: { state: "passed" },
     });
+  });
+
+  it("recomputes candidate-bound waivers when validating sealed Decision and Drain", () => {
+    const targetSha = "5eb2d8052ddc363245bea3ca4ec0833815ab6e93";
+    const sealedPlan = executionPlan(
+      { rerunGroup: "ci" },
+      { expected: { targetSha }, targetVersion: "2026.11.4" },
+    );
+    const failed = {
+      conclusion: "failure",
+      jobs: [{ name: "macos-swift (tests)", status: "completed", conclusion: "failure" }],
+    };
+    const decision = collectorArtifact("decision", 2, sealedPlan, failed);
+    const drain = collectorArtifact("drain", 2, sealedPlan, failed);
+    const expected = { ...stateExpected(), targetSha };
+    expect(verifyReleaseStateArtifacts(sealedPlan, decision, drain, expected).drain.state).toBe(
+      "passed",
+    );
+    expect(() =>
+      verifyReleaseStateArtifacts(sealedPlan, { ...decision, waivers: [] }, drain, expected),
+    ).toThrow("waivers differ");
+    const otherPlan = { ...sealedPlan, targetSha: TARGET_SHA };
+    otherPlan.sha256 = releaseExecutionPlanSha256(otherPlan);
+    expect(() =>
+      verifyReleaseStateArtifacts(otherPlan, decision, drain, stateExpected()),
+    ).toThrow();
   });
 
   it("uses one policy for decision, drain, and final verification", () => {

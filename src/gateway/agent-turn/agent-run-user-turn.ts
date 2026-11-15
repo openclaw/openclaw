@@ -19,6 +19,7 @@ import {
   resolveRequesterPrincipalKey,
   type RequesterOrigin,
 } from "../../agents/requester-origin.js";
+import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import { prepareCommandOwnerAuthority } from "../../auto-reply/command-auth.js";
 import type { InternalSessionEntry } from "../../config/sessions.js";
 import { readSessionSubmittedInput } from "../../config/sessions/session-accessor.pending-inputs.js";
@@ -461,7 +462,9 @@ export async function prepareAgentRunUserTurn(params: {
     let releaseProcessingAbortObserver: (() => void) | undefined;
     if (trackRequesterCompletion && recorder && !recorder.getProcessingCompletion?.()) {
       const recordAbort = () => {
-        const stopReason = params.getAbortStopReason?.() ?? "rpc";
+        const stopReason = isAgentRunRestartAbortReason(params.abortSignal?.reason)
+          ? "restart"
+          : (params.getAbortStopReason?.() ?? "rpc");
         // Intentional Stop seals non-retry custody immediately. A timeout
         // retains its source until the producer publishes its actual terminal facts.
         if (stopReason === "timeout") {
@@ -568,10 +571,11 @@ export async function releasePreparedAgentRunUserTurn(
     | "execApprovalFollowupHandoffClaimId"
   >,
   disposition: "cancelled" | "interrupted" = "cancelled",
+  userInitiated?: true,
 ): Promise<void> {
   try {
     prepared.releaseProcessingAbortObserver?.();
-    prepared.recorder?.finishPendingInput?.(disposition);
+    prepared.recorder?.finishPendingInput?.(disposition, userInitiated);
   } finally {
     try {
       await prepared.recorder?.waitForPendingInputSettlement?.();

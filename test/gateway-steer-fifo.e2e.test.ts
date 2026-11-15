@@ -857,7 +857,9 @@ describe("Gateway steer FIFO", () => {
   it(
     "hands steered document attachments to the active run as extracted file context",
     async () => {
-      const fixture = await createGatewayFixture("steer-document-context");
+      const fixture = await createGatewayFixture("steer-document-context", {
+        observeSteering: "QUEUED_STEER_DOCUMENT",
+      });
       const first = await sendHeldTurn(fixture, true);
 
       // Real gateway protocol send with a file attachment while the initial
@@ -885,6 +887,16 @@ describe("Gateway steer FIFO", () => {
       );
       expect(steer).toMatchObject({ status: "started" });
 
+      const admission = fixture.steeringAdmission;
+      if (!admission) {
+        throw new Error("steering admission observer was not configured");
+      }
+      // The upload ACK precedes document preparation and runtime steering admission.
+      await vi.waitFor(
+        async () =>
+          expect(await readTrace(admission.receiptPath)).toContain("QUEUED_STEER_DOCUMENT"),
+        WAIT_OPTS,
+      );
       fixture.modelServer.releaseFirst("final");
 
       await vi.waitFor(() => expect(fixture.modelServer.requests).toHaveLength(2), WAIT_OPTS);

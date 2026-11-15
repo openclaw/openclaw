@@ -25,6 +25,7 @@ type DeepgramRealtimeTranscriptionEvent = {
   is_final?: boolean;
   speech_final?: boolean;
   from_finalize?: boolean;
+  last_word_end?: number;
   error?: unknown;
   message?: string;
 };
@@ -156,13 +157,9 @@ export function buildDeepgramRealtimeTranscriptionProvider({
       const joinTranscript = (left: string, right: string) =>
         (left && right ? `${left} ${right}` : left || right).replace(/\s+/g, " ").trim();
 
-      const clearFinalizeFallback = () => {
+      const clearTurn = () => {
         clearTimeout(finalizeFallbackTimer);
         finalizeFallbackTimer = undefined;
-      };
-
-      const clearTurn = () => {
-        clearFinalizeFallback();
         finalizedTranscript = "";
         speechStarted = false;
       };
@@ -234,6 +231,11 @@ export function buildDeepgramRealtimeTranscriptionProvider({
             );
             return;
           }
+          case "UtteranceEnd":
+            if ((event.last_word_end ?? -1) >= 0 && !finalizeFallbackFired) {
+              flushTurn();
+            }
+            return;
           case "SpeechStarted":
             speechStarted = true;
             config.onSpeechStart?.();
@@ -265,6 +267,13 @@ export function buildDeepgramRealtimeTranscriptionProvider({
           url.searchParams.set("channels", "1");
           url.searchParams.set("interim_results", String(config.interimResults));
           url.searchParams.set("endpointing", String(config.endpointingMs));
+          if (config.interimResults && config.endpointingMs <= 5_000) {
+            // Transcript gaps still end a turn when noise keeps VAD endpointing open.
+            url.searchParams.set(
+              "utterance_end_ms",
+              String(Math.max(1_000, Math.ceil(config.endpointingMs))),
+            );
+          }
           if (config.language) {
             url.searchParams.set("language", config.language);
           }

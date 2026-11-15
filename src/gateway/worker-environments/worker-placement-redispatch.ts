@@ -1,4 +1,5 @@
 import { getRuntimeConfig } from "../../config/config.js";
+import { repositoryChatDispatchCredentialReader } from "../repository-dispatch.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type { WorkerDevicePlacementRequirementResolver } from "./placement-dispatch-startup.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
@@ -14,7 +15,7 @@ export function createWorkerPlacementRedispatch(params: {
   dispatch: WorkerPlacementDispatchContract["dispatch"];
   resolveDevicePlacementRequirement?: WorkerDevicePlacementRequirementResolver;
 }): WorkerPlacementRedispatch {
-  return async (placement, { assertCurrent, signal }) => {
+  return async (placement, { assertCurrent, signal, readNativeCredential: suppliedCredential }) => {
     signal?.throwIfAborted();
     assertCurrent();
     const projection = await params.placements.readProjection([placement.sessionId], {
@@ -54,10 +55,26 @@ export function createWorkerPlacementRedispatch(params: {
       }
       devicePlacement = await params.resolveDevicePlacementRequirement(identity);
     }
+    signal?.throwIfAborted();
+    assertCurrent();
+    const machineClass =
+      typeof profileSnapshot.machineClass === "string" ? profileSnapshot.machineClass : undefined;
+    const os = typeof profileSnapshot.os === "string" ? profileSnapshot.os : undefined;
+    // Direct publication recovery carries its own live caller, without a chat turn.
+    const readNativeCredential =
+      suppliedCredential ??
+      repositoryChatDispatchCredentialReader(
+        identity,
+        { profileId, providerId, profileSnapshot, executionMode },
+        assertCurrent,
+      );
     const requiredProfile = getRuntimeConfig().cloudWorkers?.requiredProfile;
     return await params.dispatch(
       {
         ...identity,
+        machineClass,
+        os,
+        readNativeCredential,
         profileId,
         ...(requiredProfile ? { requiredProfile } : {}),
         expectedPlacement: {

@@ -254,7 +254,7 @@ suite.define(() => {
             message: finalMessage,
           });
           await page
-            .getByRole("button", { name: "Stop generating" })
+            .getByRole("button", { name: "Stop", exact: true })
             .waitFor({ state: "detached" });
           await expect
             .poll(() => page.locator(".chat-work-group button").getAttribute("aria-expanded"))

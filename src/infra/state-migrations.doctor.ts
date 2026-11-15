@@ -25,10 +25,12 @@ import {
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  prepareLivePluginDoctorStateMigrationInventory,
+  preparePluginDoctorSessionStoreAgentIds,
+} from "../plugins/doctor-contract-preparation.js";
+import {
   collectRelevantDoctorPluginIds,
-  listPluginDoctorSessionStoreAgentIds,
   type PluginDoctorStateMigrationInventory,
-  resolveLivePluginDoctorStateMigrationInventory,
   resolvePluginDoctorStateMigrationInventory,
 } from "../plugins/doctor-contract-registry.js";
 import {
@@ -46,8 +48,17 @@ import {
   normalizeAgentId,
 } from "../routing/session-key.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
+import {
+  isArtifactPreservingStateRead,
+  withArtifactPreservingStateReads,
+} from "../state/artifact-preserving-state-reads.js";
 import { inspectOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import { STATE_SCHEMA_MIGRATION_DESCRIPTIONS } from "../state/openclaw-state-db-contract.js";
+import {
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import { detectOpenClawStateDatabaseSchemaMigrationsAsync } from "../state/openclaw-state-db-schema-discovery.js";
 import { detectOpenClawStateDatabaseSchemaMigrations } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -83,6 +94,7 @@ import {
   prepareDoctorAgentDatabaseDiscovery,
   resolveConcreteBindingAccountId,
 } from "./state-migrations.doctor-discovery.js";
+import type { AutoMigrateLegacyStateParams } from "./state-migrations.doctor.types.js";
 import {
   detectLegacyExecApprovals,
   migrateLegacyExecApprovals,
@@ -106,7 +118,6 @@ import {
   detectLegacyMcpOAuthStores,
   migrateLegacyMcpOAuthStores,
 } from "./state-migrations.mcp-oauth.js";
-import type { PreparedAgentDatabaseMigrationDiscovery } from "./state-migrations.media-persistence-targets.js";
 import {
   detectLegacyMeetingTranscripts,
   migrateLegacyMeetingTranscripts,
@@ -139,6 +150,7 @@ import {
 } from "./state-migrations.plugin-doctor.js";
 import {
   buildPlannedPluginStateMigrationDescriptor,
+  completedPluginMigrationFields,
   preparePostSessionPluginMigration,
 } from "./state-migrations.plugin-plan.js";
 import {
@@ -192,7 +204,6 @@ import type {
   LegacyStateMigrationMode,
   LegacyStateMigrationPlan,
   LegacyStateMigrationStepReceipt,
-  MigrationLogger,
   MigrationMessages,
   LegacyStateMigrationStep,
   PreparedPostSessionPluginMigration,
@@ -202,6 +213,7 @@ import {
   detectLegacyWorkspaceState,
   migrateLegacyWorkspaceState,
 } from "./state-migrations.workspace-setup.js";
+import { hasUpdateDoctorMigrationCapture } from "./update-doctor-migration-attribution.js";
 import {
   isUpdateRehearsalReadOnlyPath,
   resolveUpdateRehearsalRoot,
@@ -209,7 +221,7 @@ import {
 
 const autoMigrateChecked = new Set<string>();
 
-export async function detectLegacyStateMigrations(params: {
+type LegacyStateDetectionParams = {
   cfg: OpenClawConfigWithLegacyRoster;
   /** Doctor's original resolved locators, before roster ownership was materialized. */
   sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
@@ -226,7 +238,44 @@ export async function detectLegacyStateMigrations(params: {
   /** Candidate planning must not update SQLite coordination artifacts or runtime caches. */
   artifactPreservingReadOnly?: boolean;
   legacySessionSurfaces: PreparedLegacySessionSurfaces;
-}): Promise<LegacyStateDetection> {
+};
+
+export async function detectLegacyStateMigrations(
+  params: LegacyStateDetectionParams,
+): Promise<LegacyStateDetection> {
+  const asyncInspection =
+    params.mode !== "automatic" ||
+    params.artifactPreservingReadOnly === true ||
+    isArtifactPreservingStateRead() ||
+    hasUpdateDoctorMigrationCapture();
+  const detect = () => detectLegacyStateMigrationsInReadSnapshot(params, asyncInspection);
+  if (!asyncInspection) {
+    return detect();
+  }
+  // Plugin metadata and the remaining native detectors consume this prepared shared image.
+  const env = params.env ?? process.env;
+  const readEnv = {
+    ...env,
+    OPENCLAW_STATE_DIR: resolveStateDir(env, params.homedir ?? os.homedir),
+  };
+  const inspect = () =>
+    withOpenClawStateDatabaseReadSnapshot(
+      async () => {
+        await getActiveOpenClawStateDatabaseReadSnapshotAsync({ env: readEnv });
+        return detect();
+      },
+      { env: readEnv, signal: resolveSqliteInspectionSignal() },
+    );
+  // Select the source policy before preparing the image consumed by all detectors.
+  return params.artifactPreservingReadOnly
+    ? withArtifactPreservingStateReads(inspect, { agentDatabases: true })
+    : inspect();
+}
+
+async function detectLegacyStateMigrationsInReadSnapshot(
+  params: LegacyStateDetectionParams,
+  asyncInspection: boolean,
+): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
@@ -253,7 +302,7 @@ export async function detectLegacyStateMigrations(params: {
   const pluginSessionStoreAgentIds =
     params.pluginSessionStoreAgentIds ??
     (pluginPlanningEnabled
-      ? listPluginDoctorSessionStoreAgentIds({
+      ? await preparePluginDoctorSessionStoreAgentIds({
           config: pluginConfig,
           env,
           pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
@@ -320,36 +369,38 @@ export async function detectLegacyStateMigrations(params: {
     homedir,
     configuredAgentDir: migrationTarget?.dir,
   });
-  const legacyAgentInspections = [
-    ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
-    { legacyDir: path.join(stateDir, "agent"), standalone: false },
-  ]
-    .filter(({ legacyDir }) => {
-      const identity = resolveIdentityPathViaExistingAncestorSync(legacyDir);
-      if (identity === targetAgentIdentity || seenAgentSources.has(identity)) {
-        return false;
-      }
-      seenAgentSources.add(identity);
-      return true;
-    })
-    .map((source) => {
-      // Copied plans bind stateDir, not a separate home tree; do not open its payload.
-      const outsideSnapshot = Boolean(
-        isUpdateRehearsalReadOnlyPath(source.legacyDir, env) ||
-        (params.artifactPreservingReadOnly &&
-          listMigrationEndpointsOutsideRoot([{ kind: "path", path: source.legacyDir }], stateDir)
-            .length > 0),
-      );
-      const inspection = outsideSnapshot
-        ? lstatSync(source.legacyDir, { throwIfNoEntry: false })
-          ? {
-              status: "failed" as const,
-              warning: `Legacy agent source is outside the copied state snapshot: ${source.legacyDir}. Run openclaw doctor --fix on the original installation.`,
-            }
-          : { status: "empty" as const }
-        : inspectLegacyAgentDir(source.legacyDir);
-      return { source, inspection, outsideSnapshot };
-    });
+  const legacyAgentInspections = await Promise.all(
+    [
+      ...(standaloneAgent ? [{ legacyDir: standaloneAgent, standalone: true }] : []),
+      { legacyDir: path.join(stateDir, "agent"), standalone: false },
+    ]
+      .filter(({ legacyDir }) => {
+        const identity = resolveIdentityPathViaExistingAncestorSync(legacyDir);
+        if (identity === targetAgentIdentity || seenAgentSources.has(identity)) {
+          return false;
+        }
+        seenAgentSources.add(identity);
+        return true;
+      })
+      .map(async (source) => {
+        // Copied plans bind stateDir, not a separate home tree; do not open its payload.
+        const outsideSnapshot = Boolean(
+          isUpdateRehearsalReadOnlyPath(source.legacyDir, env) ||
+          (params.artifactPreservingReadOnly &&
+            listMigrationEndpointsOutsideRoot([{ kind: "path", path: source.legacyDir }], stateDir)
+              .length > 0),
+        );
+        const inspection = outsideSnapshot
+          ? lstatSync(source.legacyDir, { throwIfNoEntry: false })
+            ? {
+                status: "failed" as const,
+                warning: `Legacy agent source is outside the copied state snapshot: ${source.legacyDir}. Run openclaw doctor --fix on the original installation.`,
+              }
+            : { status: "empty" as const }
+          : await inspectLegacyAgentDir(source.legacyDir);
+        return { source, inspection, outsideSnapshot };
+      }),
+  );
   const legacyAgentSources = legacyAgentInspections.flatMap(({ source, inspection }) =>
     inspection.status === "payload"
       ? [
@@ -367,10 +418,10 @@ export async function detectLegacyStateMigrations(params: {
   const pluginInstallIndexPath = resolveLegacyInstalledPluginIndexStorePath({ stateDir });
   const hasPluginInstallIndex = safeStatSync(pluginInstallIndexPath)?.isFile() === true;
   const debugProxyCaptureSidecar = detectLegacyDebugProxyCaptureSidecar(stateDir, env);
-  const stateSchemaMigrations = detectOpenClawStateDatabaseSchemaMigrations(
-    { env: { ...env, OPENCLAW_STATE_DIR: stateDir } },
-    { artifactPreservingReadOnly: params.artifactPreservingReadOnly },
-  );
+  const stateSchemaOptions = { env: { ...env, OPENCLAW_STATE_DIR: stateDir } };
+  const stateSchemaMigrations = asyncInspection
+    ? await detectOpenClawStateDatabaseSchemaMigrationsAsync(stateSchemaOptions)
+    : detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions);
   const worktrees = await detectManagedWorktreeStateMigration({
     env,
     stateDir,
@@ -397,7 +448,7 @@ export async function detectLegacyStateMigrations(params: {
   const managedOutgoingImages = detectDoctorOwnedState(detectLegacyManagedOutgoingImages);
   const apns = detectDoctorOwnedState(detectLegacyApnsRegistrations);
   const deviceAuth = detectDoctorOwnedState(detectLegacyDeviceAuth);
-  const sharedAuthStore = detectSharedAuthStoreMigration({
+  const sharedAuthStore = await detectSharedAuthStoreMigration({
     stateDir,
     env,
     config: params.sourceConfigBeforeMigrations ?? params.cfg,
@@ -412,7 +463,7 @@ export async function detectLegacyStateMigrations(params: {
   });
   const execApprovals = detectDoctorOwnedState(detectLegacyExecApprovals);
   const mcpOauth = detectDoctorOwnedState(detectLegacyMcpOAuthStores);
-  const meetingTranscripts = detectLegacyMeetingTranscripts({
+  const meetingTranscripts = await detectLegacyMeetingTranscripts({
     stateDir,
     env,
     doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
@@ -2011,25 +2062,6 @@ export async function planLegacyStateMigrationsReadOnly(params: {
   return plan;
 }
 
-function completedPluginMigrationFields(
-  sources: readonly MigrationMessages[],
-): Pick<MigrationMessages, "completedPluginIds" | "requiredPluginIds" | "statelessPluginIds"> {
-  const completedPluginIds = sortUniqueStrings(
-    sources.flatMap((source) => source.completedPluginIds ?? []),
-  );
-  const requiredPluginIds = sortUniqueStrings(
-    sources.flatMap((source) => source.requiredPluginIds ?? []),
-  );
-  const statelessPluginIds = sortUniqueStrings(
-    sources.flatMap((source) => source.statelessPluginIds ?? []),
-  );
-  return {
-    ...(completedPluginIds.length > 0 ? { completedPluginIds } : {}),
-    ...(requiredPluginIds.length > 0 ? { requiredPluginIds } : {}),
-    ...(statelessPluginIds.length > 0 ? { statelessPluginIds } : {}),
-  };
-}
-
 /** Admit preflight's shared-state writers through the same schema step as later migrations. */
 export async function prepareLegacyStateDatabaseSchema(
   env: NodeJS.ProcessEnv,
@@ -2116,7 +2148,7 @@ export async function runLegacyStateMigrations(params: {
 
   // Schema repair can expose installed plugin owners. Freeze their full live action
   // inventory before the writer, rather than receipting the earlier pending-only preview.
-  const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
+  const inventory = await prepareLivePluginDoctorStateMigrationInventory({ config, env });
   const migrations = await runLegacyStateMigrationSteps(
     buildSteps(inventory).remaining,
     params.onStepReceipt,
@@ -2148,24 +2180,7 @@ export async function runLegacyStateMigrations(params: {
 }
 
 /** Run canonical startup migrations and explicit Doctor-owned file repairs. */
-export async function autoMigrateLegacyState(params: {
-  cfg: OpenClawConfigWithLegacyRoster;
-  sourceConfigBeforeMigrations?: OpenClawConfigWithLegacyRoster;
-  invocationPurpose?: LegacyStateMigrationInvocationPurpose;
-  integrityCheck?: "quick" | "full";
-  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
-  pluginDoctorConfig?: OpenClawConfig;
-  /** Include inputs captured by the config snapshot that produced cfg. */
-  configIncludedPaths?: readonly string[];
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-  log?: MigrationLogger;
-  now?: () => number;
-  doctorOnlyStateMigrations?: boolean;
-  legacySessionSurfaces?: PreparedLegacySessionSurfaces;
-  onStepReceipt?: (receipt: LegacyStateMigrationStepReceipt) => void;
-  beforeWorkspaceStateMigration?: (config: OpenClawConfig) => Promise<void>;
-}): Promise<{
+export async function autoMigrateLegacyState(params: AutoMigrateLegacyStateParams): Promise<{
   mode: LegacyStateMigrationMode;
   migrated: boolean;
   skipped: boolean;
@@ -2242,7 +2257,7 @@ async function executeLegacyStateMigrations(
   const configuredPluginIds = collectRelevantDoctorPluginIds(pluginDoctorConfig);
   // Retain a pre-preparation snapshot for refusal closure. Root relocation or schema repair
   // can expose installed owners, whose actions are frozen before later writers.
-  let pluginStateMigrationInventory = resolveLivePluginDoctorStateMigrationInventory({
+  let pluginStateMigrationInventory = await prepareLivePluginDoctorStateMigrationInventory({
     config: pluginDoctorConfig,
     env,
   });
@@ -2306,17 +2321,17 @@ async function executeLegacyStateMigrations(
         pluginPreparation.refusal = pluginStateMigrationInventory.resolutionFailure;
         return { changes: [], warnings: [pluginPreparation.refusal.message] };
       }
-      pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
+      pluginSessionStoreAgentIds = await preparePluginDoctorSessionStoreAgentIds({
         config: pluginDoctorConfig,
         env,
         pluginIds: configuredPluginIds,
       });
       legacySessionSurfaces =
         params.legacySessionSurfaces ??
-        (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
-          config: params.cfg,
-          env,
-        });
+        (await import("../plugins/legacy-session-surfaces.js").then(
+          ({ prepareLegacySessionSurfaces }) =>
+            prepareLegacySessionSurfaces({ config: params.cfg, env }),
+        ));
       // Capture ownership before orphan-key rewrites. Atomic replacement can split
       // a configured filesystem alias from the standard target pathname.
       const { sessionMigrationAgentId: ownershipAgentId } = resolveLegacyStateMigrationOwner({
@@ -2354,6 +2369,7 @@ async function executeLegacyStateMigrations(
       agentDatabaseTargets,
       agentDatabaseMigrationDiscovery,
       integrityCheck: params.integrityCheck,
+      inspectedSessionEntryPaths: params.inspectedSessionEntryPaths,
       orphanSessionStores: overrides?.orphanSessionStores,
       pluginSessionStoreAgentIds:
         overrides?.pluginSessionStoreAgentIds ?? pluginSessionStoreAgentIds,
@@ -2550,7 +2566,11 @@ async function executeLegacyStateMigrations(
     mode,
   });
   try {
-    if (detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions).length > 0) {
+    const stateSchemaMigrations =
+      mode === "automatic" && !isArtifactPreservingStateRead() && !hasUpdateDoctorMigrationCapture()
+        ? detectOpenClawStateDatabaseSchemaMigrations(stateSchemaOptions)
+        : await detectOpenClawStateDatabaseSchemaMigrationsAsync(stateSchemaOptions);
+    if (stateSchemaMigrations.length > 0) {
       stateSchemaStep = createStateSchemaMigrationStep({
         stateDir,
         env,
@@ -2598,7 +2618,7 @@ async function executeLegacyStateMigrations(
     });
   }
   if (stateSchema.changes.length > 0) {
-    pluginStateMigrationInventory = resolveLivePluginDoctorStateMigrationInventory({
+    pluginStateMigrationInventory = await prepareLivePluginDoctorStateMigrationInventory({
       config: pluginDoctorConfig,
       // State-root preparation must not replace config-root plugin installation authority.
       env,

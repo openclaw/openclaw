@@ -43,7 +43,7 @@ suite.define(() => {
       const { closed, dialog } = await startSignIn(page, context, "openclaw.setup.auth.start");
       await page.clock.runFor(30_000);
       await closed;
-      const error = "The Gateway is not responding. Check that it is running, then try again.";
+      const error = "Couldn’t finish setup. Check that the Gateway is running, then try again.";
       await dialog.getByRole("alert").getByText(error, { exact: true }).waitFor();
       expect(await dialog.locator("details").count()).toBe(0);
     });
@@ -55,7 +55,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await closed;
       const notice = dialog.getByRole("alert").filter({
-        hasText: "The Gateway is not responding. Waiting for it to reconnect.",
+        hasText: "Disconnected. Waiting to reconnect…",
       });
       await notice.waitFor();
 

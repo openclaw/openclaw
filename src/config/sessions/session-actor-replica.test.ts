@@ -4,6 +4,7 @@ import { assert, expect, it as baseIt, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import {
   readSqliteDatabaseScopedWriteTokenForPath,
+  readSqliteDatabaseWriteTokenForPath,
   sqliteSessionIdWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
@@ -59,6 +60,12 @@ import { addSessionMember } from "./session-sharing-store.native.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 import { prepareSessionMaintenancePreservation } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
+import {
+  beginAgentToolUsageInDatabase,
+  flushAgentToolUsageInDatabase,
+  readAgentToolUsageInDatabase,
+  readAgentToolUsageLiveRunsInDatabase,
+} from "./tool-usage.kernel.js";
 
 type Fixture = Parameters<Parameters<typeof withReplica>[0]>[0];
 type Replica = ReturnType<typeof replicaFor>;
@@ -544,6 +551,52 @@ it("shares committed facts across released handles and retires them for writes a
     hydrate({ ...fixture, replica: restarted }, "restarted");
     expect(restarted.read()?.version.epoch).toBe("restarted");
   }, "agent:main:matrix:group:!Room:server");
+});
+
+it("retains session entry facts across tool-usage-only commits", ({ fixture }) => {
+  const { database, scope, replica } = fixture;
+  const initial = hydrate(fixture);
+  assert(initial.target.database.kind === "file", "Usage fixture requires a durable actor");
+  const target = { ...initial.target, database: initial.target.database };
+  const facts = readSessionActorEntryFacts(target);
+  const rowTarget = { path: database.path, sessionKey: scope.sessionKey };
+  const rows = readSessionActorRowFacts(rowTarget);
+  expect(facts?.entry).toBe(initial.entry);
+  expect(rows).toBeDefined();
+  const now = Date.now();
+  let previousWrite = readSqliteDatabaseWriteTokenForPath(database.path);
+  const unchanged = () => {
+    const write = readSqliteDatabaseWriteTokenForPath(database.path);
+    expect(write).not.toBe(previousWrite);
+    previousWrite = write;
+    expect(readSessionActorEntryFacts(target)?.writeToken).toBe(facts?.writeToken);
+    expect(readSessionActorEntryFacts(target)?.entry).toBe(facts?.entry);
+    expect(readSessionActorRowFacts(rowTarget)).toEqual(rows);
+    expect(replica.read()).toBe(initial);
+  };
+  const admitted = runOpenClawAgentWriteTransaction(
+    ({ db }) => beginAgentToolUsageInDatabase(db, now, "scope-regression"),
+    { agentId: scope.agentId, path: database.path, env: scope.env },
+  );
+  expect(admitted.liveSince).toBe(now);
+  expect(readAgentToolUsageLiveRunsInDatabase(database.db, now)).toContain("scope-regression");
+  unchanged();
+  expect(
+    runOpenClawAgentWriteTransaction(
+      ({ db }) =>
+        flushAgentToolUsageInDatabase(db, {
+          generation: admitted.generation,
+          runId: "scope-regression",
+          rows: [{ toolId: "openclaw:core:read", score: 1, updatedAt: now }],
+          now,
+        }),
+      { agentId: scope.agentId, path: database.path, env: scope.env },
+    ),
+  ).toBe(true);
+  expect(readAgentToolUsageInDatabase(database.db, now).rows).toEqual([
+    { toolId: "openclaw:core:read", score: 1, updatedAt: now },
+  ]);
+  unchanged();
 });
 
 it("retains unrelated session postimages but invalidates a shared physical session window", ({

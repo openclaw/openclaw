@@ -261,7 +261,7 @@ describe("retained RFB connection", () => {
     expect(Buffer.concat(output)).toEqual(response);
     expect(callbacks).toEqual([null, null]);
     await vi.waitFor(() => expect(receivedBytes).toBe(first.length + last.length));
-    expect(Buffer.concat(received)).toEqual(Buffer.concat([first, last]));
+    expect(Buffer.concat(received).equals(Buffer.concat([first, last])), "queued bytes").toBe(true);
   });
 
   it.each(["", "final-pre-attach-response"])(

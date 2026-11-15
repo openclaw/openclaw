@@ -2,28 +2,37 @@ import { constants, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as crashCause from "../daemon/gateway-crash-cause.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { readConfigMachineStateAsync } from "../state/config-machine-state-async.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   GATEWAY_CRASH_LOOP_BREAKER_REASON as BREAKER,
   completeGatewayBootLifecycle,
+  completeGatewayAgentRestartRecovery,
+  reportPreviousGatewayCrash,
   formatGatewayCrashLoopManualChannelStartHint,
   inspectGatewayCrashLoopBreakerAsync,
   readGatewayLastInstallationReplacementAsync,
   readGatewayLastShutdownAsync,
+  readGatewayRecentCrashesAsync,
   beginGatewayBootLifecycle,
   recordGatewayCrashLoopRecovery,
   repairGatewayMaintenanceStartupFailures,
 } from "./gateway-boot-lifecycle.js";
 import { GATEWAY_CRASH_LOOP_RECOVERED_REASON as RECOVERED } from "./gateway-boot-lifecycle.kernel.js";
 import { gatewayBootOperations } from "./gateway-boot-lifecycle.worker.js";
+import type { GatewayCrashState } from "./gateway-crash.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import { TAILSCALE_BACKEND_AUTH_REQUIRED_REASON } from "./tailscale-backend-auth-required-error.js";
 
 type GatewayBootLifecycleTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_boot_lifecycle">;
 type GatewayBootLifecycleOutcome = Parameters<typeof completeGatewayBootLifecycle>[1]["outcome"];
@@ -55,6 +64,7 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   tempDirs.cleanup();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   setLoggerOverride(null);
   loggingState.rawConsole = null;
   resetLogger();
@@ -115,7 +125,140 @@ const completedBoot = (
   details: Pick<BootRow, "reason" | "startupReason"> = {},
 ) => bootRow(id, start, { completedAtMs: end, outcome, ...details });
 
+it("retains exact pending crash intervals per physical agent until its recovery completes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    for (const agentId of ["main", "constructor"]) {
+      openOpenClawAgentDatabase({ agentId });
+    }
+    await beginGatewayBootLifecycle(process.env, 100);
+    const crash = await beginGatewayBootLifecycle(process.env, 200);
+    expect(crash.restartResumeWindows).toEqual({
+      main: [{ startedAt: 100, endedAt: 200 }],
+      constructor: [{ startedAt: 100, endedAt: 200 }],
+    });
+    expect(crash.previousCrash).toMatchObject({ startedAtMs: 100, detectedAtMs: 200 });
+    const consecutive = await beginGatewayBootLifecycle(process.env, 300);
+    expect(consecutive.restartResumeWindows?.main).toEqual([{ startedAt: 100, endedAt: 300 }]);
+    // A late acknowledgement cannot discard the newer crash interval.
+    await completeGatewayAgentRestartRecovery("main", 200);
+    await completeGatewayBootLifecycle(consecutive.id, { outcome: "clean_stop" }, process.env, 350);
+    expect((await beginGatewayBootLifecycle(process.env, 400)).previousCrash).toBeUndefined();
+    const separated = await beginGatewayBootLifecycle(process.env, 500);
+    expect(separated.restartResumeWindows?.main).toEqual([
+      { startedAt: 100, endedAt: 300 },
+      { startedAt: 400, endedAt: 500 },
+    ]);
+    expect(separated.previousCrash).toMatchObject({ startedAtMs: 400, detectedAtMs: 500 });
+    await completeGatewayAgentRestartRecovery("main", 500);
+    await completeGatewayBootLifecycle(separated.id, { outcome: "clean_stop" }, process.env, 550);
+    const afterRetention = await beginGatewayBootLifecycle(process.env, 100_000_000);
+    expect(afterRetention.restartResumeWindows).toEqual({
+      constructor: [
+        { startedAt: 100, endedAt: 300 },
+        { startedAt: 400, endedAt: 500 },
+      ],
+    });
+    expect(afterRetention.previousCrash).toBeUndefined();
+    expect(
+      (await readConfigMachineStateAsync<GatewayCrashState>("gateway.crashes"))?.recent,
+    ).toHaveLength(3);
+    await completeGatewayAgentRestartRecovery("constructor", 500);
+    await completeGatewayBootLifecycle(
+      afterRetention.id,
+      { outcome: "clean_stop" },
+      process.env,
+      100_000_001,
+    );
+    expect(
+      (await beginGatewayBootLifecycle(process.env, 100_000_002)).restartResumeWindows,
+    ).toBeUndefined();
+  }));
+
 describe("gateway crash-loop breaker", () => {
+  it("records an unclean run once, retaining its identity after receipt pruning and clean handoffs", async () => {
+    const lifecycle = createLifecycleDb();
+    const first = await lifecycle.begin(1_000);
+    const restartAt = GATEWAY_BOOT_LIFECYCLE_RETENTION_MS + 2_000;
+    const next = await beginGatewayBootLifecycle(lifecycle.env, restartAt, {
+      pid: process.pid,
+      heartbeatAt: 60_000,
+    });
+    const warn = vi.fn();
+    if (next.previousCrash) {
+      await reportPreviousGatewayCrash(next.previousCrash, { warn }, lifecycle.env);
+    }
+    const readCrashes = async () =>
+      (
+        await readConfigMachineStateAsync<GatewayCrashState>("gateway.crashes", {
+          env: lifecycle.env,
+        })
+      )?.recent ?? [];
+    expect(await readCrashes()).toEqual([
+      expect.objectContaining({
+        bootId: first.id,
+        pid: process.pid,
+        startedAtMs: 1_000,
+        detectedAtMs: restartAt,
+        lastHeartbeatAtMs: 60_000,
+        version: expect.any(String),
+        runtime: expect.any(String),
+      }),
+    ]);
+    expect(readBootRows(lifecycle).map((row) => row.boot_id)).not.toContain(first.id);
+    await lifecycle.complete(next.id, "clean_stop", restartAt + 1);
+    const handoff = await lifecycle.begin(restartAt + 2);
+    expect(handoff.previousCrash).toBeUndefined();
+    await lifecycle.complete(handoff.id, "planned_restart", restartAt + 3);
+    expect((await lifecycle.begin(restartAt + 4)).previousCrash).toBeUndefined();
+    expect(await readCrashes()).toHaveLength(1);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("previous Gateway run ended unexpectedly: cause unknown"),
+    );
+  });
+
+  it.each(["clean_stop", "planned_restart"] as const)(
+    "does not record a crash for %s",
+    async (outcome) => {
+      const lifecycle = createLifecycleDb();
+      const boot = await lifecycle.begin(1_000);
+      await lifecycle.complete(boot.id, outcome, 2_000);
+      expect((await lifecycle.begin(3_000)).previousCrash).toBeUndefined();
+      const state = await readConfigMachineStateAsync<GatewayCrashState>("gateway.crashes", {
+        env: lifecycle.env,
+      });
+      expect(state?.recent ?? []).toEqual([]);
+    },
+  );
+
+  it("bounds crash history and enriches only the named completed failure", async () => {
+    const lifecycle = createLifecycleDb();
+    let boot = await lifecycle.begin(1_000);
+    const oldest = boot.id;
+    for (let index = 1; index <= 11; index++) {
+      await lifecycle.complete(boot.id, "startup_failed", 1_000 + index * 2 - 1, {
+        reason: "startup failed",
+      });
+      boot = await lifecycle.begin(1_000 + index * 2);
+    }
+    const crashes = await readGatewayRecentCrashesAsync(lifecycle.env);
+    expect(crashes).toHaveLength(10);
+    expect(crashes.some((crash) => crash.bootId === oldest)).toBe(false);
+    expect(crashes[0]).toMatchObject({ reason: "startup failed", detectedAtMs: 1_022 });
+    const current = crashes[0]!;
+    vi.spyOn(crashCause, "readGatewayCrashCause").mockResolvedValue({
+      signal: "SIGSEGV",
+      uptimeMs: 1,
+    });
+    const warn = vi.fn();
+    await reportPreviousGatewayCrash(current, { warn }, lifecycle.env);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("signal SIGSEGV"));
+    const updated = await readGatewayRecentCrashesAsync(lifecycle.env);
+    expect(updated[0]).toMatchObject({ bootId: current.bootId, signal: "SIGSEGV", uptimeMs: 1 });
+    expect(updated.slice(1)).toEqual(crashes.slice(1));
+    await reportPreviousGatewayCrash({ ...current, bootId: "missing" }, { warn }, lifecycle.env);
+    expect(await readGatewayRecentCrashesAsync(lifecycle.env)).toEqual(updated);
+  });
+
   it.each([2, 3])(
     "starts from %i prior crashes and observes completion without main-thread SQL",
     async (priorCrashes) => {
@@ -131,6 +274,10 @@ describe("gateway crash-loop breaker", () => {
         const first = await lifecycle.begin(4_000);
         const firstId = first.id;
         expect(firstId).toBeDefined();
+        expect(first.restartResumeWindow).toEqual({
+          startedAt: 1_000 + priorCrashes - 1,
+          endedAt: 4_000,
+        });
         expectDecision(first.decision, priorCrashes, {
           shouldWriteStabilityBundle: priorCrashes === 3,
         });
@@ -139,6 +286,7 @@ describe("gateway crash-loop breaker", () => {
         const nextId = next.id;
         expect(nextId).toBeDefined();
         expect(nextId).not.toBe(firstId);
+        expect(next.restartResumeWindow).toBeUndefined();
         expectDecision(next.decision, priorCrashes, {
           shouldWriteStabilityBundle: false,
         });
@@ -153,6 +301,45 @@ describe("gateway crash-loop breaker", () => {
       ).toEqual([priorCrashes === 3 ? BREAKER : null, null]);
     },
   );
+
+  it("offers recovery after a forced stop, but not a successfully settled predecessor", async () => {
+    const lifecycle = createLifecycleDb();
+    let now = 1_000;
+    let boot = await lifecycle.begin(now);
+    expect(boot.restartResumeWindow).toBeUndefined();
+    for (const outcome of [
+      "planned_restart",
+      "clean_stop",
+      "safe_mode_stable",
+      "startup_failure_repaired",
+      "startup_failed",
+      "forced_stop",
+    ] as const) {
+      await lifecycle.complete(boot.id, outcome, now + 1);
+      const next = await lifecycle.begin(now + 2);
+      expect(next.restartResumeWindow).toEqual(
+        outcome === "forced_stop" ? { startedAt: now, endedAt: now + 2 } : undefined,
+      );
+      now += 2;
+      boot = next;
+    }
+  });
+
+  it("keeps a safe-mode split in its original incarnation without grouping real restarts by PID", async () => {
+    const lifecycle = createLifecycleDb();
+    insertBootRows(lifecycle, [bootRow("a", 1), bootRow("b", 2), bootRow("c", 3)]);
+    const safe = await lifecycle.begin(4_000);
+    const recoveredAt = 4_000 + GATEWAY_BOOT_LOOP_WINDOW_MS + 1;
+    const recovered = await recordGatewayCrashLoopRecovery(safe.id, lifecycle.env, recoveredAt);
+    expect(recovered).toBeDefined();
+    const restarted = await lifecycle.begin(recoveredAt + 1);
+    expect(restarted.restartResumeWindow).toEqual({ startedAt: 4_000, endedAt: recoveredAt + 1 });
+    // This new incarnation shares process.pid, but is not another safe-mode split.
+    expect((await lifecycle.begin(recoveredAt + 2)).restartResumeWindow).toEqual({
+      startedAt: recoveredAt + 1,
+      endedAt: recoveredAt + 2,
+    });
+  });
 
   it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
     "retains the crash-loop decision and rolls back pruning when recording the boot fails",
@@ -173,15 +360,18 @@ describe("gateway crash-loop breaker", () => {
           : constants.SQLITE_OK,
       );
       try {
-        expect(
-          gatewayBootOperations["gatewayBoot.begin"](nowMs, {
+        const failed = gatewayBootOperations["gatewayBoot.begin"](
+          { nowMs, metadata: {} },
+          {
             open: () => state,
             stateOptions: () => ({ path: state.path, env: lifecycle.env }),
-          }),
-        ).toMatchObject({
+          },
+        );
+        expect(failed).toMatchObject({
           id: undefined,
           decision: { tripped: true, uncleanBoots: 3, shouldWriteStabilityBundle: true },
         });
+        expect(failed).not.toHaveProperty("restartResumeWindow");
       } finally {
         database.setAuthorizer(null);
       }
@@ -270,6 +460,56 @@ describe("gateway crash-loop breaker", () => {
       expect((await lifecycle.inspect(nowMs + 2_000)).tripped).toBe(false);
     },
   );
+
+  it("keeps a completed Tailscale authentication prerequisite visible without counting it as a crash", async () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    const prerequisiteBootId = await lifecycle.begin(nowMs - 3);
+    await lifecycle.complete(prerequisiteBootId.id, "startup_failed", nowMs - 2, {
+      startupReason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      reason: "gateway.tailscale_authentication_required: NeedsLogin",
+    });
+    for (const [startedAtMs, completedAtMs, reason] of [
+      [nowMs - 1, nowMs, "EADDRINUSE"],
+      [nowMs, nowMs + 1, "gateway startup cleanup failed"],
+    ] as const) {
+      const bootId = await lifecycle.begin(startedAtMs);
+      await lifecycle.complete(bootId.id, "startup_failed", completedAtMs, { reason });
+    }
+    expectDecision(await lifecycle.inspect(nowMs + 2), 2);
+    expect(readBootRows(lifecycle)).toContainEqual(
+      expect.objectContaining({
+        boot_id: prerequisiteBootId.id,
+        completed_at_ms: nowMs - 2,
+        outcome: "startup_failed",
+        startup_reason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+        reason: "gateway.tailscale_authentication_required: NeedsLogin",
+      }),
+    );
+    const bootId = await lifecycle.begin(nowMs + 2);
+    await lifecycle.complete(bootId.id, "startup_failed", nowMs + 3, {
+      reason: "unknown startup error",
+    });
+    expectDecision(await lifecycle.inspect(nowMs + 4), 3);
+  });
+
+  it("keeps an unfinished boot in breaker accounting even when its startup reason is known", async () => {
+    const lifecycle = createLifecycleDb();
+    const nowMs = 1_000_000;
+    insertBootRows(lifecycle, [
+      bootRow("unfinished-auth-prerequisite", nowMs - 3, {
+        startupReason: TAILSCALE_BACKEND_AUTH_REQUIRED_REASON,
+      }),
+    ]);
+    for (const [startedAtMs, completedAtMs, reason] of [
+      [nowMs - 2, nowMs - 1, "EADDRINUSE"],
+      [nowMs - 1, nowMs, "gateway startup cleanup failed"],
+    ] as const) {
+      const bootId = await lifecycle.begin(startedAtMs);
+      await lifecycle.complete(bootId.id, "startup_failed", completedAtMs, { reason });
+    }
+    expectDecision(await lifecycle.inspect(nowMs + 1), 3);
+  });
 
   it.each([
     ["Kubernetes", { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" }],
@@ -408,23 +648,29 @@ describe("gateway crash-loop breaker", () => {
     ]);
   });
 
-  it("prunes boot rows older than retention when recording a new boot", async () => {
-    const db = createLifecycleDb();
-    const nowMs = 2 * GATEWAY_BOOT_LIFECYCLE_RETENTION_MS;
+  it.each([false, true])(
+    "captures the latest boot before pruning (recent boot: %s)",
+    async (recent) => {
+      const db = createLifecycleDb();
+      const nowMs = 2 * GATEWAY_BOOT_LIFECYCLE_RETENTION_MS;
 
-    insertBootRows(db, [
-      bootRow("old", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - 1),
-      bootRow("kept", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS),
-    ]);
+      insertBootRows(db, [
+        bootRow("old", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - 1),
+        ...(recent ? [bootRow("kept", nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS)] : []),
+      ]);
 
-    await db.begin(nowMs);
+      expect((await db.begin(nowMs)).restartResumeWindow).toEqual({
+        startedAt: nowMs - GATEWAY_BOOT_LIFECYCLE_RETENTION_MS - (recent ? 0 : 1),
+        endedAt: nowMs,
+      });
 
-    const rows = readBootRows(db).map((row) => row.boot_id);
+      const rows = readBootRows(db).map((row) => row.boot_id);
 
-    expect(rows).toHaveLength(2);
-    expect(rows).toContain("kept");
-    expect(rows).not.toContain("old");
-  });
+      expect(rows).toHaveLength(recent ? 2 : 1);
+      expect(rows.includes("kept")).toBe(recent);
+      expect(rows).not.toContain("old");
+    },
+  );
 });
 
 describe("formatGatewayCrashLoopManualChannelStartHint", () => {

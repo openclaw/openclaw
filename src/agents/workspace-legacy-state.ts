@@ -128,9 +128,15 @@ export function legacyWorkspaceSiblingAttestationMayExist(filePath: string): boo
   }
 }
 
-function findUnmigratedWorkspaceSource(sources: LegacyWorkspaceSourcePaths): string | undefined {
+function findUnmigratedWorkspaceSource(
+  sources: LegacyWorkspaceSourcePaths,
+  stateDirOnly = false,
+): string | undefined {
   const withClaims = (paths: string[]) =>
     paths.flatMap((filePath) => [filePath, `${filePath}${WORKSPACE_DOCTOR_CLAIM_SUFFIX}`]);
+  if (stateDirOnly) {
+    return withClaims(sources.stateDirAttestationPaths).find(pathMayExistSync);
+  }
   return (
     withClaims([...sources.setupStatePaths, ...sources.stateDirAttestationPaths]).find(
       pathMayExistSync,
@@ -142,14 +148,17 @@ function workspaceMigrationError(
   blockedPaths: string[],
   env?: NodeJS.ProcessEnv,
   operation?: "doctor",
+  blockedByStepId?: string,
 ): Error {
   return new StartupMaintenanceRequiredError(
     "legacy-workspace",
     operation === "doctor"
-      ? formatDoctorStateRepairFailure(
-          `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
-          "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
-        )
+      ? blockedByStepId
+        ? `Legacy workspace setup at ${blockedPaths.join(", ")} was not imported because migration step "${blockedByStepId}" refused; resolve that refusal, then rerun ${formatCliCommand("openclaw doctor --fix", env)}.`
+        : formatDoctorStateRepairFailure(
+            `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
+            "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
+          )
       : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
   );
 }
@@ -157,18 +166,23 @@ function workspaceMigrationError(
 /** Recheck lifecycle readiness without reusing a running turn's verified-absence cache. */
 export function assertWorkspaceStateMigrationReady(params: {
   workspaceDirs: readonly string[];
+  /** Sandbox-writable dirs: only state-dir attestations, which sandboxes cannot write, count. */
+  sandboxWritableDirs?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   operation?: "doctor";
+  /** An earlier migration refusal prevented the workspace importer from running. */
+  blockedByStepId?: string;
 }): void {
   const blocked = params.workspaceDirs.flatMap((workspaceDir) => {
     const sourcePath = findUnmigratedWorkspaceSource(
       resolveLegacyWorkspaceSourcePaths(workspaceDir, params),
+      params.sandboxWritableDirs?.has(workspaceDir),
     );
     return sourcePath ? [params.operation === "doctor" ? sourcePath : workspaceDir] : [];
   });
   if (blocked.length > 0) {
-    throw workspaceMigrationError(blocked, params.env, params.operation);
+    throw workspaceMigrationError(blocked, params.env, params.operation, params.blockedByStepId);
   }
 }
 

@@ -164,6 +164,14 @@ export async function closeCliResources(cleanup?: CliHarnessCleanup): Promise<vo
         await import("../state/openclaw-agent-db-lifecycle.js");
       await closeOpenClawAgentDatabasesAsync();
     },
+    "sqlite-snapshots": async () => {
+      // CLI-owned snapshot workers are asynchronous owners. Signal cleanup is too
+      // late for a successful one-shot command, and the synchronous process exit
+      // hook cannot retire a retained native owner safely.
+      const { cleanupSnapshotOperations } =
+        await import("../infra/sqlite-readonly-location-cleanup.js");
+      await cleanupSnapshotOperations();
+    },
   };
   for (const [name, finalize] of Object.entries(finalizers)) {
     await runCliDisposer(name, finalize, runCleanup);

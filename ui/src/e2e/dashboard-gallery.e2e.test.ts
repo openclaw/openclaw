@@ -44,8 +44,8 @@ const dashboardRows = agesSeconds.map((age, index) => ({
   status: index === 0 ? "running" : "done",
   createdActor: {
     type: "human",
-    id: index % 2 ? "peter" : "mira",
-    label: index % 2 ? "Peter" : "Mira",
+    id: index % 2 ? "riley" : "mira",
+    label: index % 2 ? "Riley" : "Mira",
   },
 }));
 
@@ -81,6 +81,13 @@ async function waitForPreview(card: Locator) {
   const frame = card.locator('iframe[title="Live Gateway Pulse"]');
   await frame.waitFor();
   await frame.contentFrame().getByText("All systems nominal", { exact: true }).waitFor();
+}
+async function searchDashboards(gallery: Locator, query: string) {
+  const field = gallery.getByRole("searchbox", { name: "Search dashboards", exact: true });
+  if (!(await field.isVisible())) {
+    await gallery.getByRole("button", { name: "Search dashboards", exact: true }).click();
+  }
+  await field.fill(query);
 }
 suite.define(() => {
   it.each(["dark", "light"] as const)("fits empty dashboard previews in %s mode", async (mode) => {
@@ -118,6 +125,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessions: rows,
           featureMethods: ["board.get"],
+          deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
           methodResponses: {
             "config.get": themeConfigResponse("dash", mode),
             "sessions.list": { cases: [responseCase({ hasBoard: true }, list(rows))] },
@@ -134,6 +142,14 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}dashboards`);
         const gallery = page.locator("openclaw-dashboards-page");
+        const header = gallery.locator(".dashboards-header");
+        await gallery.locator(".dashboards-loading").waitFor();
+        const loadingHeader = await header.boundingBox();
+        await gateway.resolveDeferred("sessions.list");
+        await gallery.locator("[data-dashboard-session]").first().waitFor();
+        const loadedHeader = await header.boundingBox();
+        expect(loadedHeader!.y).toBeCloseTo(loadingHeader!.y, 0);
+        expect(Math.abs(loadedHeader!.height - loadingHeader!.height)).toBeLessThan(1);
         const emptyCard = gallery.locator(`[data-dashboard-session="${emptyKey}"]`);
         const filledCard = gallery.locator(`[data-dashboard-session="${selectedSessionKey}"]`);
         const empty = emptyCard.locator(".board-empty");
@@ -175,7 +191,8 @@ suite.define(() => {
                 left: preview.left,
                 right: preview.right,
               },
-              content: [element, ...element.children].map((child) => {
+              // The sheet extends beyond its frame; the empty-state content must stay readable.
+              content: [...element.children].map((child) => {
                 const rect = child.getBoundingClientRect();
                 return { top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right };
               }),
@@ -200,13 +217,15 @@ suite.define(() => {
         await emptyCard.hover();
         await expect.poll(async () => (await emptyCard.boundingBox())!.y).toBeLessThan(restingY);
         await saveFrame("hover", emptyCard);
-        await gallery.getByRole("searchbox").fill("No matching dashboard");
+        await searchDashboards(gallery, "No matching dashboard");
         await gallery.locator("[data-dashboards-no-results]").waitFor();
         await saveFrame("search-empty", gallery.locator("[data-dashboards-no-results]"));
         await gateway.setMethodResponse("sessions.list", {
           cases: [responseCase({ hasBoard: true }, list([]))],
         });
         await page.reload();
+        await gallery.locator(".dashboards-loading").waitFor();
+        await gateway.resolveDeferred("sessions.list");
         await gallery.locator("[data-dashboards-empty]").waitFor();
         expect(await gallery.locator("[data-dashboards-no-results]").count()).toBe(0);
         await saveFrame("catalog-empty", gallery.locator("[data-dashboards-empty]"));
@@ -230,9 +249,179 @@ suite.define(() => {
     );
   });
 
+  it.each(["grid", "list"] as const)(
+    "keeps the phone %s geometry from skeleton to loaded",
+    async (view) => {
+      const rows = [{ ...dashboardRows[0]!, hasBoard: true }];
+      await suite.withPage(
+        { colorScheme: "light", viewport: { width: 390, height: 844 } },
+        async ({ page }) => {
+          await page.route("**/dashboard-gallery-widget.html", (route) =>
+            route.fulfill({ contentType: "text/html; charset=utf-8", body: widgetMarkup }),
+          );
+          await seedChatSettings(page, suite.server.baseUrl, {
+            dashboardsDisplay: { view, sort: "updated", group: "none" },
+          });
+          const gateway = await installMockGateway(page, {
+            sessions: rows,
+            featureMethods: ["board.get"],
+            deferredRequests: [{ method: "sessions.list", match: { hasBoard: true } }],
+            methodResponses: {
+              "board.get": boardSnapshots[0],
+              "sessions.list": {
+                cases: [
+                  responseCase(
+                    { hasBoard: true },
+                    {
+                      ts: now,
+                      path: "",
+                      count: rows.length,
+                      defaults: { contextTokens: null, model: null, modelProvider: null },
+                      sessions: rows,
+                    },
+                  ),
+                ],
+              },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}dashboards`);
+          const gallery = page.locator("openclaw-dashboards-page");
+          const geometry = async () => {
+            const header = (await gallery.locator(".dashboards-header").boundingBox())!;
+            const card = (await gallery
+              .locator(".dashboard-row, .dashboard-card")
+              .first()
+              .boundingBox())!;
+            return { headerHeight: header.height, cardY: card.y, cardHeight: card.height };
+          };
+          await gallery.locator(".dashboards-loading").waitFor();
+          const loading = await geometry();
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `phone-${view}-loading.png`),
+            });
+          }
+          await gateway.resolveDeferred("sessions.list");
+          await gallery.locator("[data-dashboard-session]").first().waitFor();
+          await gallery.locator("[data-dashboard-session]").waitFor();
+          const loaded = await geometry();
+          console.log("phone gallery geometry", view, { loading, loaded });
+          if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+            await page.screenshot({
+              path: path.join(suite.artifactDir, `phone-${view}-loaded.png`),
+            });
+          }
+          expect(loaded.headerHeight).toBeCloseTo(loading.headerHeight, 0);
+          expect(loaded.cardY).toBeCloseTo(loading.cardY, 0);
+          expect(loaded.cardHeight).toBeCloseTo(loading.cardHeight, 0);
+        },
+      );
+    },
+  );
+
+  it("bounds mounted dashboards across list and small author groups", async () => {
+    const rows = Array.from({ length: 1_000 }, (_, index) => ({
+      ...dashboardRows[index % dashboardRows.length]!,
+      key: `agent:main:dashboard:volume-${index}`,
+      displayName: `Volume ${String(index).padStart(4, "0")}`,
+      hasBoard: true,
+      createdActor: {
+        type: "human",
+        id: `author-${Math.floor(index / 2)}`,
+        label: `Author ${Math.floor(index / 2)}`,
+      },
+    }));
+    await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
+      await installMockGateway(page, { sessions: rows });
+      await page.goto(`${suite.server.baseUrl}dashboards`);
+      const gallery = page.locator("openclaw-dashboards-page");
+      const entries = gallery.locator("[data-dashboard-session]");
+      await entries.first().waitFor();
+      const counts: number[] = [];
+      for (const [view, group] of [
+        ["Grid", "none"],
+        ["List", "none"],
+        ["List", "author"],
+        ["Grid", "author"],
+      ] as const) {
+        await gallery.getByRole("button", { name: "Display", exact: true }).click();
+        const menu = page.locator("#dashboards-display");
+        await menu.getByRole("button", { name: view, exact: true }).click();
+        await menu.getByLabel("Grouping").selectOption(group);
+        await menu.getByLabel("Ordering").selectOption("title");
+        await page.keyboard.press("Escape");
+        await menu.waitFor({ state: "hidden" });
+        await entries.first().waitFor();
+        await expect
+          .poll(() =>
+            entries
+              .first()
+              .locator(view === "List" ? ".dashboard-row__thumb" : ".dashboard-preview")
+              .count(),
+          )
+          .toBe(1);
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+            }),
+        );
+        counts.push(await entries.count());
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            path: path.join(suite.artifactDir, `volume-${view}-${group}.png`),
+          });
+        }
+        const second = gallery.locator(
+          '[data-dashboard-session="agent:main:dashboard:volume-1"] a',
+        );
+        const third = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-2"] a');
+        await second.focus();
+        await page.keyboard.press("Tab");
+        expect(await third.evaluate((element) => element.matches(":focus"))).toBe(true);
+        await page.keyboard.press("Shift+Tab");
+        expect(await second.evaluate((element) => element.matches(":focus"))).toBe(true);
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = element.scrollHeight / 2;
+        });
+        await expect
+          .poll(() =>
+            entries.evaluateAll((elements) =>
+              elements.some((element) => {
+                const index = Number(
+                  element.getAttribute("data-dashboard-session")?.split("-").at(-1),
+                );
+                const box = element.getBoundingClientRect();
+                return index > 400 && index < 600 && box.top < innerHeight && box.bottom > 0;
+              }),
+            ),
+          )
+          .toBe(true);
+        const last = gallery.locator('[data-dashboard-session="agent:main:dashboard:volume-999"]');
+        await last.scrollIntoViewIfNeeded();
+        await expect
+          .poll(() =>
+            last.evaluate((element) => {
+              const box = element.getBoundingClientRect();
+              return box.top < innerHeight && box.bottom > 0;
+            }),
+          )
+          .toBe(true);
+        expect(await entries.count()).toBeLessThanOrEqual(100);
+        await page.locator(".content").evaluate((element) => {
+          element.scrollTop = 0;
+        });
+      }
+      console.log("mounted dashboards for grid, list, grouped list, grouped grid:", counts);
+      for (const count of counts) {
+        expect.soft(count).toBeLessThanOrEqual(100);
+      }
+    });
+  });
+
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     await suite.withPage(
-      { colorScheme: "dark", viewport: { width: 1440, height: 900 } },
+      { colorScheme: "dark", viewport: { width: 1440, height: 900 }, hasTouch: true },
       async ({ page }) => {
         await page.route("**/dashboard-gallery-widget.html", (route) =>
           route.fulfill({
@@ -286,7 +475,12 @@ suite.define(() => {
         });
         await releaseCard.waitFor();
         expect(await gallery.locator("[data-dashboard-session]").count()).toBe(12);
-        expect(await gallery.getByText("By Mira", { exact: true }).count()).toBe(6);
+        expect(
+          await gallery
+            .locator(".dashboard-card__author")
+            .getByText("Mira", { exact: true })
+            .count(),
+        ).toBe(6);
         await waitForPreview(releaseCard);
         expect(await releaseCard.locator('[data-widget-name="release-tools"]').count()).toBe(0);
         expect(await gateway.getRequests("board.widget.appView")).toHaveLength(0);
@@ -322,7 +516,7 @@ suite.define(() => {
         const documentStartedAt = await page.evaluate(() => performance.timeOrigin);
         await openSidebarPages(page);
         await page.getByRole("link", { name: "Dashboards", exact: true }).click();
-        await gallery.getByRole("searchbox").fill("Release health");
+        await searchDashboards(gallery, "Release health");
         await releaseCard.locator("a").click();
         await page.waitForURL(
           /\/dashboard\/main\/release-health-1234567890abcdef1234567890abcdef(?:\?.*)?$/u,
@@ -358,6 +552,61 @@ suite.define(() => {
             })),
           )
           .toEqual({ documentWidth: 390, viewportWidth: 390, columns: 1 });
+
+        const cards = gallery.locator("[data-dashboard-session]");
+        const filter = gallery.getByRole("button", { name: "Filter by author", exact: true });
+        expect(await filter.getAttribute("class")).not.toContain("active");
+        await filter.click();
+        const popover = page.locator("#dashboards-author-filter");
+        const riley = popover.getByRole("checkbox", { name: /Riley/ });
+        const mira = popover.getByRole("checkbox", { name: /Mira/ });
+        await riley.check();
+        await expect.poll(() => cards.count()).toBe(6);
+        await mira.check();
+        await expect.poll(() => cards.count()).toBe(12);
+        expect(await filter.getAttribute("class")).toContain("active");
+        await popover.getByRole("button", { name: "Clear", exact: true }).click();
+        await expect.poll(() => cards.count()).toBe(12);
+        expect(await filter.getAttribute("class")).not.toContain("active");
+        await page.keyboard.press("Escape");
+
+        const display = gallery.getByRole("button", { name: "Display", exact: true });
+        const displayMenu = page.locator("#dashboards-display");
+        await display.click();
+        await displayMenu.getByLabel("Ordering").selectOption("title");
+        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        await displayMenu.getByRole("button", { name: "List", exact: true }).click();
+        await displayMenu.getByLabel("Grouping").selectOption("author");
+        await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
+        await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
+        await page.keyboard.press("Escape");
+        await page.reload();
+        await expect.poll(() => gallery.locator(".dashboard-row").count()).toBe(12);
+        await expect.poll(() => gallery.locator(".dashboards-group__heading").count()).toBe(2);
+        await expect.poll(() => cards.first().locator("h2").textContent()).toBe("Dashboard 1");
+        await display.click();
+        await displayMenu.getByRole("button", { name: "Grid", exact: true }).click();
+        await displayMenu.getByLabel("Grouping").selectOption("none");
+        await displayMenu.getByLabel("Ordering").selectOption("updated");
+        await page.keyboard.press("Escape");
+
+        // Native checkboxes remain reachable and toggle author selection with Space.
+        await filter.click();
+        await riley.focus();
+        await page.keyboard.press("Space");
+        await expect.poll(() => cards.count()).toBe(6);
+        expect(await riley.evaluate((input) => input.matches(":focus"))).toBe(true);
+        await page.keyboard.press("Space");
+        await expect.poll(() => cards.count()).toBe(12);
+
+        // An outside tap only closes the popover; the next one opens the card.
+        const galleryUrl = page.url();
+        const card = cards.nth(1);
+        await card.locator("a").tap();
+        await popover.waitFor({ state: "hidden" });
+        expect(page.url()).toBe(galleryUrl);
+        await card.locator("a").tap();
+        await expect.poll(() => page.url()).not.toBe(galleryUrl);
       },
     );
   });

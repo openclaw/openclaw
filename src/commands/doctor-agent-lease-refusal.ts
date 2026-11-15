@@ -1,8 +1,10 @@
-import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
+import { SqliteSnapshotCleanupError } from "../infra/sqlite-lifecycle-errors.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
+import { OpenClawAgentDatabaseLeaseActiveError } from "../state/openclaw-agent-db-lease.js";
 import { openDoctorStateSchemaReadAdmission } from "../state/openclaw-state-db-doctor-schema.js";
 import { sleep } from "../utils/sleep.js";
 import {
@@ -46,27 +48,32 @@ function createDoctorAgentLeaseRefusal(
 export async function preflightExternalDoctorAgentLease(
   env: NodeJS.ProcessEnv,
   updateRepair: boolean,
+  signal = resolveSqliteInspectionSignal(),
 ): Promise<void> {
   // An external parent may leave the serving Gateway running. Diagnose an
   // active agent lease before that Gateway's lifecycle lock masks it.
   // This negative-only observation grants no maintenance authority: both
   // coordinators and the held-owner lease assertion remain mandatory.
   const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
-    await import("../state/openclaw-agent-db-lease.js");
+    await import("../state/openclaw-agent-db-lease-inspection.js");
   let ownerPids: number[] = [];
   try {
-    ownerPids = withEngineStoreAdmission(() => [
+    ownerPids = [
       ...new Set(
-        readActiveOpenClawAgentDatabaseLeasesReadOnly(
-          { env },
-          openDoctorStateSchemaReadAdmission,
+        (
+          await readActiveOpenClawAgentDatabaseLeasesReadOnly(
+            { env },
+            openDoctorStateSchemaReadAdmission,
+            signal,
+          )
         ).map((lease) => lease.owner_pid),
       ),
-    ]);
+    ];
   } catch (error) {
-    if (hasCommandProcessCleanupError(error)) {
+    if (error instanceof SqliteSnapshotCleanupError || hasCommandProcessCleanupError(error)) {
       throw error;
     }
+    signal?.throwIfAborted();
     // Diagnostic failure is not admission. The mandatory held-owner
     // check below still classifies unreadable state and unknown errors.
   }
@@ -94,14 +101,23 @@ export async function preflightExternalDoctorAgentLease(
 }
 
 /** The caller holds both lifecycle coordinators; this check never opens a state writer. */
-export async function assertDoctorAgentLeaseAdmission(env: NodeJS.ProcessEnv): Promise<void> {
-  const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
-    await import("../state/openclaw-agent-db-lease.js");
+export async function assertDoctorAgentLeaseAdmission(
+  env: NodeJS.ProcessEnv,
+  signal = resolveSqliteInspectionSignal(),
+): Promise<void> {
+  const { assertNoOpenClawAgentDatabaseLeasesReadOnly } =
+    await import("../state/openclaw-agent-db-lease-inspection.js");
   try {
-    withEngineStoreAdmission(() =>
-      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission),
+    await assertNoOpenClawAgentDatabaseLeasesReadOnly(
+      { env },
+      openDoctorStateSchemaReadAdmission,
+      signal,
     );
   } catch (error) {
+    if (error instanceof SqliteSnapshotCleanupError || hasCommandProcessCleanupError(error)) {
+      throw error;
+    }
+    signal?.throwIfAborted();
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
       throw createDoctorAgentLeaseRefusal(env, { cause: error, ownerPids: error.ownerPids });
     }
@@ -145,8 +161,8 @@ export async function admitDoctorAgentLeases(params: {
   signal: AbortSignal;
   log: (message: string) => void;
 }): Promise<void> {
-  const { readActiveOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
-    await import("../state/openclaw-agent-db-lease.js");
+  const { readActiveOpenClawAgentDatabaseLeasesReadOnly } =
+    await import("../state/openclaw-agent-db-lease-inspection.js");
   // Doctor never waits for a lease it holds itself.
   const foreignHolders = (pids: readonly number[]) =>
     pids.length > 0 && !pids.includes(process.pid) ? pids : undefined;
@@ -158,7 +174,9 @@ export async function admitDoctorAgentLeases(params: {
   for (;;) {
     await params.acquire();
     try {
-      await params.state.run(() => assertDoctorAgentLeaseAdmission(params.state.env));
+      await params.state.run(() =>
+        assertDoctorAgentLeaseAdmission(params.state.env, params.signal),
+      );
       if (waited) {
         params.log(
           `Agent databases closed after ${formatDoctorWaitSeconds(performance.now() - startedAt)}; continuing Doctor maintenance.`,
@@ -212,18 +230,22 @@ export async function admitDoctorAgentLeases(params: {
       pollMs = Math.min(pollMs * 2, 2_000);
       let live: readonly number[];
       try {
-        live = withEngineStoreAdmission(() => [
+        live = [
           ...new Set(
-            readActiveOpenClawAgentDatabaseLeasesReadOnly(
-              { env: params.state.env },
-              openDoctorStateSchemaReadAdmission,
+            (
+              await readActiveOpenClawAgentDatabaseLeasesReadOnly(
+                { env: params.state.env },
+                openDoctorStateSchemaReadAdmission,
+                params.signal,
+              )
             ).map((row) => row.owner_pid),
           ),
-        ]);
+        ];
       } catch (error) {
-        if (hasCommandProcessCleanupError(error)) {
+        if (error instanceof SqliteSnapshotCleanupError || hasCommandProcessCleanupError(error)) {
           throw error;
         }
+        params.signal.throwIfAborted();
         // An observation grants nothing; the held-owner check classifies failures.
         break;
       }

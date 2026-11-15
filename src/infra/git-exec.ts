@@ -151,6 +151,7 @@ function gitExecutionArgv(
 
 export type GitCommandOptions = Pick<
   CommandOptions,
+  | "executionIntent"
   | "timeoutMs"
   | "noOutputTimeoutMs"
   | "baseEnv"
@@ -291,6 +292,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
       options.beforeRun?.();
       return runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: undefined,
       });
@@ -304,6 +306,7 @@ async function executeGitCommandWithOutput<Result extends SpawnResult | BufferSp
     (attemptTimeoutMs) =>
       runAttempt({
         ...options,
+        executionIntent: options.executionIntent ?? "gateway-internal",
         env,
         timeoutMs: attemptTimeoutMs,
       }),
@@ -334,7 +337,13 @@ export async function executeGitCommandBuffered(
     withGitNetworkRetry(
       retryableGitNetworkOperation(args),
       { ...options, timeoutMs: options.timeoutMs ?? GIT_TIMEOUT_MS },
-      (timeoutMs) => runCommandBuffered(argv, { ...options, env, timeoutMs }),
+      (timeoutMs) =>
+        runCommandBuffered(argv, {
+          ...options,
+          executionIntent: options.executionIntent ?? "gateway-internal",
+          env,
+          timeoutMs,
+        }),
     ),
   );
 }

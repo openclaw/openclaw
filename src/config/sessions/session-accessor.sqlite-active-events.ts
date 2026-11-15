@@ -85,7 +85,7 @@ export function readLatestSessionTranscriptMessageEvent(
         start: 0,
         endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
       });
-      return row ? parseActiveTranscriptMessageRow(row) : undefined;
+      return row ? parseActiveTranscriptMessageRow(row, projection) : undefined;
     },
     options,
   );
@@ -388,7 +388,7 @@ function readVisibleDeltaPayload(
       )
       .select("parent_identity.event_id as parent_id"),
   ).rows.map((row) => {
-    const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row);
+    const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row, projection);
     return { event, eventSeq, parentId: row.parent_id, seq };
   });
 }

@@ -30,6 +30,8 @@ import type { CapturedSessionEntryReadSource } from "./session-entry-read-source
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SqliteSessionEntryPatchOptions = SessionEntryPatchOptions & {
+  /** Cancel waiting admission; a started writer still owns its complete settlement. */
+  signal?: AbortSignal;
   /** Closed operations can acknowledge completion without returning the entry. */
   result?: "none";
   /** Exact captured writer under its caller's foreground reservation; never a new owner. */
@@ -82,7 +84,14 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
   const databaseOptions = toDatabaseOptions(resolved);
   assertAgentSessionWriteAdmission(databaseOptions, resolved.agentId);
   const databasePath = resolveOpenClawAgentSqlitePath(databaseOptions);
-  const targetIdentity = readDatabasePathIdentitySync(databasePath);
+  const targetIdentity =
+    typeof captured?.databaseIdentity === "string"
+      ? {
+          key: `file:${captured.databaseIdentity}`,
+          canonicalPath: databasePath,
+          birthtime: captured.databaseBirthtime,
+        }
+      : readDatabasePathIdentitySync(databasePath);
   resolved.path = databasePath;
   databaseOptions.path = databasePath;
   const useWorker = isMainThread && supportsOpenClawAgentDatabaseExecution(databaseOptions);
@@ -107,13 +116,6 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
     if (!captured) {
       return;
     }
-    if (!database && typeof captured.databaseIdentity === "string") {
-      assertExistingDatabaseIdentity(
-        captured.path,
-        `file:${captured.databaseIdentity}`,
-        captured.databaseBirthtime,
-      );
-    }
     assertCapturedSessionEntryReadSource(
       captured,
       database ?? getOpenClawAgentDatabaseIfOpen(databaseOptions),
@@ -133,10 +135,12 @@ export function captureSessionEntryPatchSource(params: SqliteSessionEntrySnapsho
         throw new Error("Retained session writer differs from its acknowledged source");
       }
     }
-    if (targetIdentity.key.startsWith("file:")) {
-      assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+    if (!useWorker) {
+      if (targetIdentity.key.startsWith("file:")) {
+        assertExistingDatabaseIdentity(databasePath, targetIdentity.key, targetIdentity.birthtime);
+      }
+      assertCapturedSource();
     }
-    assertCapturedSource();
   };
   if (retainedExecution) {
     assertCurrent();

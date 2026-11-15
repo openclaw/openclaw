@@ -5,7 +5,7 @@ import {
   resolveCompactionReplayEligibility,
   stripCompactionReplayCheckpoint,
 } from "@openclaw/ai/transports";
-import type { ModelCompatConfig } from "../../../config/types.models.js";
+import type { ModelCompatConfig } from "../../../config/zod-schema.model-compat.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
@@ -301,21 +301,23 @@ export async function settleEmbeddedAttemptStream(input: {
         const { timedOutDuringCompaction } = input.readLifecycleState();
         const compactionOccurredThisAttempt = subscription.getCompactionCount() > 0;
         const cacheTtlCompat: ModelCompatConfig | undefined = attempt.model.compat;
-        await appendAttemptCacheTtlIfNeeded({
-          sessionManager,
-          timedOutDuringCompaction,
-          compactionOccurredThisAttempt,
-          config: attempt.config,
-          provider: attempt.provider,
-          modelId: attempt.modelId,
-          modelApi: attempt.model.api,
-          modelRoute: {
-            baseUrl: attempt.model.baseUrl,
-            supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
-          },
-          isCacheTtlEligibleProvider,
-          toolResultPromptProjectionState: input.toolResultPromptProjectionState,
-        });
+        if (!attempt.inputAlreadyDelivered) {
+          await appendAttemptCacheTtlIfNeeded({
+            sessionManager,
+            timedOutDuringCompaction,
+            compactionOccurredThisAttempt,
+            config: attempt.config,
+            provider: attempt.provider,
+            modelId: attempt.modelId,
+            modelApi: attempt.model.api,
+            modelRoute: {
+              baseUrl: attempt.model.baseUrl,
+              supportsPromptCacheKey: cacheTtlCompat?.supportsPromptCacheKey,
+            },
+            isCacheTtlEligibleProvider,
+            toolResultPromptProjectionState: input.toolResultPromptProjectionState,
+          });
+        }
 
         if (timedOutDuringCompaction) {
           const removedEntries = await normalizeCompactionRecoveryTranscriptTail({
@@ -534,6 +536,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
     (messages) => messages,
     async ({ context, ...provider }) => {
       assertRunCurrent?.();
+      let localRoots: readonly string[] | undefined;
       const prepared = await materializeProviderContext({
         ...provider,
         context,
@@ -543,7 +546,11 @@ export async function prepareEmbeddedAttemptTransport(input: {
         workspaceOnly: input.workspaceOnly,
         localRoots: input.workspaceOnly
           ? undefined
-          : getAgentScopedMediaLocalRoots(attempt.config ?? {}, input.sessionAgentId),
+          : () =>
+              (localRoots ??= getAgentScopedMediaLocalRoots(
+                attempt.config ?? {},
+                input.sessionAgentId,
+              )),
         onCurrentTurnImageFailure: input.onCurrentTurnImageFailure,
         sandbox:
           input.sandbox?.enabled && input.sandbox.fsBridge

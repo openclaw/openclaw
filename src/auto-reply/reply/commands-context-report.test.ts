@@ -11,6 +11,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { buildContextReply } from "./commands-context-report.js";
@@ -58,7 +59,7 @@ function makeParams(
       ...(options?.sessionId ? { sessionId: options.sessionId } : {}),
       totalTokens: options?.totalTokens ?? 123,
       totalTokensFresh,
-      ...(totalTokensFresh ? { totalTokensVersion: 1 as const } : {}),
+      ...(totalTokensFresh ? { totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION } : {}),
       inputTokens: 100,
       outputTokens: 23,
       systemPromptReport: {
@@ -280,10 +281,12 @@ describe("buildContextReply", () => {
   });
 
   it("reports native Codex project docs as unverified without OpenClaw limit advice", async () => {
-    const result = await buildContextReply(
-      makeParams("/context detail", false, { nativeUnverified: true }),
-    );
+    const params = makeParams("/context detail", false, { nativeUnverified: true });
+    // Codex base instructions taken from configuration rather than the loaded thread.
+    params.sessionEntry!.systemPromptReport!.systemPrompt.estimatedChars = 400;
+    const result = await buildContextReply(params);
 
+    expect(result.text).toContain("(Project Context 500 chars (~125 tok); estimated 400 chars");
     expect(result.text).toContain(
       "- AGENTS.md: NATIVE/UNVERIFIED | raw(local) 10,000 chars (~2,500 tok) | injected unknown",
     );

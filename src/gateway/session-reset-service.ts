@@ -33,7 +33,6 @@ import {
   resetSessionEntryLifecycle,
 } from "../config/sessions.js";
 import { rebindCliSessionReseedReceiptsForReset } from "../config/sessions/cli-session-binding.js";
-import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { preserveResetSessionPresentation } from "../config/sessions/reset-preserved-presentation.js";
 import { resolveResetPreservedSelection } from "../config/sessions/reset-preserved-selection.js";
 import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
@@ -48,7 +47,6 @@ import {
 import { withSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { createSessionResetBoundaryId } from "../config/sessions/session-reset-boundary-event.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logVerbose } from "../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -86,6 +84,7 @@ import {
   resetSessionAgentHarnesses,
 } from "./session-lifecycle-cleanup.js";
 import {
+  emitGatewayBeforeResetPluginHook,
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "./session-lifecycle-plugin-hooks.js";
@@ -107,69 +106,22 @@ import { resolveSessionResetTarget } from "./session-reset-target.js";
 import { readGatewayBeforeResetPluginHookMessages } from "./session-reset-transcript.js";
 import { buildResetWorkspaceFields } from "./session-reset-workspace.js";
 import { withGatewaySessionEntryReadOnly } from "./session-utils-read-lifetime.js";
-import type { GatewaySessionStoreTarget } from "./session-utils-store.types.js";
 import {
   readSessionWorkerPlacementAsync,
   resolveSessionWorkerPlacementMutationError,
   retireSessionWorkerPlacementBeforeMutation,
 } from "./worker-environments/session-placement-lifecycle.js";
 
-export { emitGatewaySessionEndPluginHook, emitGatewaySessionStartPluginHook };
+export {
+  emitGatewayBeforeResetPluginHook,
+  emitGatewaySessionEndPluginHook,
+  emitGatewaySessionStartPluginHook,
+};
 
 export {
   cleanupSessionBeforeMutation,
   emitSessionUnboundLifecycleEvent,
 } from "./session-lifecycle-cleanup.js";
-
-export async function emitGatewayBeforeResetPluginHook(params: {
-  cfg: OpenClawConfig;
-  key: string;
-  messages?: unknown[];
-  target: GatewaySessionStoreTarget;
-  storePath: string;
-  entry?: SessionEntry;
-  reason: "new" | "reset";
-}): Promise<void> {
-  const hookRunner = getGlobalHookRunner();
-  if (!hookRunner?.hasHooks("before_reset")) {
-    return;
-  }
-
-  const sessionKey = params.target.canonicalKey;
-  const sessionId = params.entry?.sessionId;
-  const agentId = params.target.agentId;
-  const sessionFile = sessionId
-    ? formatSqliteSessionFileMarker({ agentId, sessionId, storePath: params.storePath })
-    : undefined;
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
-  const messages =
-    params.messages ??
-    (await readGatewayBeforeResetPluginHookMessages({
-      agentId,
-      entry: params.entry,
-      sessionId,
-      sessionKey,
-      storePath: params.storePath,
-    }));
-
-  void hookRunner
-    .runBeforeReset(
-      {
-        sessionFile,
-        messages,
-        reason: params.reason,
-      },
-      {
-        agentId,
-        sessionKey,
-        sessionId,
-        workspaceDir,
-      },
-    )
-    .catch((err: unknown) => {
-      logVerbose(`before_reset hook failed: ${String(err)}`);
-    });
-}
 
 export async function performGatewaySessionReset(
   params: SessionLifecycle.GatewaySessionResetParams,
@@ -747,6 +699,7 @@ async function performPreparedGatewaySessionReset({
         const postCommitActions: Array<() => void | Promise<void>> = [];
         const lifecycleRequest: Parameters<typeof resetSessionEntryLifecycle>[0] = {
           commitGuard,
+          creationOperation: params.creationOperation,
           archivePreviousTranscript: false,
           agentId: target.agentId,
           resetBoundary: entry

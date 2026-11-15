@@ -172,6 +172,56 @@ it("keeps the call alive during sustained caller speech and ends after silence",
   await vi.advanceTimersByTimeAsync(1);
   expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
 });
+it.each([
+  ["silence", undefined, 0],
+  ["line click", undefined, 1],
+  ["playback echo", undefined, 2],
+  ["caller speech then silence", undefined, 4],
+  ["configured timeout", 1_000, 0],
+] as const)(
+  "ends an unanswered outbound call despite continuous silent media (%s)",
+  async (_scenario, idleHangupMs, loudFrames) => {
+    const close = vi.fn();
+    const { ws, endCall, request, handler } = await connectCall("CA-unanswered", {
+      call: outbound({}),
+      idleHangupMs,
+      bridge: { close },
+    });
+    request.onTranscript?.("assistant", "Hello, is anyone there?", true);
+    request.onAudio(Buffer.alloc(160, 0x00));
+    await vi.advanceTimersByTimeAsync(0);
+    await sendFrames(ws, loudFrames);
+    const timeoutMs = idleHangupMs ?? 30_000;
+    for (let elapsed = 0; elapsed < timeoutMs - 1_000; elapsed += 1_000) {
+      await sendFrames(ws, 1, 0xff);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    await sendFrames(ws, 1, 0xff);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(endCall).not.toHaveBeenCalled();
+    const closed = waitForClose(ws);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
+    await closed;
+    expect(close).toHaveBeenCalledOnce();
+    expect(handler.speak("call-1", "Too late").success).toBe(false);
+  },
+);
+it.each(["extended outbound", "inbound"])(
+  "keeps an %s call connected through the default outbound silence window",
+  async (kind) => {
+    const { ws, request, endCall } = await connectCall("CA-not-unanswered", {
+      call: kind === "inbound" ? makeCall("CA-inbound") : outbound({}),
+      idleHangupMs: kind === "inbound" ? undefined : 60_000,
+    });
+    request.onTranscript?.("assistant", "Hello", true);
+    for (let elapsed = 0; elapsed < 31_000; elapsed += 1_000) {
+      await sendFrames(ws, 1, 0xff);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(endCall).not.toHaveBeenCalled();
+  },
+);
 it.each([false, true])(
   "preserves outbound greeting timing (native consult=%s)",
   async (nativeConsult) => {

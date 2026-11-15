@@ -1,12 +1,32 @@
 import { spawnSync, type SpawnSyncOptionsWithBufferEncoding } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, delimiter } from "node:path";
-import { expect } from "vitest";
+import { afterAll, expect } from "vitest";
+import { copyTreeCloseOnExec } from "../helpers/close-on-exec-copy.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { validReview } from "./pr-review-artifact-fixture.js";
 import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
 
 const cliFlags = (values: Record<string, string>) => Object.entries(values).flat();
+
+export function reuseBaselineFixture<T extends object>(create: (root: string) => T) {
+  const dirs = useAutoCleanupTempDirTracker(afterAll);
+  const root = dirs.make("openclaw-pr-baseline-");
+  const pristine = dirs.make("openclaw-pr-baseline-pristine-");
+  let context: T;
+  return () => {
+    if (!context) {
+      context = create(root);
+      copyTreeCloseOnExec(root, pristine);
+    }
+    // Captured JavaScript state must stay read-only after setup. Registered
+    // worktrees and evidence bind absolute paths, so restore the whole private root.
+    rmSync(root, { recursive: true, force: true });
+    copyTreeCloseOnExec(pristine, root);
+    return context;
+  };
+}
 
 export function failRestore(root: string, env: NodeJS.ProcessEnv) {
   const realGit = spawnSync("sh", ["-c", "command -v git"], {

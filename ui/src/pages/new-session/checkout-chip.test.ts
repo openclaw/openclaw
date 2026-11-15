@@ -219,7 +219,7 @@ describe("Checkout chip state", () => {
         afterHide(container);
         expect(onConfirm).toHaveBeenCalledOnce();
         expect(container.textContent).toContain(
-          "Clones OpenClaw on the selected runner. No Gateway checkout is created.",
+          "Clones OpenClaw on the selected device. No checkout is created on this computer.",
         );
         return;
       }
@@ -230,7 +230,7 @@ describe("Checkout chip state", () => {
       expect(current.disabled).toBe(remotePlacement || Boolean(currentCheckoutUnavailableReason));
       expect(current.getAttribute("title")).toBe(
         remotePlacement
-          ? "Devices and cloud run in a worktree"
+          ? "Paired and cloud devices use a worktree"
           : (currentCheckoutUnavailableReason ?? null),
       );
       expect(isolated.getAttribute("aria-pressed")).toBe(String(worktree));
@@ -242,7 +242,7 @@ describe("Checkout chip state", () => {
       );
 
       expect(container.querySelectorAll("input")).toHaveLength(worktree ? 2 : 0);
-      expect(container.textContent?.includes("Syncs OpenClaw to the selected runner")).toBe(
+      expect(container.textContent?.includes("Syncs OpenClaw to the selected device")).toBe(
         remotePlacement,
       );
     },
@@ -365,9 +365,7 @@ describe("Checkout chip state", () => {
     onPopoverShow.mockClear();
     onPopoverHide.mockClear();
 
-    expect(container.textContent).toContain(
-      "Creates branch openclaw/picker-fixes in a separate checkout.",
-    );
+    expect(name.title).toBe("Creates branch openclaw/picker-fixes in a separate checkout.");
     const suggestionPopup = container.querySelector(".new-session-page__branch-popup")!;
     for (const type of ["overlay-show", "overlay-hide", "overlay-after-hide"]) {
       suggestionPopup.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));

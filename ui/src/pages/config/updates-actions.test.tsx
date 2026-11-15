@@ -101,6 +101,7 @@ it("keeps native automatic-update intent until acknowledgement and permits retry
   await waitForSolid(() => {
     expect(input.checked).toBe(false);
     expect(input.getAttribute("aria-disabled")).toBe("true");
+    expect(input.closest(".settings-row")?.textContent).not.toContain("Saving");
   });
   first.reject(new Error("Automatic updates could not be saved"));
   await waitForSolid(() =>

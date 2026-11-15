@@ -1,6 +1,5 @@
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { toAgentStoreSessionKey } from "../../routing/session-key.js";
-import { readAgentDeletionJournalStatusInWorker } from "../../state/agent-deletion-journal.read.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -65,11 +64,6 @@ export function createCronReceiptExecutionIdentity(
           );
         });
       await executionBinding;
-      // First-use audit DDL invalidates schema-bound deletion facts before the final authority check.
-      await readAgentDeletionJournalStatusInWorker(receipt.agentId, {
-        env: context.environment,
-        path: context.admission.databasePath,
-      });
     },
   };
 }

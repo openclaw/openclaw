@@ -17,7 +17,6 @@ import * as updateCheck from "../../infra/update-check.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import * as failureArtifacts from "../../infra/update-failure-report-artifact.js";
 import * as updateGlobal from "../../infra/update-global.js";
-import * as handoffCleanup from "../../infra/update-managed-service-handoff-cleanup.js";
 import {
   POST_CORE_UPDATE_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -49,7 +48,7 @@ import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-err
 import { UpdateCommandFailure } from "./update-command-result.js";
 import * as updateResume from "./update-command-resume.js";
 import * as commandRun from "./update-command-run.js";
-import { stubNodeRuntime } from "./update-command-runtime-recovery.test-support.js";
+import { getNodeRuntimeFixture } from "./update-command-runtime-recovery.test-support.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
 import { withUpdateCommandRecoveryUnwind } from "./update-command-unwind.js";
@@ -108,9 +107,6 @@ function pendingPackageInvocation(
     profile?: string;
   } = {},
 ) {
-  if (params.serviceDrift) {
-    stubNodeRuntime();
-  }
   const home = fs.realpathSync(makeTempDir(dirs, "pending-package-admission-"));
   const identity = createManagedServiceIdentityFixture(home);
   const state = resolveProfileStateDir(params.profile ?? "default", process.env, () => home);
@@ -167,7 +163,7 @@ function pendingPackageInvocation(
       params.serviceDrift
         ? {
             programArguments: [
-              process.execPath,
+              getNodeRuntimeFixture().execPath,
               path.join(serviceRoot, "dist", "entry.js"),
               "gateway",
             ],
@@ -209,7 +205,6 @@ function pendingPackageInvocation(
       prepareTriage: vi.spyOn(triage, "prepareUpdateFailureTriage").mockResolvedValue(runTriage),
       writeTriage: vi.spyOn(failureArtifacts, "writeTriageUpdateFailure"),
       runTriage,
-      cleanupHandoffs: vi.spyOn(handoffCleanup, "cleanupStaleManagedServiceUpdateHandoffs"),
       loadPlugins: vi.spyOn(installedPlugins, "loadInstalledPluginIndexInstallRecords"),
       resumePostCore: vi
         .spyOn(updateResume, "resumePostCoreUpdate")
@@ -369,16 +364,8 @@ describe.skipIf(process.platform === "win32")("pending package activation admiss
           reason: "update-recovery-pending",
           root: serviceDrift ? f.serviceRoot : f.source,
         });
-        const { disableAutoStart, cleanupHandoffs, loadPlugins, writeTriage, runTriage } =
-          f.writers;
-        expectNoCalls(
-          metadata,
-          disableAutoStart,
-          cleanupHandoffs,
-          loadPlugins,
-          writeTriage,
-          runTriage,
-        );
+        const { disableAutoStart, loadPlugins, writeTriage, runTriage } = f.writers;
+        expectNoCalls(metadata, disableAutoStart, loadPlugins, writeTriage, runTriage);
         expect(retainedMaterial()).toEqual(before);
         if (record) {
           expect(ledger.getUpdateRun(record.runId)).toMatchObject({ runId: record.runId });
@@ -464,7 +451,7 @@ describe("pending recovery finalizer", () => {
         { ...process.env, ...f.env, OPENCLAW_CONFIG_PATH: configPath },
         () => invoke({ json: true, yes: true, deferCompletionCache: true }),
       ),
-    ).rejects.toThrow("full-state recovery is deferred");
+    ).rejects.toThrow("Interrupted shared-database publication left");
     expect(resolveRoot).not.toHaveBeenCalled();
     f.expectRetained();
     expect(fs.readFileSync(configPath)).toEqual(originalConfig);

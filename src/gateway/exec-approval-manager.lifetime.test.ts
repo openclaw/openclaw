@@ -9,6 +9,7 @@ import {
 } from "../agents/admitted-run-context.js";
 import { CronService } from "../cron/service.js";
 import { createNoopLogger } from "../cron/service.test-harness.js";
+import { prepareCronStreamMutationAdmission } from "../cron/service/config-mutation.js";
 import { loadCronJobsStore } from "../cron/store.js";
 import {
   CronStreamExecApprovalRequiredError,
@@ -22,6 +23,7 @@ import {
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -95,6 +97,30 @@ function holdResolutionReply() {
 }
 
 describe("ExecApprovalManager lifetime", () => {
+  it.for(["not-entered", "unknown"] as const)(
+    "preserves prepared approval replay after cron %s settlement",
+    async (outcome, test) => {
+      const { databaseOptions, record } = await createPersistentManager(test);
+      const replay = await operatorApprovalStore.prepareOperatorApprovalReplay({ databaseOptions });
+      expect(replay).toMatchObject({ outcome: "pending", records: [{ id: record.id }] });
+      const isCurrent = expectDefined(replay.isCurrent, "prepared approval replay");
+      expect(isCurrent()).toBe(true);
+      const context = captureOpenClawStateWorkerContext(databaseOptions);
+      const error = new Error("Synthetic cron dispatch refusal");
+      const retained = prepareCronStreamMutationAdmission({
+        context,
+        authority: {},
+        assertCurrent: () => {},
+      }).createAdmission({ settled: Promise.resolve({ kind: outcome, error }) });
+      try {
+        retained.admission.finish(outcome === "not-entered" ? "not-entered" : undefined);
+        expect(isCurrent()).toBe(outcome === "not-entered");
+      } finally {
+        retained.admission.finish();
+      }
+    },
+  );
+
   it("rolls back prepared consumption with its effect and publishes only committed consumption", async (test) => {
     const { manager, databaseOptions } = await createPersistentManager(test);
     const record = manager.create({ command: "tail -F app.log" }, 60_000);

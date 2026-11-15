@@ -17,7 +17,7 @@ import type { ChatState } from "./chat-state-contract.ts";
  * both server rows, so filling the gap never trusts held live rows. Gaps larger
  * than one older page keep the lazy boundary.
  */
-export function heldHistoryGapCursor(options: {
+function heldHistoryGapCursor(options: {
   result: ChatHistoryResult;
   previousMessages: unknown[];
   previousPagination: ChatHistoryPagination;
@@ -37,11 +37,9 @@ export function heldHistoryGapCursor(options: {
   ) {
     return null;
   }
-  const readEnd = options.previousPagination.totalMessages ?? 0;
   const rowsBeforeTail = next.totalMessages - next.nextOffset;
-  return rowsBeforeTail > readEnd && rowsBeforeTail <= CHAT_HISTORY_OLDER_PAGE_LIMIT
-    ? next.olderCursor
-    : null;
+  // A cursor reset may advance the leaf, invalidating even a fully held prefix.
+  return rowsBeforeTail <= CHAT_HISTORY_OLDER_PAGE_LIMIT ? next.olderCursor : null;
 }
 
 /**

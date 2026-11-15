@@ -28,6 +28,4 @@ export type DraftSubmissionCallbacks = {
   changed: () => void;
   closeTransientUi: () => void;
   onAccepted?: (result: SessionCreateOutcome & { agentId: string }) => void;
-  /** Launchers keep a rejected first prompt visible beside its created destination. */
-  retainRejectedPrompt?: true;
 };

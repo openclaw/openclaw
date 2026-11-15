@@ -1,9 +1,15 @@
 import fs from "node:fs";
+import { constants, zstdCompressSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
+import { realisticTranscriptText } from "../../test/helpers/session-archive.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { resolveSessionArchiveReadPath } from "../config/sessions/archive-compression.js";
 import { persistSessionTranscriptTurn } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
+import { readChatHistoryPageKernel } from "./chat-history-page-kernel.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
+import { ArchivedTranscriptReader } from "./session-transcript-archive-reader.js";
 import {
   transcriptMessage as event,
   useTranscriptFixture,
@@ -19,6 +25,7 @@ import {
   readSessionMessagesPageWithStatsAsync as readPage,
   readSessionMessagesWithSourceAsync as readSource,
 } from "./session-transcript-readers.js";
+import * as readers from "./session-transcript-readers.js";
 import { readLatestSessionUsageFromTranscriptAsync as readUsage } from "./session-transcript-usage.js";
 
 describe("session transcript reader facade", () => {
@@ -241,15 +248,25 @@ describe("session transcript reader facade", () => {
     await expectHistoryOverflow(readAround(scope, { messageId: "oversized", maxMessages: 1 }));
   });
 
-  test("refuses unbounded anchor windows and caps payloads before decoding", async () => {
+  test("bounds unbounded anchor windows and caps payloads before decoding", async () => {
     const sessionId = "reader-anchor-page-bytes";
     const scope = await writeTranscript(
       sessionId,
       chain(3, "large", () => "a".repeat(3 * 1024 * 1024)),
     );
-    await expect(readAround(scope, { messageId: "large-1", maxMessages: 3 })).rejects.toThrow(
-      "Transcript history page exceeds the 8388608-byte limit; request a smaller limit",
-    );
+    // Earlier-history paging anchors on older windows; an oversized window must still page.
+    const older = await readAround(scope, {
+      messageId: "large-2",
+      maxMessages: 3,
+      direction: "older",
+    });
+    expect(older.messages).toMatchObject([
+      { __openclaw: { id: "large-1" } },
+      { __openclaw: { id: "large-2" } },
+    ]);
+    expect(
+      (await readAround(scope, { messageId: "large-1", maxMessages: 3 })).messages,
+    ).toMatchObject([{ __openclaw: { id: "large-0" } }, { __openclaw: { id: "large-1" } }]);
     const db = database();
     // Preserve recorded sizes while poisoning excluded payloads: a late cap would parse this.
     db.db
@@ -262,9 +279,79 @@ describe("session transcript reader facade", () => {
       maxMessages: 3,
       maxBytes: 4 * 1024 * 1024,
     });
-    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-2" } }]);
+    expect(page.messages).toMatchObject([{ __openclaw: { id: "large-1" } }]);
     expect(page.hasOverreadContext).toBe(false);
   });
+
+  test.each([false, true])(
+    "pages adjacent 5 MiB messages in both directions (historical=%s)",
+    async (historical) => {
+      const ids = ["large-0", "large-1", "large-2"];
+      const events: unknown[] = chain(3, "large", () => "a".repeat(5 * 1024 * 1024));
+      if (historical) {
+        events.push({
+          type: "reset",
+          id: "reset",
+          parentId: "large-2",
+          timestamp: "2026-10-01T00:00:00.000Z",
+        });
+        ids.push("reset");
+      }
+      const scope = await writeTranscript("anchor-walk", events);
+      const params = {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 3,
+        maxHistoryBytes: 8 * 1024 * 1024,
+        effectiveMaxChars: 100,
+        offset: undefined,
+        messageId: "large-1",
+      };
+      const jump = await readChatHistoryPageKernel(params, { readers });
+      expect(jump.messages.map(readChatHistoryMessageId)).toContain("large-1");
+      for (const direction of ["older", "newer"] as const) {
+        const expected = direction === "older" ? ids.toReversed() : ids;
+        // A closing reset uses the current interval; start older traversal at its preceding message.
+        const traversal = historical && direction === "older" ? expected.slice(1) : expected;
+        let messageId = traversal[0]!;
+        const seen = [messageId];
+        for (let index = 1; index < traversal.length; index++) {
+          const page = await readChatHistoryPageKernel(
+            {
+              ...params,
+              messageId,
+              pageCursor: {
+                sessionId: scope.sessionId,
+                source: jump.anchor!.source,
+                messageId,
+                direction,
+              },
+            },
+            { readers },
+          );
+          expect(page.windowReset).not.toBe(true);
+          const actual = page.messages.map(readChatHistoryMessageId);
+          if (direction === "older") {
+            actual.reverse();
+          }
+          expect(actual.length).toBeGreaterThan(0);
+          seen.push(...actual.filter((id): id is string => id !== undefined));
+          messageId =
+            direction === "older" ? page.anchor!.oldestMessageId! : page.anchor!.newestMessageId!;
+          const hasMore = direction === "older" ? page.anchor!.hasOlder : page.anchor!.hasNewer;
+          expect(hasMore).toBe(seen.length < traversal.length);
+          if (!hasMore) {
+            break;
+          }
+        }
+        expect(seen).toEqual(traversal);
+      }
+    },
+  );
 
   test("acquires messages incrementally and releases the cursor after visitor failure", async () => {
     const sessionId = "reader-stream-visitor";
@@ -333,6 +420,55 @@ describe("session transcript reader facade", () => {
       readPage(scope, { offset: 0, maxMessages: 1, allowResetArchiveFallback: true }),
     ).resolves.toMatchObject({ messages: [{ content: "retained archive" }] });
   });
+
+  // #190690 refused both: a ~10x production transcript and its own 2 MiB repeated-byte frame.
+  // History's own per-message payload cap still applies once the archive is readable.
+  test.each([
+    [
+      "production-like",
+      (index: number) => realisticTranscriptText(64 * 1024, index + 1),
+      realisticTranscriptText(64 * 1024, 24),
+    ],
+    [
+      "repeated-byte bomb",
+      (index: number) => (index === 23 ? "x".repeat(2 * 1024 * 1024) : "m"),
+      [{ type: "text", text: "[chat.history omitted: message too large]" }],
+    ],
+  ] as const)(
+    "reads %s archives during discovery and exact reads",
+    async (_shape, content, latest) => {
+      const sessionId = "reader-expanding-archive";
+      const sessionFile = fixture.path("custom.jsonl");
+      const scope = { ...scopeFor(sessionId), sessionFile };
+      const archivePath = `${sessionFile}.reset.2026-07-12T18-00-00.000Z.zst`;
+      const body = chain(24, "m", content).map((entry) => JSON.stringify(entry));
+      const plaintext = `${JSON.stringify({ type: "session", id: sessionId })}\n${body.join("\n")}\n`;
+      const stored = zstdCompressSync(Buffer.from(plaintext));
+      // Stored size plus 1 MiB was #190690's refusal threshold.
+      expect(Buffer.byteLength(plaintext)).toBeGreaterThan(stored.length + 1024 * 1024);
+      fs.writeFileSync(archivePath, stored);
+      const damaged = zstdCompressSync(Buffer.from("corrupt suffix"), {
+        params: { [constants.ZSTD_c_checksumFlag]: 1 },
+      });
+      damaged[damaged.length - 1] = damaged.readUInt8(damaged.length - 1) ^ 1;
+      const newerPath = archivePath.replace("T18-", "T19-");
+      fs.writeFileSync(newerPath, Buffer.concat([stored, damaged]));
+
+      await expect(
+        new ArchivedTranscriptReader(scope).readRecentWithStats({ maxMessages: 1 }),
+      ).resolves.toMatchObject({ messages: [{ content: latest }], transcriptPath: archivePath });
+      await expect(
+        new ArchivedTranscriptReader({ ...scope, exactArchivePath: archivePath }).readAroundId({
+          messageId: "m-10",
+          maxMessages: 1,
+          maxBytes: 256 * 1024,
+        }),
+      ).resolves.toMatchObject({ found: true });
+      expect(
+        fs.existsSync(resolveSessionArchiveReadPath(archivePath, fs.statSync(archivePath))),
+      ).toBe(false);
+    },
+  );
 
   test.each(["artifact", "sqlite"] as const)(
     "reads usage from %s storage with a placeholder store path",

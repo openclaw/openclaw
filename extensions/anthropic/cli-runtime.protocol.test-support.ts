@@ -116,6 +116,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     user = message.message.content;
     synthetic = message.isSynthetic === true;
     writeFileSync("user.received", user);
+    if (turn === 1 && process.env.CLAUDE_FIXTURE_MCP_SERVERS) system("init", { mcp_servers: JSON.parse(process.env.CLAUDE_FIXTURE_MCP_SERVERS) });
     if (scenario === "revoked-prompt") {
       ready("prompt.ready");
       while (!existsSync("prompt.release")) await delay(5);

@@ -12,7 +12,7 @@ const DOWNLOAD_TTL_MS = 5 * 60_000;
 const MAX_DOWNLOADS_PER_CONNECTION = 128;
 export const SESSION_FILE_PREVIEW_RESOURCE_PATH = "/__openclaw__/file-preview/";
 
-export type SessionFilePreviewResource = { body: Uint8Array; mimeType: string };
+type SessionFilePreviewResource = { body: Uint8Array; mimeType: string };
 
 type DownloadSource =
   | {

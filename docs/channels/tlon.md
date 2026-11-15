@@ -164,6 +164,22 @@ Notebook and Gallery channels in joined groups, even though Tlon listens and rep
 auto-discovered chat channels. In a 1:1 DM from `ownerShip`, citations can expand from any channel
 the bot ship can read regardless of the auto-discovery setting.
 
+Admitted senders can cite posts from channels they cannot read themselves, and the bot adds that
+content to the agent's context. To keep citations inside the conversation they came from, set
+`crossChannelCitations: false`. A citation then expands only when it points at the channel the
+message was posted in. Citations in other DMs and group DMs stay as opaque references, while the
+owner's 1:1 DMs keep the exemption above.
+
+```json5
+{
+  channels: {
+    tlon: {
+      crossChannelCitations: false,
+    },
+  },
+}
+```
+
 Once the bot has replied inside a thread, it keeps responding to later messages in that thread
 without requiring another mention.
 

@@ -103,6 +103,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                   aria-label={viewLabel(view)}
                   aria-pressed={
                     host.navigationVisible &&
+                    !host.onExitSettings &&
                     !host.navigationCollapsed &&
                     host.navigationView === view
                       ? "true"
@@ -111,7 +112,9 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
                   onClick={() => {
                     const active = host.navigationView === view;
                     host.navigationView = view;
-                    if (
+                    if (host.onExitSettings) {
+                      host.onExitSettings();
+                    } else if (
                       !isMobileNavLayout() &&
                       ((active && view !== "online") || host.navigationCollapsed)
                     ) {
@@ -161,6 +164,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onClick={(event) => {
           if (
             !isMobileNavLayout() &&
+            !host.onExitSettings &&
             !host.navigationCollapsed &&
             event.button === 0 &&
             !event.metaKey &&
@@ -423,6 +427,9 @@ function renderRailPin(
 }
 
 function RailSessionGlyph(props: { session: SidebarRecentSession; label: string }) {
+  const subagentsWorking = createMemo(
+    () => (props.session.subagentSummary?.runningChildCount ?? props.session.runningChildCount) > 0,
+  );
   const graphic = createMemo(() =>
     Boolean(
       props.session.icon &&
@@ -454,12 +461,18 @@ function RailSessionGlyph(props: { session: SidebarRecentSession; label: string 
       }
       running={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) ||
-        props.session.runningChildCount > 0
+        subagentsWorking() ||
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       queued={
         (props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
         props.session.status === "queued" &&
-        props.session.runningChildCount === 0
+        !subagentsWorking()
+      }
+      background={
+        !(props.session.isRunVisuallyActive ?? props.session.hasActiveRun) &&
+        !subagentsWorking() &&
+        (props.session.backgroundProcessCount ?? 0) > 0
       }
       badge={props.session.unread ? renderSessionUnreadBadge() : undefined}
     />

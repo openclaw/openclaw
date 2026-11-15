@@ -58,6 +58,7 @@ import {
 import { createReleasePublishInputs } from "./lib/release-publish-inputs.mjs";
 import {
   evaluateReleaseChildPolicy,
+  ReleaseAggregateValidationError,
   validateReleaseWaiverAggregates,
 } from "./lib/release-validation-waivers.mjs";
 import { downloadFullReleaseNpmPreflight } from "./npm-preflight-tooling-identity.mjs";
@@ -157,6 +158,20 @@ async function runGh(args, options = {}) {
     }
   }
   throw lastError;
+}
+
+// gh 2.97+ refuses raw job logs containing terminal escapes, even off a TTY;
+// older gh rejects the flag before issuing the request.
+async function readJobLog(id, signal) {
+  const args = ["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`];
+  try {
+    return await runGh([...args, "--allow-escape-sequences"], { signal });
+  } catch (error) {
+    if (!String(error?.stderr).includes("unknown flag: --allow-escape-sequences")) {
+      throw error;
+    }
+    return runGh(args, { signal });
+  }
 }
 
 async function githubJson(path, signal) {
@@ -322,22 +337,25 @@ export async function readChild(child, previous, signal, options = {}) {
       const policy = evaluateReleaseChildPolicy({
         child: snapshot,
         targetVersion: options.targetVersion,
+        targetSha: options.targetSha,
       });
       const jobs = evidence.jobs.map((job) =>
         attempts
           .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
           .jobs.find((raw) => raw.name === job.name),
       );
-      await validateReleaseWaiverAggregates({
-        policy,
-        jobs,
-        getJobLog:
-          options.readJobLog ??
-          ((id) =>
-            runGh(["api", `repos/${process.env.GITHUB_REPOSITORY}/actions/jobs/${id}/logs`], {
-              signal,
-            })),
-      });
+      try {
+        await validateReleaseWaiverAggregates({
+          policy,
+          jobs,
+          getJobLog: options.readJobLog ?? ((id) => readJobLog(id, signal)),
+        });
+      } catch (error) {
+        if (!(error instanceof ReleaseAggregateValidationError)) {
+          throw error;
+        }
+        snapshot.errors.push(issue("aggregate_validation", child, error.message));
+      }
     }
     return snapshot;
   } catch (error) {
@@ -1429,6 +1447,7 @@ async function collectMode(mode) {
       ],
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     writePayload(decision, { cancelledRunIds, requested: true });
     finished = true;
@@ -1489,17 +1508,20 @@ async function collectMode(mode) {
         readChild(child, snapshots[index], abortController.signal, {
           reuseSelection: executionPlan.childReuse?.[child.key],
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         }),
       ),
     );
     transport = updateReleaseTransportEpisode(transport, snapshots);
     const transportReadErrors = transport.error ? [transport.error] : [];
+    const extraErrors = [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors];
     let decision = classifyReleaseSnapshot({
       children: snapshots,
       extraBlockers: [...executionPlan.blockers, ...decisionReuse.blockers],
-      extraErrors: [...transportReadErrors, ...executionPlan.errors, ...decisionReuse.errors],
+      extraErrors,
       localFailures: gateFailures,
       targetVersion: executionPlan.targetVersion,
+      targetSha: executionPlan.targetSha,
     });
     if (Date.now() >= nextHeartbeat) {
       console.log(formatReleaseStateHeartbeat(mode, decision));
@@ -1528,15 +1550,26 @@ async function collectMode(mode) {
           ],
           localFailures: gateFailures,
           targetVersion: executionPlan.targetVersion,
+          targetSha: executionPlan.targetSha,
         });
       }
     }
+    // The displayed errors are capped; drain admission uses every fatal input.
+    const hasNonAggregateError =
+      extraErrors.some((error) => error.kind !== "aggregate_validation") ||
+      snapshots.some(
+        (child) =>
+          child.selected &&
+          child.errors.some(
+            (error) => !["dispatch_missing", "aggregate_validation"].includes(error.kind),
+          ),
+      );
     const done =
       mode === "decision"
         ? decision.state !== "qualifying" &&
           !(decision.state === "passed" && transport.status === "uncertain")
         : transport.status !== "uncertain" &&
-          (decision.state === "orchestration_error" ||
+          ((decision.state === "orchestration_error" && hasNonAggregateError) ||
             (decision.state !== "qualifying" && decision.activeRunIds.length === 0));
     if (done) {
       const payload = writePayload(decision, { cancelledRunIds, requested: false });

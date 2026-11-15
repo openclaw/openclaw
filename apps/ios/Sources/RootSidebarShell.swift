@@ -37,6 +37,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     let onHide: () -> Void
     let sidebar: Sidebar
     let detail: Detail
+    let contentSafeAreaInsets: EdgeInsets
 
     @State private var dragSession = DragSession()
     @GestureState(resetTransaction: Transaction(animation: .spring(response: 0.35, dampingFraction: 0.86)))
@@ -85,7 +86,7 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
     private var contentCard: some View {
         let offset = self.contentOffset
         let progress = self.sidebarWidth > 0 ? offset / self.sidebarWidth : 0
-        let shape = Self.contentShape(progress: progress)
+        let shape = RootSidebarContentClipShape.cardShape(progress: progress)
         return self.detail
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             // RootTabs always supplies its shared NavigationStack here. Expanding
@@ -94,7 +95,11 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
             .background(OpenClawProBackground())
             .ignoresSafeArea(.container, edges: self.isDrawerLayout ? .vertical : [])
             .allowsHitTesting(!self.isDrawerLayout || !self.isPresented)
-            .clipShape(shape)
+            // Native bars can paint outside the content bounds into the system
+            // safe area. Keep them inside the card's mask without moving content.
+            .clipShape(RootSidebarContentClipShape(
+                progress: progress,
+                safeAreaInsets: self.contentSafeAreaInsets))
             .overlay {
                 shape.strokeBorder(
                     OpenClawSidebarPalette.hairline.opacity(Double(progress)),
@@ -214,8 +219,29 @@ struct RootSidebarShell<Sidebar: View, Detail: View>: View {
         translation > RootSidebarShellMetric.settleTranslation ||
             predictedTranslation > RootSidebarShellMetric.settlePredictedTranslation
     }
+}
 
-    private static func contentShape(progress: CGFloat) -> UnevenRoundedRectangle {
+struct RootSidebarContentClipShape: Shape {
+    var progress: CGFloat
+    let safeAreaInsets: EdgeInsets
+
+    var animatableData: CGFloat {
+        get { self.progress }
+        set { self.progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        let progress = min(1, max(0, self.progress))
+        let expansion = 1 - progress
+        let barBounds = CGRect(
+            x: rect.minX - self.safeAreaInsets.leading * expansion,
+            y: rect.minY - self.safeAreaInsets.top * expansion,
+            width: rect.width + (self.safeAreaInsets.leading + self.safeAreaInsets.trailing) * expansion,
+            height: rect.height + (self.safeAreaInsets.top + self.safeAreaInsets.bottom) * expansion)
+        return Self.cardShape(progress: progress).path(in: barBounds)
+    }
+
+    static func cardShape(progress: CGFloat) -> UnevenRoundedRectangle {
         UnevenRoundedRectangle(
             topLeadingRadius: RootSidebarShellMetric.topLeadingRadius * progress,
             bottomLeadingRadius: RootSidebarShellMetric.cornerRadius * progress,

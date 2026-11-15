@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type { EmbeddingProviderAdapter } from "openclaw/plugin-sdk/embedding-providers";
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   MemoryEmbeddingProvider,
@@ -14,9 +13,8 @@ import {
 } from "./embeddings.js";
 
 const mockEmbeddingRegistry = vi.hoisted(() => ({
-  genericAdapters: [] as EmbeddingProviderAdapter[],
-  adapters: [] as MemoryEmbeddingProviderAdapter[],
-  genericLookupConfigs: [] as Array<OpenClawConfig | undefined>,
+  adapters: new Map<string, MemoryEmbeddingProviderAdapter>(),
+  lookupConfigs: [] as Array<OpenClawConfig | undefined>,
   acquireLocalService: vi.fn(async () => undefined),
 }));
 
@@ -24,22 +22,9 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-embeddings", async (importO
   ...(await importOriginal<
     typeof import("openclaw/plugin-sdk/memory-core-host-engine-embeddings")
   >()),
-  createLocalEmbeddingProvider: async () => {
-    throw new Error("local embedding provider is not used by these tests");
-  },
   getMemoryEmbeddingProvider: (id: string, config?: OpenClawConfig) => {
-    const memoryAdapter = mockEmbeddingRegistry.adapters.find((adapter) => adapter.id === id);
-    if (memoryAdapter) {
-      return memoryAdapter;
-    }
-    mockEmbeddingRegistry.genericLookupConfigs.push(config);
-    const genericAdapter = mockEmbeddingRegistry.genericAdapters.find(
-      (adapter) => adapter.id === id,
-    );
-    if (!genericAdapter) {
-      return undefined;
-    }
-    return genericAdapter;
+    mockEmbeddingRegistry.lookupConfigs.push(config);
+    return mockEmbeddingRegistry.adapters.get(id);
   },
 }));
 
@@ -89,23 +74,14 @@ function createConstantEmbeddingProvider(
   };
 }
 
-function clearTestMemoryAdapters(): void {
-  mockEmbeddingRegistry.genericAdapters = [];
-  mockEmbeddingRegistry.adapters = [];
-  mockEmbeddingRegistry.genericLookupConfigs = [];
-}
-
-function registerGenericEmbeddingProvider(adapter: EmbeddingProviderAdapter): void {
-  mockEmbeddingRegistry.genericAdapters.push(adapter);
-}
-
 function registerTestMemoryAdapter(adapter: MemoryEmbeddingProviderAdapter): void {
-  mockEmbeddingRegistry.adapters.push(adapter);
+  mockEmbeddingRegistry.adapters.set(adapter.id, adapter);
 }
 
 describe("createEmbeddingProvider", () => {
   beforeEach(() => {
-    clearTestMemoryAdapters();
+    mockEmbeddingRegistry.adapters.clear();
+    mockEmbeddingRegistry.lookupConfigs = [];
     mockEmbeddingRegistry.acquireLocalService.mockReset();
   });
 
@@ -301,7 +277,7 @@ describe("createEmbeddingProvider", () => {
   );
 
   it("uses config-scoped generic defaults for creation, cold identity, and fallback", async () => {
-    registerGenericEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "openai-compatible",
       defaultModel: "generic-default",
       create: async ({ model }) => ({
@@ -321,7 +297,7 @@ describe("createEmbeddingProvider", () => {
     expect(
       resolveEmbeddingProviderFallbackModel("openai-compatible", "source-model", options.config),
     ).toBe("generic-default");
-    expect(mockEmbeddingRegistry.genericLookupConfigs).toEqual([
+    expect(mockEmbeddingRegistry.lookupConfigs).toEqual([
       options.config,
       options.config,
       options.config,
@@ -330,12 +306,10 @@ describe("createEmbeddingProvider", () => {
 
   it("keeps concurrent provider creation bound to each caller's local-service hook", async () => {
     const observedHooks: unknown[] = [];
-    registerGenericEmbeddingProvider({
+    registerTestMemoryAdapter({
       id: "openai-compatible",
       create: async (options) => {
-        observedHooks.push(
-          (options as typeof options & { acquireLocalService?: unknown }).acquireLocalService,
-        );
+        observedHooks.push(options.acquireLocalService);
         await Promise.resolve();
         return {
           provider: createConstantEmbeddingProvider("generic", "generic-model", 1),
@@ -351,26 +325,6 @@ describe("createEmbeddingProvider", () => {
     ]);
 
     expect(observedHooks).toEqual([firstAcquire, secondAcquire]);
-  });
-
-  it("keeps memory-specific providers authoritative during dual registration", async () => {
-    registerGenericEmbeddingProvider({
-      id: "openai-compatible",
-      create: async () => ({
-        provider: createConstantEmbeddingProvider("generic", "generic-model", 1),
-      }),
-    });
-    registerTestMemoryAdapter({
-      id: "openai-compatible",
-      create: async () => ({
-        provider: createConstantEmbeddingProvider("legacy", "legacy-model", 0),
-      }),
-    });
-
-    const result = await createEmbeddingProvider(createOptions("openai-compatible"));
-
-    expect(result.provider?.id).toBe("legacy");
-    await expect(result.provider?.embed("hello", { inputType: "query" })).resolves.toEqual([0]);
   });
 
   it("reports the llama.cpp plugin install command when local is unregistered", async () => {

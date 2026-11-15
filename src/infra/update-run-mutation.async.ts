@@ -9,11 +9,18 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import { hasSqliteWorkerOutcomeUnknown, isSqliteWorkerError } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
+import type { PluginCohortRecoveryPair } from "./update-plugin-cohort-schema.js";
 import type { UpdateResultPayload } from "./update-result-payload.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type { UpdateRunWriteCommand, UpdateRunWriteInput } from "./update-run-mutation.types.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
+import { readUpdateRecoveryAdmissionFactsAsync } from "./update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
+import type { PluginCohortRecoveryContinuation } from "./update-run-recovery-types.js";
+import {
+  assertUpdateRecoveryAdmissionFacts,
+  assertPluginCohortRecoveryContinuation,
+} from "./update-run-recovery.js";
 import { isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
@@ -25,6 +32,7 @@ export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   assertAccepting?: () => void;
   retainSettlement?: (settled: Promise<void>) => void;
   requireNoRecovery?: true;
+  pluginCohort?: PluginCohortRecoveryContinuation;
 };
 
 /** Capture the receipt before yielding and join its writer through native settlement. */
@@ -43,10 +51,21 @@ export async function recordUpdateRunMutationAsync(
     ...(options.redactPaths ? { redactPaths: [...options.redactPaths] } : {}),
   };
   const context = captured.context ?? captureOpenClawStateWorkerContext(captured);
+  const continuation = captured.pluginCohort;
+  let cohortPair: PluginCohortRecoveryPair | undefined;
   const assertCurrent = () => {
     context.admission.assertCurrent();
     captured.signal?.throwIfAborted();
     captured.assertCurrent?.();
+    if (continuation && cohortPair) {
+      if (continuation.runId !== runId) {
+        throw new Error("Plugin cohort bookkeeping requires its original update run");
+      }
+      assertPluginCohortRecoveryContinuation(cohortPair, continuation, {
+        env: captured.env,
+        path: context.admission.databasePath,
+      });
+    }
   };
   assertCurrent();
   const command = structuredClone(
@@ -58,13 +77,45 @@ export async function recordUpdateRunMutationAsync(
       redactPaths: captured.redactPaths,
     }),
   );
-  const pending = runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
-    existingOnly: command.type !== "updateRuns.create",
-    assertCurrent,
-    createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
-      context.admission.databasePath,
-    ]),
-  });
+  // Retain the accepted receipt before the metadata read yields; settlement owns
+  // both the reader and the write that rechecks recovery in its transaction.
+  const pending = (async () => {
+    if (continuation) {
+      const selected = { env: captured.env, path: context.admission.databasePath };
+      cohortPair = assertUpdateRecoveryAdmissionFacts(
+        await readUpdateRecoveryAdmissionFactsAsync(selected),
+        { ...selected, pluginCohort: continuation },
+      );
+    }
+    assertCurrent();
+    const pluginCohort = cohortPair
+      ? {
+          runId: cohortPair.cohort.runId,
+          transactionId: cohortPair.cohort.transactionId,
+          installKey: cohortPair.cohort.installKey,
+        }
+      : undefined;
+    if (pluginCohort) {
+      if (
+        !captured.requireNoRecovery ||
+        (command.type !== "updateRuns.recordPhase" &&
+          command.type !== "updateRuns.recordStep" &&
+          command.type !== "updateRuns.recordDiagnostics")
+      ) {
+        throw new Error("Plugin cohort continuation permits only update progress bookkeeping");
+      }
+      command.input.pluginCohort = pluginCohort;
+    }
+    return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
+      existingOnly: command.type !== "updateRuns.create",
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(
+        assertCurrent,
+        [context.admission.databasePath],
+        pluginCohort,
+      ),
+    });
+  })();
   const completion = pending.catch((error: unknown) => {
     if (hasSqliteWorkerOutcomeUnknown(error) && !hasCommandProcessCleanupError(error)) {
       throw new CommandProcessCleanupError({ cause: error });

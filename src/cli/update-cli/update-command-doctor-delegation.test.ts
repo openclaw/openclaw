@@ -28,6 +28,8 @@ import {
   leaseQueries,
 } from "../../infra/update-managed-service-handoff-database.js";
 import { parseManagedHandoffLeasePayload } from "../../infra/update-managed-service-handoff-schema.js";
+import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
@@ -38,6 +40,7 @@ import { hasCommandProcessCleanupError, type SpawnResult } from "../../process/e
 import * as processRunner from "../../process/exec.js";
 import * as processDeadline from "../../process/process-deadline.js";
 import { getProcessInstanceStartTime } from "../../shared/pid-alive.js";
+import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import { waitForPidToExit } from "../../test-utils/process-tree.js";
 import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { createUpdateProgress, printResult } from "./progress.js";
@@ -172,6 +175,28 @@ it("shows activation Doctor progress before child completion while JSON and ledg
   );
   const work = withUpdateCommandExecutor(runId, async (executor) => {
     const fence = await executor.enter(root, { serviceRoot });
+    createUpdateRun({ trigger: "cli", runId }, { env });
+    const runtime = { root, nodePath: process.execPath, version: "2026.10.9", buildId: "fixture" };
+    // The pending pair must survive the real Doctor child without granting the parent effects.
+    const reservation = createRetainedUpdateRecovery(
+      { runId, from: runtime, to: runtime },
+      { env },
+    );
+    writeConfigMachineState(
+      "update.pluginCohort." + runId,
+      {
+        runId,
+        transactionId: reservation.transactionId,
+        revision: 0,
+        disposition: "pending",
+        installKey: root,
+        priorArtifacts: [],
+        artifacts: [],
+        publications: [],
+        settledPublications: 0,
+      },
+      { env },
+    );
     const guards = createUpdateCommandExecutionGuards(
       { run: { runId, env, executorFence: fence } },
       root,

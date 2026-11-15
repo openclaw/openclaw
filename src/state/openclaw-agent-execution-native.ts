@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -7,6 +8,7 @@ import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { captureGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -32,6 +34,7 @@ import {
   captureAgentDatabasePreparationJournal,
   recordAgentDatabaseStartupFtsRepair,
 } from "./agent-database-admission.js";
+import { captureAgentDatabaseStartupVerification } from "./agent-database-startup-integrity.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -79,9 +82,21 @@ export function createAgentDatabaseNativeGeneration(
   creatingIdentity?: DatabasePathIdentity,
   creationClaim?: AgentDatabaseFileExecutionOpen["creationClaim"],
   startupPreparation = false,
+  observePreparedIntegrity?: () => void,
 ): AgentDatabaseNativeGeneration {
   const inPreparation = AsyncLocalStorage.snapshot();
   const processOwner = captureGatewayStateOwner(context.admission.databasePath);
+  const startupSignal = startupPreparation ? resolveSqliteInspectionSignal() : undefined;
+  const startupCancellation = startupSignal
+    ? new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT))
+    : undefined;
+  const cancelStartup = () => {
+    if (startupCancellation) {
+      Atomics.store(startupCancellation, 0, 1);
+      Atomics.notify(startupCancellation, 0);
+    }
+  };
+  const startupAbort = startupSignal && addAbortListener(startupSignal, cancelStartup);
   const input: AgentDatabaseFileExecutionOpen = {
     leaseId: randomUUID(),
     agentId,
@@ -112,6 +127,15 @@ export function createAgentDatabaseNativeGeneration(
   let preparationPublished = false;
   let nativeLossReason: Error | undefined;
   const sharedPreparation = createSharedAgentDatabasePreparation(() => assertCurrent());
+
+  // Terminal readers belong to this generation, not its initiating request.
+  const onNativeStopped: NonNullable<
+    Parameters<typeof openAgentDatabaseSqliteWorkerStore>[1]["onNativeStopped"]
+  > = (stopped, readReceipt, readRefused) => {
+    nativeStopped = stopped;
+    readCloseReceipt = readReceipt;
+    readOpenRefused = readRefused;
+  };
 
   // The actor retains this observer; keep it outside the opening caller's scope.
   const onNativeLost = (reason: Error) => {
@@ -154,6 +178,9 @@ export function createAgentDatabaseNativeGeneration(
       const assertPreparationJournal = captureAgentDatabasePreparationJournal(agentId, {
         env: context.environment,
       });
+      const assertBackgroundIntegrity = assertPreparationJournal
+        ? captureAgentDatabaseStartupVerification(pathname, context.environment)
+        : undefined;
       const nativeLocations = [
         pathname,
         ...(nativeIdentity ? [nativeIdentity.nativeLocation] : []),
@@ -163,6 +190,7 @@ export function createAgentDatabaseNativeGeneration(
       const assertSourceCurrent = (identity?: AgentDatabaseFileExecutionIdentity) => {
         source.assertCurrent();
         assertCurrent();
+        assertBackgroundIntegrity?.();
         // The reference checks its captured constraints; this owner checks the path last.
         assertCallerCurrent?.(identity);
       };
@@ -346,6 +374,9 @@ export function createAgentDatabaseNativeGeneration(
         attachment: {
           kind: "agent-execution",
           startupJournal: assertPreparationJournal !== undefined,
+          // Startup repair without a background verifier retains foreground verification.
+          startupIntegrityRequired: Boolean(assertPreparationJournal && !assertBackgroundIntegrity),
+          ...(startupCancellation ? { startupCancellation } : {}),
           ...(cleanup ? { deletion: cleanup.guard } : {}),
         },
         nativeLocations,
@@ -466,11 +497,7 @@ export function createAgentDatabaseNativeGeneration(
                 registration,
                 preparingShared ? undefined : assertCallerCurrent,
               ),
-              onNativeStopped: (stopped, readReceipt, readRefused) => {
-                nativeStopped = stopped;
-                readCloseReceipt = readReceipt;
-                readOpenRefused = readRefused;
-              },
+              onNativeStopped,
               onNativeLost,
             },
           );
@@ -499,6 +526,7 @@ export function createAgentDatabaseNativeGeneration(
           assertCurrent();
           // An eager opener has already settled registration and its topology publication.
           preparationPublished ||= nativeIdentity !== undefined;
+          observePreparedIntegrity?.();
           return store;
         } catch (error) {
           try {
@@ -621,6 +649,7 @@ export function createAgentDatabaseNativeGeneration(
           source.assertCurrent();
         });
         preparationPublished = true;
+        observePreparedIntegrity?.();
       }
       preparedStore = store;
     } finally {
@@ -667,6 +696,8 @@ export function createAgentDatabaseNativeGeneration(
     run,
     close() {
       lifetime.retire();
+      cancelStartup();
+      startupAbort?.[Symbol.dispose]();
       closing ??= closeAgentDatabaseNativeGeneration({
         pathname,
         context,

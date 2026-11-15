@@ -15,7 +15,7 @@ function embeddingRegistry() {
         config,
         id,
         name: id,
-        ...(declared ? { contracts: { embeddingProviders: [providerId] } } : {}),
+        ...(declared ? { contracts: { embeddingProviders: [providerId.trim()] } } : {}),
         register(api) {
           api.registerEmbeddingProvider({
             id: providerId,
@@ -60,11 +60,13 @@ describe("embedding provider registration", () => {
     expect(registry.plugins[0]?.embeddingProviderIds).toContain("embedding-owner");
   });
 
-  it("rejects duplicate provider ids", () => {
+  it.each(["shared", " shared "])("rejects duplicate provider ids after %j", (firstId) => {
     const { registry, register } = embeddingRegistry();
-    for (const id of ["first-owner", "second-owner"]) {
-      register(id, "shared");
-    }
+    register("first-owner", firstId);
+    expect(registry.embeddingProviders).toHaveLength(1);
+    expect(registry.diagnostics).toEqual([]);
+
+    register("second-owner", "shared");
     expect(registry.embeddingProviders).toHaveLength(1);
     const diagnostic = registry.diagnostics.find((entry) => entry.pluginId === "second-owner");
     expect(diagnostic?.message).toBe(

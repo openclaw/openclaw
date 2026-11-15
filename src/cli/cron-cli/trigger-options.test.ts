@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "../../cron/scratch-contract.js";
 import { defaultRuntime } from "../../runtime.js";
-import { ExpectedCliError, formatCliJsonFailure } from "../failure-output.js";
+import { ExpectedCliError } from "../expected-cli-error.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 
 const callGatewayFromCli = vi.hoisted(() => vi.fn());
 vi.mock("../gateway-rpc.js", async () => {
@@ -66,9 +67,12 @@ async function expectJsonFailure(args: readonly string[], message: string, root 
     process.argv = argv;
   }
 }
+// --command asks the Gateway for its platform to pick the stored shell wrapper.
+const gatewayReply = (method: string) =>
+  method === "system.info" ? { platform: "linux" } : { ok: true };
 function existing(job: Record<string, unknown>) {
   callGatewayFromCli.mockImplementation(async (method: string) =>
-    method === "cron.get" ? { id: "job-1", ...job } : { ok: true },
+    method === "cron.get" ? { id: "job-1", ...job } : gatewayReply(method),
   );
 }
 function expectPatch(patch: Record<string, unknown>, extra: Record<string, unknown> = {}) {
@@ -85,7 +89,7 @@ async function reject(args: readonly string[], message: string, reads: string[] 
 }
 
 beforeEach(() => {
-  callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
+  callGatewayFromCli.mockReset().mockImplementation(async (method: string) => gatewayReply(method));
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
@@ -133,7 +137,7 @@ it.each`
   ${{ webhook: "https://example.invalid/hook", "clear-channel": true }} | ${"--webhook cannot be combined with chat delivery options"}
   ${{ webhook: "not-a-url" }}                                           | ${"--webhook must be a valid http(s) URL"}
   ${{ session: "main", "system-event": "wakeup", channel: "telegram" }} | ${"require an agentTurn job or a non-main command or script job with delivery"}
-  ${{ "on-exit-cwd": "/repo" }}                                         | ${"--on-exit-cwd requires --on-exit"}
+  ${{ "stream-cwd": "/new-stream", "on-exit-cwd": "/repo" }}            | ${"--on-exit-cwd requires --on-exit"}
   ${{ "on-exit": "./watch.sh", every: "5m" }}                           | ${"Choose at most one schedule change"}
   ${{ "stream-batch-ms": "100", tz: "UTC" }}                            | ${"not valid with stream schedule edits"}
 `(
@@ -253,6 +257,8 @@ it.each`
   ${["edit", "job-1", "--pacing-min", "30m", "--every", ""]}                                                 | ${"Schedule values must not be blank"}                                                                                        | ${{ configRevision: "revision", pacing: { min: "1m", max: "1h" } }}                                         | ${["cron.get"]}
   ${[...addArgs, "--system-event", "test", "--every", "8640000000000001ms"]}                                 | ${"Invalid --every"}                                                                                                          | ${undefined}                                                                                                | ${undefined}
   ${["edit", "job-1", "--cron", "0 * * * *", "--tz", "UTC", "--stagger", "8640000000000001ms"]}              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  ${["edit", "job-1", "--cron", "0 * * * *", "--stagger", " "]}                                              | ${"Invalid --stagger"}                                                                                                        | ${undefined}                                                                                                | ${undefined}
+  ${[...addMessage, "--trigger-script", "   "]}                                                              | ${"--trigger-script must not be blank"}                                                                                       | ${undefined}                                                                                                | ${undefined}
 `("rejects $args", async ({ args, message, job, reads }: RejectCase) => {
   if (job) {
     existing(job);
@@ -404,13 +410,6 @@ describe("cron trigger CLI options", () => {
     );
   });
 
-  it("rejects an explicitly blank trigger script before adding a job", async () => {
-    await rejectAdd(
-      { "trigger-script": "   ", "system-event": "changed", session: "main" },
-      "--trigger-script must not be blank",
-    );
-  });
-
   it.each(["add", "edit"] as const)(
     "reads the exact payload path and budgets on %s",
     async (operation) => {
@@ -532,4 +531,15 @@ describe("cron scratch", () => {
     await runScratch([...args, "--expected-revision", revision]);
     expectRpc(["set", { content, expectedRevision: Number(revision) }]);
   });
+});
+
+it.each(["standard", "daybreak_blue", "daybreak_red"])(
+  "forwards explicit scheduled Access %s through add and edit",
+  async (cyberAccessProgram) => {
+    await add(["--access", cyberAccessProgram], { cyberAccessProgram });
+    await edit(["--access", cyberAccessProgram], { cyberAccessProgram });
+  },
+);
+it("clears scheduled Access through edit", async () => {
+  await edit(["--clear-access"], { cyberAccessProgram: null });
 });

@@ -198,4 +198,40 @@ extension OpenClawClientDatabases {
             """)
         }
     }
+
+    static func registerComposerDraftsMigration(_ migrator: inout DatabaseMigrator) {
+        // Older builds ignore these tables. Their Forget marks the irreversible
+        // phase like this build does, so the trigger still erases drafts there.
+        migrator.registerMigration("client-state-composer-drafts-v11") { db in
+            try db.execute(sql: """
+            CREATE TABLE composer_drafts(
+                gateway_id TEXT NOT NULL,
+                draft_key TEXT NOT NULL,
+                text TEXT NOT NULL,
+                revision INTEGER NOT NULL,
+                updated_at REAL NOT NULL,
+                PRIMARY KEY(gateway_id, draft_key)
+            ) STRICT;
+            CREATE TABLE composer_draft_attachments(
+                gateway_id TEXT NOT NULL,
+                draft_key TEXT NOT NULL,
+                position INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                mime_type TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                payload BLOB NOT NULL,
+                duration_seconds REAL,
+                PRIMARY KEY(gateway_id, draft_key, position),
+                FOREIGN KEY(gateway_id, draft_key)
+                    REFERENCES composer_drafts ON DELETE CASCADE
+            ) STRICT;
+            CREATE TRIGGER composer_drafts_forget
+            AFTER UPDATE OF cleanup_phase ON forgotten_gateways
+            WHEN NEW.cleanup_phase = 2 AND NEW.gateway_id IS NOT NULL
+            BEGIN
+                DELETE FROM composer_drafts WHERE gateway_id = NEW.gateway_id;
+            END;
+            """)
+        }
+    }
 }

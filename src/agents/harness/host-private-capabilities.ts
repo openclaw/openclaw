@@ -218,7 +218,7 @@ export type ReplyToolAuthorityCaller =
 export type ReplyToolAuthorityCallerBinding = {
   assertCurrent(): void;
   /** Classify continuation before compatibility, retaining the selected live owner. */
-  continuationKind?: "verified-profile" | "shared-owner";
+  continuationKind?: "verified-profile" | "shared-owner" | "owner-guidance";
   allowPendingUserInputAnswer?: false;
   joinObservation?: ReplyMessageJoinObservation;
   prepare(): Promise<PreparedQuestionCallerRead | undefined>;

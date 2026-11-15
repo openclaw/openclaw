@@ -36,6 +36,7 @@ export async function dispatchCronDelivery(
 ): Promise<DispatchCronDeliveryState> {
   let { summary, outputText, synthesizedText, deliveryPayloads } = params;
   let diagnostics: DispatchCronDeliveryState["diagnostics"];
+  const deliveryReceipts: NonNullable<DispatchCronDeliveryState["deliveryReceipts"]> = [];
   const sentByTool = params.sourceDeliveryOutcome.satisfiesSourceDelivery;
   const state: CronResolvedDeliveryState = {
     status: params.deliveryRequested ? "not-delivered" : "not-requested",
@@ -98,6 +99,7 @@ export async function dispatchCronDelivery(
       deliveryState: state,
       delivered: state.delivered,
       deliveryAttempted,
+      ...(deliveryReceipts.length ? { deliveryReceipts } : {}),
       deliveryError: state.error,
       deliverySuppressionReason: state.deliverySuppressionReason,
       summary,
@@ -376,6 +378,7 @@ export async function dispatchCronDelivery(
           runStartedAt: params.runStartedAt,
           deliveryAttemptFence: params.deliveryAttemptFence,
         },
+        onDeliveryReceipt: (receipt) => deliveryReceipts.push(receipt),
         onDeliveryAttempt: (reachedRecipient) => {
           mayHaveReachedRecipient ||= reachedRecipient;
         },

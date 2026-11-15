@@ -4,7 +4,7 @@ import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
 import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger } from "openclaw/plugin-sdk/runtime-env";
+import { createSubsystemLogger, danger } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -36,6 +36,7 @@ import {
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
+import { selectTelegramSenderMediaMessageIds } from "./group-history-window.js";
 import type { TelegramCachedMessageNode, TelegramReplyChainEntry } from "./message-cache-codec.js";
 import type { TelegramResolvedMedia } from "./message-cache-persistence.js";
 import {
@@ -49,7 +50,12 @@ import {
   resolveTelegramPromptMediaPath,
 } from "./prompt-media-path.js";
 
+// The child file logger never reaches stdout, where container operators look.
+const mediaLog = createSubsystemLogger("telegram/media");
+
 const HOUR_MS = 60 * 60_000;
+const SENDER_MEDIA_MAX_AGE_MS = 2 * 60_000;
+const SENDER_MEDIA_LIMIT = 4;
 
 function resolveRetainedTelegramMedia(params: {
   media?: TelegramResolvedMedia;
@@ -76,6 +82,7 @@ function resolveRetainedTelegramMedia(params: {
     ? {
         path,
         kind: media.kind,
+        fileUniqueId: media.fileUniqueId,
         ...(media.contentType ? { contentType: media.contentType } : {}),
         ...(fileName ? { fileName } : {}),
         ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
@@ -95,7 +102,6 @@ export function createTelegramMessagePipeline({
   telegramCfg,
   resolveTelegramGroupConfig,
   processMessage,
-  logger,
 }: RegisterTelegramHandlerParams) {
   const { token } = opts;
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
@@ -128,6 +134,7 @@ export function createTelegramMessagePipeline({
     recordMessageResolvedMedia,
     recordReplyMessageResolvedMedia,
     resolveCachedMessageThreadSpec,
+    getCachedMessage,
     buildReplyChainForMessage,
     toReplyChainEntry,
     buildPromptContextForMessage,
@@ -272,7 +279,7 @@ export function createTelegramMessagePipeline({
         return await spooledReplayFinalization;
       }
       const finalization = (async () => {
-        if (result.kind === "completed") {
+        if (result.kind === "completed" || result.kind === "dropped") {
           // Do not cache or settle a durable-adoption failure. Deferred queue
           // ownership retries this callback with the same spool participants.
           const releaseSettlementHolds = beginSpooledReplaySettlementHolds(
@@ -363,6 +370,13 @@ export function createTelegramMessagePipeline({
       );
       const replyMedia: TelegramMediaRef[] = [];
       const replyChain: TelegramReplyChainEntry[] = [];
+      // Only downloaded current media claims its source; an unavailable attachment
+      // must still allow a replied-to copy to hydrate.
+      const seenFileUniqueIds = new Set(
+        params.allMedia.flatMap((media) =>
+          media.fileUniqueId && !media.unavailable ? [media.fileUniqueId] : [],
+        ),
+      );
       const hydrateMedia = async (
         sourceMessage: Parameters<typeof resolveMedia>[0]["ctx"]["message"],
         replyFileId: string,
@@ -395,6 +409,7 @@ export function createTelegramMessagePipeline({
           mediaRef = {
             path: media.path,
             kind: media.kind,
+            fileUniqueId: media.fileUniqueId,
             ...(media.contentType ? { contentType: media.contentType } : {}),
             ...(media.fileName ? { fileName: media.fileName } : {}),
             ...(media.stickerMetadata ? { stickerMetadata: media.stickerMetadata } : {}),
@@ -414,21 +429,28 @@ export function createTelegramMessagePipeline({
             recordTelegramMessageProcessingResult({ kind: "failed-retryable", error: err });
             throw err;
           }
-          logger.warn(
-            { chatId: replyCtx.message.chat.id, error: String(err) },
-            "reply media fetch failed",
-          );
+          mediaLog.warn(`reply media fetch failed: ${String(err)}`, {
+            chatId: replyCtx.message.chat.id,
+          });
         }
         return mediaRef;
       };
       for (const [index, node] of replyChainNodes.entries()) {
-        const replyFileId = resolveTelegramPrimaryMedia(node.sourceMessage)?.fileRef.file_id;
+        const replyPrimaryMedia = resolveTelegramPrimaryMedia(node.sourceMessage);
+        const replyFileId = replyPrimaryMedia?.fileRef.file_id;
+        const replyFileUniqueId =
+          node.resolvedMedia?.fileUniqueId ?? replyPrimaryMedia?.fileRef.file_unique_id;
         const mediaRef =
-          replyFileId && (await shouldHydrateReplyMedia(node, index))
+          replyFileId &&
+          (!replyFileUniqueId || !seenFileUniqueIds.has(replyFileUniqueId)) &&
+          (await shouldHydrateReplyMedia(node, index))
             ? await hydrateMedia(node.sourceMessage, replyFileId, node)
             : undefined;
         if (mediaRef) {
           replyMedia.push(mediaRef);
+          if (mediaRef.fileUniqueId) {
+            seenFileUniqueIds.add(mediaRef.fileUniqueId);
+          }
         }
         replyChain.push(toReplyChainEntry(node, replyCtx, mediaRef));
       }
@@ -437,12 +459,15 @@ export function createTelegramMessagePipeline({
         replyChainNodes.length === 0 && !replyCtx.message.reply_to_message
           ? replyCtx.message.external_reply
           : undefined;
-      const externalFileId = resolveTelegramPrimaryMedia(externalReply)?.fileRef.file_id;
+      const externalPrimaryMedia = resolveTelegramPrimaryMedia(externalReply);
+      const externalFileId = externalPrimaryMedia?.fileRef.file_id;
+      const externalFileUniqueId = externalPrimaryMedia?.fileRef.file_unique_id;
       const externalTarget = externalFileId ? describeReplyTarget(replyCtx.message) : null;
       if (
         externalReply &&
         externalFileId &&
         externalTarget &&
+        (!externalFileUniqueId || !seenFileUniqueIds.has(externalFileUniqueId)) &&
         (await shouldHydrateReplyMedia(externalTarget, 0))
       ) {
         const mediaRef = await hydrateMedia(externalReply, externalFileId);
@@ -481,16 +506,54 @@ export function createTelegramMessagePipeline({
           });
         }
       }
-      const promptContext = await buildPromptContextForMessage(
-        params.ctx,
-        params.msg,
-        replyChainNodes,
-        runtimeCfg,
-        runtimeTelegramCfg,
-        params.options,
-        promptContextMediaByMessageId,
-        params.promptContextMessageSelection,
-      );
+      const buildPromptContext = () =>
+        buildPromptContextForMessage(
+          params.ctx,
+          params.msg,
+          replyChainNodes,
+          runtimeCfg,
+          runtimeTelegramCfg,
+          params.options,
+          promptContextMediaByMessageId,
+          params.promptContextMessageSelection,
+        );
+      const promptContext = await buildPromptContext();
+      // "Photo, then @bot in a separate message": the photo skipped download as
+      // unaddressed group media. Context calls this only after the mention gate.
+      const resolveSenderMedia = async () => {
+        const senderId = params.msg.from?.id;
+        if (senderId == null) {
+          return undefined;
+        }
+        const messageIds = selectTelegramSenderMediaMessageIds({
+          promptContext,
+          senderId: String(senderId),
+          sinceMs: params.msg.date * 1000 - SENDER_MEDIA_MAX_AGE_MS,
+        });
+        const photos = [];
+        for (const messageId of messageIds) {
+          const node = await getCachedMessage(params.msg.chat.id, messageId);
+          const primary = resolveTelegramPrimaryMedia(node?.sourceMessage);
+          if (node && primary?.kind === "image") {
+            photos.push({ messageId, node, fileId: primary.fileRef.file_id });
+          }
+        }
+        const media: TelegramMediaRef[] = [];
+        for (const { messageId, node, fileId } of photos.slice(-SENDER_MEDIA_LIMIT)) {
+          const mediaRef = await hydrateMedia(node.sourceMessage, fileId, node);
+          if (!mediaRef) {
+            continue;
+          }
+          media.push({ ...mediaRef, sourceMessageId: messageId });
+          const promptMediaPath = mediaRef.path
+            ? resolveTelegramPromptMediaPath(mediaRef.path)
+            : undefined;
+          if (promptMediaPath) {
+            promptContextMediaByMessageId.set(messageId, { ...mediaRef, path: promptMediaPath });
+          }
+        }
+        return media.length > 0 ? { media, promptContext: await buildPromptContext() } : undefined;
+      };
       const result = await processMessage({
         ctx: params.ctx,
         allMedia: params.allMedia,
@@ -513,6 +576,7 @@ export function createTelegramMessagePipeline({
         replyMedia,
         replyChain,
         promptContext,
+        ...(params.allMedia.length === 0 && replyMedia.length === 0 ? { resolveSenderMedia } : {}),
       });
       if (spooledReplay) {
         return await finalizeSpooledReplayResult(result);

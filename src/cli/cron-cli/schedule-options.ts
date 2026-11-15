@@ -4,7 +4,7 @@ import {
   normalizeOptionalString,
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValidCronExpression } from "../../cron/schedule.js";
+import { isValidCronExpression } from "../../cron/expression.js";
 import type { CronSchedule } from "../../cron/types.js";
 import { CronCliError } from "./cron-cli-error.js";
 import {
@@ -73,9 +73,6 @@ export function resolveCronCreateScheduleFromArgs(
       normalized.cronExpr = fields === 5 || fields === 6 ? positionalSchedule : "";
       normalized.at = normalized.cronExpr ? "" : positionalSchedule;
     }
-  }
-  if (normalized.onExitCwd && !normalized.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
   }
   const chosen = countChosenSchedules(normalized);
   if (chosen !== 1) {
@@ -190,7 +187,15 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
       throw new CronCliError("Schedule values must not be blank");
     }
   }
+  const onExitCommand = readNonBlankString(options.onExit) ?? "";
+  const onExitCwd = readNonBlankString(options.onExitCwd);
+  if (onExitCwd && !onExitCommand) {
+    throw new CronCliError("--on-exit-cwd requires --on-exit.");
+  }
   const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
+  if (typeof options.stagger === "string" && !staggerRaw) {
+    throw new CronCliError("Invalid --stagger; use e.g. 30s, 1m, 5m");
+  }
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new CronCliError("Choose either --stagger or --exact, not both");
@@ -217,8 +222,8 @@ function normalizeScheduleOptions(options: ScheduleOptionInput) {
     at: normalizeOptionalString(options.at) ?? "",
     every: normalizeOptionalString(options.every) ?? "",
     cronExpr: normalizeOptionalString(options.cron) ?? "",
-    onExitCommand: readNonBlankString(options.onExit) ?? "",
-    onExitCwd: readNonBlankString(options.onExitCwd),
+    onExitCommand,
+    onExitCwd,
     streamCommand: parseCronStreamCommandArgv(options.streamCommand),
     streamCwd: readNonBlankString(options.streamCwd),
     streamCwdSupplied: options.streamCwd !== undefined,
@@ -260,9 +265,6 @@ function resolveDirectSchedule(
   options: NormalizedScheduleOptions,
   behavior: { deferStreamMetadataValidation?: boolean } = {},
 ): CronSchedule | undefined {
-  if (options.onExitCwd && !options.onExitCommand) {
-    throw new CronCliError("--on-exit-cwd requires --on-exit.");
-  }
   if (hasStreamSchedulePatch(options) && !options.streamCommand) {
     throw new CronCliError("Stream options require --stream-command.");
   }

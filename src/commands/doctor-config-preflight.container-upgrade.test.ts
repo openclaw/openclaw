@@ -35,7 +35,6 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import * as configFlow from "./doctor-config-flow.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
-import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import { runStartupConfigPreflight } from "./startup-config-preflight.js";
 
@@ -133,7 +132,11 @@ describe("container image replacement Doctor repair and startup readiness", () =
       );
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`));
+        .filter(
+          (name) =>
+            name.startsWith(`${path.basename(databasePath)}.pre-startup-migration-`) &&
+            name.endsWith(".bak"),
+        );
       expect(backups).toHaveLength(1);
       const before = new DatabaseSync(path.join(path.dirname(databasePath), backups[0]!), {
         readOnly: true,
@@ -163,7 +166,7 @@ describe("container image replacement Doctor repair and startup readiness", () =
       await cleanupSessionStateForTest({ stateDir });
       const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
       const inspect = () => inspectSessionSqliteRecovery({ cfg: {}, env });
-      const protectedBackups = inspect();
+      const protectedBackups = await inspect();
       expect(protectedBackups.artifacts).toHaveLength(2);
       expect(
         protectedBackups.artifacts.every(
@@ -187,17 +190,21 @@ describe("container image replacement Doctor repair and startup readiness", () =
       await withEnvAsync({ OPENCLAW_SUPERVISOR_MODE: "external" }, async () => {
         await updateMigrateCommand(backupRoot);
         await cleanupSessionStateForTest({ stateDir });
+        const pending = await inspect();
+        const originals = pending.artifacts.filter((item) => item.path !== legacyBackup);
+        expect(originals).toHaveLength(3);
         expect(
-          inspect().artifacts.filter(
+          pending.artifacts.filter(
             (item) => item.path.endsWith(".bak") && item.outcome === "candidate",
           ),
         ).toHaveLength(0);
         await updateFinishCommand(backupRoot);
+        expect(originals.filter((item) => fs.existsSync(item.path))).toEqual([]);
       });
       clock.mockRestore();
       await cleanupSessionStateForTest({ stateDir });
-      const preview = inspect();
-      expect(preview.artifacts.filter((item) => item.outcome === "candidate")).toHaveLength(3);
+      const preview = await inspect();
+      expect(preview.artifacts).toHaveLength(1);
       expect(preview.artifacts).toContainEqual(
         expect.objectContaining({
           path: legacyBackup,
@@ -205,14 +212,6 @@ describe("container image replacement Doctor repair and startup readiness", () =
           reason: "unmanifested-recovery-original",
         }),
       );
-      const retired = await retireSessionSqliteRecovery({
-        env,
-        preview,
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      });
-      expect(retired.status, JSON.stringify(retired, null, 2)).toBe("complete");
-      expect(retired.totals.removedFiles).toBe(3);
       expect(fs.existsSync(legacyBackup)).toBe(true);
       expect(fs.existsSync(databasePath)).toBe(true);
     });
@@ -248,7 +247,10 @@ describe("container image replacement Doctor repair and startup readiness", () =
       ).toBe(true);
       const backups = fs
         .readdirSync(path.dirname(databasePath))
-        .filter((name) => name.startsWith("openclaw.sqlite.pre-startup-migration-"));
+        .filter(
+          (name) =>
+            name.startsWith("openclaw.sqlite.pre-startup-migration-") && name.endsWith(".bak"),
+        );
       const fullBackups = backups.filter((name) => !name.endsWith(".scoped.bak"));
       const credentialBackups = backups.filter((name) => name.endsWith(".scoped.bak"));
       expect(fullBackups).toHaveLength(1);

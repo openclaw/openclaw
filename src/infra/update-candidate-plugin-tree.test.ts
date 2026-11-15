@@ -10,6 +10,8 @@ import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createFileMutationClock } from "./file-mutation-clock.test-support.js";
 import * as fsSafe from "./fs-safe.js";
 import { hasNodeErrorCode } from "./path-guards.js";
+import type { UpdateCandidatePluginCodeLink } from "./update-candidate-plugin-code-links.js";
+import { ignoreUnresolvedPluginLink } from "./update-candidate-plugin-tree-links.js";
 import {
   copyUpdateCandidatePluginTrees,
   prepareUpdateCandidatePluginTrees,
@@ -50,7 +52,8 @@ async function fixture(hardlink = false, beforePlan?: (source: string) => Promis
         candidateRoot,
         assertCurrent: () => {},
       }),
-    copy: () => copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot }),
+    copy: (onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void) =>
+      copyUpdateCandidatePluginTrees(plan, { targetStateDir, candidateRoot, onCodeLink }),
   };
 }
 
@@ -648,3 +651,40 @@ it.each(["node_modules.openclaw-update-operator.tmp"])(
     ).rejects.toThrow("Cannot privately copy plugin dependency");
   },
 );
+
+it.each([
+  { code: "ENOENT", link: "missing-target" },
+  { code: "ENOTDIR", link: path.join("blocker", "nested") },
+  { code: "ELOOP", link: "plugin-link" },
+] as const)(
+  "carries a plugin link that resolves with $code through inventory and copied-link identity",
+  async ({ code, link }) => {
+    const file = (source: string) => path.join(source, "plugin-link");
+    const f = await fixture(false, async (source) => {
+      if (code === "ENOTDIR") {
+        await fs.writeFile(path.join(source, "blocker"), "not a directory");
+      }
+      await fs.symlink(link, file(source));
+      let resolution: unknown;
+      try {
+        fsSync.realpathSync(file(source));
+      } catch (error) {
+        resolution = error;
+      }
+      expect(hasNodeErrorCode(resolution, code)).toBe(true);
+    });
+    const unresolved: Array<{ path: string; link: string }> = [];
+    await f.copy((fact) => {
+      if (fact.target === null) {
+        unresolved.push({ path: fact.path, link: fact.link });
+      }
+    });
+    expect(unresolved).toEqual([{ path: path.join(f.destination, "plugin-link"), link }]);
+  },
+);
+
+it("rethrows a plugin link failure that is not an unresolved link", () => {
+  expect(() =>
+    ignoreUnresolvedPluginLink(Object.assign(new Error("EACCES"), { code: "EACCES" })),
+  ).toThrow("EACCES");
+});

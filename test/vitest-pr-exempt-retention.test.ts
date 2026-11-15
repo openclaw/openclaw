@@ -86,8 +86,8 @@ function createPrExemptCensus() {
       ?.files.toSorted(),
   ).toEqual(browserFiles.toSorted());
   const extensionOwners = extensions.map((group) => ({
-    configs: [group.config],
-    includePatterns: allFiles(group.config).filter((file) =>
+    config: group.config,
+    paths: allFiles(group.config).filter((file) =>
       group.roots.some((root) => file === root || file.startsWith(`${root}/`)),
     ),
   }));
@@ -122,15 +122,15 @@ function createPrExemptCensus() {
       expect(periodic.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
       expect(periodic.length).toBeLessThanOrEqual(79);
     }
-    const owners = [
-      ...periodic.flatMap((shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }]),
-      ...extensionOwners,
-    ];
+    const owners = periodic.flatMap(
+      (shard) => shard.groups ?? [{ ...shard, shard_name: shard.shardName }],
+    );
     for (const file of files) {
       const config = expectDefined(configsByFile.get(file), file);
-      const shared = owners.filter(
-        (owner) => owner.configs.includes(config) && includes(file, owner),
-      ).length;
+      const shared =
+        owners.filter((owner) => owner.configs.includes(config) && includes(file, owner)).length +
+        extensionOwners.filter(({ config: key, paths }) => key === config && paths.includes(file))
+          .length;
       const dedicated =
         config === browserConfig
           ? Number(browserFiles.includes(file) && selected(file, ui.ui))

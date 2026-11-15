@@ -13,13 +13,35 @@ type RecordedPublication = {
   >;
 };
 
-/** Inspection verifies recorded publications are public; other readers require linked identity. */
+/** Full-write assistance retains live action authority; ordinary readers require linked identity. */
 export function captureOwnGitHubPullRequestReader(
-  profileId: string,
+  profileId: string | undefined,
   getHost: () => string,
   publication?: RecordedPublication,
+  assertOperatorWrite?: () => void,
 ) {
   const host = getHost();
+  if (assertOperatorWrite) {
+    const assertCurrent = () => {
+      assertOperatorWrite();
+      if (getHost() !== host) {
+        throw new Error("The GitHub host changed; retry inspection.");
+      }
+    };
+    assertCurrent();
+    const accountIds: number[] = [];
+    return {
+      host,
+      accountIds,
+      publication,
+      operatorWrite: true,
+      identity: JSON.stringify(["operator.write", profileId, host]),
+      assertCurrent,
+    };
+  }
+  if (!profileId) {
+    throw new Error("Inspecting your PR requires your verified linked GitHub account.");
+  }
   const profile = captureResidentUserProfileAccess(profileId);
   const accountIds = () => {
     const facts = profile.readCurrentFacts();
@@ -40,6 +62,7 @@ export function captureOwnGitHubPullRequestReader(
     host,
     accountIds: admittedIds,
     publication,
+    operatorWrite: false,
     identity: JSON.stringify([
       profileId,
       host,

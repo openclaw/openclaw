@@ -52,6 +52,11 @@ export async function settleExecProcessExit({
     }
   } finally {
     try {
+      await session.durable?.finalize();
+    } catch {
+      session.finalizationFailed = true;
+    }
+    try {
       if (!session.exited) {
         markProcessExited();
       }

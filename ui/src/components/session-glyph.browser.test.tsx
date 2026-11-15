@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { flush } from "solid-js";
+import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import "../test-helpers/load-styles.ts";
@@ -156,6 +156,35 @@ describe.skipIf(!hasBrowserLayout)("sidebar glyph geometry", () => {
       }
     },
   );
+
+  it("keeps the subagent ring prominent when background work also runs", () => {
+    const session = {
+      ...projectSidebarSession({
+        key: "agent:main:subagent-parent",
+        icon: "book",
+        backgroundProcessCount: 1,
+      }),
+      runningChildCount: 1,
+    };
+    const [current, setCurrent] = createSignal(session);
+    const view = mountSolid(
+      () =>
+        renderSessionLeadingState({
+          get session() {
+            return current();
+          },
+          attribution: "owned",
+        }).leadingIndicator,
+    );
+    const ring = view.getByRole("img", { name: /^Subagents working$/ });
+    expect(ring.classList.contains("session-glyph__ring--background")).toBe(false);
+    expect(getComputedStyle(ring).animationPlayState).toBe("running");
+
+    setCurrent({ ...session, runningChildCount: 0 });
+    flush();
+    const background = view.getByRole("img", { name: /^Background work running$/ });
+    expect(background.classList.contains("session-glyph__ring--background")).toBe(true);
+  });
 
   it("pauses the paired trace while queued", () => {
     const { container } = mountSolid(() => (

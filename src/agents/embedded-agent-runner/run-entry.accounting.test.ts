@@ -1,9 +1,13 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { buildReplyUsageState } from "../../auto-reply/reply/reply-usage-state.js";
 import { prepareSessionUsageUpdate } from "../../auto-reply/reply/session-usage.js";
 import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
+import {
+  resolveModelCostConfig,
+  estimateAggregateUsageCostAsync,
+} from "../../utils/usage-format.js";
+import * as modelsConfig from "../models-config-state.js";
 import type { NormalizedUsage } from "../usage.js";
 import { runEmbeddedAgentEntry, setupRunEntryTestState } from "./run-entry.test-harness.js";
 import {
@@ -50,12 +54,20 @@ const diagnosticUsage = [
   { input: 250, cost: { total: 1.1 } },
 ] as const;
 
-function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
+async function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
+  const prepareCost = () =>
+    resolveModelCostConfig({
+      config: cfg,
+      agentDir: "/nonexistent-fallback-accounting",
+      provider: meta.provider,
+      model: meta.model,
+    });
+  const turnUsd = await estimateAggregateUsageCostAsync({ usage: meta.usage, prepareCost });
   return {
     reply: buildReplyUsageState({
       ...meta,
       config: cfg,
-      agentDir: "/nonexistent-fallback-accounting",
+      turnUsd,
       agentId: "main",
       sessionId: "session-1",
       winnerProvider: meta.provider,
@@ -63,14 +75,14 @@ function usageConsumers(meta: Partial<EmbeddedAgentMeta>) {
     }),
     session: prepareSessionUsageUpdate({
       ...meta,
-      cfg,
+      estimatedCostUsd: turnUsd,
       providerUsed: meta.provider,
       modelUsed: meta.model,
     }),
-    diagnosticCost: estimateAggregateUsageCost({
+    diagnosticCost: await estimateAggregateUsageCostAsync({
       ...meta,
-      config: cfg,
       usage: meta.diagnosticUsage,
+      prepareCost,
     }),
   };
 }
@@ -124,7 +136,10 @@ it.each([null, { input: 0, output: 0, usageReport: { state: "available" as const
       undefined,
       lastCallUsage,
     );
-    const { reply } = usageConsumers({ usage: meta.usage, lastCallUsage: meta.lastCallUsage });
+    const { reply } = await usageConsumers({
+      usage: meta.usage,
+      lastCallUsage: meta.lastCallUsage,
+    });
     expect(meta.usage?.input).toBe(300);
     expect(reply.contextUsedTokens).toBeUndefined();
     expect(meta.lastCallUsage).toEqual(lastCallUsage ?? undefined);
@@ -139,6 +154,7 @@ it.each([
 ] as const)(
   "retains discarded work and %s across reply and session accounting",
   async (_name, primary, fallback, expected, diagnostics) => {
+    using preparation = vi.spyOn(modelsConfig, "captureModelsJsonCostSource");
     const unknown = expected === undefined;
     const meta = await runAccountedEntry(
       { input: 100, output: diagnostics ? undefined : 10, cost: primary },
@@ -146,6 +162,9 @@ it.each([
       unknown ? {} : cfg,
       diagnostics,
     );
+    if (_name === "provider-billed zero" || _name === "separate diagnostic totals") {
+      expect(preparation).not.toHaveBeenCalled();
+    }
     const output = diagnostics ? {} : { output: 30, total: 330 };
     expect(meta).toMatchObject({
       usage: { input: 300, ...output },
@@ -155,11 +174,11 @@ it.each([
       bridgeCalls: { search: 2, describe: 0, call: 4 },
     });
     const consumerMeta = unknown ? { ...meta, lastCallUsage: undefined } : meta;
-    const { reply, session, diagnosticCost } = usageConsumers(consumerMeta);
+    const { reply, session, diagnosticCost } = await usageConsumers(consumerMeta);
     expect(reply.usage).toMatchObject({ input: 300, ...(diagnostics ? {} : { output: 30 }) });
     expect(reply.contextUsedTokens).toBe(unknown ? undefined : 20);
     const cost = unknown ? undefined : expect.closeTo(expected, 9);
-    const costs = [reply.turnUsd, session?.estimateCost(), diagnosticCost];
+    const costs = [reply.turnUsd, session?.estimatedCostUsd, diagnosticCost];
     expect(costs).toEqual([cost, cost, diagnostics ? expect.closeTo(1.4, 9) : cost]);
     if (diagnostics) {
       expect(meta).toMatchObject({

@@ -2,21 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 
 const fixture = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn() }));
-vi.mock("../infra/abort-signal.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/abort-signal.js")>()),
-  racePromiseWithAbortSignal: (p: Promise<unknown>) => p,
-}));
 vi.mock("../infra/runtime-process-url.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/runtime-process-url.js")>()),
   resolveRuntimeProcessEntrypointUrl: () => new URL("file:///fixture/worker.js"),
-}));
-vi.mock("../infra/runtime-worker-generation.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/runtime-worker-generation.js")>()),
-  captureRuntimeWorkerSource: (moduleUrl: URL) => ({ moduleUrl }),
-}));
-vi.mock("../infra/sqlite-handle-lifecycle.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/sqlite-handle-lifecycle.js")>()),
-  SQLITE_IDLE_HANDLE_TTL_MS: 999999,
 }));
 // mock-isolation: Keep real broker actors and worker processes outside this retained-actor fixture.
 vi.mock("../infra/sqlite-worker-store.js", () => ({
@@ -32,17 +20,9 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../logging/subsystem.js")>()),
   createSubsystemLogger: () => ({ warn: () => {} }),
 }));
-vi.mock("../shared/detached-async-context.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../shared/detached-async-context.js")>()),
-  runInDetachedAsyncContext: (f: () => unknown) => f(),
-}));
 vi.mock("../shared/global-singleton.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../shared/global-singleton.js")>()),
   resolveGlobalSingleton: (_key: unknown, f: () => unknown) => f(),
-}));
-vi.mock("../shared/listeners.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../shared/listeners.js")>()),
-  notifyListeners: () => {},
 }));
 // mock-isolation: Keep the process-wide database cache and lifecycle registrations outside this owner-only fixture.
 vi.mock("./openclaw-state-db-cache.js", () => ({

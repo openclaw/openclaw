@@ -157,7 +157,9 @@ export function createUsageAggregateAccumulator() {
     return day;
   }
 
-  function addModelDays(usage: SessionUsageEntry["usage"]) {
+  function addModelDays(
+    usage: Pick<NonNullable<SessionUsageEntry["usage"]>, "dailyModelUsage"> | null,
+  ) {
     for (const day of usage?.dailyModelUsage ?? []) {
       const key = usageDailyModelIdentity(day.date, day.provider, day.model);
       const existing: SessionDailyModelUsage = dailyModels.get(key) ?? {
@@ -269,6 +271,87 @@ export function createUsageAggregateAccumulator() {
     addModelDays(usage);
   }
 
+  /** Merge disjoint populations without revisiting their session rows. */
+  function merge(source: { totals: CostUsageTotals; aggregates: SessionsUsageAggregates }) {
+    const { aggregates } = source;
+    addCostUsageTotals(totals, source.totals);
+    sessionCount += aggregates.sessionCount ?? 0;
+    longestSessionDurationMs = Math.max(
+      longestSessionDurationMs,
+      aggregates.longestSessionDurationMs ?? 0,
+    );
+    for (const key of [
+      "total",
+      "user",
+      "assistant",
+      "toolCalls",
+      "toolResults",
+      "errors",
+    ] as const) {
+      messages[key] += aggregates.messages[key];
+    }
+    for (const tool of aggregates.tools.tools) {
+      tools.set(tool.name, (tools.get(tool.name) ?? 0) + tool.count);
+    }
+    for (const entry of aggregates.byModel) {
+      mergeModelUsage(models, usageModelIdentity(entry.provider, entry.model), entry, entry.model);
+    }
+    for (const entry of aggregates.byProvider) {
+      mergeModelUsage(providers, entry.provider ?? "unknown", entry, undefined);
+    }
+    for (const entry of aggregates.byAgent) {
+      mergeGroupedTotals(agents, entry.agentId, entry.totals);
+    }
+    for (const entry of aggregates.byChannel) {
+      mergeGroupedTotals(channels, entry.channel, entry.totals);
+    }
+    for (const entry of aggregates.byCreator ?? []) {
+      const creator = creators.get(entry.key) ?? {
+        key: entry.key,
+        ...(entry.actor ? { actor: entry.actor } : {}),
+        totals: createEmptyCostUsageTotals(),
+        sessionCount: 0,
+        daily: new Map<string, CostUsageTotals>(),
+        sessionActivity: new Map<string, CreatorUsage["sessionActivity"][number]>(),
+      };
+      addCostUsageTotals(creator.totals, entry.totals);
+      creator.sessionCount += entry.sessionCount;
+      for (const day of entry.daily) {
+        mergeGroupedTotals(creator.daily, day.date, day);
+      }
+      for (const activity of entry.sessionActivity) {
+        const key = JSON.stringify(activity.dates);
+        const current = creator.sessionActivity.get(key) ?? {
+          dates: activity.dates,
+          sessionCount: 0,
+        };
+        current.sessionCount += activity.sessionCount;
+        creator.sessionActivity.set(key, current);
+      }
+      creators.set(entry.key, creator);
+    }
+    for (const day of aggregates.daily) {
+      const target = getDay(day.date);
+      target.tokens += day.tokens;
+      target.cost += day.cost;
+      target.messages += day.messages;
+      target.toolCalls += day.toolCalls;
+      target.errors += day.errors;
+    }
+    for (const day of aggregates.costDaily ?? []) {
+      mergeGroupedTotals(costDays, day.date, day);
+    }
+    if (aggregates.latency) {
+      mergeLatency(latency, aggregates.latency);
+    }
+    for (const day of aggregates.dailyLatency ?? []) {
+      const current = dailyLatency.get(day.date) ?? createLatencyAccumulator();
+      mergeLatency(current, day);
+      dailyLatency.set(day.date, current);
+    }
+    addModelDays({ dailyModelUsage: aggregates.modelDaily });
+  }
+
   /* oxlint-disable unicorn/no-array-sort -- Every sorted array is freshly materialized here and exclusively owned until return. */
   function finish(): SessionsUsageAggregates {
     const toolEntries = Array.from(tools, ([name, count]) => ({ name, count })).sort(
@@ -324,5 +407,5 @@ export function createUsageAggregateAccumulator() {
   }
   /* oxlint-enable unicorn/no-array-sort */
 
-  return { totals, totalsForDays, add, addCalendar, finish };
+  return { totals, totalsForDays, add, addCalendar, merge, finish };
 }

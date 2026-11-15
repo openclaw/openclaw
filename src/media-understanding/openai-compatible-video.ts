@@ -5,9 +5,10 @@ import {
   resolveMediaUnderstandingString,
   type OpenAiCompatibleVideoPayload,
 } from "../../packages/media-understanding-common/src/openai-compatible-video.js";
+import type { VideoDescriptionResult } from "../../packages/media-understanding-common/src/types.js";
 import { postJsonResponse } from "./provider-json-post.js";
 import { buildOpenAiCompatibleAuthHeaders, resolveProviderHttpRequestConfig } from "./shared.js";
-import type { VideoDescriptionRequest, VideoDescriptionResult } from "./types.js";
+import type { VideoDescriptionRequest } from "./types.js";
 
 export * from "../../packages/media-understanding-common/src/openai-compatible-video.js";
 

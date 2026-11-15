@@ -6,6 +6,7 @@ import {
   clearSessionResetRuntimeState,
   prepareSessionResetCleanupGuard,
   SessionResetCleanupError,
+  stopSessionResetProcesses,
   stopSessionResetSubagents,
 } from "../auto-reply/reply/session-reset-cleanup.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
@@ -67,6 +68,7 @@ export async function ensureSessionRuntimeCleanup(params: {
       agentId: params.target.agentId,
       assertCurrent,
     });
+    await stopSessionResetProcesses({ scopeKeys: [...queueKeys, params.key], assertCurrent });
   } catch (error) {
     if (error instanceof SessionResetCleanupError) {
       return errorShape(ErrorCodes.UNAVAILABLE, error.message);

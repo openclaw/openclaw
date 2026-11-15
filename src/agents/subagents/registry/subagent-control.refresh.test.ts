@@ -104,6 +104,8 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
     let finalReadSettled = false;
     let publishedBeforeJoin = false;
     let releasedBeforeJoin = false;
+    let consumedSnapshots = 0;
+    let copiedSnapshots = 0;
     const release = () => {
       gates.forEach((gate) => gate.resolve());
       finishRun.resolve();
@@ -119,7 +121,21 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
           "sessionKeys" in scope &&
           scope.sessionKeys.includes(rootKey);
         const index = observe ? contexts.push(lane.getStore()) - 1 : -1;
-        return read(runs, select, consume, scope).then(async (result) => {
+        return read(
+          runs,
+          select,
+          (selection, snapshot) => {
+            consumedSnapshots++;
+            const entries = vi.spyOn(snapshot, Symbol.iterator);
+            try {
+              return consume(selection, snapshot);
+            } finally {
+              copiedSnapshots += entries.mock.calls.length;
+              entries.mockRestore();
+            }
+          },
+          scope,
+        ).then(async (result) => {
           if (index >= 0 && index < gates.length) {
             entered[index]!.resolve();
             await gates[index]!.promise;
@@ -221,6 +237,8 @@ it.for(["complete", "reject undefined", "native failure"] as const)(
       await expect(scope.refresh()).rejects.toThrow("refresh scope is no longer active");
       expect(contexts).toEqual(["kill-scope", "kill-scope"]);
       expect([publishedBeforeJoin, releasedBeforeJoin]).toEqual([false, false]);
+      expect(consumedSnapshots).toBeGreaterThan(0);
+      expect(copiedSnapshots, "discovery reads values without copying prepared snapshots").toBe(0);
     } finally {
       release();
       await Promise.allSettled([...accepted, stopped]);

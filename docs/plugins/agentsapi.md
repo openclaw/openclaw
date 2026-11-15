@@ -138,8 +138,15 @@ generated files in [Work with files and tools](/plugins/agentsapi#work-with-file
 
 ## Continue a task
 
-Follow-up messages use the same Agents API session. Ask the agent to revise its
-answer, work with another attachment, or take the next step. A message sent while
+Follow-up messages use the same Agents API session. When switching an existing
+OpenClaw conversation to Agents API, the new native session receives bounded,
+quoted prior conversation context, including recorded tool outcomes. Returning
+to a retained Agents API session also supplies work recorded outside that native
+session since its last completed reply. This context does not replay tools or
+copy local files into the hosted workspace. If an older checkpoint is outside
+the bounded history window, some quoted reference context may repeat.
+
+Ask the agent to revise its answer, work with another attachment, or take the next step. A message sent while
 the agent is working can redirect it; stopping the task cancels its remote turn.
 
 Saved sessions from `v2026.9.9` are upgraded on their first continuation without

@@ -536,12 +536,16 @@ describe("loadControlUiSessionPullRequests", () => {
     expect(stillLimited.pullRequests.map((item) => item.number)).toEqual([103469]);
   });
 
-  it("finds a renamed fork without changing the base repository", async () => {
+  it("reuses an owner's list while finding a renamed fork among its repositories", async () => {
     const head = { owner: "lonexreb", repo: "paloa-claw" };
-    vi.stubGlobal("fetch", routedFetch(forkRoutes(183571, head)));
-    const result = await loadFork([head]);
+    const fetchImpl = routedFetch(forkRoutes(183571, head));
+    vi.stubGlobal("fetch", fetchImpl);
+    const result = await loadFork([{ ...head, repo: "another-repository" }, head]);
     expect(result.repository).toEqual({ owner: "openclaw", repo: "openclaw" });
     expect(result.pullRequests.map((pull) => pull.number)).toEqual([183571]);
+    expect(
+      fetchImpl.mock.calls.filter(([input]) => requestUrl(input).includes("/pulls?head=lonexreb")),
+    ).toHaveLength(1);
   });
 
   it("continues fork discovery when the origin query returns another head repository", async () => {

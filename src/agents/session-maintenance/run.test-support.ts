@@ -48,7 +48,7 @@ export async function setup(env: NodeJS.ProcessEnv, sessionId: string) {
       },
       () => scheduleSessionMaintenance(request, afterOwnerSettles),
     );
-  return { scope, entry, schedule };
+  return { scope, entry, schedule, request };
 }
 
 export function blockFlush(onStart = () => {}) {

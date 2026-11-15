@@ -28,7 +28,7 @@ const MAX_SETTLE_SECONDS = 2;
     distance: under 1.5 px on a phone-height sheet, with about a dozen stops. */
 const EASING_TOLERANCE = 0.003;
 
-export function springCoefficients(spring: Spring): { stiffness: number; damping: number } {
+function springCoefficients(spring: Spring): { stiffness: number; damping: number } {
   const stiffness = ((2 * Math.PI) / spring.duration) ** 2;
   const damping =
     spring.bounce >= 0
@@ -41,7 +41,7 @@ export function springCoefficients(spring: Spring): { stiffness: number; damping
  * Normalized position (0 → 1) after `time` seconds. `velocity` is the initial speed in
  * distances per second: the "relative velocity" from WWDC18 "Designing Fluid Interfaces".
  */
-export function springValue(spring: Spring, time: number, velocity = 0): number {
+function springValue(spring: Spring, time: number, velocity = 0): number {
   const { stiffness, damping } = springCoefficients(spring);
   const omega = Math.sqrt(stiffness);
   const zeta = damping / (2 * omega);
@@ -65,7 +65,7 @@ export function springValue(spring: Spring, time: number, velocity = 0): number 
 }
 
 /** Seconds until the spring stays within the settle epsilon of its target. */
-export function springSettleTime(spring: Spring, velocity = 0): number {
+function springSettleTime(spring: Spring, velocity = 0): number {
   let settled = 0;
   for (let ms = 0; ms <= MAX_SETTLE_SECONDS * 1000; ms += 1) {
     if (Math.abs(1 - springValue(spring, ms / 1000, velocity)) > SETTLE_EPSILON) {

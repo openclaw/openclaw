@@ -6,7 +6,7 @@ read_when:
 title: "Personal assistant setup"
 ---
 
-OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant. Setting up a shared gateway for several people instead? See [Team setup](/start/teams).
+OpenClaw is a self-hosted gateway that connects Discord, Google Chat, iMessage, Matrix, Microsoft Teams, Signal, Slack, Telegram, WhatsApp, Zalo, and more to AI agents. This guide covers the "personal assistant" setup: a dedicated WhatsApp number that behaves like your always-on AI assistant. This is a personal claw. Setting up one gateway for a whole team instead? See [Multiplayer](/start/multiplayer).
 
 ## Good defaults first
 
@@ -254,8 +254,10 @@ openclaw status --deep   # check channels (WhatsApp Web + Telegram + Discord + S
 openclaw health --json   # gateway health snapshot over the WS connection
 ```
 
-Logs live under `/tmp/openclaw/`: `openclaw-YYYY-MM-DD.log` for the default
-profile and `openclaw-<profile>-YYYY-MM-DD.log` for named profiles.
+Logs live under the selected state directory's `logs/` directory:
+`openclaw-YYYY-MM-DD.log` for the default profile and
+`openclaw-<profile>-YYYY-MM-DD.log` for named profiles. Use `openclaw logs`
+to discover the active path; see [log locations](/logging#where-logs-live).
 
 ## Next steps
 

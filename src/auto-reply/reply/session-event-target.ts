@@ -22,6 +22,10 @@ import {
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { sessionToolOverridesEqual } from "../../config/sessions/session-tool-overrides.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -364,6 +368,15 @@ export async function prepareSessionEventTargetForHost(
       assertTargetCurrent();
       retained.assertCurrent();
     };
+    Object.assign(assertCurrent, {
+      prepareSessionSourceEffect: composeSessionSourceAssertion(
+        [target.assertCurrent, retained.assertCurrent],
+        (assertSource) => {
+          assertSource();
+          assertCurrent();
+        },
+      ).prepareSessionSourceEffect,
+    });
     assertCurrent();
     return {
       ...retained,
@@ -372,17 +385,28 @@ export async function prepareSessionEventTargetForHost(
         assertTargetCurrent();
         return retained.readSessionSettings();
       },
-      bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
+      bindCreation: (
+        operation: Parameters<typeof retained.bindCreation>[0],
+      ): SessionSourceAssertion => {
         assertTargetCurrent();
         const assertCreationCurrent = retained.bindCreation(operation, (binding) => {
           // Retain the committed origin even if this attempt stops before model start.
           target.sessionId = binding.sessionId;
           target.lifecycleRevision = binding.lifecycleRevision;
         });
-        return () => {
+        const assertBoundCurrent = () => {
           assertTargetCurrent();
           assertCreationCurrent();
         };
+        return Object.assign(assertBoundCurrent, {
+          prepareSessionSourceEffect: composeSessionSourceAssertion(
+            [target.assertCurrent, assertCreationCurrent],
+            (assertSource) => {
+              assertSource();
+              assertBoundCurrent();
+            },
+          ).prepareSessionSourceEffect,
+        });
       },
     };
   } catch (error) {

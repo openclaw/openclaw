@@ -8,7 +8,7 @@ import { authProfileRuntimeMode } from "../agents/auth-profiles/runtime-scope.js
 import { getRuntimeAuthProfileStoreSnapshotCore } from "../agents/auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
+import { isTrustedToolExecutionPreflightError } from "../agents/tool-execution-error.js";
 import { hasAuthProfileForProvider } from "../agents/tools/model-config.helpers.js";
 import { selectLiveRuntimeConfig } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -188,12 +188,13 @@ type WebSearchRequestContext = {
   config?: OpenClawConfig;
   search?: WebSearchConfig;
   runtimeWebSearch?: RuntimeWebSearchMetadata;
+  sandboxed?: boolean;
 };
 
 function resolveWebSearchRequestContext(
   options?: Pick<
     ResolveWebSearchDefinitionParams,
-    "config" | "preferInputConfig" | "runtimeWebSearch"
+    "config" | "preferInputConfig" | "runtimeWebSearch" | "sandboxed"
   >,
 ): WebSearchRequestContext {
   const config = resolveWebSearchRuntimeConfig({
@@ -205,6 +206,7 @@ function resolveWebSearchRequestContext(
     search: resolveSearchConfig(config),
     runtimeWebSearch:
       options?.runtimeWebSearch ?? getActiveRuntimeWebToolsMetadataFromState()?.search,
+    sandboxed: options?.sandboxed,
   };
 }
 
@@ -237,6 +239,7 @@ function loadSortedWebSearchProviders(
   return sortPluginEntriesForAutoDetect(
     resolveProviders({
       config: params.config,
+      sandboxed: params.sandboxed,
       ...(pluginId ? { onlyPluginIds: [pluginId] } : {}),
     }),
   );
@@ -246,16 +249,14 @@ async function resolveWebSearchCandidates(
   options?: ResolveWebSearchDefinitionParams,
   context = resolveWebSearchRequestContext(options),
 ): Promise<PluginWebSearchProviderEntry[]> {
-  const { config, search, runtimeWebSearch } = context;
+  const { config, search } = context;
   if (search?.enabled === false) {
     return [];
   }
 
   await prepareBundledDiscoveryMode();
   const providers = loadSortedWebSearchProviders({
-    config,
-    search,
-    runtimeWebSearch,
+    ...context,
     providerId: options?.providerId,
     preferRuntimeProviders: options?.preferRuntimeProviders,
   });
@@ -400,7 +401,6 @@ function selectWebSearchCandidates(
 }
 
 type WebSearchConfigurationParams = ResolveWebSearchDefinitionParams & {
-  authStore?: AuthProfileStore;
   resolveAuthProfileStoreSource?: () => boolean;
 };
 
@@ -529,9 +529,13 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
     context,
   );
   if (candidates.length === 0) {
-    throw new Error("web_search is disabled or no provider is available.");
+    throw new Error(
+      params.sandboxed
+        ? "web_search is unavailable. Enable or select a bundled or verified official search provider for sandboxed agents."
+        : "web_search is disabled or no provider is available.",
+    );
   }
-  const allowFallback = !hasExplicitWebSearchSelection({
+  const allowAutomaticFallback = !hasExplicitWebSearchSelection({
     search,
     runtimeWebSearch,
     providerId: params.providerId,
@@ -549,6 +553,12 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
       // Keep the selected provider's failure, including null or undefined rejections.
       let firstFailure: WebSearchProviderError | undefined;
       for (const candidate of candidates) {
+        const allowFallback =
+          allowAutomaticFallback &&
+          !(
+            params.modelSelection?.authProfileId &&
+            candidate.authProviderId === params.modelSelection.provider
+          );
         params.signal?.throwIfAborted();
         assertRequestCurrent?.();
         try {
@@ -566,6 +576,7 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           }
           const executed = await definition.execute(params.args, {
             signal: params.signal,
+            ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
             ...(assertRequestCurrent ? { assertCurrent: assertRequestCurrent } : {}),
           });
           // Cancellation wins races with provider completion or cleanup failures. Otherwise an
@@ -594,9 +605,10 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
           if (isTrustedToolExecutionPreflightError(error)) {
             throw error;
           }
-          firstFailure ??= new WebSearchProviderError(candidate.id, error);
+          const failure = new WebSearchProviderError(candidate.id, error);
+          firstFailure ??= failure;
           if (!allowFallback) {
-            throw firstFailure;
+            throw failure;
           }
         }
       }

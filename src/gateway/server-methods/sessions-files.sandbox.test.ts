@@ -148,7 +148,11 @@ it("keeps real guest file requests in their session's private sandbox", async ()
             },
             viewer,
           );
-          expect(denied.message).toContain("requires a sandboxed session");
+          expect(denied).toMatchObject({
+            code: "FORBIDDEN",
+            message:
+              "Your operator role requires a sandboxed session. You cannot read this session's host workspace files. Ask the owner to download and share the file, then attach it to your own session.",
+          });
         }
       }
       try {

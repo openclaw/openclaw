@@ -37,8 +37,6 @@ export function fingerprintPreparedModelCatalogPluginContext(
   value: PreparedModelCatalogWorkerInput,
 ): string {
   return fingerprintPreparedRuntimeFacts({
-    remoteCatalogSource: value.remoteCatalog?.sourceUrl,
-    remoteCatalogRevision: value.remoteCatalog?.revision,
     config: fingerprintPreparedModelCatalogConfig(value.input.config),
     sourceConfigForSecrets: fingerprintPreparedModelCatalogConfig(value.sourceConfigForSecrets),
     configResolutionFacts: value.configResolutionFacts,
@@ -54,10 +52,16 @@ export function fingerprintPreparedModelCatalogPluginContext(
   });
 }
 
-/** The worker's workspace slot and registration identity travel together. */
+/** Transport reuse includes catalog data; registrations follow only their loader inputs. */
 export function prepareModelCatalogWorkerContext(value: PreparedModelCatalogWorkerInput) {
+  const registrationFingerprint = fingerprintPreparedModelCatalogPluginContext(value);
   return {
     workspaceDir: value.pluginMetadataSnapshot.workspaceDir ?? value.input.workspaceDir,
-    fingerprint: fingerprintPreparedModelCatalogPluginContext(value),
+    registrationFingerprint,
+    fingerprint: fingerprintPreparedRuntimeFacts({
+      registrationFingerprint,
+      remoteCatalogSource: value.remoteCatalog?.sourceUrl,
+      remoteCatalogRevision: value.remoteCatalog?.revision,
+    }),
   };
 }

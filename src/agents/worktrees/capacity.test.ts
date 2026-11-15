@@ -11,6 +11,7 @@ import { resolveWorktreeBase as resolveBase } from "./base-ref.js";
 import { estimateWorktreeCheckoutTransitionBytes, estimateWorktreeGitBytes } from "./capacity.js";
 import { git, initializeGitFixture } from "./git-fixture.test-support.js";
 import { runGit } from "./git.js";
+import { hydrateCommitObjects } from "./object-hydration.js";
 
 describe("worktree Git size estimates", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -110,6 +111,23 @@ describe("worktree Git size estimates", () => {
     expect(scans()).toHaveLength(1);
   });
 
+  it("hydrates missing contents with 20,000 unrelated repository config entries", async () => {
+    const { clone, commit, missing } = await partialClone();
+    await fs.appendFile(
+      path.join(clone, ".git/config"),
+      Array.from(
+        { length: 10_000 },
+        (_, index) =>
+          `[branch "session-${index}"]\nremote = origin\n[remote "unused-${index}"]\nurl = https://example.invalid/repository.git\n`,
+      ).join(""),
+    );
+    await hydrateCommitObjects(clone, commit, missing);
+    for (const object of missing) {
+      await expect(runGit(clone, ["cat-file", "-e", object])).resolves.toMatchObject({ code: 0 });
+    }
+    expect(await estimateWorktreeGitBytes(clone, commit)).toBe(16_384);
+  });
+
   it("preserves admitted caller ownership config through text and buffered sizing without changing defaults", async () => {
     const root = tempDirs.make("openclaw-capacity-caller-git-");
     const repo = await initializeGitFixture(root, "repo", "README.md", "capacity\n");
@@ -143,14 +161,19 @@ describe("worktree Git size estimates", () => {
       }
       const commandSpy = vi.spyOn(gitExec, "executeGitCommandBytes");
       const runBuffered = commandExec.runCommandBuffered;
+      const censusBytes: number[] = [];
       const bufferedSpy = vi
         .spyOn(commandExec, "runCommandBuffered")
-        .mockImplementation((argv, options) => {
+        .mockImplementation(async (argv, options) => {
           // Older Git ignores GIT_NO_LAZY_FETCH; transport denial must still prevent per-blob fetches.
           const executionOptions = argv.includes("ls-tree")
             ? { ...options, env: { ...options?.env, GIT_NO_LAZY_FETCH: "0" } }
             : options;
-          return runBuffered(argv, executionOptions);
+          const result = await runBuffered(argv, executionOptions);
+          if (argv.includes("--missing=print")) {
+            censusBytes.push(result.stdout.byteLength);
+          }
+          return result;
         });
       const packetTrace = path.join(clone, "hydrate-packets.log");
       vi.stubEnv("GIT_TRACE_PACKET", packetTrace);
@@ -178,6 +201,11 @@ describe("worktree Git size estimates", () => {
       );
       const fetches = commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch");
       expect(fetches).toHaveLength(1);
+      // Promisor membership scans every promised pack, even with --max-count=1.
+      // Creation needs the selected tree's contents, not snapshot retirement proof.
+      expect(
+        commandSpy.mock.calls.filter(([, args]) => args.includes("--missing=allow-promisor")),
+      ).toHaveLength(0);
       expect(fetches[0]?.[1]).toContain("--no-auto-maintenance");
       const fetchOptions = fetches[0]?.[2];
       expect(fetchOptions?.timeoutMs).toBe(300_000);
@@ -190,22 +218,41 @@ describe("worktree Git size estimates", () => {
       );
       expect(sizes).toHaveLength(2);
       expect(sizes[0]?.[1]?.env?.GIT_NO_LAZY_FETCH).toBe("1");
-      expect(
-        bufferedSpy.mock.calls.filter(([argv]) => argv.includes("--missing=print")),
-      ).toHaveLength(1);
+      // The worker boundary carries only missing IDs, not the complete checkout inventory.
+      expect(censusBytes).toEqual([missing.reduce((bytes, oid) => bytes + oid.length + 2, 0)]);
       commandSpy.mockClear();
       await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
       expect(commandSpy.mock.calls.filter(([, args]) => args[0] === "fetch").length).toBe(0);
+      // Another preparation can finish after this caller captured its missing-object inventory.
+      await fs.writeFile(packetTrace, "");
+      await hydrateCommitObjects(clone, commit, missing);
+      expect(await fs.readFile(packetTrace, "utf8")).not.toMatch(/>\s+want [0-9a-f]{40}/u);
     },
   );
 
-  it("keeps the hydration fetch from starting Git auto-maintenance on the source repository", async () => {
+  it("hydrates without reading unrelated ref tips or starting auto-maintenance", async () => {
     const { root, clone, commit } = await partialClone();
+    const tree = await git(clone, "rev-parse", `${commit}^{tree}`);
+    // Clones do not inherit the fixture's repo-local identity; CI has no global one.
+    await git(clone, "config", "user.name", "OpenClaw Test");
+    await git(clone, "config", "user.email", "openclaw-test@example.invalid");
+    const unrelated = await git(clone, "commit-tree", tree, "-m", "unrelated session");
+    await git(clone, "update-ref", "refs/heads/unrelated", unrelated);
+    const packed = await runGit(clone, ["pack-objects", ".git/objects/pack/pack"], {
+      input: `${unrelated}\n`,
+    });
+    expect(packed.code).toBe(0);
+    await fs.unlink(path.join(clone, ".git/objects", unrelated.slice(0, 2), unrelated.slice(2)));
+    const packAccess = path.join(root, "hydrate-pack-access.log");
+    vi.stubEnv("GIT_TRACE_PACK_ACCESS", packAccess);
     const traceDir = path.join(root, "hydrate-trace2");
     await fs.mkdir(traceDir);
     // A directory target gives one event file per Git process, so nothing interleaves.
     vi.stubEnv("GIT_TRACE2_EVENT", traceDir);
     await expect(estimateWorktreeGitBytes(clone, commit)).resolves.toBe(16_384);
+    expect(await fs.readFile(packAccess, "utf8")).not.toContain(
+      `pack-${packed.stdout.trim()}.pack`,
+    );
     const events = (
       await Promise.all(
         (await fs.readdir(traceDir)).map(async (name) =>
@@ -243,13 +290,11 @@ describe("worktree Git size estimates", () => {
         await release.promise;
       });
       await started.promise;
-      const execute = gitExec.executeGitCommandBytes;
-      vi.spyOn(gitExec, "executeGitCommandBytes").mockImplementation(async (cwd, args, options) => {
-        const result = await execute(cwd, args, options);
-        if (args[0] === "rev-parse" && args[1] === "--git-common-dir") {
-          discovered.resolve();
-        }
-        return result;
+      const enqueue = gitExec.enqueueGitRefMutation;
+      vi.spyOn(gitExec, "enqueueGitRefMutation").mockImplementation((...args) => {
+        const queued = enqueue(...args);
+        discovered.resolve();
+        return queued;
       });
       const controller = new AbortController();
       const revoked = new Error("hydration authority revoked");

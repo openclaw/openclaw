@@ -7,6 +7,7 @@ import {
   type AgentRunTimeoutPhase,
 } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 import { hasLifecycleErrorCode as hasAgentRunAbortCode } from "../infra/agent-lifecycle-error.js";
 import { isGatewayRestartDrainError } from "../process/gateway-work-admission.js";
@@ -41,14 +42,20 @@ export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
 const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
-export function createAgentRunDirectAbortError(): Error {
+export function createAgentRunDirectAbortError(userInitiated?: boolean): Error {
   return Object.assign(createAbortError(AGENT_RUN_ABORTED_ERROR), {
     code: AGENT_RUN_DIRECT_ABORT_ERROR_CODE,
+    ...(userInitiated ? { userInitiated: true } : {}),
   });
 }
 
 export function isAgentRunDirectAbortReason(value: unknown): boolean {
   return hasAgentRunAbortCode(value, AGENT_RUN_DIRECT_ABORT_ERROR_CODE);
+}
+
+/** Presentation fact from an explicit Stop; it never grants cancellation authority. */
+export function isUserInitiatedAgentRunAbortReason(value: unknown): boolean {
+  return isAgentRunDirectAbortReason(value) && asOptionalRecord(value)?.userInitiated === true;
 }
 
 export function createAgentRunRestartAbortError(): Error {

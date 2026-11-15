@@ -187,16 +187,13 @@ it.each([false, true])(
       expect(readLeases()).toEqual(retainedLeases);
       beginGatewayShutdownCleanup();
       const cleanupThread = await following.execute(append("cleanup"), allow);
-      if (retainGeneration) {
-        expect(cleanupThread).toBe(firstThread);
-        expect(readLeases()).toEqual(retainedLeases);
-      } else {
-        expect(readLeases()).toEqual(hostLeases);
-      }
+      expect(cleanupThread).toBe(firstThread);
+      expect(readLeases()).toEqual(retainGeneration ? retainedLeases : hostLeases);
       expectValues(db, ["first", "second", "third", "cleanup"]);
       await following.close();
       await execution?.release();
-      expect(db.isOpen).toBe(false);
+      await closeOpenClawAgentDatabasesAsync();
+      await vi.waitFor(() => expect(db.isOpen).toBe(false));
       expect(readLeases()).toEqual([]);
       expect(readSqliteDatabaseCleanClose(options.path)).toBe(true);
     } finally {
@@ -215,6 +212,31 @@ it.each([false, true])(
 describe("pooled agent publication owner (captured source)", () => {
   beforeEach(() => {
     sourceMode = "captured";
+  });
+  it("settles an accepted native write while the idle host handles shutdown cleanup", async () => {
+    const { db, worker } = await setup();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const writing = worker.run(async (scope) => {
+      await scope.execute(append("before cleanup"));
+      entered.resolve();
+      await release.promise;
+      await scope.execute(append("during cleanup"));
+    }, allow);
+    void writing.catch(allow);
+    try {
+      await entered.promise;
+      markGatewayRestartDraining();
+      beginGatewayShutdownCleanup();
+      await nextTurn();
+      release.resolve();
+      await writing;
+      expectValues(db, ["before cleanup", "during cleanup"]);
+    } finally {
+      release.resolve();
+      await writing.catch(allow);
+      resetGatewayWorkAdmission();
+    }
   });
   it.for([
     { entry: "scope", outcome: "revoked" },

@@ -45,6 +45,7 @@ import {
   type RequesterOrigin,
 } from "../requester-origin.js";
 import { readToolStringParam, type AnyAgentTool } from "./common.js";
+import type { GatewayToolCallerSource } from "./gateway-caller-context.types.js";
 import type { GatewayToolCallerReceiptAdmission } from "./gateway-caller-receipt.types.js";
 
 type ReceiptAuthority = (() => boolean | void) &
@@ -68,6 +69,8 @@ type GatewayToolCallerIdentity = {
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
   fullPermission?: boolean;
+  /** Host-held current delegation grant. A posture boolean alone never authorizes a write. */
+  assertAutoApproveChangesCurrent?: () => void;
   operationalRunInstance?: OperationalRunInstanceRef;
   embeddedRunToolAuthorityBinding?: EmbeddedRunToolAuthorityBinding;
   /** Exact run authority used to fence delegated system-agent approvals. */
@@ -93,6 +96,14 @@ type GatewayToolCallerIdentity = {
   workspaceBaseRefreshSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Host handoff selects the exact settled conversation; never accepted from RPC input. */
   workspacePrAdoptionSessionId?: string;
+  /** Reporting attribution only; never restores the yielding turn's execution authority. */
+  workspacePublicationRunId?: string;
+  /** Effective requesting surface captured by local publication before yielding. */
+  workspacePublicationPolicy?: {
+    allow: string[];
+    deny: string[];
+    permissionMode?: SessionEntry["permissionMode"];
+  };
   /** Current tool's filesystem owner for inspected PR evidence; never serialized in RPC data. */
   workspaceEvidenceSandbox?: import("../sandbox/types.js").SandboxContext;
   /** Closure-bound Gateway capability; revalidates both owners at child admission. */
@@ -117,18 +128,6 @@ type GatewayToolCallerIdentity = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
-};
-
-type GatewayToolCallerSource = {
-  agentSessionKey?: string;
-  gatewayUiCommandTarget?: GatewayUiCommandTarget;
-  agentChannel?: string;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  agentTo?: string;
-  agentAccountId?: string;
-  currentThreadTs?: string;
-  agentThreadId?: string | number;
 };
 
 const gatewayToolCallerStorage = new AsyncContext<GatewayToolCallerIdentity>(
@@ -214,11 +213,24 @@ export function captureGatewayToolReceiptAssertion(
     }
   };
   const prepare = receipt.prepareSessionSource?.bind(receipt);
+  const prepareEffect = receipt.prepareSessionSourceEffect?.bind(receipt);
   return Object.assign(() => assertAllowed(receipt()), {
     nativeSource: receipt.nativeSource,
     opaqueCommitGuard: receipt.opaqueCommitGuard,
     assertScopeCurrent: receipt.assertScopeCurrent?.bind(receipt),
     prepareSessionSourceScope: receipt.prepareSessionSourceScope?.bind(receipt),
+    ...(prepareEffect
+      ? {
+          async prepareSessionSourceEffect() {
+            const prepared = await prepareEffect();
+            return {
+              ...prepared,
+              assertCurrent: () => assertAllowed(prepared.assertCurrent()),
+              release: prepared.release?.bind(prepared),
+            };
+          },
+        }
+      : {}),
     ...(prepare
       ? {
           async prepareSessionSource() {
@@ -607,6 +619,8 @@ export async function withGatewayToolCallerIdentity<T>(
           : (identity.sessionEventToolsAllow ?? inheritedOwner?.sessionEventToolsAllow),
       workspaceBaseRefreshSandbox: inheritedValue("workspaceBaseRefreshSandbox"),
       workspacePrAdoptionSessionId: inheritedValue("workspacePrAdoptionSessionId"),
+      workspacePublicationRunId: inheritedValue("workspacePublicationRunId"),
+      workspacePublicationPolicy: inheritedValue("workspacePublicationPolicy"),
       workspaceEvidenceSandbox: inheritedValue("workspaceEvidenceSandbox"),
       personalToolParticipants: inheritedValue("personalToolParticipants"),
       personalToolUser: inheritedValue("personalToolUser"),
@@ -617,6 +631,13 @@ export async function withGatewayToolCallerIdentity<T>(
         inheritedOwner?.fullPermission === false || identity.fullPermission === false
           ? false
           : inheritedValue("fullPermission"),
+      assertAutoApproveChangesCurrent:
+        inheritedOwner?.assertAutoApproveChangesCurrent || identity.assertAutoApproveChangesCurrent
+          ? () => {
+              inheritedOwner?.assertAutoApproveChangesCurrent?.();
+              identity.assertAutoApproveChangesCurrent?.();
+            }
+          : undefined,
       operationalRunInstance: inheritedValue("operationalRunInstance"),
       embeddedRunToolAuthorityBinding:
         identity.embeddedRunToolAuthorityBinding ?? inheritedOwner?.embeddedRunToolAuthorityBinding,

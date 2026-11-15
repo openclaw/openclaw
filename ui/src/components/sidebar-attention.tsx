@@ -122,7 +122,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     } catch {
       if (isCurrentPanel(generation, scope)) {
         showToast({
-          message: `${t("lazyView.errorTitle")}. ${t("lazyView.staleSubtitle")}`,
+          message: `${t("lazyView.errorTitle")} ${t("lazyView.staleSubtitle")}`,
           severity: "error",
         });
       }
@@ -181,6 +181,20 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     }
     const generation = panelGeneration;
     const scope = routeScope();
+    if (item.action.kind === "openClawIdRecovery") {
+      const client = context.gateway.snapshot.client;
+      try {
+        const { openSidebarKeyRecovery } = await import("./openclaw-id/key-attention.ts");
+        if (isCurrentPanel(generation, scope) && client === context.gateway.snapshot.client) {
+          await openSidebarKeyRecovery(context);
+        }
+      } catch (error) {
+        showToast({ message: formatUiError(error), severity: "error" });
+      } finally {
+        context.sidebarAttention.refreshOpenClawId();
+      }
+      return;
+    }
     try {
       const { custodianAlertStore } = await import("../pages/custodian/custodian-alert-store.ts");
       if (!isCurrentPanel(generation, scope)) {

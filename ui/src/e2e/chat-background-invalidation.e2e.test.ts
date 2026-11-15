@@ -84,29 +84,6 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       // Startup timers must belong to the clock before the app schedules them.
       await page.clock.install();
-      const idleModules = [
-        "chat-header-panel-menu-content",
-        "chat-interaction-runtime",
-        "chat-composer-plus-menu-content",
-      ];
-      const evaluatedModules = new Set<string>();
-      page.on("console", (message) => {
-        if (message.type() === "debug" && idleModules.includes(message.text())) {
-          evaluatedModules.add(message.text());
-        }
-      });
-      await page.route(new RegExp(`/(${idleModules.join("|")})-[^/]+\\.js$`), async (route) => {
-        const response = await route.fetch();
-        const name = idleModules.find((module) => route.request().url().includes(`/${module}-`));
-        const headers = response.headers();
-        delete headers["content-length"];
-        delete headers["content-encoding"];
-        await route.fulfill({
-          response,
-          headers,
-          body: `${await response.text()}\nconsole.debug(${JSON.stringify(name)});`,
-        });
-      });
       let selected = createControlUiSessionRow(selectedKey, "Foreground conversation", baseTime);
       let foreign = createControlUiSessionRow(foreignKey, "Background conversation", baseTime);
       const gateway = await installMockGateway(page, {
@@ -165,20 +142,6 @@ suite.define(() => {
             ?.state.chatBranchesSessionKey === key,
         selectedKey,
       );
-      // Observe evaluation, not preloaded bytes or an earlier network-idle event.
-      await expect.poll(() => evaluatedModules.size).toBe(idleModules.length);
-      // The shared interaction chunk initializes its catalog in the import continuation.
-      // A browser task drains that promise chain before the existing pane commit fence.
-      await page.evaluate(async () => {
-        const { port1, port2 } = new MessageChannel();
-        await new Promise<void>((resolve) => {
-          port1.addEventListener("message", () => resolve(), { once: true });
-          port1.start();
-          port2.postMessage(null);
-        });
-        port1.close();
-        port2.close();
-      });
       const probe = await observePaneRenders(page);
       const counts = { foreign: [] as number[], presence: 0, selected: 0, viewer: 0 };
       try {

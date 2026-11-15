@@ -9,7 +9,6 @@ import type {
   MemoryCorpusSupplementRegistration,
   MemoryFlushFilePlanDraft,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginCapabilityRegistration,
   MemoryProviderFlushPlanResolver,
@@ -39,7 +38,6 @@ export type {
   MemoryFlushPlan,
   MemoryFlushPlanResolver,
   MemoryFlushToolsPlan,
-  MemoryLearnGuidanceBuilder,
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
@@ -171,21 +169,6 @@ export function getMemoryCapabilityRegistration(): MemoryPluginCapabilityRegistr
     ? {
         pluginId: capability.pluginId,
         capability: { ...capability.capability },
-      }
-    : undefined;
-}
-
-/** The selected memory provider's /learn contribution, when it declares one. */
-export function getMemoryLearnContribution():
-  | { pluginId: string; toolNames: readonly string[]; buildGuidance: MemoryLearnGuidanceBuilder }
-  | undefined {
-  const registration = getMemoryCapability();
-  const capability = registration?.capability;
-  return registration && capability?.learnToolNames?.length && capability.learnGuidanceBuilder
-    ? {
-        pluginId: registration.pluginId,
-        toolNames: capability.learnToolNames,
-        buildGuidance: capability.learnGuidanceBuilder,
       }
     : undefined;
 }

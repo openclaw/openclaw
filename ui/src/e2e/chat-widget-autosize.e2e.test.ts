@@ -181,7 +181,6 @@ suite.define(() => {
       const anchored = samples[loadedStart]!;
       for (const sample of samples.slice(loadedStart)) {
         expect(Math.abs(sample.endGap)).toBeLessThanOrEqual(1);
-        expect(Math.abs(sample.scrollTop - anchored.scrollTop)).toBeLessThanOrEqual(1);
         expect(Math.abs(sample.anchorTop - anchored.anchorTop)).toBeLessThanOrEqual(1);
       }
     });

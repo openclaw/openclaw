@@ -1,7 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as sessions from "../config/sessions/session-accessor.js";
-import { runSessionStartupMigration } from "../config/sessions/startup-migration.js";
+import { runSessionStartupMigration } from "../config/sessions/startup-migration-runtime.js";
 import * as agentDb from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";

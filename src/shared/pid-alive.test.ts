@@ -281,6 +281,31 @@ describe("native process identity policy", () => {
     },
   );
 
+  it.each([
+    { owner: "absent", value: null, stale: true },
+    { owner: "exited", value: { ...identity(), exited: true }, stale: true },
+    { owner: "live", value: identity(), stale: false },
+    { owner: "protected", value: new ProcSafeError("access-denied", "hidden"), stale: false },
+    {
+      owner: "unavailable",
+      value: new ProcSafeError("helper-unavailable", "missing"),
+      stale: false,
+    },
+  ])("recovers only a proven dead Windows EPERM lock owner ($owner)", async ({ value, stale }) => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    mockKill("EPERM");
+    nativeIdentity.mockImplementation(() => {
+      if (value instanceof Error) {
+        throw value;
+      }
+      return value;
+    });
+    const { isLockOwnerDefinitelyStale } = await import("../infra/stale-lock-file.js");
+    expect(
+      isLockOwnerDefinitelyStale({ payload: { pid: 42, createdAt: "2000-01-01T00:00:00Z" } }),
+    ).toBe(stale);
+  });
+
   it("keeps sealed helpers on the bounded shell path", () => {
     vi.stubGlobal("SEALED_RUNTIME_BUILD", true);
     const shell = vi

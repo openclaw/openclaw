@@ -26,6 +26,7 @@ import {
 import { syncSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
+import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createPaneTestHost,
@@ -34,7 +35,9 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { refreshChatCommands, refreshPageChat } from "./chat-state-refresh.ts";
+import { refreshChatCommands } from "./chat-session-commands.ts";
+import { prewarmChatSnapshot } from "./chat-snapshot-prewarm.ts";
+import { refreshPageChat } from "./chat-state-refresh.ts";
 import type { ChatHistoryState } from "./chat-transcript-metadata.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
 import { resetTranscriptTestDom } from "./components/chat-transcript.test-support.ts";
@@ -49,7 +52,6 @@ import {
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { publishSnapshotInvalidation } from "./session-snapshot-invalidation-events.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
-import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { CHAT_SNAPSHOT_PROJECTION_VERSION } from "./session-snapshot-record.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import "./chat-pane.tsx";
@@ -423,8 +425,8 @@ describe("first chat startup snapshot ordering", () => {
         { sessionKey },
       );
       vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
-        // Version 11 filtered out reasoning while retaining the current transcript cursor.
-        projectionVersion: 11,
+        // Version 12 filtered out reasoning while retaining the current transcript cursor.
+        projectionVersion: 12,
         savedAt: 0,
         sessionKey: cacheKey,
         sessionId: stored.sessionId,
@@ -496,6 +498,40 @@ describe("first chat startup snapshot ordering", () => {
       expect(h.state.chatMessages).toEqual(liveMessages);
       h.read.resolve(stored);
       await vi.advanceTimersByTimeAsync(0);
+      expect(h.state.chatMessages).toEqual(liveMessages);
+      expect(h.request).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "keeps the pending full refill when an obsolete snapshot is rejected (subscription=%s)",
+    async (subscribe) => {
+      const record = createDeferred<unknown>();
+      vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockReturnValueOnce(
+        record.promise,
+      );
+      const h = mountPane(sessionKey, false, new SessionSnapshotStore());
+      onTestFinished(subscribeChatPaneSnapshotInvalidation(() => h.state));
+      const network = h.pendingResponse();
+      if (subscribe) {
+        connectSessionOwner(h);
+      } else {
+        h.connect();
+      }
+      const subscription = subscribe
+        ? syncSelectedSessionMessageSubscription(h.state, { initialHistory: true })
+        : undefined;
+      const loading = h.start();
+      await vi.waitFor(() => expect(h.request).toHaveBeenCalledOnce());
+      record.resolve({ ...snapshotRecord(h, stored), projectionVersion: 12 });
+      await paintCachedSnapshot();
+      network.resolve(
+        subscribe
+          ? { key: sessionKey, initialHistory: { ok: true, payload: h.liveResult } }
+          : h.liveResult,
+      );
+      await subscription;
+      await loading;
       expect(h.state.chatMessages).toEqual(liveMessages);
       expect(h.request).toHaveBeenCalledOnce();
     },

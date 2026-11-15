@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import { createServer, type ServerResponse } from "node:http";
+import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import { reserveTestPortListener } from "../../../src/test-utils/port-claims.js";
 import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.ts";
@@ -23,7 +23,7 @@ import {
 const sessionKey = "agent:main:stop-long-turn";
 const prompt = "Walk through every fixture step, then wait for my instruction.";
 // Two transcript rows per step put the opening prompt outside the 80-row history tail.
-const toolSteps = 48;
+const toolSteps = 42;
 
 function execCall(step: number) {
   const item = {
@@ -65,7 +65,6 @@ async function startLongTurnProvider() {
   const pending = createDeferred();
   const failure = createDeferred<never>();
   void failure.promise.catch(() => {});
-  const held = new Set<ServerResponse>();
   let requests = 0;
   const reserved = await reserveTestPortListener({
     offsets: [0],
@@ -85,7 +84,6 @@ async function startLongTurnProvider() {
             writeOpenAiResponsesSse(response, execCall(step));
             return;
           }
-          held.add(response);
           response.writeHead(200, { "content-type": "text/event-stream" });
           response.flushHeaders();
           pending.resolve();

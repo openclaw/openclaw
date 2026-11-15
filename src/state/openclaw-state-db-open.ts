@@ -3,8 +3,11 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   bindFreshClientCredentialStore,
   prepareClientCredentialMigration,
+  prepareClientCredentialMigrationCustody,
 } from "../infra/client-credential-migration.js";
 import { isNativeClientCredentialBootstrap } from "../infra/client-credential-native-bootstrap.js";
+import type { ClientCredentialCustody } from "../infra/client-credential-store.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { openEngineStore } from "../infra/database-engine/open.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -22,6 +25,7 @@ import {
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
@@ -35,9 +39,16 @@ import {
   captureSqliteWorkerWalMaintenanceSuspension,
   getSqliteWorkerExistingDatabaseIdentity,
 } from "../infra/sqlite-worker-state-context.js";
-import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
-import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
+import {
+  withStateDatabaseSchemaMaintenance,
+  withStateDatabaseSchemaMaintenanceAsync,
+} from "../infra/state-database-maintenance.js";
+import {
+  runUpdateSqliteMigration,
+  runUpdateSqliteMigrationAsync,
+} from "../infra/update-doctor-migration-attribution.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -50,10 +61,10 @@ import {
   migrateCronDefaultStoreIdentity,
   resolveCronIdentityMigrationDefaultStoreKey,
 } from "./openclaw-state-db-cron-identity-migration.js";
+import { stateEngineInput } from "./openclaw-state-db-engine-input.js";
 import {
   admitStatePostgres,
   inspectStateSqlite,
-  stateEngineInput,
   stateEngineSchema,
 } from "./openclaw-state-db-engine.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
@@ -63,6 +74,7 @@ import {
 } from "./openclaw-state-db-initialization.js";
 import { assertStateDatabaseIntegrityOnce } from "./openclaw-state-db-integrity-admission.js";
 import { ensureOpenClawStatePermissions } from "./openclaw-state-db-permissions.js";
+import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
@@ -103,56 +115,133 @@ type UnpublishedStateDatabaseOptions = {
   env: NodeJS.ProcessEnv;
   busyTimeoutMs: number;
   lockFailureReporting: SqliteLockFailureReporting;
-  ensureSchema: (database: DatabaseSync, initialization: StateDatabaseInitialization) => void;
+  ensureSchema: (
+    database: DatabaseSync,
+    initialization: StateDatabaseInitialization,
+    credentialCustody?: ClientCredentialCustody | null,
+  ) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
   existingSchema?: boolean;
   initializationAgentPaths?: readonly string[];
+  clientCredentialMigrationFromVersion?: number;
 };
 
 export function openUnpublishedStateDatabase(
   params: UnpublishedStateDatabaseOptions,
 ): OpenClawStateDatabase {
-  const open = (schemaOwned: boolean): OpenClawStateDatabase => {
-    const existingIdentity = getSqliteWorkerExistingDatabaseIdentity(params.pathname);
-    const original =
-      params.existingSchema || existingIdentity
-        ? statSync(params.pathname, { bigint: true })
-        : statSync(params.pathname, { bigint: true, throwIfNoEntry: false });
-    if (
-      existingIdentity &&
-      (!original || `file:${original.dev}:${original.ino}` !== existingIdentity)
-    ) {
-      throw new Error("SQLite database file identity changed before existing-only open");
-    }
-    if (!original && !schemaOwned) {
-      return withStateDatabaseSchemaMaintenance(
-        { databasePath: params.pathname, busyTimeoutMs: params.busyTimeoutMs },
-        () => open(true),
-      );
-    }
-    if (original && !original.isFile()) {
-      throw new Error(`Existing shared-state database must be a regular file: ${params.pathname}`);
-    }
-    const initialization = prepareStateDatabaseInitialization(
-      params.pathname,
-      params.env,
-      params.initializationAgentPaths,
-    );
-    if (!original) {
-      quarantineOrphanedSqliteSidecars(params.pathname);
-      ensureOpenClawStatePermissions(params.pathname, params.env, { createDirectory: true });
-      prepareSqliteDatabaseDirectory(params.pathname);
-    }
-    return openNativeStateDatabase(params, initialization, original);
-  };
-  return open(false);
+  return runStateOpenSteps(openUnpublishedStateDatabaseSteps(params));
 }
 
-function openNativeStateDatabase(
+type StateOpenStep = { run(): void; runAsync(): Promise<void> };
+type StateOpenSteps = Generator<StateOpenStep, OpenClawStateDatabase, void>;
+
+export function runStateOpenSteps<Input>(
+  operation: Generator<{ run(): Input }, OpenClawStateDatabase, Input>,
+): OpenClawStateDatabase {
+  let step = operation.next();
+  while (!step.done) {
+    try {
+      step = operation.next(step.value.run());
+    } catch (error) {
+      step = operation.throw(error);
+    }
+  }
+  return step.value;
+}
+
+/** Doctor retains this unpublished handle while generation observations run in children. */
+export async function openUnpublishedStateDatabaseAsync(
+  params: UnpublishedStateDatabaseOptions,
+): Promise<OpenClawStateDatabase> {
+  return runStateOpenStepsAsync(openUnpublishedStateDatabaseSteps(params));
+}
+
+export async function runStateOpenStepsAsync<Input>(
+  operation: Generator<{ runAsync(): Promise<Input> }, OpenClawStateDatabase, Input>,
+): Promise<OpenClawStateDatabase> {
+  resolveSqliteInspectionSignal(getAsyncWorkSignal())?.throwIfAborted();
+  let step = withEngineStoreAdmission(() => operation.next());
+  while (!step.done) {
+    try {
+      const value = await step.value.runAsync();
+      step = withEngineStoreAdmission(() => operation.next(value));
+    } catch (error) {
+      step = withEngineStoreAdmission(() => operation.throw(error));
+    }
+  }
+  return step.value;
+}
+
+function* openUnpublishedStateDatabaseSteps(
+  params: UnpublishedStateDatabaseOptions,
+  schemaOwned = false,
+): StateOpenSteps {
+  const existingIdentity = getSqliteWorkerExistingDatabaseIdentity(params.pathname);
+  const original =
+    params.existingSchema || existingIdentity
+      ? statSync(params.pathname, { bigint: true })
+      : statSync(params.pathname, { bigint: true, throwIfNoEntry: false });
+  if (
+    existingIdentity &&
+    (!original || `file:${original.dev}:${original.ino}` !== existingIdentity)
+  ) {
+    throw new Error("SQLite database file identity changed before existing-only open");
+  }
+  if (!original && !schemaOwned) {
+    let opened: OpenClawStateDatabase | undefined;
+    const options = { databasePath: params.pathname, busyTimeoutMs: params.busyTimeoutMs };
+    try {
+      yield {
+        run() {
+          withStateDatabaseSchemaMaintenance(options, () => {
+            opened = runStateOpenSteps(openUnpublishedStateDatabaseSteps(params, true));
+          });
+        },
+        async runAsync() {
+          await withStateDatabaseSchemaMaintenanceAsync(options, async () => {
+            opened = await runStateOpenStepsAsync(openUnpublishedStateDatabaseSteps(params, true));
+          });
+        },
+      };
+      if (!opened) {
+        throw new Error("Shared-state acquisition did not return its native handle.");
+      }
+      return opened;
+    } catch (error) {
+      const errors = opened
+        ? openClawStateDatabaseCache.closeUnpublishedOpenClawStateDatabaseHandle(opened)
+        : [];
+      if (errors.length > 0) {
+        throw createSqliteLifecycleAggregateError(
+          [error, ...errors],
+          `Fresh shared-state acquisition and cleanup failed for ${params.pathname}.`,
+          error,
+        );
+      }
+      throw error;
+    }
+  }
+  if (original && !original.isFile()) {
+    throw new Error(`Existing shared-state database must be a regular file: ${params.pathname}`);
+  }
+  const initialization = prepareStateDatabaseInitialization(
+    params.pathname,
+    params.env,
+    params.initializationAgentPaths,
+  );
+  if (!original) {
+    quarantineOrphanedSqliteSidecars(params.pathname);
+    ensureOpenClawStatePermissions(params.pathname, params.env, { createDirectory: true });
+    prepareSqliteDatabaseDirectory(params.pathname);
+  }
+  return yield* openNativeStateDatabase(params, initialization, original);
+}
+
+function* openNativeStateDatabase(
   params: UnpublishedStateDatabaseOptions,
   initialization: StateDatabaseInitialization,
   original: BigIntStats | undefined,
-): OpenClawStateDatabase {
+): StateOpenSteps {
   const { busyTimeoutMs, lockFailureReporting } = params;
   const assertSameFile = () => {
     if (original) {
@@ -180,6 +269,7 @@ function openNativeStateDatabase(
     enableNodeSqliteKyselyStatementCache(db);
     setSqliteBusyTimeout(db, busyTimeoutMs);
     const engine = stateEngineInput();
+    let credentialCustody: ClientCredentialCustody | null | undefined;
     const openSelected = () => {
       admitStateSchemaFacts(db, params.pathname);
       if (engine && isNativeClientCredentialBootstrap(db)) {
@@ -198,6 +288,7 @@ function openNativeStateDatabase(
           bindFreshClientCredentialStore(anchor, {
             path: params.pathname,
             env: params.env,
+            custody: credentialCustody,
           }),
         admitPostgres: (database, fresh) => {
           admitStatePostgres(database, fresh);
@@ -210,6 +301,7 @@ function openNativeStateDatabase(
             bindFreshClientCredentialStore(database, {
               path: params.pathname,
               env: params.env,
+              custody: credentialCustody,
             });
           }
         },
@@ -218,6 +310,7 @@ function openNativeStateDatabase(
             path: params.pathname,
             env: params.env,
             fromVersion,
+            custody: credentialCustody,
           });
           if (fromVersion === CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1) {
             advanceStateSchemaContentVersion(database, {
@@ -245,7 +338,7 @@ function openNativeStateDatabase(
           });
           if (params.existingSchema) {
             assertSameFile();
-            params.ensureSchema(db, initialization);
+            params.ensureSchema(db, initialization, credentialCustody);
             assertSameFile();
             sqlite = {
               db,
@@ -302,7 +395,7 @@ function openNativeStateDatabase(
                 foreignKeys: true,
                 synchronous: "NORMAL",
               });
-              params.ensureSchema(db, initialization);
+              params.ensureSchema(db, initialization, credentialCustody);
               return walMaintenance;
             },
             { lockFailureReporting },
@@ -313,11 +406,88 @@ function openNativeStateDatabase(
         },
       });
     };
-    selected = engine
-      ? openSelected()
-      : runUpdateSqliteMigration(db, params.pathname, openSelected, {
-          created: original === undefined,
+    yield {
+      run() {
+        selected = engine
+          ? openSelected()
+          : runUpdateSqliteMigration(db, params.pathname, openSelected, {
+              created: original === undefined,
+            });
+      },
+      async runAsync() {
+        let fromVersion = params.clientCredentialMigrationFromVersion;
+        if (fromVersion === undefined) {
+          if (engine && inspectStateSqlite(db).hasEngineAnchor) {
+            const read = await executeExistingOpenClawStateRead(
+              { path: params.pathname, env: params.env },
+              {
+                type: "stateBootstrap.inspect",
+                input: {
+                  pathname: params.pathname,
+                  supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+                  purpose: "maintenance",
+                  scope: "state",
+                },
+              },
+              { signal: resolveSqliteInspectionSignal(getAsyncWorkSignal()), current: true },
+            );
+            if (
+              !read ||
+              read.inspection.schemas.indeterminate.length > 0 ||
+              read.inspection.schemas.incompatible.length > 0
+            ) {
+              throw new Error(
+                "Cannot prepare PostgreSQL credentials without its supported state schema. Restore the matching state schema and anchor before retrying Doctor.",
+              );
+            }
+            fromVersion =
+              read.inspection.schemas.pendingMigrations?.[0]?.foundVersion ??
+              OPENCLAW_STATE_SCHEMA_VERSION;
+          } else {
+            fromVersion = engine || !original ? 0 : readStateSchemaContentVersion(db);
+          }
+        }
+        const custody = await prepareClientCredentialMigrationCustody({
+          path: params.pathname,
+          env: params.env,
+          fromVersion,
         });
+        credentialCustody = custody ?? null;
+        try {
+          if (engine) {
+            const open = () => {
+              // Retain a successful connection before its postimage observation can fail.
+              selected = withEngineStoreAdmission(openSelected);
+              return selected;
+            };
+            selected = custody
+              ? await runUpdateSqliteMigrationAsync(custody.database, custody.path, open, {
+                  created: custody.created,
+                  retainExclusive: true,
+                })
+              : open();
+          } else {
+            selected = await runUpdateSqliteMigrationAsync(
+              db,
+              params.pathname,
+              () => {
+                assertSameFile();
+                return openSelected();
+              },
+              {
+                created: original === undefined,
+                companions: custody
+                  ? [{ database: custody.database, path: custody.path, created: custody.created }]
+                  : [],
+              },
+            );
+          }
+        } finally {
+          credentialCustody = undefined;
+          custody?.close();
+        }
+      },
+    };
     if (sqlite) {
       return sqlite;
     }

@@ -6,6 +6,7 @@ import {
   buildCloudflareAccessHeaders,
   type CloudflareAccessCredentials,
 } from "../../packages/gateway-client/src/cloudflare-access.js";
+import { parseUnixGatewayUrl } from "../../packages/gateway-client/src/unix-target.js";
 import { applyGatewayWebSocketTlsPin } from "../../packages/gateway-client/src/websocket-transport.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createLoopbackConnectOptions } from "../infra/loopback-connect.js";
@@ -83,7 +84,9 @@ export async function runNodeStreamTransport(params: {
     if (params.signal.aborted) {
       return;
     }
-    const gateway = new URL(params.gatewayUrl);
+    const unix = parseUnixGatewayUrl(params.gatewayUrl);
+    // Resolve and validate attach paths normally, but retain the enrolled Unix socket as owner.
+    const gateway = new URL(unix ? `ws://localhost${unix.path}` : params.gatewayUrl);
     const url = new URL(params.attachPath, gateway);
     if (url.protocol !== "ws:" && url.protocol !== "wss:") {
       throw new Error(`${params.streamName} stream gateway URL must use WebSocket transport`);
@@ -93,7 +96,9 @@ export async function runNodeStreamTransport(params: {
     }
     // Auxiliary streams share the enrolled node's reverse-proxy mount point.
     url.pathname = `${gateway.pathname.replace(/\/$/u, "")}${url.pathname}`;
-    const attachUrl = url.toString();
+    const attachUrl = unix
+      ? `ws+unix:${unix.socketPath}:${url.pathname}${url.search}${url.hash}`
+      : url.toString();
     const tlsFingerprint = params.gatewayTlsFingerprint;
     const cloudflareAccess = params.gatewayCloudflareAccess;
     const options: ClientOptions = {

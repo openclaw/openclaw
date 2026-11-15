@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json-normalize.js";
 import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,
@@ -98,15 +98,14 @@ it("drops empty assistant turns while preserving the user turn", async () => {
   await check([user, assistant([text(" ")]), assistant([], { stopReason: "error" })], [user]);
 });
 
-it("keeps user and tool-result content nonempty", async () => {
-  const input = castAgentMessages([
-    { role: "user", content: [text(""), text("")] },
-    { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text("")] },
-  ]);
-  await check(input, [
-    { ...input[0], content: [text("[empty content omitted]")] },
-    { ...input[1], content: [text("[empty content omitted]")] },
-  ]);
+it("keeps blank tool results available for provider-specific replay", async () => {
+  const content = Object.freeze([Object.freeze(text("   ")), Object.freeze(text(""))]);
+  const user = { role: "user", content };
+  const toolResult = { role: "toolResult", toolCallId: "tool-1", content };
+  await check(
+    [user, toolResult],
+    [{ ...user, content: [text("[empty content omitted]")] }, toolResult],
+  );
 });
 
 it.each([false, true])("applies signature policy (images-only=%s)", async (imagesOnly) => {

@@ -32,6 +32,24 @@ export function registerCronRunWaitTests({
   getRuntimeConfig: Mock<() => OpenClawConfig>;
 }) {
   const invokeCron = createCronTestInvoker(handlers, getRuntimeConfig);
+  it("runs a padded exact job ID without caller scope", async () => {
+    const context = createCronTestContext(
+      createCronJob({ id: "cron-1", agentId: "ops" }),
+      getRuntimeConfig,
+    );
+    const { respond } = await invokeCron("cron.run", { id: " cron-1 " }, { context });
+    expect(context.cron.readJob).toHaveBeenCalledWith("cron-1");
+    expect(context.cron.enqueueRun).toHaveBeenCalledWith("cron-1", "force", {
+      commitGuard: expect.any(Function),
+    });
+    expectCronReply(respond, {
+      ok: true,
+      enqueued: true,
+      runId: "run-1",
+      processInstanceId: getGatewayProcessInstanceId(),
+    });
+  });
+
   it.each([
     { name: "main", job: { sessionTarget: "main" }, waits: false },
     {

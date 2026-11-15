@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRequestHeaders } from "../../llm/types.js";
-import type { ProviderModelCatalog } from "../models-config.merge.js";
+import { mergeProviderModels, type ProviderModelCatalog } from "../models-config.merge.js";
 import { loadPersistedPluginModelCatalogs } from "../plugin-model-catalog-execution.js";
 import type { PersistedPluginModelCatalog } from "../plugin-model-catalog-read.types.js";
 import type { ModelsConfig, ProviderAuthMode } from "./model-registry-schema.js";
@@ -110,4 +110,47 @@ export interface CustomModelsResult {
 
 export function emptyCustomModelsResult(error?: string): CustomModelsResult {
   return { providers: {}, error };
+}
+
+export function mergeProviderSources(
+  ...sources: readonly RegistryProviderSources[]
+): RegistryProviderSources {
+  const providers: RegistryProviderSources = {};
+  for (const source of sources) {
+    for (const [providerId, provider] of Object.entries(source)) {
+      const existing = providers[providerId];
+      providers[providerId] = existing
+        ? mergeProviderModels(existing, provider, {
+            providerId,
+            modelIdMatching: "exact",
+          })
+        : provider;
+    }
+  }
+  return providers;
+}
+
+export function projectProviderRequestConfig(config: {
+  baseUrl?: string;
+  models?: readonly { baseUrl?: string }[];
+  apiKey?: string;
+  auth?: ProviderAuthMode;
+  headers?: Record<string, string>;
+  authHeader?: boolean;
+}): ProviderRequestConfig | undefined {
+  if (!config.apiKey && !config.auth && !config.headers && !config.authHeader) {
+    return undefined;
+  }
+
+  return {
+    // File-authored endpoints authorize these settings; generated destinations do not.
+    // Route-less runtime registrations retain their explicit caller-owned scope.
+    baseUrls: config.baseUrl
+      ? [config.baseUrl, ...(config.models ?? []).flatMap((model) => model.baseUrl ?? [])]
+      : undefined,
+    apiKey: config.apiKey,
+    auth: config.auth,
+    headers: config.headers,
+    authHeader: config.authHeader,
+  };
 }

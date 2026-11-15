@@ -68,7 +68,7 @@ export default definePluginEntry({
             agentId: config.agentId,
           }),
         });
-        service.start();
+        await service.start();
       },
       async stop() {
         const active = service;

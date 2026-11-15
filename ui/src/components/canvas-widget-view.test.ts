@@ -5,7 +5,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { CanvasDocumentViewResult } from "@openclaw/gateway-protocol";
 import { createComponent, createSignal } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { GatewayEventListener } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -48,6 +48,84 @@ import { WIDGET_PROMPT_EVENT } from "./mcp-app-security.ts";
 setupCanvasWidgetTests();
 
 describe("Canvas widget view", () => {
+  it("hands the linked claw shell only to its own bootstrap frame", async () => {
+    const origin = "https://sbx--5hc3teeyegqctvmnit76geymerpsvbtq.crabd.xyz";
+    const shell = "<p>Trusted shell</p>";
+    client.request.mockResolvedValue({
+      ...documentView,
+      sandboxOrigin: origin,
+      sandboxUrl: origin + "/mcp-app-sandbox?claw=studio-k7x2q&cspv=1",
+      sandboxShellHtml: shell,
+    });
+    const view = mount(client);
+    const frame = await frameFor(view);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const data = { method: "ui/notifications/sandbox-bootstrap-ready", params: { version: 1 } };
+    window.dispatchEvent(new MessageEvent("message", { data, origin, source: window }));
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data,
+        origin: "https://other.example",
+        source: frame.contentWindow,
+      }),
+    );
+    expect(post).not.toHaveBeenCalled();
+    window.dispatchEvent(
+      new MessageEvent("message", { data, origin, source: frame.contentWindow }),
+    );
+    expect(post).toHaveBeenCalledExactlyOnceWith(
+      {
+        jsonrpc: "2.0",
+        method: "ui/notifications/sandbox-bootstrap-shell",
+        params: { html: shell },
+      },
+      origin,
+    );
+    message(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: frame.src },
+    });
+    await settle(view);
+    expect(post).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "ui/notifications/sandbox-resource-ready" }),
+      origin,
+    );
+  });
+
+  it("waits for scrolling to settle but admits frames even with a short idle deadline", async () => {
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    vi.useFakeTimers();
+    const callbacks: IdleRequestCallback[] = [];
+    vi.stubGlobal("requestIdleCallback", (cb: IdleRequestCallback) => callbacks.push(cb));
+    vi.stubGlobal("cancelIdleCallback", () => callbacks.splice(0));
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = host.attachShadow({ mode: "open" });
+    const view = mount(client, "cv_inline", root);
+    await settle(view);
+    expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("420px");
+    await vi.advanceTimersByTimeAsync(100);
+    root.dispatchEvent(new Event("scroll"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(callbacks).toHaveLength(0);
+    vi.spyOn(HTMLIFrameElement.prototype, "contentWindow", "get").mockReturnValue(window);
+    await vi.advanceTimersByTimeAsync(20);
+    callbacks.shift()!({ didTimeout: true, timeRemaining: () => 0 });
+    await settle(view);
+    const frame = await frameFor(view);
+    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    message(frame, {
+      method: "ui/notifications/sandbox-proxy-ready",
+      params: { sandboxUrl: frame.src },
+    });
+    await settle(view);
+    expect(
+      post.mock.calls.some(([data]) => data.method === "ui/notifications/sandbox-resource-ready"),
+    ).toBe(true);
+  });
+
   it("loads authenticated HTML once for concurrent views and waits for the exact isolated proxy", async () => {
     const add = vi.spyOn(window, "addEventListener");
     const pending = createDeferred<CanvasDocumentViewResult>();
@@ -551,7 +629,7 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(notice(view)).toContain("recover automatically");
+    expect(notice(view)).toContain("reconnects automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);
@@ -633,7 +711,7 @@ describe("Canvas widget view", () => {
         sessionKey: view.sessionKey,
         text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
       });
-      expect(notice(view)).toBe(`Script error: ${expectedMessage}`);
+      expect(notice(view)).toBe(`Couldn’t run this widget. Try again. ${expectedMessage}`);
       expect(view.querySelector("iframe")).toBe(frame);
       view.remove();
       const remount = await frameFor(mount(client, docId));
@@ -674,7 +752,7 @@ describe("Canvas widget view", () => {
       const frame = await frameFor(view);
       message(frame, { type: "openclaw:widget-runtime-error", message: "Missing element" });
       await view.updateComplete;
-      expect(notice(view)).toBe("Script error: Missing element");
+      expect(notice(view)).toBe("Couldn’t run this widget. Try again. Missing element");
       expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },

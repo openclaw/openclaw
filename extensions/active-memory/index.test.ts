@@ -611,6 +611,7 @@ describe("active-memory plugin", () => {
   });
 
   registerActiveMemoryProviderTests({
+    logger: api.logger,
     memoryCapability: hoisted.memoryCapability,
     getActiveMemoryProvider: hoisted.getActiveMemoryProvider,
     getActiveMemorySearchManager: hoisted.getActiveMemorySearchManager,
@@ -2806,28 +2807,17 @@ describe("active-memory plugin", () => {
   });
 
   it("caps the active-memory cache size and evicts the oldest entries", () => {
-    const key = (index: number) =>
-      buildCacheKey({
-        agentId: "main",
-        sessionKey: "agent:main:cache-cap",
-        query: `cache pressure prompt ${index}`,
-        authorityFingerprint: "cache-authority",
-        recallToolNames: ["memory_search"],
-      });
+    vi.useFakeTimers();
+    const key = (index: number) => `cache-cap-${index}`;
+    const result = { status: "ok" as const, elapsedMs: 1, rawReply: "memory", summary: "memory" };
     for (let index = 0; index <= 1000; index += 1) {
-      setCachedResult(
-        key(index),
-        {
-          status: "ok",
-          elapsedMs: 1,
-          rawReply: `memory ${index}`,
-          summary: `memory ${index}`,
-        },
-        15_000,
-      );
+      setCachedResult(key(index), result, 15_000);
     }
     expect(getCachedResult(key(0))).toBeUndefined();
-    expect(getCachedResult(key(1))).toMatchObject({ status: "ok", summary: "memory 1" });
+    expect(getCachedResult(key(1))).toMatchObject(result);
+    vi.setSystemTime(Date.now() - 3_600_000);
+    vi.advanceTimersByTime(16_000);
+    expect(getCachedResult(key(1))).toBeUndefined();
   });
 
   it("partitions cached recall by turn authority and memory resource scope", () => {
@@ -2855,7 +2845,7 @@ describe("active-memory plugin", () => {
   });
 
   it("pauses failed cooldown probes and clears the streak after a completed recall", async () => {
-    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     const CONFIGURED_TIMEOUT_MS = 250;
     const COOLDOWN_MS = 60_000;
     registerPluginConfig({

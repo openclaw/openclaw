@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
 import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
@@ -11,7 +11,7 @@ import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metr
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
-  GATEWAY_GC_TRACE_MARKER,
+  writeGatewayGcTraceMarker,
   GATEWAY_CPU_SAMPLE_INTERVAL_MICROS,
   GATEWAY_HEAP_SAMPLE_INTERVAL,
   type GatewayBenchCommand,
@@ -347,11 +347,7 @@ ${source}`;
   }
   const markGc = (phase: string, profilePath?: string) => {
     if (traceGc) {
-      // Share V8's stdout descriptor without asynchronous stream buffering.
-      writeSync(
-        1,
-        `${GATEWAY_GC_TRACE_MARKER}${JSON.stringify({ phase, pid: process.pid, profilePath })}\n`,
-      );
+      writeGatewayGcTraceMarker(phase, profilePath);
     }
   };
   if (traceGc) {

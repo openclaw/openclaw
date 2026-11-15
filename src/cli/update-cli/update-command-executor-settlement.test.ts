@@ -444,9 +444,6 @@ it.each(cleanupResults)(
         alreadyCurrent: true,
         shouldRestart: true,
         service: {
-          stopped: false,
-          inspected: true,
-          runtimeInspected: true,
           running: true,
           serviceNodeRunner: "/synthetic/node",
           serviceUpdateVerdict: {

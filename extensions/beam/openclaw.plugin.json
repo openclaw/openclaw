@@ -60,5 +60,9 @@
         }
       }
     }
-  }
+  },
+  "recommendedPrompts": [
+    "Explain how to share a sanitized coding-session snapshot with Beam.",
+    "Compare Beam snapshots with Session Share for read-only team visibility."
+  ]
 }

@@ -704,7 +704,8 @@ val generateMermaidAssets =
   tasks.register<Exec>("generateMermaidAssets") {
     val repositoryRoot = rootProject.projectDir.resolve("../..").canonicalFile
     workingDir(repositoryRoot)
-    commandLine("pnpm", "--dir", "packages/mermaid-renderer", "build")
+    val pnpmBin = if (System.getProperty("os.name").startsWith("Windows")) "pnpm.cmd" else "pnpm"
+    commandLine(pnpmBin, "--dir", "packages/mermaid-renderer", "build")
     inputs
       .files(
         fileTree(repositoryRoot.resolve("packages/mermaid-renderer")) {

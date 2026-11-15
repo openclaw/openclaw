@@ -12,6 +12,7 @@ import {
   retireSessionControllerInput,
   type SessionControllerInput,
 } from "../../sessions/session-controller.mailbox.js";
+import { waitForAgentInputAdmission } from "../../state/agent-database-preparation-context.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { TurnAdoptionLifecycle } from "../get-reply-options.types.js";
 import type { MsgContext } from "../templating.js";
@@ -106,6 +107,12 @@ export async function prepareReplySourceInput(
     return { options: { ...prepared, abortSignal: signal }, created: false };
   }
   signal?.throwIfAborted();
+  // A fresh FIFO reservation would block the recovery input it is waiting for.
+  const preparation = waitForAgentInputAdmission(agentId, { cfg, sessionKey, signal });
+  if (preparation) {
+    await preparation;
+    signal?.throwIfAborted();
+  }
   options?.operatorAuthority?.assertCurrent();
   const input = reserveSessionControllerSource(sessionKey, {
     sourceTurnId: readChannelSourceTurnId(ctx),

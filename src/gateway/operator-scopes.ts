@@ -1,6 +1,7 @@
 export const ADMIN_SCOPE = "operator.admin" as const;
 export const READ_SCOPE = "operator.read" as const;
 export const WRITE_SCOPE = "operator.write" as const;
+export const CRON_SCOPE = "operator.cron" as const;
 export const SESSION_READ_SCOPE = "operator.sessions.read" as const;
 export const SESSION_WRITE_SCOPE = "operator.sessions.write" as const;
 export const APPROVALS_SCOPE = "operator.approvals" as const;
@@ -13,6 +14,7 @@ const KNOWN_OPERATOR_SCOPE_VALUES = [
   ADMIN_SCOPE,
   READ_SCOPE,
   WRITE_SCOPE,
+  CRON_SCOPE,
   SESSION_READ_SCOPE,
   SESSION_WRITE_SCOPE,
   APPROVALS_SCOPE,

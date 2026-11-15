@@ -323,10 +323,16 @@ export async function runReplyAgent(
         diagnosticLogger.warn("steering rejected; applying follow-up policy", {
           reason:
             messageInjectionDisposition === "rejected"
-              ? "runtime_rejected"
+              ? (opts?.messageInjectionRejection?.reason ?? "runtime_rejected")
               : providedReplyOperation
                 ? "source-operation-pending"
                 : "reply-owner-ended",
+          ...(opts?.messageInjectionRejection?.runtimeReason
+            ? { runtimeReason: opts.messageInjectionRejection.runtimeReason }
+            : {}),
+          ...(opts?.messageInjectionRejection?.errorMessage
+            ? { error: opts.messageInjectionRejection.errorMessage.slice(0, 512) }
+            : {}),
           disposition: enqueued
             ? "followup-queued"
             : replyOperationRunState?.admission?.status === "skipped" &&
@@ -337,7 +343,7 @@ export async function runReplyAgent(
             followupRun.originatingChannel ??
             followupRun.run.messageProvider ??
             sessionCtx.Provider,
-          sessionId: activeReplyOperation?.sessionId ?? followupRun.run.sessionId,
+          sessionKey: sessionKey ?? followupRun.run.sessionKey,
           runId: opts?.runId,
         });
       }
@@ -501,6 +507,18 @@ export async function runReplyAgent(
       return hasVisiblePartialReply() || blockReplyPipeline?.didStream() === true;
     };
     bindReplyOperationTyping(replyOperation, typing);
+    // In message-tool-only delivery, a final message-tool send is the answer while the run
+    // continues. Report it now, so channel progress UI stops before it renders below it.
+    const stopSourceReplyObservation = replyOperation.onSourceReplyDelivered(() => {
+      if (followupRun.run.sourceReplyDeliveryMode !== "message_tool_only") {
+        return;
+      }
+      try {
+        void Promise.resolve(runOpts?.onObservedReplyDelivery?.()).catch(logObservedDeliveryError);
+      } catch (error) {
+        logObservedDeliveryError(error);
+      }
+    });
     let runFollowupTurn = queuedRunFollowupTurn;
     let shouldDrainQueuedFollowupsAfterClear = false;
     const returnWithQueuedFollowupDrain = <T>(value: T): T => {
@@ -589,6 +607,7 @@ export async function runReplyAgent(
         replyOperation,
       );
       const result = await handleReplyAgentRunError(error, {
+        config: cfg,
         resolveVisibleReplyDelivery,
         userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,
         replyExpectation,
@@ -599,6 +618,7 @@ export async function runReplyAgent(
       });
       return prependCompactionNotices(result, pendingCompactionNotices, replyOperation);
     } finally {
+      stopSourceReplyObservation();
       try {
         await cleanupReplyAgentRun({
           blockReplyPipeline,
@@ -626,4 +646,8 @@ export async function runReplyAgent(
     }
     retireUnadoptedReplySource(controllerInput);
   }
+}
+
+function logObservedDeliveryError(error: unknown): void {
+  logVerbose(`observed reply delivery callback failed: ${String(error)}`);
 }

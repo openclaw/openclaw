@@ -1,11 +1,11 @@
-// After a chat settles, its menu bodies are already loaded: first open shows real items.
+// First open loads menu bodies; reopening retains their ready items.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Control UI chat menu idle warmup" });
+const suite = createControlUiE2eSuite({ name: "Control UI chat menu lazy loading" });
 const sessionKey = "agent:main:main";
 // Lazy-body fallbacks only; owner and people rows load their own data on open.
 const fallbacks = '[data-value="header-session-loading"], [data-value="plus-menu-loading"]';
@@ -39,7 +39,7 @@ async function countLoadingRows(page: Page) {
 }
 
 suite.define(() => {
-  it("opens chat menus without a loading row once the page is idle", async () => {
+  it("loads chat menus on first open and reuses their ready bodies", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
       async ({ page }) => {
@@ -66,52 +66,25 @@ suite.define(() => {
         const plusTrigger = pane.getByRole("button", { name: "Add attachment" });
         await sessionTrigger.waitFor({ state: "visible" });
         await plusTrigger.waitFor({ state: "visible" });
-        // The shell's idle owner loads registered menu bodies after the transcript
-        // settles, then the bodies those register. Only a fallback still pending at
-        // open is user-visible, so let that chain finish before interacting.
-        await expect
-          .poll(
-            () =>
-              page.evaluate(() =>
-                ["chat-header-session-menu-content", "chat-composer-plus-menu-content"].every(
-                  (name) =>
-                    performance
-                      .getEntriesByType("resource")
-                      .some((entry) => entry.name.includes(name)),
-                ),
-              ),
-            { timeout: 15_000 },
-          )
-          .toBe(true);
-        let resources = -1;
-        let quietSince = Date.now();
-        await expect
-          .poll(
-            async () => {
-              const count = await page.evaluate(
-                () => performance.getEntriesByType("resource").length,
-              );
-              if (count !== resources) {
-                resources = count;
-                quietSince = Date.now();
-              }
-              return Date.now() - quietSince;
-            },
-            { timeout: 15_000, interval: 100 },
-          )
-          .toBeGreaterThan(1_500);
         const loadingRows = await countLoadingRows(page);
-
-        await sessionTrigger.click();
         const sessionMenu = pane.locator("openclaw-chat-header-session-menu");
-        await sessionMenu.getByRole("menuitem", { name: "Advanced" }).waitFor({ state: "visible" });
-        await page.keyboard.press("Escape");
-        await plusTrigger.click();
-        await pane
-          .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
-          .first()
-          .waitFor({ state: "visible" });
-        expect(await loadingRows()).toBeNull();
+        const openMenus = async () => {
+          await sessionTrigger.click();
+          await sessionMenu
+            .getByRole("menuitem", { name: "Advanced" })
+            .waitFor({ state: "visible" });
+          await page.keyboard.press("Escape");
+          await plusTrigger.click();
+          await pane
+            .locator(".agent-chat__capability-menu .oc-menu-item:not([disabled])")
+            .first()
+            .waitFor({ state: "visible" });
+          await page.keyboard.press("Escape");
+        };
+        await openMenus();
+        const firstOpenLoadingRows = await loadingRows();
+        await openMenus();
+        expect(await loadingRows()).toBe(firstOpenLoadingRows);
       },
     );
   });

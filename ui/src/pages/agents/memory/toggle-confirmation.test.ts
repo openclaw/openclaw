@@ -34,17 +34,20 @@ describe("renderDreamingToggleConfirmation", () => {
   it("states the global scope and never promises a gateway restart", () => {
     for (const enabling of [true, false]) {
       const text = renderToggle({ enabling }).textContent ?? "";
-      expect(text).toContain("All Agents");
-      expect(text).toContain("global setting");
+      expect(text).toContain("all agents");
+      expect(text).toContain("Dreaming applies to all agents.");
       expect(text.toLowerCase()).not.toContain("restart");
       expect(text.toLowerCase()).not.toContain("interrupt");
     }
   });
 
   it("uses direction-specific copy for enabling and disabling", () => {
-    expect(renderToggle({ enabling: true }).textContent).toContain("Turn On Dreaming");
+    expect(renderToggle({ enabling: true }).textContent).toContain(
+      "Turn on dreaming for all agents?",
+    );
     const disabling = renderToggle({ enabling: false });
-    expect(disabling.textContent).toContain("Turn Off Dreaming");
+    expect(disabling.textContent).toContain("Turn off dreaming for all agents?");
+    expect(disabling.textContent).toContain("not only this agent");
     // Disabling is the destructive direction: it stops the sweep for every agent.
     expect(disabling.querySelector("button.btn.danger")).not.toBeNull();
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();

@@ -199,7 +199,7 @@ it.each(["config.health.patch", "diagnostic.register"] as const)(
         input: { artifactPreservingReadOnly: false },
       }),
     ).toEqual([]);
-    expect(readFileSync(databasePath)).toEqual(initialBytes);
+    expect(readFileSync(databasePath).equals(initialBytes), databasePath).toBe(true);
 
     const scope = "tests/health-native-borrow";
     const write = (backend: typeof first, key: string) =>

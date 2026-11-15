@@ -27,6 +27,28 @@ export type InternalBeforeToolBatchHook = NonNullable<AgentLoopConfig["beforeToo
 
 const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>();
 
+export type InternalBeforeRequestHook = (
+  signal?: AbortSignal,
+) => Promise<AgentMessage[] | undefined>;
+
+const beforeRequestByOwner = new WeakMap<object, InternalBeforeRequestHook>();
+
+/** Adopt already committed host messages before any initial or continuation request. */
+export function setInternalBeforeRequest(
+  owner: object,
+  hook: InternalBeforeRequestHook | undefined,
+): void {
+  if (hook) {
+    beforeRequestByOwner.set(owner, hook);
+  } else {
+    beforeRequestByOwner.delete(owner);
+  }
+}
+
+export function getInternalBeforeRequest(owner: object): InternalBeforeRequestHook | undefined {
+  return beforeRequestByOwner.get(owner);
+}
+
 type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();

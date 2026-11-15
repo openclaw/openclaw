@@ -10,11 +10,9 @@ import {
   resolveToolCardOutcome,
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
-import { formatDurationLong } from "../../../lib/format-duration.ts";
+import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { BrowserTabPreviews } from "./chat-browser-tab-previews.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
-import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 
 type WorkGroupSummaryItem = {
   key: string;
@@ -22,16 +20,14 @@ type WorkGroupSummaryItem = {
   groups: readonly MessageGroup[];
 };
 type WorkGroupSummaryOptions = {
-  mediaReadAllowed?: boolean;
   expanded: boolean;
   onToggle: () => void;
   presentation?: "standalone" | "continuation";
-  browserTabPreviews?: readonly BrowserTabPreview[];
   bubbleMode?: boolean;
 };
 
 function prepareWorkGroupSummary(item: WorkGroupSummaryItem) {
-  const duration = formatDurationLong(item.durationMs);
+  const duration = formatDurationCompact(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -128,17 +124,10 @@ function WorkGroupSummaryBody(props: {
             </span>
           )}
         </For>
-        <span class="chat-tool-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
+        <span class="chat-inline-disclosure__chevron" aria-hidden="true">
+          <Icon name="chevronDown" />
         </span>
       </button>
-      <div class="chat-work-group__separator" aria-hidden="true" />
-      <Show when={!props.options.expanded && !props.options.bubbleMode}>
-        <BrowserTabPreviews
-          previews={props.options.browserTabPreviews}
-          mediaReadAllowed={props.options.mediaReadAllowed}
-        />
-      </Show>
     </div>
   );
 }

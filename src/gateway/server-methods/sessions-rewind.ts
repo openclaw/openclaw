@@ -9,19 +9,15 @@ import {
   type SessionsRewindParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ErrorCode } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import type {
-  SessionBranchSwitchMutationResult,
-  SessionMessageCutMutationResult,
-} from "../../config/sessions/session-accessor.js";
 import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
 import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
+import type { SessionMessageCutResult as MessageCutMutationResult } from "../../config/sessions/session-message-cut.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
-import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
 import {
   captureSessionTarget,
   isCompetingSessionControllerWorkActive,
@@ -63,6 +59,7 @@ import { emitSessionsChanged } from "./session-change-event.js";
 import { prepareSessionForkFilesystemRoot } from "./session-create-root.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import { resolveEditorMediaAttachments } from "./session-rewind-editor-media.js";
+import { rejectSessionMessageCutFailure } from "./session-rewind-failure-log.js";
 import { prepareRewindRepositoryEntries } from "./session-rewind-repository-entries.js";
 import { waitForTerminalSessionRunSettlement } from "./session-run-settlement.js";
 import { listSessionBranchesForGateway } from "./sessions-branches-list.js";
@@ -77,10 +74,6 @@ import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./typ
 import { defineValidatedGatewayHandler } from "./validation.js";
 
 type MessageCutAction = "fork" | "rewind" | "switch";
-type MessageCutMutationResult =
-  | SessionMessageCutMutationResult
-  | SessionBranchSwitchMutationResult
-  | { status: "conflict" };
 
 export const sessionRewindHandlers: GatewayRequestHandlers = {
   "sessions.branches.list": defineValidatedGatewayHandler(
@@ -234,7 +227,7 @@ async function mutatePreparedSessionAtMessage({
     if (error instanceof SessionMutationAuthorizationChangedError) {
       throw error;
     }
-    reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+    rejectSessionMessageCutFailure(action, "upstream presence", error, reject);
     return;
   }
   using preparedUpstream = upstreamPresence;
@@ -543,6 +536,7 @@ async function mutatePreparedSessionAtMessage({
           };
           assertRepositoryCurrent();
           const forked = await forkSessionRepositoryWorkspace({
+            branchPrefix: cfg.repositoryBranchPrefix,
             sourceWorkspaceId: current.entry.repositoryWorkspaceId,
             agentId: current.agentId,
             sessionKey: targetKey,
@@ -583,11 +577,7 @@ async function mutatePreparedSessionAtMessage({
         if (error instanceof SessionMutationAuthorizationChangedError) {
           throw error;
         }
-        if (error instanceof ModelSelectionLockedError) {
-          reject(error.message);
-          return;
-        }
-        reject(`Failed to ${action} the local session. Try again.`, ErrorCodes.UNAVAILABLE);
+        rejectSessionMessageCutFailure(action, "local mutation", error, reject);
         return;
       } finally {
         if (forkRepository && !repositoryForkCommitted) {

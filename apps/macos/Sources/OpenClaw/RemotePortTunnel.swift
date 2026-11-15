@@ -7,7 +7,7 @@ import Subprocess
 
 /// Port forwarding tunnel for remote mode.
 ///
-/// Uses `ssh -N -L` to forward the remote gateway ports to localhost.
+/// Uses `ssh -N -L` to forward the remote gateway and widget sandbox ports to localhost.
 final class RemotePortTunnel: @unchecked Sendable {
     private static let logger = Logger(subsystem: "ai.openclaw", category: "remote.tunnel")
 
@@ -17,6 +17,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         let remotePort: Int
         let hostKeyPolicy: CommandResolver.SSHHostKeyPolicy
         let preferredLocalPort: UInt16?
+        let reservedLocalPorts: Set<Int>
     }
 
     let localPort: UInt16
@@ -110,7 +111,22 @@ final class RemotePortTunnel: @unchecked Sendable {
             identity: settings.identity.trimmingCharacters(in: .whitespacesAndNewlines),
             remotePort: ports.remote,
             hostKeyPolicy: settings.sshHostKeyPolicy,
-            preferredLocalPort: UInt16(ports.local))
+            preferredLocalPort: UInt16(ports.local),
+            reservedLocalPorts: Self.reservedLocalPorts(
+                root: root,
+                hostsLocalGateway: AppDefaults.standard.bool(forKey: hostsLocalGatewayWithRemotePrimaryKey),
+                localGatewayPort: GatewayEnvironment.gatewayPort(root: root)))
+    }
+
+    /// While hosting beside the remote primary is on, this Mac's Gateway owns its port and its widget
+    /// sandbox port, even while stopped or before its sandbox listener starts lazily. Turning hosting
+    /// off keeps the separated port settings, so the preference, not the port split, decides. The
+    /// preference is part of Configuration, so toggling it replaces the tunnel.
+    static func reservedLocalPorts(root: [String: Any], hostsLocalGateway: Bool, localGatewayPort: Int) -> Set<Int> {
+        guard hostsLocalGateway else { return [] }
+        let apps = (root["mcp"] as? [String: Any])?["apps"] as? [String: Any]
+        let sandboxPort = (apps?["sandboxPort"] as? NSNumber)?.intValue ?? localGatewayPort + 1
+        return [localGatewayPort, sandboxPort]
     }
 
     static func create(configuration: Configuration) async throws -> RemotePortTunnel {
@@ -123,10 +139,29 @@ final class RemotePortTunnel: @unchecked Sendable {
         Self.logger.debug(
             "ssh tunnel route host=\(sshHost, privacy: .public) " +
                 "remotePort=\(configuration.remotePort, privacy: .public)")
-        let options = Self.sshOptions(
+        return try await self.spawn(
+            configuration: configuration,
             localPort: localPort,
-            remotePort: configuration.remotePort,
-            hostKeyPolicy: configuration.hostKeyPolicy)
+            options: Self.sshOptions(
+                localPort: localPort,
+                remotePort: configuration.remotePort,
+                hostKeyPolicy: configuration.hostKeyPolicy))
+    }
+
+    /// Opens the widget sandbox forward in its own SSH process, so a sandbox port conflict can never take
+    /// the Gateway route down with it.
+    static func createSandboxForward(configuration: Configuration, port: UInt16) async throws -> RemotePortTunnel {
+        try await self.spawn(
+            configuration: configuration,
+            localPort: port,
+            options: self.sandboxForwardOptions(port: port, hostKeyPolicy: configuration.hostKeyPolicy))
+    }
+
+    private static func spawn(
+        configuration: Configuration,
+        localPort: UInt16,
+        options: [String]) async throws -> RemotePortTunnel
+    {
         let args = CommandResolver.sshArguments(
             target: configuration.target,
             identity: configuration.identity,
@@ -300,15 +335,65 @@ final class RemotePortTunnel: @unchecked Sendable {
         remotePort: Int,
         hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String]
     {
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy, exitOnForwardFailure: true)
+            + ["-L", "\(localPort):127.0.0.1:\(remotePort)"]
+    }
+
+    /// Command-line GatewayPorts=no wins over ssh_config and keeps the listener on loopback. The `-L`
+    /// argument keeps the Gateway tunnel's shape without a bind address: v2026.11.1 shares the version 2
+    /// PortGuardian ledger and drops receipts whose command it cannot match, even while their app runs.
+    ///
+    /// ExitOnForwardFailure stays off: this process reads the same ssh alias as the Gateway process, whose
+    /// LocalForward/RemoteForward/DynamicForward lines the Gateway already holds, so those copies always
+    /// fail here. ClearAllForwardings would also clear this -L. waitForListener decides success from this
+    /// pid listening on the sandbox port, so a failed own bind still ends the attempt, after its timeout.
+    static func sandboxForwardOptions(port: UInt16, hostKeyPolicy: CommandResolver.SSHHostKeyPolicy) -> [String] {
+        self.baseOptions(hostKeyPolicy: hostKeyPolicy, exitOnForwardFailure: false)
+            + ["-o", "GatewayPorts=no", "-L", "\(port):127.0.0.1:\(port)"]
+    }
+
+    private static func baseOptions(
+        hostKeyPolicy: CommandResolver.SSHHostKeyPolicy,
+        exitOnForwardFailure: Bool) -> [String]
+    {
         ["-o", "BatchMode=yes"] + hostKeyPolicy.commandOptions + [
-            "-o", "ExitOnForwardFailure=yes",
+            "-o", "ExitOnForwardFailure=\(exitOnForwardFailure ? "yes" : "no")",
             "-o", "ServerAliveInterval=15",
             "-o", "ServerAliveCountMax=3",
             "-o", "TCPKeepAlive=yes",
             "-n",
             "-N",
-            "-L", "\(localPort):127.0.0.1:\(remotePort)",
         ]
+    }
+
+    /// Widgets load from the remote Gateway's sandbox listener (Gateway port + 1 unless the
+    /// remote sets mcp.apps.sandboxPort). The Control UI addresses it as the tunnel host plus
+    /// the advertised port, so it must be forwarded to the same local port number.
+    static func availableSandboxForwardPort(
+        localPort: UInt16,
+        remotePort: Int,
+        reservedLocalPorts: Set<Int>) -> UInt16?
+    {
+        guard (1..<65535).contains(remotePort) else { return nil }
+        let sandboxPort = UInt16(remotePort + 1)
+        guard sandboxPort != localPort, !reservedLocalPorts.contains(Int(sandboxPort)),
+              self.sandboxPortIsFree(sandboxPort)
+        else { return nil }
+        return sandboxPort
+    }
+
+    /// ssh binds the forward to 127.0.0.1 with SO_REUSEADDR, which succeeds beside a wildcard listener
+    /// and would then take loopback traffic from it. Binding the same address without SO_REUSEADDR
+    /// also fails for a wildcard holder, so success here means ssh can bind without shadowing anyone.
+    /// ssh also binds ::1 when it can; an IPv6-only wildcard holder of this port could then lose its ::1
+    /// traffic. That is accepted: it is rare and the forward ends with the Gateway route.
+    static func sandboxPortIsFree(_ port: UInt16) -> Bool {
+        var addr = sockaddr_in()
+        addr.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        addr.sin_family = sa_family_t(AF_INET)
+        addr.sin_port = port.bigEndian
+        addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
+        return self.canBind(&addr, family: AF_INET, reuseAddress: false)
     }
 
     private static func findPort(preferred: UInt16) async throws -> UInt16 {
@@ -355,7 +440,7 @@ final class RemotePortTunnel: @unchecked Sendable {
         addr.sin_port = port.bigEndian
         addr.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
-        return self.canBind(&addr, family: AF_INET)
+        return self.canBind(&addr, family: AF_INET, reuseAddress: true)
     }
 
     private static func canBindIPv6(_ port: UInt16) -> Bool {
@@ -368,16 +453,18 @@ final class RemotePortTunnel: @unchecked Sendable {
             inet_pton(AF_INET6, "::1", ptr)
         }
         addr.sin6_addr = loopback
-        return self.canBind(&addr, family: AF_INET6)
+        return self.canBind(&addr, family: AF_INET6, reuseAddress: true)
     }
 
-    private static func canBind<Address>(_ address: inout Address, family: Int32) -> Bool {
+    private static func canBind<Address>(_ address: inout Address, family: Int32, reuseAddress: Bool) -> Bool {
         let fd = socket(family, SOCK_STREAM, 0)
         guard fd >= 0 else { return false }
         defer { _ = Darwin.close(fd) }
 
-        var one: Int32 = 1
-        _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+        if reuseAddress {
+            var one: Int32 = 1
+            _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout.size(ofValue: one)))
+        }
 
         return withUnsafePointer(to: &address) { ptr in
             ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in

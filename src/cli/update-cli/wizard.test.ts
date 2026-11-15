@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { defaultRuntime, ExitError } from "../../runtime.js";
+import { runRegisteredCli } from "../../test-utils/command-runner.js";
+import { withConsoleLogsRoutedToStderrForJson } from "../json-output-mode.js";
 import { createCliTtyMock } from "../test-runtime-capture.js";
+import { registerUpdateCli } from "../update-cli.js";
 import { updateCommand } from "./update-command.js";
-import { updateWizardCommand } from "./wizard.js";
 
 vi.mock("@clack/prompts", () => ({ confirm: async () => true, isCancel: () => false }));
 vi.mock("../../../packages/terminal-core/src/prompt-select-styled.js", async (importOriginal) => ({
@@ -34,21 +36,48 @@ const tty = createCliTtyMock([process.stdin]);
 beforeEach(() => {
   tty.set(true);
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+  vi.spyOn(defaultRuntime, "exit");
+  vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
 });
 afterEach(() => {
   vi.restoreAllMocks();
   tty.restore();
 });
 
+async function runWizard(json = false) {
+  const previousArgv = process.argv;
+  process.argv = ["node", "openclaw", "update", ...(json ? ["--json"] : []), "wizard"];
+  try {
+    await withConsoleLogsRoutedToStderrForJson(
+      process.argv,
+      () => runRegisteredCli({ register: registerUpdateCli, argv: process.argv.slice(2) }),
+      { restoreChanges: true },
+    );
+  } finally {
+    process.argv = previousArgv;
+  }
+}
+
 it.each([0, 1, 23])("preserves an already-reported delegated exit %s", async (code) => {
   const outcome = new ExitError(code);
   vi.mocked(updateCommand).mockRejectedValueOnce(outcome);
-  await expect(updateWizardCommand()).rejects.toBe(outcome);
+  await expect(runWizard()).rejects.toBe(outcome);
   expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
 });
 
 it("still reports an unexpected delegated failure", async () => {
   vi.mocked(updateCommand).mockRejectedValueOnce(new Error("update unavailable"));
-  await expect(updateWizardCommand()).rejects.toEqual(new ExitError(1));
+  await expect(runWizard()).rejects.toEqual(new ExitError(1));
   expect(defaultRuntime.error).toHaveBeenCalledExactlyOnceWith("update unavailable");
+  expect(defaultRuntime.exit).toHaveBeenCalledExactlyOnceWith(1);
+});
+
+it("routes unexpected delegated failures to the outer JSON error owner", async () => {
+  const failure = new Error("update unavailable");
+  vi.mocked(updateCommand).mockRejectedValueOnce(failure);
+  await expect(runWizard(true)).rejects.toBe(failure);
+  expect(defaultRuntime.error).not.toHaveBeenCalled();
+  expect(defaultRuntime.exit).not.toHaveBeenCalled();
+  expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
 });

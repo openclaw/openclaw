@@ -228,7 +228,7 @@ suite.define(() => {
         widgets: [],
       });
       await gateway.emitGatewayEvent("board.changed", { sessionKey });
-      await document.getByText("A clear board, ready for work", { exact: true }).waitFor();
+      await document.getByText("No widgets yet.", { exact: true }).waitFor();
     });
   });
 

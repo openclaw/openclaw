@@ -106,6 +106,33 @@ function heapBytesUnder(
   );
 }
 
+it("writes synchronous GC marker bytes without normalizing capture identities", async () => {
+  const ownerUrl = new URL("../../scripts/lib/gateway-bench-profile.ts", import.meta.url).href;
+  const { child, closed, stdout, stderr } = spawnFixture(
+    [
+      "--input-type=module",
+      "-e",
+      `
+      import { writeSync } from "node:fs";
+      import { writeGatewayGcTraceMarker } from ${JSON.stringify(ownerUrl)};
+      for (const profilePath of [undefined, "", 'raw/../capture"\\\\name']) {
+        writeGatewayGcTraceMarker("heap-start", profilePath);
+        writeSync(1, "after\\n");
+      }
+      `,
+    ],
+    undefined,
+    false,
+  );
+  expect(await closed).toEqual([0, null]);
+  expect(stderr()).toBe("");
+  expect(stdout()).toBe(
+    `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid}}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":""}\nafter\n` +
+      `OPENCLAW_GATEWAY_BENCH_GC {"phase":"heap-start","pid":${child.pid},"profilePath":"raw/../capture\\"\\\\name"}\nafter\n`,
+  );
+});
+
 it("enables GC tracing without passing unsupported arguments to default Workers", async () => {
   const { closed, stdout, stderr } = spawnFixture(
     [
@@ -390,7 +417,10 @@ it("attributes worker receipts without retaining labels or treating unsized mess
   expect(JSON.stringify(tasks)).not.toContain("fixture-private-task");
 });
 
-it("attributes broadcast allocations through deep stacks without double counting", async () => {
+it.each([
+  ["broadcastInternal", "gateway-prewarm.js"],
+  ["", new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href],
+])("attributes deep broadcast stacks under %s (%s)", async (name, url) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "gateway-broadcast-profile-"));
   onTestFinished(() => rm(directory, { recursive: true, force: true }));
   const frame = (
@@ -414,10 +444,7 @@ it("attributes broadcast allocations through deep stacks without double counting
     projection = frame("wrapper", "", 0, [projection]);
   }
   const profile: HeapProfiler.SamplingHeapProfile = {
-    head: frame("root", "", 0, [
-      frame("unrelated", "", 1000),
-      frame("broadcastInternal", "server-broadcast.ts", 100, [projection]),
-    ]),
+    head: frame("root", "", 0, [frame("unrelated", "", 1000), frame(name, url, 100, [projection])]),
   };
   const file = path.join(directory, "allocation.heapprofile");
   await writeFile(file, JSON.stringify(profile));

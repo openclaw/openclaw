@@ -1,7 +1,8 @@
 import { EventEmitter } from "node:events";
 import { Argument, Command, Option } from "commander";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ExpectedCliError, isExpectedCliError } from "../cli/failure-output.js";
+import { ExpectedCliError } from "../cli/expected-cli-error.js";
+import { isExpectedCliError } from "../cli/failure-output.js";
 import { createPluginRuntimeStore, type PluginRuntime } from "../plugin-sdk/runtime-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { buildPluginApi } from "./api-builder.js";

@@ -9,6 +9,9 @@ import { Icon } from "./solid/icon.tsx";
 const SettingsSidebar = lazy(() => import("./settings-sidebar-shell.tsx"), {
   export: "ShellSettingsSidebar",
 });
+const SettingsSaveStatus = lazy(() => import("./settings-sidebar-shell.tsx"), {
+  export: "ShellSettingsSaveStatus",
+});
 export type SettingsSidebarFallbackProps = Pick<
   SettingsSidebarProps,
   | "presentation"
@@ -16,8 +19,22 @@ export type SettingsSidebarFallbackProps = Pick<
   | "connectionStatus"
   | "footerStatus"
   | "onExit"
+  | "onEscape"
   | "nativeDeviceSettings"
 > & { canAdmin: boolean };
+
+/** Feedback waits on the Settings chunk without ever holding the page. */
+export function LazySettingsSaveStatus(
+  props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSaveStatus>[0],
+) {
+  return (
+    <Errored fallback={null}>
+      <Loading fallback={null}>
+        <SettingsSaveStatus host={props.host} />
+      </Loading>
+    </Errored>
+  );
+}
 
 export function LazySettingsSidebar(
   props: Parameters<typeof import("./settings-sidebar-shell.tsx").ShellSettingsSidebar>[0],

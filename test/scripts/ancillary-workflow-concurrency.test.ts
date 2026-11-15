@@ -79,6 +79,7 @@ type Job = {
   concurrency?: Concurrency;
   outputs?: Record<string, string>;
   steps: {
+    id?: string;
     if?: string;
     uses?: string;
     env?: Record<string, string>;
@@ -276,9 +277,11 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
   let checkouts = 0;
   const scope = workflow.jobs.scope;
   if (scope) {
-    const context = { github, needs, vars, steps: { checkout: { outcome: "success" } } };
+    const steps: Record<string, { outcome?: string; outputs?: Record<string, string> }> = {
+      checkout: { outcome: "success" },
+    };
+    const context = { github, needs, vars, steps };
     jobs.scope = Boolean(evaluate(scope.if ?? true, context, true));
-    const outputs: Record<string, string> = {};
     if (jobs.scope) {
       for (const step of scope.steps) {
         if (!evaluate(step.if ?? true, context, true)) {
@@ -286,6 +289,10 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
         }
         if (step.uses?.startsWith("actions/checkout@")) {
           checkouts++;
+        }
+        const outputs: Record<string, string> = {};
+        if (step.id) {
+          steps[step.id] = { ...steps[step.id], outputs };
         }
         if (step.uses === "./.github/actions/detect-scheduled-changes") {
           // Admission ordering uses changed inputs; the cost suite owns proof-reuse decisions.
@@ -319,7 +326,7 @@ async function eligibleJobs(workflow: Workflow, github: Github, vars: Record<str
       }
     }
     needs.scope = {
-      outputs: evaluateRecord(scope.outputs ?? {}, { steps: { scope: { outputs } } }),
+      outputs: evaluateRecord(scope.outputs ?? {}, { steps }),
       result: jobs.scope ? "success" : "skipped",
     };
   }
@@ -403,6 +410,9 @@ describe.each(WORKFLOWS)("ancillary admission: $file", (policy) => {
     expect(other.cancel).toBe(true);
     expect(other.group).not.toBe(prGroup);
     expectUseful(ready, newer, other);
+    if (file === workflowPath("website-installer-sync")) {
+      expect(ready.eligibility.diffCalls).toBe(2);
+    }
     for (const [id, eligible] of nonScopeJobs(ready)) {
       expect(eligible, id).toBe(id !== policy.manualAdmission);
     }

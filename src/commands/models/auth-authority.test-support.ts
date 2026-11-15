@@ -35,7 +35,6 @@ export function registerModelsAuthAuthorityTests(fixture: {
     async (reason) => {
       const controller = new AbortController();
       const authority = new AbortController();
-      const onModelAccessRequested = vi.fn();
       await reject(authority, {
         credentialOnly: false,
         signal: controller.signal,
@@ -47,9 +46,7 @@ export function registerModelsAuthAuthorityTests(fixture: {
           }
           throw new Error("Auth publication failed.");
         },
-        onModelAccessRequested,
       });
-      expect(onModelAccessRequested).not.toHaveBeenCalled();
     },
   );
 
@@ -95,8 +92,10 @@ export function registerModelsAuthAuthorityTests(fixture: {
           },
         );
       }
-      await reject(authority);
+      const refreshAfterLogin = vi.fn(async () => undefined);
+      await reject(authority, { refreshAfterLogin });
       expect(published).toBe(false);
+      expect(refreshAfterLogin).not.toHaveBeenCalled();
       if (credentialGate) {
         expect(mocks.updateConfig).not.toHaveBeenCalled();
       }

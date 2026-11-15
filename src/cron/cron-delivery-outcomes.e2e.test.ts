@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
@@ -155,19 +156,12 @@ function runHistory(storePath: string, jobId: string, limit = 1) {
 function historyEntry(storePath: string, jobId: string) {
   const history = runHistory(storePath, jobId);
   expect(history.total).toBe(1);
-  const entry = history.entries[0];
-  if (!entry) {
-    throw new Error(`Expected cron run history for job ${jobId}`);
-  }
-  return entry;
-}
-
-async function persistedJob(storePath: string, jobId: string) {
-  return (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
+  return expectDefined(history.entries[0], `cron run history for job ${jobId}`);
 }
 
 async function expectState(storePath: string, jobId: string, expected: Partial<CronJob["state"]>) {
-  expect((await persistedJob(storePath, jobId))?.state).toMatchObject(expected);
+  const storedJob = (await loadCronStore(storePath)).jobs.find((job) => job.id === jobId);
+  expect(storedJob?.state).toMatchObject(expected);
 }
 
 describe("cron delivery outcomes", { concurrent: false }, () => {
@@ -289,10 +283,8 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
       const history = runHistory(storePath, job.id, 25);
       expect(history.total).toBe(21);
       expect(history.entries).toHaveLength(21);
-      expect(history.entries).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ status: "error", error: "monitor failed" }),
-        ]),
+      expect(history.entries).toContainEqual(
+        expect.objectContaining({ status: "error", error: "monitor failed" }),
       );
       expect(
         history.entries.filter((entry) => entry.failureNotificationDelivery?.status === "unknown"),
@@ -360,7 +352,12 @@ describe("cron delivery outcomes", { concurrent: false }, () => {
             expect(enqueueSystemEvent).not.toHaveBeenCalled();
             expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
               expect.stringContaining('Automation "fallback owner" failed 1 times'),
-              { agentId: "work", sessionKey, contextKey: `cron:${job.id}:failure-alert` },
+              {
+                agentId: "work",
+                sessionKey,
+                contextKey: `cron:${job.id}:failure-alert`,
+                jobId: job.id,
+              },
             );
             await expectState(storePath, job.id, {
               lastFailureNotificationDelivered: false,

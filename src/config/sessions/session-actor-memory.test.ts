@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { prepareReplyToolAuthorityCallerRead } from "../../agents/harness/host-private-capabilities.js";
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSessionResetCleanupGuard } from "../../auto-reply/reply/session-reset-cleanup.js";
@@ -74,23 +74,23 @@ describe("memory session actor", () => {
   it("detaches committed receipts and rejects a stale command version", async () => {
     const { actor } = await fixture();
     const old = actor.snapshot(authority)!;
-    const result = await actor.patch(activityCommand(10), authority);
-    if (result.kind !== "committed") {
-      throw new Error("Expected a committed receipt");
-    }
+    const result = await actor.patch(activityCommand(10), authority, {
+      committed(value) {
+        Object.assign(value.receipt.afterVersion, { sequence: 100 });
+        value.receipt.postimage.entry!.updatedAt = 100;
+        value.receipt.transcript.after.rawSeq = 100;
+      },
+    });
+    assert(result.kind === "committed", "Expected a committed receipt");
     const retained = actor.snapshot(authority);
+    expect(result.receipt.postimage).toEqual(retained);
+    expect(retained?.entry?.updatedAt).toBe(10);
     Object.assign(result.receipt.afterVersion, { sequence: 100 });
+    result.receipt.postimage.entry!.updatedAt = 100;
     result.receipt.transcript.after.rawSeq = 100;
     expect(actor.snapshot(authority)).toEqual(retained);
-    expect(
-      await actor.patch(
-        {
-          ...activityCommand(99),
-          expected: old.version,
-        },
-        authority,
-      ),
-    ).toMatchObject({
+    const stale = await actor.patch({ ...activityCommand(99), expected: old.version }, authority);
+    expect(stale).toMatchObject({
       kind: "stale-version",
       postimage: { entry: { updatedAt: 10 } },
     });

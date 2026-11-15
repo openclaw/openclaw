@@ -236,8 +236,6 @@ export async function selectUsageSessions(params: {
   startMs: number;
   endMs: number;
   visibilityFilter?: UsageSessionVisibility;
-  /** Overview reads judge freshness in the cache worker, without transcript statistics. */
-  statistics?: false;
 }): Promise<UsageSessionSelection[]> {
   const {
     config,
@@ -297,7 +295,6 @@ export async function selectUsageSessions(params: {
           ...(effectiveAgentId ? { agentId: effectiveAgentId } : {}),
           startMs,
           endMs,
-          statistics: params.statistics,
         })
       : [];
   const discoveredByIdentity = new Map(
@@ -312,8 +309,6 @@ export async function selectUsageSessions(params: {
     const currentInstance = {
       sessionId: base.sessionId,
       sessionFile: base.sessionFile,
-      transcriptFile: discoveredByIdentity.get(usageSessionIdentity(base.agentId, base.sessionId))
-        ?.transcriptFile,
     };
     if (groupingMode !== "family") {
       return { ...base, instances: [currentInstance] };

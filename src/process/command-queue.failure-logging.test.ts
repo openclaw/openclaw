@@ -21,6 +21,13 @@ afterEach(resetCommandQueueStateForTest);
 it.each([
   ["Gateway shutdown", () => new GatewayDrainingError()],
   [
+    "unavailable memory persistence tools",
+    () =>
+      Object.assign(new Error("memory flush skipped"), {
+        name: "MemoryFlushToolsUnavailableError",
+      }),
+  ],
+  [
     "transcript change",
     () => new SessionTranscriptReadFenceError("Session transcript changed during context read"),
   ],

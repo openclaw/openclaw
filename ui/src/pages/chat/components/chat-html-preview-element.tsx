@@ -215,6 +215,9 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
           frame,
           sandboxUrl: preview.url,
           sandboxOrigin: preview.origin,
+          sandboxShellHtml: preview.preparedCsp?.sandboxPath
+            ? undefined
+            : preview.document.sandboxShellHtml,
           documentKey: String(generation),
           allowScripts,
           loadDocument: async (signal) => {
@@ -227,7 +230,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             if (preview.preparedCsp) {
               return preview.preparedCsp.status === "ready"
                 ? prepareHtmlPreviewLinks(preview.preparedCsp.html, allowScripts)
-                : preview.binding.html;
+                : prepareHtmlPreviewLinks(preview.binding.html, allowScripts);
             }
             let content = prepareHtmlPreviewLinks(preview.document.html, allowScripts);
             if (source) {
@@ -371,7 +374,7 @@ export const ChatHtmlPreview = defineSolidBridge<HtmlPreviewProps>(
             const url = resolveSandboxHostUrl(
               preparedCsp?.sandboxPath ?? document.sandboxUrl,
               document.sandboxPort,
-              document.sandboxOrigin,
+              preparedCsp?.sandboxPath ? preparedCsp.sandboxOrigin : document.sandboxOrigin,
               context.gateway.connection.gatewayUrl,
               window.location.origin,
               undefined,

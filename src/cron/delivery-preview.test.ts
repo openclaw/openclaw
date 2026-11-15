@@ -6,7 +6,11 @@ import {
   replaceSessionEntry,
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
+  upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
+import * as sessionGenerations from "../config/sessions/session-delivery-generation.js";
+import * as sessionReads from "../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
@@ -14,6 +18,7 @@ import {
   getOpenClawAgentDatabaseIfOpen,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -132,6 +137,50 @@ it("prefers the persistent target over the creator's route", () =>
     );
     job.sessionTarget = `session:${sessionKey}`;
     expect(await preview()).toEqual(externalPreview("persistent-recipient"));
+  }));
+
+it.each<[string, OpenClawConfig["cron"]]>([
+  ["Gateway", { delivery: { channel: "telegram", to: "default-recipient" } }],
+  ["agent", { agents: { main: { delivery: { channel: "telegram", to: "default-recipient" } } } }],
+])("routes a route-less current job to the %s default", (_layer, cron) =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const withDefault = { ...cfg, cron };
+    expect(await resolveCronDeliveryPreview({ cfg: withDefault, job })).toEqual(
+      externalPreview("default-recipient"),
+    );
+    expect(
+      await resolveCronDeliveryPreview({
+        cfg: withDefault,
+        job: { ...job, delivery: { mode: "announce", to: "explicit-recipient" } },
+      }),
+    ).toEqual(externalPreview("explicit-recipient"));
+  }),
+);
+
+it("routes a route-less current job to its human creator's default over the agent default", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const cron = {
+      agents: { main: { delivery: { channel: "telegram", to: "agent-recipient" } } },
+      creators: { alice: { delivery: { channel: "telegram", to: "creator-recipient" } } },
+    };
+    const withDefaults = { ...cfg, cron };
+    const createdActor = { type: "human", source: "profile", id: "alice" } as const;
+    expect(
+      await resolveCronDeliveryPreview({ cfg: withDefaults, job: { ...job, createdActor } }),
+    ).toEqual(externalPreview("creator-recipient"));
+    expect(await resolveCronDeliveryPreview({ cfg: withDefaults, job })).toEqual(
+      externalPreview("agent-recipient"),
+    );
+  }));
+
+it("keeps the creator's route when only another agent has a default", () =>
+  withCurrentOrigin({ source: sourceRoute }, async ({ cfg, job }) => {
+    const cron = {
+      agents: { other: { delivery: { channel: "telegram", to: "default-recipient" } } },
+    };
+    expect(await resolveCronDeliveryPreview({ cfg: { ...cfg, cron }, job })).toEqual(
+      externalPreview("recipient"),
+    );
   }));
 
 it("lists a refused agent's repair reason beside a healthy preview", () =>
@@ -345,6 +394,98 @@ it("uses the creating conversation route without a public session key", () =>
       expect(await preview()).toEqual(externalPreview("recipient"));
     },
   ));
+
+it("batches creating-conversation reads while preserving each generation and refreshing next list", () =>
+  withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job }) => {
+    const jobs = Array.from({ length: 12 }, (_, index) => {
+      const sessionKey = `agent:main:dashboard:source-${index}`;
+      const sessionId = `source-${index}`;
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey, storePath: cfg.session!.store! },
+        sessionEntry(undefined, sessionId),
+      );
+      return { ...job, id: sessionId, sessionKey, sourceConversation: { sessionKey, sessionId } };
+    });
+    const reads = vi.spyOn(sessionReads, "withSessionEntriesFromStoresInWorker");
+    try {
+      expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual(
+        Object.fromEntries(
+          jobs.map((entry) => [entry.id, conversationPreview("creating conversation")]),
+        ),
+      );
+      expect(
+        reads.mock.calls.filter(([inputs]) =>
+          inputs.some((input) => input.projection === "sharing"),
+        ),
+      ).toHaveLength(1);
+      jobs[0]!.sourceConversation.sessionId = "superseded-session";
+      const next = await resolveCronDeliveryPreviews({ cfg, jobs });
+      expect(next[jobs[0]!.id]).toMatchObject(blockedPreview("original session generation"));
+      expect(next[jobs[1]!.id]).toEqual(conversationPreview("creating conversation"));
+    } finally {
+      reads.mockRestore();
+    }
+  }));
+
+it.each(["file", "memory"] as const)(
+  "releases each %s source generation once per preview",
+  (storage) =>
+    withOpenClawTestState({ layout: "home" }, async (state) => {
+      const memory = storage === "memory";
+      const storePath = memory
+        ? resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" })
+        : path.join(state.sessionsDir(), "sessions.json");
+      const sessionKey = `agent:main:dashboard:${memory ? "incognito-" : ""}preview-release`;
+      const sessionId = "preview-release";
+      await upsertSessionEntryCore(
+        { agentId: "main", storePath, sessionKey },
+        { sessionId, updatedAt: 1, ...(memory ? { incognito: true } : {}) },
+      );
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        session: { store: storePath },
+      };
+      const jobs = ["first", "second"].map((id) =>
+        Object.assign(
+          makeCronJob({
+            id,
+            agentId: "main",
+            sessionTarget: "isolated",
+            delivery: { mode: "announce" },
+          }),
+          { sourceConversation: { sessionKey, sessionId } },
+        ),
+      );
+      const releases: Array<() => void> = [];
+      const prepare = sessionGenerations.prepareSessionGenerationFactsBatch;
+      vi.spyOn(sessionGenerations, "prepareSessionGenerationFactsBatch").mockImplementation(
+        async (inputs) => {
+          const generations = await prepare(inputs);
+          for (const generation of generations) {
+            if (generation.ok) {
+              releases.push(vi.spyOn(generation.value, "release"));
+            }
+          }
+          return generations;
+        },
+      );
+      try {
+        expect(await resolveCronDeliveryPreviews({ cfg, jobs })).toEqual({
+          first: conversationPreview("creating conversation"),
+          second: conversationPreview("creating conversation"),
+        });
+        expect(releases).toHaveLength(jobs.length);
+        for (const release of releases) {
+          expect(release).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        vi.restoreAllMocks();
+        if (memory) {
+          memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath });
+        }
+      }
+    }),
+);
 
 it("does not rebind implicit delivery when the public session key changes", () =>
   withCurrentOrigin({ sessionTarget: "isolated" }, async ({ cfg, job, preview }) => {

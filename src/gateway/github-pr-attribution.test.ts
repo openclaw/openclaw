@@ -17,7 +17,7 @@ vi.mock("./worker-environments/session-repository-checkpoints.js", async (import
   ...(await importOriginal<
     typeof import("./worker-environments/session-repository-checkpoints.js")
   >()),
-  withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
+  withSessionRepositoryPublicationCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const mocks = githubPublicationTestMocks();
 function setPreference(profileId: string, value: boolean | string, disableCoauthor = false) {

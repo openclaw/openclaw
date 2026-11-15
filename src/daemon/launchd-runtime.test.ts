@@ -31,6 +31,17 @@ it.each([
   ],
   ["foreign job", job("\tstate = running\n\tpid = 4242", "gui/501/ai.openclaw.other"), unknownJob],
   ["duplicate state", job("\tstate = running\n\tstate = waiting"), unknownJob],
+  [
+    "root PID after a nested PID",
+    job("\tresource coalition = {\n\t\tpid = 1234\n\t}\n\tpid = 4242"),
+    { state: "running", runtime: { pid: 4242 } },
+  ],
+  [
+    "missing root PID with a nested PID",
+    job("\tresource coalition = {\n\t\tpid = 4242\n\t}"),
+    { state: "stopped", runtime: {} },
+  ],
+  ["duplicate PID", job("\tpid = 4242\n\tpid = 4243"), unknownJob],
 ] as const)("reports %s", async (_name, stdout, expected) => {
   vi.mocked(execLaunchctl).mockResolvedValue(nativeExit(stdout));
   await expect(probeLaunchAgentState(target)).resolves.toEqual(expected);

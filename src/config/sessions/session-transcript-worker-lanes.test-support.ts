@@ -165,6 +165,7 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => ({
 }));
 // mock-isolation: Observe custody without registering real database lifecycle resources.
 vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
+  registerAgentDatabaseResourceReleaseHandler: () => {},
   matchesAgentDatabaseReadCandidatePath: (candidate: { path: string }, targetPath: string) =>
     candidate.path === targetPath,
   registerOpenClawAgentDatabaseReadCandidateResource: (resource: Resource) => {
@@ -186,10 +187,8 @@ vi.mock("./disk-budget-runtime.js", () => ({
 
 import {
   historyLane,
-  maintenanceLane,
-  projectionLane,
+  sessionStoreLane,
   rotateDatabaseWorkers,
-  targetDiscoveryLane,
 } from "./session-transcript-worker-resources.js";
 
 let sequence = 0;
@@ -223,11 +222,7 @@ afterEach(async () => {
   observed.rotate.mockResolvedValue(undefined);
   observed.closeResources.mockResolvedValue(undefined);
   await Promise.all(observed.resources.splice(0).map((resource) => resource.close()));
-  await Promise.all(
-    [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane].map((lane) =>
-      rotateDatabaseWorkers(lane),
-    ),
-  );
+  await Promise.all([historyLane, sessionStoreLane].map((lane) => rotateDatabaseWorkers(lane)));
 });
 afterAll(() => {
   vi.useRealTimers();

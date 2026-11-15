@@ -136,6 +136,29 @@ describe("plugin runtime session creation", () => {
     }),
   );
 
+  it("lists metadata without decoding saved prompts while preserving full listings", async () => {
+    const { runtime, key, storePath, seed } = sessionFixture();
+    const prompt = "metadata-listing-saved-prompt".repeat(128);
+    await seed({
+      sessionId: "metadata-session",
+      updatedAt: 1,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    const scope = { agentId: "main", storePath, readOnly: true };
+    expect(runtime.session.listSessionEntries(scope)[0]?.entry.skillsSnapshot?.prompt).toBe(prompt);
+    const parses = vi.spyOn(JSON, "parse");
+    try {
+      const entries = runtime.session.listSessionEntries({ ...scope, projection: "list" });
+      expect(entries).toEqual([
+        { sessionKey: key, entry: expect.objectContaining({ sessionId: "metadata-session" }) },
+      ]);
+      expect(entries[0]?.entry.skillsSnapshot).toBeUndefined();
+      expect(parses.mock.calls.filter(([text]) => text.includes(prompt))).toHaveLength(0);
+    } finally {
+      parses.mockRestore();
+    }
+  });
+
   it("creates and recovers a trusted harness session without changing its title", async () => {
     const { key, read, create, seed } = sessionFixture(
       "agent:main:harness:codex:supervision:codex-native-thread",

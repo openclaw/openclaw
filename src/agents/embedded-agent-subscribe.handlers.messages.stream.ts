@@ -306,7 +306,7 @@ export function resolveAssistantTextChunk(params: {
   if (content.startsWith(accumulatedText)) {
     return content.slice(accumulatedText.length);
   }
-  return accumulatedText.includes(content) ? "" : content;
+  return "";
 }
 
 export function createStreamingReplyResolver(): StreamingReplyResolver {
@@ -423,7 +423,8 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       text === undefined &&
       params.evtType !== "text_end" &&
       params.parsedStreamDirectives &&
-      params.parsedStreamDirectives.text === params.visibleDelta &&
+      hasDirectiveMarker &&
+      params.parsedStreamDirectives.text.trim() === params.visibleDelta.trim() &&
       params.appendDelta !== null &&
       params.previousCleaned &&
       params.previousText.length > params.previousCleaned.length &&

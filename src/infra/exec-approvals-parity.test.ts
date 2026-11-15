@@ -30,8 +30,8 @@ describe("exec approvals shell parser parity fixture", () => {
 describe("exec approvals wrapper resolution parity fixture", () => {
   const fixtures = loadWrapperResolutionParityFixtureCases();
 
-  it.each(fixtures)("matches wrapper fixture: $id", (fixture) => {
-    const resolution = resolveCommandResolutionFromArgv(fixture.argv);
+  it.each(fixtures)("matches wrapper fixture: $id", async (fixture) => {
+    const resolution = await resolveCommandResolutionFromArgv(fixture.argv);
     expect(resolution?.execution.rawExecutable ?? null).toBe(fixture.expectedRawExecutable);
   });
 });

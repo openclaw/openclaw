@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { isProcessAlive } from "../../../test/scripts/live-process-fixture.test-support.js";
+import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { execCommand } from "./exec.js";
 
 const cleanupPids = new Set<number>();
@@ -37,6 +38,16 @@ describe("execCommand process-tree cleanup", () => {
     cleanupPids.clear();
   });
 
+  it("returns an exit result for a missing executable", async () => {
+    const command = join(tempDirs.make("openclaw-exec-missing-"), "absent-command");
+    await expect(execCommand(command, [], process.cwd())).resolves.toMatchObject({
+      code: 1,
+      killed: false,
+      stdout: "",
+      stderr: "",
+    });
+  });
+
   it.each([2 ** 31, Number.MAX_SAFE_INTEGER])(
     "allows a command to finish with a long timeout of %s ms",
     async (timeout) => {
@@ -48,7 +59,46 @@ describe("execCommand process-tree cleanup", () => {
     },
   );
 
-  it("does not resolve a timeout while a SIGTERM-resistant descendant is alive", async ({
+  it.runIf(process.platform !== "win32")(
+    "returns the root tail while background work survives, then joins scope custody",
+    async () => {
+      let backgroundPid = 0;
+      let anchorPid = 0;
+      let settled = false;
+      const descendant =
+        "process.send('ready'); process.disconnect(); setTimeout(() => process.stdout.write('TAIL\\n'), 25); setInterval(() => {}, 1000)";
+      const parent = `const {spawn}=require('node:child_process'); const child=spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:['ignore','inherit','inherit','ipc']}); child.once('message',()=>process.stdout.write(child.pid+'\\nHEAD\\n',()=>process.exit(0)));`;
+      await withCommandProcessScope(
+        async () => {
+          const result = await execCommand(process.execPath, ["-e", parent], process.cwd());
+          backgroundPid = Number(result.stdout.split("\n")[0]);
+          cleanupPids.add(backgroundPid);
+          expect(result).toMatchObject({ code: 0, killed: false });
+          expect(result.stdout).toContain("HEAD\nTAIL\n");
+          expect(isProcessAlive(backgroundPid)).toBe(true);
+          expect(isProcessAlive(anchorPid)).toBe(true);
+          expect(settled).toBe(false);
+        },
+        undefined,
+        {
+          reserve: () => ({
+            spawned: ({ pid }) => {
+              anchorPid = pid;
+              cleanupPids.add(pid);
+            },
+            settled: () => {
+              settled = true;
+            },
+          }),
+        },
+      );
+      expect(settled).toBe(true);
+      expect(isProcessAlive(backgroundPid)).toBe(false);
+      expect(isProcessAlive(anchorPid)).toBe(false);
+    },
+  );
+
+  it("does not resolve cancellation while a SIGTERM-resistant descendant is alive", async ({
     signal,
   }) => {
     const readyPath = join(tempDirs.make("openclaw-exec-tree-"), "ready.json");
@@ -65,8 +115,9 @@ describe("execCommand process-tree cleanup", () => {
       "setInterval(() => {}, 1000);",
     ].join("\n");
 
+    const controller = new AbortController();
     const resultPromise = execCommand(process.execPath, ["-e", parentScript], process.cwd(), {
-      timeout: 1_000,
+      signal: controller.signal,
     });
     const { parentPid, childPid } = await vi.waitFor(
       () =>
@@ -78,6 +129,7 @@ describe("execCommand process-tree cleanup", () => {
     );
     cleanupPids.add(parentPid);
     cleanupPids.add(childPid);
+    controller.abort();
 
     await expect(resultPromise).resolves.toMatchObject({ killed: true });
     // The product joins its termination controller, but foreign descendants expose no

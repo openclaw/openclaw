@@ -25,8 +25,10 @@ export async function automaticallyCleanUpdateRecovery(
   runId: string,
   env: NodeJS.ProcessEnv,
 ): Promise<UpdateStepResult | undefined> {
+  const startedAt = performance.now();
+  let result: UpdateStepResult | undefined;
   try {
-    return await withOwnedManagedUpdateEnv(env, () =>
+    result = await withOwnedManagedUpdateEnv(env, () =>
       runWithLocalStateOwner({
         method: "update.recovery.cleanup",
         params: { runId },
@@ -44,6 +46,10 @@ export async function automaticallyCleanUpdateRecovery(
     );
   } catch (error) {
     // A refusal or uncertain RPC never authorizes offline fallback or rollback.
-    return automaticRecoveryCleanupWarning(error);
+    result = automaticRecoveryCleanupWarning(error);
   }
+  if (result) {
+    result.durationMs = Math.round(performance.now() - startedAt);
+  }
+  return result;
 }

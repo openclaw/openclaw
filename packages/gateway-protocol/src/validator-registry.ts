@@ -12,5 +12,6 @@ export * from "./validators/conversations.js";
 export * from "./validators/integrations.js";
 export * from "./validators/operations.js";
 export * from "./validators/sessions.js";
+export * from "./validators/users-channel-identity.js";
 export * from "./validators/workers.js";
 export * from "./validators/workspaces.js";

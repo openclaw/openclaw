@@ -38,6 +38,7 @@ import { readUsageCostReportEntry } from "./session-cost-usage-worker-report.js"
 import type {
   UsageCostWorkerOperation,
   UsageCostWorkerResult,
+  UsageCostWorkerSession,
 } from "./session-cost-usage-worker.types.js";
 import type {
   CostUsageTotals,
@@ -80,7 +81,7 @@ type InstanceSource = UsageCostTranscriptFile | SqliteFreshness;
 export async function projectUsageCostQuartersInWorker(params: {
   operation: QuarterOperation;
   access: UsageCostCollectionAccess;
-  inventory: () => Promise<UsageCostTranscriptFile[]>;
+  inventory: () => Promise<UsageCostWorkerSession[]>;
   readFreshness: (
     markers: readonly SqliteSessionFileMarker[],
   ) => Promise<Array<{ mtimeMs: number; generation: string | null } | undefined>>;
@@ -149,18 +150,6 @@ export async function projectUsageCostQuartersInWorker(params: {
       }
       // Transcript writes advance the mutation time; a later append keeps the prefix usable.
       fresh = checkpoint.mtimeMs >= file.mtimeMs;
-    } else if (
-      operation.kind === "overview" &&
-      checkpoint.kind === "sqlite" &&
-      file.kind === "sqlite"
-    ) {
-      if ((checkpoint.generation ?? null) !== (file.generation ?? null)) {
-        // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
-        return { state: "pending" };
-      }
-      // A same-generation append can commit after discovery; newer cache stays usable.
-      fresh =
-        checkpoint.maxSeq > (file.maxSeq ?? 0) || isUsageCostRollupFresh({ checkpoint, file });
     } else {
       // usage.cost rejects a checkpoint beyond the current transcript, such as a shorter rewrite.
       if (!canUseUsageCostRollupForPartial({ checkpoint, file })) {
@@ -227,104 +216,10 @@ export async function projectUsageCostQuartersInWorker(params: {
     }
   };
 
-  if (operation.kind === "summary") {
-    const files = await params.inventory();
-    const snapshot = await readSnapshot(
-      files.map((file) => file.filePath),
-      true,
-    );
-    // Sub-quarter ranges replay transcripts within one bounded allowance.
-    const replayBudget = { remainingBytes: 16 * 1024 * 1024, deadline: performance.now() + 5_000 };
-    const replay = (entry: UsageCostQuarterSnapshotEntry, file: UsageCostTranscriptFile) =>
-      readUsageCostReportEntry({
-        prepared: {
-          valueJson: entry.row.valueJson,
-          blob: entry.body ?? null,
-          envelope: entry.envelope,
-          selected: undefined,
-        },
-        file,
-        startMs: operation.startMs,
-        endMs: operation.endMs,
-        dayBucket: operation.dayBucket,
-        scan: params.scan,
-        throwIfCancelled: params.throwIfCancelled,
-        replayBudget,
-        cacheBudget: { remainingBytes: Number.POSITIVE_INFINITY },
-      });
-    const formatDay = createUsageDayKeyFormatter(operation.dayBucket);
-    observe(snapshot);
-    const daily = new Map<string, CostUsageTotals>();
-    const totals = createEmptyCostUsageTotals();
-    const staleSessionFiles = new Set<string>();
-    // Keep file order and per-quarter additions so repeated reports add identically.
-    for (const file of files) {
-      params.throwIfCancelled();
-      const instance = evaluateInstance({
-        path: file.filePath,
-        file,
-        entry: snapshot.get(file.filePath),
-      });
-      if (instance.state === "pending") {
-        counts.stale += 1;
-        staleSessionFiles.add(file.sourcePath);
-        continue;
-      }
-      if (instance.state === "exact") {
-        const entry = snapshot.get(file.filePath);
-        const replayed = entry ? await replay(entry, file) : null;
-        if (replayed) {
-          counts.cached += 1;
-          if (instance.fresh === false) {
-            counts.stale += 1;
-            staleSessionFiles.add(file.sourcePath);
-          }
-          addRollupToCostUsageSummary({
-            rollup: replayed.rollup,
-            startMs: operation.startMs,
-            endMs: operation.endMs,
-            formatDay,
-            daily,
-            totals,
-          });
-        } else if (replayed === null) {
-          // The bounded replay allowance is spent; the summary stays partial.
-          counts.deferred += 1;
-        } else {
-          // A failed replay omits the file and asks the refresh owner to rebuild it.
-          counts.stale += 1;
-          staleSessionFiles.add(file.sourcePath);
-          if (entry) {
-            invalidRows.set(entry.row.key, entry.row);
-          }
-        }
-        continue;
-      }
-      counts.cached += 1;
-      if (!instance.fresh) {
-        counts.stale += 1;
-        staleSessionFiles.add(file.sourcePath);
-      }
-      for (const block of instance.blocks) {
-        addUsageQuartersToDailyTotals({ block, range, daily, totals });
-      }
-    }
-    return {
-      kind: "summary",
-      summary: finishUsageCostSummary({
-        daily,
-        totals,
-        startMs: operation.startMs,
-        endMs: operation.endMs,
-        formatDay,
-        cacheStatus: cacheStatusOf(),
-      }),
-      staleSessionFiles: [...staleSessionFiles],
-      invalidRows: [...invalidRows.values()],
-    };
-  }
-
-  const families = expandUsageOverviewFamilies(operation);
+  const families =
+    operation.kind === "summary"
+      ? [await params.inventory()]
+      : expandUsageOverviewFamilies(operation);
   const instances = families.flat();
   const paths = await resolveUsageCostTranscriptPaths(
     instances.map((instance) => instance.sessionFile),
@@ -332,17 +227,15 @@ export async function projectUsageCostQuartersInWorker(params: {
   );
   const snapshot = await readSnapshot(
     [...new Set(paths.filter((path) => path !== undefined))],
-    operation.includeUntimestamped === true,
+    operation.kind === "summary" || operation.includeUntimestamped === true,
   );
   observe(snapshot);
   // Freshness facts for cached instances: SQLite mutation facts, or file stats for JSONL.
-  const files: Array<InstanceSource | undefined> = instances.map(
-    (instance) => instance.transcriptFile,
-  );
+  const files: Array<InstanceSource | undefined> = Array(instances.length);
   const sqlite: Array<{ index: number; marker: SqliteSessionFileMarker }> = [];
   const jsonl: number[] = [];
   for (const [index, instance] of instances.entries()) {
-    if (instance.transcriptFile || paths[index] === undefined || !snapshot.has(paths[index])) {
+    if (paths[index] === undefined || !snapshot.has(paths[index])) {
       continue;
     }
     const marker = parseSqliteSessionFileMarker(instance.sessionFile);
@@ -370,6 +263,106 @@ export async function projectUsageCostQuartersInWorker(params: {
   for (const [position, index] of jsonl.entries()) {
     files[index] = stats[position];
   }
+
+  if (operation.kind === "summary") {
+    // Sub-quarter ranges replay transcripts within one bounded allowance.
+    const replayBudget = { remainingBytes: 16 * 1024 * 1024, deadline: performance.now() + 5_000 };
+    const replay = (entry: UsageCostQuarterSnapshotEntry, file: InstanceSource) => {
+      const checkpoint = entry.envelope!.checkpoint;
+      let transcript: UsageCostTranscriptFile;
+      if (file.kind === "sqlite-mutation") {
+        if (checkpoint.kind !== "sqlite") {
+          return undefined;
+        }
+        transcript = { ...file, ...checkpoint, kind: "sqlite", filePath: entry.row.key };
+      } else {
+        transcript = file;
+      }
+      return readUsageCostReportEntry({
+        prepared: {
+          valueJson: entry.row.valueJson,
+          blob: entry.body ?? null,
+          envelope: entry.envelope,
+          selected: undefined,
+        },
+        file: transcript,
+        startMs: operation.startMs,
+        endMs: operation.endMs,
+        dayBucket: operation.dayBucket,
+        scan: params.scan,
+        throwIfCancelled: params.throwIfCancelled,
+        replayBudget,
+        cacheBudget: { remainingBytes: Number.POSITIVE_INFINITY },
+      });
+    };
+    const formatDay = createUsageDayKeyFormatter(operation.dayBucket);
+    const daily = new Map<string, CostUsageTotals>();
+    const totals = createEmptyCostUsageTotals();
+    const staleSessionFiles = new Set<string>();
+    // Keep file order and per-quarter additions so repeated reports add identically.
+    for (const [index, source] of instances.entries()) {
+      params.throwIfCancelled();
+      const file = files[index];
+      const entry = paths[index] === undefined ? undefined : snapshot.get(paths[index]);
+      const instance = evaluateInstance({ path: paths[index], file, entry });
+      if (instance.state === "pending") {
+        counts.stale += 1;
+        staleSessionFiles.add(source.sessionFile);
+        continue;
+      }
+      if (instance.state === "exact") {
+        const replayed = entry && file ? await replay(entry, file) : null;
+        if (replayed) {
+          counts.cached += 1;
+          if (instance.fresh === false) {
+            counts.stale += 1;
+            staleSessionFiles.add(source.sessionFile);
+          }
+          addRollupToCostUsageSummary({
+            rollup: replayed.rollup,
+            startMs: operation.startMs,
+            endMs: operation.endMs,
+            formatDay,
+            daily,
+            totals,
+          });
+        } else if (replayed === null) {
+          // The bounded replay allowance is spent; the summary stays partial.
+          counts.deferred += 1;
+        } else {
+          // A failed replay omits the file and asks the refresh owner to rebuild it.
+          counts.stale += 1;
+          staleSessionFiles.add(source.sessionFile);
+          if (entry) {
+            invalidRows.set(entry.row.key, entry.row);
+          }
+        }
+        continue;
+      }
+      counts.cached += 1;
+      if (!instance.fresh) {
+        counts.stale += 1;
+        staleSessionFiles.add(source.sessionFile);
+      }
+      for (const block of instance.blocks) {
+        addUsageQuartersToDailyTotals({ block, range, daily, totals });
+      }
+    }
+    return {
+      kind: "summary",
+      summary: finishUsageCostSummary({
+        daily,
+        totals,
+        startMs: operation.startMs,
+        endMs: operation.endMs,
+        formatDay,
+        cacheStatus: cacheStatusOf(),
+      }),
+      staleSessionFiles: [...staleSessionFiles],
+      invalidRows: [...invalidRows.values()],
+    };
+  }
+
   const batch = createUsageOverviewBatchBuilder();
   const computing: boolean[] = [];
   const staleSessionFiles = new Set<string>();

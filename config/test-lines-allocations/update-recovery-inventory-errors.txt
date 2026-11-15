@@ -1,2 +1,0 @@
-# Recovery inventory isolation regression coverage.
-48

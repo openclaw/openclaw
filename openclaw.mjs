@@ -25,6 +25,7 @@ import {
 import {
   canRunOpenClawNodeDiagnostics,
   classifyUnsupportedNodeCommand,
+  emitNodeSecurityWarning,
   formatUnsupportedNodeDiagnosticWarning,
   SUPPORTED_NODE_VERSION_RANGE,
 } from "./node-version.mjs";
@@ -64,7 +65,7 @@ const ensureSupportedRuntimeVersion = async () => {
   const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
-    return false;
+    return await recoverNodeRuntime();
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);
   const canRunDiagnostics = canRunOpenClawNodeDiagnostics(process.versions.node, probe.available);
@@ -625,6 +626,9 @@ if (isBrowserNativeHostInvocation) {
     if (!supported) {
       process.exitCode = 1;
     } else {
+      if (!process.versions.bun) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       await installProcessWarningFilter();
       // Fixed package artifact, not a path selected by argv, config or plugin discovery.
       // Its async entry owns stdin and drains the single response before process exit.
@@ -680,6 +684,9 @@ async function runLauncher() {
       }
     }
     if (tryOutputLauncherVersion(process.argv)) {
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       if (currentNodeRuntimeFailure) {
         process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
       }
@@ -713,11 +720,16 @@ async function runLauncher() {
 
   if (!waitingForCompileCacheRespawn) {
     if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
       if (currentNodeRuntimeFailure) {
         process.stderr.write(`${formatUnsupportedNodeDiagnosticWarning(process.versions.node)}\n`);
       }
     } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
-      // OK
+      if (!process.versions.bun && !currentNodeRuntimeFailure) {
+        emitNodeSecurityWarning(process.versions.node);
+      }
     } else {
       await installProcessWarningFilter();
       if (await tryImport("./dist/entry.js")) {

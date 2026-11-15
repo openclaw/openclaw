@@ -132,6 +132,9 @@ sidebarTitle: "Troubleshooting"
     by this guard; examples in substantive answers remain text.
     The original reply and corrective continuation remain in session history.
 
+    If tool calls still arrive as text, try [llmman](/providers/llmman#advanced-configuration)
+    with its explicit native Ollama configuration and a model that supports tool calling.
+
   </Accordion>
 
   <Accordion title="Repeated tool errors stop the turn">
@@ -177,7 +180,8 @@ sidebarTitle: "Troubleshooting"
     Try a stronger model, request less output, or split the task into smaller
     turns. Native Ollama requests also send the resolved model output cap as
     `num_predict`; lower the model's `maxTokens` if generation runs too long.
-    Discovered local models default to 8,192 output tokens. Ollama Cloud models
+    Discovered local models default to 16,384 output tokens, half of the
+    32,768-token local context cap (less for smaller windows). Ollama Cloud models
     use their documented output limits, or their context window when a separate
     output limit is unavailable. Authored `maxTokens` and `params.num_predict`
     override those defaults. Set `params: { num_predict: -1 }` on a model entry

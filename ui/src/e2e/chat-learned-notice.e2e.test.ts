@@ -53,13 +53,17 @@ suite.define(() => {
           ...(format === "marked"
             ? {
                 openclawDeliveryMirror: {
-                  kind: "skill-workshop-change",
-                  agentId: "main",
-                  runId: "review-run",
-                  skills: [
-                    { name: "staging-checks", action: "updated", summary: "check rollback" },
-                    { name: "release-summary", action: "created", summary: "report checks" },
-                  ],
+                  kind: "plugin-notice",
+                  pluginId: "skill-workshop",
+                  type: "skills-changed",
+                  data: {
+                    agentId: "main",
+                    runId: "review-run",
+                    skills: [
+                      { name: "staging-checks", action: "updated", summary: "check rollback" },
+                      { name: "release-summary", action: "created", summary: "report checks" },
+                    ],
+                  },
                 },
               }
             : {}),

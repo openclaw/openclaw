@@ -44,6 +44,11 @@ export type SkillLibraryAuthority = {
   profileId?: string;
   namespace?: "personal";
   scopes: readonly string[];
+  /**
+   * The host verified a current OpenClaw ID owner device whose account is linked to
+   * `profileId`: that profile's named role does not cap the owner's scopes.
+   */
+  ownerDevice?: boolean;
   getConfig: () => OpenClawConfig;
   /** Must revalidate the admitted run/placement and request owner, synchronously at commit. */
   assertCurrent: () => void;
@@ -158,16 +163,19 @@ export function resolveSkillLibraryActor(db: EngineConnection, authority: SkillL
 
 /** Apply the same role ceiling to current worker rows or the Gateway's committed profile facts. */
 export function resolveSkillLibraryActorFromProfile(
-  authority: Pick<SkillLibraryAuthority, "scopes">,
+  authority: Pick<SkillLibraryAuthority, "scopes" | "profileId" | "ownerDevice">,
   config: OpenClawConfig,
   profile: { id: string; role: string | null; githubLogin: string | null } | undefined,
 ) {
-  const ceiling = resolveOperatorRolePolicyForAssignment(
-    profile?.id,
-    profile?.role ?? null,
-    config,
-    profile?.githubLogin ?? null,
-  )?.scopes;
+  const ceiling =
+    authority.ownerDevice === true && profile !== undefined && profile.id === authority.profileId
+      ? undefined
+      : resolveOperatorRolePolicyForAssignment(
+          profile?.id,
+          profile?.role ?? null,
+          config,
+          profile?.githubLogin ?? null,
+        )?.scopes;
   const permits = (scope: "operator.read" | "operator.write" | "operator.admin") =>
     authorizeOperatorScopesForRequiredScope(scope, [...authority.scopes]).allowed &&
     (!ceiling || authorizeOperatorScopesForRequiredScope(scope, ceiling).allowed);
