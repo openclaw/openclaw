@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { copyConfigResolutionFactsThroughRewrite } from "../config/resolution-facts.js";
 import { readStoredClaw } from "../gateway/openclaw-id/claw-store.js";
 import {
-  MEMBER_ROLE_PRESETS,
+  listMissingMemberRolePresets,
   withMissingMemberRolePresets,
 } from "../gateway/openclaw-id/member-role-presets.js";
 import { readSandboxBackendAvailability } from "../gateway/openclaw-id/sandbox-availability.js";
@@ -70,15 +70,13 @@ export const memberRolesCheck: HealthCheck = {
     if (!isOpenClawIdEnabled(cfg.gateway?.openclawId)) {
       return findings;
     }
-    for (const name of Object.keys(MEMBER_ROLE_PRESETS)) {
-      if (!Object.hasOwn(roles.definitions, name)) {
-        warn(
-          "missing-preset",
-          `OpenClaw ID preset role "${name}" has no definition.`,
-          "Accept Doctor's missing-preset repair, or define the role in gateway.roles.definitions.",
-          name,
-        );
-      }
+    for (const name of listMissingMemberRolePresets(cfg)) {
+      warn(
+        "missing-preset",
+        `OpenClaw ID preset role "${name}" has no definition.`,
+        "Accept Doctor's missing-preset repair, or define the role in gateway.roles.definitions.",
+        name,
+      );
     }
     const sandboxUsers: string[] = [];
     try {

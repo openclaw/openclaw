@@ -34,15 +34,24 @@ const MEMBER_ROLE_PRESETS: Record<"operator" | "viewer" | "guest", GatewayOperat
     },
   };
 
+function missingMemberRolePresets(config: OpenClawConfig) {
+  return Object.entries(MEMBER_ROLE_PRESETS).filter(
+    ([name]) => !Object.hasOwn(config.gateway?.roles?.definitions ?? {}, name),
+  );
+}
+
+/** Names needed by diagnostics; preset definitions remain owned by this module. */
+export function listMissingMemberRolePresets(config: OpenClawConfig): string[] {
+  return missingMemberRolePresets(config).map(([name]) => name);
+}
+
 /** Shared activation/Doctor transform: add missing presets without changing existing policy. */
 export function withMissingMemberRolePresets(config: OpenClawConfig): OpenClawConfig {
   if (!isOpenClawIdEnabled(config.gateway?.openclawId)) {
     return config;
   }
   const roles = config.gateway?.roles;
-  const missing = Object.entries(MEMBER_ROLE_PRESETS).filter(
-    ([name]) => !Object.hasOwn(roles?.definitions ?? {}, name),
-  );
+  const missing = missingMemberRolePresets(config);
   if (!missing.length) {
     return config;
   }
