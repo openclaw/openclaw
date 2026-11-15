@@ -106,11 +106,17 @@ function joinRequestAttention(
   };
 }
 
-/** One read's Inbox rows; join requests drop out, one by one, as they expire. */
+// How often a request's time left is shown again: hourly while days remain, then each minute,
+// then every few seconds in its last hour.
+function timeLeftRefreshMs(remainingMs: number): number {
+  return remainingMs > 86_400_000 ? 3_600_000 : remainingMs > 3_600_000 ? 60_000 : 5_000;
+}
+
+/** One read's Inbox rows; join requests count down and drop out as they expire. */
 export type OpenClawIdAttention = {
   items(nowMs: number): SidebarAttentionItem[];
-  /** When the next join request still pending at `nowMs` expires. */
-  nextExpiryAt(nowMs: number): number | undefined;
+  /** When a pending join request's time left or presence next changes. */
+  nextChangeAt(nowMs: number): number | undefined;
 };
 
 export async function readOpenClawIdAttention(
@@ -137,9 +143,15 @@ export async function readOpenClawIdAttention(
       ...(key ? [key] : []),
       ...pendingAt(nowMs).map((request) => joinRequestAttention(request, nowMs)),
     ],
-    nextExpiryAt: (nowMs) => {
+    nextChangeAt: (nowMs) => {
       const pending = pendingAt(nowMs);
-      return pending.length ? Math.min(...pending.map((request) => request.decideByMs)) : undefined;
+      return pending.length
+        ? Math.min(
+            ...pending.map((request) =>
+              Math.min(request.decideByMs, nowMs + timeLeftRefreshMs(request.decideByMs - nowMs)),
+            ),
+          )
+        : undefined;
     },
   };
 }

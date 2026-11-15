@@ -226,7 +226,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       return;
     }
     let refreshAt = Math.min(this.modelAuthRefreshAt ?? Infinity, this.cronRetryAt ?? Infinity);
-    refreshAt = Math.min(refreshAt, this.openClawIdAttention?.nextExpiryAt(now) ?? Infinity);
+    refreshAt = Math.min(refreshAt, this.openClawIdAttention?.nextChangeAt(now) ?? Infinity);
     for (const job of this.cronJobs) {
       // Overdue uses a strict comparison; notify on the first millisecond after it.
       const overdueAt = Math.floor(cronOverdueAt(job, this.cronSchedulerEnabled)) + 1;
@@ -578,7 +578,7 @@ export class SidebarAttentionStoreOwner implements StoreOwner {
       const attention = await readOpenClawIdAttention(client, current);
       if (attention && current()) {
         this.openClawIdAttention = attention;
-        // Join requests expire without a Gateway event; retire each row when it does.
+        // Join requests count down and expire without a Gateway event; keep each row current.
         this.scheduleHealthRefresh();
         this.onChange();
       }
