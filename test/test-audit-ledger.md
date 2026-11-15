@@ -901,6 +901,22 @@ worker compilation. The warm candidate passes both in 22.06 seconds wall time
 Independent preservation review found no lost contract. This closes the earlier
 source-only realtime cleanup follow-up; no production change is claimed.
 
+### Secrets CLI plan fixture setup custody
+
+At `69c3acaca6854826a03e7e6ee2a1cf0334959282`, `withPlanFile` writes its
+temporary plan before entering its cleanup block. A partial write followed by
+failure therefore leaves the file behind. Move that write into the existing
+`try`; retain the callback, contents, error propagation and removal operation.
+All 22 declarations / 23 expanded cases remain, including malformed UTF-8,
+literal replacement characters, size limits, FIFO rejection and error causes.
+Test code changes by +1/-1 line; production and shared support are unchanged.
+
+Executing the unchanged helper body with a real partial file write followed by
+an injected `ENOSPC` leaves the file present without calling removal. The
+candidate removes it and preserves the exact write error without invoking the
+test callback. Both observations precede emergency cleanup. Full suite
+qualification remains pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
