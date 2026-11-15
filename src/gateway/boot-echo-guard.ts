@@ -26,6 +26,15 @@ function isWindowEdge(text: string, index: number): boolean {
   );
 }
 
+function includesSafeWindow(text: string, window: string): boolean {
+  for (let start = text.indexOf(window); start >= 0; start = text.indexOf(window, start + 1)) {
+    if (isWindowEdge(text, start) && isWindowEdge(text, start + window.length)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Visits each surrogate-safe window hash in O(text.length) time; stops when visit returns true. */
 function someWindowHash(
   text: string,
@@ -105,7 +114,8 @@ function sharesEchoWindow(first: string, second: string): boolean {
       longer,
       length,
       (start, hash) =>
-        hasSortedHash(sorted, hash) && shorter.includes(longer.slice(start, start + length)),
+        hasSortedHash(sorted, hash) &&
+        includesSafeWindow(shorter, longer.slice(start, start + length)),
     );
   });
 }
