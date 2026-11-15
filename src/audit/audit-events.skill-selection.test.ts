@@ -3,7 +3,6 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
-import { withLegacySkillSelectionCompanionAbsent } from "../state/openclaw-state-db-schema-skill-selection.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
@@ -11,7 +10,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { getOpenClawStatePredecessorSchema } from "../state/openclaw-state-schema-runtime.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import {
   listAuditEvents,
   pruneExpiredAuditEventsInDatabase,
@@ -159,10 +159,11 @@ describe("audit event skill-selection persistence", () => {
   });
 
   it("upgrades a v2026.11.3 database preserving settings and audit rows", async () => {
-    // Simulate an installed v2026.11.3 database: the current schema layout
-    // minus the unreleased companion table (the release predates it), with
-    // stored settings and one audit row. Opening it with the current build
-    // must keep every stored row working while the companion table is
+    // Simulate an installed published v2026.11.3 database: schema v22 with
+    // no companion table (the release predates it; verified against the
+    // published release tag). The predecessor chain reproduces the release's
+    // audit/settings tables byte-identically. Opening it with the current
+    // build must keep every stored row working while the companion table is
     // created lazily on first observed skill use.
     const options = {
       env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-audit-upgrade-") },
@@ -172,10 +173,10 @@ describe("audit event skill-selection persistence", () => {
     const storedAt = Date.now() - 60_000;
     const setup = new DatabaseSync(pathname);
     try {
-      setup.exec(withLegacySkillSelectionCompanionAbsent(OPENCLAW_STATE_SCHEMA_SQL));
-      setup.exec(`PRAGMA user_version = 40;
+      setup.exec(getOpenClawStatePredecessorSchema(22));
+      setup.exec(`PRAGMA user_version = 22;
         INSERT INTO schema_meta (meta_key, role, schema_version, created_at, updated_at)
-        VALUES ('primary', 'global', 40, 1, 1);`);
+        VALUES ('primary', 'global', 22, 1, 1);`);
       // A stored user setting from the release install.
       setup.exec(`INSERT INTO workspace_setup_state (workspace_key, workspace_path, version)
         VALUES ('proof-workspace', '/tmp/skill-proof', 1);`);
@@ -188,46 +189,51 @@ describe("audit event skill-selection persistence", () => {
       setup.close();
     }
 
-    const auditDatabase = { ...options, database: openOpenClawStateDatabase(options) };
-    // Stored settings survive the upgrade untouched, including the release's
-    // schema version row and the workspace setting.
-    expect(auditDatabase.database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: 40,
-    });
-    expect(
-      auditDatabase.database.db
-        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-        .get(),
-    ).toEqual({ schema_version: 40 });
-    expect(
-      auditDatabase.database.db
-        .prepare(
-          "SELECT workspace_path, version FROM workspace_setup_state WHERE workspace_key = 'proof-workspace'",
-        )
-        .get(),
-    ).toEqual({ workspace_path: "/tmp/skill-proof", version: 1 });
-    const legacy = await listAuditEvents({ database: options, limit: 10 });
-    expect(legacy.events.map((event) => event.eventId)).toEqual(["legacy-event-1"]);
+    // The v22 -> v40 jump crosses the client-credentials migration, which
+    // requires backed-up migration custody; the test-support backup stands
+    // in for the pre-upgrade backup a real install would have.
+    await withStateMigrationBackupForTest(options, async () => {
+      const auditDatabase = { ...options, database: openOpenClawStateDatabase(options) };
+      // Stored settings survive the upgrade untouched, including the release's
+      // schema version row and the workspace setting.
+      expect(auditDatabase.database.db.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: 40,
+      });
+      expect(
+        auditDatabase.database.db
+          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .get(),
+      ).toEqual({ schema_version: 40 });
+      expect(
+        auditDatabase.database.db
+          .prepare(
+            "SELECT workspace_path, version FROM workspace_setup_state WHERE workspace_key = 'proof-workspace'",
+          )
+          .get(),
+      ).toEqual({ workspace_path: "/tmp/skill-proof", version: 1 });
+      const legacy = await listAuditEvents({ database: options, limit: 10 });
+      expect(legacy.events.map((event) => event.eventId)).toEqual(["legacy-event-1"]);
 
-    const skill = recordAuditEventInDatabase(
-      skillSelectionInput({ occurredAt: Date.now(), sourceSequence: 2 }),
-      auditDatabase,
-    );
-    expect(skill?.kind).toBe("skill_selection");
-    // The shared sequence continues after the stored row.
-    expect(skill?.sequence).toBe(2);
+      const skill = recordAuditEventInDatabase(
+        skillSelectionInput({ occurredAt: Date.now(), sourceSequence: 2 }),
+        auditDatabase,
+      );
+      expect(skill?.kind).toBe("skill_selection");
+      // The shared sequence continues after the stored row.
+      expect(skill?.sequence).toBe(2);
 
-    const page = await listAuditEvents({
-      database: options,
-      limit: 10,
-      filters: { includeSkillSelections: true },
+      const page = await listAuditEvents({
+        database: options,
+        limit: 10,
+        filters: { includeSkillSelections: true },
+      });
+      expect(page.events.map((event) => [event.kind, event.sourceSequence])).toEqual([
+        ["skill_selection", 2],
+        ["agent_run", 1],
+      ]);
+      // The stored row survives the upgrade untouched.
+      expect(page.events[1]).toMatchObject({ eventId: "legacy-event-1", sequence: 1 });
     });
-    expect(page.events.map((event) => [event.kind, event.sourceSequence])).toEqual([
-      ["skill_selection", 2],
-      ["agent_run", 1],
-    ]);
-    // The stored row survives the upgrade untouched.
-    expect(page.events[1]).toMatchObject({ eventId: "legacy-event-1", sequence: 1 });
   });
 
   it("returns fresh ledger sequences after companion allocation consumes a sequence", () => {

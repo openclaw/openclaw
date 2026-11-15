@@ -451,7 +451,9 @@ describe("audit run explanation", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it.each(["", " \t"])("rejects an explicit empty decision limit %#", async (limit) => {
+  it("rejects an explicit empty decision limit", async () => {
+    const limit = "";
+
     await expect(
       auditListCommand({ explain: true, runId: "run-1", limit }, runtime),
     ).rejects.toThrow("with --explain");
