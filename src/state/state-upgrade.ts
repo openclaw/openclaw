@@ -432,42 +432,32 @@ export async function upgradeStateDirectory(params: {
         // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
         `State upgrade chain failed at ${failedStep}: ${(error as Error).message}. Rebuilding the databases with the generic copy; the previous files are kept and pinned.`,
       );
-      // Keep what the chain finished outside the databases it upgrades: the migrated
-      // config and new stores it moved data into (client credentials, services).
-      const kept = path.join(workDir, "kept");
-      const keep = [
-        shadowConfig,
-        ...listTreeFiles(shadowRoot).filter(
-          (file) =>
-            isSqliteFile(file) &&
-            !fs.existsSync(path.join(stateDir, path.relative(shadowRoot, file))),
-        ),
-      ].filter((file) => fs.existsSync(file));
-      for (const file of keep) {
-        const target = path.join(kept, path.relative(workDir, file));
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.renameSync(file, target);
-      }
-      fs.rmSync(shadowRoot, { recursive: true, force: true });
-      const fallback = buildFallback(outdated, toShadow, workDir);
-      // The upgrade report, set-aside rows and pin live in the shared database, so a
-      // current one is copied too and swapped with them.
-      const liveState = path.join(stateDir, "state", "openclaw.sqlite");
-      if (!outdated.some((t) => t.kind === "state") && isSqliteFile(liveState)) {
-        fs.mkdirSync(path.dirname(toShadow(liveState)), { recursive: true });
-        vacuumSqliteInto(liveState, toShadow(liveState));
-        fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
-      }
-      for (const file of keep) {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.renameSync(path.join(kept, path.relative(workDir, file)), file);
-        if (file !== shadowConfig) {
+      // The fallback swaps only the rebuilt databases plus what the chain finished
+      // outside them: the migrated config and new stores it moved data into (client
+      // credentials, services). Those stay in the shadow, in directories with the
+      // chain's modes; the rest of the shadow is never swapped.
+      for (const file of listTreeFiles(shadowRoot)) {
+        if (
+          isSqliteFile(file) &&
+          !fs.existsSync(path.join(stateDir, path.relative(shadowRoot, file)))
+        ) {
           fallbackAdds.push({
             kind: "add",
             live: path.join(stateDir, path.relative(shadowRoot, file)),
             next: file,
           });
         }
+      }
+      const fallback = buildFallback(outdated, toShadow, workDir);
+      // The upgrade report, set-aside rows and pin live in the shared database, so a
+      // current one is copied too and swapped with them.
+      const liveState = path.join(stateDir, "state", "openclaw.sqlite");
+      if (!outdated.some((t) => t.kind === "state") && isSqliteFile(liveState)) {
+        for (const suffix of ["-wal", "-shm", "-journal"]) {
+          fs.rmSync(`${toShadow(liveState)}${suffix}`, { force: true });
+        }
+        vacuumSqliteInto(liveState, toShadow(liveState));
+        fallbackAdds.push({ kind: "replace", live: liveState, next: toShadow(liveState) });
       }
       warnings.push(...fallback.foldInFailures);
       for (const report of fallback.reports) {
