@@ -103,6 +103,7 @@ describe("swarm tools integration", () => {
   it("spawns text and structured collectors with explicit collection guidance and drains them in completion order", async () => {
     const settleRootWork = observeRootWork();
     const waitsStarted = createDeferred();
+    const firstStructuredOutputRecorded = createDeferred();
     const stateDir = tempDirs.make("openclaw-swarm-tools-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     setRuntimeConfigSnapshot(config);
@@ -145,8 +146,16 @@ describe("swarm tools integration", () => {
       ).find((tool) => tool.name === "structured_output");
       if (outputSchema) {
         expect(structuredOutput).toBeDefined();
+        // Tool preparation is concurrent; explicitly order the mock model calls,
+        // independently of the collector completion order exercised below.
+        if (index === 3) {
+          await firstStructuredOutputRecorded.promise;
+        }
         await structuredOutput?.execute("mock-model-output", { result: { index } });
         modelStructuredCalls.push(index);
+        if (index === 1) {
+          firstStructuredOutputRecorded.resolve();
+        }
       } else {
         expect(structuredOutput).toBeUndefined();
       }

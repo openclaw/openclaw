@@ -13,6 +13,7 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
 import { createNoopLogger } from "../../cron/service.test-harness.js";
+import { loadCronJobsStore } from "../../cron/store.js";
 import type { CronDelivery } from "../../cron/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -49,6 +50,7 @@ async function withWebchatTool(
     cron: CronService;
     revoke: () => void;
     creatorStorePath: string;
+    cronStorePath: string;
   }) => Promise<void>,
   storedContext: DeliveryContext = { channel: "webchat", to: sessionKey },
   channelsEnabled = true,
@@ -178,6 +180,7 @@ async function withWebchatTool(
       await check({
         cron,
         creatorStorePath: sessionStorePath,
+        cronStorePath: storePath,
         revoke,
         tool,
         add: async (delivery, target = "current") => {
@@ -205,7 +208,7 @@ async function withWebchatTool(
 describe("WebChat automation creation through the tool and Gateway", () => {
   it("previews the retained conversation when replaying a declaration after reset", async () => {
     await withWebchatTool(
-      async ({ tool, cron, creatorStorePath }) => {
+      async ({ tool, cron, creatorStorePath, cronStorePath }) => {
         const create = () =>
           tool.execute("declare-watcher", {
             action: "add",
@@ -220,7 +223,7 @@ describe("WebChat automation creation through the tool and Gateway", () => {
           });
         await create();
         const original = structuredClone(
-          expectDefined((await cron.list({ includeDisabled: true }))[0], "created job"),
+          expectDefined((await loadCronJobsStore(cronStorePath)).jobs[0], "created job"),
         );
         expect(original.sourceConversation).toMatchObject({
           sessionKey,

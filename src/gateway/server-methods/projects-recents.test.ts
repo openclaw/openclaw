@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   replaceSessionEntry,
@@ -26,7 +26,15 @@ import * as rowInputs from "../session-utils-row.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import { initializeRepository, invokeProjectMethod } from "./projects.test-support.js";
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => Response.json({ visibility: "public" })),
+  );
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   const memoryLocation = {
     agentId: "main",
