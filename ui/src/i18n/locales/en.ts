@@ -794,6 +794,7 @@ const startupEnglish = {
     deleteSessionsStale: {},
     groupMenu: "Group options for {group}",
     groupOptions: "Group options",
+    openSessionsPage: "Open Sessions",
     newSessionInGroup: "New session in {group}",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
     moveToTopLevel: "Move to top level",

@@ -209,7 +209,7 @@ suite.define(() => {
 
           await gateway.waitForRequest("plugins.controlUi.list");
           const pages = await openSidebarPages(page);
-          await pages.getByRole("link", { name: "Sessions", exact: true }).waitFor();
+          await pages.getByRole("link", { name: "Systems", exact: true }).waitFor();
           expect
             .soft(await pages.getByRole("link", { name: "Access", exact: true }).count())
             .toBe(0);
