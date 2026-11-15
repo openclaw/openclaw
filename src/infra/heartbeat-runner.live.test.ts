@@ -43,18 +43,87 @@ function messagesWithRole(messages: unknown[], role: string): string {
   return JSON.stringify(messages.filter((message) => asOptionalRecord(message)?.role === role));
 }
 
+// Code Mode carries nested exec receipts in its value or JSON text output.
+// Project only lifecycle scalars, never the command, output, or error message.
+function summarizeToolResult(value: unknown, depth = 0): unknown {
+  if (depth > 5) {
+    return undefined;
+  }
+  if (typeof value === "string") {
+    try {
+      return summarizeToolResult(JSON.parse(value), depth + 1);
+    } catch {
+      return undefined;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => summarizeToolResult(item, depth + 1));
+  }
+  const result = asOptionalRecord(value);
+  if (!result) {
+    return undefined;
+  }
+  return {
+    status: typeof result.status === "string" ? result.status : undefined,
+    exitCode: typeof result.exitCode === "number" ? result.exitCode : undefined,
+    durationMs: typeof result.durationMs === "number" ? result.durationMs : undefined,
+    value: summarizeToolResult(result.value, depth + 1),
+    output: summarizeToolResult(result.output, depth + 1),
+    text: summarizeToolResult(result.text, depth + 1),
+  };
+}
+
+// Keep failure evidence structural: never emit prompts, reasoning, or tool output.
+function summarizeMessages(messages: unknown[]) {
+  return messages.map((value) => {
+    const message = asOptionalRecord(value);
+    const content = Array.isArray(message?.content) ? message.content : [];
+    const usage = asOptionalRecord(message?.usage);
+    return {
+      role: message?.role,
+      timestamp: message?.timestamp,
+      stopReason: message?.stopReason,
+      contentTypes: content.map((block) => asOptionalRecord(block)?.type),
+      usage: usage
+        ? Object.fromEntries(
+            Object.entries(usage).filter(([, amount]) => typeof amount === "number"),
+          )
+        : undefined,
+      isError: message?.isError,
+      toolResult:
+        message?.role === "toolResult"
+          ? summarizeToolResult(message.details ?? message.content)
+          : undefined,
+    };
+  });
+}
+
 async function sendChatTurn(client: GatewayClient, sessionKey: string, message: string) {
+  const submittedAt = Date.now();
   const started = await client.request<{ runId: string }>("chat.send", {
     sessionKey,
     idempotencyKey: randomUUID(),
     timeoutMs: 170_000,
     message,
   });
-  return client.request<{ status: string }>(
+  const waitStartedAt = Date.now();
+  const result = await client.request<{ status: string; startedAt?: number; endedAt?: number }>(
     "agent.wait",
     { runId: started.runId, timeoutMs: TURN_TIMEOUT_MS },
     { timeoutMs: TURN_TIMEOUT_MS + 5_000 },
   );
+  console.info(
+    "[session-event-wake] agent.wait",
+    JSON.stringify({
+      submittedAt,
+      waitStartedAt,
+      settledAt: Date.now(),
+      status: result.status,
+      startedAt: result.startedAt,
+      endedAt: result.endedAt,
+    }),
+  );
+  return result;
 }
 
 async function writeGateFixture(workspace: string, name: string, output: string, exitCode: number) {
@@ -224,8 +293,16 @@ describeLive("session event wake through a live Gateway", () => {
           "started",
         );
         const foregroundMessages = await readMessages(config, sessionKey);
-        expect(messagesWithRole(foregroundMessages, "assistant")).toContain(startedReply);
-        expect(messagesWithRole(foregroundMessages, "assistant")).not.toContain(completionReply);
+        const foregroundSummary = JSON.stringify(summarizeMessages(foregroundMessages));
+        // Assert booleans so Vitest cannot dump reasoning/tool payloads on failure.
+        expect(
+          messagesWithRole(foregroundMessages, "assistant").includes(startedReply),
+          foregroundSummary,
+        ).toBe(true);
+        expect(
+          messagesWithRole(foregroundMessages, "assistant").includes(completionReply),
+          foregroundSummary,
+        ).toBe(false);
         await expect(fs.access(path.join(workspace, "completion-completed"))).rejects.toThrow();
 
         if (busySibling) {

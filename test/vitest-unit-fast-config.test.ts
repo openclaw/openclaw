@@ -647,6 +647,7 @@ describe("unit-fast vitest lane", () => {
       "src/agents/auth-profiles/oauth-refresh-error.test.ts",
       "src/agents/embedded-agent-runner/model.provider-hooks.timeout.test.ts",
       "src/agents/tools/computer-tool.schema.test.ts",
+      "src/auto-reply/reply.directive.directive-behavior.shows-current-verbose-level-verbose-has-no.test.ts",
       "src/infra/provider-usage.test.ts",
     ];
     for (const file of files) {
@@ -656,6 +657,9 @@ describe("unit-fast vitest lane", () => {
       expect(resolveUnitFastTestIncludePattern(file)).toBeNull();
       expect(resolveUnitFastIsolatedTestIncludePattern(file)).toBe(file);
     }
+    // The consumer stays non-isolated: isolation belongs to the helper that installs mocks.
+    const consumer = "src/agents/agent-tools.before-tool-call.params.test.ts";
+    expect(resolveUnitFastTestIncludePattern(consumer)).toBe(consumer);
   });
 
   it("routes fake-timer unit-fast tests through the serial fake-timer lane", () => {

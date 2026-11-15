@@ -81,6 +81,7 @@ struct ControlUIDocumentNativeAuthTests {
             var outcome: Result<Void, Error>
             var hostedBridge: NativeConversationBridge?
             var pendingReply: Task<String, Error>?
+            var stage = "conversation document creation"
             do {
                 let manager = DashboardManager._testMake(
                     selection: MacGatewaySelectionPreferences(defaults: defaults),
@@ -101,14 +102,17 @@ struct ControlUIDocumentNativeAuthTests {
                 let bridge = NativeConversationBridge(document: document)
                 handler.owner = bridge
                 hostedBridge = bridge
+                stage = "document load and ready message"
                 bridge.load(server.url("/control/chat/main"))
                 try await AsyncTimeout.withTimeout(
                     seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await ready.loaded.wait() })
+                stage = "native auth bootstrap"
                 let bootstrap = try #require(try await document.webView.evaluateJavaScript(
                     "window.__OPENCLAW_NATIVE_CONTROL_AUTH__") as? [String: Any])
                 #expect(bootstrap["nativeConnectAuth"] as? Bool == true)
                 #expect(bootstrap["token"] as? String == "accepted-native-token")
                 #expect(document.currentURL.fragment == nil)
+                stage = "initial native auth challenge"
                 let accepted = try await Self.decodeReply(Self.challenge(in: document.webView))
                 let result = try #require(accepted["result"] as? [String: Any], "Native auth reply: \(accepted)")
                 #expect(result["auth"] as? [String: String] == ["token": "accepted-native-token"])
@@ -130,6 +134,7 @@ struct ControlUIDocumentNativeAuthTests {
                     await release.wait()
                     return reply
                 }
+                stage = "held native auth provider request"
                 let pending = Task { try await Self.challenge(in: document.webView) }
                 pendingReply = pending
                 try await AsyncTimeout.withTimeout(
@@ -139,17 +144,21 @@ struct ControlUIDocumentNativeAuthTests {
                 document.webView.navigationDelegate = retirement
                 bridge.close()
                 release.open()
+                stage = "in-flight reply rejection after retirement"
                 let retired = try await Self.decodeReply(pending.value)
                 #expect(retired["error"] as? String != nil)
                 #expect(retired["result"] == nil)
                 // The fixture deliberately retains the old page. A new request
                 // must also be denied, not just the earlier in-flight reply.
+                stage = "new challenge rejection after retirement"
                 let refused = try await Self.decodeReply(Self.challenge(in: document.webView))
                 #expect(refused["error"] as? String != nil)
                 #expect(calls.value == 1)
                 outcome = .success(())
             } catch {
-                outcome = .failure(error)
+                outcome = .failure(NSError(
+                    domain: "ControlUIDocumentNativeAuthTests", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Failed during \(stage)", NSUnderlyingErrorKey: error]))
             }
             _ = await pendingReply?.result
             if let bridge = hostedBridge {
@@ -162,7 +171,14 @@ struct ControlUIDocumentNativeAuthTests {
                     try await AsyncTimeout.withTimeout(
                         seconds: 5, onTimeout: { URLError(.timedOut) }, operation: { await shutdown.wait() })
                 } catch {
-                    if case .success = outcome { outcome = .failure(error) }
+                    if case .success = outcome {
+                        outcome = .failure(NSError(
+                            domain: "ControlUIDocumentNativeAuthTests", code: 1,
+                            userInfo: [
+                                NSLocalizedDescriptionKey: "Failed during blank navigation commit and shutdown",
+                                NSUnderlyingErrorKey: error,
+                            ]))
+                    }
                 }
             }
             await connection.shutdown()
