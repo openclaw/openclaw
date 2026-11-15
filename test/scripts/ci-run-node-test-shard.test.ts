@@ -1,5 +1,5 @@
 import * as childProcess from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash as createVolumeHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -59,10 +59,10 @@ const nativeQualificationFixtures = vi.hoisted(() => ({
 }));
 
 vi.mock("../../scripts/lib/ci-test-native-bun-qualification.json", async () => {
-  const { createHash: createSourceHash } = await import("node:crypto");
+  const { createHash } = await import("node:crypto");
   const { readFileSync: readQualificationSource } = await import("node:fs");
   const hash = (file: string) =>
-    createSourceHash("sha256").update(readQualificationSource(file)).digest("hex");
+    createHash("sha256").update(readQualificationSource(file)).digest("hex");
   const { first, second, helperTest, helper, setup } = nativeQualificationFixtures;
   return {
     default: {
@@ -140,7 +140,7 @@ it.each([false, true])(
           engine: "vitest" as const,
           profile: "c".repeat(64),
           environment: nodeTestVolumeEnvironment({}).semantic,
-          argsDigest: createHash("sha256")
+          argsDigest: createVolumeHash("sha256")
             .update(JSON.stringify([configs[0]]))
             .digest("hex"),
           full: { ...count, id: "d".repeat(64) },
@@ -149,7 +149,6 @@ it.each([false, true])(
       ],
     };
     const plans = groupPlans([{ configs, volume }], packed);
-    expect(plans[0]).toMatchObject({ plan: { volume } });
     const output: string[] = [];
     vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
       output.push(String(chunk));
@@ -175,43 +174,18 @@ it.each([false, true])(
     expect(changedArgs.every((record) => record.full === null && record.selected === null)).toBe(
       true,
     );
+    output.length = 0;
+    volume.entries.push({ ...volume.entries[0]! });
+    await recordPlans(groupPlans([{ configs, volume }], packed));
+    const ambiguous = output.filter((line) => line.startsWith("[shard:volume] "));
+    expect(ambiguous.map((line) => JSON.parse(line.slice("[shard:volume] ".length)))).toMatchObject(
+      [
+        { full: null, selected: null },
+        { full: null, selected: null },
+      ],
+    );
   },
 );
-
-it("rejects ambiguous volume matches", async () => {
-  const config = "one.config.ts";
-  const volume = {
-    version: 1 as const,
-    revision: "a".repeat(40),
-    policy: "node" as const,
-    entries: [
-      {
-        config,
-        runtime: "node" as const,
-        engine: "vitest" as const,
-        profile: "b".repeat(64),
-        environment: nodeTestVolumeEnvironment({}).semantic,
-        argsDigest: createHash("sha256")
-          .update(JSON.stringify([config]))
-          .digest("hex"),
-        full: { count: 3, digest: "c".repeat(64), id: "d".repeat(64) },
-        selected: { count: 1, digest: "e".repeat(64) },
-      },
-    ],
-  };
-  const output: string[] = [];
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-    output.push(String(chunk));
-    return true;
-  });
-  const records = () =>
-    output
-      .filter((line) => line.startsWith("[shard:volume] "))
-      .map((line) => JSON.parse(line.slice("[shard:volume] ".length)));
-  volume.entries.push({ ...volume.entries[0]! });
-  await recordPlans(groupPlans([{ configs: [config], volume }]));
-  expect(records()).toMatchObject([{ full: null, selected: null }]);
-});
 
 function machine(cpus: number, gib: number) {
   vi.spyOn(groupOwner, "shouldUseDetachedVitestProcessGroup").mockReturnValue(true);

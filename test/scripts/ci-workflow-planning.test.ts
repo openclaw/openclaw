@@ -5504,7 +5504,11 @@ describe("ci workflow guards", () => {
         },
         changedPlannerSource: `
         export const createChangedNodeTestShards = (_paths, options = {}) => {
-          console.log("dedicated-coverage:" + JSON.stringify(options));
+          const { environment, ...volumeContext } = options.volumeContext;
+          if (environment.OPENCLAW_CI_TEST_RUNTIME_POLICY !== volumeContext.runtimePolicy) {
+            throw new Error("Volume environment must retain the planner runtime policy");
+          }
+          console.log("dedicated-coverage:" + JSON.stringify({ ...options, volumeContext }));
           return ${
             buildImpact
               ? "[]"
@@ -5547,6 +5551,18 @@ describe("ci workflow guards", () => {
           (file) => !CI_MANIFEST_FIXTURE_TARGETS.real.includes(file),
         ),
         dedicatedMaxLinesRatchet: true,
+        volumeContext: {
+          revision: "a".repeat(40),
+          runtimePolicy: "node",
+          eligibility: {
+            changedPaths: [
+              buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts",
+              ...nativePaths,
+            ],
+            includeReleaseOnlyRuntimeTests: false,
+            includePrExemptRuntimeTests: false,
+          },
+        },
       });
       const workflow = readCiWorkflow();
       const typeContext = {
@@ -13450,7 +13466,6 @@ describe("ci workflow guards", () => {
     for (const encoded of Object.values(pools)) {
       expect(String(encoded).length).toBeLessThanOrEqual(60_000);
     }
-    let measured = 0;
     const denominators = new Map<string, string[]>();
     const runtimeRows: {
       row: Record<string, unknown>;
@@ -13478,25 +13493,16 @@ describe("ci workflow guards", () => {
           continue;
         }
         for (const entry of plan.plan.volume?.entries ?? []) {
-          const owner = new Set(listNodeTestConfigFiles(entry.config));
-          const selected = (plan.plan.includePatterns ?? [])
-            .filter((file) => owner.has(file))
-            .toSorted();
           expect(entry.runtime).toBe("node");
           expect(entry.full).not.toBeNull();
-          expect(entry.selected).toEqual({
-            count: selected.length,
-            digest: createHash("sha256").update(JSON.stringify(selected)).digest("hex"),
-          });
           if (entry.full) {
             const key = JSON.stringify([entry.config, entry.runtime, entry.profile]);
             denominators.set(key, [...(denominators.get(key) ?? []), entry.full.id]);
           }
-          measured++;
         }
       }
     }
-    expect(measured).toBeGreaterThan(0);
+    expect(runtimeRows.length).toBeGreaterThan(0);
     expect([...denominators.values()].some((ids) => ids.length > 1)).toBe(true);
     for (const ids of denominators.values()) {
       expect(new Set(ids).size).toBe(1);

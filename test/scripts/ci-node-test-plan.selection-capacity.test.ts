@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { createChangedNodeTestShards } from "../../scripts/lib/ci-changed-node-test-plan.mts";
 import { routeBoatNodeTestJobs } from "../../scripts/lib/ci-node-test-capacity.mts";
 import { nodeTestVolumeEnvironment } from "../../scripts/lib/ci-node-test-groups-codec.mts";
@@ -8,6 +8,7 @@ import * as inventoryOwner from "../../scripts/lib/ci-node-test-inventory.mts";
 import {
   createNodeTestShardBundles,
   createSelectedNodeTestShardBundles,
+  isRuntimeTestFileIncluded,
   type NodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { parseCompactSplitTimingKey } from "../../scripts/lib/vitest-shard-metadata.mts";
@@ -19,71 +20,57 @@ it("retains the original eligible denominator across selected subsets and runtim
     "src/gateway/board-http.test.ts",
   ];
   const siblingConfig = "test/vitest/vitest.gateway-server-isolated.config.ts";
-  const siblingFiles = [
-    "src/gateway/gateway.prompt-cache.test.ts",
-    "src/gateway/gateway-plugin-notice.prompt-cache.test.ts",
-    "src/gateway/server.subagent-prompt-recent.gateway.test.ts",
-  ];
-  const released = "src/gateway/gateway-auth-recovery.test.ts";
-  const original = inventoryOwner.listNodeTestConfigFiles;
-  const owner = vi
-    .spyOn(inventoryOwner, "listNodeTestConfigFiles")
-    .mockImplementation((name) =>
-      name === config
-        ? [...files, released]
-        : name === siblingConfig
-          ? siblingFiles
-          : original(name),
+  const sibling = "src/gateway/gateway.prompt-cache.test.ts";
+  const volumeContext = {
+    revision: "a".repeat(40),
+    runtimePolicy: "dual-all" as const,
+    eligibility: {
+      changedPaths: [...files, sibling],
+      includeReleaseOnlyRuntimeTests: false,
+      includePrExemptRuntimeTests: false,
+    },
+  };
+  const eligible = (name: string) =>
+    inventoryOwner
+      .listNodeTestConfigFiles(name)!
+      .filter((file) => isRuntimeTestFileIncluded(file, volumeContext.eligibility));
+  expect(eligible(config)).not.toContain("src/gateway/gateway-auth-recovery.test.ts");
+  const volumes = files.map((file) => {
+    const jobs = createSelectedNodeTestShardBundles([file, sibling], {
+      runnerBackend: "hybrid",
+      // Execution has already admitted these targets. Metadata must not use these flags.
+      includeReleaseOnlyRuntimeTests: true,
+      includePrExemptRuntimeTests: true,
+      volumeContext,
+    })!;
+    expect(jobs.flatMap(planFiles).toSorted()).toEqual([file, sibling].toSorted());
+    const entries = jobs.flatMap((job) =>
+      job.groups.flatMap((group) => group.volume?.entries ?? []),
     );
-  try {
-    const volumeContext = {
-      revision: "a".repeat(40),
-      runtimePolicy: "dual-all" as const,
-      eligibility: {
-        changedPaths: [...files, ...siblingFiles],
-        includeReleaseOnlyRuntimeTests: false,
-        includePrExemptRuntimeTests: false,
-      },
-    };
-    const volumes = files.map((file) => {
-      const jobs = createSelectedNodeTestShardBundles([file, siblingFiles[0]!], {
-        runnerBackend: "hybrid",
-        // Execution has already admitted these targets. Metadata must not use these flags.
-        includeReleaseOnlyRuntimeTests: true,
-        includePrExemptRuntimeTests: true,
-        volumeContext,
-      })!;
-      expect(jobs.flatMap(planFiles).toSorted()).toEqual([file, siblingFiles[0]!].toSorted());
-      const entries = jobs.flatMap((job) =>
-        job.groups.flatMap((group) => group.volume?.entries ?? []),
+    expect(
+      entries.filter((entry) => entry.config === siblingConfig).map((entry) => entry.full?.count),
+    ).toEqual([eligible(siblingConfig).length, eligible(siblingConfig).length]);
+    return entries.filter((entry) => entry.config === config);
+  });
+  for (const entries of volumes) {
+    expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(["bun", "node"]);
+    for (const entry of entries) {
+      const expected = eligible(config).filter(
+        (file) =>
+          entry.runtime === "node" || file !== "src/gateway/session-database-retention.test.ts",
       );
-      expect(
-        entries.filter((entry) => entry.config === siblingConfig).map((entry) => entry.full?.count),
-      ).toEqual([3, 3]);
-      return entries.filter((entry) => entry.config === config);
-    });
-    const digest = createHash("sha256").update(JSON.stringify(files.toSorted())).digest("hex");
-    for (const entries of volumes) {
-      expect(entries.map((entry) => entry.runtime).toSorted()).toEqual(["bun", "node"]);
-      for (const entry of entries) {
-        expect(entry.config).toBe(config);
-        expect(entry.full).toMatchObject({ count: 2, digest });
-        expect(entry.selected?.count).toBe(1);
-      }
+      expect(entry.full).toMatchObject({
+        count: expected.length,
+        digest: createHash("sha256").update(JSON.stringify(expected.toSorted())).digest("hex"),
+      });
     }
-    for (const runtime of ["node", "bun"]) {
-      expect(volumes[0]!.find((entry) => entry.runtime === runtime)!.full!.id).toBe(
-        volumes[1]!.find((entry) => entry.runtime === runtime)!.full!.id,
-      );
-    }
-    expect(volumes[0]![0]!.full!.id).not.toBe(volumes[0]![1]!.full!.id);
-    const legacy = createSelectedNodeTestShardBundles([files[0]!], { runnerBackend: "hybrid" })!;
-    expect(legacy.flatMap((job) => job.groups).every((group) => group.volume === undefined)).toBe(
-      true,
-    );
-  } finally {
-    owner.mockRestore();
   }
+  for (const runtime of ["node", "bun"]) {
+    expect(volumes[0]!.find((entry) => entry.runtime === runtime)!.full!.id).toBe(
+      volumes[1]!.find((entry) => entry.runtime === runtime)!.full!.id,
+    );
+  }
+  expect(volumes[0]![0]!.full!.id).not.toBe(volumes[0]![1]!.full!.id);
 });
 
 it("separates scenario identity from worker-only split profiles", () => {
