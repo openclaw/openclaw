@@ -43,6 +43,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("omits a redundant ACP owner from chat history while retaining other explicit scopes", () => {
+  const acpKey = "agent:acp-unlisted:acp:00000000-0000-4000-8000-000000000001";
+  expect(chatHistoryRequestParams("chat.history", acpKey, "acp-unlisted")).not.toHaveProperty(
+    "agentId",
+  );
+  expect(chatHistoryRequestParams("chat.history", "agent:main:main", "main").agentId).toBe("main");
+  expect(chatHistoryRequestParams("chat.history", acpKey, "other-agent").agentId).toBe(
+    "other-agent",
+  );
+});
+
 it("keeps the initial transcript and buffered streaming final exactly once in the real pane", async () => {
   const key = "agent:main:current";
   const runId = "boot-stream-run";

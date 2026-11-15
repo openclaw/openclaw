@@ -33,7 +33,7 @@ import {
   resolvePendingConversation,
 } from "./session-pending-rows.ts";
 import type { SessionPermissionClaim } from "./session-permission-projection.ts";
-import { requestSessionPatch } from "./session-requests.ts";
+import { buildSessionRequestParams, requestSessionPatch } from "./session-requests.ts";
 import type { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 import type {
   SessionConnectionScope,
@@ -488,13 +488,18 @@ export function requestSessionPatchMany(
   client: SessionRequestClient,
   params: SessionsPatchManyParams,
 ): Promise<SessionsPatchManyResult> {
+  const targets = params.targets.map((target) => {
+    const { agentId, ...rest } = target;
+    return { ...rest, ...buildSessionRequestParams(target.key, agentId) };
+  });
+  const request = { ...params, targets };
   return params.patch.archived === true
     ? client.request<SessionsPatchManyResult>(
         "sessions.patchMany",
-        params,
+        request,
         SESSION_ARCHIVE_REQUEST_OPTIONS,
       )
-    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
+    : client.request<SessionsPatchManyResult>("sessions.patchMany", request);
 }
 
 registerSessionMutationOperations({

@@ -7,6 +7,7 @@ import { formatUiError } from "../lib/format-error.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
 import { resolveSessionRenamePatch } from "../lib/session-rename.ts";
+import { scopedAgentParamsForSession } from "../lib/sessions/navigation.ts";
 import { sessionDeleteConfirmationMessage } from "../lib/sessions/session-delete-confirmation.ts";
 import { isSubagentSessionKey, resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -145,9 +146,13 @@ export async function deleteSessionsBatch(
   if (!confirmed) {
     return;
   }
+  const sessionScope = {
+    assistantAgentId: scope.selectedAgentId,
+    hello: scope.gateway.snapshot.hello,
+  };
   const requests = rows.map((row) => ({
     key: row.key,
-    agentId: resolveUiSessionRowAgentId(row, scope.selectedAgentId),
+    ...scopedAgentParamsForSession(sessionScope, row.key),
     deleteTranscript: true,
     ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),
     ...(row.archived === true ? { archivedOnly: true } : {}),
@@ -612,7 +617,13 @@ export async function deleteSession(
   }
   const agentId = resolveUiSessionRowAgentId(session, scope.selectedAgentId);
   const deleteParams = {
-    agentId,
+    ...scopedAgentParamsForSession(
+      {
+        assistantAgentId: scope.selectedAgentId,
+        hello: scope.gateway.snapshot.hello,
+      },
+      session.key,
+    ),
     deleteTranscript: true,
     ...(session.sessionId ? { expectedSessionId: session.sessionId } : {}),
     ...(session.archived === true ? { archivedOnly: true } : {}),

@@ -13,6 +13,7 @@ import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   isUiSelectedGlobalSessionKey,
+  parseAgentSessionKey,
   resolveUiSelectedSessionAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
@@ -193,6 +194,13 @@ async function synchronizeSelectedSessionMessageSubscription(
   if (!nextKey) {
     return false;
   }
+  const parsedSession = parseAgentSessionKey(nextKey);
+  const initialHistoryEnabled =
+    opts?.initialHistory === true &&
+    !(
+      parsedSession?.rest.startsWith("acp:") &&
+      !state.agentsList?.agents?.some((agent) => agent.id === parsedSession.agentId)
+    );
   const previousRequestedKey = normalizeNullableString(
     state.chatSessionMessageSubscriptionRequestedKey,
   );
@@ -273,7 +281,7 @@ async function synchronizeSelectedSessionMessageSubscription(
         let run: ReturnType<typeof captureChatHistoryRun>;
         let observation: InitialChatHistoryReceipt["observation"] | undefined;
         const admit = () => {
-          if (state.connected && opts?.initialHistory && !observation) {
+          if (state.connected && initialHistoryEnabled && !observation) {
             observation = { owner: sessions, reconcile: sessions.captureReconcile() };
             run = captureChatHistoryRun(state, isCurrent);
           }
@@ -284,11 +292,11 @@ async function synchronizeSelectedSessionMessageSubscription(
             return null;
           }
         }
-        const cursor = opts?.initialHistory ? readChatHistoryCursor(state) : undefined;
+        const cursor = initialHistoryEnabled ? readChatHistoryCursor(state) : undefined;
         const requestAgentId = isUiSelectedGlobalSessionKey(state, nextKey)
           ? resolveUiSelectedSessionAgentId(state)
           : undefined;
-        const params = opts?.initialHistory
+        const params = initialHistoryEnabled
           ? chatHistoryRequestParams(
               "chat.startup",
               nextKey,

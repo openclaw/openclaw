@@ -12,6 +12,7 @@ import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../../src/shared/session-lis
 import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts";
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
+import { isRedundantAcpSessionOwner } from "./session-key.ts";
 import type {
   SessionListOptions,
   SessionRequestClient,
@@ -70,7 +71,9 @@ export function buildSessionRequestParams(
   const normalizedAgentId = agentId?.trim();
   return {
     key: normalizedKey,
-    ...(normalizedAgentId ? { agentId: normalizedAgentId } : {}),
+    ...(normalizedAgentId && !isRedundantAcpSessionOwner(normalizedKey, normalizedAgentId)
+      ? { agentId: normalizedAgentId }
+      : {}),
   };
 }
 
