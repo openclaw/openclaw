@@ -21,30 +21,17 @@ const runTurn = ({
   runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({ ...overrides, job: makeIsolatedAgentJobFixture(job) }),
   );
-function mockAgentRun({
-  provider = "anthropic",
-  model = "claude-opus-4-8",
-  usage = { input: 10, output: 0 },
-  meta = {},
-  ...result
-}: {
-  provider?: string;
-  model?: string;
-  usage?: { input: number; output: number };
-  meta?: Record<string, unknown>;
-  [key: string]: unknown;
-} = {}) {
+function mockAgentRun(result: Record<string, unknown> = {}) {
   harness.runWithModelFallbackMock.mockResolvedValueOnce({
-    result: { result: { payloads: [], ...result, meta: { agentMeta: { usage }, ...meta } } },
-    provider,
-    model,
+    result: { result: { payloads: [], meta: {}, ...result } },
+    provider: "anthropic",
+    model: "claude-opus-4-8",
     attempts: [],
   });
 }
 function mockChildRun(payloads: unknown[] = [], collector = true, meta = {}) {
   mockAgentRun({
     payloads,
-    usage: { input: 10, output: 1 },
     meta,
     acceptedSessionSpawns: [
       { runId: "run-child", childSessionKey: "agent:default:child", collector },
@@ -170,8 +157,10 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       const errorObservation = { failoverReason: "context_overflow" };
       const data = { phase: "finishing", error: "context length exceeded", errorObservation };
       params.onAgentEvent({ stream: "lifecycle", data });
-      const payloads = [{ text: "Partial success-looking text" }];
-      return { payloads, meta: { error: { kind: "compaction_failure", message } } };
+      return {
+        payloads: [{ text: "Partial success-looking text" }],
+        meta: { error: { kind: "compaction_failure", message } },
+      };
     });
     const terminals: Record<string, unknown>[] = [];
     const stop = onAgentEvent((evt) => evt.data.phase === "error" && terminals.push(evt.data));
@@ -203,7 +192,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       await useRealOutcome();
       mockAgentRun({
         payloads: failed ? [{ text: "⚠️ 🛠️ Bash failed: mount unavailable", isError: true }] : [],
-        usage: { input: 10, output: failed ? 0 : 1 },
         meta: { terminalReply: { disposition: "silent" } },
       });
       const result = await runTurn();
