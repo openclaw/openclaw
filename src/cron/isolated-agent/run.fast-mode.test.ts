@@ -372,7 +372,9 @@ describe("runCronIsolatedAgentTurn session cleanup", () => {
       }
       expectCall(h.dispatchCronDeliveryMock, {
         sourceSessionKey: source.sessionKey,
-        sourceSessionGeneration: sourceGeneration,
+        sourceSessionGeneration: isolated
+          ? { sessionId: "source-session", lifecycleRevision: undefined }
+          : sourceGeneration,
       });
     },
   );
