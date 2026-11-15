@@ -1,4 +1,5 @@
 import { asSafeIntegerInRange } from "@openclaw/normalization-core/number-coercion";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChatInputReceipts,
@@ -7,14 +8,16 @@ import type {
   ChatHistoryDeltaResult as ProtocolChatHistoryDeltaResult,
   ChatHistoryResetResult,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import {
+  readTranscriptDisplayPosition,
+  type TranscriptDisplayPosition,
+} from "../../../../src/chat/transcript-display-position.ts";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
 import {
   nativeHistoryMessageIdentity,
   nativeHistoryMessageSourceId,
-  nativeHistoryMessagePosition,
-  oldestPositionedHistoryMessage,
   nativeHistoryMessageSourceIdentity,
   oldestNativeHistoryMessage,
 } from "../../lib/chat/history-message-identity.ts";
@@ -130,6 +133,28 @@ export function historySessionId(result: ChatHistoryResult): string | null {
     normalizeNullableString(result.sessionInfo?.sessionId) ??
     normalizeNullableString(result.sessionId)
   );
+}
+
+export function nativeHistoryMessagePosition(message: unknown) {
+  return readTranscriptDisplayPosition(
+    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
+  );
+}
+
+/** Display order can relocate activity; cursor coverage follows physical rows. */
+export function oldestPositionedHistoryMessage(messages: unknown[]) {
+  let oldest: { message: unknown; position: TranscriptDisplayPosition } | undefined;
+  for (const message of messages) {
+    const position = nativeHistoryMessagePosition(message);
+    if (
+      position &&
+      (!oldest ||
+        (position.source === oldest.position.source && position.rawSeq < oldest.position.rawSeq))
+    ) {
+      oldest = { message, position };
+    }
+  }
+  return oldest;
 }
 
 function retainedRawHistoryStart(pagination: ChatHistoryPagination): number | null {

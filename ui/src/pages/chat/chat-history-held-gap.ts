@@ -1,7 +1,5 @@
 import {
   nativeHistoryMessageSourceId,
-  nativeHistoryMessagePosition,
-  oldestPositionedHistoryMessage,
   prependUniqueNativeMessages,
 } from "../../lib/chat/history-message-identity.ts";
 import type { ChatHistoryPagination } from "./chat-history-pagination.ts";
@@ -13,6 +11,8 @@ import {
   type ChatHistoryResult,
   historySessionId,
   resolveChatHistoryPagination,
+  nativeHistoryMessagePosition,
+  oldestPositionedHistoryMessage,
 } from "./chat-history-snapshot.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 

@@ -1,9 +1,5 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  readTranscriptDisplayPosition,
-  type TranscriptDisplayPosition,
-} from "../../../../src/chat/transcript-display-position.ts";
 
 export function readChatThreadMessageIdentity(message: unknown) {
   const record = asNullableRecord(message);
@@ -51,28 +47,6 @@ export function findChatSubmissionMessage(
 export function nativeHistoryMessageSourceId(message: unknown): string | null {
   const id = asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.id;
   return typeof id === "string" && id ? id : null;
-}
-
-export function nativeHistoryMessagePosition(message: unknown) {
-  return readTranscriptDisplayPosition(
-    asNullableRecord(asNullableRecord(message)?.["__openclaw"])?.transcriptPosition,
-  );
-}
-
-/** Display order can relocate activity; cursor coverage follows physical rows. */
-export function oldestPositionedHistoryMessage(messages: unknown[]) {
-  let oldest: { message: unknown; position: TranscriptDisplayPosition } | undefined;
-  for (const message of messages) {
-    const position = nativeHistoryMessagePosition(message);
-    if (
-      position &&
-      (!oldest ||
-        (position.source === oldest.position.source && position.rawSeq < oldest.position.rawSeq))
-    ) {
-      oldest = { message, position };
-    }
-  }
-  return oldest;
 }
 
 /** Raw loaded rows retain the sources rendered inside activity summaries. */
