@@ -312,6 +312,8 @@ describe("sidebar rail pin menu", () => {
     sidebar.sidebarEntries = ["person:ada", "route:usage", "route:cron"];
     await sidebar.updateComplete;
     expect(order()).toEqual(["route:usage", "route:cron", "pages", "separator", "person:ada"]);
+    // Search lives with the footer controls, not above the pins.
+    expect(sidebar.querySelector(".sidebar-rail__bottom .sidebar-brand__search")).not.toBeNull();
     sidebar.sidebarEntries = ["route:usage"];
     await sidebar.updateComplete;
     expect(order()).toEqual(["route:usage", "pages"]);
