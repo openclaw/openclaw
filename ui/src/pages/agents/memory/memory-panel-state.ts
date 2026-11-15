@@ -1,5 +1,3 @@
-import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createDeferred } from "@solidjs/signals";
 import { action, createMemo, createOptimistic, createStore, onSettled } from "solid-js";
 import type { ApplicationContext, ApplicationGateway } from "../../../app/context.ts";
@@ -37,6 +35,7 @@ import {
   type WikiPagePreview,
 } from "./dreaming.ts";
 import type { DreamingToggleConfirmationProps } from "./toggle-confirmation.tsx";
+import { wikiPagePreviewFromResponse } from "./wiki-page-preview.ts";
 
 registerDreamingEnglish();
 
@@ -456,24 +455,7 @@ export function createAgentMemory(
     if (!isTaskScopeCurrent(scope) || scope.state.selectedAgentId !== agentId) {
       return null;
     }
-    const payload = asOptionalObjectRecord(response);
-    const content =
-      typeof payload?.content === "string" && payload.content.length > 0
-        ? payload.content
-        : t("dreaming.wiki.noContent");
-    const updatedAt = normalizeOptionalString(payload?.updatedAt);
-    const totalLines =
-      typeof payload?.totalLines === "number" && Number.isFinite(payload.totalLines)
-        ? Math.max(0, Math.floor(payload.totalLines))
-        : undefined;
-    return {
-      title: normalizeOptionalString(payload?.title) ?? lookup,
-      path: normalizeOptionalString(payload?.path) ?? lookup,
-      content,
-      ...(totalLines === undefined ? {} : { totalLines }),
-      ...(payload?.truncated === true ? { truncated: true } : {}),
-      ...(updatedAt ? { updatedAt } : {}),
-    };
+    return wikiPagePreviewFromResponse(response, lookup);
   }
 
   function read() {
