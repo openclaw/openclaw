@@ -549,6 +549,8 @@ export async function createFullModelCatalogAccess(
 
   const authOwner = {
     pluginGeneration: params.pluginGeneration,
+    agentFacts: params.agentFacts,
+    retirementSignal: params.retirementSignal,
     accountCatalog,
     normalizeProvider,
     assertCurrent,
@@ -556,26 +558,21 @@ export async function createFullModelCatalogAccess(
       getPreparedModelFullCatalogAuth(published.catalog ?? staticCatalog) ?? currentAuth,
     refreshAuth: worker.loadAuth,
   };
-  const recheckNativeLogin = createNativeLoginRecheck(
-    authOwner,
-    params,
-    eligibleProviders,
-    (auth) => {
-      const inventory = {
-        runtimeModels: new Map(),
-        providers: new Map(),
-        discoveryOrigins: [],
-        ...published.inventory,
-        key: inventoryKey,
-        pluginFingerprint,
-        nativeSource,
-        catalog: { ...(published.inventory?.catalog ?? params.catalogFacts.modelCatalog) },
-      };
-      setCatalogAuth(inventory.catalog, auth);
-      const change = publishCatalog({ ...published, inventory }, "native");
-      notifyPreparedModelCatalogPublication(change);
-    },
-  );
+  const recheckNativeLogin = createNativeLoginRecheck(authOwner, eligibleProviders, (auth) => {
+    const inventory = {
+      runtimeModels: new Map(),
+      providers: new Map(),
+      discoveryOrigins: [],
+      ...published.inventory,
+      key: inventoryKey,
+      pluginFingerprint,
+      nativeSource,
+      catalog: { ...(published.inventory?.catalog ?? params.catalogFacts.modelCatalog) },
+    };
+    setCatalogAuth(inventory.catalog, auth);
+    const change = publishCatalog({ ...published, inventory }, "native");
+    notifyPreparedModelCatalogPublication(change);
+  });
   const refreshExpiredModelCatalog = () => {
     assertCurrent();
     void recheckNativeLogin();

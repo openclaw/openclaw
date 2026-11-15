@@ -68,8 +68,10 @@ type Lifetime = ReturnType<typeof createLifetime> & {
 };
 type PreparedCatalogBuildOwner = Pick<
   PreparedModelRuntimeCatalogAccessParams,
-  "pluginGeneration" | "agentFacts"
->;
+  "pluginGeneration"
+> & {
+  agentFacts: Pick<PreparedModelRuntimeCatalogAccessParams["agentFacts"], "input">;
+};
 type PreparedPluginGenerationResources = Pick<
   PreparedModelRuntimePluginGeneration,
   "pluginMetadataSnapshot" | "pluginRegistry" | "inboundPluginRegistry"
