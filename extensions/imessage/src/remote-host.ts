@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { normalizeScpRemoteHost } from "openclaw/plugin-sdk/host-runtime";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { expandIMessageUserPath } from "./cli-path.js";
 
 // CLI installation and wrapper contents are process-stable channel metadata.
@@ -9,7 +10,7 @@ const detectedRemoteHosts = new Map<string, string | null | typeof ambiguousSshW
 const remoteHostLookups = new Map<string, Promise<string | undefined>>();
 
 function cacheKey(cliPath: string): string {
-  return expandIMessageUserPath(cliPath.trim() || "imsg");
+  return expandIMessageUserPath(readNonBlankString(cliPath) ?? "imsg");
 }
 
 function unwrapExecutableToken(token: string): string | undefined {

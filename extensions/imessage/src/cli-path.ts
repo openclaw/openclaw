@@ -1,6 +1,14 @@
 import { constants, accessSync, readFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { resolveRequiredHomeDir } from "openclaw/plugin-sdk/state-paths";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  expandIMessageHomePrefix,
+  expandIMessageUserPath,
+  resolveIMessageHomeDir,
+} from "./user-path.js";
+
+export { expandIMessageUserPath, resolveIMessageHomeDir };
 
 const localCliPathCache = new Map<string, boolean>();
 const MACH_O_MAGICS = new Set([
@@ -14,27 +22,15 @@ const MACH_O_MAGICS = new Set([
   "bfbafeca",
 ]);
 
-export function resolveIMessageHomeDir(): string | undefined {
-  const configuredHome = process.env.HOME;
-  const home = configuredHome?.trim();
-  if (home) {
-    return home;
-  }
-  try {
-    // On POSIX, os.homedir() echoes a defined blank HOME instead of querying the account.
-    const systemHome = configuredHome === undefined ? os.homedir() : os.userInfo().homedir;
-    return systemHome.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-export function expandIMessageUserPath(value: string): string {
-  if (!value.startsWith("~")) {
-    return value;
-  }
-  const home = resolveIMessageHomeDir();
-  return home ? value.replace(/^~(?=$|[\\/])/, () => home) : value;
+/**
+ * Resolves a configured local path the way `resolveUserPath` does — a leading `~`
+ * expands against the effective home, with its working-directory fallback when no
+ * home exists, and the result becomes absolute — but keeps the literal bytes.
+ * macOS permits trailing whitespace in file and directory names, so trimming here
+ * would silently select a different path.
+ */
+export function resolveIMessageLiteralPath(value: string): string {
+  return path.resolve(expandIMessageHomePrefix(value, resolveRequiredHomeDir()));
 }
 
 function resolveIMessageExecutable(cliPath: string): string | undefined {
@@ -69,7 +65,7 @@ function isProvenLocalIMessageCliPath(params: { cliPath: string; remoteHost?: st
   if (params.remoteHost?.trim()) {
     return false;
   }
-  const cliPath = params.cliPath.trim();
+  const cliPath = readNonBlankString(params.cliPath) ?? "";
   const cacheKey = `${cliPath}\0${process.env.PATH ?? ""}`;
   const cached = localCliPathCache.get(cacheKey);
   if (cached !== undefined) {
@@ -95,7 +91,7 @@ function isProvenLocalIMessageCliPath(params: { cliPath: string; remoteHost?: st
 }
 
 function isLikelyLocalIMessageCliPath(rawCliPath: string): boolean {
-  const cliPath = rawCliPath.trim();
+  const cliPath = readNonBlankString(rawCliPath) ?? "";
   if (cliPath === "imsg") {
     return true;
   }
@@ -122,7 +118,7 @@ export function resolveIMessageChatDbLookupPath(params: {
   if (params.remoteHost?.trim()) {
     return undefined;
   }
-  const configured = params.dbPath?.trim();
+  const configured = readNonBlankString(params.dbPath);
   if (configured) {
     return expandIMessageUserPath(configured);
   }
@@ -142,6 +138,6 @@ export function resolveLocalIMessageChatDbPath(params: {
   if (!isProvenLocalIMessageCliPath({ cliPath: params.cliPath, remoteHost: params.remoteHost })) {
     return undefined;
   }
-  const configured = params.dbPath?.trim();
+  const configured = readNonBlankString(params.dbPath);
   return configured ? expandIMessageUserPath(configured) : defaultMessagesDbPath();
 }

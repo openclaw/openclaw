@@ -5,6 +5,7 @@ import {
   resolveOutboundSendDep,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { waitForAbortSignal } from "openclaw/plugin-sdk/runtime-env";
+import { readNonBlankString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   listEnabledIMessageAccounts,
   resolveIMessageAccount,
@@ -85,8 +86,8 @@ export async function startIMessageGatewayAccount(
   ctx: ChannelGatewayContextV2<ResolvedIMessageAccount>,
 ) {
   const account = ctx.account;
-  const cliPath = account.config.cliPath?.trim() || "imsg";
-  const dbPath = account.config.dbPath?.trim();
+  const cliPath = readNonBlankString(account.config.cliPath) ?? "imsg";
+  const dbPath = readNonBlankString(account.config.dbPath);
   ctx.setStatus({
     accountId: account.accountId,
     cliPath,
@@ -97,7 +98,7 @@ export async function startIMessageGatewayAccount(
   await Promise.all(
     listEnabledIMessageAccounts(ctx.cfg).map(async (candidate) => {
       await resolveIMessageRemoteHost({
-        cliPath: candidate.config.cliPath?.trim() || "imsg",
+        cliPath: readNonBlankString(candidate.config.cliPath) ?? "imsg",
         remoteHost: candidate.config.remoteHost,
       });
     }),

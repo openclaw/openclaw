@@ -8,6 +8,7 @@ import {
   filterStringEntries,
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
+  readNonBlankString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expandIMessageUserPath } from "./cli-path.js";
@@ -135,7 +136,7 @@ export async function probeIMessagePrivateApi(
   timeoutMs: number,
   options: { forceRefresh?: boolean } = {},
 ): Promise<NonNullable<IMessageProbe["privateApi"]>> {
-  const key = cliPath.trim() || "imsg";
+  const key = readNonBlankString(cliPath) ?? "imsg";
   if (!options.forceRefresh) {
     const cached = getCachedIMessagePrivateApiStatus(key);
     if (cached) {
@@ -248,9 +249,11 @@ export async function probeIMessage(
   opts: IMessageProbeOptions = {},
 ): Promise<IMessageProbe> {
   const cfg = opts.cliPath || opts.dbPath ? undefined : await captureRuntimeConfigAsyncReader()();
-  const explicitCliPath = opts.cliPath?.trim() || cfg?.channels?.imessage?.cliPath?.trim();
+  const explicitCliPath =
+    readNonBlankString(opts.cliPath) ?? readNonBlankString(cfg?.channels?.imessage?.cliPath);
   const cliPath = explicitCliPath || "imsg";
-  const dbPath = opts.dbPath?.trim() || cfg?.channels?.imessage?.dbPath?.trim();
+  const dbPath =
+    readNonBlankString(opts.dbPath) ?? readNonBlankString(cfg?.channels?.imessage?.dbPath);
   const remoteHost = await resolveIMessageRemoteHost({
     cliPath,
     remoteHost: opts.remoteHost ?? cfg?.channels?.imessage?.remoteHost,
