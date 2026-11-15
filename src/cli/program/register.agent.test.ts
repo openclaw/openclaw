@@ -1,6 +1,7 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../expected-cli-error.js";
 import { OpenClawCommand } from "./openclaw-command.js";
 import { registerAgentTurnCommand } from "./register.agent-turn.js";
 import { registerAgentsCommands } from "./register.agent.js";
@@ -231,11 +232,9 @@ describe("backup registration", () => {
     );
   });
 
-  it("rejects partial Git log limits before dispatch", async () => {
-    await expect(parse("git log --repository /repo --limit 1oops")).rejects.toThrow(
-      "--limit must be a positive integer.",
-    );
-    expect(handlers.gitLog).not.toHaveBeenCalled();
+  it("rejects namespaces without remote sources before dispatch", async () => {
+    await expect(parse("verify x --namespace n --json")).rejects.toThrow(ExpectedCliError);
+    expect(handlers.verify).not.toHaveBeenCalled();
   });
 });
 
