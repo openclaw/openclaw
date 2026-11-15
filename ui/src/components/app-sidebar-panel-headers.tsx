@@ -1,6 +1,6 @@
 import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
-import { titleForRoute } from "../app-navigation.ts";
+import { titleForRoute, type NavigationRouteId } from "../app-navigation.ts";
 import { isMobileNavLayout, mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
 import { automationsFiltered } from "../lib/cron/automations-filter.ts";
@@ -81,6 +81,15 @@ export function SidebarCustomizeHeader(props: { host: AppSidebarRenderHost }) {
   return (
     <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
       <span class="sidebar-panel-header__title">{titleForRoute("plugins", t)}</span>
+    </SidebarPanelHeader>
+  );
+}
+
+/** A page that brings its own sidebar list, like Systems, heads it with its own title. */
+export function SidebarPageHeader(props: { host: AppSidebarRenderHost; route: NavigationRouteId }) {
+  return (
+    <SidebarPanelHeader onToggleSidebar={props.host.onToggleSidebar}>
+      <span class="sidebar-panel-header__title">{titleForRoute(props.route, t)}</span>
     </SidebarPanelHeader>
   );
 }

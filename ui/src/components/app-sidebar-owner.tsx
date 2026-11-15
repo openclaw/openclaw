@@ -14,6 +14,7 @@ import {
   SidebarAutomationsHeader,
   SidebarCustomizeHeader,
   SidebarOnlineHeader,
+  SidebarPageHeader,
 } from "./app-sidebar-panel-headers.tsx";
 import "./sidebar-attention.tsx";
 import "./tooltip.ts";
@@ -567,6 +568,9 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   </Match>
                   <Match when={this.navigationView === "online"}>
                     <SidebarOnlineHeader host={this} />
+                  </Match>
+                  <Match when={this.navigationView === "sessions" && this.contextualSidebar}>
+                    {(sidebar) => <SidebarPageHeader host={this} route={sidebar().key} />}
                   </Match>
                 </Switch>
                 <div
