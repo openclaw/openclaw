@@ -255,7 +255,9 @@ export async function convergeUpdatePlugins(params: {
             channel: params.channel,
             requestedChannel: params.requestedChannel,
             opts: params.opts,
-            requiresCohort: !params.coreAlreadyCurrent && params.adoptedFinalization !== true,
+            // A cohort pairs plugins with a core rollback; a Git release never rolls core back here.
+            requiresCohort:
+              !params.coreAlreadyCurrent && params.adoptedFinalization !== true && !gitRelease,
             timeoutMs: params.updateStepTimeoutMs,
             preUpdateConfig,
             ...(params.candidateRuntime
