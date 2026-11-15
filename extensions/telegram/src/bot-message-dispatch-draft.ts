@@ -123,9 +123,6 @@ export function createDraftState(params: TurnConfig): TelegramDraftStateSlice {
           chatId: params.context.chatId,
           message,
           messageId: message.message_id,
-          ...(params.context.threadSpec.id !== undefined
-            ? { messageThreadId: params.context.threadSpec.id }
-            : {}),
           successfulSendThread: params.context.threadSpec,
         });
       },

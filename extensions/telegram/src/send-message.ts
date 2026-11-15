@@ -114,7 +114,6 @@ export async function sendMessageTelegram(
         account,
         ...(botUserId !== undefined ? { botUserId } : {}),
         chatId,
-        ...(threadSpec?.id !== undefined ? { messageThreadId: threadSpec.id } : {}),
         ...(threadSpec ? { successfulSendThread: threadSpec } : {}),
         ...params,
         promptContextProjection: projection,
@@ -388,15 +387,11 @@ export async function sendMessageTelegram(
         if (recordedMedia.has(part.result)) {
           return;
         }
-        const acceptedParams = toAcceptedThreadScopedParams(part.acceptedParams);
         await recordDeliveredPromptContext(
           {
             message: part.result,
             messageId: part.result.message_id,
             ...(part.plainText ? { text: part.plainText } : {}),
-            ...(acceptedParams?.message_thread_id !== undefined
-              ? { messageThreadId: acceptedParams.message_thread_id }
-              : {}),
           },
           finalPart,
         );

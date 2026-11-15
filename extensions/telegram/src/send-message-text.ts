@@ -138,9 +138,6 @@ export function createTelegramTextSender(config: {
           message: chunk.result,
           messageId: chunk.messageId,
           text: chunk.plainText,
-          ...(chunk.acceptedParams?.message_thread_id !== undefined
-            ? { messageThreadId: chunk.acceptedParams.message_thread_id }
-            : {}),
         },
         finalPart,
       );

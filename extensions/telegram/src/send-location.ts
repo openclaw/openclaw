@@ -5,11 +5,7 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { withTelegramNativeQuoteFallback } from "./reply-parameters.js";
-import {
-  toAcceptedThreadScopedParams,
-  withTelegramApiContext,
-  type TelegramApiContext,
-} from "./send-context.js";
+import { withTelegramApiContext, type TelegramApiContext } from "./send-context.js";
 import type { TelegramLocationSendOpts, TelegramSendResult } from "./send-message-types.js";
 import {
   finalizeTelegramOutbound,
@@ -83,7 +79,6 @@ export async function sendLocationTelegram(
         }, retryLabel);
       },
     });
-    const acceptedParams = toAcceptedThreadScopedParams(delivery.acceptedParams);
     return finalizeTelegramOutbound({
       context,
       prepared,
@@ -91,9 +86,6 @@ export async function sendLocationTelegram(
       resultContext: `${label} send`,
       ...(botUserId !== undefined ? { botUserId } : {}),
       text: formatLocationText(location),
-      ...(acceptedParams?.message_thread_id !== undefined
-        ? { messageThreadId: acceptedParams.message_thread_id }
-        : {}),
       promptContextProjectionPlan: opts.promptContextProjectionPlan,
       onDeliveryResult: opts.onDeliveryResult,
     });

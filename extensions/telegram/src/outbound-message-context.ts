@@ -50,8 +50,7 @@ export async function recordOutboundMessageForPromptContext(params: {
   messageId: number;
   botUserId?: number;
   text?: string;
-  messageThreadId?: number;
-  /** Effective server-owned thread for the successful provider send. */
+  /** The one thread record for this send: the server-owned thread the message went to. */
   successfulSendThread?: TelegramThreadSpec;
   promptContextProjection?: TelegramPromptContextProjection;
   /** Pre-resolved account owner from the active Telegram runtime. */
@@ -62,7 +61,7 @@ export async function recordOutboundMessageForPromptContext(params: {
       message: params.message,
       successfulSendThread: params.successfulSendThread,
     });
-    const messageThreadId = providerObservedThread?.id ?? params.messageThreadId;
+    const messageThreadId = providerObservedThread?.id ?? params.successfulSendThread?.id;
     const chat = params.message.chat ?? {};
     const text = params.message.text ?? params.message.caption ?? params.text;
     const rawSender = params.message.from;

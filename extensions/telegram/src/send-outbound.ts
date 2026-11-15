@@ -209,7 +209,6 @@ export async function finalizeTelegramOutbound(params: {
   resultContext: string;
   botUserId?: number;
   text?: string;
-  messageThreadId?: number;
   promptContextProjectionPlan?: TelegramSendOpts["promptContextProjectionPlan"];
   onDeliveryResult?: TelegramSendOpts["onDeliveryResult"];
 }): Promise<TelegramSendResult> {
@@ -239,7 +238,6 @@ export async function finalizeTelegramOutbound(params: {
       message: params.result,
       messageId,
       text: params.text,
-      messageThreadId: params.messageThreadId ?? params.prepared.threadSpec?.id,
       successfulSendThread: params.prepared.threadSpec,
       promptContextProjection: projection,
     });

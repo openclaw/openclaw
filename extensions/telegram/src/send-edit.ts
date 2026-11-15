@@ -222,18 +222,16 @@ export async function editMessageTelegram(
 
       if (editedMessage && editedMessage !== true && typeof editedMessage.message_id === "number") {
         const botUserId = resolveTelegramBotUserIdFromToken(opts.token || account.token);
-        const successfulSendThread = resolveTelegramMessageThreadSpec(editedMessage as Message);
         await recordOutboundMessageForPromptContext({
           cfg,
           account,
           chatId,
           message: editedMessage,
           messageId: editedMessage.message_id,
-          successfulSendThread,
+          // A non-forum reply chain also carries message_thread_id; only the
+          // resolved thread record says whether the edit lives in a topic.
+          successfulSendThread: resolveTelegramMessageThreadSpec(editedMessage as Message),
           ...(botUserId !== undefined ? { botUserId } : {}),
-          ...(editedMessage.message_thread_id !== undefined
-            ? { messageThreadId: editedMessage.message_thread_id }
-            : {}),
         });
       }
 

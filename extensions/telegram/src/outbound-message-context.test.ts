@@ -87,7 +87,6 @@ describe("recordOutboundMessageForPromptContext", () => {
     async (_label, scope, message, id, bound) => {
       const cached = await recordAndRead(message, {
         chatId: scope === "dm" ? 42 : -1001,
-        messageThreadId: "message_thread_id" in message ? message.message_thread_id : id,
         successfulSendThread: { scope, id },
       });
       expect(hasProviderObservedTelegramThreadBinding(cached, id)).toBe(bound);
@@ -100,27 +99,34 @@ describe("recordOutboundMessageForPromptContext", () => {
     },
   );
 
-  it("keeps an unthreaded group reply chain out of the thread scope", async () => {
-    const cached = await recordAndRead(
-      {
-        message_id: 700,
-        message_thread_id: 99,
-        chat: { id: -1001, type: "supergroup", title: "General" },
-        text: "Bot replied in a chain",
-      },
-      { chatId: -1001 },
-    );
-    expect(cached?.threadId).toBeUndefined();
-    expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "none" });
+  it.each([
+    ["send without a thread record", undefined],
+    // An edit resolves its record from the edited message; the reply-chain root is not a topic.
+    ["edit resolved to no thread", { scope: "none" } as const],
+  ])(
+    "keeps an unthreaded group reply chain out of the thread scope: %s",
+    async (_label, thread) => {
+      const cached = await recordAndRead(
+        {
+          message_id: 700,
+          message_thread_id: 99,
+          chat: { id: -1001, type: "supergroup", title: "General" },
+          text: "Bot replied in a chain",
+        },
+        { chatId: -1001, ...(thread ? { successfulSendThread: thread } : {}) },
+      );
+      expect(cached?.threadId).toBeUndefined();
+      expect(cached?.threadBinding?.threadSpec).toEqual({ scope: "none" });
 
-    const history = await createPromptContextCache().readHistoryWindow({
-      accountId,
-      chatId: -1001,
-      before: "701",
-      limit: 10,
-    });
-    expect(history.map((node) => node.messageId)).toContain("700");
-  });
+      const history = await createPromptContextCache().readHistoryWindow({
+        accountId,
+        chatId: -1001,
+        before: "701",
+        limit: 10,
+      });
+      expect(history.map((node) => node.messageId)).toContain("700");
+    },
+  );
 
   it.each([
     [

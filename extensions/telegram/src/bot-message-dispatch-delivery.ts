@@ -124,9 +124,6 @@ const createPromptContextSequence = (
         messageId: record.messageId,
         ...(record.text ? { text: record.text } : {}),
         ...(record.projection ? { promptContextProjection: record.projection } : {}),
-        ...(turn.context.threadSpec.id !== undefined
-          ? { messageThreadId: turn.context.threadSpec.id }
-          : {}),
         successfulSendThread: turn.context.threadSpec,
       });
     },
