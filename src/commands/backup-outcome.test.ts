@@ -89,8 +89,8 @@ function expectOwnerChanged(response: Awaited<ReturnType<typeof receive>>) {
 it.each([
   ["done", "label", undefined],
   ["ok", "  ", undefined],
-  ...["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""].map((bytes) => ["ok", "hex", bytes]),
-])("rejects malformed record arguments: %s %s %s", async (status, target, bytes) => {
+  ...["0x10", "1e3", "0b101", "0o17", "0.5", "12abc", ""].map((b) => ["ok", "hex", b] as const),
+] as const)("rejects malformed record arguments: %s %s %s", async (status, target, bytes) => {
   const { runtime } = await fixture();
   const result = backupRecordCommand(runtime, { status, target, bytes });
   await expect(result).rejects.toMatchObject({ name: "ExpectedCliError" });
