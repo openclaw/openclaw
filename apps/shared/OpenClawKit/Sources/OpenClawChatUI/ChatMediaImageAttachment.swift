@@ -37,6 +37,15 @@ struct ChatMediaImageAttachment: View {
         case loading
         case loaded(OpenClawPlatformImage)
         case unavailable
+
+        /// Probe name, so `pnpm ios:behavior` can see an image drop out and reload.
+        var probeName: String {
+            switch self {
+            case .loading: "image-loading"
+            case .loaded: "image-loaded"
+            case .unavailable: "image-unavailable"
+            }
+        }
     }
 
     let artifactId: String
@@ -97,9 +106,15 @@ struct ChatMediaImageAttachment: View {
         .task(id: "\(self.artifactId):\(self.resolverReady):\(self.retryGeneration)") {
             await self.loadImage()
         }
+        .onChange(of: self.state.probeName, initial: true) { _, name in
+            ChatBehaviorProbe.mark(name)
+        }
     }
 
     private func loadImage() async {
+        // A decoded image is complete without the resolver; a reconnect must not drop it to
+        // "unavailable" and reload it with a spinner.
+        if case .loaded = self.state { return }
         guard self.resolverReady else {
             self.state = .unavailable
             return

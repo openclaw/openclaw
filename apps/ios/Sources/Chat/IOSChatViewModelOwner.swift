@@ -51,7 +51,7 @@ final class IOSChatViewModelOwner {
                 self.capturePresentationIdentity(appModel: appModel)
             }
             if let controlUIInputs { self.controlUIInputs = controlUIInputs }
-            if reconnected { viewModel.refresh() }
+            if reconnected { viewModel.recoverAfterReconnect() }
             return
         }
         // Recording, staging, and delivery retain their captured route until the owner releases it.

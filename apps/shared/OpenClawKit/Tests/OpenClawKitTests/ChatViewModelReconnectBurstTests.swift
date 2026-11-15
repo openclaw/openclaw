@@ -112,7 +112,7 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
         agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
     {
         self.record("composer")
-        return OpenClawChatComposerCapabilityCatalog()
+        return OpenClawChatComposerCapabilityCatalog(sessionSettingsAvailable: true, permissionMutationAvailable: true)
     }
 
     func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
@@ -243,7 +243,7 @@ struct ChatViewModelReconnectBurstTests {
         let recovery = vm.handleTransportEvent(.reconnected)
         await transport.waitFor("history.1")
 
-        // The iOS presentation owner also refreshes on operator reconnect.
+        // A first load can still be reading history when the route is replaced.
         vm.load()
         await transport.waitFor("questions")
         transport.releaseHistory(keepingHeld: true)
@@ -256,5 +256,35 @@ struct ChatViewModelReconnectBurstTests {
         for catalog in ["models", "composer"] {
             #expect((requests.firstIndex(of: catalog) ?? -1) > historyDone)
         }
+    }
+
+    @Test @MainActor func `owner reconnect reconciles in place without a reload`() async {
+        let transport = ReconnectBurstTransport()
+        let vm = OpenClawChatViewModel(sessionKey: "main", transport: transport)
+        defer { vm.detachTransport() }
+        #expect(await vm.refreshHistoryAfterRun().applied)
+        await vm.pollHealthIfNeeded(force: true)
+        vm.sessionDefaults = OpenClawChatSessionsDefaults(model: "mock/gpt-test", contextTokens: nil)
+        await vm.loadComposerCapabilities(force: true)
+        await waitForObservedState { vm.composerCapabilityControlsAvailable }
+        #expect(vm.composerInlineModelLabel == "gpt-test")
+        #expect(vm.composerCapabilityControlsAvailable)
+        transport.reset(holdingHistory: true)
+
+        vm.recoverAfterReconnect()
+        await transport.waitFor("history")
+        // A bootstrap would raise the loading flag here and blank the transcript behind a spinner.
+        #expect(!vm.isLoading)
+        #expect(!vm.healthOK, "the replaced socket's health is not reused")
+        // Same Gateway: the composer keeps its model label and session controls until the
+        // catalogs reload after history, instead of flashing "Default" and hiding the controls.
+        #expect(vm.composerInlineModelLabel == "gpt-test")
+        #expect(vm.composerCapabilityControlsAvailable)
+        transport.releaseHistory()
+        await transport.waitFor("source")
+        await waitForObservedState { vm.healthOK }
+
+        #expect(transport.requests.count(where: { $0 == "history" }) == 1)
+        #expect(!vm.isLoading)
     }
 }
