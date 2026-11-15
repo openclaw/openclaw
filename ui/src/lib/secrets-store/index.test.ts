@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { describe, expect, it } from "vitest";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../test-helpers/gateway-client.ts";
 import {
   bulkSetSecretsStoreEntries,
   createInitialSecretsStoreState,
@@ -10,8 +13,8 @@ import {
 
 function storeWithSnapshots(...snapshots: unknown[][]) {
   const responses = snapshots.flatMap((entries) => [{ ok: true, reloaded: false }, { entries }]);
-  const request = vi.fn(async (_method: string, _params?: unknown) => responses.shift());
-  const client = { request } as unknown as GatewayBrowserClient;
+  const request = createGatewayRequestMock(async () => responses.shift());
+  const client = createTestGatewayClient(request);
   return { state: createInitialSecretsStoreState({ client, connected: true }), request };
 }
 
