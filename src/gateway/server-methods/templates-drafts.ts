@@ -336,7 +336,7 @@ function draftAuthority(
     ) {
       throw new TemplateProjectError(
         "human_required",
-        "Create, review, and publish Templates from an active administrator Control UI connection.",
+        "Create, review, and publish Templates from the OpenClaw app while connected as an administrator.",
       );
     }
     options.sessionMutationCommitGuard?.();

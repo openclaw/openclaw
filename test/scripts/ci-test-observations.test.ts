@@ -164,6 +164,21 @@ describe("CI observation export", () => {
         const launchHash = createHash("sha256")
           .update(readFileSync(path.join(directory, "launch.json")))
           .digest("hex");
+        if (auditOnly) {
+          expect(
+            createCiTestObservationCapture({
+              repositoryRoot: process.cwd(),
+              cacheDirectory,
+              configFiles: [path.join(directory, "companion.config.ts")],
+              configuration,
+              env: {
+                OPENCLAW_VITEST_OBSERVATION_DIR: directory,
+                OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY: "1",
+                OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG: path.relative(process.cwd(), configFile),
+              },
+            }),
+          ).toBeUndefined();
+        }
         const capture = createCiTestObservationCapture({
           repositoryRoot: process.cwd(),
           cacheDirectory,
@@ -177,6 +192,9 @@ describe("CI observation export", () => {
             OPENCLAW_VITEST_OBSERVATION_DIR: directory,
             OPENCLAW_VITEST_INCLUDE_FILE: includeFile,
             OPENCLAW_VITEST_OBSERVATION_AUDIT_ONLY: auditOnly ? "1" : undefined,
+            OPENCLAW_VITEST_OBSERVATION_AUDIT_CONFIG: auditOnly
+              ? path.relative(process.cwd(), configFile)
+              : undefined,
           },
         });
         expect(capture).toBeDefined();
