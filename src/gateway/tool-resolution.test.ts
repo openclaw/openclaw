@@ -4,11 +4,14 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it, vi } from "vitest";
 import {
+  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
+import { createTestAdmittedRunContext } from "../agents/admitted-run-context.test-support.js";
 import {
   getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
   wrapToolWithGatewayCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import * as gatewayTools from "../agents/tools/gateway.js";
@@ -365,6 +368,68 @@ it("applies sandbox tool denies to sandboxed loopback turns", async () => {
   const names = toolNames(result);
   expect(names).not.toContain("sessions_list");
   expect(names).toContain("sessions_history");
+});
+
+it("does not let ambient caller authority expand sandbox sessions tools without a captured run", async () => {
+  const controller = new AbortController();
+  const ambientAdmin = createAdmittedRunOperatorAuthority({
+    profileId: "ambient-admin",
+    scopes: ["operator.sessions.write"],
+    signal: controller.signal,
+    assertCurrent: () => {},
+  });
+  const admittedRunContext = createTestAdmittedRunContext("sandbox-no-lease");
+  const result = await withGatewayToolCallerIdentity(
+    {
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      operatorAuthority: ambientAdmin,
+    },
+    () =>
+      resolveTools({
+        cfg: {
+          agents: { defaults: { sandbox: { mode: "all" } } },
+        },
+        admittedRunContext,
+        senderIsOwner: false,
+      }),
+  );
+  const names = toolNames(result);
+  expect(names).not.toContain("sessions_create");
+  expect(names).not.toContain("sessions");
+});
+
+it("keeps sandbox sessions tools when the admitted run carries the captured lease", async () => {
+  const controller = new AbortController();
+  const capturedLease = createAdmittedRunOperatorAuthority({
+    profileId: "captured-operator",
+    scopes: ["operator.sessions.write"],
+    signal: controller.signal,
+    assertCurrent: () => {},
+  });
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "sandbox-with-lease",
+    "main",
+    "test",
+    undefined,
+    capturedLease,
+  );
+  try {
+    const admittedRunContext = await admission.admit("gateway", "gateway-sandbox-with-lease");
+    const result = await resolveTools({
+      cfg: {
+        agents: { defaults: { sandbox: { mode: "all" } } },
+      },
+      admittedRunContext,
+      senderIsOwner: false,
+    });
+    const names = toolNames(result);
+    expect(names).toContain("sessions_create");
+    expect(names).toContain("sessions");
+  } finally {
+    admission.close();
+  }
 });
 
 registerGatewayToolFinalEffectTests();
