@@ -590,7 +590,7 @@ function renderSidebarMenus(
       {(menu) => renderSidebarPeopleFilterMenuForMenus(projected, view, menu)}
     </Show>,
     <Show when={projected.automationsFilterMenuPosition}>
-      {renderSidebarAutomationsFilterMenuForMenus(projected)}
+      {renderSidebarAutomationsFilterMenuForMenus(projected, view)}
     </Show>,
     <Show when={projected.dashboardsFilterMenuPosition}>
       {renderSidebarDashboardsFilterMenuForMenus(projected, view)}
