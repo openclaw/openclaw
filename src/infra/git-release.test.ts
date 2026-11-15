@@ -108,4 +108,29 @@ describe.skipIf(process.platform === "win32")("git releases", () => {
     expect(resolveGitReleaseLauncherForEntrypoint("/opt/openclaw/dist/index.js")).toBeNull();
     expect(await writeGitReleaseLauncher(prefix)).toBe(launcher);
   });
+
+  it("keeps a service unit that names the launcher across release switches", async () => {
+    const { inspectManagedGatewayServiceBeforeUpdate } =
+      await import("../cli/update-cli/update-command-service-plan.js");
+    const { prefix } = await setup();
+    await publishGitRelease({
+      prefix,
+      releaseRoot: await release(prefix, "1.0.0", ""),
+      trial: false,
+    });
+    const launcher = path.join(prefix, "openclaw-launcher.mjs");
+    const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+      root: gitReleaseSlot(prefix),
+      state: {
+        installed: true,
+        loadState: { status: "loaded" },
+        running: true,
+        env: {},
+        command: { programArguments: [process.execPath, launcher, "gateway", "--port", "1"] },
+        runtime: { status: "running" },
+      },
+    });
+
+    expect(verdict).toMatchObject({ kind: "owned", refreshDefinition: false });
+  });
 });
