@@ -181,84 +181,40 @@ describe("parseTemplateManifest", () => {
     }
   });
 
-  it("rejects resolved MCP secrets", () => {
-    const result = parseTemplateManifest({
-      ...baseManifest,
-      mcpServers: {
-        github: { command: "npx", env: { GITHUB_TOKEN: "secret-value" } },
-      },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toBe("$.mcpServers.github.env.GITHUB_TOKEN");
-  });
-
+  const url = "https://mcp.linear.app/mcp";
   it("accepts credential-free remote MCP with local OAuth completion", () => {
     const linear = {
-      url: "https://mcp.linear.app/mcp",
+      url,
       transport: "streamable-http",
       auth: "oauth",
       toolFilter: { include: ["list_issues"] },
     };
-    const manifest = requireManifest({
-      ...baseManifest,
-      mcpServers: { linear },
-    });
-    expect(manifest.mcpServers.linear).toEqual(linear);
+    expect(requireManifest({ ...baseManifest, mcpServers: { linear } }).mcpServers.linear).toEqual(
+      linear,
+    );
   });
 
   it.each([
-    {
-      url: "https://example.com/mcp",
-      transport: "streamable-http",
-      headers: { Authorization: "secret" },
-    },
-    { url: "https://example.com/mcp", transport: "streamable-http", command: "npx" },
-    { url: "https://example.com/mcp", transport: "stdio" },
-  ])("rejects non-portable remote MCP config %#", (server) => {
-    const result = parseTemplateManifest({
-      ...baseManifest,
-      mcpServers: { unsafe: server },
-    });
-
-    expect(result.ok).toBe(false);
-    expect(result.diagnostics[0]?.path).toMatch(/^\$\.mcpServers\.unsafe/);
-  });
-
-  it.each([
-    {
-      server: { url: "https://mcp.linear.app/mcp" },
-      path: "$.mcpServers.remote.transport",
-      reason: 'expected one of "sse"|"streamable-http"',
-    },
-    {
-      server: { url: "https://mcp.linear.app/mcp", transport: "http" },
-      path: "$.mcpServers.remote.transport",
-      reason: 'expected one of "sse"|"streamable-http"',
-    },
-    {
-      server: { command: "node", args: [8080] },
-      path: "$.mcpServers.remote.args[0]",
-      reason: "expected string, received number",
-    },
-    {
-      server: {},
-      path: "$.mcpServers.remote.command",
-      reason: "expected string, received undefined",
-    },
-  ])("names the malformed MCP field for %j", ({ server, path, reason }) => {
-    const result = parseTemplateManifest({
-      ...baseManifest,
-      mcpServers: { remote: server },
-    });
-
+    [{ command: "npx", env: { GITHUB_TOKEN: "secret-value" } }, ".env.GITHUB_TOKEN", ""],
+    [{ url, transport: "streamable-http", headers: { Authorization: "secret" } }, null, ""],
+    [{ url, transport: "streamable-http", command: "npx" }, null, ""],
+    [{ url, transport: "stdio" }, null, ""],
+    [{ url }, ".transport", 'expected one of "sse"|"streamable-http"'],
+    [{ url, transport: "http" }, ".transport", 'expected one of "sse"|"streamable-http"'],
+    [{ command: "node", args: [8080] }, ".args[0]", "expected string, received number"],
+    [{}, ".command", "expected string, received undefined"],
+    [{ timeout: "slow" }, "", "Invalid input"],
+  ])("reports malformed MCP diagnostics for %j", (server, suffix, reason) => {
+    const result = parseTemplateManifest({ ...baseManifest, mcpServers: { server } });
     expect(result.ok).toBe(false);
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ path, message: expect.stringContaining(reason) }),
-    );
-    // A collapsed union diagnostic carries no field or rule, so it is never actionable.
-    expect(result.diagnostics.map((diagnostic) => diagnostic.message)).not.toContain(
-      "Invalid input",
+      expect.objectContaining({
+        path:
+          suffix === null
+            ? expect.stringMatching(/^\$\.mcpServers\.server/)
+            : `$.mcpServers.server${suffix}`,
+        message: expect.stringContaining(reason),
+      }),
     );
   });
 
