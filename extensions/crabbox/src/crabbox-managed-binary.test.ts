@@ -257,11 +257,11 @@ describe("managed Crabbox", () => {
         expect((await fs.stat(path.join(test.directory, name))).mode & 0o111).toBe(0o111);
       }
     }
-    await fs.writeFile(test.binary, "0.83.1");
+    await fs.writeFile(test.binary, "0.83.3");
     test.fetch.mockRejectedValue(new Error("offline"));
     await expect(test.ensure()).resolves.toEqual({
       ...test.installed,
-      version: "0.83.1",
+      version: "0.83.3",
     });
     expect(await test.entries()).toEqual([path.basename(test.directory)]);
   });
