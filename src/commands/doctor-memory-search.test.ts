@@ -275,33 +275,39 @@ function collectFindings(config: OpenClawConfig) {
 }
 
 it.each([
-  ["missing entry", {}, true],
-  ["explicit enablement", { plugins: { entries: { "active-memory": { enabled: true } } } }, false],
-  ["recall opt-out", { memory: { search: { rememberAcrossConversations: false } } }, false],
-  ["isolated DM default", { session: { dmScope: "per-peer" } }, false],
+  ["missing entry", {}, "Set plugins.entries.active-memory.enabled=true, or"],
+  ["explicit enablement", { plugins: { entries: { "active-memory": { enabled: true } } } }, null],
+  ["recall opt-out", { memory: { search: { rememberAcrossConversations: false } } }, null],
+  ["isolated DM default", { session: { dmScope: "per-peer" } }, null],
   [
     "global disablement",
     { plugins: { enabled: false, entries: { "active-memory": { enabled: true } } } },
-    true,
+    "Set plugins.enabled=true, or",
   ],
   [
     "denylist",
     { plugins: { deny: ["active-memory"], entries: { "active-memory": { enabled: true } } } },
-    true,
+    "Remove active-memory from plugins.deny, or",
   ],
   [
     "restrictive allowlist",
     { plugins: { allow: ["other-plugin"], entries: { "active-memory": { enabled: true } } } },
-    true,
+    "Add active-memory to plugins.allow, or",
   ],
   [
     "internal disablement",
     { plugins: { entries: { "active-memory": { enabled: true, config: { enabled: false } } } } },
-    true,
+    "Set plugins.entries.active-memory.config.enabled=true, or",
   ],
-] satisfies Array<[string, OpenClawConfig, boolean]>)(
+  [
+    "denylist without explicit enablement",
+    { plugins: { deny: ["active-memory"] } },
+    "Remove active-memory from plugins.deny, set plugins.entries.active-memory.enabled=true, or",
+  ],
+] satisfies Array<[string, OpenClawConfig, string | null]>)(
   "reports effective Active Memory prerequisites with %s in normal Doctor and lint",
-  async (name, overrides: OpenClawConfig, warns) => {
+  async (name, overrides: OpenClawConfig, expectedHint) => {
+    const warns = expectedHint !== null;
     const config: OpenClawConfig = {
       ...overrides,
       agents: { entries: { personal: {} } },
@@ -318,7 +324,7 @@ it.each([
     if (warns) {
       expectFirstNoteContains(
         "Active Memory plugin is disabled",
-        "plugins.entries.active-memory.enabled=true",
+        `disabled. ${expectedHint}`,
         "memory.search.rememberAcrossConversations to false",
       );
       expect(findings).toMatchObject([
@@ -401,7 +407,7 @@ it("emits recall warnings before a later provider diagnostic fails", async () =>
 
   expect(note).toHaveBeenCalledOnce();
   expect(firstNoteMessage()).toBe(
-    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Set plugins.entries.active-memory.enabled=true or set memory.search.rememberAcrossConversations to false.',
+    'Remember across conversations is effectively enabled for agent "personal", but the Active Memory plugin is disabled. Set plugins.entries.active-memory.enabled=true, or set memory.search.rememberAcrossConversations to false.',
   );
 });
 

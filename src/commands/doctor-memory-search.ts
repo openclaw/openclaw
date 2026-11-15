@@ -142,6 +142,33 @@ function resolveActiveMemoryConversationRecallSupport(
   };
 }
 
+function describeActiveMemoryEnablementSteps(cfg: OpenClawConfig): string {
+  const plugins = normalizePluginsConfig(cfg.plugins);
+  const entry = plugins.entries["active-memory"];
+  const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
+  const steps: string[] = [];
+  if (!plugins.enabled) {
+    steps.push("set plugins.enabled=true");
+  }
+  if (plugins.deny.includes("active-memory")) {
+    steps.push("remove active-memory from plugins.deny");
+  }
+  if (plugins.allow.length > 0 && !plugins.allow.includes("active-memory")) {
+    steps.push("add active-memory to plugins.allow");
+  }
+  if (entry?.enabled !== true) {
+    steps.push("set plugins.entries.active-memory.enabled=true");
+  }
+  if (pluginConfig?.enabled === false) {
+    steps.push("set plugins.entries.active-memory.config.enabled=true");
+  }
+  if (steps.length === 0) {
+    return "Enable the Active Memory plugin";
+  }
+  const sentence = steps.join(", ");
+  return sentence.charAt(0).toUpperCase() + sentence.slice(1);
+}
+
 type MemorySearchHealthPath =
   | "memory.search.provider"
   | "memory.search.sources"
@@ -171,7 +198,7 @@ function inspectRememberAcrossConversationsHealth(params: {
   );
   if (!conversationRecallSupport.available) {
     params.report(
-      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Set plugins.entries.active-memory.enabled=true or set memory.search.rememberAcrossConversations to false.`,
+      `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. ${describeActiveMemoryEnablementSteps(params.cfg)}, or set memory.search.rememberAcrossConversations to false.`,
     );
   } else if (!conversationRecallSupport.providerSupported) {
     params.report(
