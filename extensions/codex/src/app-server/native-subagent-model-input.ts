@@ -563,7 +563,7 @@ export function drainNativeChildModelAdmissions(
       affectedChildren.add(evidence.childThreadId);
       continue;
     }
-    if (!ownerIsCurrent) {
+    if (!ownerIsCurrent || owner.modelExecutionCancelled) {
       continue;
     }
     const childState = dependencies.registerChildThread(state, evidence.childThreadId, {
