@@ -62,18 +62,16 @@ export async function seedDeferredWorkspaceDefaults(
     return;
   }
   const skipped = new Set<string>(defaults?.skipOptionalBootstrapFiles);
-  await runWorkspacePreparation(workspace, async (assertFilesystem) => {
+  await runWorkspacePreparation(workspace, async (filesystem) => {
     for (const name of [
       DEFAULT_AGENTS_FILENAME,
       DEFAULT_SOUL_FILENAME,
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
     ].filter((file) => !skipped.has(file))) {
-      await publishBootstrapFile(
-        path.join(workspace, name),
-        () => loadWorkspaceTemplate(name),
-        assertFilesystem,
-      );
+      await publishBootstrapFile(path.join(workspace, name), () => loadWorkspaceTemplate(name), {
+        filesystem: [filesystem],
+      });
     }
   });
 }
