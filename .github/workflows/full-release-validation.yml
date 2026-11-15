@@ -1018,8 +1018,9 @@ jobs:
 
   evidence_reuse:
     name: Check for reusable validation evidence
-    needs: [resolve_target, plugin_compatibility_readiness]
-    if: ${{ always() && needs.resolve_target.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.plugin_compatibility_readiness.result) && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
+    # Read-only lookup can overlap readiness; fanout and final success still require it.
+    needs: [resolve_target]
+    if: ${{ always() && needs.resolve_target.result == 'success' && inputs.rerun_group == 'all' && inputs.reuse_evidence && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
     runs-on: *linux_runner_hybrid_small
     timeout-minutes: 10
     outputs:
@@ -2819,6 +2820,7 @@ jobs:
     needs:
       [
         resolve_target,
+        plugin_compatibility_readiness,
         evidence_reuse,
         prepare_npm_package,
         qualify_npm_package,
@@ -2846,6 +2848,16 @@ jobs:
       PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
       DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
     steps:
+      - name: Require successful source readiness
+        env:
+          SOURCE_READINESS_RESULT: ${{ needs.plugin_compatibility_readiness.result }}
+        run: |
+          set -euo pipefail
+          [[ "$SOURCE_READINESS_RESULT" == "success" ]] || {
+            echo "Release source readiness must succeed, including when reusing evidence." >&2
+            exit 1
+          }
+
       - name: Require qualified publication artifacts
         if: inputs.rerun_group == 'all'
         env:
