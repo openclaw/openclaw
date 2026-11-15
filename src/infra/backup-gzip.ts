@@ -26,8 +26,7 @@ export async function* gzipInParallel(
   let size = 0;
   let submitted = false;
   const submit = () => {
-    // One output buffer per block avoids a pool round trip for every 16 KiB.
-    const member = compress(Buffer.concat(parts, size), { chunkSize: BLOCK_BYTES });
+    const member = compress(Buffer.concat(parts, size));
     // The consumer observes the rejection in order; a later block must not
     // surface first as an unhandled rejection.
     member.catch(() => undefined);
@@ -59,7 +58,7 @@ export async function* gzipInParallel(
       yield await pending.shift()!;
     }
   } finally {
-    // Cancellation joins in-flight blocks before the archive owner cleans up.
+    // A cancelled or failed archive settles only after its in-flight blocks do.
     await Promise.allSettled(pending);
   }
 }
