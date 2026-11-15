@@ -194,7 +194,7 @@ public struct OpenClawIDMemberJoinClient: Sendable {
     }
 
     /// The role of the member listing `peerKey` in an already verified snapshot response.
-    private static func role(of peerKey: String, in response: Data) throws -> String {
+    static func role(of peerKey: String, in response: Data) throws -> String {
         let snapshot = try OpenClawIDCanonicalJSON.parse(response).fields(["descriptor", "snapshot"])["snapshot"]!
         guard case let .object(envelope) = snapshot, case let .object(body)? = envelope["body"],
               let members = try body["members"]?.list()

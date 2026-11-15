@@ -9,8 +9,9 @@ enum OpenClawIDSettingsPresentation: Equatable {
     /// `needsSignIn`: without a node, the route re-reads the claw with the person's Discovery
     /// session, and that session has ended.
     case owner(claw: String, device: String, runsTools: Bool, approvedWith: String, needsSignIn: Bool)
-    /// Joined with an invite: the owner's device actions (tools, removal, approvals) are not offered.
-    case member(claw: String, device: String, role: String, needsSignIn: Bool)
+    /// A member device, added with an invite or from another of the member's devices: the owner's
+    /// device actions (tools, removal, approvals) are not offered.
+    case member(claw: String, device: String, approvedWith: String, needsSignIn: Bool)
     /// A member request is waiting for an owner's approval.
     case pendingJoin(claw: String)
 }
@@ -54,11 +55,12 @@ final class OpenClawIDSettingsModel {
     func presentation(state: AppState) -> OpenClawIDSettingsPresentation? {
         _ = self.revision
         let device = InstanceIdentity.displayName
-        if let enrolled = self.store.load(), let role = enrolled.memberRole {
+        if let enrolled = self.store.load(), enrolled.memberRole != nil {
             return .member(
                 claw: enrolled.hostname,
                 device: device,
-                role: role.capitalized,
+                approvedWith: enrolled.approvedWith == .invite
+                    ? "Added with an invite" : "Approved from your other device",
                 needsSignIn: self.store.session(for: enrolled) == nil)
         }
         if let enrolled = self.store.load() {
@@ -308,15 +310,15 @@ struct OpenClawIDSettingsSection: View {
                 }
                 .disabled(self.model.busy)
                 if needsSignIn { self.signInAgain(claw) }
-            case let .member(claw, device, role, needsSignIn):
+            case let .member(claw, device, approvedWith, needsSignIn):
                 self.header(
-                    "\(device) · \(role) on \(claw)",
-                    detail: "Joined with an invite. Chat and the dashboard, with the access an owner chose.",
+                    "\(device) · Member of \(claw)",
+                    detail: "\(approvedWith). Chat and the dashboard.",
                     icon: "person.crop.circle.badge.checkmark")
                 Text("Your assistant can’t use this Mac’s commands, screen or camera.")
                     .font(.callout).foregroundStyle(.secondary)
                 HStack {
-                    self.plain("To remove this Mac, ask an owner of \(claw) to remove it under People.")
+                    self.plain("To remove this Mac, open Your devices on another of your devices, or ask an owner.")
                         .font(.callout).foregroundStyle(.secondary)
                     Spacer()
                     Button("Open Dashboard") { self.model.retryPrimarySelection() }.disabled(self.model.busy)

@@ -61,14 +61,15 @@ struct OnboardingOpenClawIDSignInTests {
             return
         }
         #expect(account == "owner@example.test")
-        #expect(listed.map(\.relationship) == ["Owner", "Owner", "Operator"])
+        #expect(listed.map(\.relationship) == ["Owner", "Owner", "Member"])
         #expect(await http.bearers == ["fixture-id-token", "ds_fixture"])
         #expect(try await service.perform(.selectClaw(Discovery.studio)) == .chooseApproval(
             claw: "studio-k7x2q.crabd.me", device: "Fixture Mac"))
         #expect(try await service.perform(.selectClaw(Discovery.lab)) == .problem(.clawOffline(
             claw: "lab-k7x2q.crabd.me")))
-        // Each of a member's devices joins with its own invite.
-        #expect(try await service.perform(.selectClaw(Discovery.team)) == .inviteEntry(claw: "team-k7x2q.crabd.me"))
+        // A member adds this Mac from another of their devices, without an invite.
+        #expect(try await service.perform(.selectClaw(Discovery.team)) == .addMemberDevice(
+            claw: "team-k7x2q.crabd.me", device: "Fixture Mac"))
     }
 
     @Test func `an account without claws and a cancelled sign in`() async throws {
@@ -473,12 +474,13 @@ struct OnboardingOpenClawIDSignInTests {
                 self.enrollments += 1
                 return .ownerConnected(claw: "studio-fixture", device: "Fixture Mac", approvedWith: "Approved")
             case .approveFromDevice:
-                return .ownerCompareCode(
+                return .deviceCompareCode(
                     claw: "studio-fixture",
                     device: "Fixture Mac",
                     code: "123 456",
                     approvalURL: nil,
-                    confirmed: false)
+                    confirmed: false,
+                    member: false)
             case .checkApproval:
                 return try await withCheckedThrowingContinuation { self.decision = $0 }
             case .useRecoveryKit:

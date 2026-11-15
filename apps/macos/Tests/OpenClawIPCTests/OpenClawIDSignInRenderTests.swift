@@ -59,16 +59,16 @@ struct OpenClawIDSignInRenderTests {
             ("mac-a04-signing-in", .signingIn),
             ("mac-a05-claw-picker", .claws(account: "owner@example.test", claws: [
                 .init(id: "studio", name: claw, relationship: "Owner", online: true),
-                .init(id: "team", name: "team-k7x2q.crabd.me", relationship: "Operator", online: true),
+                .init(id: "team", name: "team-k7x2q.crabd.me", relationship: "Member", online: true),
                 .init(id: "lab", name: "lab-k7x2q.crabd.me", relationship: "Owner", online: false),
             ])),
             ("mac-a06-choose-approval", .chooseApproval(claw: claw, device: Self.mac)),
-            ("mac-a07-compare-code", .ownerCompareCode(
+            ("mac-a07-compare-code", .deviceCompareCode(
                 claw: claw, device: Self.mac, code: "482 913", approvalURL: URL(string: "https://\(claw)/"),
-                confirmed: false)),
-            ("mac-a08-compare-code-confirmed", .ownerCompareCode(
+                confirmed: false, member: false)),
+            ("mac-a08-compare-code-confirmed", .deviceCompareCode(
                 claw: claw, device: Self.mac, code: "482 913", approvalURL: URL(string: "https://\(claw)/"),
-                confirmed: true)),
+                confirmed: true, member: false)),
             ("mac-a09-owner-connected", .ownerConnected(
                 claw: claw, device: Self.mac, approvedWith: "Approved from your other device")),
             ("mac-b02-kit-connected", .ownerConnected(
@@ -78,8 +78,13 @@ struct OpenClawIDSignInRenderTests {
             ("mac-f03-expired", .problem(.expired(claw: claw))),
             ("mac-f04-kit-invalid", .problem(.kitInvalid(claw: claw))),
             ("mac-f05-no-claws", .problem(.notInvited(account: "sam@example.test"))),
-            ("mac-g01-invite-entry", .inviteEntry(claw: nil)),
-            ("mac-g02-invite-entry-member-claw", .inviteEntry(claw: "team-k7x2q.crabd.me")),
+            ("mac-h01-add-member-device", .addMemberDevice(claw: "team-k7x2q.crabd.me", device: Self.mac)),
+            ("mac-h02-member-compare-code", .deviceCompareCode(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, code: "482 913",
+                approvalURL: URL(string: "https://team-k7x2q.crabd.me/"), confirmed: false, member: true)),
+            ("mac-h03-member-device-connected", .memberConnected(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, role: nil)),
+            ("mac-g01-invite-entry", .inviteEntry),
             ("mac-g03-member-request", .memberRequest(
                 claw: "team-k7x2q.crabd.me", device: Self.mac, account: "sam@example.test")),
             ("mac-g04-member-pending", .memberPending(claw: "team-k7x2q.crabd.me", device: Self.mac)),
@@ -135,7 +140,11 @@ struct OpenClawIDSignInRenderTests {
                 claw: claw, device: Self.mac, runsTools: false, approvedWith: "Approved with your recovery kit",
                 needsSignIn: true)),
             ("mac-g08-settings-member", .member(
-                claw: "team-k7x2q.crabd.me", device: Self.mac, role: "Operator", needsSignIn: false)),
+                claw: "team-k7x2q.crabd.me", device: Self.mac, approvedWith: "Added with an invite",
+                needsSignIn: false)),
+            ("mac-h04-settings-member-device", .member(
+                claw: "team-k7x2q.crabd.me", device: Self.mac, approvedWith: "Approved from your other device",
+                needsSignIn: false)),
             ("mac-g09-settings-member-pending", .pendingJoin(claw: "team-k7x2q.crabd.me")),
         ] {
             try OnboardingRenderTests.capture(

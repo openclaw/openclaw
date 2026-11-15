@@ -57,18 +57,24 @@ enum OnboardingOpenClawIDStep: Equatable {
     case signingIn
     /// The owner picks how this Mac becomes their device.
     case chooseApproval(claw: String, device: String)
+    /// A member adds this Mac to their account from another of their devices.
+    case addMemberDevice(claw: String, device: String)
     /// The six digits are shown; the service waits for the approving device on its own, and opens
-    /// its handoff only after the person confirmed the match here too.
-    case ownerCompareCode(claw: String, device: String, code: String, approvalURL: URL?, confirmed: Bool)
+    /// its handoff only after the person confirmed the match here too. `member`: the approver is
+    /// another of the member's devices, not an owner device.
+    case deviceCompareCode(
+        claw: String, device: String, code: String, approvalURL: URL?, confirmed: Bool, member: Bool)
     case recoveryKitEntry(claw: String)
     case ownerConnected(claw: String, device: String, approvedWith: String)
-    /// A member joins with an owner's invite link. `claw` is the member claw picked, if any.
-    case inviteEntry(claw: String?)
+    /// A member joins with an owner's invite link.
+    case inviteEntry
     /// The pasted invite is for `claw`; nothing is sent until the person asks to join.
     case memberRequest(claw: String, device: String, account: String)
     /// The request is with the claw; the service waits for an owner's approval on its own.
     case memberPending(claw: String, device: String)
-    case memberConnected(claw: String, device: String, role: String)
+    /// `role`: the invite's role; nil when another of the member's devices approved this Mac, which
+    /// then has the account's role.
+    case memberConnected(claw: String, device: String, role: String?)
     case problem(OnboardingOpenClawIDProblem)
 }
 
@@ -89,7 +95,7 @@ extension OnboardingOpenClawIDStep {
     /// The code is shown and the service is waiting for the owner's decision.
     var isAwaitingApproval: Bool {
         switch self {
-        case .ownerCompareCode, .memberPending: true
+        case .deviceCompareCode, .memberPending: true
         default: false
         }
     }
@@ -205,7 +211,7 @@ final class OnboardingOpenClawIDModel {
         switch step {
         case let .nodeConnection(claw, true): self.onNodeConnected(claw)
         case let .ownerConnected(claw, _, _), let .memberConnected(claw, _, _): try self.onJoined(claw)
-        case .ownerCompareCode, .memberPending: self.awaitApproval()
+        case .deviceCompareCode, .memberPending: self.awaitApproval()
         default: break
         }
     }

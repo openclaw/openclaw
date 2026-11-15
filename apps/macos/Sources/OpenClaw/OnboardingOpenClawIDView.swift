@@ -233,10 +233,27 @@ struct OnboardingOpenClawIDContent: View {
                 You can stop this in Settings.
                 """,
                 icon: "wrench.and.screwdriver")
-        case let .ownerCompareCode(claw, device, code, approvalURL, confirmed):
+        case let .addMemberDevice(claw, device):
+            self.heading(
+                "Add this Mac to \(claw)",
+                subtitle: "You’re a member of \(claw). Approve \(device) once from a device you already use with it.")
+            self.choice(
+                "Approve from another of your devices",
+                detail: "Use a browser or device that already has access to \(claw). You’ll compare a six-digit code.",
+                icon: "laptopcomputer.and.iphone",
+                action: .approveFromDevice)
+            self.row(
+                "Chat and the dashboard only",
+                detail: "Your assistant can’t use this Mac’s commands, screen or camera.",
+                icon: "bubble.left.and.bubble.right")
+            Button("Lost your other devices? Join with a new invite") { self.action(.joinWithInvite) }
+                .buttonStyle(.link)
+        case let .deviceCompareCode(claw, device, code, approvalURL, confirmed, member):
             self.heading(
                 "Compare the code",
-                subtitle: "On a device that already has access to \(claw), open the request from \(device).")
+                subtitle: member
+                    ? "On another of your devices, open \(claw) and find the request from \(device)."
+                    : "On a device that already has access to \(claw), open the request from \(device).")
             Text(code).font(.system(size: 42, weight: .semibold, design: .monospaced)).textSelection(.enabled)
             if confirmed {
                 HStack(spacing: 10) {
@@ -258,7 +275,11 @@ struct OnboardingOpenClawIDContent: View {
             if let approvalURL, approvalURL.scheme == "https" {
                 Link(destination: approvalURL) { self.plain("Open \(claw) in your browser") }
             }
-            Button("Use your recovery kit instead") { self.action(.useRecoveryKit) }.buttonStyle(.link)
+            if member {
+                Button("Use an invite instead") { self.action(.joinWithInvite) }.buttonStyle(.link)
+            } else {
+                Button("Use your recovery kit instead") { self.action(.useRecoveryKit) }.buttonStyle(.link)
+            }
         case let .recoveryKitEntry(claw):
             self.heading(
                 "Use your recovery kit",
@@ -299,11 +320,8 @@ struct OnboardingOpenClawIDContent: View {
                 "Opening the dashboard…",
                 detail: "Signed in through OpenClaw ID. No VPN or Gateway token.",
                 icon: "rectangle.and.hand.point.up.left")
-        case let .inviteEntry(claw):
-            self.heading(
-                "Join with an invite",
-                subtitle: claw.map { "Ask an owner of \($0) for an invite for this Mac." }
-                    ?? "Ask an owner of the claw for an invite for this Mac.")
+        case .inviteEntry:
+            self.heading("Join with an invite", subtitle: "Ask an owner of the claw for an invite for this Mac.")
             Image(systemName: "envelope.open").font(.system(size: 48)).foregroundStyle(.tint)
             Text("Copy the invite link the owner sent you, then paste it here.")
                 .foregroundStyle(.secondary)
@@ -339,10 +357,17 @@ struct OnboardingOpenClawIDContent: View {
             }
         case let .memberConnected(claw, device, role):
             self.heading("You’re all set!", subtitle: "\(device) joined \(claw).")
-            self.row(
-                "Joined as \(role)",
-                detail: "Chat and the dashboard, with the access the owner chose.",
-                icon: "checkmark.seal")
+            if let role {
+                self.row(
+                    "Joined as \(role)",
+                    detail: "Chat and the dashboard, with the access the owner chose. Added with an invite.",
+                    icon: "checkmark.seal")
+            } else {
+                self.row(
+                    "Added to \(claw)",
+                    detail: "Chat and the dashboard. Approved from your other device.",
+                    icon: "checkmark.seal")
+            }
             self.row(
                 "No tools on this Mac",
                 detail: "Your assistant can’t use this Mac’s commands, screen or camera.",

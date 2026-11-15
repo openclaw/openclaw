@@ -5,7 +5,8 @@ import Testing
 @testable import OpenClawKit
 
 /// The Mac's member join: paste an owner's invite, send the redemption, wait as pending and join
-/// with the invite's role and no node. Discovery is scripted; no Keychain or app state is touched.
+/// with the invite's role and no node; or, already a member, approve this Mac from another of the
+/// member's devices. Discovery is scripted; no Keychain or app state is touched.
 @MainActor
 struct OnboardingOpenClawIDMemberJoinTests {
     private static let configuration = MacOpenClawIDConfiguration(
@@ -33,7 +34,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
         effects.clipboard = try Self.link()
         let service = Self.service(http: http, effects: effects, defaults: defaults, approveWhileWaiting: true)
         _ = try await service.perform(.signIn)
-        #expect(try await service.perform(.joinWithInvite) == .inviteEntry(claw: nil))
+        #expect(try await service.perform(.joinWithInvite) == .inviteEntry)
         #expect(try await service.perform(.pasteInvite) == .memberRequest(
             claw: Self.claw, device: "Fixture Mac", account: "bob@example.test"))
         #expect(try await service.perform(.requestJoin) == .memberPending(claw: Self.claw, device: "Fixture Mac"))
@@ -59,6 +60,35 @@ struct OnboardingOpenClawIDMemberJoinTests {
         #expect(effects.joined == [Self.claw])
         #expect(MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: Self.database()).pendingJoin() == nil)
         model.cancel()
+    }
+
+    @Test func `a member approves this Mac from another of their devices, with no invite or node`() async throws {
+        let (defaults, suite) = try Self.defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let http = MemberDiscovery(member: true)
+        let effects = Effects()
+        let service = Self.service(http: http, effects: effects, defaults: defaults)
+        _ = try await service.perform(.signIn)
+        #expect(try await service.perform(.selectClaw(Self.clawID)) == .addMemberDevice(
+            claw: Self.claw, device: "Fixture Mac"))
+        let compare = try await service.perform(.approveFromDevice)
+        guard case let .deviceCompareCode(claw, _, code, _, false, true) = compare else {
+            Issue.record("expected the member's code comparison, got \(compare)")
+            return
+        }
+        #expect(claw == Self.claw && code.count == 7)
+        _ = try await service.perform(.confirmCode(matches: true))
+        #expect(try await service.perform(.checkApproval) == .memberConnected(
+            claw: Self.claw, device: "Fixture Mac", role: nil))
+        let device = try #require(effects.installed.first)
+        #expect(device.memberRole == "operator")
+        #expect(device.nodeEnrollmentID == nil)
+        #expect(device.approvedWith == .device)
+        #expect(device.admission == .member)
+        #expect(device.memberAccountID == "acct_bob")
+        // The request went to the member's own devices; nothing was redeemed or sent to the owners.
+        #expect(await http.recipients.first == "self")
+        #expect(await http.redemptions == 0)
     }
 
     @Test func `a saved request resumes for its account and cancelling forgets its keys`() async throws {
@@ -229,20 +259,27 @@ struct OnboardingOpenClawIDMemberJoinTests {
     }
 
     /// Discovery for an invitee: a join ticket names the claw, and once an owner approves, the
-    /// account lists it and its snapshot names the redeemed W as a member.
+    /// account lists it and its snapshot names the redeemed W as a member. For an existing `member`,
+    /// it also plays the member's other device approving this Mac over SAS.
     private actor MemberDiscovery: OpenClawIDNodeEnrollmentHTTP {
         private let account: String
+        private let member: Bool
         private let gateway = Curve25519.Signing.PrivateKey()
+        private let ephemeralE = Curve25519.KeyAgreement.PrivateKey()
         private var role: String?
         enum MailFailure { case refused, lost }
 
         private let mailFailure: MailFailure?
         private var peer: String?
+        private var start: [String: OpenClawIDCanonicalJSON]?
+        private var inbox: [OpenClawIDCanonicalJSON] = []
         private(set) var redemptions = 0
         private(set) var claws = 0
+        private(set) var recipients: [String] = []
 
-        init(account: String = "acct_bob", mailFailure: MailFailure? = nil) {
+        init(account: String = "acct_bob", member: Bool = false, mailFailure: MailFailure? = nil) {
             self.account = account
+            self.member = member
             self.mailFailure = mailFailure
         }
 
@@ -250,7 +287,7 @@ struct OnboardingOpenClawIDMemberJoinTests {
             self.role = role
         }
 
-        func send(_ request: URLRequest) throws -> OpenClawIDNodeEnrollmentHTTPResponse {
+        func send(_ request: URLRequest) async throws -> OpenClawIDNodeEnrollmentHTTPResponse {
             let json = { (value: OpenClawIDCanonicalJSON) in
                 OpenClawIDNodeEnrollmentHTTPResponse(status: 200, body: value.encoded)
             }
@@ -263,10 +300,11 @@ struct OnboardingOpenClawIDMemberJoinTests {
                 ]))
             case ("GET", "/v1/claws"):
                 self.claws += 1
-                let claws: [OpenClawIDCanonicalJSON] = listed ? [.object([
+                let claws: [OpenClawIDCanonicalJSON] = listed || self.member ? [.object([
                     "claw_id": .string(OnboardingOpenClawIDMemberJoinTests.clawID),
                     "hostname": .string(OnboardingOpenClawIDMemberJoinTests.claw),
-                    "relationship": .string("member"), "role": .string(self.role ?? ""), "online": .bool(true),
+                    "relationship": .string("member"), "role": .string(self.role ?? "operator"),
+                    "online": .bool(true),
                 ])] : []
                 return json(.object(["claws": .array(claws)]))
             case ("POST", "/v1/join-tickets"):
@@ -279,6 +317,16 @@ struct OnboardingOpenClawIDMemberJoinTests {
                 return .init(status: 400, body: Data(#"{"error":{"code":"invalid_statement","message":"x"}}"#.utf8))
             case let ("POST", path) where path.hasSuffix("/mailbox") && self.mailFailure == .lost:
                 throw URLError(.networkConnectionLost)
+            case let ("GET", path) where path.hasSuffix("/mailbox/device"):
+                let messages = self.inbox
+                self.inbox = []
+                if messages.isEmpty { try await Task.sleep(for: .milliseconds(5)) }
+                return json(.object(["messages": .array(messages), "cursor": .string("1")]))
+            case let ("POST", path) where path.hasSuffix("/mailbox") && self.member:
+                let mail = try OpenClawIDCanonicalJSON.parse(request.httpBody ?? Data()).fields(["to", "payload"])
+                try self.recipients.append(mail["to"]!.text())
+                try self.approve(mail["payload"]!.fields(["kind", "request_id", "step", "data"]))
+                return json(.object([:]))
             case let ("POST", path) where path.hasSuffix("/mailbox"):
                 let payload = try OpenClawIDCanonicalJSON.parse(request.httpBody ?? Data())
                     .fields(["to", "payload"])["payload"]!.fields(["kind", "redemption"])
@@ -296,6 +344,62 @@ struct OnboardingOpenClawIDMemberJoinTests {
                 return try json(.object(["snapshot": self.snapshot()]))
             default:
                 return .init(status: 404, body: Data())
+            }
+        }
+
+        /// The member's other device E: accept the request, then add N to the account (the snapshot
+        /// lists it) and seal the pin with no certificate.
+        private func approve(_ payload: [String: OpenClawIDCanonicalJSON]) throws {
+            guard case let .object(data) = payload["data"]! else { return }
+            let requestID = try payload["request_id"]!.text()
+            let approver = try OpenClawIDNodeIdentity(seed: Data(repeating: 8, count: 32))
+            let reply = { (step: String, data: [String: OpenClawIDCanonicalJSON]) in
+                OpenClawIDCanonicalJSON.object([
+                    "message_id": .string(UUID().uuidString), "to": .string("fp:n"),
+                    "payload": .object([
+                        "kind": .string("enrollment"), "request_id": .string(requestID), "step": .string(step),
+                        "data": .object(data),
+                    ]),
+                ])
+            }
+            switch try payload["step"]!.text() {
+            case "start":
+                self.start = data
+                self.peer = try data["peer_key"]!.text()
+                self.inbox.append(reply("accept", [
+                    "eph_pub": .string(OpenClawIDNodeIdentity.hex(self.ephemeralE.publicKey.rawRepresentation)),
+                    "device_pub": .string(approver.signingKey),
+                ]))
+            case "key":
+                guard var start = self.start else { return }
+                let commit = try start["commit"]!.text()
+                start["commit"] = nil
+                start["request_id"] = .string(requestID)
+                let ephN = try OpenClawIDNodeIdentity.unhex(data["eph_pub"]!.text())
+                let shared = try self.ephemeralE.sharedSecretFromKeyAgreement(with: .init(rawRepresentation: ephN))
+                    .withUnsafeBytes { Data($0) }
+                let transcript = Data(SHA256.hash(data: OpenClawIDCanonicalJSON.object([
+                    "start": .object(start), "commit": .string(commit),
+                    "eph_e": .string(OpenClawIDNodeIdentity.hex(self.ephemeralE.publicKey.rawRepresentation)),
+                    "eph_n": .string(OpenClawIDNodeIdentity.hex(ephN)), "device_pub_e": .string(approver.signingKey),
+                ]).encoded))
+                let key = HKDF<SHA256>.deriveKey(
+                    inputKeyMaterial: SymmetricKey(data: shared), salt: Data(),
+                    info: Data(("openclaw/sas-mac/v1" + OpenClawIDNodeIdentity.hex(transcript)).utf8),
+                    outputByteCount: 32)
+                let descriptor = try self.descriptor().fields([
+                    "v", "claw_id", "transport", "relay_url", "root_pub", "binding", "published_at",
+                ])
+                let handoff = OpenClawIDCanonicalJSON.object([
+                    "root_pub": descriptor["root_pub"]!, "binding": descriptor["binding"]!, "cert": .null,
+                ])
+                let box = try AES.GCM.seal(handoff.encoded, using: key)
+                self.role = "operator"
+                self.inbox.append(reply("sealed", [
+                    "nonce": .string(OpenClawIDNodeIdentity.hex(box.nonce)),
+                    "ciphertext": .string(OpenClawIDNodeIdentity.hex(box.ciphertext + box.tag)),
+                ]))
+            default: break
             }
         }
 

@@ -8,7 +8,7 @@ struct MacOpenClawIDRemoval: Equatable {
     let shortName: String
     let date: Date
     let origin: Origin
-    /// This Mac had joined as a member: only a new invite brings it back.
+    /// This Mac was a member device: another of the member's devices or a new invite brings it back.
     let member: Bool
 
     init(hostname: String, date: Date = Date(), origin: Origin, member: Bool = false) {
@@ -31,8 +31,9 @@ struct MacOpenClawIDRemoval: Equatable {
                 "Chat, the dashboard and tools on this Mac no longer reach \(self.hostname)."
         }
         if self.member {
-            return "An owner of \(self.shortName) removed it. To use it with \(self.shortName) again, " +
-                "ask an owner for a new invite."
+            return "It was removed from \(self.shortName), from one of your devices or by an owner. " +
+                "To use it again, sign in and approve it from another of your devices. " +
+                "If you’ve lost them all, ask an owner for a new invite."
         }
         return "It was removed from another device. To use it with \(self.shortName) again, " +
             "sign in and approve it from one of your devices, or with your recovery kit."
@@ -40,7 +41,7 @@ struct MacOpenClawIDRemoval: Equatable {
 
     func settingsMessage(now: Date = Date()) -> String {
         if self.member {
-            return "An owner removed this Mac. Ask for a new invite to join again."
+            return "Removed from one of your devices or by an owner. Sign in to add it back."
         }
         return self.origin == .here
             ? "You removed this Mac \(age(from: self.date, now: now)). Sign in to approve it again."
