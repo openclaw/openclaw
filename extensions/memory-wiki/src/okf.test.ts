@@ -330,3 +330,26 @@ describe("importMemoryWikiOkfBundle", () => {
     await expect(read(pagePath)).resolves.toContain("Updated body.");
   });
 });
+
+describe("OKF complex link destinations", () => {
+  it("rewrites balanced parentheses and angle destinations while preserving literals", async () => {
+    const { bundlePath, run, page, read, write } = await createImport("complex-okf");
+    await fs.mkdir(path.join(bundlePath, "metrics"), { recursive: true });
+    await write("metrics/weekly (active) users.md", "Metric body", "Weekly Active Users");
+    const literal = "`[Example](../metrics/weekly%20(active)%20users.md)`";
+    await write(
+      "tables/orders.md",
+      [
+        "[Balanced](../metrics/weekly%20(active)%20users.md?view=compact#columns)",
+        '[Angle](<../metrics/weekly (active) users.md> "metric docs")',
+        literal,
+      ].join("\n\n"),
+    );
+    const result = await run();
+    const orders = parseWikiMarkdown(await read(page(result.pagePaths, "orders")));
+    const target = path.basename(page(result.pagePaths, "metrics-weekly-active-users"));
+    expect(orders.body).toContain(`[Balanced](${target}?view=compact#columns)`);
+    expect(orders.body).toContain(`[Angle](<${target}> "metric docs")`);
+    expect(orders.body).toContain(literal);
+  });
+});

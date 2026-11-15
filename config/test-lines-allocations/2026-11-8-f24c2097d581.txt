@@ -1,0 +1,5 @@
+23
+# LOCAL 2026.11.8 row 89; source f24c2097d581cc93bd15a0340c6f5fbd69db16b6.
+# Already-declared Markdown parser replaces regex; balanced and angle destinations supported while authored titles and code literals retained.
+# Keeps distinct regression invariants; exact net LF measured at integration.
+# Scalar baseline unchanged; focused private proof retained.
