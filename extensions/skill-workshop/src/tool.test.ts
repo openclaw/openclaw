@@ -129,6 +129,37 @@ describe("skill_workshop", () => {
       "write_file",
     ]);
   });
+  it("shows what a whole-file SKILL.md rewrite or draft drops from the live skill", async () => {
+    const tool = workshop();
+    const steps = (section: string) => `## ${section}\n${"1. Do the step.\n".repeat(20)}`;
+    await tool("write_file", {
+      file_path: "SKILL.md",
+      content: `---\nname: deploy\ndescription: Deploy staging\n---\n\n${["Build", "Ship", "Verify"].map(steps).join("\n")}`,
+    });
+    // A change note sent as the whole file: it applies, and the result says what it dropped.
+    const note =
+      "---\nname: deploy\ndescription: Deploy staging\n---\n\n# Fix: verify after ship\n\n## Why this exists\nCheck health.\n";
+    const drafted = await tool("draft", { content: note });
+    expect(drafted).toContain("SKILL.md body: 65 → 4 lines (-94%).");
+    const id = /Saved draft (\S+) for "deploy"/.exec(drafted)?.[1];
+    expect(await tool("view", { draft: id })).toContain(
+      'Removed sections: "## Build", "## Ship", "## Verify".',
+    );
+
+    const written = await tool("write_file", { file_path: "SKILL.md", content: note });
+    expect(written.split("\n")).toEqual([
+      expect.stringMatching(/^Updated "deploy"/),
+      "SKILL.md body: 65 → 4 lines (-94%).",
+      'Removed sections: "## Build", "## Ship", "## Verify".',
+      expect.stringMatching(
+        /^Advisory \(not blocking\): the new SKILL\.md body is 6% of the previous/,
+      ),
+      expect.stringMatching(
+        /^Advisory \(not blocking\): title "# Fix: verify after ship" reads as a change note/,
+      ),
+    ]);
+  });
+
   it("saves a background review's change as a draft in propose mode and leaves skills unchanged", async () => {
     setRuntimeConfigSnapshot(workshopPluginConfig({ autonomous: { mode: "propose" } }));
     const review = workshop({ runId: "propose-run", reviewOf: "agent:main:main" });

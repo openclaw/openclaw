@@ -112,6 +112,11 @@ that finds a lesson saves a draft: the complete proposed `SKILL.md` for the skil
 it would create or replace, with its reason. Drafts are not announced and never
 load as skills.
 
+A draft for a live skill replaces its `SKILL.md` whole when applied. Saving or
+viewing such a draft with `skill_workshop` reports the same line count, removed
+sections, and shrink advisory as a write, so a draft that is only a change note
+is visible before anyone applies it.
+
 Review drafts in either place:
 
 - **Control UI:** the **Drafts** list on **Plugins → Skill workshop** shows each
@@ -236,7 +241,7 @@ It is part of `tools.profile: "coding"`; with a stricter policy, add it to
 | `view`        | `name`, optional `file_path`, `version`              | Reads a file, current or from a saved version                            |
 | `create`      | `name`, `content` (full `SKILL.md`)                  | Creates a new skill                                                      |
 | `patch`       | `name`, `old_text`, `new_text`, optional `file_path` | Replaces one exact, unique span                                          |
-| `write_file`  | `name`, `file_path`, `content`                       | Writes a support file, or rewrites `SKILL.md`                            |
+| `write_file`  | `name`, `file_path`, `content`                       | Writes a support file, or replaces `SKILL.md` whole                      |
 | `remove_file` | `name`, `file_path`                                  | Deletes one support file; `SKILL.md` goes only through `archive`         |
 | `archive`     | `name`, optional `absorbed_into`, `reason`           | Hides the skill; `absorbed_into` names the live skill that now covers it |
 | `restore`     | `name`, optional `version`                           | Restores the newest saved version, or the one named                      |
@@ -263,8 +268,17 @@ The background review must `view` an existing skill before it can `patch`,
 `absorbed_into` or `reason`. In `propose` mode it can only `list`, `view`, and
 `draft`. A foreground `view` counts as using the skill.
 
-A successful `create`, `patch`, or `write_file` of `SKILL.md` may end with up to
+`content` in `create`, `write_file`, and `draft` is the complete file and replaces
+it whole; nothing is merged. A `patch` or `write_file` of an existing `SKILL.md`
+reports the body's line count before and after (for example
+`SKILL.md body: 387 → 87 lines (-78%).`) and lists `##` sections the write
+removed. When the new body is under 60% of the previous one, the result adds an
+`Advisory (not blocking)` line saying the content replaced the whole file; undo
+with `restore` if it was meant as a change note.
+
+A successful `create`, `patch`, or `write_file` of `SKILL.md` may also end with up to
 three `Advisory (not blocking)` lines: authoring issues the write introduced (a
+title such as `# Fix: ...` or `# Proposal` that reads as a change note, a
 description over 160 bytes or opening with "This skill", a body over 250 lines
 or 12 KB, emphasis words, three or more Never/Don't steps, update notes or
 dates). The write has already landed. A `create` also lists the agent's other
