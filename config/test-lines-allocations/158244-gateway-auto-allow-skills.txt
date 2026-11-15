@@ -4,4 +4,4 @@
 # hook is wrapped, as the withdrawal seam). Mocked-boundary regressions: inline and detached-approval
 # rechecks (supervisor and approval RPCs mocked) and the cron standing-grant recheck (allowlist
 # classification mocked). Exact net growth for PR #158244.
-848
+841
