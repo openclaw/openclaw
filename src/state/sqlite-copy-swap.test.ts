@@ -28,6 +28,12 @@ const RETIRED_COLUMNS: Record<string, string> = {
   "current_conversation_bindings.target_session_id": "derived from the session key (v15)",
 };
 
+// Tables this build keeps outside the rebuilt database. Every other table a release
+// wrote must exist in the rebuilt schema, or its rows would only survive as set-aside data.
+const MOVED_TABLES: Record<string, string> = {
+  device_identities: "client credential store (v29); the fallback keeps the chain-created store",
+};
+
 const dirs: string[] = [];
 afterEach(() => {
   for (const dir of dirs.splice(0)) {
@@ -95,6 +101,11 @@ describe.each(releases)("generic rebuild of %s", (release) => {
         expect(table.copied + table.setAside, table.table).toBe(table.source);
       }
       expect(droppedUserColumns(source, report)).toEqual([]);
+      expect(
+        report.setAside
+          .filter((row) => row.reason === "table removed" && !MOVED_TABLES[row.table])
+          .map((row) => row.table),
+      ).toEqual([]);
       const built = new DatabaseSync(out, { readOnly: true });
       try {
         expect(built.prepare("PRAGMA user_version").get()).toEqual({

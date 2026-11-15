@@ -5,7 +5,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { migrateSingletonStateFoldInV12 } from "./openclaw-state-db-schema-v12-foldin.js";
 import { migrateJsonCanonicalWideRowsV13 } from "./openclaw-state-db-schema-v13-widerow.js";
 import { TEMPLATE_RECORD_VERSIONS } from "./openclaw-state-db-schema-v36-template-names.js";
-import { getOpenClawStateFeatureSchemaSql } from "./openclaw-state-feature-schema.js";
+import {
+  getOpenClawStateFeatureSchemaSql,
+  listOpenClawStateFeatureSchemas,
+} from "./openclaw-state-feature-schema.js";
 import { getOpenClawStateRuntimeSchema } from "./openclaw-state-schema-compatibility.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -17,11 +20,13 @@ import {
   type SqliteSwapTarget,
 } from "./sqlite-copy-swap.js";
 
-const CANONICAL_TABLES = new Set(
-  [...OPENCLAW_STATE_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(
+// Tables created on first use; feature-local DDL is not in the base schema text.
+const FIRST_USE_TABLES = new Set([
+  ...[...OPENCLAW_STATE_SCHEMA_SQL.matchAll(/CREATE TABLE IF NOT EXISTS (\w+)/g)].map(
     (match) => match[1]!,
   ),
-);
+  ...listOpenClawStateFeatureSchemas().flatMap((feature) => feature.tables),
+]);
 
 /**
  * Shipped steps that move rows between tables. The fallback runs them on a
@@ -76,7 +81,7 @@ function createStateSchema(db: DatabaseSync, sourceTables: ReadonlySet<string>):
   );
   for (const table of sourceTables) {
     // First-use feature tables exist only where the feature already wrote.
-    if (CANONICAL_TABLES.has(table)) {
+    if (FIRST_USE_TABLES.has(table)) {
       db.exec(getOpenClawStateFeatureSchemaSql(table));
     }
   }
