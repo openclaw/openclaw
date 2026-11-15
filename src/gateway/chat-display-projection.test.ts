@@ -651,6 +651,23 @@ it.each([undefined, "", "   ", "Desktop-specific failure details"])(
 const projectedIds = (messages: unknown[]) =>
   projectChatDisplayMessages(messages).map((message) => message["__openclaw"]);
 
+it("retains empty cancellation receipts for display without adding model context", () => {
+  const receipt = assistant([text("")], {
+    stopReason: "stop",
+    excludeFromContext: true,
+    __openclaw: { runId: "cancelled-run" },
+    openclawAbort: { aborted: true, origin: "rpc", runId: "cancelled-run" },
+  });
+  expect(projectStable([receipt])).toMatchObject([
+    {
+      role: "assistant",
+      excludeFromContext: true,
+      __openclaw: { runId: "cancelled-run" },
+      openclawAbort: { aborted: true, origin: "rpc", runId: "cancelled-run" },
+    },
+  ]);
+});
+
 it.each(["length", "stop"])("hides empty %s attempts", (stopReason) => {
   const empty = assistant([text("")], { stopReason, __openclaw: { runId: "run-empty" } });
   const thinking = { ...empty, content: [text(""), { type: "thinking", thinking: "" }] };
