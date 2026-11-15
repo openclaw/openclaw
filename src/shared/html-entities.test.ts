@@ -18,6 +18,16 @@ describe("decodeHtmlEntities", () => {
   it("keeps direct numeric mapping, single-pass decoding, and invalid scalar references", () => {
     expect(
       decodeHtmlEntities("&#128; &#0; &amp;#39; &#38;mdash; &#xD800; &#55296; &#x110000;"),
-    ).toBe("\u0080 \0 &#39; &mdash; &#xD800; &#55296; &#x110000;");
+    ).toBe("\u20ac \0 &#39; &mdash; &#xD800; &#55296; &#x110000;");
+  });
+
+  it("maps C1-range numeric references through the HTML5 windows-1252 table", () => {
+    expect(
+      decodeHtmlEntities("it&#146;s a test &#151; with &#x93;smart quotes&#148; inside."),
+    ).toBe("it\u2019s a test \u2014 with \u201csmart quotes\u201d inside.");
+    // Undefined windows-1252 slots (0x81, 0x8d, 0x8f, 0x90, 0x9d) keep their C1 control.
+    expect(decodeHtmlEntities("&#x80; &#128; &#x9f; &#159; &#x81; &#143;")).toBe(
+      "\u20ac \u20ac \u0178 \u0178 \u0081 \u008f",
+    );
   });
 });

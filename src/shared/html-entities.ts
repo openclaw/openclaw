@@ -32,7 +32,15 @@ export function decodeHtmlEntities(html: string): string {
 
       const codePoint =
         hex === undefined ? Number.parseInt(decimal ?? "", 10) : Number.parseInt(hex, 16);
-      return isUnicodeScalar(codePoint) ? String.fromCodePoint(codePoint) : entity;
+      if (!isUnicodeScalar(codePoint)) {
+        return entity;
+      }
+      // HTML5 numeric references in the C1 range name windows-1252 characters, not Unicode C1
+      // controls; `entities` implements that end-state table (e.g. &#146; -> U+2019).
+      if (codePoint >= 0x80 && codePoint <= 0x9f) {
+        return decodeHTMLStrict(entity);
+      }
+      return String.fromCodePoint(codePoint);
     },
   );
 }
