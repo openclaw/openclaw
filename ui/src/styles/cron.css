@@ -188,11 +188,36 @@
   line-height: 1.45;
 }
 
-.cron-failure-details__cause {
+/* Raw errors are diagnostics: collapsed, monospace, and wrapped to the container width. */
+.cron-error-details {
+  min-width: 0;
+  margin-top: var(--space-2);
+  font-size: var(--control-ui-text-sm);
+}
+
+.cron-error-details > summary {
+  cursor: default;
+  color: var(--muted);
+}
+
+.cron-error-details__text {
+  margin: var(--space-1) 0 0;
+  max-height: 16em;
+  overflow: auto;
+  font-family: var(--mono);
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-.cron-failure-details__cause--preview {
+.cron-run-entry__error,
+.cron-run-entry__delivery-error {
+  min-width: 0;
+  padding-top: var(--space-1);
+  font-size: var(--control-ui-text-sm);
+  overflow-wrap: anywhere;
+}
+
+.cron-run-entry__error--clamped {
   display: -webkit-box;
   overflow: hidden;
   -webkit-line-clamp: 2;
