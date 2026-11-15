@@ -5,7 +5,6 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPENAI_CODEX_DEFAULT_MODEL, OPENAI_DEFAULT_MODEL } from "./default-models.js";
 
 const refreshOpenAICodexTokenMock = vi.hoisted(() => vi.fn());
 const loginOpenAICodexDeviceCodeMock = vi.hoisted(() => vi.fn());
@@ -94,16 +93,12 @@ describe("OpenAI provider Codex transport hooks", () => {
     expect(provider.aliases).toBeUndefined();
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
     expect(
-      provider.auth.map(({ id, wizard, kind, starterModel }) => [
-        id,
-        wizard?.choiceId,
-        kind === "oauth" || kind === "device_code" ? [starterModel] : [],
-      ]),
+      provider.auth.map(({ id, wizard, starterModel }) => [id, wizard?.choiceId, starterModel]),
     ).toEqual([
-      ["oauth", "openai", [OPENAI_CODEX_DEFAULT_MODEL]],
-      ["device-code", "openai-device-code", [OPENAI_CODEX_DEFAULT_MODEL]],
-      ["siwc", "openai-token-sharing", [OPENAI_DEFAULT_MODEL]],
-      ["api-key", "openai-api-key", []],
+      ["oauth", "openai", "openai/gpt-6.1-sol"],
+      ["device-code", "openai-device-code", "openai/gpt-6.1-sol"],
+      ["siwc", "openai-token-sharing", "openai/gpt-6.1-sol"],
+      ["api-key", "openai-api-key", "openai/gpt-6.1-sol"],
     ]);
     expect(provider.oauthProfileIdRepairs).toBeUndefined();
   });
@@ -125,9 +120,9 @@ describe("OpenAI provider Codex transport hooks", () => {
           credential: { type: "oauth", provider: "openai", ...tokens },
         },
       ],
-      defaultModel: "openai/gpt-6-astra",
+      defaultModel: "openai/gpt-6.1-sol",
     });
-    expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6-astra": {} });
+    expect(result?.configPatch?.agents?.defaults?.models).toEqual({ "openai/gpt-6.1-sol": {} });
   });
 
   it.each(["structured", "note"])(

@@ -92,7 +92,7 @@ Docker notes:
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Harness baseline model: `openai/gpt-5.6-luna`
-- Fresh OpenAI API-key selection default: `openai/gpt-6-astra`
+- Fresh OpenAI API-key selection default: `openai/gpt-6.1-sol`
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
 - Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`

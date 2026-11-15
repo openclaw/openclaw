@@ -27,6 +27,7 @@ describe("openai default models", () => {
     const next = applyOpenAIProviderConfig({
       agents: {
         defaults: {
+          modelPolicy: { allow: ["custom/model", "openai/*"] },
           models: {
             "custom/model": { alias: "gPt" },
           },
@@ -38,9 +39,9 @@ describe("openai default models", () => {
     expect(next.agents?.defaults?.models?.[OPENAI_DEFAULT_MODEL]).toEqual({});
   });
 
-  it("sets the default model when it is unset", () => {
+  it("sets Sol as the API-key default when it is unset", () => {
     const next = applyOpenAIConfig({});
-    expect(next.agents?.defaults?.model).toEqual({ primary: OPENAI_DEFAULT_MODEL });
+    expect(next.agents?.defaults?.model).toEqual({ primary: "openai/gpt-6.1-sol" });
   });
 
   it("preserves an explicit primary and its fallbacks", () => {
@@ -70,5 +71,29 @@ describe("openai default models", () => {
       "anthropic/claude-opus-4-6": {},
       [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
     });
+  });
+  it.each([
+    { modelPolicy: { allow: ["openai/gpt-6-astra"] } },
+    { models: { "openai/gpt-6-astra": {} } },
+  ])("does not widen a restriction to select the new default", (defaults) => {
+    const config: OpenClawConfig = { agents: { defaults } };
+    expect(applyOpenAIProviderConfig(config)).toEqual(config);
+    expect(applyOpenAIConfig(config)).toEqual(config);
+  });
+  it("preserves a permitted implicit default under an agent-owned restriction", () => {
+    const config: OpenClawConfig = {
+      agents: { entries: { main: { modelPolicy: { allow: ["openai/gpt-6-astra"] } } } },
+    };
+    expect(applyOpenAIConfig(config)).toEqual(config);
+  });
+
+  it("does not let an independently selected agent block a permitted new default", () => {
+    const research = {
+      model: { primary: "openai/gpt-6-astra" },
+      modelPolicy: { allow: ["openai/gpt-6-astra"] },
+    };
+    const next = applyOpenAIConfig({ agents: { entries: { main: {}, research } } });
+    expect(next.agents?.defaults?.model).toEqual({ primary: "openai/gpt-6.1-sol" });
+    expect(next.agents?.entries?.research).toEqual(research);
   });
 });

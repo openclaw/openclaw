@@ -1,12 +1,23 @@
-import { resolveMutableAgentEntry } from "../../agents/agent-scope-config.js";
-import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import { expectDefined } from "@openclaw/normalization-core";
+import { resolveAgentEntry, resolveMutableAgentEntry } from "../../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentModelFallbacksOverride,
+  toAgentEntriesRecord,
+} from "../../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import { normalizeProviderId } from "../../agents/model-ref-shared.js";
+import { resolveAllowedModelRefCore } from "../../agents/model-selection-resolve.js";
 import {
   LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH,
+  resolveConfiguredPrimaryProviderFallback,
   resolveConfiguredModelPolicyAllow,
 } from "../../agents/model-selection-shared.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../../config/model-policy-allowlist-migration.js";
 import {
   attachRuntimeConfigWriteApplication,
@@ -33,6 +44,79 @@ export function applyProviderLoginDefaultModel(
     next.agents.defaults.models = config.agents?.defaults?.models;
   }
   return next;
+}
+
+function hasProviderLoginModelSelection(config: OpenClawConfig, agentId: string): boolean {
+  return (
+    Boolean(resolveAgentEffectiveModelPrimary(config, agentId)) ||
+    Boolean(
+      findNormalizedProviderValue(config.models?.providers, DEFAULT_PROVIDER)?.models?.some(
+        (model) => model.id === DEFAULT_MODEL,
+      ),
+    ) ||
+    resolveConfiguredPrimaryProviderFallback({
+      cfg: config,
+      agentId,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+    }) !== null
+  );
+}
+
+/** Check the policy saving these credentials will produce, without changing it here. */
+export function canInitializeProviderLoginDefaultModel(
+  config: OpenClawConfig,
+  agentId: string,
+  provider: string,
+  model: string,
+): boolean {
+  if (hasProviderLoginModelSelection(config, agentId)) {
+    return false;
+  }
+  const connected = structuredClone(config);
+  // The existing access owner only widens policy when it hides this entire provider.
+  // An operator's narrower OpenAI restriction must keep its working implicit default.
+  allowProviderModelsInConfig(connected, agentId, provider);
+  return !(
+    "error" in
+    resolveAllowedModelRefCore({
+      cfg: connected,
+      agentId,
+      catalog: [],
+      raw: model,
+      defaultProvider: DEFAULT_PROVIDER,
+      defaultModel: DEFAULT_MODEL,
+    })
+  );
+}
+
+/** The login and credential-reuse paths share one current-config initialization decision. */
+export function applyProviderLoginInitialDefaultModel(
+  config: OpenClawConfig,
+  agentId: string,
+  provider: string,
+  model: string,
+): OpenClawConfig {
+  if (!canInitializeProviderLoginDefaultModel(config, agentId, provider, model)) {
+    return config;
+  }
+  const entries = listAgentEntries(config);
+  if (entries.length <= 1) {
+    return applyProviderLoginDefaultModel(config, model);
+  }
+  const target = expectDefined(resolveAgentEntry(config, agentId), "configured login agent");
+  const fallbacks =
+    resolveAgentModelFallbacksOverride(config, agentId) ??
+    resolveAgentModelFallbackValues(config.agents?.defaults?.model);
+  // Do not mutate entries shared with the writer's before snapshot.
+  const targetIndex = entries.findIndex((entry) => entry.id === target.id);
+  entries[targetIndex] = {
+    ...target,
+    model: { ...toAgentModelListLike(target.model), primary: model, fallbacks },
+  };
+  return { ...config, agents: { ...config.agents, entries: toAgentEntriesRecord(entries) } };
 }
 
 /** Provider setup defaults cannot change model restrictions; only saved credentials widen them. */

@@ -69,6 +69,8 @@ import {
   allowLoginProviderModels,
   allowProviderModelsInConfig,
   applyProviderLoginDefaultModel,
+  applyProviderLoginInitialDefaultModel,
+  canInitializeProviderLoginDefaultModel,
   withoutProviderModelPolicy,
   type ProviderModelAccess,
 } from "./auth-model-policy.js";
@@ -295,6 +297,9 @@ async function runProviderAuthMethod(
     ? {
         profiles: result.profiles,
         notes: result.notes,
+        ...(params.method.defaultModelSelection === "if-unset"
+          ? { defaultModel: result.defaultModel }
+          : {}),
         ...(result.configPatch
           ? {
               configPatch: {
@@ -327,7 +332,10 @@ async function runProviderAuthMethod(
   const defaultModel = login.result.defaultModel
     ? normalizeAgentModelRefForConfig(login.result.defaultModel)
     : undefined;
+  const initializeDefault =
+    profiles.length > 0 && login.method.defaultModelSelection === "if-unset" && defaultModel;
   const persistedProfiles: ProviderAuthResult["profiles"] = [];
+  let initializedDefault = false;
   // Match source and runtime rows using the config owner's canonical model identities.
   const loginConfig = applyProviderAuthConfigPatchWithNormalization(login.config, {});
   const configPatch = login.result.configPatch
@@ -350,7 +358,16 @@ async function runProviderAuthMethod(
     : undefined;
   const shouldUpdateConfig =
     (isRecord(configPatch) && Object.keys(configPatch).length > 0) ||
-    Boolean(login.setDefault && defaultModel);
+    Boolean(login.setDefault && defaultModel) ||
+    Boolean(
+      initializeDefault &&
+      canInitializeProviderLoginDefaultModel(
+        loginConfig,
+        login.agentId,
+        login.provider.id,
+        initializeDefault,
+      ),
+    );
   if (profiles.length > 0 || shouldUpdateConfig) {
     await login.beforePersistentEffect?.();
   }
@@ -399,6 +416,17 @@ async function runProviderAuthMethod(
               ? applyProviderLoginDefaultModel(next, defaultModel)
               : applyPrimaryModel(next, defaultModel);
           }
+          if (initializeDefault) {
+            // Use the current writer snapshot: a choice made during sign-in wins.
+            const initialized = applyProviderLoginInitialDefaultModel(
+              next,
+              login.agentId,
+              login.provider.id,
+              initializeDefault,
+            );
+            initializedDefault = initialized !== next;
+            return initialized;
+          }
           return next;
         },
       });
@@ -423,7 +451,7 @@ async function runProviderAuthMethod(
     }
     if (defaultModel) {
       login.runtime.log(
-        login.setDefault
+        login.setDefault || initializedDefault
           ? `Default model set to ${defaultModel}`
           : `Default model available: ${defaultModel} (current default unchanged; run ${formatCliCommand(`openclaw models set ${defaultModel}`)} to apply)`,
       );
@@ -861,15 +889,66 @@ async function runModelsAuthLoginFlow(
       profileId: imported.profileId,
       assertCurrent: opts.assertCurrent,
     });
+    const initialModel =
+      chosenMethod.defaultModelSelection === "if-unset" && chosenMethod.starterModel
+        ? normalizeAgentModelRefForConfig(chosenMethod.starterModel)
+        : undefined;
+    let initializedDefault = false;
+    let connectedConfig = context.config;
+    if (
+      initialModel &&
+      canInitializeProviderLoginDefaultModel(
+        context.config,
+        context.agentId,
+        selectedProvider.id,
+        initialModel,
+      )
+    ) {
+      opts.signal?.throwIfAborted();
+      try {
+        connectedConfig = await writeProviderAuthConfig({
+          config: context.config,
+          configSnapshot: context.configSnapshot,
+          configPatch: undefined,
+          credentialsSaved: true,
+          beforeCommit: opts.assertCurrent,
+          writeOptions: { assertCurrent: opts.assertCurrent },
+          finalizeConfig: (current) => {
+            const initialized = applyProviderLoginInitialDefaultModel(
+              current,
+              context.agentId,
+              selectedProvider.id,
+              initialModel,
+            );
+            initializedDefault = initialized !== current;
+            return initialized;
+          },
+        });
+      } catch (error) {
+        if (error instanceof ProviderAuthConfigApplyError) {
+          await refreshSavedAuthAfterSettingsFailure({ ...opts, agentId: context.agentId });
+        }
+        throw error;
+      }
+      if (initializedDefault) {
+        for (const warning of await repairModelSelectionRuntimePlugins({
+          cfg: connectedConfig,
+          model: initialModel,
+        })) {
+          opts.runtime.error?.(warning);
+        }
+        opts.runtime.log(`Default model set to ${initialModel}`);
+      }
+    }
     const authRefresh = await refreshProviderAuthAfterLogin({ ...opts, agentId: context.agentId });
-    if (imported.configUpdated) {
+    if (imported.configUpdated || initializedDefault) {
       logConfigUpdated(opts.runtime);
     }
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
     const modelAccess = await allowLoginProviderModels(
-      { ...opts, config: context.config },
+      { ...opts, config: connectedConfig },
       context.agentId,
       selectedProvider.id,
     );
@@ -879,6 +958,7 @@ async function runModelsAuthLoginFlow(
       authRefresh,
       ...(modelAccess ? { modelAccess } : {}),
       imported: true,
+      ...(initializedDefault && initialModel ? { defaultModel: initialModel } : {}),
       profiles: [
         { profileId: imported.profileId, provider: imported.provider, mode: imported.mode },
       ],

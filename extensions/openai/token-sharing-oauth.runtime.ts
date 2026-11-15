@@ -20,7 +20,7 @@ import {
   isRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./model-default-refs.js";
 import {
   createOpenAIAuthorizationCodeForm,
   withOpenAIOAuthResponse,
@@ -463,7 +463,7 @@ export async function loginTokenSharing(ctx: ProviderAuthContext): Promise<Provi
       providerId: "openai",
       profilePrefix: "openai:token-sharing",
       profileName,
-      defaultModel: OPENAI_DEFAULT_MODEL,
+      defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
       access: credential.access,
       refresh: credential.refresh,
       expires: credential.expires,

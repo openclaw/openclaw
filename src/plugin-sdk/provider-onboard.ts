@@ -6,7 +6,11 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
+import { listAgentIds } from "../agents/agent-roster.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
+import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,
@@ -377,6 +381,30 @@ export function applyOnboardAuthAgentModelsAndProviders(
       providers: mergedProviders,
     },
   };
+}
+
+/**
+ * Check an initial shared recommendation before adding model metadata.
+ * Preserve narrower policies for agents without a selected primary; this query
+ * neither selects a model nor grants access through the agent execution runtime.
+ */
+export function isInitialDefaultModelAllowed(cfg: OpenClawConfig, modelRef: string): boolean {
+  const inheritingAgents = listAgentIds(cfg).filter(
+    (agentId) => !resolveAgentEffectiveModelPrimary(cfg, agentId),
+  );
+  return [undefined, ...inheritingAgents].every(
+    (agentId) =>
+      !(
+        "error" in
+        resolveAllowedModelRefCore({
+          cfg,
+          agentId,
+          catalog: [],
+          raw: modelRef,
+          defaultProvider: DEFAULT_PROVIDER,
+        })
+      ),
+  );
 }
 
 /** Set the agent default primary model while preserving normalized fallbacks and provider models. */

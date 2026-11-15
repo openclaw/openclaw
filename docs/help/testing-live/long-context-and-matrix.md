@@ -110,12 +110,12 @@ Fresh OpenAI API-key default:
 ```bash
 OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
   OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai \
-  OPENCLAW_LIVE_GATEWAY_THINKING=off \
+  OPENCLAW_LIVE_GATEWAY_THINKING=medium \
   pnpm test:live -- src/gateway/gateway-models.profiles.live.test.ts
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection path, asserts `openai/gpt-6-astra`, and then
+the fresh onboarding inference-selection path, asserts `openai/gpt-6.1-sol`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:

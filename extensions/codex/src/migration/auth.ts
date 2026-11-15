@@ -21,6 +21,7 @@ import {
   updateAuthProfileStoreWithLock,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/provider-auth";
+import { isInitialDefaultModelAllowed } from "openclaw/plugin-sdk/provider-onboard";
 import {
   isRecord,
   normalizeOptionalString as readString,
@@ -38,7 +39,8 @@ import { defaultCodexHome, type CodexSource } from "./source.js";
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_OAUTH_ITEM_ID = "auth:openai";
 const OPENAI_API_KEY_ITEM_ID = "auth:openai:api-key";
-const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6-astra";
+// OAuth imports share the subscription setup default; API-key imports do not seed a model.
+const OPENAI_CODEX_DEFAULT_MODEL = "openai/gpt-6.1-sol";
 const CODEX_IMPORT_DISPLAY_NAME = "Codex import";
 const CODEX_REASON_AUTH_NOT_SELECTED = "auth credential migration not selected";
 const CODEX_REASON_AUTH_PROFILE_EXISTS = "auth profile exists";
@@ -307,13 +309,15 @@ function applyCredentialConfig(
   credential: CodexAuthCredential,
   profileId: string,
 ): OpenClawConfig {
+  const configureModels =
+    credential.kind === "oauth" && isInitialDefaultModelAllowed(config, OPENAI_CODEX_DEFAULT_MODEL);
   const next = applyAuthProfileConfig(
-    credential.kind === "oauth"
+    configureModels
       ? (mergeMigrationConfigValue(config, credential.configPatch) as OpenClawConfig)
       : config,
     { ...authProfileConfigForCredential(credential, profileId), preferProfileFirst: false },
   );
-  return credential.kind === "oauth" ? applyDefaultModelIfMissing(next) : next;
+  return configureModels ? applyDefaultModelIfMissing(next) : next;
 }
 
 export async function buildCodexAuthItems(params: {

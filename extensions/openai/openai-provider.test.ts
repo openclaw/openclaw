@@ -13,7 +13,6 @@ import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   resolveOpenAICodexModelsEndpoint,
 } from "./base-url.js";
-import { OPENAI_DEFAULT_MODEL } from "./default-models.js";
 import { buildOpenAIProvider } from "./openai-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import discoveryProvider from "./provider-discovery.js";
@@ -124,7 +123,7 @@ describe("buildOpenAIProvider", () => {
     mocks.resolveProviderAuthProfileMetadata.mockReset();
   });
 
-  it("preserves existing model selection during non-interactive API key setup", async () => {
+  it("preserves existing model selection and restriction during non-interactive API key setup", async () => {
     const provider = buildOpenAIProvider();
     const apiKey = provider.auth.find((method) => method.id === "api-key");
     if (!apiKey?.runNonInteractive) {
@@ -156,10 +155,9 @@ describe("buildOpenAIProvider", () => {
       primary: primaryModel,
       fallbacks: [fallbackModel],
     });
-    expect(next?.agents?.defaults?.models).toMatchObject({
+    expect(next?.agents?.defaults?.models).toEqual({
       [primaryModel]: { alias: "Primary" },
       [fallbackModel]: { alias: "Fallback" },
-      [OPENAI_DEFAULT_MODEL]: { alias: "GPT" },
     });
   });
 

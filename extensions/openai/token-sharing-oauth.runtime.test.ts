@@ -54,6 +54,10 @@ function existingCredential(overrides: Partial<OAuthCredential> = {}): OAuthCred
 }
 
 async function expectConnected(result: Awaited<ReturnType<typeof loginTokenSharing>>) {
+  expect(result).toMatchObject({
+    defaultModel: "openai/gpt-6.1-sol",
+    configPatch: { agents: { defaults: { models: { "openai/gpt-6.1-sol": {} } } } },
+  });
   expect(result.profiles).toHaveLength(1);
   expect(result.profiles[0]?.credential).toMatchObject({
     access: "opaque-test-access",
@@ -348,6 +352,7 @@ describe("ChatGPT token-sharing authorization", () => {
       identity.aud = registeredId;
       grantScope = "openid resource.invoke chatgpt.tokens.use.direct offline_access";
       const registered = await method.run(ctx);
+      expect(registered.defaultModel).toBe("openai/gpt-6.1-sol");
       expect(Object.fromEntries(authorization.searchParams)).toMatchObject({
         client_id: "dynamic_agent_client",
         agent_name_hint: "OpenClaw",
@@ -380,6 +385,7 @@ describe("ChatGPT token-sharing authorization", () => {
       );
       callbackClientIds = [];
       const reconnected = await method.run(reconnect);
+      expect(reconnected.defaultModel).toBe("openai/gpt-6.1-sol");
       expect(Object.fromEntries(authorization.searchParams)).toMatchObject({
         client_id: registeredId,
         scope: TOKEN_SHARING_SCOPE,

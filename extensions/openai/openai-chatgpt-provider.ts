@@ -25,7 +25,7 @@ import {
   isOpenAICodexBaseUrl,
   OPENAI_CODEX_RESPONSES_BASE_URL,
 } from "./base-url.js";
-import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
+import { OPENAI_CODEX_DEFAULT_MODEL } from "./model-default-refs.js";
 import {
   OPENAI_CODEX_GPT_61_SOL_CONTEXT_TOKENS,
   OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
