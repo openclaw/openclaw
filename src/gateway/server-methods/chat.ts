@@ -69,6 +69,7 @@ async function injectChat(
     {
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      sessionId: params.sessionId,
       message: params.message,
       label: params.label,
     },
