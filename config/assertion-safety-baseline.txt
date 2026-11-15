@@ -1023,7 +1023,7 @@ src/agents/agent-tools.before-tool-call.wrapper.ts	3
 src/agents/agent-tools.execution-preparer.ts	2
 src/agents/agent-tools.params.ts	5
 src/agents/agent-tools.policy.ts	1
-src/agents/agent-tools.read.ts	4
+src/agents/agent-tools.read.ts	3
 src/agents/agent-tools.ring-zero-context.ts	1
 src/agents/ai-transport-runtime-host.ts	9
 src/agents/apply-patch-file-ops.ts	2
@@ -2258,7 +2258,7 @@ src/tui/tui-session-projection.ts	2
 src/tui/tui-task-suggestions.ts	6
 src/tui/tui.ts	2
 src/utils.ts	1
-src/utils/delivery-context.shared.ts	2
+src/utils/delivery-context.shared.ts	1
 src/utils/string-readers.ts	2
 src/utils/usage-format.ts	1
 src/version.ts	4

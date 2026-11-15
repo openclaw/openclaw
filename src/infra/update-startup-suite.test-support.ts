@@ -19,6 +19,10 @@ export type PersistedUpdateCheckState = {
   autoLastAttemptAt?: string;
 };
 
+export function commandSuccess(stdout = "") {
+  return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" as const };
+}
+
 export function pauseAt<T>(
   entered: ReturnType<typeof createDeferred<void>>,
   result: ReturnType<typeof createDeferred<T>>,

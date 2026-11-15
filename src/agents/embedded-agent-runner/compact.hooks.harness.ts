@@ -492,7 +492,8 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     vi.doUnmock("./server-endpoint-compaction.js");
     vi.doUnmock("../sessions/model-registry-runtime.js");
     vi.doUnmock("../sessions/resource-loader.js");
-    vi.doUnmock("../sessions/index.js");
+    vi.doUnmock("../sessions/session-manager.js");
+    vi.doUnmock("../sessions/compaction/compaction.js");
     vi.doUnmock("../sessions/sdk.js");
     vi.doUnmock("../session-tool-result-guard-wrapper.js");
     vi.doUnmock("../agent-settings.js");
@@ -596,13 +597,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
       },
     }));
 
-    vi.doMock("../sessions/index.js", () => ({
-      AuthStorage: function AuthStorage() {},
-      ModelRegistry: function ModelRegistry() {},
+    vi.doMock("../sessions/session-manager.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/session-manager.js")>()),
       SessionManager: createCompactionSessionManagerMock(sessionMessages),
-      SettingsManager: {
-        create: vi.fn(() => ({})),
-      },
+    }));
+    vi.doMock("../sessions/compaction/compaction.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../sessions/compaction/compaction.js")>()),
       estimateTokens: estimateTokensMock,
       generateSummary: vi.fn(async () => "summary"),
     }));

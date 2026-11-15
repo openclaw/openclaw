@@ -33,7 +33,6 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - Tool activity counts distinct calls, not start/update/result events, repeated history or live projections, or Gateway observation RPCs. Nested calls count independently, even when their names and arguments match. Expand the activity to see each call; read and edit counts can include repeated attempts on the same file.
     - Tool activity automatically displays a short purpose description supplied by the acting agent when available, with commands and results expandable underneath. Calls without descriptions keep fixed labels. Viewing activity makes no additional model calls. The former `gateway.controlUi.toolTitles` option is retired; `openclaw doctor --fix` removes it from existing configs.
     - Start or dismiss ephemeral model-suggested follow-up tasks. **Start in a new session** opens the proposed task in the suggested folder without requiring Git or creating a worktree. The new session asks the user before using a worktree if the task needs one later.
-    - Activity tab with browser-local, bounded summaries of live tool activity from existing `session.tool` / tool event delivery.
 
   </Accordion>
   <Accordion title="Channels, sessions, memory">
@@ -130,7 +129,7 @@ Workboard sidebar entries offer pin/unpin and, with write access, confirmed boar
     - The System busyness overlay counts running or queued sessions in the Gateway's current-work listing, including global sessions and sessions outside the first history page. It lists up to 100 session IDs and shows the displayed and total counts when more sessions are active (`sessions.list`).
     - Lane tables omit disabled, empty lanes, including `hook-dispatch` when HTTP hooks are off. Disabled lanes remain visible while work is running or queued.
     - The event log includes Control UI refresh/RPC timings, slow chat/config render timings, and browser responsiveness entries for long animation frames or long tasks when the browser exposes those PerformanceObserver entry types.
-    - Raw Gateway event history is captured while Debug or the expanded System busyness overlay subscribes to it, up to 250 events. Closing the last diagnostic view releases those payloads; Live Activity retains its own reduced history independently.
+    - Raw Gateway event history is captured while Debug or the expanded System busyness overlay subscribes to it, up to 250 events. Closing the last diagnostic view releases those payloads.
     - Diagnostic event history belongs to the selected Gateway and authentication context. Applying a different Gateway URL or credential clears the previous history immediately, even if the new connection fails. A reconnect authenticated as a different account also clears it. Reconnects with unchanged authentication preserve history for troubleshooting.
     - Logs: live tail of gateway file logs with filter/export (`logs.tail`). A truncation notice stays visible when the Gateway skips records or the displayed buffer drops older entries. It clears when a complete tail replaces that buffer.
     - Update: run a package/git update plus restart (`update.run`) with a restart report, then poll `update.status` after reconnect to verify the running gateway version.
