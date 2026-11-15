@@ -54,14 +54,24 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
     const controller = new AbortController();
     pending = controller;
     const client = host.gatewayClient();
-    const confirmed = await showConfirmDialog({
-      ...prompt,
-      danger: true,
-      signal: controller.signal,
-      canConfirm: host.canManagePairing,
-    });
-    if (pending === controller) {
-      pending = null;
+    let confirmed: boolean;
+    try {
+      confirmed = await showConfirmDialog({
+        ...prompt,
+        danger: true,
+        signal: controller.signal,
+        canConfirm: host.canManagePairing,
+      });
+    } catch (error) {
+      if (pending === controller && client === host.gatewayClient()) {
+        host.setDevicesError(formatUiError(error));
+      }
+      return;
+    } finally {
+      // Failed preparation must release the same slot as a dismissed confirmation.
+      if (pending === controller) {
+        pending = null;
+      }
     }
     if (
       !confirmed ||
@@ -225,17 +235,26 @@ export function createDevicesDialogs(host: DevicesDialogHost) {
       }
       const controller = new AbortController();
       pending = controller;
-      const confirmed = await showConfirmDialog({
-        title: t("devices.execApprovals.discardPromptTitle"),
-        message: t("devices.execApprovals.discardPromptBody"),
-        confirmLabel: t("devices.execApprovals.discardConfirm"),
-        danger: true,
-        signal: controller.signal,
-      });
-      if (pending === controller) {
-        pending = null;
+      const client = host.gatewayClient();
+      try {
+        const confirmed = await showConfirmDialog({
+          title: t("devices.execApprovals.discardPromptTitle"),
+          message: t("devices.execApprovals.discardPromptBody"),
+          confirmLabel: t("devices.execApprovals.discardConfirm"),
+          danger: true,
+          signal: controller.signal,
+        });
+        return confirmed && !controller.signal.aborted;
+      } catch (error) {
+        if (pending === controller && client === host.gatewayClient()) {
+          host.setDevicesError(formatUiError(error));
+        }
+        return false;
+      } finally {
+        if (pending === controller) {
+          pending = null;
+        }
       }
-      return confirmed && !controller.signal.aborted;
     },
   };
 }
