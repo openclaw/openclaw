@@ -1749,10 +1749,16 @@ final class NodeAppModel {
             paramsJSON: #"{"keys":["ui.railShortcuts"]}"#,
             timeoutSeconds: 8,
             ifCurrentRoute: route)
-        guard try GatewayUserPreferences.decodeRailShortcuts(data) != nil,
-              identity == self.chatViewModelOwnerID,
+        guard identity == self.chatViewModelOwnerID,
               authority == self.operatorAuthorityGeneration
-        else { throw URLError(.cannotParseResponse) }
+        else { throw CancellationError() }
+        guard try GatewayUserPreferences.decodeRailShortcuts(data) != nil else {
+            throw NSError(domain: "PersonalSessionPin", code: 3, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    localized:
+                    "Personal pins require a profile. Sign in to a Gateway that supports personal preferences."),
+            ])
+        }
         guard let params = try GatewayUserPreferences.personalPinWriteParams(data, pinned: pinned, key: key)
         else { throw URLError(.cannotParseResponse) }
         let result = try await operatorGateway.request(

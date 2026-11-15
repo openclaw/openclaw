@@ -4785,6 +4785,7 @@
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.b4fa4587709a992a","source":"Connect to your Gateway, then run Start Live Voice again."},
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.cbbbadf8c46d760c","source":"No speech heard. Try again and speak near the microphone."},
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.621136a0bb67a987","source":"Personal pins changed or are unavailable. Refresh and try again."},
+    {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.74dd46ce15d608a7","source":"Personal pins require a profile. Sign in to a Gateway that supports personal preferences."},
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.5d3f8c0d2aa4bd23","source":"Update OpenClaw on iPhone and Apple Watch before sending Watch messages."},
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.856b7d2cfa55557e","source":"Watch delivery storage is unavailable. Try again on iPhone."},
     {"path":"apps/ios/Sources/Model/NodeAppModel.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.de940b69d4c4a3f0","source":"Watch reply was not saved. Open iPhone and try again."},
