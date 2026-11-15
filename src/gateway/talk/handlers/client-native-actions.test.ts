@@ -243,8 +243,8 @@ describe("native Talk action ownership through public plugin registration", () =
         expect.soft(generated[0]).toMatchObject({
           role: "user",
           display: false,
-          excludeFromContext: true,
         });
+        expect.soft(generated[0]).not.toHaveProperty("excludeFromContext");
         expect(extractText(generated[0])).toBe(run.prompt);
         const spokenFrames = fixture.broadcast.mock.calls.flatMap(([event, payload]) =>
           event === "talk.event" && payload.talkEvent?.type === "transcript.done"
