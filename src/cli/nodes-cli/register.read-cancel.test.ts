@@ -14,7 +14,9 @@ vi.mock("./cli-utils.js", async (importOriginal) => ({
 
 const mocks = vi.hoisted(() => ({
   resolveCliNodeId: vi.fn(async () => "node-abc"),
-  callNodesGatewayCli: vi.fn(async () => ({ payload: {} })),
+  callNodesGatewayCli: vi.fn<typeof import("./rpc.js").callNodesGatewayCli>(async () => ({
+    payload: {},
+  })),
 }));
 
 vi.mock("./rpc.js", async (importOriginal) => ({
