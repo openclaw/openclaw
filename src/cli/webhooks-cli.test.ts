@@ -65,6 +65,24 @@ describe("webhooks cli", () => {
   });
 
   it.each([
+    ["--account", " ", "--account is required."],
+    ["--tailscale", "invalid", "Invalid --tailscale (must be funnel, serve, or off)."],
+    ["--port", "8080x", "--port must be a positive integer."],
+    ["--max-bytes", "10mb", "--max-bytes must be a positive integer."],
+    ["--renew-minutes", "30m", "--renew-minutes must be a positive integer."],
+  ])("preserves the expected setup error for %s in JSON mode", async (flag, value, reason) => {
+    await expect(parse("setup", [flag, value, "--json"])).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: expect.stringContaining(reason),
+      machineOutput: expect.stringContaining(reason),
+    });
+    expect(mocks.runGmailSetup).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
+  });
+
+  it.each([
     { command: "setup", mode: "human", json: false },
     { command: "setup", mode: "JSON", json: true },
     { command: "run", mode: "human", json: false },

@@ -15,6 +15,8 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
+import { throwExpectedCliError } from "./expected-cli-error.js";
+import { rethrowExpectedCliError } from "./failure-output.js";
 import { formatDocsHelp } from "./help-format.js";
 import { parseOptionalPositiveInteger } from "./parse-positive-integer.js";
 
@@ -90,7 +92,7 @@ export function registerWebhooksCli(program: Command) {
       try {
         const account = normalizeOptionalString(opts.account) ?? "";
         if (!account) {
-          throw new Error(
+          throwExpectedCliError(
             `--account is required. Example: ${formatCliCommand("openclaw webhooks gmail setup --account default")}.`,
           );
         }
@@ -104,6 +106,7 @@ export function registerWebhooksCli(program: Command) {
         });
       } catch (err) {
         if (opts.json) {
+          rethrowExpectedCliError(err);
           throw new Error(formatErrorMessage(err), { cause: err });
         }
         defaultRuntime.error(danger(formatErrorMessage(err)));
@@ -167,5 +170,5 @@ function tailscaleModeOption(value: unknown): GmailRunOptions["tailscale"] {
   if (mode === "funnel" || mode === "serve" || mode === "off") {
     return mode;
   }
-  throw new Error("Invalid --tailscale (must be funnel, serve, or off).");
+  return throwExpectedCliError("Invalid --tailscale (must be funnel, serve, or off).");
 }
