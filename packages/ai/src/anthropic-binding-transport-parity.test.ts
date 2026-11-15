@@ -15,13 +15,36 @@ describe("Anthropic thinking-binding transport parity", () => {
   it.each([
     { name: "direct API-key adaptive", enabled: true },
     { name: "caller beta", headers: { "Anthropic-Beta": "synthetic-beta" }, enabled: true },
+    {
+      name: "custom provider id on api.anthropic.com",
+      model: { provider: "claude-api" },
+      enabled: true,
+    },
     { name: "environment proxy", env: true, model: { baseUrl: undefined }, enabled: false },
     { name: "OAuth", apiKey: "sk-ant-oat01-synthetic", enabled: false },
     { name: "proxy", model: { baseUrl: "https://proxy.example/v1" }, enabled: false },
-    { name: "Cloudflare", model: { provider: "cloudflare-ai-gateway" }, enabled: false },
+    {
+      name: "Cloudflare",
+      model: {
+        provider: "cloudflare-ai-gateway",
+        baseUrl: "https://gateway.ai.cloudflare.com/v1/account/gateway/anthropic",
+      },
+      enabled: false,
+    },
     { name: "Copilot", model: { provider: "github-copilot" }, enabled: false },
-    { name: "Foundry", model: { provider: "microsoft-foundry" }, enabled: false },
-    { name: "Kimi", model: { provider: "kimi-coding" }, enabled: false },
+    {
+      name: "Foundry",
+      model: {
+        provider: "microsoft-foundry",
+        baseUrl: "https://resource.services.ai.azure.com/anthropic",
+      },
+      enabled: false,
+    },
+    {
+      name: "Kimi",
+      model: { provider: "kimi-coding", baseUrl: "https://api.kimi.com/coding/" },
+      enabled: false,
+    },
     { name: "budget thinking", model: { id: "claude-sonnet-4-5" }, enabled: false },
     { name: "disabled thinking", reasoning: "off" as const, enabled: false },
     { name: "hook-disabled thinking", thinkingOverride: disabledThinking, enabled: false },
