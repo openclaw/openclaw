@@ -12,6 +12,41 @@ export type ClawHubTemplateCatalogPreview = {
   content: string;
 };
 
+export async function readClawHubCatalogInstructionBytes(input: {
+  sourcePath: string;
+  verified: ResolvedClawHubSource;
+  rootDir: string;
+}): Promise<Buffer> {
+  const source =
+    input.verified.packageBootstrap?.sourcePath === input.sourcePath
+      ? input.verified.packageBootstrap
+      : input.verified.snapshot.workspaceSources.find(
+          (file) => file.sourcePath === input.sourcePath,
+        );
+  if (!source) {
+    throw new ClawHubSourceError(
+      "clawhub_preview_unavailable",
+      "This workspace file is not available in the verified Template release.",
+    );
+  }
+  const root = await fsSafeRoot(input.rootDir);
+  const read = await root.read(input.sourcePath, {
+    hardlinks: "reject",
+    maxBytes: MAX_MANAGED_FILE_BYTES,
+    symlinks: "reject",
+  });
+  if (
+    read.buffer.byteLength !== source.byteLength ||
+    digestTemplateBytes(read.buffer) !== source.digest
+  ) {
+    throw new ClawHubSourceError(
+      "clawhub_preview_unavailable",
+      "This workspace file changed during preview.",
+    );
+  }
+  return read.buffer;
+}
+
 export async function readClawHubCatalogPreview(input: {
   params: ClawHubFetchOptions & { packageName: string; version: string };
   requested: Pick<ClawHubTemplateCatalogPreview, "kind" | "name"> | undefined;
@@ -29,37 +64,16 @@ export async function readClawHubCatalogPreview(input: {
     if (!instruction) {
       return undefined;
     }
-    const source =
-      verified.packageBootstrap?.sourcePath === instruction.source
-        ? verified.packageBootstrap
-        : verified.snapshot.workspaceSources.find((file) => file.sourcePath === instruction.source);
-    if (instruction.source !== "CLAW.md#body" && !source) {
-      throw new ClawHubSourceError(
-        "clawhub_preview_unavailable",
-        "This workspace file is not available in the verified Template release.",
-      );
-    }
-    let content: string | undefined;
-    if (instruction.source === "CLAW.md#body") {
-      content = verified.templateMarkdownBody?.toString("utf8");
-    } else {
-      const root = await fsSafeRoot(rootDir);
-      const read = await root.read(instruction.source, {
-        hardlinks: "reject",
-        maxBytes: MAX_MANAGED_FILE_BYTES,
-        symlinks: "reject",
-      });
-      if (
-        read.buffer.byteLength !== source!.byteLength ||
-        digestTemplateBytes(read.buffer) !== source!.digest
-      ) {
-        throw new ClawHubSourceError(
-          "clawhub_preview_unavailable",
-          "This workspace file changed during preview.",
-        );
-      }
-      content = read.buffer.toString("utf8");
-    }
+    const content =
+      instruction.source === "CLAW.md#body"
+        ? verified.templateMarkdownBody?.toString("utf8")
+        : (
+            await readClawHubCatalogInstructionBytes({
+              sourcePath: instruction.source,
+              verified,
+              rootDir,
+            })
+          ).toString("utf8");
     return content === undefined
       ? undefined
       : { kind: "instruction", name: instruction.name, content };
