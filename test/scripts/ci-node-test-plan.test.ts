@@ -3334,6 +3334,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     fileTimings?: Readonly<Record<string, number>>;
     githubFileTimings?: Readonly<Record<string, number>>;
     fileSeconds: (file: string) => number;
+    expectedSourcePatterns?: { file: string; patterns: string[] };
     options: {
       compactMode: "push" | "pull-request";
       runnerBackend?: string;
@@ -3364,7 +3365,19 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     }));
     mockTrackedFiles((rootDir: string) => (rootDir === "test" ? params.files.toSorted() : []));
     return await withPlanModule(
-      ({ createNodeTestShardBundles: createPlan }) => {
+      ({ createNodeTestShardBundles: createPlan, createNodeTestShards: createShards }) => {
+        if (params.expectedSourcePatterns) {
+          const expected = params.expectedSourcePatterns;
+          const sources = createShards({
+            ...params.options,
+            includeReleaseOnlyToolingShards: true,
+          });
+          expect(
+            sources
+              .filter((source) => source.includePatterns?.includes(expected.file))
+              .map((source) => source.includePatterns),
+          ).toEqual([expected.patterns]);
+        }
         // These fixtures exercise a caller's 90-row reservation independently
         // of the profile ceiling; explicit tighter reservations remain authoritative.
         return createPlan({
@@ -3406,11 +3419,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     { label: "pull-request parent floor", compactMode: "pull-request", expectedSeconds: 128 },
   ])("prices implicit reduced tooling with $label", async (params) => {
     const retained = "test/vitest-pr-exempt-retention.test.ts";
-    // Fill the sixteen parent stripes before placing the retained file with a sibling.
+    // Two workers pair equal-cost files: fill fifteen pairs and one singleton first.
     const discarded =
       params.discardSiblings === false
         ? []
-        : Array.from({ length: 16 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
+        : Array.from({ length: 31 }, (_, index) => `test/scripts/release-only-${index}.test.ts`);
     const retainedSeconds = params.retainedSeconds ?? 20;
     const discardedSeconds = 80;
     const jobs = await createToolingFixturePlan({
@@ -3426,6 +3439,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       githubFileTimings:
         params.githubSeconds === undefined ? {} : { [retained]: params.githubSeconds },
       fileSeconds: (file) => (file === retained ? retainedSeconds : discardedSeconds),
+      expectedSourcePatterns: {
+        file: retained,
+        patterns: discarded.length ? [discarded.toSorted().at(-1)!, retained] : [retained],
+      },
       options: {
         compactMode: params.compactMode ?? "push",
         runnerBackend: params.runnerBackend ?? "github",
