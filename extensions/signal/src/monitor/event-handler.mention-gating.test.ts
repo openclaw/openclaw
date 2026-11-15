@@ -80,6 +80,28 @@ function createMentionHandler(
     }),
   );
 }
+
+function createQuoteContextHandler(contextVisibility: "allowlist" | "allowlist_quote") {
+  const groupAllowFrom = ["+15550001111"];
+  return createSignalEventHandler(
+    createBaseSignalEventHandlerDeps({
+      cfg: {
+        messages: { inbound: { debounceMs: 0 } },
+        channels: {
+          signal: {
+            contextVisibility,
+            groupPolicy: "allowlist",
+            groupAllowFrom,
+          },
+        },
+      },
+      groupPolicy: "allowlist",
+      groupAllowFrom,
+      groupHistories,
+    }),
+  );
+}
+
 const storedReply = (replyToId: string) =>
   resolveSignalReplyContextWithPersistence({
     accountId: "default",
@@ -197,6 +219,53 @@ it("records quote text in pending history for skipped quote-only group messages"
     "quoted context",
   );
 });
+
+it.each([
+  {
+    recipient: "recipient-a",
+    text: "\uFFFC check this",
+    mentions: [{ uuid: "recipient-a", start: 0, length: 1 }],
+    expected: "@recipient-a check this",
+  },
+  {
+    recipient: "recipient-b",
+    text: "\uFFFC check this",
+    mentions: [{ uuid: "recipient-b", start: 0, length: 1 }],
+    expected: "@recipient-b check this",
+  },
+  {
+    recipient: "no mention metadata",
+    text: "\uFFFC check this",
+    mentions: null,
+    expected: "\uFFFC check this",
+  },
+  {
+    recipient: "leading whitespace",
+    text: "\n\uFFFC ping",
+    mentions: [{ uuid: "recipient-a", start: 1, length: 1 }],
+    expected: "@recipient-a ping",
+  },
+])(
+  "preserves quoted Signal recipient context for $recipient",
+  async ({ text, mentions, expected }) => {
+    const handler = createQuoteContextHandler("allowlist_quote");
+    await handler(
+      groupEvent(
+        "",
+        { quote: { text, author: "+15550002222", mentions } },
+        { timestamp: 1700000000001 },
+      ),
+    );
+
+    expect(getCapturedCtx()).toMatchObject({
+      BodyForAgent: "",
+      ReplyToBody: expected,
+      ReplyToSender: "+15550002222",
+      ReplyToId: "1700000000001",
+      ReplyToIsQuote: true,
+    });
+  },
+);
 
 it.each([
   [{ accountUuid: "bot-uuid" }, "Hi X!", { uuid: "bot-uuid", start: 3, length: 1 }, "Hi X!"],
