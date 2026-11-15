@@ -425,6 +425,7 @@ export async function prepareModelsListResult({
                 entry,
                 evaluation,
                 pluginRegistry: preparedPluginRegistry,
+                resolveOpenAIProviderRoutes: decisions.resolveOpenAIProviderRoutes,
               }) ?? { id: "openclaw", source: "implicit" as const });
           const agentRuntime = preparedPluginRegistry
             ? withPluginRuntimeRegistryScope(preparedPluginRegistry, () =>
@@ -645,6 +646,7 @@ export async function prepareModelsListResult({
                 modelId: entry.id,
                 modelApi: entry.api,
                 modelBaseUrl: entry.baseUrl,
+                resolveOpenAIProviderRoutes: projector.resolveOpenAIProviderRoutes,
               }).runtime
             : undefined;
           const preparedHost = projector.evaluateEntry(entry, variants, baseRuntime);

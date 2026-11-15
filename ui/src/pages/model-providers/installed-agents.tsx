@@ -467,11 +467,9 @@ export function createInstalledAgents(options: InstalledAgentsOptions) {
       } else if (card?.catalogStatus === "unavailable") {
         status = { kind: "warn", labelKey: "modelProviders.status.modelsUnavailable" };
         hint = t("modelProviders.installedAgents.discoveryHint", { name: agent.name });
-      } else if (card?.checkingModels) {
-        status = { kind: "muted", labelKey: "modelProviders.installedAgents.status.discovering" };
       } else if (card && card.availableModelCount > 0) {
         status = { kind: "ok", labelKey: "modelProviders.installedAgents.status.modelsAvailable" };
-      } else {
+      } else if (!card?.checkingModels) {
         hint = t("modelProviders.installedAgents.signInHint", { name: agent.name });
       }
       return {

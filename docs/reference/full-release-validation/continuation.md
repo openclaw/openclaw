@@ -136,8 +136,12 @@ Changed source, tooling, dispatch identity, superseded jobs, missing evidence,
 and expired receipts remain errors, not reasons to trust stale evidence.
 
 A failed npm producer is a retry target, not a reason to reject continuation.
-The controller uses GitHub's failed-job rerun operation on the same run, then
-collects its result. Frozen workflows still execute their original code:
+When exactly one npm qualification job and its dependent **Seal artifact producer
+receipt** fail, the controller targets only the qualification job on the same run.
+GitHub reruns its dependent seal as well; the controller does not send a second
+request for the seal. Multiple independent failed npm jobs remain a recovery
+error rather than triggering a broader retry. The controller then collects the
+new attempt. Frozen workflows still execute their original code:
 upgrading the local controller does not retrofit receipt adoption into an older
 workflow. Final verification must pass before recovery is reported successful.
 

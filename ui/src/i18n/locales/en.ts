@@ -895,7 +895,7 @@ const startupEnglish = {
       externalPost: "Posts externally to {target}",
     },
 
-    reviewOnly: "You need approval access to approve.",
+    reviewOnly: "You can review this request, but you don’t have permission to approve or deny it.",
 
     labels: {},
   },
@@ -1411,7 +1411,7 @@ const startupEnglish = {
     // Footer key hint: "Tab compose" switches to the other mode.
     modeSwitch: { search: "search", compose: "compose" },
     searchPlaceholder: "Search…",
-    composePlaceholder: "Write a message…",
+    composePlaceholder: "Ask me anything, or hand me something to do",
     attachmentPrompt: "What would you like to do with these files?",
     categories: { navigation: "Navigation" },
   },
@@ -1536,7 +1536,8 @@ const startupEnglish = {
     clawhub: {},
     modelAccounts: {
       section: "Account",
-      automatic: "Automatic (new-chat default)",
+      automatic: "Automatic",
+      automaticTrigger: "Account: Auto",
       manage: "Manage saved accounts…",
     },
     mentions: {},

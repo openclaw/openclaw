@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { expect } from "vitest";
 import type { GatewayClientInfo } from "../../packages/gateway-protocol/src/client-info.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
@@ -9,6 +10,8 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
@@ -190,4 +193,38 @@ export async function createOperatorRecoveryFixture(params: {
     },
     restore: () => restoreGatewayOperatorSource({ snapshot, target, context, assertCurrent }),
   };
+}
+
+export function expectCurrent(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
+  expect(authority.signal?.aborted).toBe(false);
+  expect(authority.assertCurrent).not.toThrow();
+}
+
+export type RecoveryFixture = Awaited<ReturnType<typeof recoveryFixture>>;
+export function withRecovery(
+  run: (
+    fixture: RecoveryFixture,
+    stateDir: string,
+    profile: ReturnType<typeof ensureProfileForEmail>,
+  ) => Promise<void>,
+  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    const profile = ensureProfileForEmail("recovery@example.test");
+    await run(
+      await recoveryFixture(stateDir, profile.id, { device: pairedOperator(), ...overrides }),
+      stateDir,
+      profile,
+    );
+  });
+}
+
+export function expectRevoked(authority: { signal?: AbortSignal; assertCurrent: () => void }) {
+  expect(authority.assertCurrent).toThrow();
+  expect(authority.signal?.aborted).toBe(true);
+}
+
+export async function restoreFixture(fixture: RecoveryFixture) {
+  const source = expectDefined(await fixture.restore(), "restored operator source");
+  return { ...source, [Symbol.dispose]: source.release };
 }

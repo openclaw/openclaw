@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionTranscriptContextVersion } from "../../config/sessions/session-accessor.sqlite-contract.js";
 import { publishCommittedSessionIdentity } from "../../config/sessions/session-accessor.sqlite-identity.js";
 import { startSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { targetDiscoveryLane } from "../../config/sessions/session-transcript-worker-resources.js";
+import { sessionStoreLane } from "../../config/sessions/session-transcript-worker-resources.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -236,7 +236,7 @@ export class SessionManagerBranching extends SessionManagerMetadata {
           await restoreSessionColdTranscript(persistenceTarget, assertCurrent);
         }
         const reader = prepareSessionManagerHydration(persistenceTarget, {
-          lane: targetDiscoveryLane,
+          lane: sessionStoreLane,
         });
         const facts = await reader.readMaintenance({ operation: "version" });
         reader.assertCurrent();

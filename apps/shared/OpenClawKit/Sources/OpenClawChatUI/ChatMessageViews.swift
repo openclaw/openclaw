@@ -316,6 +316,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
     let contextWindowTokens: Int?
     let userMessageExpanded: Bool
     let onToggleUserMessageExpanded: @MainActor () -> Void
+    let inlineWidgetScope: ChatInlineWidgetScope
     let inlineWidgetResolverReady: Bool
     let inlineWidgetResourceResolver: @MainActor @Sendable (
         String,
@@ -355,6 +356,7 @@ struct ChatMessageBubble: View, @MainActor Equatable {
             lhs.isClean == rhs.isClean &&
             lhs.contextWindowTokens == rhs.contextWindowTokens &&
             lhs.userMessageExpanded == rhs.userMessageExpanded &&
+            lhs.inlineWidgetScope == rhs.inlineWidgetScope &&
             lhs.inlineWidgetResolverReady == rhs.inlineWidgetResolverReady &&
             lhs.mediaArtifactResolverReady == rhs.mediaArtifactResolverReady
     }
@@ -545,6 +547,8 @@ extension ChatMessageBubble {
                     preview: self.inlineWidgets[idx],
                     resolverReady: self.inlineWidgetResolverReady,
                     resolveResource: self.inlineWidgetResourceResolver)
+                    // A retained row must not lend its browser or callbacks to another chat owner.
+                        .id(self.inlineWidgetScope)
             }
 
             self.footer

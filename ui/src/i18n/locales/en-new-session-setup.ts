@@ -143,7 +143,6 @@ const enNewSessionSetup = {
     worktreeName: "Name",
     worktreeNamePlaceholder: "From session title",
     worktreeBranchNote: "Creates branch {branch} in a separate checkout.",
-    worktreeBranchFromTitleNote: "Uses the session title if blank.",
     worktreeNameInvalid: "Use lowercase letters, digits, and dashes.",
     draft: "Draft",
     draftDescription: "Keep this session to yourself until you publish it",
@@ -153,6 +152,7 @@ const enNewSessionSetup = {
     dictate: "Dictate",
     readingAttachment: "Reading attachment",
     start: "Start session",
+    backgroundSend: "Background",
     created: "Session created",
     startInTerminal: "Start in terminal",
     nativeTerminalHint:
@@ -162,7 +162,7 @@ const enNewSessionSetup = {
     chooseNativeHost: "Choose a device for the native CLI",
     nativeHostsUnavailable:
       "No native CLI is available. Install it on this computer or connect a device with CLI access, then reconnect to the Gateway.",
-    nativeTerminalPrompt: "Optional initial prompt for the native CLI",
+    nativeTerminalPrompt: "What should the CLI agent do first? (optional)",
     terminalNodeFolder: "Existing absolute folder on this device",
     terminalAttachmentsUnsupported:
       "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",

@@ -454,7 +454,7 @@ export class ModelRegistry {
 
     try {
       const content = options.contents ?? readFileSync(modelsJsonPath, "utf-8");
-      const parsed = parseModelCatalogJson(content);
+      const parsed = parseModelCatalogJson(content, options.requireGeneratedCatalog);
       if (options.requireGeneratedCatalog === true && !isGeneratedPluginModelCatalog(parsed)) {
         return emptyCustomModelsResult();
       }

@@ -135,9 +135,9 @@ surface. Tool policy, authenticated command handling, and Gateway scope checks
 remain owned by their existing execution paths.
 
 Operation count is not tool count: a custom UI can use many typed session
-actions without exposing them to the agent. Contracts have no operation-count
-or tool-count cap; the separate limit of 64 event types remains. Operation IDs,
-schemas, bounded JSON payloads, and authorization checks still apply.
+actions without exposing them to the agent. Contracts have no operation-count,
+tool-count, or declared event-type cap. Operation and event IDs, schemas, bounded
+JSON payloads, and authorization checks still apply.
 
 OpenClaw logs advisory warnings when plugin registration or an embedded turn's
 tool preparation takes more than five seconds, and when a session's effective tool
