@@ -102,9 +102,9 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   ...STORAGE_FIELD_HELP,
   ...DESKTOP_FIELD_HELP,
   gateway:
-    "Gateway runtime surface for bind mode, auth, control UI, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
+    "Gateway runtime surface for bind mode, auth, web app, remote transport, and operational safety controls. Keep conservative defaults unless you intentionally expose the gateway beyond trusted local interfaces.",
   "gateway.port":
-    "TCP port used by the gateway listener for API, control UI, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
+    "TCP port used by the gateway listener for API, web app, and channel-facing ingress paths. Use a dedicated port and avoid collisions with reverse proxies or local developer services.",
   "gateway.mode":
     'Gateway operation mode: "local" runs channels and agent runtime on this host, while "remote" connects through remote transport. Keep "local" unless you intentionally run a split remote gateway topology.',
   "gateway.bind":
@@ -112,11 +112,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.customBindHost":
     "IPv4 address used for a custom bind. Specific IPv4s also require the same Gateway port on 127.0.0.1; avoid 0.0.0.0 unless all-interface exposure is required.",
   "gateway.controlUi":
-    "Control UI hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
+    "Web app hosting settings including enablement, pathing, and browser-origin/auth hardening behavior. Keep UI exposure minimal and pair with strong auth controls before internet-facing deployments.",
   "gateway.controlUi.enabled":
-    "Enables serving the gateway Control UI from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
+    "Enables serving the web app from the gateway HTTP process when true. Keep enabled for local administration, and disable when an external control surface replaces it.",
   "gateway.uploads":
-    "Client file and image upload policy for the Gateway and Control UI. Downloads and agent-generated media remain available.",
+    "Client file and image upload policy for the Gateway and web app. Downloads and agent-generated media remain available.",
   "gateway.uploads.enabled":
     "Allows client file and image uploads (default: true). Set false to reject attachments, workspace/terminal uploads, avatar uploads, and archive imports at the Gateway, including direct API requests. Changes apply without restarting. This is not a sandbox or a restriction on channel media, agent tools, or operator shell access.",
   "gateway.openclawId":
@@ -126,7 +126,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.openclawId.issuerUrl":
     "OpenClaw ID issuer used to sign in for identity only while linking a claw. It is never trusted for membership, device approval or which server a client dials.",
   "gateway.openclawId.clientId":
-    "Public OAuth client (authorization code with PKCE) the Control UI uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <Control UI origin>/openclaw-id/callback. On this machine sign-in uses that redirect; a Control UI reached through a personal sign-in such as Tailscale uses the issuer's device grant.",
+    "Public OAuth client (authorization code with PKCE) the web app uses for Sign in with OpenClaw ID in its account menu. Its redirect URI is <web app origin>/openclaw-id/callback. On this machine sign-in uses that redirect; a web app reached through a personal sign-in such as Tailscale uses the issuer's device grant.",
   "gateway.openclawId.discoveryUrl":
     "Discovery service that mirrors the claw descriptor and membership snapshot and relays mailbox messages. It is untrusted: every statement it returns is verified against the claw's pinned owner root.",
   "gateway.openclawId.relayUrl":
@@ -138,11 +138,11 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.openclawId.memberDeviceInactivityDays":
     "Days a member's browser may go without reaching this claw before the claw removes it (default: 30). The member stays listed.",
   "gateway.cliAgents":
-    "Control UI discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
+    "Web app discovery for external CLI session engines exposed by the Gateway session catalog. Enabled by default; disable to prevent starting those engines from the new-session model picker.",
   "gateway.cliAgents.enabled":
-    "Shows catalog-backed CLI agents in the Control UI new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
+    "Shows catalog-backed CLI agents in the web app new-session model picker when true (default: true). Set false to disable CLI agents and native CLI session creation. Only catalogs that advertise session creation are listed, and the picker stays hidden when the Gateway does not advertise session catalog support.",
   "gateway.terminal":
-    "Operator terminal served to Control UI and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
+    "Operator terminal served to web app and mobile clients: a PTY-backed shell on the gateway host, restricted to admin-scope operator sessions. It starts in the target agent's workspace and is refused for fully-sandboxed agents (sandbox.mode 'all') rather than handing back an unconfined host shell.",
   "gateway.terminal.enabled":
     "Enables the operator terminal for admin-scope clients (default: true). This exposes a browser/mobile shell with the gateway process environment; set false to opt out on deployments where admin operators should not get a host shell. Changes apply without restarting the Gateway.",
   "gateway.terminal.shell":

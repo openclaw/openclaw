@@ -159,7 +159,7 @@ export default {
     openBoardAutomation: "Open",
     automationLoading: "Loading linked automation…",
     automationUnavailable: "Automation unavailable",
-    automationPaused: "Paused",
+    automationDisabled: "Disabled",
     automationEnabled: "Enabled",
     automationState: "State",
     automationFrequency: "Frequency",

@@ -9,6 +9,7 @@ import {
 } from "../../../sessions/session-controller.mailbox.js";
 import { isCronSessionKey } from "../../../sessions/session-key-utils.js";
 import { normalizeDeliveryContext } from "../../../utils/delivery-context.shared.js";
+import { isAgentRunRestartAbortReason } from "../../run-termination.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   getFollowupForCohort,
@@ -531,6 +532,7 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       }
       if (
         params.signal?.aborted ||
+        isAgentRunRestartAbortReason(controllerInput?.abortSignal.reason) ||
         isGatewayClosed() ||
         !isBatchCurrent() ||
         (await retireReplacedStore())

@@ -238,3 +238,29 @@ it("never replays a lost committed reply", async () => {
     });
   });
 });
+
+it("checks caller authority once per progress-card owner assertion", async () => {
+  await withCardSession(false, async () => {
+    const current = vi.fn();
+    const open = publications.openOpenClawAgentSqliteWorkerStore;
+    let observed = false;
+    vi.spyOn(publications, "openOpenClawAgentSqliteWorkerStore").mockImplementation(
+      async (...args) => {
+        const worker = await open(...args);
+        const execute = worker.execute.bind(worker);
+        worker.execute = (command, assertCurrent, options) => {
+          const before = current.mock.calls.length;
+          assertCurrent();
+          expect(current.mock.calls.length - before).toBe(1);
+          observed = true;
+          return execute(command, assertCurrent, options);
+        };
+        return worker;
+      },
+    );
+    expect(await put({ markdown: "Once", assertCurrent: current })).toMatchObject({
+      card: { revision: 1, markdown: "Once" },
+    });
+    expect(observed).toBe(true);
+  });
+});

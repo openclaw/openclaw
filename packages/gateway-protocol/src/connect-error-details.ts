@@ -594,9 +594,7 @@ function formatProtocolMismatchMessage(message: string | undefined, details: unk
   const parts: string[] = [];
   if (clientMin !== undefined && clientMax !== undefined) {
     parts.push(
-      clientMin === clientMax
-        ? `Control UI v${clientMin}`
-        : `Control UI v${clientMin}-v${clientMax}`,
+      clientMin === clientMax ? `Web app v${clientMin}` : `Web app v${clientMin}-v${clientMax}`,
     );
   }
   if (expected !== undefined) {

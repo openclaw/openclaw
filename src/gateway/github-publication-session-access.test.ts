@@ -27,11 +27,14 @@ import { listSessionChildEntriesReadOnly } from "../config/sessions/session-entr
 import { withSessionStoreReaderInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.js";
 import { registerProjectRegistry } from "../projects/project-registry.js";
+import { deriveGitHubPublicationTaskId } from "../state/github-publication-requester.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import { prepareGitHubPublicationSession } from "./github-publication-availability.js";
 import { readPublicationCommit } from "./github-publication-git.test-support.js";
+import { prepareGitHubPublicationTaskRequester } from "./github-publication-requester.js";
 import {
+  createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
   guestScopes,
 } from "./github-publication-requester.test-support.js";
@@ -76,6 +79,10 @@ async function worktreeState(
 
 const LOCAL_CHECKOUT_OUTCOMES = [
   "published",
+  "previous task",
+  "ambiguous previous tasks",
+  "rebased task",
+  "task access",
   "project",
   "private project",
   "writer project",
@@ -323,15 +330,18 @@ describe("local checkout publication", () => {
     await manager.appendMessageAsync(
       makeUserMessage("Implement this change and publish its PR", 1),
     );
-    const requester = outcome === "writer project" ? f.maintainerSource : f.guestSource;
-    const requesterClient =
+    const requester =
+      outcome === "writer project" || outcome === "task access"
+        ? f.maintainerSource
+        : f.guestSource;
+    let requesterClient =
       outcome === "system private project"
         ? createSyntheticPluginRuntimeClient({
             operatorRoleActor: { kind: "system" },
             scopes: guestScopes,
           })
         : requester.client;
-    const clients = [requester.client, f.maintainerSource.client];
+    const clients = [f.guestSource.client, f.maintainerSource.client];
     const context = {
       ...createDirectChatContext({
         getRuntimeConfig,
@@ -393,6 +403,10 @@ describe("local checkout publication", () => {
       { message: expect.stringContaining("Commit the task changes") },
     ]);
     expect(await worktreeState(source)).toEqual(dirty);
+    if (outcome === "rebased task") {
+      await fs.writeFile(path.join(source.cwd, "shared.txt"), "upstream improvement\n");
+      await source.git("add", "shared.txt");
+    }
     await source.git("add", "artifact.txt");
     await source.git("commit", "-m", "Implement the requested change");
     const linked = path.join(root, "linked-worktree");
@@ -432,7 +446,7 @@ describe("local checkout publication", () => {
       projectId = (await registerProjectRegistry({ path: projectRoot })).id;
       await upsertSessionEntryCore(scope, { projectId });
     }
-    const before = await worktreeState(source);
+    let before = await worktreeState(source);
     if (outcome === "linked project worktree") {
       const update = mocks.updateIndex.getMockImplementation()!;
       mocks.updateIndex.mockImplementationOnce(async (...args) => {
@@ -483,7 +497,101 @@ describe("local checkout publication", () => {
       expect(source.effects).toEqual([]);
       expect(await listSessionChildEntriesReadOnly(scope)).toEqual([]);
     }
+    const previousPublications: Array<{ url?: string; branch?: string }> = [];
+    if (outcome === "previous task" || outcome === "ambiguous previous tasks") {
+      const original = await createGitHubPublicationRequesterFixture({
+        ...scope,
+        profileId: f.guestProfile,
+        scopes: guestScopes,
+      });
+      const origin = {
+        ...scope,
+        sessionId: SESSION_ID,
+        lifecycleRevision: loadSessionEntryReadOnly(scope)!.lifecycleRevision ?? null,
+      };
+      // Create the previous version's task shape through real creation and publication
+      // owners; accepted receipts must be written by the coordinator, never seeded.
+      for (let index = 0; index < (outcome === "previous task" ? 1 : 2); index++) {
+        const idempotencyKey = `previous-publication-${index}`;
+        const taskId = deriveGitHubPublicationTaskId(origin, idempotencyKey);
+        const created = await createGatewaySession({
+          cfg: getRuntimeConfig(),
+          agentId: "main",
+          key: `agent:main:dashboard:github-${taskId}`,
+          parentSessionKey: SESSION_KEY,
+          label: `github-publication-${taskId}`,
+          requestingOperatorScopes: guestScopes,
+          requestingOperatorProfileId: f.guestProfile,
+          operatorRoleActor: original.requester.snapshot.actor,
+          creation: {
+            via: "spawn",
+            actor: {
+              type: "agent",
+              id: "main",
+              delegatedBy: { type: "human", source: "profile", id: f.guestProfile },
+            },
+            requesterProfileId: f.guestProfile,
+          },
+          commandSource: "github-publication",
+          spawnDepth: 1,
+          spawnToolPolicy: { version: 1, allow: ["github_publish", "read"], deny: ["exec"] },
+          preparedPermissionSelection: {
+            mode: "guarded",
+            assertCurrent: original.requester.assertCurrent,
+          },
+          prepareLifecycle: async (target) =>
+            allocation.prepareSessionWorktree({
+              cfg: getRuntimeConfig(),
+              target,
+              workspace: source.cwd,
+              checkoutCommit: await source.git("rev-parse", "HEAD"),
+              runSetupScript: false,
+            }),
+        });
+        if (!created.ok) {
+          throw new Error(created.error.message);
+        }
+        const transferred = await prepareGitHubPublicationTaskRequester(
+          original.requester,
+          { agentId: "main", sessionKey: created.key },
+          origin,
+          getRuntimeConfig,
+        );
+        onTestFinished(transferred.release);
+        const published = await f.coordinator.requestForSessionV2({
+          agentId: "main",
+          sessionKey: created.key,
+          idempotencyKey,
+          requester: transferred.requester,
+        });
+        if (published.status !== "published") {
+          throw new Error(`Previous publication did not complete: ${published.status}`);
+        }
+        previousPublications.push(published);
+      }
+      context.githubPublicationService = f.restart();
+      if (outcome === "ambiguous previous tasks") {
+        const effects = [...source.effects];
+        expect(await invoke(source.cwd)).toMatchObject([
+          false,
+          undefined,
+          { message: expect.stringContaining("Multiple publication tasks") },
+        ]);
+        expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(2);
+        expect(source.effects).toEqual(effects);
+        expect(await worktreeState(source)).toEqual(before);
+        return;
+      }
+      expect(await invoke(source.cwd, true, "previous-publication-0")).toMatchObject([
+        true,
+        { status: "published", ...previousPublications[0] },
+      ]);
+    }
     const result = await invoke(publicationSource);
+    if (previousPublications.length) {
+      const { url, branch } = previousPublications[0]!;
+      expect(result).toMatchObject([true, { url, branch }]);
+    }
     expect(await worktreeState(source)).toEqual(before);
     // Publishing a task must not redirect the next turn's editor or shell.
     expect(loadSessionEntryReadOnly(scope)?.spawnedCwd).toBe(root);
@@ -524,6 +632,7 @@ describe("local checkout publication", () => {
       true,
       { status: "published", url: expect.stringContaining("/pull/") },
     ]);
+    const publicationTarget = { url: result[1].url, branch: result[1].branch };
     const parent = loadSessionEntryReadOnly(scope)!;
     expect(parent).toMatchObject({
       thinkingLevel: "high",
@@ -601,23 +710,87 @@ describe("local checkout publication", () => {
     expect(source.effects).toEqual(["push", "pull_request"]);
     expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
 
+    if (outcome === "task access") {
+      const taskHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      await fs.writeFile(path.join(source.cwd, "artifact.txt"), "guest follow-up\n");
+      await source.git("commit", "-am", "Guest follow-up");
+      requesterClient = f.guestSource.client;
+      expect(await invoke(source.cwd, true, "guest-follow-up")).toMatchObject([
+        false,
+        undefined,
+        { message: expect.stringContaining("requester is no longer authorized") },
+      ]);
+      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(taskHead);
+      expect(source.effects).toEqual(["push", "pull_request"]);
+      return;
+    }
+
     if (projectId) {
       if (outcome === "linked project worktree") {
         expect(await fs.readFile(path.join(linked, "artifact.txt"), "utf8")).toBe("another chat\n");
       }
       if (outcome === "project") {
         projectVisibility = "private";
-        expect(await invoke(publicationSource)).toEqual(result);
-        expect(await invoke(publicationSource, true, "new-project-task")).toMatchObject([
-          false,
-          undefined,
-          { message: expect.stringContaining("project is unavailable to this requester") },
-        ]);
+        // A retry checks current access again before it reaches the accepted receipt.
+        for (const key of ["local-checkout", "new-project-task"]) {
+          expect(await invoke(publicationSource, true, key)).toMatchObject([
+            false,
+            undefined,
+            { message: expect.stringContaining("project is unavailable to this requester") },
+          ]);
+        }
         expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
         expect(source.effects).toEqual(["push", "pull_request"]);
       }
       return;
     }
+
+    // Fixing CI, or amending, in the same checkout updates its task, branch and PR.
+    for (const [text, args] of [
+      ["follow-up\n", ["commit", "-qam", "Fix CI"]],
+      ["amended\n", ["commit", "-qa", "--amend", "--no-edit"]],
+    ] as const) {
+      await fs.writeFile(path.join(source.cwd, "artifact.txt"), text);
+      expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
+      await source.git(...args);
+      const acceptedHead = await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD");
+      expect(await invoke(source.cwd, true, "local-checkout")).toEqual(result);
+      expect(await source.git("-C", task.entry.spawnedCwd!, "rev-parse", "HEAD")).toBe(
+        acceptedHead,
+      );
+      expect(await invoke(source.cwd, true, text)).toMatchObject([
+        true,
+        { status: "published", ...publicationTarget },
+      ]);
+      expect(await fs.readFile(path.join(task.entry.spawnedCwd!, "artifact.txt"), "utf8")).toBe(
+        text,
+      );
+    }
+    expect(await listSessionChildEntriesReadOnly(scope)).toHaveLength(1);
+    expect(source.effects).toEqual(["push", "pull_request", "push", "push"]);
+    if (outcome === "rebased task") {
+      const upstream = path.join(root, "upstream");
+      await source.git("worktree", "add", "--detach", upstream, "main");
+      await fs.writeFile(path.join(upstream, "shared.txt"), "upstream improvement\n");
+      await source.git("-C", upstream, "add", "shared.txt");
+      await source.git("-C", upstream, "commit", "-m", "Upstream includes the shared change");
+      const base = await source.git("-C", upstream, "rev-parse", "HEAD");
+      const tree = await source.git("rev-parse", "HEAD^{tree}");
+      await source.git("rebase", base);
+      expect(await source.git("rev-parse", "HEAD^{tree}")).toBe(tree);
+      overrideCommands((argv) =>
+        argv.some((arg) => arg.endsWith("/git/ref/heads/main"))
+          ? commandResult(JSON.stringify({ ref: "refs/heads/main", sha: base }))
+          : undefined,
+      );
+      const rebased = await invoke(source.cwd, true, "rebased-publication");
+      expect(rebased).toMatchObject([true, { status: "published", ...publicationTarget }]);
+      expect(await source.git("diff", "--name-only", `${base}...${rebased[1].headCommit}`)).toBe(
+        "artifact.txt",
+      );
+      expect(source.effects.filter((effect) => effect === "pull_request")).toHaveLength(1);
+    }
+    before = await worktreeState(source);
 
     // A later task can edit and publish another repository from the same conversation.
     const other = path.join(root, "another-repository");
@@ -633,7 +806,7 @@ describe("local checkout publication", () => {
     const edit = createHostWorkspaceEditTool(resumedRoot!, { workspaceOnly: true });
     await edit.execute("next-task", {
       path: path.join(other, "artifact.txt"),
-      edits: [{ oldText: "accepted\n", newText: "second task\n" }],
+      edits: [{ oldText: "amended\n", newText: "second task\n" }],
     });
     await source.git("-C", other, "add", "artifact.txt");
     await source.git("-C", other, "commit", "-m", "Implement the next task");

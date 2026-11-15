@@ -134,6 +134,11 @@ synchronous deletion, even when several retained generations need a new owner.
 Those reference lists expire with the deletion; direct current-generation matches
 and the first matching successor in session-key order retain their existing behavior.
 
+Empty-transcript lifecycle deletion prepares retained-window successors before
+opening its write transaction. The commit checks the existing database revision
+before using those request-local facts; intervening writes require a fresh scan.
+Surviving reference rows protect retained history and are not deletion candidates.
+
 Refused ordered session reads include the conflicting admission's shortened,
 bounded database path, operation, thread, age, and any recorded caller or worker
 operation labels in the error itself. They never include request payloads.
@@ -795,6 +800,13 @@ repair backfill to finish: exact reads run before the next bounded bulk batch.
 An already-running batch finishes before priority work starts. Background scope
 drain still owns the complete backfill, and a failed or cancelled refresh rejects
 its pending exact reads instead of returning stale totals.
+
+Usage aggregation, compression, and changed-month selection happen before writer
+admission. Publication deletes replaced partitions by individual session ranges
+and removed months by exact keys, using SQLite's existing primary-key index.
+These deletions share the transaction with their checkpoints and quarter summaries.
+Combining many ranges or keys can make stale small-cache statistics select a
+full-cache scan while holding the writer.
 
 Refresh discovery reuses the durable rollup's raw transcript statistics only when
 the transcript owner's mutation timestamp and rewrite generation still match.

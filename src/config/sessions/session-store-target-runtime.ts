@@ -111,6 +111,8 @@ export function prepareSessionStoreTargetInventoryRead(
   request: Omit<SessionStoreTargetInventoryRequest, "registeredDatabases">,
   unchangedBy?: Parameters<typeof prepareOpenClawAgentDatabaseRegistrySnapshotRead>[1],
   registeredDatabases?: SessionStoreRegistryRead,
+  /** Access checks use the worker pool's reserved class-0 lane. */
+  pointRead?: true,
 ) {
   const { candidates, ...prepared } = request;
   const selection = [
@@ -186,6 +188,7 @@ export function prepareSessionStoreTargetInventoryRead(
         },
         sessionStoreLane,
         signal,
+        pointRead,
       );
     },
   };
@@ -196,6 +199,7 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
+  pointRead?: true,
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = {
@@ -263,6 +267,8 @@ export async function withSessionStoreTarget<T>(
       });
     },
     sessionStoreLane,
+    undefined,
+    pointRead,
   );
 }
 
