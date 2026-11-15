@@ -1,4 +1,5 @@
 import { brandIconData } from "./icon-data-brand.ts";
+import { navigationIconData } from "./icon-data-navigation.ts";
 import { statusIconPaths } from "./icon-data-status.ts";
 import { keyboardIconData, toolIconData } from "./icon-data-tools.ts";
 import { strokeIconData, strokePathData, type IconData } from "./icon-data-types.ts";
@@ -632,6 +633,7 @@ export const iconData = {
     ["circle", { cx: "19", cy: "12", r: "1" }],
   ]),
   ...toolIconData,
+  ...navigationIconData,
 } as const satisfies Record<string, IconData>;
 
 export type IconName = keyof typeof iconData;

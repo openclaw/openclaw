@@ -1,5 +1,5 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import { For } from "solid-js";
+import { createUniqueId, For } from "solid-js";
 import { brandIconData, type BrandIconName } from "../icon-data-brand.ts";
 import { keyboardIconData, type KeyboardIconSymbol } from "../icon-data-tools.ts";
 import { strokeIconData, type IconData, type IconNode } from "../icon-data-types.ts";
@@ -45,16 +45,36 @@ type IconPresentation = {
   "aria-label"?: string;
 };
 
-function IconShape(props: { node: IconNode }) {
+// SVG ids resolve document-wide, so each rendered icon suffixes the ids its
+// masks and gradients declare and every url(#id) reference to them.
+function scopedAttributes(attributes: IconNode[1], scope: string): Record<string, string | number> {
+  let scoped: Record<string, string | number> | undefined;
+  for (const [name, value] of Object.entries(attributes)) {
+    const next =
+      name === "id"
+        ? `${value}-${scope}`
+        : typeof value === "string"
+          ? value.replace(/^url\(#(.+)\)$/u, `url(#$1-${scope})`)
+          : value;
+    if (next !== value) {
+      scoped ??= { ...attributes };
+      scoped[name] = next;
+    }
+  }
+  return scoped ?? attributes;
+}
+
+function IconShape(props: { node: IconNode; scope: string }) {
   const Shape = dynamic(() => props.node[0]);
   return (
-    <Shape {...props.node[1]}>
-      <For each={props.node[2]}>{(node) => <IconShape node={node} />}</For>
+    <Shape {...scopedAttributes(props.node[1], props.scope)}>
+      <For each={props.node[2]}>{(node) => <IconShape node={node} scope={props.scope} />}</For>
     </Shape>
   );
 }
 
 function IconSvg(props: IconPresentation & { data: IconData }) {
+  const scope = createUniqueId();
   return (
     <svg
       {...props.data.attributes}
@@ -64,7 +84,7 @@ function IconSvg(props: IconPresentation & { data: IconData }) {
       aria-label={props["aria-label"]}
       role={props["aria-label"] ? "img" : undefined}
     >
-      <For each={props.data.children}>{(node) => <IconShape node={node} />}</For>
+      <For each={props.data.children}>{(node) => <IconShape node={node} scope={scope} />}</For>
     </svg>
   );
 }
