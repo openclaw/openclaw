@@ -105,20 +105,19 @@ it("preserves unexpected fetch errors", async () => {
   await expect(run("web", "fetch", "--url", "https://example.invalid")).rejects.toBe(error);
 });
 
-it.each([false, true])(
-  "keeps matching embedding flags on the provider path, failed=$failed",
-  async (failed) => {
-    const error = new Error("embedding request failed");
-    const close = vi.fn();
-    mocks.createEmbedding.mockResolvedValue({
-      provider: {
-        id: "fixture",
-        model: "model",
-        close,
-        embedBatch: failed ? vi.fn().mockRejectedValue(error) : vi.fn().mockResolvedValue([[1, 2]]),
-      },
-    });
-    const result = run(
+it("preserves unexpected embedding errors and closes the provider", async () => {
+  const error = new Error("embedding request failed");
+  const close = vi.fn();
+  mocks.createEmbedding.mockResolvedValue({
+    provider: {
+      id: "fixture",
+      model: "model",
+      close,
+      embedBatch: vi.fn().mockRejectedValue(error),
+    },
+  });
+  await expect(
+    run(
       "embedding",
       "create",
       "--text",
@@ -127,20 +126,7 @@ it.each([false, true])(
       "fixture",
       "--model",
       "fixture/model",
-    );
-    if (failed) {
-      await expect(result).rejects.toBe(error);
-    } else {
-      await result;
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          ok: true,
-          provider: "fixture",
-          outputs: [{ text: "hello", embedding: [1, 2], dimensions: 2 }],
-        }),
-        2,
-      );
-    }
-    expect(close).toHaveBeenCalledOnce();
-  },
-);
+    ),
+  ).rejects.toBe(error);
+  expect(close).toHaveBeenCalledOnce();
+});

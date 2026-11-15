@@ -71,9 +71,17 @@ export function registerEmbeddingCapabilityCliTests({
   it("rejects conflicting provider and model prefixes before creating a provider", async () => {
     await expect(
       create("--provider", "deepinfra", "--model", "Qwen/Qwen3-Embedding-8B", "--json"),
-    ).rejects.toThrow("exit 1");
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      humanOutput: expect.stringContaining(
+        'Embedding --provider "deepinfra" must match the provider "Qwen" in --model.',
+      ),
+      machineOutput: expect.stringContaining(
+        'Embedding --provider "deepinfra" must match the provider "Qwen" in --model.',
+      ),
+    });
     expect(providerCall()).toBeUndefined();
-    expectError('Embedding --provider "deepinfra" must match the provider "Qwen" in --model.');
+    expect(jsonOutput()).toBeUndefined();
   });
 
   it("shows ordered embedding dimensions and bounded vector previews in text output", async () => {

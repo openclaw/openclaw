@@ -2004,9 +2004,14 @@ describe("capability cli", () => {
         ...(provider ? ["--provider", provider] : []),
         "--json",
       ];
-      await expect(runCapability("web", "fetch", ...args)).rejects.toThrow("exit 1");
+      await expect(runCapability("web", "fetch", ...args)).rejects.toMatchObject({
+        name: "ExpectedCliError",
+        humanOutput: expect.stringContaining("tools.web.fetch.enabled"),
+        machineOutput: expect.stringContaining("tools.web.fetch.enabled"),
+      });
 
-      expect(runtimeErrorMessages().join("\n")).toContain("tools.web.fetch.enabled");
+      expect(mocks.runtime.error).not.toHaveBeenCalled();
+      expect(mocks.runtime.exit).not.toHaveBeenCalled();
       expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     },
   );
