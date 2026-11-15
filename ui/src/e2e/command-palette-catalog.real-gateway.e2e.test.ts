@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { appendFileSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
@@ -493,6 +494,28 @@ suite.define(() => {
   }, 120_000);
 
   it("refreshes open search after publication and retains results through a failed read", async () => {
+    // Diagnostic overlay only: bounded private phase records survive forced termination.
+    let diagnosticRows = 0;
+    const trace = (phase: string, data: Record<string, unknown> = {}) => {
+      if (diagnosticRows >= 128) return;
+      if (diagnosticRows++ === 127) { phase = "capture-truncated"; data = {}; }
+      try {
+        appendFileSync(path.join(suite.artifactDir, "publication-progress.log"),
+          JSON.stringify({ phase, at: Date.now(), ...data }) + "\n");
+      } catch {
+        console.warn("[publication-diagnostic] phase capture unavailable");
+      }
+    };
+    const snapshotGatewayLog = () => {
+      try {
+        const text = instance.logs().replaceAll(instance.gatewayToken, "[synthetic token]")
+          .replaceAll(instance.hookToken, "[synthetic token]");
+        writeFileSync(path.join(suite.artifactDir, "publication-progress-gateway.log"), text);
+      } catch {
+        console.warn("[publication-diagnostic] gateway capture unavailable");
+      }
+    };
+    trace("scenario-start");
     const handoff = await instance.cli(["dashboard", "--json"]);
     expect(handoff.code).toBe(0);
     const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
@@ -509,14 +532,21 @@ suite.define(() => {
       const applicationHandle = await getControlUiContextHandle(page);
       try {
         const publication = await applicationHandle.evaluateHandle((application) => {
-          const observed = { committed: false };
+          const observed: { committed: boolean; seenAt: number | null } = { committed: false, seenAt: null };
+          const initialClient = application.gateway.snapshot.client;
           const stop = application.gateway.subscribeEvents((event) => {
             if (event.event === "config.changed") {
               observed.committed = true;
+              observed.seenAt = Date.now();
             }
           });
-          return { observed, stop };
+          return { observed, stop, diagnosticSnapshot: () => ({
+            committed: observed.committed, seenAt: observed.seenAt,
+            gatewayPhase: application.gateway.snapshot.phase,
+            sameClient: initialClient === application.gateway.snapshot.client,
+          }) };
         });
+        trace("listener-installed");
         const args = [
           "config",
           "set",
@@ -526,15 +556,26 @@ suite.define(() => {
           "--replace",
         ];
         try {
+          trace("cli-start");
           const result = await instance.cli(args);
+          trace("cli-exit", { code: result.code, signal: result.signal });
+          snapshotGatewayLog();
           commands.push({ args, ...result });
           expect(result.code, result.stderr).toBe(0);
           // Runtime rows can arrive before this accepted-config event retires them.
           await expect
             .poll(() => publication.evaluate(({ observed }) => observed.committed))
             .toBe(true);
+          trace("observer-passed");
         } finally {
-          await publication.evaluate(({ stop }) => stop());
+          trace("observer-finally");
+          snapshotGatewayLog();
+          const diagnosticState = await publication.evaluate(({ stop, diagnosticSnapshot }) => {
+            try { return diagnosticSnapshot(); }
+            catch { return null; }
+            finally { stop(); }
+          });
+          trace(diagnosticState ? "observer-state" : "observer-state-unavailable", diagnosticState ?? {});
           await publication.dispose();
         }
       } finally {
@@ -584,6 +625,9 @@ suite.define(() => {
                 );
               } else {
                 socket.send(message);
+              }
+              if (frame.event === "config.changed") {
+                trace("wire-config-changed-forwarded", { seq: typeof frame.seq === "number" ? frame.seq : null });
               }
             });
           });
@@ -687,6 +731,7 @@ suite.define(() => {
         redact(JSON.stringify({ frames, commands }, null, 2)),
       );
       await fs.writeFile(path.join(suite.artifactDir, "gateway.log"), redact(instance.logs()));
+      trace("scenario-finally-complete");
     }
   }, 120_000);
 });
