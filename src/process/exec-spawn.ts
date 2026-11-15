@@ -383,11 +383,13 @@ export async function withCommandProcessScope<T>(
 function retainCommandProcess(
   scope: CommandProcessScope,
   child: { pid?: number; nodeChildProcess: ChildProcess } & PromiseLike<unknown>,
+  inheritScopeCancellation: boolean,
   reservation?: ReturnType<CommandProcessCustody["reserve"]>,
 ): void {
   let pid: number | undefined;
   let startedAt: number | null = null;
   let stopped = false;
+  let stopRequested = false;
   let stopping: Promise<void> | undefined;
   let groupExtinct = false;
   let settlementFailed = false;
@@ -412,6 +414,7 @@ function retainCommandProcess(
   nativeChild.once("exit", onExit);
   const closed = nativeChild instanceof BrokerChild ? nativeChild.waitForClose() : undefined;
   const stop = () => {
+    stopRequested = true;
     if (stopped || pid === undefined || process.platform === "win32") {
       return;
     }
@@ -473,7 +476,7 @@ function retainCommandProcess(
             ? startedAt
             : getProcessInstanceStartTime(childPid),
       });
-      if (scope.signal.aborted) {
+      if (stopRequested || (inheritScopeCancellation && scope.signal.aborted)) {
         stop();
       }
       return startedAt;
@@ -499,10 +502,7 @@ function retainCommandProcess(
   commandAdmissions.set(nativeChild, readiness);
   // Admission is retained before remote readiness, and rejection is observed immediately.
   const completed = Promise.resolve(child)
-    .then(
-      () => undefined,
-      () => undefined,
-    )
+    .catch(() => {})
     .then(async () => {
       await closed;
       nativeChild.removeListener("exit", onExit);
@@ -713,7 +713,7 @@ export function spawnCommandWithInvocation<
     niceGit ? argv.slice(4) : invocation.args,
   );
   if (scope) {
-    retainCommandProcess(scope, child, reservation);
+    retainCommandProcess(scope, child, inheritScopeCancellation, reservation);
   }
   return { child: child as CommandSubprocess<OptionsType>, invocation };
 }

@@ -10,10 +10,12 @@ import process from "node:process";
 import { setImmediate, setTimeout as waitForProcessTick } from "node:timers/promises";
 import { describe, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as processIdentity from "../shared/pid-alive.js";
 import { killPidIfAlive } from "../test-utils/process-tree.js";
 import { isChildProcessTreeAlive } from "./child-process-tree.js";
 import * as commandIdentity from "./command-process-identity.js";
+import { readCommandProcessCleanup } from "./exec-result.js";
 import { runCommandWithTimeout } from "./exec-runner.js";
 import { spawnCommand, withCommandProcessScope } from "./exec-spawn.js";
 import { isProcessGroupGoneByCensus } from "./supervisor/service-child-group-ownership.js";
@@ -143,43 +145,63 @@ describe("command process scope cancellation", () => {
     }, controller.signal);
   });
 
-  it.each(["scope", "caller"] as const)(
+  it.for(["scope", "caller"] as const)(
     "joins command-runner termination after nested %s cancellation",
-    async (source) => {
+    async (source, { signal }) => {
       const controller = new AbortController();
       const caller = new AbortController();
+      const identityReady = createDeferredCore();
+      const readIdentity = commandIdentity.readCommandProcessStartTime;
+      const identity = vi
+        .spyOn(commandIdentity, "readCommandProcessStartTime")
+        .mockImplementationOnce(async (...args) => {
+          const observed = await readIdentity(...args);
+          await identityReady.promise;
+          return observed;
+        });
       let childPid: number | undefined;
       try {
         await withCommandProcessScope(
           () =>
             withCommandProcessScope(async () => {
               let output = "";
-              const result = await runCommandWithTimeout(
-                [
-                  process.execPath,
-                  "-e",
-                  "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000)",
-                ],
-                {
-                  signal: caller.signal,
-                  killProcessTree: true,
-                  timeoutMs: 3_000,
-                  onOutputChunk: (chunk) => {
-                    output += chunk.toString();
-                    if (output.includes("\n") && childPid === undefined) {
-                      childPid = Number(output.trim());
-                      (source === "scope" ? controller : caller).abort();
-                    }
+              const result = await withinTest(
+                runCommandWithTimeout(
+                  [
+                    process.execPath,
+                    "-e",
+                    "process.on('SIGTERM',()=>{});console.log(process.pid);setInterval(()=>{},1000)",
+                  ],
+                  {
+                    signal: caller.signal,
+                    killProcessTree: true,
+                    timeoutMs: 3_000,
+                    onOutputChunk: (chunk) => {
+                      output += chunk.toString();
+                      if (output.includes("\n") && childPid === undefined) {
+                        childPid = Number(output.trim());
+                        (source === "scope" ? controller : caller).abort();
+                      }
+                    },
                   },
-                },
-              );
-              expect(result).toMatchObject({ termination: "signal", cleanup: "forced" });
+                ),
+                signal,
+              ).finally(() => identityReady.resolve());
+              expect(result.termination).toBe("signal");
+              expect(
+                await withinTest(
+                  Promise.resolve(readCommandProcessCleanup(result) ?? result.cleanup),
+                  signal,
+                ),
+              ).toBe("forced");
               expect(Number.isSafeInteger(childPid)).toBe(true);
               expect(processIdentity.isPidAlive(childPid!)).toBe(false);
             }),
           controller.signal,
         );
       } finally {
+        identityReady.resolve();
+        identity.mockRestore();
         killPidIfAlive(childPid);
       }
     },

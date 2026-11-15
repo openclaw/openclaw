@@ -5,6 +5,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promis
 import { useWorkspaceFilesystemBlock } from "../../test/helpers/workspace-filesystem-block.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
+import * as writerQueue from "../shared/store-writer-queue.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { withOpenClawStateDatabaseReadSnapshot as withSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -21,6 +22,7 @@ import {
 import { DuplicateAgentError } from "./agent-create-error.js";
 import { resolveBootstrapFilesForPreparation as bootstrap } from "./bootstrap-files.js";
 import { assertConfiguredWorkspaceStateReady as assertReady } from "./workspace-state-dirs.js";
+import * as workspaceGuard from "./workspace-state-guard.js";
 import { WorkspaceAliasRepointedError } from "./workspace-state-identity.js";
 import { readCanonicalWorkspaceStateSnapshot } from "./workspace-state-read.js";
 import {
@@ -261,16 +263,47 @@ it.each(["expiry", "deletion"] as const)(
   },
 );
 
-it("keeps captured first-writer setup milestones across queued merges and reopen", async () => {
+it("keeps captured first-writer setup milestones across queued merges and reopen", async ({
+  signal,
+}) => {
   await seed();
+  const release = Promise.withResolvers<void>();
+  const capture = workspaceGuard.captureWorkspaceFilesystemEvidence;
+  vi.spyOn(workspaceGuard, "captureWorkspaceFilesystemEvidence").mockImplementationOnce(
+    async (...args) => {
+      const evidence = await capture(...args);
+      await release.promise;
+      return evidence;
+    },
+  );
+  const enqueue = writerQueue.runQueuedStoreWrite;
+  vi.spyOn(writerQueue, "runQueuedStoreWrite").mockImplementation((input) => {
+    const pending = enqueue(input);
+    if (input.label === "Workspace state" && input.queues.get(input.storePath)?.pending.length) {
+      release.resolve();
+    }
+    return pending;
+  });
+  probe.command(stateWorker, (command, options, scope) => {
+    const pending = scope.execute(command, options);
+    release.resolve();
+    return pending;
+  });
   const next = { ...milestone };
   const first = merge(dir, next, 2_000);
   next.setupCompletedAt = "2026-07-17T02:00:00.000Z";
   const second = merge(dir, next, 3_000);
-  expect((await first).setupCompletedAt).toBe(completedAt);
-  expect((await second).setupCompletedAt).toBe(completedAt);
-  await closeDatabase();
-  expect((await read(dir)).setup.setupCompletedAt).toBe(completedAt);
+  try {
+    // Release the slow observation once its follower is queued or has already overtaken it.
+    await withinTest(release.promise, signal);
+    expect((await first).setupCompletedAt).toBe(completedAt);
+    expect((await second).setupCompletedAt).toBe(completedAt);
+    await closeDatabase();
+    expect((await read(dir)).setup.setupCompletedAt).toBe(completedAt);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([first, second]);
+  }
 });
 
 it.each(["legacy-read", "transaction"] as const)(

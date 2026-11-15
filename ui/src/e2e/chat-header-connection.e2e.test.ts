@@ -123,6 +123,7 @@ suite.define(() => {
         await header.locator(".chat-pane__workspace-chip").waitFor();
         await header.locator(".session-color-dot").waitFor();
         await header.locator(".chat-header-session-menu__trigger").waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         const settled = await geometry();
         const settledFooter = await footerGeometry();
         const boundary = page.locator(".chat-history-boundary__action").first();
@@ -142,6 +143,7 @@ suite.define(() => {
         await page.reload({ waitUntil: "domcontentloaded" });
         await gateway.waitForRequest("connect");
         await conversation.waitFor();
+        await page.evaluate(() => document.fonts.ready.then(() => undefined));
         expect.soft(await boundary.textContent()).toBe(finalBoundary);
         await capture("boot");
         expect(await status.count()).toBe(0);

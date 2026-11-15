@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
 import type { AgentDeletionWorkerAuthority } from "../state/agent-deletion-worker.types.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
@@ -66,6 +68,10 @@ type WorkspaceStateOperationOptions = {
   "recoveryHoldPredicate" | "beforeLegacyApply" | "filesystem" | "stateOwnerPath"
 >;
 
+const workspaceWrites = resolveGlobalMap<string, StoreWriterQueue>(
+  Symbol.for("openclaw.workspaceStateWrites"),
+);
+
 async function runWorkspaceStateOperation<
   K extends Exclude<keyof WorkspaceStateWorkerOperations, "workspace.delete">,
 >(
@@ -81,50 +87,60 @@ async function runWorkspaceStateOperation<
     context.admission.assertCurrent();
     options.assertCurrent?.();
   };
-  const evidence =
-    filesystem?.evidence ??
-    (await captureWorkspaceFilesystemEvidence(
-      command.input.workspaceDir,
-      command.type !== "workspace.snapshotAndRegister" &&
-        command.type !== "workspace.replaceAttestation",
-    ));
-  assertCurrent();
-  const capturedCommand = {
-    ...command,
-    input: {
-      ...command.input,
-      recoveryHoldPredicate: options.recoveryHoldPredicate,
-      filesystem: [...(options.filesystem ?? []), evidence],
-      stateOwnerPath: options.stateOwnerPath,
+  return runQueuedStoreWrite({
+    queues: workspaceWrites,
+    storePath: context.admission.coordinationKey,
+    label: "Workspace state",
+    fn: async () => {
+      const evidence =
+        filesystem?.evidence ??
+        (await captureWorkspaceFilesystemEvidence(
+          command.input.workspaceDir,
+          command.type !== "workspace.snapshotAndRegister" &&
+            command.type !== "workspace.replaceAttestation",
+        ));
+      assertCurrent();
+      const capturedCommand = {
+        ...command,
+        input: {
+          ...command.input,
+          recoveryHoldPredicate: options.recoveryHoldPredicate,
+          filesystem: [...(options.filesystem ?? []), evidence],
+          stateOwnerPath: options.stateOwnerPath,
+        },
+      };
+      const result = await runOpenClawStateWorkerOperation(
+        context,
+        (scope) => {
+          options.beforeLegacyApply?.();
+          return scope.execute(capturedCommand);
+        },
+        {
+          assertCurrent,
+          createAdmission: withWorkspaceStatePublication(context, () => {
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              if (request.stage !== "transaction" && request.stage !== "commit") {
+                throw new Error("Workspace state requires transaction admission");
+              }
+              assertCurrent();
+              // SAFETY: These are the paired workspace worker's observations for this command.
+              const facts = request.facts as {
+                filesystem: readonly Pick<WorkspaceFilesystemEvidence, "root">[];
+              };
+              installWorkspaceFilesystemEvidence(
+                capturedCommand.input.filesystem,
+                facts.filesystem,
+              );
+              grant();
+            });
+            return { admission, nativeLocations: [context.admission.databasePath] };
+          }),
+        },
+      );
+      assertCurrent();
+      return result;
     },
-  };
-  const result = await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => {
-      options.beforeLegacyApply?.();
-      return scope.execute(capturedCommand);
-    },
-    {
-      assertCurrent,
-      createAdmission: withWorkspaceStatePublication(context, () => {
-        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "transaction" && request.stage !== "commit") {
-            throw new Error("Workspace state requires transaction admission");
-          }
-          assertCurrent();
-          // SAFETY: These are the paired workspace worker's observations for this command.
-          const facts = request.facts as {
-            filesystem: readonly Pick<WorkspaceFilesystemEvidence, "root">[];
-          };
-          installWorkspaceFilesystemEvidence(capturedCommand.input.filesystem, facts.filesystem);
-          grant();
-        });
-        return { admission, nativeLocations: [context.admission.databasePath] };
-      }),
-    },
-  );
-  assertCurrent();
-  return result;
+  });
 }
 
 export async function readWorkspaceStateSnapshot(
@@ -323,23 +339,30 @@ export async function deleteWorkspaceState(
     assertHost?.();
   };
   assertCurrent();
-  await runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: "workspace.delete", input: { plan } }),
-    {
-      existingOnly: true,
-      assertCurrent,
-      createAdmission: withWorkspaceStatePublication(context, () => {
-        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "transaction" && request.stage !== "commit") {
-            throw new Error("Workspace deletion requires transaction admission");
-          }
-          assertCurrent();
-          grant();
-        });
-        return { admission, nativeLocations: [context.admission.databasePath] };
-      }),
+  await runQueuedStoreWrite({
+    queues: workspaceWrites,
+    storePath: context.admission.coordinationKey,
+    label: "Workspace deletion",
+    fn: async () => {
+      await runOpenClawStateWorkerOperation(
+        context,
+        (scope) => scope.execute({ type: "workspace.delete", input: { plan } }),
+        {
+          existingOnly: true,
+          assertCurrent,
+          createAdmission: withWorkspaceStatePublication(context, () => {
+            const admission = createSqliteWorkerOperationAdmission((request, grant) => {
+              if (request.stage !== "transaction" && request.stage !== "commit") {
+                throw new Error("Workspace deletion requires transaction admission");
+              }
+              assertCurrent();
+              grant();
+            });
+            return { admission, nativeLocations: [context.admission.databasePath] };
+          }),
+        },
+      );
+      assertCurrent();
     },
-  );
-  assertCurrent();
+  });
 }

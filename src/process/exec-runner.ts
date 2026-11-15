@@ -607,8 +607,7 @@ async function runCommandWithOutputEncoding(
       throwOutputError("uncertain");
       return recordCommandProcessCleanup(
         { ...stopped, ...finalizeOutput() },
-        interrupted === "output-limit" &&
-          killProcessTree &&
+        killProcessTree &&
           nodeChild.pid !== undefined &&
           (process.platform === "linux" || process.platform === "android")
           ? processCleanup

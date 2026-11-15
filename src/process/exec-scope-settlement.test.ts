@@ -14,6 +14,7 @@ import {
   withCommandProcessScope,
 } from "./exec-spawn.js";
 import { runCommandBuffered, runExec } from "./exec.js";
+import { killProcessTree } from "./kill-tree.js";
 import { BrokerChild } from "./spawn-broker/child.js";
 
 const transport = vi.hoisted(() => ({ spawn: vi.fn(), settle: vi.fn() }));
@@ -243,9 +244,14 @@ it.each([
   },
 );
 
-it.for(["uncertain", "rejected"] as const)(
-  "preserves the cleanup owner's %s result after a buffered output cap",
-  (ending, { signal }) =>
+it.for([
+  { ending: "uncertain", interruption: "output cap" },
+  { ending: "rejected", interruption: "output cap" },
+  { ending: "forced", interruption: "signal" },
+  { ending: "forced", interruption: "timeout" },
+] as const)(
+  "preserves the cleanup owner's $ending result after a buffered $interruption",
+  ({ ending, interruption }, { signal }) =>
     withMockedPlatform("linux", async () => {
       const fixture = commandFixture();
       const stdout = new PassThrough();
@@ -267,30 +273,45 @@ it.for(["uncertain", "rejected"] as const)(
       });
       const failure = new Error("native cleanup observation failed");
       const finished = vi.fn();
-      const work = runCommandBuffered(["fixture"], { maxOutputBytes: 1 }).finally(finished);
+      const controller = new AbortController();
+      const work = runCommandBuffered(["fixture"], {
+        maxOutputBytes: 1,
+        signal: controller.signal,
+        timeoutMs: interruption === "timeout" ? 1 : undefined,
+      }).finally(finished);
       const outcome = work.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
       try {
         await withinTest(entered.promise, signal);
-        stdout.write("overflow");
+        stdout.write(interruption === "output cap" ? "overflow" : "o");
+        if (interruption === "signal") {
+          controller.abort();
+        }
         const inner = await withinTest(returned.promise, signal);
-        expect(inner).toMatchObject({ outputLimitExceeded: true, cleanup: "uncertain" });
+        expect(inner).toMatchObject({
+          termination: interruption === "timeout" ? "timeout" : "signal",
+          outputLimitExceeded: interruption === "output cap" || undefined,
+          cleanup: "uncertain",
+        });
         await expectPending(finished);
         fixture.open();
         stdout.end();
         fixture.finish();
         await expectPending(finished);
-        if (ending === "uncertain") {
-          fixture.cleanup.resolve("uncertain");
-        } else {
+        if (ending === "rejected") {
           fixture.cleanup.reject(failure);
+        } else {
+          fixture.cleanup.resolve(ending);
         }
         const result = await withinTest(work, signal);
-        expect(result).toMatchObject({ termination: "output-limit", code: null });
+        expect(result).toMatchObject({
+          termination: interruption === "output cap" ? "output-limit" : interruption,
+          code: null,
+        });
         expect(result.stdout.toString()).toBe("o");
-        expect(hasCommandProcessCleanupError(result.error)).toBe(true);
+        expect(hasCommandProcessCleanupError(result.error)).toBe(ending !== "forced");
         expect(result.error?.cause).toBe(ending === "rejected" ? failure : undefined);
       } finally {
         fixture.open();
@@ -364,16 +385,27 @@ it.each(["forced", "uncertain"] as const)(
 
 it.each(["exec", "spawn"] as const)("retains %s admitted before remote readiness", async (api) => {
   const fixture = commandFixture();
+  vi.mocked(killProcessTree).mockClear();
   const failure = new Error("caller stopped");
   const scopeFinished = vi.fn();
   const scope = ownScope(async () => {
-    const pending = api === "exec" ? runExec("fixture", [], { logOutput: false }) : spawnFixture();
+    const pending =
+      api === "exec"
+        ? runExec("fixture", [], { logOutput: false })
+        : spawnCommand(["fixture"], { reject: false, inheritScopeCancellation: false });
     void pending.catch(() => {});
     throw failure;
   }).finally(scopeFinished);
   const outcome = scope.catch((error: unknown) => error);
   await expectPending(scopeFinished);
   fixture.open();
+  await setImmediate();
+  if (process.platform !== "win32") {
+    expect(killProcessTree).toHaveBeenCalledExactlyOnceWith(424242, {
+      detached: true,
+      force: true,
+    });
+  }
   fixture.finish();
   expect(await outcome).toBe(failure);
 });

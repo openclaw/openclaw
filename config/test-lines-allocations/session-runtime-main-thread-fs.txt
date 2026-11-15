@@ -1,4 +1,4 @@
-# 13,087 net test LF against main 5025db61 minus the single 400-line PR allowance.
+# 13,176 net test LF against main 66957689 minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -20,4 +20,6 @@
 # Concurrent bootstrap publication uses the same workspace FIFO as every production caller.
 # ACP control survives pending run ownership but refuses owner/membership changes;
 # startup census and visible-pane geometry fixtures retain their existing assertions.
-12687
+# Workspace first-writer FIFO, interrupted process cleanup, explicit late-PID stop,
+# and font-ready geometry reuse existing owning regressions and their assertions.
+12776
