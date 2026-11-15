@@ -164,7 +164,14 @@ function applyMcpServerControls(
     if (seconds === undefined || seconds <= 0) {
       fail(`${label} must be a positive number.`);
     }
-    server[field] = seconds * 1_000;
+    const ms = seconds * 1_000;
+    if (!Number.isFinite(ms) || ms > Number.MAX_SAFE_INTEGER) {
+      // Exponent forms like 1e13 pass the finite-number check yet overflow the
+      // milliseconds field past Number.MAX_SAFE_INTEGER once scaled. Fractional
+      // products (1.001s -> 1000.9999…ms) stay valid and are kept as-is.
+      fail(`${label} is too large; keep the value at or below ${Math.floor(Number.MAX_SAFE_INTEGER / 1_000)} seconds.`);
+    }
+    server[field] = ms;
   }
   if (opts.parallel === true) {
     server.supportsParallelToolCalls = true;

@@ -431,6 +431,43 @@ it("rejects hexadecimal MCP timeout options before writing configuration", async
   });
 });
 
+it("rejects timeout seconds that overflow safe-integer milliseconds", async () => {
+  await expect(
+    mcp("add", "docs", "--url", "https://mcp.example.com/mcp", "--timeout", "1e13", "--no-probe"),
+  ).rejects.toMatchObject({ code: 1 });
+  expect(lastErrorLine()).toBe(
+    "--timeout is too large; keep the value at or below 9007199254740 seconds.",
+  );
+  await expect(fs.readFile(configPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+  await setServer('{"url":"https://mcp.example.com","requestTimeoutMs":12000}');
+  mockError.mockClear();
+
+  await expectFailure(
+    "--connect-timeout is too large; keep the value at or below 9007199254740 seconds.",
+    "configure",
+    "docs",
+    "--connect-timeout",
+    "1e13",
+  );
+
+  // The saved override is untouched by the rejected configure call.
+  expect(await readServer()).toEqual({
+    url: "https://mcp.example.com",
+    requestTimeoutMs: 12_000,
+  });
+});
+
+it("keeps fractional timeout seconds whose millisecond product is not an integer", async () => {
+  await setServer('{"url":"https://mcp.example.com","requestTimeoutMs":12000}');
+  await mcp("configure", "docs", "--timeout", "1.001");
+  expect(await readServer()).toEqual({
+    url: "https://mcp.example.com",
+    // 1.001s scales to 1000.9999999999999; only overflow past MAX_SAFE_INTEGER rejects.
+    requestTimeoutMs: 1.001 * 1_000,
+  });
+});
+
 it(
   "requires initialize to finish within the configured probe timeout before saving",
   { timeout: 10_000 },
