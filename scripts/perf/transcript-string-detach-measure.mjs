@@ -184,7 +184,7 @@ if (process.argv.includes("--heap")) {
   await collect();
   const memory = process.memoryUsage();
   // Count separately so instrumentation does not enter allocation/CPU measurements.
-  const from = Buffer.from;
+  const from = Buffer.from.bind(Buffer);
   let copies = 0,
     copiedBytes = 0,
     shortCopies = 0;
@@ -196,7 +196,7 @@ if (process.argv.includes("--heap")) {
         shortCopies++;
       }
     }
-    return Reflect.apply(from, Buffer, args);
+    return from(...args);
   };
   try {
     normalize(fixture(0), "");
