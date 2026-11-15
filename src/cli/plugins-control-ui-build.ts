@@ -5,6 +5,7 @@ import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { retryAsync } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
+import { root } from "../infra/fs-safe.js";
 import {
   CONTROL_UI_PLUGIN_MAX_ASSET_BYTES,
   CONTROL_UI_PLUGIN_MAX_ASSETS,
@@ -101,6 +102,7 @@ export async function buildPluginControlUi(params: {
   validateControlUiFiles(files);
   const output = `dist/control-ui/${pluginControlUiGenerationHash(files)}`;
   const outputDir = path.join(rootDir, output);
+  const packageRoot = await root(rootDir, { symlinks: "reject", hardlinks: "reject" });
   const declaration = {
     ...(presentation.value?.panelIcon ? { panelIcon: presentation.value.panelIcon } : {}),
     ...(presentation.value?.activation ? { activation: presentation.value.activation } : {}),
@@ -112,7 +114,7 @@ export async function buildPluginControlUi(params: {
   };
   if (params.check) {
     for (const file of files) {
-      const existing = await fs.readFile(path.join(outputDir, file.name)).catch(() => null);
+      const existing = await packageRoot.readBytes(`${output}/${file.name}`).catch(() => null);
       if (!existing?.equals(Buffer.from(file.contents))) {
         throw new Error("Control UI build is missing or stale. Run openclaw plugins build.");
       }
@@ -123,7 +125,8 @@ export async function buildPluginControlUi(params: {
   // Publish an immutable directory before its manifest pointer. A failed build
   // cannot change the previous activation or expose a mixed JS/CSS generation.
   const generations = path.dirname(outputDir);
-  await fs.mkdir(generations, { recursive: true });
+  // Reject aliased output before creating or changing permissions outside the package.
+  await packageRoot.mkdir("dist/control-ui");
   // The builder owns this parent too; a restrictive umask would otherwise leave
   // it owner-only and block traversal before the generation is ever reached.
   await fs.chmod(generations, 0o755);
@@ -156,7 +159,7 @@ export async function buildPluginControlUi(params: {
         throw error;
       }
       for (const file of files) {
-        const existing = await fs.readFile(path.join(outputDir, file.name));
+        const existing = await packageRoot.readBytes(`${output}/${file.name}`);
         if (!existing.equals(Buffer.from(file.contents))) {
           throw new Error(
             "An immutable Control UI build was modified. Remove that build and rebuild.",

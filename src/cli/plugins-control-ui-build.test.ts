@@ -349,6 +349,36 @@ export { flush };
     expect((await readJson(project.rootDir, "openclaw.plugin.json")).controlUi).toEqual(first);
   });
 
+  it.skipIf(process.platform === "win32").each(["dist", "dist/control-ui", "generation", "asset"])(
+    "preserves external files when the build's %s is a symlink",
+    async (alias) => {
+      const project = await fixture();
+      const declaration = await buildPluginControlUi(project);
+      const relative =
+        alias === "generation"
+          ? path.dirname(declaration.entry)
+          : alias === "asset"
+            ? declaration.entry
+            : alias;
+      const target = path.join(project.rootDir, relative);
+      const external = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-external-"));
+      directories.push(external);
+      const moved = path.join(external, "original");
+      await fs.rename(target, moved);
+      await fs.chmod(moved, alias === "asset" ? 0o600 : 0o700);
+      const before = await fs.stat(moved);
+      await fs.symlink(moved, target);
+      await expect(buildPluginControlUi(project)).rejects.toThrow();
+      await expect(buildPluginControlUi({ ...project, check: true })).rejects.toThrow();
+      expect((await fs.stat(moved)).mode).toBe(before.mode);
+      // Retiring the alias restores the same executable generation without rebuilding source.
+      await fs.unlink(target);
+      await fs.rename(moved, target);
+      expect(await buildPluginControlUi(project)).toEqual(declaration);
+      expect((await browserModule(project.rootDir, declaration.entry)).message).toBe("first");
+    },
+  );
+
   it("rejects a split build that the asset reader cannot admit", async () => {
     const project = await fixture();
     await Promise.all(
