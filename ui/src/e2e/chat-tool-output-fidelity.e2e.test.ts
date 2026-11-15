@@ -1,11 +1,10 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -110,14 +109,6 @@ suite.define(() => {
         await gateway.waitForRequest("chat.message.get");
         const panel = page.locator("openclaw-chat-tool-output");
         await panel.locator('.chat-tool-output[aria-busy="false"]').waitFor();
-        const artifacts = createControlUiE2eArtifactDir("image-only-output-audit");
-        const frame = await takeControlUiScreenshotFrame(
-          page,
-          page.locator(".shell"),
-          [panel.locator(".sidebar-title")],
-          { animations: "disabled" },
-        );
-        await writeFile(path.join(artifacts, "result.png"), frame.png);
         expect(
           await panel
             .getByText("Full output unavailable. Only the captured output is shown.", {
@@ -160,11 +151,6 @@ suite.define(() => {
             .getByRole("button", { name: "Download available output", exact: true })
             .isVisible(),
         ).toBe(true);
-        const artifacts = createControlUiE2eArtifactDir("unavailable-output-preserved");
-        const frame = await takeControlUiScreenshotFrame(page, page.locator(".shell"), [warning], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(artifacts, "result.png"), frame.png);
       },
     );
   });
