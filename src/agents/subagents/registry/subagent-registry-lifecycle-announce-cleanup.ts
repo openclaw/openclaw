@@ -581,21 +581,23 @@ export const startSubagentAnnounceCleanupFlow = (
           throw new Error("Subagent completion requester is unavailable");
         }
       }
-      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, () =>
-        params.runSubagentAnnounceFlow({
-          ...announceParams,
-          controllerInput,
-          childAgentId: entry.childAgentId,
-          childSessionIdentity: entry.childSessionIdentity,
-          signal: deadline.signal,
-          onAccepted: releasePreparation,
-          // Delivery expiry bounds admission; the requester owns its execution budget.
-          onExecutionStarted: () => {
-            releasePreparation();
-            clearTimeout(deadlineTimer);
-          },
-        }),
-      );
+      announceOutcome = await subagentRuns.runWithCompletionAuthority(entry, (authority) => {
+        const deliver = () =>
+          params.runSubagentAnnounceFlow({
+            ...announceParams,
+            controllerInput,
+            childAgentId: entry.childAgentId,
+            childSessionIdentity: entry.childSessionIdentity,
+            signal: deadline.signal,
+            onAccepted: releasePreparation,
+            // Delivery expiry bounds admission; the requester owns its execution budget.
+            onExecutionStarted: () => {
+              releasePreparation();
+              clearTimeout(deadlineTimer);
+            },
+          });
+        return authority ? authority.runWithRequester(deliver) : deliver();
+      });
     } catch (error) {
       if (hasSqliteWorkerOutcomeUnknown(error)) {
         throw error;

@@ -38,6 +38,7 @@ import {
   resolveCommandReplyExpectation,
   resolveCompletionInputReplyExpectation,
 } from "../../reply-completion.js";
+import { getGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -450,7 +451,17 @@ async function sendSubagentAnnounceDirectlyBound(
       if (!isCompletionAdmissionAllowed()) {
         throw new SourceOwnerChangedError();
       }
+      const retainedRequester = getGatewayToolCallerIdentity();
       directAnnounceResponse = await runAnnounceAgentCall({
+        agentToolCaller:
+          retainedRequester?.personalToolIdentityScoped && retainedRequester.personalToolSelection
+            ? {
+                agentId: retainedRequester.agentId,
+                sessionKey: retainedRequester.sessionKey,
+                requesterOrigin: retainedRequester.personalToolSelection.requesterOrigin,
+                assertCurrent: retainedRequester.personalToolSelection.assertCurrent,
+              }
+            : undefined,
         agentParams: directAgentParams,
         controllerInput: params.controllerInput,
         replyExpectation: inputReplyExpectation,
