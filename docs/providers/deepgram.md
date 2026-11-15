@@ -147,16 +147,16 @@ Realtime transcription WebSockets honor the Gateway's `HTTPS_PROXY` / `https_pro
 and `NO_PROXY` / `no_proxy` settings, including CIDR bypasses. Configured debug
 capture proxies take precedence; TLS certificate verification remains enabled.
 
-| Setting         | Config path                                                             | Default                                      |
-| --------------- | ----------------------------------------------------------------------- | -------------------------------------------- |
-| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`             |
-| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API |
-| Model           | `...deepgram.model`                                                     | `nova-3`                                     |
-| Language        | `...deepgram.language`                                                  | (unset)                                      |
-| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                      |
-| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                       |
-| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                        |
-| Interim results | `...deepgram.interimResults`                                            | `true`                                       |
+| Setting         | Config path                                                             | Default                                                                |
+| --------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| API key         | `plugins.entries.voice-call.config.streaming.providers.deepgram.apiKey` | Falls back to `DEEPGRAM_API_KEY`, then a saved `deepgram` auth profile |
+| Base URL        | `...deepgram.baseUrl`                                                   | `DEEPGRAM_BASE_URL` or Deepgram's public API                           |
+| Model           | `...deepgram.model`                                                     | `nova-3`                                                               |
+| Language        | `...deepgram.language`                                                  | (unset)                                                                |
+| Encoding        | `...deepgram.encoding`                                                  | `mulaw`                                                                |
+| Sample rate     | `...deepgram.sampleRate`                                                | `8000`                                                                 |
+| Endpointing     | `...deepgram.endpointingMs`                                             | `800`                                                                  |
+| Interim results | `...deepgram.interimResults`                                            | `true`                                                                 |
 
 With interim results enabled and endpointing at most 5000 ms, a provider-detected
 word gap also completes confirmed speech when background noise prevents endpointing.
