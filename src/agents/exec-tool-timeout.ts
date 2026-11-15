@@ -4,7 +4,7 @@ import { addSafeTimeoutDelayGraceMs } from "../utils/timer-delay.js";
 import { resolveRequestedExecTarget } from "./bash-tools.exec-target.js";
 import type { ExecToolDefaults } from "./bash-tools.exec-types.js";
 
-export function resolveExecDefaultTimeoutSec(timeoutSec?: number): number {
+function resolveExecDefaultTimeoutSec(timeoutSec?: number): number {
   return timeoutSec && timeoutSec > 0 ? timeoutSec : 1800;
 }
 

@@ -46,7 +46,10 @@ import {
   SessionDeliveryGenerationRevokedError,
   SessionDeliveryGenerationUnavailableError,
 } from "./session-delivery-generation-errors.js";
-import { prepareMemorySessionGeneration } from "./session-delivery-generation-memory.js";
+import {
+  matchesSessionGeneration,
+  prepareMemorySessionGeneration,
+} from "./session-delivery-generation-memory.js";
 import {
   createSessionGenerationReadBatch,
   type GenerationRead,
@@ -178,15 +181,15 @@ async function prepareSessionGenerationLease(
     if (entry === undefined) {
       throw diag.unavailable("entry-missing");
     }
-    if (
-      (entry?.sessionId ?? null) !== generation.sessionId ||
-      (entry?.lifecycleRevision ?? null) !== generation.lifecycleRevision
-    ) {
+    if (!matchesSessionGeneration(generation, entry)) {
       if (!committed) {
         throw diag.unavailable("entry-tentative");
       }
       revoked = true;
       throw new SessionDeliveryGenerationRevokedError();
+    }
+    if (entry && committed) {
+      generation.sessionId = entry.sessionId;
     }
     return entry;
   };
@@ -522,7 +525,11 @@ async function prepareSessionGenerationLease(
           sessionId: generation.sessionId,
           lifecycleRevision: generation.lifecycleRevision ?? undefined,
         },
-        fields: ["sessionId", "lifecycleRevision"],
+        fields: generation.exactTranscript
+          ? ["sessionId", "lifecycleRevision"]
+          : generation.lifecycleRevision === null
+            ? []
+            : ["lifecycleRevision"],
         assertCurrent: () => readCurrent(),
         assertHostCurrent: assertActive,
         refuse: () => {
@@ -698,6 +705,7 @@ export async function prepareCronRootSessionGeneration(
     {
       ...input,
       lifecycleRevision: input.lifecycleRevision ?? null,
+      exactTranscript: true,
     },
     onRevoked,
   );

@@ -7,7 +7,6 @@ import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { MAX_SERVICES_PER_SESSION } from "./bash-process-adopted.js";
 import {
   registerOneShotExecScopeCleanup,
   stopSessionExecProcesses,
@@ -20,6 +19,19 @@ import { createProcessTool } from "./bash-tools.process.js";
 vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: () => supervisor,
 }));
+const identityFault = vi.hoisted<{ unavailablePid?: number }>(() => ({}));
+vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
+  return {
+    ...actual,
+    readProcessIdentity: (pid: number) => {
+      if (pid === identityFault.unavailablePid) {
+        throw new Error("Process identity is temporarily unavailable");
+      }
+      return actual.readProcessIdentity(pid);
+    },
+  };
+});
 const memoryOwner = vi.hoisted(() => ({ resetBudget: () => {} }));
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
@@ -61,6 +73,7 @@ const byNumber = (left: number | undefined, right: number | undefined) =>
   (left ?? 0) - (right ?? 0);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const node = quote(process.execPath);
+const SESSION_SERVICE_LIMIT = 16;
 const sleeper = `${node} -e 'setTimeout(() => {}, 60000)'`;
 
 async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
@@ -160,7 +173,7 @@ child.once("spawn", () => {
         ).toBe(true);
         started.push(survivor!);
         // Every survivor is reported with its pid and what happened to it.
-        if (call < MAX_SERVICES_PER_SESSION) {
+        if (call < SESSION_SERVICE_LIMIT) {
           expect(output).toMatch(
             new RegExp(`pid ${survivor} .*keeps running as background session`),
           );
@@ -168,7 +181,7 @@ child.once("spawn", () => {
         } else {
           expect(output).toMatch(
             new RegExp(
-              `Stopped 1 process .*pid ${survivor} .*${MAX_SERVICES_PER_SESSION} allowed services`,
+              `Stopped 1 process .*pid ${survivor} .*${SESSION_SERVICE_LIMIT} allowed services`,
             ),
           );
           stopped.push(survivor!);
@@ -411,7 +424,7 @@ it.skipIf(process.platform === "win32")(
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
-      expect(tracked).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(tracked).toHaveLength(SESSION_SERVICE_LIMIT);
       expect(output).toContain(`Stopped 4 processes`);
       // No survivor escapes: each one is either tracked or confirmed gone, and named.
       expect(
@@ -446,12 +459,12 @@ it.skipIf(process.platform === "win32")(
     await withEnvAsync(testEnv(cwd, "exec-reserve-test"), async () => {
       const exec = hostExec(cwd, scopeKey, true);
       const fill = await exec.execute("fill", {
-        command: `for i in $(seq ${MAX_SERVICES_PER_SESSION - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
+        command: `for i in $(seq ${SESSION_SERVICE_LIMIT - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
       });
       started.push(
         ...[...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((m) => Number(m[1])),
       );
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION - 1);
+      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT - 1);
       const starts = await Promise.allSettled(
         ["a", "b"].map((id) =>
           exec.execute(`start-${id}`, {
@@ -463,7 +476,7 @@ it.skipIf(process.platform === "win32")(
       expect(starts.filter((start) => start.status === "fulfilled")).toHaveLength(1);
       expect(starts.filter((start) => start.status === "rejected")).toHaveLength(1);
       started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
-      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT);
     });
   },
   60_000,
@@ -556,6 +569,64 @@ it.skipIf(process.platform === "win32")(
       await stopSessionExecProcesses([scopeKey], () => {});
       expect(await waitFor(() => !isPidAlive(pid) && session.exited)).toBe(true);
     });
+  },
+  30_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "retains an adopted process when its identity cannot be read, then retries its stop",
+  async () => {
+    const cwd = tempDirs.make("exec-identity-unavailable-");
+    const scopeKey = "agent:main:exec-identity-unavailable";
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      await withEnvAsync(testEnv(cwd, "exec-identity-unavailable-test"), async () => {
+        const result = await hostExec(cwd, scopeKey).execute("survivor", {
+          command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
+        });
+        const pid = firstPid(aggregated(result.details));
+        const session = runningIn(scopeKey).find((candidate) => candidate.pid === pid)!;
+        expect(session).toBeDefined();
+        const processTool = createProcessTool({ scopeKey });
+        const realKill = process.kill.bind(process);
+        let signals = 0;
+        const observedKill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
+          if (target === pid && signal !== 0 && signal !== undefined) {
+            signals += 1;
+          }
+          return realKill(target, signal);
+        });
+        try {
+          identityFault.unavailablePid = pid;
+          // Exercise the ordinary reaper before requesting a stop through the public tool.
+          await vi.advanceTimersByTimeAsync(5_000);
+          const observed = await processTool.execute("observe", {
+            action: "poll",
+            sessionId: session.id,
+          });
+          await processTool.execute("stop", { action: "kill", sessionId: session.id });
+          expect(await waitFor(() => session.exited || session.cleanupUncertain === true)).toBe(
+            true,
+          );
+          const stopped = await processTool.execute("confirm", {
+            action: "poll",
+            sessionId: session.id,
+          });
+          expect(() => realKill(pid, 0)).not.toThrow();
+          expect(observed.details).toMatchObject({ status: "running" });
+          expect(stopped.details).toMatchObject({ status: "running" });
+          expect(session.cleanupUncertain).toBe(true);
+          expect(signals).toBe(0);
+        } finally {
+          identityFault.unavailablePid = undefined;
+          observedKill.mockRestore();
+        }
+        await processTool.execute("retry", { action: "kill", sessionId: session.id });
+        expect(await waitFor(() => !isPidAlive(pid) && session.exited)).toBe(true);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   },
   30_000,
 );

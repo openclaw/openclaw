@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { isPromise } from "node:util/types";
-import { serialize } from "node:v8";
+import v8 from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -119,7 +119,7 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
         assertCurrent = admission && inCaller ? () => inCaller(admission, commandType) : undefined;
         assertCurrent?.();
         // The queued guard and wire command must observe the same captured type.
-        payload = serialize({ type: commandType, input: command.input });
+        payload = v8.serialize({ type: commandType, input: command.input });
       } catch (error) {
         return Promise.reject(
           toErrorObject(error, "SQLite worker command could not be serialized"),

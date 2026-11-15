@@ -536,7 +536,7 @@ async function consolidatePacks(
   };
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
+export function createWorktreeGitMaintenance(env?: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
   const nextRunAt = new Map<string, { at: number; retirementPending: boolean }>();
@@ -550,7 +550,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
     if (params.retryDeferred) {
       failed.clear();
     }
-    const records = await readRegistryWorktrees(env).catch((error: unknown) => {
+    const records = await readRegistryWorktrees(env ?? process.env).catch((error: unknown) => {
       assertCurrent();
       progress.error("git-maintenance", error);
       log.warn(`worktree Git maintenance inventory failed: ${String(error)}`);
@@ -595,7 +595,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
           {
             scope: "projects.git-maintenance",
             key: repoRoot,
-            database: { scope: "shared", options: { env } },
+            database: { scope: "shared", options: { env: env ?? process.env } },
             signal: params.signal,
             leaseMs: 30_000,
             waitMs: 0,
@@ -622,7 +622,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             // Verify bounded pack inputs before expiry; never gate them on full fsck.
             scheduled.retirementPending = await maintainWorktreePacks(
               repoRoot,
-              env,
+              env ?? process.env,
               ownedParams,
               async (before, after) => {
                 if (after !== undefined) {
@@ -665,7 +665,7 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
             // Only an explicit repair pass may fetch. Pack progress is already published.
             if (params.retryDeferred && remote) {
               await withContentGitSlot(
-                () => repairWorktreeObjects(repoRoot, remote, env, ownedParams),
+                () => repairWorktreeObjects(repoRoot, remote, env ?? process.env, ownedParams),
                 params.signal,
               );
             }
