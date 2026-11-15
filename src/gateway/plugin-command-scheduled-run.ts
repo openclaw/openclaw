@@ -271,6 +271,11 @@ export async function runPluginCommandScheduledTurn(params: {
       if (!entry || entry.archivedAt) {
         throw new Error("Scheduled plugin command parent was deleted or archived.");
       }
+      const parent = {
+        ...schedule.parent,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      };
       const assertParent = composeSessionSourceAssertion(
         [currentSession.source],
         (assertSession) => {
@@ -342,7 +347,7 @@ export async function runPluginCommandScheduledTurn(params: {
       );
       const upstream = signals.length ? AbortSignal.any(signals) : undefined;
       return await withSessionTurn(
-        { ...schedule.parent, storePath, abortSignal: upstream },
+        { ...parent, storePath, abortSignal: upstream },
         async (_operation, signal): Promise<ScheduledResult> => {
           turnSignal = signal;
           const assertTurn = composeSessionSourceAssertion([assertCurrent], (assertSources) => {
@@ -374,7 +379,7 @@ export async function runPluginCommandScheduledTurn(params: {
               },
             },
             target: {
-              ...schedule.parent,
+              ...parent,
               sessionEntry: entry,
               expectedSessionId: entry.sessionId,
               storePath,
@@ -514,7 +519,7 @@ export async function runPluginCommandScheduledTurn(params: {
                     senderIsOwner: false,
                     assertOwnerCurrent: assertTurn,
                     gatewayClientScopes: [...operatorAuthority.scopes],
-                    ...schedule.parent,
+                    ...parent,
                     authProfileId: job.inferenceBinding?.profileId,
                     commandBody,
                     config: cfg,

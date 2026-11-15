@@ -609,26 +609,42 @@ describe("native scheduled command execution", () => {
       });
     },
   );
-  it.each(["reset", "revoked operator"] as const)(
-    "refuses a %s before command or input acceptance",
-    async (change) => {
-      await withCommandPlugin(async (fixture) => {
-        const id = await createContinuation(fixture);
-        const before = await fixture.userInputs();
-        if (change === "reset") {
-          await fixture.resetParent();
-        } else {
-          fixture.revokeOwner();
-        }
-        fixture.handler.mockClear();
-        await fixture.cron.run(id, "force");
-        expect(fixture.scheduledResults[0]).toMatchObject({
-          status: "error",
-          executionStarted: false,
-        });
-        expect(fixture.handler).not.toHaveBeenCalled();
-        expect(await fixture.userInputs()).toEqual(before);
+  it("follows a reset before command acceptance and writes only to the current parent", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const before = await fixture.userInputs();
+      await fixture.resetParent();
+      fixture.handler.mockImplementation((ctx) => {
+        expect(ctx.sessionId).toBe("replacement-parent");
+        return { text: "continued after reset" };
       });
-    },
-  );
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "ok",
+        executionStarted: true,
+        sessionId: "replacement-parent",
+      });
+      expect(await fixture.userInputs()).toEqual(before);
+      expect(await fixture.assistantOutputs()).toEqual([]);
+      expect(await fixture.userInputs("replacement-parent")).toHaveLength(1);
+      expect(await fixture.assistantOutputs("replacement-parent")).toEqual([
+        [{ type: "text", text: "continued after reset" }],
+      ]);
+    });
+  });
+  it("refuses a revoked operator before command or input acceptance", async () => {
+    await withCommandPlugin(async (fixture) => {
+      const id = await createContinuation(fixture);
+      const before = await fixture.userInputs();
+      fixture.revokeOwner();
+      fixture.handler.mockClear();
+      await fixture.cron.run(id, "force");
+      expect(fixture.scheduledResults[0]).toMatchObject({
+        status: "error",
+        executionStarted: false,
+      });
+      expect(fixture.handler).not.toHaveBeenCalled();
+      expect(await fixture.userInputs()).toEqual(before);
+    });
+  });
 });
