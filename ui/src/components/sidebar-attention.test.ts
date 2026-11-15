@@ -165,30 +165,35 @@ describe("model auth attention", () => {
     expect(item?.detail).toContain(status);
   });
   it.each([
-    ["setup_inactive", "Sign in"],
-    [undefined, "Review account"],
-  ] as const)("handles mixed account inventory with reason %s", (reasonCode, action) => {
-    const snapshot = authStatus(1);
-    snapshot.providers = [
-      {
-        provider: "openai",
-        displayName: "OpenAI",
-        status: "expired",
-        profiles: [
-          { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
-          {
-            profileId: "openai:z-login",
-            type: "oauth",
-            status: "expired",
-            reasonCode: "refresh_failed",
-          },
-        ],
-      },
-    ];
-    const item = authItems("main", snapshot)[0];
-    expect(item?.inlineAction?.label).toBe(action);
-    expect(item?.meta?.context).toBe(reasonCode ? "openai:z-login" : "main");
-  });
+    ["setup_inactive", "refresh_failed", "Sign in", "openai:z-login"],
+    [undefined, "refresh_failed", "Review account", "main"],
+    ["missing_credential", "expired", "Review account", "main"],
+    ["setup_inactive", "expired", undefined, undefined],
+  ] as const)(
+    "handles mixed account inventory with reason %s and OAuth %s",
+    (reasonCode, oauthReason, action, context) => {
+      const snapshot = authStatus(1);
+      snapshot.providers = [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          status: "expired",
+          profiles: [
+            { profileId: "openai:a-key", type: "api_key", status: "missing", reasonCode },
+            {
+              profileId: "openai:z-login",
+              type: "oauth",
+              status: "expired",
+              reasonCode: oauthReason,
+            },
+          ],
+        },
+      ];
+      const item = authItems("main", snapshot)[0];
+      expect(item?.inlineAction?.label).toBe(action);
+      expect(item?.meta?.context).toBe(context);
+    },
+  );
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
     expect(authItems("writer")[0]?.signature).toBe("agent:writer\nopenai");

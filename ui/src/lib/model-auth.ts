@@ -24,7 +24,7 @@ export function isOAuthRefreshPending(profile: ModelAuthStatusProfile): boolean 
   return profile.type === "oauth" && profile.reasonCode === "expired";
 }
 
-/** A rollup is quiet only when every matching expiry belongs to routine OAuth renewal. */
+/** Routine renewal is quiet only when no actionable missing credential also needs attention. */
 export function hasRoutineOAuthExpiry(
   status: "expired" | "expiring",
   profiles: readonly ModelAuthStatusProfile[],
@@ -32,6 +32,9 @@ export function hasRoutineOAuthExpiry(
   const expiring = profiles.filter((profile) => profile.status === status);
   return (
     expiring.length > 0 &&
+    !profiles.some(
+      (profile) => profile.status === "missing" && profile.reasonCode !== "setup_inactive",
+    ) &&
     expiring.every((profile) => isAccessTokenExpiry(profile) || isOAuthRefreshPending(profile))
   );
 }

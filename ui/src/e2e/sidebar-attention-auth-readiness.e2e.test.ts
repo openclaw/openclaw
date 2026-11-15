@@ -21,6 +21,26 @@ suite.define(() => {
             "models.authStatus": {
               ts: Date.now(),
               providers: [
+                ...(["missing_credential", "setup_inactive"] as const).map((reasonCode) => ({
+                  provider: "example-" + reasonCode,
+                  displayName:
+                    reasonCode === "missing_credential" ? "Missing credential" : "Inactive setup",
+                  status: "expired",
+                  profiles: [
+                    {
+                      profileId: reasonCode + ":oauth",
+                      type: "oauth",
+                      status: "expired",
+                      reasonCode: "expired",
+                    },
+                    {
+                      profileId: reasonCode + ":key",
+                      type: "api_key",
+                      status: "missing",
+                      reasonCode,
+                    },
+                  ],
+                })),
                 {
                   provider: "example-pending",
                   displayName: "Refreshing account",
@@ -63,12 +83,21 @@ suite.define(() => {
           .locator('[data-attention-kind="modelAuthExpired"]')
           .filter({ hasText: "Refreshing account" });
         const premature = await pending.count();
+        const missing = panel
+          .locator('[data-attention-kind="modelAuthExpired"]')
+          .filter({ hasText: "Missing credential" });
+        const missingCount = await missing.count();
+        expect(await panel.getByText("Inactive setup", { exact: true }).count()).toBe(0);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           const frame = await takeControlUiScreenshotFrame(page, panel, [lost], {
             animations: "disabled",
           });
           await writeFile(path.join(suite.artifactDir, "oauth-refresh-attention.png"), frame.png);
         }
+        expect(
+          missingCount,
+          "Routine renewal must retain actionable missing-credential attention",
+        ).toBe(1);
         expect(await lost.textContent()).toContain("Sign-in required");
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
         expect(premature, "An admitted OAuth refresh does not require another sign-in").toBe(0);
