@@ -58,7 +58,13 @@ export async function prepareCodexAttemptTurnRequest(
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
   const { context, turnState, buildRenderedCodexInstructions, nativeHistoryProvenancePrefix } =
     prompt;
-  const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
+  const {
+    runtime,
+    attemptTools,
+    hookContextWindowFields,
+    workspaceBootstrapContext,
+    watchedSessionsContext,
+  } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
   const { tools, toolBridge } = attemptTools;
@@ -119,8 +125,12 @@ export async function prepareCodexAttemptTurnRequest(
       resourceState.client,
       resourceState.thread.threadId,
       workspaceBootstrapContext.promptContext,
+      watchedSessionsContext,
     );
-    prompt.refreshWorkspaceReferences(references.include);
+    prompt.refreshWorkspaceReferences({
+      includeWorkspace: references.includeWorkspace,
+      includeWatchedSessions: references.includeWatchedSessions,
+    });
     return references;
   };
   const startCodexTurn = async (): Promise<CodexStartedTurn> => {
@@ -378,10 +388,18 @@ export async function prepareCodexAttemptTurnRequest(
       resources.nativeProcessAuthority?.bindTurn(turnClient, threadId, acceptedTurnId);
       assertTurnCurrent();
       resourceState.nativeSubagentMonitor?.bindTurn(acceptedTurnId, modelMapping);
-      // Fitting may drop or truncate references; only acknowledge the complete block.
-      if (upstreamUserText.includes(workspaceBootstrapContext.promptContext ?? "")) {
-        references.accepted();
-      }
+      // Acknowledge only complete sections accepted by Codex. Cancellation after
+      // turn/start acceptance must not cause the same reference to be resent.
+      const workspacePrompt = workspaceBootstrapContext.promptContext?.trim();
+      const watchedPrompt = watchedSessionsContext?.trim();
+      references.accepted({
+        workspaceAccepted: Boolean(
+          references.includeWorkspace && workspacePrompt && upstreamUserText.includes(workspacePrompt),
+        ),
+        watchedSessionsAccepted: Boolean(
+          references.includeWatchedSessions && watchedPrompt && upstreamUserText.includes(watchedPrompt),
+        ),
+      });
       if (runAbortController.signal.aborted) {
         const reason = runAbortController.signal.reason;
         if (reason instanceof Error) {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  prepareCodexWorkspaceReferenceState,
   readCodexWorkspaceModelContext,
   type CodexClientWorkspaceState,
 } from "./client-workspace-state.js";
@@ -95,5 +96,85 @@ describe("readCodexWorkspaceModelContext", () => {
       line("event_msg", { type: "thread_rolled_back", num_turns: 1 }),
     );
     await expect(read()).resolves.toEqual({ baseInstructions: "Base." });
+  });
+});
+
+describe("native thread runtime-reference admission (#84662)", () => {
+  it("sends unchanged workspace and watched-session references only once over three turns", () => {
+    const state = workspaceState();
+    const included: Array<[boolean, boolean]> = [];
+    for (let turn = 0; turn < 3; turn++) {
+      const refs = prepareCodexWorkspaceReferenceState(
+        state,
+        threadId,
+        "workspace instructions",
+        "## Watched Sessions\\n- synthetic session",
+      );
+      included.push([refs.includeWorkspace, refs.includeWatchedSessions]);
+      refs.accepted({
+        workspaceAccepted: refs.includeWorkspace,
+        watchedSessionsAccepted: refs.includeWatchedSessions,
+      });
+    }
+    expect(included).toEqual([
+      [true, true],
+      [false, false],
+      [false, false],
+    ]);
+  });
+
+  it("resends only a changed reference, and retries a truncated section", () => {
+    const state = workspaceState();
+    const first = prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched A");
+    first.accepted({ workspaceAccepted: true, watchedSessionsAccepted: true });
+
+    const changed = prepareCodexWorkspaceReferenceState(
+      state,
+      threadId,
+      "workspace A",
+      "watched B",
+    );
+    expect([changed.includeWorkspace, changed.includeWatchedSessions]).toEqual([false, true]);
+    changed.accepted({ workspaceAccepted: false, watchedSessionsAccepted: false });
+    expect(
+      prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched B")
+        .includeWatchedSessions,
+    ).toBe(true);
+
+    const retried = prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched B");
+    retried.accepted({ workspaceAccepted: false, watchedSessionsAccepted: true });
+    expect(
+      prepareCodexWorkspaceReferenceState(state, threadId, "workspace A", "watched B")
+        .includeWatchedSessions,
+    ).toBe(false);
+    expect(
+      prepareCodexWorkspaceReferenceState(state, threadId, "workspace C", "watched B")
+        .includeWorkspace,
+    ).toBe(true);
+  });
+
+  it("does not acknowledge stale attempts when compaction re-arms the thread", () => {
+    const state = workspaceState();
+    const refs = prepareCodexWorkspaceReferenceState(state, threadId, "workspace", "watched");
+    const original = state.workspaceReferences.get(threadId)!;
+    state.workspaceReferences.set(threadId, {
+      ...original,
+      needsReintroduction: true,
+      needsWatchedSessionsReintroduction: true,
+    });
+    refs.accepted({ workspaceAccepted: true, watchedSessionsAccepted: true });
+    const next = prepareCodexWorkspaceReferenceState(state, threadId, "workspace", "watched");
+    expect([next.includeWorkspace, next.includeWatchedSessions]).toEqual([true, true]);
+  });
+
+  it("does not emit empty references and reintroduces both on a cold thread", () => {
+    const state = workspaceState();
+    const empty = prepareCodexWorkspaceReferenceState(state, threadId, "  ", undefined);
+    expect([empty.includeWorkspace, empty.includeWatchedSessions]).toEqual([false, false]);
+    const refs = prepareCodexWorkspaceReferenceState(state, threadId, "workspace", "watched");
+    refs.accepted({ workspaceAccepted: true, watchedSessionsAccepted: true });
+    state.workspaceReferences.delete(threadId);
+    const resumed = prepareCodexWorkspaceReferenceState(state, threadId, "workspace", "watched");
+    expect([resumed.includeWorkspace, resumed.includeWatchedSessions]).toEqual([true, true]);
   });
 });

@@ -27,34 +27,70 @@ type CodexModelContextScan = {
   agentsMd?: CodexAgentsMdSnapshot;
 };
 
+export type CodexWorkspaceReferenceEntry = {
+  digest?: string;
+  watchedSessionsDigest?: string;
+  needsReintroduction: boolean;
+  needsWatchedSessionsReintroduction: boolean;
+};
+
 export type CodexClientWorkspaceState = {
   closed: boolean;
   sessionMetadata: Map<string, { sessionsRoot: string; rolloutPath: string; metadata: JsonObject }>;
   modelContextScans: Map<string, CodexModelContextScan>;
-  workspaceReferences: Map<string, { digest?: string; needsReintroduction: boolean }>;
+  workspaceReferences: Map<string, CodexWorkspaceReferenceEntry>;
 };
 
 const MODEL_CONTEXT_READ_CHUNK_BYTES = 1024 * 1024;
 
+/**
+ * Both reference sources belong to the same warm native thread, but each can
+ * change independently. This only bounds new submissions; Codex still owns
+ * already-persisted native user history.
+ */
 export function prepareCodexWorkspaceReferenceState(
   state: CodexClientWorkspaceState | undefined,
   threadId: string,
   reference: string | undefined,
+  watchedSessionsReference?: string,
 ) {
-  const digest = createHash("sha256")
-    .update(reference ?? "")
-    .digest("hex");
-  const previous = state?.workspaceReferences.get(threadId) ?? { needsReintroduction: true };
+  const workspaceText = reference?.trim() ?? "";
+  const watchedText = watchedSessionsReference?.trim() ?? "";
+  const digest = createHash("sha256").update(workspaceText).digest("hex");
+  const watchedSessionsDigest = createHash("sha256").update(watchedText).digest("hex");
+  const previous: CodexWorkspaceReferenceEntry = state?.workspaceReferences.get(threadId) ?? {
+    needsReintroduction: true,
+    needsWatchedSessionsReintroduction: true,
+  };
   if (state && !state.closed) {
     state.workspaceReferences.set(threadId, previous);
   }
   return {
-    include: previous.needsReintroduction || previous.digest !== digest,
-    accepted: () => {
-      if (!state || state.closed || state.workspaceReferences.get(threadId) !== previous) {
+    includeWorkspace:
+      workspaceText.length > 0 && (previous.needsReintroduction || previous.digest !== digest),
+    includeWatchedSessions:
+      watchedText.length > 0 &&
+      (previous.needsWatchedSessionsReintroduction ||
+        previous.watchedSessionsDigest !== watchedSessionsDigest),
+    accepted: (accepted: { workspaceAccepted: boolean; watchedSessionsAccepted: boolean }) => {
+      if (
+        !state ||
+        state.closed ||
+        state.workspaceReferences.get(threadId) !== previous ||
+        (!accepted.workspaceAccepted && !accepted.watchedSessionsAccepted)
+      ) {
         return;
       }
-      state.workspaceReferences.set(threadId, { digest, needsReintroduction: false });
+      state.workspaceReferences.set(threadId, {
+        digest: accepted.workspaceAccepted ? digest : previous.digest,
+        watchedSessionsDigest: accepted.watchedSessionsAccepted
+          ? watchedSessionsDigest
+          : previous.watchedSessionsDigest,
+        needsReintroduction: accepted.workspaceAccepted ? false : previous.needsReintroduction,
+        needsWatchedSessionsReintroduction: accepted.watchedSessionsAccepted
+          ? false
+          : previous.needsWatchedSessionsReintroduction,
+      });
     },
   };
 }

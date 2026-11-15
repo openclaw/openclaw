@@ -32,6 +32,11 @@ import {
   resolveCodexOpenClawBaseInstructions,
 } from "./thread-prompt.js";
 
+export type CodexOpenClawReferenceInclusion = {
+  includeWorkspace: boolean;
+  includeWatchedSessions: boolean;
+};
+
 export async function prepareCodexAttemptContext(
   runtime: CodexAttemptRuntime,
   attemptTools: CodexAttemptTools,
@@ -228,13 +233,13 @@ export async function prepareCodexAttemptContext(
       connection.assertCurrent();
     },
   });
-  const buildOpenClawPromptContext = (includeWorkspaceReferences: boolean) =>
+  const buildOpenClawPromptContext = (inclusion: CodexOpenClawReferenceInclusion) =>
     buildCodexOpenClawPromptContext({
       params: runtimeParams,
-      workspacePromptContext: includeWorkspaceReferences
+      workspacePromptContext: inclusion.includeWorkspace
         ? workspaceBootstrapContext.promptContext
         : undefined,
-      watchedSessionsContext,
+      watchedSessionsContext: inclusion.includeWatchedSessions ? watchedSessionsContext : undefined,
     });
   const promptState: {
     promptText: string;
@@ -276,6 +281,7 @@ export async function prepareCodexAttemptContext(
     hookRunner,
     buildActiveContextEngineRuntimeContext,
     workspaceBootstrapContext,
+    watchedSessionsContext,
     agentWorkspaceDeveloperInstructions,
     baseDeveloperInstructions,
     openClawBaseInstructions,

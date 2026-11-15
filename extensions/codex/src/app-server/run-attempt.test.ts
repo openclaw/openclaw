@@ -2535,6 +2535,46 @@ describe("runCodexAppServerAttempt", () => {
     },
   );
 
+  it("bounds watched-session references in consecutive native turn/start inputs", async () => {
+    const harnessRuntime = await import("openclaw/plugin-sdk/agent-harness-runtime");
+    const watchedText = "## Watched Sessions\\n- synthetic session: active";
+    const watchedContext = vi
+      .spyOn(harnessRuntime, "prepareWatchedSessionsHarnessContext")
+      .mockResolvedValue(watchedText);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const harness = createStartedThreadHarness();
+    const runTurn = async () => {
+      const offset = harness.requests.length;
+      const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+      await finishRun(run, harness);
+      const request = requestsFor(harness.requests.slice(offset), "turn/start")[0];
+      assert(request, "expected turn/start");
+      return (request.params as { input: Array<{ text?: string }> }).input[0]?.text ?? "";
+    };
+    try {
+      const first = await runTurn();
+      expect(first).toContain(watchedText);
+      const second = await runTurn();
+      const third = await runTurn();
+      expect(second).not.toContain(watchedText);
+      expect(third).not.toContain(watchedText);
+      expect(requestsFor(harness.requests, "thread/start")).toHaveLength(1);
+
+      await emit(harness, "item/completed", {
+        turnId: "compact-1",
+        item: { type: "contextCompaction", id: "compact-item" },
+      });
+      const afterCompaction = await runTurn();
+      expect(afterCompaction).toContain(watchedText);
+      expect(await runTurn()).not.toContain(watchedText);
+
+      await releaseCodexAppServerLiveThread(harness.client, "thread-1");
+      expect(await runTurn()).toContain(watchedText);
+    } finally {
+      watchedContext.mockRestore();
+    }
+  });
+
   it("reports MEMORY.md as truncated when no-tool fallback exceeds the bootstrap budget", async () => {
     const { workspaceDir, params } = createRunFixture();
     const soulGuidance = "Soul guidance ".repeat(80);

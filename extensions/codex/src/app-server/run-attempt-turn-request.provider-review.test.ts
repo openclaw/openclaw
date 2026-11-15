@@ -22,10 +22,11 @@ vi.mock("./attempt-diagnostics.js", () => ({
 }));
 vi.mock("./client-runtime.js", () => ({
   prepareCodexWorkspaceReferences: () => ({
-    include: !references.delivered,
-    accepted: () => {
-      references.delivered = true;
-      references.accepted();
+    includeWorkspace: !references.delivered,
+    includeWatchedSessions: !references.delivered,
+    accepted: (result: { workspaceAccepted: boolean; watchedSessionsAccepted: boolean }) => {
+      references.delivered = result.workspaceAccepted && result.watchedSessionsAccepted;
+      references.accepted(result);
     },
   }),
 }));
@@ -161,11 +162,19 @@ async function prepare(native = createNativeThread(), usesSupervisionConnection 
       turnState,
       contextImageGroups: [],
       buildRenderedCodexInstructions: () => "developer instructions",
-      refreshWorkspaceReferences: (include: boolean) => {
-        turnState.codexTurnPromptText = include ? "workspace reference\nuser input" : "user input";
+      refreshWorkspaceReferences: (include: {
+        includeWorkspace: boolean;
+        includeWatchedSessions: boolean;
+      }) => {
+        turnState.codexTurnPromptText = [
+          include.includeWorkspace ? "workspace reference" : "",
+          include.includeWatchedSessions ? "watched reference" : "",
+          "user input",
+        ].filter(Boolean).join("\n");
       },
       context: {
         workspaceBootstrapContext: { promptContext: "workspace reference" },
+        watchedSessionsContext: "watched reference",
         attemptTools: { tools: [], toolBridge: { availableTools: [], availableSpecs: [] } },
         runtime: {
           nativeExecutionPolicy: {},
@@ -266,6 +275,18 @@ function expectOnlyReviewRead(attempt: Attempt) {
 }
 
 describe("native acknowledged turn requests", () => {
+  it("submits both reference sections and acknowledges only accepted native input", async () => {
+    const attempt = await prepare();
+    await attempt.start();
+    const submitted = attempt.request.mock.calls.find(([method]) => method === "turn/start");
+    expect(submitted?.[1]?.input?.[0]?.text).toContain("workspace reference");
+    expect(submitted?.[1]?.input?.[0]?.text).toContain("watched reference");
+    expect(references.accepted).toHaveBeenCalledWith({
+      workspaceAccepted: true,
+      watchedSessionsAccepted: true,
+    });
+  });
+
   it.each<SelectionChange>(["thread", "thread ID", "owner", "released owner", "model", "provider"])(
     "rejects a changed %s after reading the native provider review",
     async (kind) => {
