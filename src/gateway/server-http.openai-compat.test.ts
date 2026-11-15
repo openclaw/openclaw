@@ -16,7 +16,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithRuntimeDispatcher } from "../infra/net/runtime-fetch.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { parseSseEvents } from "./http-stream.test-support.js";
+import { parseSseEvents } from "./http-sse.test-support.js";
 import {
   AUTH_NONE,
   AUTH_TOKEN,
@@ -87,6 +87,18 @@ it.each(endpoints.flatMap((endpoint) => [false, true].map((stream) => ({ endpoin
       },
       {
         error: { code: "SESSION_WORK_START_INVALIDATED" },
+        code: "SESSION_WORK_START_INVALIDATED",
+        message: "Session changed while starting work. Retry.",
+      },
+      {
+        error: new Error("preparation failed", {
+          cause: createSessionWorkStartChangedError("nested"),
+        }),
+        code: "SESSION_WORK_START_CHANGED",
+        message: 'Session "nested" changed while starting work. Retry.',
+      },
+      {
+        error: new Error("503 overloaded", { cause: { code: "SESSION_WORK_START_INVALIDATED" } }),
         code: "SESSION_WORK_START_INVALIDATED",
         message: "Session changed while starting work. Retry.",
       },

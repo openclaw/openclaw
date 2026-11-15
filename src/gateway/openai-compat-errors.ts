@@ -1,3 +1,4 @@
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentStreamParams } from "../agents/command/shared-types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
@@ -46,19 +47,23 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
       },
     };
   }
-  if (isSessionWorkStartInvalidatedError(err)) {
+  if (err instanceof ToolAuthorizationError) {
+    return { status: 403, error: { message: err.message, type: "permission_error" } };
+  }
+  const conflict = collectNestedErrorCandidates(err).find(isSessionWorkStartInvalidatedError);
+  if (conflict) {
     // Changed/invalidated work starts are retryable conflicts, not internal errors.
     return {
       status: 409,
       error: {
-        message: err instanceof Error ? err.message : "Session changed while starting work. Retry.",
+        message:
+          conflict instanceof Error
+            ? conflict.message
+            : "Session changed while starting work. Retry.",
         type: "invalid_request_error",
-        code: err.code,
+        code: conflict.code,
       },
     };
-  }
-  if (err instanceof ToolAuthorizationError) {
-    return { status: 403, error: { message: err.message, type: "permission_error" } };
   }
   const described = describeFailoverError(err);
   const reason = described.reason;
