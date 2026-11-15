@@ -61,6 +61,28 @@ export function invalidateSkillSelectionAuditCachesForDatabase(db: EngineConnect
 }
 
 /**
+ * Schema readiness stays tentative until its owner's batch commits: drop the
+ * established flag when the enclosing transaction rolls back or is
+ * invalidated. SQLite rolls back lazy DDL with the batch, so a stale flag
+ * would skip recreation and fail later writes with
+ * `no such table: audit_skill_selection_events`. Outside a transaction this
+ * is a no-op and the caller's established flag stands.
+ */
+function bindSkillSelectionSchemaToTransaction(db: EngineConnection): void {
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => {
+      skillSelectionSchemaEstablished.delete(db);
+      skillSelectionAuditRowCounts.delete(db);
+    },
+    invalidate: () => {
+      skillSelectionSchemaEstablished.delete(db);
+      skillSelectionAuditRowCounts.delete(db);
+    },
+  });
+}
+
+/**
  * Tentative counts stay private until their batch commits: drop the warm
  * count when the enclosing transaction rolls back or is invalidated, as the
  * canonical ledger does for its retention facts. Outside a transaction this
@@ -131,12 +153,14 @@ function ensureSkillSelectionAuditSchemaOnce(db: EngineConnection): void {
   if (isPostgresSqlConnection(db)) {
     ensureStatePostgresFragment(db, "audit_skill_selection_events");
     skillSelectionSchemaEstablished.add(db);
+    bindSkillSelectionSchemaToTransaction(db);
     return;
   }
   if (!tableExists(db, "audit_skill_selection_events")) {
     ensureSkillSelectionAuditSchema(db);
   }
   skillSelectionSchemaEstablished.add(db);
+  bindSkillSelectionSchemaToTransaction(db);
 }
 
 function deleteExpiredSkillSelectionAuditEvents(

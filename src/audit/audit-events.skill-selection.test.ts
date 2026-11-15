@@ -18,7 +18,10 @@ import {
   recordAuditEventInDatabase,
 } from "./audit-event-store.js";
 import { pruneExpiredSkillSelectionAuditEvents } from "./audit-event-store.skill-selection-storage.js";
-import { recordSkillSelectionAuditEvent } from "./audit-event-store.skill-selection-storage.js";
+import {
+  invalidateSkillSelectionAuditCachesForDatabase,
+  recordSkillSelectionAuditEvent,
+} from "./audit-event-store.skill-selection-storage.js";
 import type { AuditEventInput, SkillSelectionAuditEventInput } from "./audit-event-types.js";
 
 const tempDirs: string[] = [];
@@ -510,5 +513,55 @@ describe("audit event skill-selection persistence", () => {
       ),
     ).toBeDefined();
     expect(countRows()).toBe(AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
+  });
+
+  it("recreates companion schema after lazy creation rolls back", () => {
+    const database = createDatabaseOptions();
+    const auditDatabase = { ...database, database: openOpenClawStateDatabase(database) };
+    const { db } = auditDatabase.database;
+    const tableMissing = () =>
+      (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'audit_skill_selection_events'",
+          )
+          .get() as { count: number }
+      ).count === 0;
+    // Simulate a pre-companion database: drop the canonical table and clear
+    // the per-connection readiness so the next write takes the lazy-DDL path.
+    db.prepare("DROP TABLE IF EXISTS audit_skill_selection_events").run();
+    invalidateSkillSelectionAuditCachesForDatabase(db);
+    expect(tableMissing()).toBe(true);
+
+    const retainedAfter = Date.now() - AUDIT_EVENT_RETENTION_MS_CONTRACT;
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        recordSkillSelectionAuditEvent(
+          skillSelectionInput({
+            sourceId: "rollback-schema-doomed",
+            sourceSequence: 9001,
+            occurredAt: Date.now(),
+          }),
+          db,
+          retainedAfter,
+        );
+        throw new Error("simulated schema batch failure");
+      }, auditDatabase),
+    ).toThrow("simulated schema batch failure");
+    // SQLite rolls back the lazy DDL with the batch.
+    expect(tableMissing()).toBe(true);
+
+    // The next write on the same handle must recreate the table instead of
+    // failing with `no such table: audit_skill_selection_events`.
+    const recovered = recordAuditEventInDatabase(
+      skillSelectionInput({
+        sourceId: "rollback-schema-after",
+        sourceSequence: 9002,
+        occurredAt: Date.now(),
+      }),
+      auditDatabase,
+    );
+    expect(recovered?.kind).toBe("skill_selection");
+    expect(tableMissing()).toBe(false);
   });
 });
