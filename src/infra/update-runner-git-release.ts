@@ -196,7 +196,8 @@ export async function updateGitRelease(params: {
         ...common,
         release,
         retainCleanup,
-        targetRevision: beforeSha,
+        // The fallback is the code that serves now, which can differ from the checkout's HEAD.
+        targetRevision: runningSha,
         beforeRuntimeVerified: false,
         validateCandidate: async () => [],
         beforeCandidate: async () => {},

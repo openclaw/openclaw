@@ -713,3 +713,34 @@ it.each([false, true])("warns about stopped channels after repair (json=%s)", as
     );
   }
 });
+
+it("ends a verified Git release's trial without the release's own settlement", async () => {
+  const fs = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const { createGitReleaseDirs, publishGitRelease } = await import("../../infra/git-release.js");
+  const { gitReleaseSlot } = await import("../../infra/git-release-paths.js");
+  const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "release-trial-")));
+  const prefix = path.join(dir, "git-install");
+  try {
+    for (const version of ["1.0.0", "2.0.0"]) {
+      const releaseRoot = (await createGitReleaseDirs(prefix)).releaseRoot;
+      await fs.mkdir(releaseRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(releaseRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version }),
+      );
+      await publishGitRelease({ prefix, releaseRoot, trial: true });
+    }
+    const trial = path.join(prefix, "releases", ".trial");
+    await fs.access(trial);
+    result.root = gitReleaseSlot(prefix);
+
+    const { validation } = await verifyHealth({});
+
+    expect(validation.ok).toBe(true);
+    await expect(fs.access(trial)).rejects.toThrow();
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
