@@ -602,7 +602,7 @@ async function mutatePreparedSessionAtMessage({
           "already-active": `branch is already active: ${entryId}`,
           "not-user-message": `entry is not a user message: ${entryId}`,
           "off-active-path": `message entry is not on the active path: ${entryId}`,
-          "unsupported-storage": `session transcript storage does not support ${actionLabel}`,
+          "unsupported-storage": `chat history storage does not support ${actionLabel}`,
           failed: `failed to ${actionLabel} session`,
         }[result.status];
         reject(

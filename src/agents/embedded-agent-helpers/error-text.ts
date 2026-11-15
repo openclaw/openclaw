@@ -231,7 +231,7 @@ export function formatAssistantErrorText(
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
-      "If this keeps happening, reset the session or delete the corrupted session transcript."
+      "If this keeps happening, reset the session or delete the corrupted chat history."
     );
   }
 

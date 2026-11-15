@@ -111,7 +111,7 @@ struct ChatProTab: View {
                     }
                 }
                 .alert(
-                    String(localized: "Unable to Export Transcript"),
+                    String(localized: "Unable to Export Chat"),
                     isPresented: self.$showsTranscriptExportError)
                 {
                     Button(role: .cancel) {} label: {
@@ -501,7 +501,7 @@ struct ChatProTab: View {
                 .accessibilityIdentifier("chat-show-reasoning-toggle")
 
                 self.chatActionButton(
-                    title: String(localized: "Export transcript"),
+                    title: String(localized: "Export chat"),
                     systemImage: "square.and.arrow.up",
                     disabled: self.viewModel == nil)
                 {
