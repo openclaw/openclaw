@@ -1,10 +1,16 @@
-import { Repeat, Show } from "solid-js";
+import { Repeat, Show, onSettled } from "solid-js";
 import { beginNativeWindowDrag } from "../../app/native-window-drag.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
 export function LoadingSkeleton(props: { messagesOnly?: boolean } = {}) {
+  let skeleton: HTMLDivElement;
+  onSettled(() => () => {
+    // Retire CSS-owned effects before detachment; cancel() retains native WebKit records.
+    skeleton.style.setProperty("--skeleton-animation", "none");
+    skeleton.getAnimations({ subtree: true });
+  });
   return (
-    <div class="loading-skeleton" aria-hidden="true">
+    <div ref={(element) => (skeleton = element)} class="loading-skeleton" aria-hidden="true">
       <Show when={!props.messagesOnly}>
         <div class="loading-skeleton__header">
           <div class="skeleton loading-skeleton__avatar" />

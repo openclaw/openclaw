@@ -54,7 +54,7 @@ import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
 import { planTelegramTextDeliveryPages } from "../telegram-text-delivery.js";
-import { emitTelegramMessageSentHooks } from "./delivery.hooks.js";
+import { emitTelegramMessageSentHooks, runTelegramMessageSendingHook } from "./delivery.hooks.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import {
   resolveReplyQuoteForSend,
@@ -607,12 +607,13 @@ async function deliverReplyPlan(
     return receipt;
   };
 
+  // HTML-mode text bypasses the markdown -> rich-block converter, so native
+  // table rendering only applies to the rich markdown funnel.
+  const richMessages = params.richMessages === true && params.textMode !== "html";
   for (const originalReply of normalizedReplies) {
     let reply = canonicalizeTelegramPresentationPayload(originalReply, {
       allowWebAppButtons: resolveTelegramTargetChatType(params.chatId) === "direct",
-      // HTML-mode text bypasses the markdown -> rich-block converter, so native
-      // table rendering only applies to the rich markdown funnel.
-      richTables: params.richMessages === true && params.textMode !== "html",
+      richTables: richMessages,
     });
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
@@ -670,24 +671,15 @@ async function deliverReplyPlan(
       replyQuoteEntities: params.replyQuoteEntities,
     });
     if (hasMessageSendingHooks) {
-      const hookResult = await hookRunner?.runMessageSending(
-        {
-          to: params.chatId,
-          content: hookContent,
-          replyToId,
-          threadId: params.thread?.id,
-          metadata: {
-            channel: "telegram",
-            mediaUrls: mediaList,
-            threadId: params.thread?.id,
-          },
-        },
-        {
-          channelId: "telegram",
-          accountId: params.accountId,
-          conversationId: params.chatId,
-        },
-      );
+      const hookResult = await runTelegramMessageSendingHook(hookRunner, {
+        chatId: params.chatId,
+        accountId: params.accountId,
+        sessionKey: params.sessionKeyForInternalHooks,
+        content: hookContent,
+        replyToId,
+        threadId: params.thread?.id,
+        mediaUrls: mediaList,
+      });
       if (hookResult?.cancel) {
         continue;
       }
@@ -714,11 +706,10 @@ async function deliverReplyPlan(
     try {
       const deliveredCountBeforeReply = deliveredCount();
       const replyMarkup = buildInlineKeyboard(
-        resolveTelegramInlineButtons({
-          buttons: telegramData?.buttons,
-          presentation,
-          interactive,
-        }),
+        resolveTelegramInlineButtons(
+          { buttons: telegramData?.buttons, presentation, interactive },
+          { supportsDisabled: richMessages },
+        ),
       );
       let firstDeliveredMessageId: number | undefined;
       let deliveredMediaUrls: string[] = [];

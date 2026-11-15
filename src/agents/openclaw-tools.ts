@@ -45,6 +45,7 @@ import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.j
 import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
 import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { createOpenClawWidgetPresenterContext } from "./openclaw-tools.widget-context.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
 import {
   withPreparedToolConstruction,
@@ -232,16 +233,10 @@ function* createOpenClawToolsSteps(
     accountId: options?.agentAccountId,
     threadId: options?.agentThreadId,
   });
-  const widgetSessionKey = options?.runSessionKey ?? options?.agentSessionKey;
-  const widgetPresenterContext = {
-    messageChannel: options?.agentChannel,
-    accountId: options?.agentAccountId,
-    deliveryContext: widgetDeliveryContext,
-    nativeChannelId: options?.nativeChannelId,
-    currentChannelId: options?.currentChannelId,
-    currentMessagingTarget: options?.currentMessagingTarget,
-    sessionKey: widgetSessionKey,
-  };
+  const widgetPresenterContext = createOpenClawWidgetPresenterContext(
+    options,
+    widgetDeliveryContext,
+  );
   const widgetPresenters = resolveWidgetPresenters().map((registration) => registration.presenter);
   const currentChannelWidgetPresenter = resolveCurrentChannelWidgetPresenter(
     widgetPresenters,

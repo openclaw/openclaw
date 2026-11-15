@@ -410,8 +410,10 @@ describe("production lint suppressions", () => {
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
+        // Pinned WebKit Inspector is the only API that includes detached CSS animations.
         // Session commands relay the owner's original error so the display boundary can format it.
         "ui/src/pages/sessions/view.tsx|typescript/only-throw-error|1",
+        "ui/src/test-helpers/control-ui-webkit-animations.ts|no-underscore-dangle|1",
       ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });

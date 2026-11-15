@@ -10,6 +10,10 @@ import type {
   ChannelMessageActionName,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
+import {
+  isMessagePresentationInteractiveBlock,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { asNonArrayRecord, readStringValue } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -216,7 +220,13 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       return null;
     }
     const quoteText = readStringParam(ctx.params, "quoteText", { trim: false });
-    if (!quoteText) {
+    // Message-tool controls retain agent ownership through queued delivery.
+    const hasControls = Boolean(
+      normalizeMessagePresentation(payload.presentation)?.blocks.some(
+        isMessagePresentationInteractiveBlock,
+      ),
+    );
+    if (!quoteText && !hasControls) {
       return payload;
     }
     const telegramData = asNonArrayRecord(payload.channelData?.telegram);
@@ -224,7 +234,11 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       ...payload,
       channelData: {
         ...payload.channelData,
-        telegram: { ...telegramData, quoteText },
+        telegram: {
+          ...telegramData,
+          ...(quoteText ? { quoteText } : {}),
+          ...(hasControls ? { typedCallbackOwner: "agent" } : {}),
+        },
       },
     };
   },

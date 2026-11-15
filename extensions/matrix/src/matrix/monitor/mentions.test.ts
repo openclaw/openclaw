@@ -233,10 +233,21 @@ describe("resolveMentions", () => {
   }
 
   describe("formatted_body matrix.to links", () => {
+    it("keeps malformed formatted mention scans within the event-loop budget", () => {
+      const started = performance.now();
+      for (const formatted of ['<a href="https://matrix.to/#/'.repeat(1200), "<".repeat(33_600)]) {
+        expect(resolveFormatted("ordinary text", formatted)).toEqual({
+          wasMentioned: false,
+          hasExplicitMention: false,
+        });
+      }
+      expect(performance.now() - started).toBeLessThan(1000);
+    });
+
     it("detects mention in formatted_body with plain user ID", () => {
       const result = resolveFormatted(
         "Bot: hello",
-        '<a href="https://matrix.to/#/@bot:matrix.org">Bot</a>: hello',
+        '<A class="x" HREF=\'https://example.com\' href="https://matrix.to/#/@bot:matrix.org">Bot</A></a>: hello',
       );
       expect(result.wasMentioned).toBe(true);
     });
@@ -260,7 +271,7 @@ describe("resolveMentions", () => {
     it("does not detect mention for different user ID", () => {
       const result = resolveFormatted(
         "Other: hello",
-        '<a href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
+        '<a href="https://matrix.to/#/@bot:matrix.org" href="https://matrix.to/#/@other:matrix.org">Other</a>: hello',
       );
       expect(result.wasMentioned).toBe(false);
     });
