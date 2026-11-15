@@ -99,7 +99,7 @@ export function* assembleOpenClawCodingTools(
   const listingClientCaps =
     options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
-  const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
+  const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath, unavailableCoreToolReason } =
     resolveMemoryFlushToolSetup(options);
   const automationsScope = resolveAutomationsRunScope(options);
   const cronSelfRemoveOnlyJobId = automationsScope.selfJobId;
@@ -373,6 +373,7 @@ export function* assembleOpenClawCodingTools(
     disableMessageTool: options?.disableMessageTool || options?.swarmCollector,
     requesterAgentIdOverride: executionAgentId,
   };
+  const clientCapsWithheldToolNames = new Set<string>();
   const pluginToolsOnly = filterToolsByClientCaps(
     skipOrdinaryToolConstruction || includeOpenClawTools || !includePluginTools
       ? []
@@ -384,6 +385,7 @@ export function* assembleOpenClawCodingTools(
         },
     listingClientCaps,
     options?.clientCaps,
+    clientCapsWithheldToolNames,
   );
   // Neither flush arm may regain execution tools outside its persistence projection.
   const ringZeroTools =
@@ -414,7 +416,7 @@ export function* assembleOpenClawCodingTools(
     pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
     catalog: () => ({
       tools: toolsForModelProvider,
-      declaredToolAllowlist,
+      declaredToolAllowlist: { ...declaredToolAllowlist, clientCapsWithheldToolNames },
       unavailableCoreToolReason,
     }),
     isAvailable: (): boolean => turnAuthorized({ name: "message" }),
@@ -497,6 +499,7 @@ export function* assembleOpenClawCodingTools(
               : undefined,
             inheritedToolPolicySource: capabilityProfile.policy.inheritedToolPolicySource,
             processScopeKey: scopeKey,
+            clientCapsWithheldToolNames,
           },
         )
       : pluginToolsOnly),
@@ -527,10 +530,6 @@ export function* assembleOpenClawCodingTools(
         ? options?.memoryFlushTools
         : undefined,
   );
-  const unavailableCoreToolReason =
-    isMemoryFlushRun && memoryFlushWritePath
-      ? "memory-triggered compaction runs expose only read and append-only write"
-      : undefined;
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.toolPolicyMessageProvider ?? options?.messageProvider,

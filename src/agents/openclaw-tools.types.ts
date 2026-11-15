@@ -120,6 +120,8 @@ export type OpenClawToolsOptions = {
   githubPublicationConfigurationAware?: true;
   /** Internal inventory projection; the resulting GitHub tool cannot execute. */
   githubPublicationPreview?: true;
+  /** Receives names of tools withheld because the listing client lacks their requiredClientCaps. */
+  clientCapsWithheldToolNames?: Set<string>;
   /** Actual prepared sandbox passed only by the coding-tool assembly owner. */
   sandbox?: import("./sandbox/types.js").SandboxContext | null;
   abortSignal?: AbortSignal;
