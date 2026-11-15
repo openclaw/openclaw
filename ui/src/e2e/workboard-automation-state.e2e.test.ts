@@ -1,7 +1,4 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installWorkboardPage } from "./workboard-page.test-support.ts";
 
@@ -68,10 +65,6 @@ suite.define(() => {
         const info = page.locator(".workboard-automation-info");
         await info.waitFor({ state: "visible" });
         expect.soft(await info.textContent()).toContain("Disabled");
-        const frame = await takeControlUiScreenshotFrame(page, heading, [info], {
-          animations: "disabled",
-        });
-        await writeFile(path.join(suite.artifactDir, "disabled-heading.png"), frame.png);
         await page.locator(".workboard-card__title", { hasText: "Review release" }).click();
         const detail = page.locator(".workboard-detail");
         await detail.waitFor();
