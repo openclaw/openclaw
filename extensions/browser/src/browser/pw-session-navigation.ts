@@ -285,7 +285,7 @@ export async function withPageNavigationRequestGuard<T>(
     assertCurrent: () => {
       const assertion = opts.assertCurrent?.();
       if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
-      opts.signal?.throwIfAborted();
+      return opts.signal?.throwIfAborted();
     },
     failed: async (route, request, err) => {
       recordGuardError(err);
@@ -375,7 +375,7 @@ export async function gotoPageWithNavigationGuard(
     assertCurrent: () => {
       const assertion = opts.assertPageCurrent?.();
       if (assertion) return assertion.then(() => opts.signal?.throwIfAborted());
-      opts.signal?.throwIfAborted();
+      return opts.signal?.throwIfAborted();
     },
     handle: async (route, request) => {
       if (blockedError) {

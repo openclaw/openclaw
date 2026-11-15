@@ -135,12 +135,15 @@ export async function ensurePageDocumentPolicy(
   owners.set(page, owner);
   page.on("close", retire);
   browser?.on("disconnected", retire);
-  owner.ready = page.route("**", handler).catch(async (error: unknown) => {
-    retire();
-    // Playwright registers locally before remote setup can fail.
-    await page.unroute("**", handler).catch(() => {});
-    throw error;
-  });
+  owner.ready = page
+    .route("**", handler)
+    .then(() => {})
+    .catch(async (error: unknown) => {
+      retire();
+      // Playwright registers locally before remote setup can fail.
+      await page.unroute("**", handler).catch(() => {});
+      throw error;
+    });
   await owner.ready;
   return owner;
 }
