@@ -596,14 +596,13 @@ export function explainMachineFailure(error: unknown, stateDir: string): unknown
 function isMachineFailure(error: unknown): boolean {
   // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
+  const message = (error as Error | undefined)?.message ?? "";
   return (
     code === "ENOSPC" ||
     code === "EIO" ||
     code === "EDQUOT" ||
     code === "EROFS" ||
-    // SAFETY: node:fs and node:sqlite throw Error instances; only optional fields are read.
-    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(
-      (error as Error | undefined)?.message ?? "",
-    )
+    /SQLITE_FULL|database or disk is full|disk I\/O error/iu.test(message)
   );
 }
