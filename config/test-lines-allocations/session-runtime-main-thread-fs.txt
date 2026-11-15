@@ -1,4 +1,4 @@
-# 13,341 net test LF against main 932b1322; retained 12,969 credit leaves 372.
+# 13,383 net test LF against main 71fe3086; 12,983 credit leaves 400.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -23,4 +23,5 @@
 # Workspace first-writer FIFO, interrupted process cleanup, explicit late-PID stop,
 # and font-ready geometry reuse existing owning regressions and their assertions.
 # Accepted unbound Goal input and native Details dismissal replace projection-only fixtures.
-12969
+# Existing regressions and fixture extraction add 42 LF for proven authority/eligibility bugs.
+12983

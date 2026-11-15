@@ -19,6 +19,8 @@ import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 
 const mocks = getPreparedModelRuntimeMocks();
 const config = createMetadataConfig();
+config.plugins = { allow: [] };
+const providerOwners = mocks.pluginMetadataSnapshot.owners.providers;
 const signedIn = {
   version: 1,
   profiles: { "openai:default": { type: "api_key", provider: "openai", key: "sk-test" } },
@@ -31,6 +33,7 @@ beforeEach(async () => {
   state = await createOpenClawTestState({ label: "metadata-rebuild" });
   await resetPreparedModelRuntimeHarness(state);
   mocks.configuredAgentIds = ["main"];
+  mocks.pluginMetadataSnapshot.owners.providers = new Map([["openai", ["openai"]]]);
   mocks.authStorage.getAll.mockReturnValue({ openai: { type: "api_key", key: "sk-test" } });
   mocks.preparedAuthStore = structuredClone(signedIn);
   mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
@@ -42,6 +45,7 @@ beforeEach(async () => {
 
 afterEach(async ({ task }) => {
   await sidecars.stop();
+  mocks.pluginMetadataSnapshot.owners.providers = providerOwners;
   await cleanupPreparedModelRuntimeHarness(state, task.result?.state === "fail");
   vi.unstubAllEnvs();
 });
@@ -94,6 +98,13 @@ it("retains unchanged providers during discovery and immediately applies auth an
   const rebuild = publishOwner().catch((error: unknown) => error);
   try {
     expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = { ...config, plugins: { allow: ["other-plugin"] } };
+    expect(await read()).not.toContain("openai/gpt-5.4");
+    activeConfig = config;
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = { ...config, plugins: {} };
+    expect(await read()).toContain("openai/gpt-5.4");
+    activeConfig = config;
     mocks.preparedAuthStore = { version: 1, profiles: {} };
     expect(await read()).not.toContain("openai/gpt-5.4");
     mocks.preparedAuthStore = structuredClone(signedIn);

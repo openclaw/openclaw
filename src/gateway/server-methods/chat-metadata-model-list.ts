@@ -78,7 +78,9 @@ function providerIdentity(source: ProviderIdentitySource, provider: string): unk
     ],
     plugins: {
       enabled: config.plugins?.enabled,
-      allow: config.plugins?.allow?.filter((id) => pluginIds.includes(id)),
+      allow: config.plugins?.allow?.length
+        ? config.plugins.allow.filter((id) => pluginIds.includes(id))
+        : undefined,
       deny: config.plugins?.deny?.filter((id) => pluginIds.includes(id)),
       entries: pluginIds.map((id) => config.plugins?.entries?.[id]),
     },
