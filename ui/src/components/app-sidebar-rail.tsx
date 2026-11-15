@@ -5,7 +5,10 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import {
+  isPluginsHubRoute,
   isRailSectionPin,
+  SIDEBAR_NAV_ROUTES,
+  USERS_SECTION_PLUGIN_PAGES,
   normalizeSidebarEntries,
   sidebarSectionForRoute,
   parseSidebarEntry,
@@ -180,6 +183,22 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
   let pagesMenu: PopoverHandle | undefined;
   let moreButton: HTMLButtonElement | undefined;
   const [pagesMenuOpen, setPagesMenuOpen] = createSignal(false);
+  // A page that lives only in the "more" menu (not pinned) marks the menu as where it is.
+  const moreHoldsPage = createMemo(() => {
+    const route = host.activeRouteId;
+    if (route === "plugin") {
+      const key = host.activePluginTabId;
+      return (
+        key !== "" && !USERS_SECTION_PLUGIN_PAGES.has(key) && !pins().includes(`plugin:${key}`)
+      );
+    }
+    const entry = route && isPluginsHubRoute(route) ? "plugins" : route;
+    return (
+      entry !== "sessions" &&
+      SIDEBAR_NAV_ROUTES.some((menuRoute) => menuRoute === entry) &&
+      !pins().includes(`route:${entry}`)
+    );
+  });
   return [
     <nav
       ref={elementRef((element: HTMLElement) => attachRailPeek(host, element))}
@@ -278,8 +297,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
             type="button"
             class={[
               "sidebar-rail__button sidebar-rail__more",
-              // Like any menu button, it reads as pressed only while its menu is open.
-              { "nav-item--active": pagesMenuOpen() },
+              // Pressed while its menu is open, or while the page shown lives in it.
+              { "nav-item--active": pagesMenuOpen() || moreHoldsPage() },
             ]}
             data-rail-more=""
             aria-label={t("nav.pages")}
