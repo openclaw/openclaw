@@ -50,7 +50,6 @@ import {
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import { ChatSessionActivity } from "./chat-session-activity.solid.tsx";
-import { TurnRecapRow } from "./chat-turn-recap-view.tsx";
 
 export type { NativeMessageGroupOptions } from "./chat-message-group-frame.ts";
 
@@ -531,14 +530,7 @@ function FramedMessageGroup(props: {
         >
           {options().frameContent}
         </Show>
-        <Show
-          when={Boolean(options().activeContinuation)}
-          fallback={
-            options().turnRecap ? (
-              <TurnRecapRow recap={options().turnRecap!} presentation="continuation" />
-            ) : undefined
-          }
-        >
+        <Show when={Boolean(options().activeContinuation)}>
           <StreamGroupParts
             parts={options().activeContinuation!.parts}
             options={options().activeContinuation!.options}

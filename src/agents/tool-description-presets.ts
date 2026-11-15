@@ -8,7 +8,7 @@ export const PROCESS_TOOL_DISPLAY_SUMMARY = "Inspect/control exec sessions.";
 export const CRON_TOOL_DISPLAY_SUMMARY = "Schedule reminders, automations, wake events.";
 export const SESSIONS_LIST_TOOL_DISPLAY_SUMMARY = "List visible sessions; filters/previews.";
 export const SESSIONS_HISTORY_TOOL_DISPLAY_SUMMARY = "Read sanitized session history.";
-export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past session transcripts.";
+export const SESSIONS_SEARCH_TOOL_DISPLAY_SUMMARY = "Search past chats.";
 export const SESSIONS_SEND_TOOL_DISPLAY_SUMMARY = "Run same-Gateway session/agent.";
 export const SESSIONS_SEND_RESULT_GUIDANCE =
   'Accepted results report target admission as `targetDisposition: "queued"` or `"steered"`; `delivery.status` is only later reply delivery state, and neither proves target completion.';
@@ -181,16 +181,26 @@ export function describeSessionStatusTool(): string {
   ].join(" ");
 }
 
-/** Describes the ask_user tool and its decision-only use policy. */
+export function describeRequiredHumanActionTool(callableName: string): string {
+  return [
+    `Use ${callableName} with requiredAction only for an observed external prerequisite, such as browser sign-in, that the human can complete while this run waits.`,
+    "Do not invent approval or manual prerequisites for already authorized work. An inactive Goal stops automatic pursuit, not the current user-requested turn; continue executable work within its actual permissions without requiring Goal Resume. Never wait in ask_user for a native session control that requires this run to end; if that control is genuinely needed, explain it and finish the turn first.",
+    "Give the specific observed blocker and supported instructions; an optional verified URL opens separately from the completion answer. Reuse existing approval or native permission cards when available; never add another approval prompt, invent a remediation, request credentials in chat, or hide an incorrect denial.",
+    "requiredAction parks the original task and returns ready_to_verify, not success or authorization: re-observe the original target and continue from recorded progress only after the actual prerequisite is satisfied. action_unresolved means stop dependent work, report the blocker, and wait for a new user instruction; never use best-judgment fallback or repeat the handoff.",
+  ].join(" ");
+}
+
+/** Decisions and required manual steps share the attributed human wait. */
 export function describeAskUserTool(): string {
   return [
     "Ask the human user 1-3 structured questions and wait for their answer; `multiSelect` allows picking several options and `timeoutSeconds` bounds the wait.",
-    "Use only when blocked on a decision genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    "For questions, ask only about decisions genuinely theirs that cannot be resolved from the request, code, or sensible defaults; never ask whether to proceed or confirm a plan.",
+    describeRequiredHumanActionTool("ask_user"),
     "Ask exactly one question per call unless several answers must be submitted together; one single-select question uses native controls on supported messaging channels.",
     "Put every selectable choice in `options`, never only in the question text. Put the recommended option first and suffix its label with ` (Recommended)`.",
     "Use `multiSelect` only when the user may choose several options at once; otherwise omit it.",
     "Do not include an Other option; free text is added automatically.",
-    "If the result is no_answer, continue with best judgment.",
+    "For ordinary questions only, no_answer means continue with best judgment.",
   ].join(" ");
 }
 

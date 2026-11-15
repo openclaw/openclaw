@@ -428,7 +428,7 @@ describe("ModelProvidersPage agent scope", () => {
             },
           },
         },
-        note: "Update defaults from Control UI",
+        note: "Update defaults from the OpenClaw app",
         replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
       });
     },
@@ -455,7 +455,7 @@ describe("ModelProvidersPage agent scope", () => {
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
   });
@@ -488,6 +488,34 @@ describe("ModelProvidersPage agent scope", () => {
     expect(defaults).toHaveLength(2);
     defaults[0]?.click();
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
+  });
+
+  it.each([
+    ["billing", "Check the provider’s billing or quota"],
+    ["auth", "Enter a different key."],
+  ] as const)("keeps saved-key recovery specific to %s", async (status, guidance) => {
+    const { context, request } = createHarness("main");
+    const page = appendPage(context);
+    await waitForProviders(page);
+    const originalRequest = request.getMockImplementation()!;
+    request.mockImplementation(async (method) => {
+      if (method === "models.authSetApiKey") {
+        return { provider: "openai", profileId: "openai:key" };
+      }
+      if (method === "models.probe") {
+        return { provider: "openai", status, error: "Provider diagnostic.", results: [] };
+      }
+      return originalRequest(method);
+    });
+    await saveKey(page, "synthetic-replacement");
+    await waitForSolid(() => expect(page.view.props.messages.openai?.kind).toBe("error"));
+    const message = page.view.props.messages.openai?.text;
+    expect(message).toContain("API key saved");
+    expect(message).toContain("Provider diagnostic.");
+    expect(message).toContain(guidance);
+    if (status === "billing") {
+      expect(message).not.toContain("Enter a different key");
+    }
   });
 
   it("keeps saved-key warnings after providers failure", async () => {
@@ -960,7 +988,7 @@ it("finishes loading with a system-only roster and keeps global defaults editabl
           },
         },
       },
-      note: "Update defaults from Control UI",
+      note: "Update defaults from the OpenClaw app",
       replacePaths: ["agents.defaults.model.fallbacks", "agents.defaults.utilityModel.fallbacks"],
     });
     expect(request.mock.calls.some(([method]) => method.startsWith("models."))).toBe(false);

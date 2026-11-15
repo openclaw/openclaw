@@ -75,6 +75,7 @@ export async function spawnTerminalPty(
   lifecycle?: {
     abortSignal?: AbortSignal;
     assertCurrent?: () => void;
+    prepareCurrent?: () => Promise<void>;
     initiateSpawn?: SpawnInitiation;
   },
 ): Promise<TerminalPtyHandle> {
@@ -102,13 +103,19 @@ export async function spawnTerminalPty(
     // The broker launches the existing helper, which owns PTY I/O and exec cgroup placement.
     const { spawnNodeTerminalPty } = await import("./terminal-pty-node.js");
     assertCurrent();
-    const pty = await spawnNodeTerminalPty(params, assertCurrent, lifecycle?.initiateSpawn);
+    const pty = await spawnNodeTerminalPty(
+      params,
+      assertCurrent,
+      lifecycle?.initiateSpawn,
+      lifecycle?.prepareCurrent,
+    );
     if (pty.pid > 0) {
       recordSpawn?.();
     }
     return pty;
   }
   const launch = await prepareTerminalPty(params);
+  await lifecycle?.prepareCurrent?.();
   assertCurrent();
   return lifecycle?.initiateSpawn ? lifecycle.initiateSpawn(launch) : launch();
 }

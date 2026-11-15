@@ -21,6 +21,7 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   ) =>
     resolveWorkspaceBootstrapRouting({
       isWorkspaceBootstrapPending: vi.fn(async () => false),
+      isWorkspaceSetupCompleted: vi.fn(async () => false),
       trigger: "user",
       isPrimaryRun: true,
       isCanonicalWorkspace: true,
@@ -44,18 +45,25 @@ describe("resolveWorkspaceBootstrapRouting", () => {
   it("records a completed workspace as delivering the whole bootstrap context", async () => {
     // A setup-complete workspace has no BOOTSTRAP.md to withhold, so its turns
     // carry every bootstrap file even though onboarding leaves the mode at "none".
-    const routing = await resolveWorkspaceBootstrapRouting({
-      isWorkspaceBootstrapPending: vi.fn(async () => false),
-      trigger: "user",
-      isPrimaryRun: true,
-      isCanonicalWorkspace: true,
-      effectiveWorkspace: "/tmp/openclaw-workspace",
-      resolvedWorkspace: "/tmp/openclaw-workspace",
-      hasBootstrapFileAccess: true,
+    const routing = await resolveRouting({
+      isWorkspaceSetupCompleted: vi.fn(async () => true),
+      bootstrapContextRunKind: "cron",
     });
 
     expect(routing.bootstrapMode).toBe("none");
     expect(routing.deliversCompleteWorkspaceContext).toBe(true);
+    expect(routing.bootstrapCompleted).toBe(true);
+  });
+
+  it("does not report completion for a pending workspace whose run skips bootstrap", async () => {
+    const routing = await resolveRouting({
+      bootstrapFiles: [bootstrapFile],
+      isWorkspaceSetupCompleted: vi.fn(async () => true),
+      bootstrapContextRunKind: "cron",
+    });
+
+    expect(routing.bootstrapMode).toBe("none");
+    expect(routing.bootstrapCompleted).toBe(false);
   });
 
   it("uses hook-provided BOOTSTRAP.md content even when normal file reads are unavailable", async () => {

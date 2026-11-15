@@ -29,7 +29,8 @@ local package directory, or `CLAW.md` with YAML frontmatter. The reference uses 
 publisher's ClawHub handle, as skill references do, including for a Template whose
 package name is the unscoped slug. Other source-reading commands remain local-only.
 Packages must declare `package.json.openclaw.template` as a safe package-relative
-path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. The obsolete
+path whose filename is `CLAW.md`, such as `CLAW.md` or `nested/CLAW.md`. Local
+[project commands](/cli/templates#author-locally) require `CLAW.md` at the package root. The obsolete
 `openclaw.claw` selector and JSON Template manifests are rejected, including in downloaded archives.
 `CLAW.md` and `package.json` must contain valid UTF-8.
 If inspection reports an encoding error, re-encode the source file as UTF-8 and retry;
@@ -91,9 +92,12 @@ openclaw templates build ./incident-triage --out ./incident-triage-1.0.0.tgz
 ```
 
 A package contains `package.json`, `CLAW.md`, and any files selected by its
-manifest. `create` writes only `package.json` and `CLAW.md` and refuses to merge
-into a nonempty directory. Project validation rejects package scripts and
-lifecycle hooks. `dev` builds the same package artifact and checks its Add
+manifest. `validate`, `dev` and `build` require a project whose `CLAW.md` sits
+beside `package.json`, with `openclaw.template` set to `"CLAW.md"`; move a nested
+`CLAW.md` to the package root before validating or building. `inspect` and `add`
+also read a package whose selector names a nested `CLAW.md`. `create` writes
+only `package.json` and `CLAW.md` and refuses to merge into a nonempty directory.
+Project validation rejects package scripts and lifecycle hooks. `dev` builds the same package artifact and checks its Add
 requirements locally without installing packages, contacting ClawHub,
 starting an agent turn, enabling automations, or changing OpenClaw state.
 Requirements needing online preflight appear as blockers. `build` creates a
@@ -200,33 +204,40 @@ folders are not installed or counted as dependencies. Bundled contents show thei
 name and package-relative path; they have no invented registry version or
 standalone ClawHub verification claim.
 
+`validate` and `build` also stop at 4,096 folders and unselected files in the
+project, outside `.git` and `node_modules`; selected files do not count toward it.
+
 Bundled skill and plugin folders use the same bounded selection: regular files
 only, at most 1 MiB per file, 20 MiB across bundled dependencies, 4,096 entries
 per folder, 4,096 selected bundled files in total, and 16 directory levels. `.git` and `node_modules` directories are
 excluded regardless of case. Links, nonregular files, unsafe portable paths,
 overlapping bundled directories, and conflicting skill identities or workspace
-destinations are rejected. Build and Add reject changed source bytes or folder
-membership after review. File modes follow ordinary Template packaging.
+destinations are rejected. Build and Add preserve executable files and reject changes to source bytes,
+executable flags, or folder membership after review. Other permission bits are
+normalized when packaging and installing bundled folders.
 
 Use `automations` for scheduled work. The retired `cronJobs` key is rejected;
 move its declarations to `automations` and remove `cronJobs`.
 
-Add schedules every declared automation in the new agent's main session, with
-no delivery, so its runs appear in the agent's own conversation. `CLAW.md` still
-requires `session` and accepts `delivery`, but Add does not apply either. To run
-an automation in an isolated session or post its summary to a channel, change
-it in the automation's settings after Add.
+Add preserves each automation's required `session`: `main` runs in the new
+agent's main conversation, while `isolated` runs in a separate session.
+Declared automations start with no channel delivery; Add accepts but does not
+apply `delivery`. To post a summary to a channel, configure delivery in the
+automation's settings after Add. Previously added jobs keep their saved session
+target; change those in the automation's settings if needed.
 
 Environment values remain unresolved references; never package credentials.
 Shared plugins and MCP servers must match existing declarations exactly or Add
-reports the conflict without replacing them. Plugin and skill trust warnings
-require explicit consent. Automations are assigned to the new agent.
+reports the conflict without replacing them. An MCP server's `timeout` and
+`connectTimeout` are in seconds; Add stores and compares them as
+`requestTimeoutMs` and `connectionTimeoutMs` in milliseconds. Plugin and skill
+trust warnings require explicit consent. Automations are assigned to the new agent.
 If a declared plugin still needs setup, a referenced environment variable is
 missing, or an OAuth MCP server is not authorized, Add creates the declared
-automations paused. Their schedules, prompts, and imported scratch stay intact.
+automations disabled. Their schedules, prompts, and imported scratch stay intact.
 Connect the requirement through its ordinary plugin or MCP controls, then enable
 the jobs through the agent's automation controls; Add does not create substitute
-routines or automatically enable paused jobs later.
+routines or automatically enable disabled jobs later.
 
 A package may declare `agent.heartbeat` in `CLAW.md` or include
 `HEARTBEAT.md`. Add converts those inputs into ordinary interval automations
@@ -263,7 +274,7 @@ agent:
   memory: { search: { enabled: false } }
 ```
 
-Set `enabled: false` on an automation to install it paused; omitting the field
+Set `enabled: false` on an automation to install it disabled; omitting the field
 keeps the enabled default. Jobs belong to the new agent. First-run instructions
 in `BOOTSTRAP.md` should find that agent's declared job, including disabled jobs,
 and update its timezone, tools, or timeout through ordinary automation controls.
@@ -304,7 +315,7 @@ version review and installation. The Gateway chooses the new workspace;
 precedence over registry names and require the Gateway to be stopped.
 
 Offline Add uses the same installer and local scheduler after acquiring exclusive
-state ownership. Explicitly paused automations remain paused.
+state ownership. Explicitly disabled automations remain disabled.
 
 A registry name resolves the latest published release to an exact version and
 immutable artifact digest before planning. OpenClaw uses its existing registry
@@ -330,12 +341,15 @@ greeting or a message sent on your behalf. Later setup failure retains the expos
 agent and conversation; completion does not replace an existing draft.
 
 The installer shows a card for each newly installed plugin and an automation-created
-notice as each routine is added. Paused routines stay paused until their setup
-prerequisites are ready. Actual installation failures appear in the plugin card or
+notice as each routine is added. Disabled routines remain disabled while their setup
+prerequisites are missing. Actual installation failures appear in the plugin card or
 a concise automation-failed notice; continue setup in the same agent. Successful
 skill and MCP setup, absent optional files, and empty categories stay silent. There
 is no final setup receipt or second model recap. Declared package bootstrap still
 follows shared setup; MCP configuration alone does not prove a working connection.
+When offline Add keeps an agent after a later step fails, the agent gets the default
+`AGENTS.md`, `IDENTITY.md` and `USER.md`, and the package `BOOTSTRAP.md` is held
+back because its setup did not finish.
 
 `--dry-run --json` remains available for automation or local-source inspection.
 `--agent-id` selects an unused ID. `--workspace` selects a new path for local

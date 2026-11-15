@@ -3,7 +3,7 @@ import {
   providerDisplayLabel,
   type ProviderPresentation,
 } from "../../../components/provider-icon-data.ts";
-import { Tooltip } from "../../../components/solid/tooltip.tsx";
+import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../../lib/reactive/platform.ts";
 import { createTabList } from "../../../lib/tabs.ts";
@@ -12,6 +12,7 @@ import { loadModelProviderOrder, saveModelProviderOrder } from "./model-provider
 
 export function ChatModelProviderRail(props: {
   providers: string[];
+  favorites?: boolean;
   presentation: (provider: string) => ProviderPresentation | undefined;
   targets: readonly { id: string; label: string }[];
   active?: string;
@@ -25,6 +26,9 @@ export function ChatModelProviderRail(props: {
     ...props.providers.filter((id) => !order().includes(id)),
   ]);
   const items = createMemo(() => [
+    ...(props.favorites
+      ? [{ id: "$favorites", label: t("chat.modelFavorites.label"), draggable: false }]
+      : []),
     ...providers().map((id) => ({
       id,
       label: providerDisplayLabel(id, props.presentation(id)),
@@ -92,6 +96,8 @@ export function ChatModelProviderRail(props: {
         aria-orientation={horizontal() ? "horizontal" : "vertical"}
         onDragOver={(event) => {
           if (source) {
+            // The composer rejects text drops; this rail owns its internal reorder.
+            event.stopPropagation();
             setDragOffset({
               x: event.clientX - dragOrigin.x,
               y: event.clientY - dragOrigin.y,
@@ -101,12 +107,14 @@ export function ChatModelProviderRail(props: {
       >
         <For each={items()} keyed={(item) => item.id}>
           {(item) => (
-            <Tooltip
-              content={item().label}
-              disabled={props.active === item().id}
+            <div
+              class="chat-controls__provider-slot"
               onDragOver={(event) => {
                 if (source && item().draggable) {
                   event.preventDefault();
+                  if (event.dataTransfer) {
+                    event.dataTransfer.dropEffect = "move";
+                  }
                   setDrag({
                     from: providers().indexOf(source),
                     to: providers().indexOf(item().id),
@@ -116,6 +124,7 @@ export function ChatModelProviderRail(props: {
               onDrop={(event) => {
                 event.preventDefault();
                 if (source && item().draggable) {
+                  event.stopPropagation();
                   move(source, providers().indexOf(item().id));
                 }
                 endDrag();
@@ -136,11 +145,18 @@ export function ChatModelProviderRail(props: {
                 style={{ "--rail-shift": `${shift(item().id)}px` }}
                 data-dragging={drag()?.from === providers().indexOf(item().id) ? "" : undefined}
                 onDragStart={(event) => {
+                  if (!item().draggable) {
+                    event.preventDefault();
+                    return;
+                  }
                   source = item().id;
                   dragOrigin = { x: event.clientX, y: event.clientY };
                   const index = providers().indexOf(source);
                   setDrag({ from: index, to: index });
-                  event.dataTransfer?.setData("text/plain", source);
+                  if (event.dataTransfer) {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", source);
+                  }
                   // Paint the moving tab in the rail instead of the browser's drag image.
                   event.dataTransfer?.setDragImage(document.createElement("canvas"), 0, 0);
                 }}
@@ -177,7 +193,9 @@ export function ChatModelProviderRail(props: {
                   }
                 }}
               >
-                {item().draggable ? (
+                {item().id === "$favorites" ? (
+                  <Icon name="star" class="chat-controls__provider-icon" />
+                ) : item().draggable ? (
                   <ChatModelProviderIcon
                     provider={item().id}
                     presentation={props.presentation(item().id)}
@@ -186,7 +204,7 @@ export function ChatModelProviderRail(props: {
                   <ChatModelTargetIcon />
                 )}
               </button>
-            </Tooltip>
+            </div>
           )}
         </For>
       </div>

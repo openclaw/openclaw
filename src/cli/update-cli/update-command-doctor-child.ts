@@ -29,7 +29,7 @@ import { withUpdateCommandExecutorChild } from "./update-command-executor.js";
 import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
-/** Inspect the same published --check contract consumed by candidate canary. */
+/** Inspect the same published --check contract consumed by the candidate check. */
 export async function inspectUpdateDoctorChildSupport(
   worker: { workerUrl: URL; argv: string[] },
   options: CommandOptions,
@@ -40,7 +40,7 @@ export async function inspectUpdateDoctorChildSupport(
     await fs.lstat(worker.workerUrl);
   } catch (cause) {
     if (hasErrnoCode(cause, "ENOENT")) {
-      // Candidate canary preserves this pre-worker published-target contract.
+      // The candidate check preserves this pre-worker published-target contract.
       // Only the expected worker's absence qualifies, never a failed command.
       assertCurrent();
       return { doctorConfigWrites: false, doctorRetirementOnly: false };

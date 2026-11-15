@@ -31,7 +31,7 @@ vi.mock("./browser/cdp.helpers.js", () => ({
 }));
 vi.mock("./browser/pw-session-page-target.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/pw-session-page-target.js")>()),
-  isConnectionScopedPage: () => false,
+  pageCloseClosesConnection: () => false,
 }));
 vi.mock("./browser/pw-session-connection.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./browser/pw-session-connection.js")>()),

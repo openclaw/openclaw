@@ -42,12 +42,21 @@ describe("tool usage scoring", () => {
   });
 });
 
-it("uses excluded catalog identities to reject ambiguous historical names", () => {
+it("rejects ambiguous historical names but resolves exact OpenClaw and MCP ids", () => {
   const resolve = createToolUsageCatalogResolver([
     { id: "openclaw:notes:lookup", name: "lookup" },
     { id: "mcp:bundle:lookup", name: "lookup" },
   ]);
-  expect(resolve("lookup")).toBeUndefined();
-  expect(resolve("mcp:bundle:lookup")).toBeUndefined();
+  const evidence = { details: { mcpServer: "bundle" } };
+  expect(resolve("lookup", evidence)).toBeUndefined();
+  expect(resolve("mcp:bundle:lookup")).toBe("mcp:bundle:lookup");
   expect(resolve("openclaw:notes:lookup")).toBe("openclaw:notes:lookup");
+  // Exact MCP ids name their server; bare names need matching server evidence.
+  expect(resolve("mcp:granola:granola__list")).toBe("mcp:granola:granola__list");
+  expect(resolve("granola__list", { details: { mcpServer: "granola" } })).toBe(
+    "mcp:granola:granola__list",
+  );
+  expect(resolve("granola__list", { details: { mcpServer: "linear" } })).toBeUndefined();
+  expect(resolve("granola__list")).toBeUndefined();
+  expect(resolve("openclaw:other:lookup")).toBeUndefined();
 });

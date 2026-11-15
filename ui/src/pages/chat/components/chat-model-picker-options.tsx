@@ -1,17 +1,18 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Show, useContext } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, Show, useContext } from "solid-js";
 import { providerDisplayLabel as defaultProviderLabel } from "../../../components/provider-icon-data.ts";
 import type { ProviderPresentation } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../../components/solid/provider-icon.tsx";
 import { Tooltip } from "../../../components/solid/tooltip.tsx";
+import { registerModelFavoritesEnglish } from "../../../i18n/locales/en-model-favorites.ts";
 import { formatDurationHuman } from "../../../lib/format-duration.ts";
 import "../../../components/tooltip.ts";
 import { formatModelRuntimeLabel } from "../../../lib/model-runtime-label.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { keyboardHintsVisible } from "../../../lib/reactive/keyboard-hints.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { readVisibleTime } from "../../../lib/reactive/visible-clock.ts";
 import { ChatContextWindowControl } from "./chat-context-window-control.tsx";
+import { ChatModelCatalogState } from "./chat-model-catalog-state.tsx";
 import {
   formatModelContextMeta,
   formatModelLabel,
@@ -19,8 +20,11 @@ import {
   modelPickerOptionKey,
   type ChatModelPickerOptionProps,
   type ChatModelPickerTargetOptionProps,
+  type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
 import { ChatModelSearchContext, type ChatModelSearchRow } from "./chat-model-picker-search.ts";
+import type { createModelPickerWindow } from "./chat-model-picker-window.tsx";
+import type { ChatModelPickerParams } from "./chat-model-picker.tsx";
 
 export function ModelList(props: {
   label: string;
@@ -62,20 +66,7 @@ export function ChatModelCooldown(props: { until: number }) {
   );
 }
 
-function ModelShortcut(props: { rowKey: string }) {
-  const search = useContext(ChatModelSearchContext);
-  const number = createMemo(() => search?.row(props.rowKey)?.shortcut);
-  return (
-    <kbd
-      class="shortcut-kbd"
-      aria-hidden="true"
-      hidden={number() === undefined || !keyboardHintsVisible()}
-      data-chat-model-shortcut="true"
-      data-shortcut={number()}
-      data-chat-model-shortcut-number={number()}
-    />
-  );
-}
+registerEnglishCatalog(registerModelFavoritesEnglish);
 
 export function ChatModelProviderIcon(props: {
   provider: string;
@@ -215,13 +206,55 @@ function ModelOptionButton(
   const defaultLabel = createMemo(() =>
     props.entry.isDefault ? t("chat.modelControls.default") : "",
   );
-  const key = createMemo(() => modelPickerOptionKey(props.entry));
+  const key = createMemo(() => props.rowKey ?? modelPickerOptionKey(props.entry));
+  const modelName = createMemo(() => formatModelLabel(props.entry).toLocaleLowerCase());
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
   const highlighted = createMemo(() => search?.isHighlighted(key()));
+  const blocked = () =>
+    props.disabled ||
+    props.presentation.blocked ||
+    Boolean(props.entry.disabled && !props.presentation.resetsPin);
+  function FavoriteButton() {
+    const [popped, setPopped] = createSignal(false);
+    return (
+      <button
+        type="button"
+        class="chat-controls__model-favorite"
+        data-chat-model-favorite={props.entry.value}
+        data-popped={popped() ? "" : undefined}
+        aria-pressed={props.favorite?.selected ? "true" : "false"}
+        // Unavailable models still allow favorites; override the row's disabled state.
+        aria-disabled={props.favorite?.disabled ? "true" : "false"}
+        aria-label={t(
+          props.favorite?.selected ? "chat.modelFavorites.remove" : "chat.modelFavorites.add",
+          {
+            model: [props.presentation.modelLabel, props.presentation.runtimeLabel]
+              .filter(Boolean)
+              .join(" · "),
+          },
+        )}
+        disabled={props.favorite?.disabled}
+        onKeyDown={(event) => {
+          // The star is independent of model selection and picker shortcuts.
+          if (event.key !== "Escape" && event.key !== "Tab" && event.key !== "/") {
+            event.stopPropagation();
+          }
+        }}
+        onClick={(event) => {
+          event.stopPropagation();
+          setPopped(!props.favorite?.selected);
+          props.favorite?.onToggle(event);
+        }}
+        onAnimationEnd={() => setPopped(false)}
+      >
+        <Icon name="star" />
+      </button>
+    );
+  }
   return (
-    <button
+    <div
       ref={search?.rowRef(key)}
       id={search?.optionId(key())}
       class={[
@@ -247,11 +280,12 @@ function ModelOptionButton(
         .filter(Boolean)
         .join(" ")
         .toLocaleLowerCase()}
-      data-chat-model-name={props.presentation.modelLabel.toLocaleLowerCase()}
+      data-chat-model-name={modelName()}
       data-chat-model-provider-label={providerDisplayLabel(
         props.entry.provider,
       ).toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       hidden={hidden()}
@@ -264,16 +298,22 @@ function ModelOptionButton(
       ]
         .filter(Boolean)
         .join(". ")}
-      type="button"
-      disabled={
-        props.disabled ||
-        props.presentation.blocked ||
-        Boolean(props.entry.disabled && !props.presentation.resetsPin)
-      }
+      tabindex={blocked() ? -1 : 0}
+      aria-disabled={blocked() ? "true" : undefined}
       data-chat-model-auth-blocked={props.presentation.needsAuth ? "" : undefined}
       data-chat-model-cooldown={props.presentation.coolingDown ? "" : undefined}
+      onKeyDown={(event) => {
+        if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          if (!blocked()) {
+            event.currentTarget.click();
+          }
+        }
+      }}
       onClick={(event) => {
-        props.onSelect(props.entry, event);
+        if (!blocked()) {
+          props.onSelect(props.entry, event);
+        }
       }}
     >
       <span class="chat-controls__model-option-provider">
@@ -312,16 +352,17 @@ function ModelOptionButton(
           </Show>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <Show when={!props.presentation.blocked}>
-          <Show when={props.presentation.selected} fallback={<ModelShortcut rowKey={key()} />}>
-            <span class="chat-controls__inline-select-check" aria-hidden="true">
-              <Icon name="check" />
-            </span>
-          </Show>
+      <span class="chat-controls__model-favorite-slot">
+        <Show when={!props.presentation.blocked && props.presentation.selected}>
+          <span class="chat-controls__inline-select-check" aria-hidden="true">
+            <Icon name="check" />
+          </span>
+        </Show>
+        <Show when={props.favorite}>
+          <FavoriteButton />
         </Show>
       </span>
-    </button>
+    </div>
   );
 }
 
@@ -351,7 +392,7 @@ export function ChatModelPickerOption(props: ChatModelPickerOptionProps) {
   );
 }
 
-export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
+function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionProps) {
   const search = useContext(ChatModelSearchContext);
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
@@ -373,6 +414,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
       data-chat-model-name={props.entry.label.toLocaleLowerCase()}
       data-chat-model-provider-label={props.groupLabel.toLocaleLowerCase()}
       role="option"
+      aria-keyshortcuts={search?.row(key())?.shortcut?.toString()}
       aria-posinset={search?.row(key())?.position}
       aria-setsize={search?.row(key())?.size}
       aria-selected="false"
@@ -391,9 +433,86 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
           <span class="chat-controls__model-option-name">{props.entry.label}</span>
         </span>
       </span>
-      <span class="chat-controls__model-option-action">
-        <ModelShortcut rowKey={key()} />
-      </span>
     </button>
+  );
+}
+
+export function ChatModelPickerTargets(panel: {
+  group: ChatModelPickerTargetGroup;
+  disabled: boolean;
+  startIndex: number;
+  window: ReturnType<typeof createModelPickerWindow>;
+  onSelect: ChatModelPickerTargetOptionProps["onSelect"];
+  onRetry: ChatModelPickerParams["onTargetRetry"];
+}) {
+  function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
+    const options = createMemo(() => props.group.completion.promise);
+    return (
+      <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+        <For
+          each={options().filter((entry) =>
+            panel.window.has(`target:${props.group.id}:${entry.value}`),
+          )}
+          keyed={(entry) => entry.value}
+        >
+          {(entry) => {
+            const key = createMemo(() => `target:${props.group.id}:${entry().value}`);
+            return (
+              <>
+                {panel.window.renderRow(key(), () => (
+                  <ChatModelPickerTargetOption
+                    disabled={panel.disabled}
+                    entry={entry()}
+                    groupId={props.group.id}
+                    groupLabel={props.group.label}
+                    index={
+                      panel.startIndex +
+                      props.group.options.findIndex((option) => option.value === entry().value)
+                    }
+                    onSelect={panel.onSelect}
+                  />
+                ))}
+              </>
+            );
+          }}
+        </For>
+      </ModelList>
+    );
+  }
+  function TargetState(props: { group: ChatModelPickerTargetGroup; error?: boolean }) {
+    return (
+      <>
+        {panel.window.renderRow(`state:target:${props.group.id}`, () => (
+          <ChatModelCatalogState
+            state={{ hasSnapshot: false, status: props.error ? "error" : "loading" }}
+            hasOptions={false}
+            hasSelectableOptions={false}
+            errorLabel={props.group.errorLabel}
+            retryTarget={
+              panel.onRetry
+                ? {
+                    disabled: panel.disabled,
+                    groupId: props.group.id,
+                    onRetry: panel.onRetry!,
+                  }
+                : undefined
+            }
+          />
+        ))}
+        <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+          {null}
+        </ModelList>
+      </>
+    );
+  }
+
+  return (
+    <Show when={panel.group.completion} keyed>
+      <Errored fallback={() => <TargetState group={panel.group} error />}>
+        <Loading fallback={<TargetState group={panel.group} />}>
+          <TargetOptions group={panel.group} />
+        </Loading>
+      </Errored>
+    </Show>
   );
 }

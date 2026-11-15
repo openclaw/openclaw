@@ -35,6 +35,7 @@ import {
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as leaseAcquisition from "../state/openclaw-state-lease-acquisition.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -470,10 +471,11 @@ test.for(["invocation", "configured"] as const)(
       countActiveRuns: () => 0,
     });
     const publishChild = vi.spyOn(spawnRuntime, "upsertSessionEntryCore");
-    const held = createDeferredCore<() => void>();
+    const held = createDeferredCore<() => Promise<void>>();
     const release = createDeferredCore();
-    const holder = withProjectCheckoutLifecycle(repository, {}, async (lease) => {
-      held.resolve(lease.assertOwned);
+    const custody = { context: captureOpenClawStateWorkerContext() };
+    const holder = withProjectCheckoutLifecycle(repository, custody, async (lease) => {
+      held.resolve(() => lease.assertOwned());
       await release.promise;
     });
     const operations: Promise<unknown>[] = [holder];
@@ -530,7 +532,7 @@ test.for(["invocation", "configured"] as const)(
         Promise.race([spawning.then(() => false), continued.promise.then(() => true)]),
         signal,
       );
-      assertHeld();
+      await assertHeld();
       expect(publishChild).not.toHaveBeenCalled();
       expect(await sessionAccess.listSessionEntryKeysReadOnly(scope)).toEqual(originalKeys);
       release.resolve();

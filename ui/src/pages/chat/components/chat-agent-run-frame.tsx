@@ -24,7 +24,6 @@ import {
   chatItemGroups,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
-import type { TurnRecap } from "../chat-progress.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import {
@@ -56,7 +55,6 @@ type AgentRunFrameOptions = {
   partDependencies: (part: BodyPart) => readonly unknown[];
   isWorkExpanded: (key: string) => boolean;
   onToggleWork: (key: string, expanded: boolean) => void;
-  turnRecap?: TurnRecap;
 };
 type FrameProps = { frame: AgentRunFrameRenderItem; options: AgentRunFrameOptions };
 type BodyPart =
@@ -423,8 +421,6 @@ function RunFrame(props: FrameProps) {
         frameActionOwner: state().actionOwner,
         frameHeader: props.frame.fragment?.first,
         frameFooter: props.frame.fragment?.last,
-        turnRecap:
-          !props.frame.fragment || props.frame.fragment.last ? props.options.turnRecap : undefined,
       }}
     />
   );

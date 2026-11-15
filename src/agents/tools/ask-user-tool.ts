@@ -20,11 +20,13 @@ import {
   resolveAgentQuestionAnswerAuthority,
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
+import { captureAgentPluginRuntimeRefresh } from "../plugin-runtime-refresh.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
   QUESTION_RPC_GRACE_MS,
+  REQUIRED_ACTION_READY,
   type NormalizedAskUserParams,
   normalizeAskUserParams,
 } from "./ask-user-tool-normalization.js";
@@ -335,7 +337,28 @@ export function cancelAskUserPromptDelivery(
   releaseAskUserQuestion(buildAskUserQuestionId(toolCallId, sessionKey, runId, agentId));
 }
 
-function answeredResult(questions: readonly QuestionRequestQuestion[], answers: QuestionAnswers) {
+function answeredResult(
+  questions: readonly QuestionRequestQuestion[],
+  answers: QuestionAnswers,
+  requiredAction: boolean | undefined,
+  refreshTools: () => boolean,
+) {
+  if (requiredAction) {
+    if (answers.answers.required_action?.[0] !== REQUIRED_ACTION_READY) {
+      return unresolvedActionResult("declined");
+    }
+    const payload = { status: "ready_to_verify" as const };
+    // Human work can make previously unavailable tools discoverable (for example, OAuth).
+    const refresh = refreshTools();
+    return {
+      ...textResult(
+        "The user is ready for a fresh check of the required step. This is not proof of completion, authentication, or permission. Re-observe the original target through its owning tool. Continue the original task only if the prerequisite is actually satisfied; preserve completed progress and do not repeat completed or uncertain side effects. If still unresolved, report the remaining blocker without claiming success or repeating the handoff.\n\n" +
+          JSON.stringify(payload),
+        payload,
+      ),
+      ...(refresh ? { terminate: true } : {}),
+    };
+  }
   const payload = { status: "answered" as const, answers };
   const lines = questions.map((question) => {
     const values = answers.answers[question.questionId] ?? [];
@@ -344,7 +367,24 @@ function answeredResult(questions: readonly QuestionRequestQuestion[], answers: 
   return textResult(`${lines.join("\n")}\n\n${JSON.stringify(payload)}`, payload);
 }
 
-function noAnswerResult(status: Exclude<QuestionWaitAnswerResult["status"], "answered">) {
+function unresolvedActionResult(reason: "cancelled" | "expired" | "declined") {
+  const payload = { status: "action_unresolved" as const, reason };
+  return textResult(
+    "The required manual step was " +
+      reason +
+      ". The dependent task remains blocked; do not continue its dependent actions, retry this handoff, or claim success. Preserve completed progress and report this outcome. Wait for a new user instruction before trying this step again.\n\n" +
+      JSON.stringify(payload),
+    payload,
+  );
+}
+
+function noAnswerResult(
+  status: Exclude<QuestionWaitAnswerResult["status"], "answered">,
+  requiredAction = false,
+) {
+  if (requiredAction) {
+    return unresolvedActionResult(status === "cancelled" ? "cancelled" : "expired");
+  }
   const payload = { status: "no_answer" as const };
   const note =
     status === "cancelled"
@@ -453,6 +493,7 @@ export function createAskUserTool(params: {
   // Tool callbacks may run outside their creation scope; never borrow the invoker's owner.
   const questionAuthority = resolveAgentQuestionAnswerAuthority();
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
+  const runtimeRefresh = captureAgentPluginRuntimeRefresh();
   return {
     label: "Ask User",
     name: "ask_user",
@@ -512,14 +553,24 @@ export function createAskUserTool(params: {
             ? ((await cancelPendingQuestion("wait-timeout")) ?? waitResult)
             : waitResult;
         if (result.status === "answered") {
-          return answeredResult(normalized.questions, result.answers);
+          return answeredResult(
+            normalized.questions,
+            result.answers,
+            normalized.requiredAction,
+            runtimeRefresh.request,
+          );
         }
         if (
           result.status === "pending" ||
           result.status === "expired" ||
           result.status === "cancelled"
         ) {
-          return noAnswerResult(result.status);
+          return noAnswerResult(
+            normalized.requiredAction && waitResult.status === "pending"
+              ? "expired"
+              : result.status,
+            normalized.requiredAction,
+          );
         }
         throw new Error("question.waitAnswer returned an invalid status");
       };
@@ -571,8 +622,13 @@ export function createAskUserTool(params: {
         if (state.claim.isCancellationRequested()) {
           const answered = await cancelPendingQuestion("superseded-input");
           return answered
-            ? answeredResult(normalized.questions, answered.answers)
-            : noAnswerResult("cancelled");
+            ? answeredResult(
+                normalized.questions,
+                answered.answers,
+                normalized.requiredAction,
+                runtimeRefresh.request,
+              )
+            : noAnswerResult("cancelled", normalized.requiredAction);
         }
         signal?.addEventListener("abort", cancelOnAbort, { once: true });
         if (signal?.aborted) {
@@ -604,7 +660,12 @@ export function createAskUserTool(params: {
           if (deliveryResult.error !== undefined) {
             const answered = await cancelPendingQuestion("prompt-delivery-failed");
             if (answered) {
-              return answeredResult(normalized.questions, answered.answers);
+              return answeredResult(
+                normalized.questions,
+                answered.answers,
+                normalized.requiredAction,
+                runtimeRefresh.request,
+              );
             }
             if (
               isReplyDispatchDeliveryError(deliveryResult.error) &&
@@ -631,7 +692,12 @@ export function createAskUserTool(params: {
             signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
           );
           if (!signal?.aborted && answered) {
-            return answeredResult(normalized.questions, answered.answers);
+            return answeredResult(
+              normalized.questions,
+              answered.answers,
+              normalized.requiredAction,
+              runtimeRefresh.request,
+            );
           }
         }
         throw error;

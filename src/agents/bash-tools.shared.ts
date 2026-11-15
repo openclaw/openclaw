@@ -2,7 +2,7 @@ import { parseStrictInteger } from "@openclaw/normalization-core/number-coercion
 import { parseEnvValue as stripQuotes } from "../secrets/shared.js";
 import { sliceUtf16Safe } from "../utils.js";
 import type { SandboxBackendHandle } from "./sandbox/backend-handle.types.js";
-import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/workspace-mounts.js";
+import type { ReadOnlyWorkspaceSkillMount } from "./sandbox/fs-bridge.types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 

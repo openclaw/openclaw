@@ -47,6 +47,10 @@ export function modelPickerOptionKey(option: ChatModelPickerOption): string {
   return JSON.stringify([option.value, option.agentRuntime ?? null]);
 }
 
+export const FAVORITES_GROUP = "$favorites";
+export const modelRowKey = (option: ChatModelPickerOption, provider: string) =>
+  `${provider === FAVORITES_GROUP ? "favorite:" : ""}${modelPickerOptionKey(option)}`;
+
 export function isModelPickerOptionSelected(
   option: ChatModelPickerOption,
   value: string,
@@ -107,6 +111,8 @@ export function formatModelLabel(
 }
 
 export type ChatModelPickerOptionProps = {
+  rowKey?: string;
+  favorite?: { selected: boolean; disabled: boolean; onToggle: (event: MouseEvent) => void };
   contextWindow?: ChatContextWindowControlParams;
   hideCooldown?: boolean;
   sessionKey?: string;
@@ -131,12 +137,19 @@ export type ChatModelPickerTargetOptionProps = {
 export const modelProviderId = (option: ChatModelPickerOption) =>
   option.provider === "claude-cli" ? "anthropic" : option.provider;
 
-export function prepareChatModelPickerPanel(params: {
-  modelOptions: ChatModelPickerOption[];
-  selectedModelValue: string;
-  selectedAgentRuntime?: string;
-  targetGroups?: readonly ChatModelPickerTargetGroup[];
-}) {
+export function prepareChatModelPickerPanel(
+  params: {
+    modelOptions: ChatModelPickerOption[];
+    selectedModelValue: string;
+    selectedAgentRuntime?: string;
+    targetGroups?: readonly ChatModelPickerTargetGroup[];
+  },
+  favorites?: {
+    keys: readonly string[];
+    /** A remembered Favorites tab opens only while it holds the selected model. */
+    opening: { keys: readonly string[]; selected: string; favoritesTab?: boolean };
+  },
+) {
   const defaultModelOption = params.modelOptions.find((option) => option.isDefault);
   const activeModelOption = params.modelOptions.find((option) =>
     isModelPickerOptionSelected(option, params.selectedModelValue, params.selectedAgentRuntime),
@@ -166,19 +179,57 @@ export function prepareChatModelPickerPanel(params: {
     }
     providerGroups.set(provider, group);
   }
-  // Unranked catalogs can contain hundreds of models; browse the rest through All models.
+  // Small provider lists need no disclosure, whether ranked or not.
   for (const [provider, group] of providerGroups) {
-    if (!recommendingProviders.has(provider)) {
+    if (group.lead.length + group.more.length < 10) {
+      group.lead.push(...group.more);
+      group.more = [];
+    } else if (!recommendingProviders.has(provider)) {
       group.more = group.lead.splice(9);
     }
+  }
+  const byModel = new Map(params.modelOptions.map((option) => [option.value, option]));
+  const favoriteOptions = (favorites?.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
+  // Keep provider rows steady under the pointer; the Favorites group stays live.
+  const openingFavorites = (favorites?.opening.keys ?? [])
+    .map((key) => byModel.get(key))
+    .filter((option) => option !== undefined);
+  for (const [provider, group] of providerGroups) {
+    const first = [...group.lead, ...group.more].filter(
+      (option) => option.isDefault || option.value === favorites?.opening.selected,
+    );
+    const promoted = new Set([
+      ...first,
+      ...openingFavorites.filter((option) => groupProvider(option) === provider),
+    ]);
+    group.lead = [...promoted, ...group.lead.filter((option) => !promoted.has(option))];
+    group.more = group.more.filter((option) => !promoted.has(option));
   }
   const orderedProviderGroups = [...providerGroups];
   const leadingProvider = leadingModelOption && groupProvider(leadingModelOption);
   const activeProvider = activeModelOption && groupProvider(activeModelOption);
+  let openingProvider = activeProvider;
 
+  if (favoriteOptions.length && orderedProviderGroups.length > 1) {
+    orderedProviderGroups.unshift([FAVORITES_GROUP, { lead: favoriteOptions, more: [] }]);
+    // Opening keys keep the tab steady while stars change; an emptied group falls back.
+    if (
+      favorites?.opening.favoritesTab &&
+      activeModelOption &&
+      openingFavorites.includes(activeModelOption)
+    ) {
+      openingProvider = FAVORITES_GROUP;
+    }
+  }
   const orderedOptions = orderedProviderGroups.flatMap(([, { lead, more }]) => [...lead, ...more]);
   const optionIndex = new Map(
-    orderedOptions.map((option, index) => [modelPickerOptionKey(option), index]),
+    orderedProviderGroups
+      .flatMap(([provider, group]) =>
+        [...group.lead, ...group.more].map((option) => modelRowKey(option, provider)),
+      )
+      .map((key, index) => [key, index]),
   );
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
@@ -187,6 +238,7 @@ export function prepareChatModelPickerPanel(params: {
   return {
     orderedProviderGroups,
     activeProvider: activeProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
+    openingProvider: openingProvider ?? leadingProvider ?? orderedProviderGroups[0]?.[0],
     orderedOptions,
     optionIndex,
     targetGroups,

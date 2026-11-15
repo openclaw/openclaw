@@ -43,7 +43,7 @@ const enLabs = {
     usageRankedToolIndex: {
       title: "Usage-ranked tool index",
       description:
-        "Prefer frequently and recently used tools in Code Mode and Tool Search prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
+        "Prefer frequently and recently used tools in Code Mode, Tool Search, and MCP tool directory prompt indexes. Off by default. Stores tool IDs, scores, and timestamps for 90 days in operator-owned storage, excluding incognito sessions. Changes apply at the next prompt-prefix boundary. Inspect, import, or reset with openclaw tools usage.",
     },
     composerPredictions: {
       title: "Composer predictions",
@@ -51,7 +51,7 @@ const enLabs = {
         "Suggest a next message after a reply in the active conversation. Adds a tool-free model call using conversation context. Tab accepts the suggestion into your draft; it never sends automatically. Off by default.",
       model: "Prediction model",
       modelDescription:
-        "Utility is recommended for short, lower-cost predictions. Session uses the current session model; Default uses the agent’s configured primary model. An unavailable choice skips predictions instead of switching models.",
+        "Utility uses the agent’s utility model and may try its configured fallback models. Session uses the current session model; Default uses the agent’s configured primary model. Without a utility model, Utility skips predictions.",
       utility: "Utility model (recommended)",
       conversation: "Session model",
       default: "Default model",

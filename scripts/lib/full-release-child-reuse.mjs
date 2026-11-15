@@ -8,6 +8,7 @@ import {
   readReleaseJobListing,
   releaseChildSpec,
   releaseCompositeJobsSha256,
+  terminalPolicyPass,
   validateReleaseChildRunProvenance,
 } from "../full-release-validation-policy.mjs";
 import {
@@ -21,6 +22,10 @@ import {
 } from "./full-release-evidence.mjs";
 import { execGhRead, execGhReadAsync } from "./plain-gh.mjs";
 import { isRecord } from "./record-shared.mjs";
+import {
+  evaluateReleaseChildPolicy,
+  validateReleaseWaiverAggregates,
+} from "./release-validation-waivers.mjs";
 
 const MAX_RUNS = 100;
 const MAX_ARTIFACT_PROBES = 40;
@@ -145,6 +150,7 @@ function dependencies(repository, deps) {
   return {
     github,
     immutableReads: deps.immutableReads,
+    getJobLog: deps.getJobLog,
     downloadArchive:
       deps.downloadArchive ??
       (async (params) => {
@@ -226,7 +232,8 @@ function validateRun(run, selection, request) {
     run.run_attempt === selection.runAttempt &&
       run.run_attempt <= MAX_ATTEMPTS &&
       run.status === "completed" &&
-      run.conclusion === "success" &&
+      (run.conclusion === "success" ||
+        (request.policyTargetVersion && run.conclusion === "failure")) &&
       run.head_repository?.full_name === request.repository,
     "child is not the current successful attempt",
   );
@@ -390,7 +397,8 @@ async function validateEvidence(selection, request, deps) {
       receipt.dispatchId === origin(selection, request) &&
       receipt.sourceParentRunId === selection.sourceParentRunId &&
       receipt.sourceParentAttempt === selection.sourceParentAttempt &&
-      receipt.workloadConclusion === "success" &&
+      (receipt.workloadConclusion === "success" ||
+        (request.policyTargetVersion && receipt.workloadConclusion === "failure")) &&
       canonical(normalizedInputs(receipt.inputs)) === canonical(request.inputs),
     "receipt target, origin, or exact dispatch inputs changed",
   );
@@ -420,12 +428,41 @@ async function validateEvidence(selection, request, deps) {
   composite.compositeJobsSha256 = releaseCompositeJobsSha256(composite);
   requireEvidence(
     composite.jobs.length > 0 &&
-      composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion)) &&
+      (request.policyTargetVersion ||
+        composite.jobs.every((job) => ["success", "neutral"].includes(job.conclusion))) &&
       Object.entries(composite).every(
         ([key, value]) => canonical(receipt[key]) === canonical(value),
       ),
     "receipt does not match the complete live composite workload",
   );
+  // Only authenticated recovery supplies a version. Ordinary reuse/discovery remains green-only.
+  if (request.policyTargetVersion) {
+    const child = {
+      key: request.role,
+      runId: String(run.id),
+      runAttempt: run.run_attempt,
+      status: run.status,
+      conclusion: run.conclusion,
+      jobs: composite.jobs,
+    };
+    requireEvidence(
+      terminalPolicyPass(child, request.policyTargetVersion),
+      "workload does not pass recovery release policy",
+    );
+    const policy = evaluateReleaseChildPolicy({
+      child,
+      targetVersion: request.policyTargetVersion,
+    });
+    await validateReleaseWaiverAggregates({
+      policy,
+      jobs: composite.jobs.map((job) =>
+        attempts
+          .find((attempt) => attempt.runAttempt === job.acceptedRunAttempt)
+          .jobs.find((raw) => raw.name === job.name),
+      ),
+      getJobLog: deps.getJobLog,
+    });
+  }
   // The source parent is the pinned dispatch origin, not a live evidence producer.
   // Its later reruns do not supersede the independently checked child attempt.
   // Read the exact origin below, including when immutable payloads are replayed.
