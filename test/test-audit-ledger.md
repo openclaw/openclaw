@@ -926,6 +926,22 @@ or actionable finding. Source-only follow-ups remain for FIFO setup cleanup,
 failed MCP temporary-directory removal and environment restoration after
 channel/model fixture removal errors.
 
+### Secrets CLI FIFO fixture setup custody
+
+At `d32ac41084fcaef1099ecdbfeb1cfa81da532642`, the FIFO rejection case
+allocates its directory before running `mkfifo`, outside the cleanup scope.
+Use the existing automatic temporary-directory tracker so failed setup also
+releases that directory. Retain the positive regular-file preflight, real FIFO
+creation, CLI rejection assertions, timeout, recovery writer and awaited parse
+settlement. All 22 declarations / 23 expanded cases remain; one fixture is
+repaired and no coverage is removed. Test code changes by +4/-3 lines;
+production and shared helper code are unchanged.
+
+A direct execution of the existing setup block with `mkfifo` unavailable
+reproduces `ENOENT` and leaves the allocated directory present while preserving
+the original setup error. The observation precedes emergency cleanup. Full
+Vitest failure-path and clean-suite qualification remain pending.
+
 ## Pending qualification and proof repairs
 
 - Keep source-only candidates separate from applied removals. Obsolete fixture candidates require current-owner and runtime qualification. Retain Twitch's pre-abort pending check: it protects the passive account lifecycle. Its post-await settled check remains a separate live-test cleanup candidate.
