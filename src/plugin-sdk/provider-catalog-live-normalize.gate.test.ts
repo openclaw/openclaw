@@ -24,14 +24,28 @@ const rows = [
 ];
 
 describe("live discovery unknown-model gate", () => {
-  it("requires a chat declaration for unfamiliar ids even without a provider gate", () => {
+  it("allows unfamiliar ids without a chat declaration or provider gate", () => {
     const ids = buildOpenAICompatibleLiveModels([...rows, { id: "unclassified" }], fallback)
       .filter((m) => m.inference?.chat !== false)
       .map((m) => m.id);
     expect(ids).toContain("known-model");
     expect(ids).toContain("brand-new-model");
-    expect(ids).not.toContain("unclassified");
+    expect(ids).toContain("unclassified");
   });
+
+  it.each(["novel-model", "gpt-future-cyber", "vendor-alpha", "vendor-exp", "vendor-live"])(
+    "defaults %s to chat unless the provider explicitly rejects it",
+    (id) => {
+      const [model] = buildOpenAICompatibleLiveModels([{ id }], fallback);
+      expect(model?.id).toBe(id);
+      expect(model?.inference?.chat).not.toBe(false);
+      const [nonChat] = buildOpenAICompatibleLiveModels(
+        [{ id, capabilities: { chat: false } }],
+        fallback,
+      );
+      expect(nonChat?.inference?.chat).toBe(false);
+    },
+  );
 
   it("drops only the ids the manifest does not publish when the gate rejects", () => {
     const seen: string[] = [];

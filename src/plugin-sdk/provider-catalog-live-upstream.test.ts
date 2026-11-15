@@ -295,3 +295,12 @@ it("preserves a standalone feed's zero timer without sharing a finite pending lo
   expect(await noTimer).toMatchObject({ id: "opencode" });
   expect(await bounded).toMatchObject({ id: "opencode" });
 });
+
+it.each(["novel-model", "vendor-cyber", "vendor-alpha", "vendor-exp", "vendor-live"])(
+  "allows upstream model %s without capability metadata",
+  (id) => {
+    const model = project({ id, limit: { context: 8192, output: 4096 } });
+    expect(model?.id).toBe(id);
+    expect(model?.inference?.chat).not.toBe(false);
+  },
+);

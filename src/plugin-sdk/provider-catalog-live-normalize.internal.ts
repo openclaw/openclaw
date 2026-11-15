@@ -258,7 +258,11 @@ function buildOpenAICompatibleLiveModel(
   const parameterCount = readLiveModelCatalogPositiveSafeIntegerField(record, "parameterCount");
   const advertisedChatCapability = readLiveModelChatCapability(record);
   const exact = fallback.models.find((model) => model.id === id);
-  const chat = advertisedChatCapability ?? (exact ? (exact.inference?.chat ?? true) : false);
+  // Missing metadata is not a negative capability. Keep known non-chat families
+  // out of chat while allowing new models without a catalog release.
+  const chat =
+    advertisedChatCapability ??
+    (exact ? (exact.inference?.chat ?? true) : !NON_TEXT_MODEL_ID_PATTERN.test(id));
 
   if (exact) {
     const contextWindow =
@@ -386,7 +390,7 @@ export function projectUpstreamProviderCatalogModel(params: {
   if (!model || !id || !contextWindow || !maxTokens) {
     return undefined;
   }
-  const chat = readLiveModelChatCapability(model) === true;
+  const chat = readLiveModelChatCapability(model) ?? !NON_TEXT_MODEL_ID_PATTERN.test(id);
 
   const modelProvider = asOptionalRecord(model.provider);
   const npm =

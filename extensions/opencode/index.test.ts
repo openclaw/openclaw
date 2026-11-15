@@ -73,6 +73,7 @@ type UpstreamFixtureModel = {
   npm?: string;
   status?: string;
   reasoningEfforts?: string[];
+  capabilities?: { chat: boolean };
 };
 
 function upstreamCatalog(models: readonly UpstreamFixtureModel[]) {
@@ -89,6 +90,7 @@ function upstreamCatalog(models: readonly UpstreamFixtureModel[]) {
             name: model.name ?? model.id,
             reasoning: true,
             tool_call: true,
+            capabilities: model.capabilities,
             modalities: { input: ["text", "image"], output: ["text"] },
             limit: { context: 1_000_000, input: 900_000, output: 131_072 },
             cost: { input: 0, output: 0, cache_read: 0 },
@@ -432,6 +434,7 @@ describe("opencode provider plugin", () => {
         { id: "fresh-gemini-fixture", npm: "@ai-sdk/google" },
         { id: "fresh-gpt-fixture", npm: "@ai-sdk/openai" },
         { id: "retired-zen-fixture", status: "deprecated" },
+        { id: "denied-chat-fixture", capabilities: { chat: false } },
       ],
       advertised: [
         "x-preview-f-free",
@@ -443,6 +446,7 @@ describe("opencode provider plugin", () => {
         "listed-only-fixture-free",
         "test",
         "text-embedding-3-small",
+        "denied-chat-fixture",
       ],
     });
     const { dynamicModel } = await registerFixture();
@@ -462,6 +466,9 @@ describe("opencode provider plugin", () => {
       "fresh-claude-fixture",
       "fresh-gemini-fixture",
       "fresh-gpt-fixture",
+      "listed-only-fixture",
+      "listed-only-fixture-free",
+      "test",
     ]);
     expect(second.apiKey).toBe("other-runtime-key");
     expect(second.models.map((model) => model.id)).toEqual(first.models.map((model) => model.id));
@@ -482,16 +489,16 @@ describe("opencode provider plugin", () => {
     ]) {
       expect(first.models.find((model) => model.id === id)).toMatchObject({ api, baseUrl });
     }
-    for (const id of [
-      "listed-only-fixture",
-      "listed-only-fixture-free",
-      "test",
-      "text-embedding-3-small",
-    ]) {
+    for (const id of ["listed-only-fixture", "listed-only-fixture-free", "test"]) {
       expect(first.models.find((model) => model.id === id)).toMatchObject({
         api: "openai-completions",
         baseUrl: "https://opencode.ai/zen/v1",
         provider: "opencode",
+      });
+      expect(first.models.find((model) => model.id === id)?.inference?.chat).not.toBe(false);
+    }
+    for (const id of ["text-embedding-3-small", "denied-chat-fixture"]) {
+      expect(first.models.find((model) => model.id === id)).toMatchObject({
         inference: { chat: false },
       });
     }

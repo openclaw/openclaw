@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { Model } from "../llm/types.js";
+import { buildOpenAICompatibleLiveModels } from "../plugin-sdk/provider-catalog-live-normalize.internal.js";
 import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -16,14 +17,14 @@ import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.type
 import { AuthStorage } from "./sessions/auth-storage.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 
-function fixture(inference?: ModelCatalogEntry["inference"]) {
+function fixture(inference?: ModelCatalogEntry["inference"], id = "first") {
   const config = {};
   const metadataSnapshot = createPluginMetadataSnapshot({
     config,
     manifestRegistry: { plugins: [], diagnostics: [] },
   });
   const model: Model<"openai-responses"> = {
-    id: "first",
+    id,
     name: "First",
     provider: "synthetic",
     api: "openai-responses",
@@ -75,6 +76,31 @@ function fixture(inference?: ModelCatalogEntry["inference"]) {
 }
 
 describe("captured model catalog generations", () => {
+  it.each(["novel-model", "vendor-cyber", "vendor-alpha", "vendor-exp", "vendor-live"])(
+    "resolves discovered %s through an admitted catalog without chat metadata",
+    async (id) => {
+      const f = fixture(undefined, id);
+      const [discovered] = buildOpenAICompatibleLiveModels([{ id }], {
+        api: f.model.api,
+        baseUrl: f.model.baseUrl,
+        models: [],
+      });
+      expect(discovered).toBeDefined();
+      f.replaceCatalog({
+        entries: [{ ...f.model, inference: discovered?.inference }],
+        routeVariants: [],
+      });
+      const snapshot = f.capture();
+      await expect(
+        resolveModelAsync("synthetic", id, snapshot.agentDir, snapshot.config, {
+          ...snapshot.createStores(),
+          preparedModelRuntime: snapshot,
+          skipAgentDiscovery: true,
+        }),
+      ).resolves.toMatchObject({ model: { id } });
+    },
+  );
+
   it("retains withdrawn chat support when a run adds prompt-project facts", async () => {
     const f = fixture();
     f.replaceCatalog({

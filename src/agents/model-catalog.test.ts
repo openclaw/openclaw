@@ -8,7 +8,10 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { validateConfigObjectRaw } from "../config/validation-core.js";
 import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
-import { buildOpenAICompatibleLiveProviderCatalog } from "../plugin-sdk/provider-catalog-live-runtime.js";
+import {
+  buildOpenAICompatibleLiveProviderCatalog,
+  clearLiveCatalogCacheForTests,
+} from "../plugin-sdk/provider-catalog-live-runtime.js";
 import * as pluginMetadata from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
@@ -135,13 +138,17 @@ const customRoute = {
 } as const;
 
 beforeEach(() => {
+  clearLiveCatalogCacheForTests();
   mocks.augmentModelCatalogWithProviderPlugins.mockReset();
   mocks.augmentModelCatalogWithProviderPlugins.mockResolvedValue([]);
 });
 
-it.each([undefined, { input: ["text"], output: ["audio"] }])(
-  "keeps an excluded pin with metadata %j and rejects it before execution",
-  async (modalities) => {
+it.each([
+  { modalities: { input: ["text"], output: ["audio"] } },
+  { capabilities: { chat: false } },
+])(
+  "keeps an explicitly non-chat pin with metadata %j and rejects it before execution",
+  async (metadata) => {
     const baseUrl = "https://synthetic.invalid/v1";
     const config: OpenClawConfig = {
       plugins: { enabled: false },
@@ -160,7 +167,7 @@ it.each([undefined, { input: ["text"], output: ["audio"] }])(
       fetchGuard: async () => ({
         response: Response.json({
           data: [
-            { id: "voice-v2", modalities },
+            { id: "voice-v2", ...metadata },
             { id: "chat-v2", modalities: { input: ["text"], output: ["text"] } },
           ],
         }),

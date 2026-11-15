@@ -256,8 +256,9 @@ describe("opencode-go provider plugin", () => {
       {
         known: upstreamModel("known", { name: "Enriched" }),
         retired: upstreamModel("retired", { status: "deprecated" }),
+        denied: upstreamModel("denied", { capabilities: { chat: false } }),
       },
-      ["known", "retired", "unknown", "future-embedding"],
+      ["known", "retired", "unknown", "future-embedding", "denied"],
     );
     const result = await buildOpencodeGoLiveProviderConfig({
       discoveryApiKey: "resolved-opencode-key",
@@ -265,12 +266,18 @@ describe("opencode-go provider plugin", () => {
     });
     expect(result.models.filter((model) => model.inference?.chat !== false)).toMatchObject([
       { id: "known", name: "Enriched" },
+      { id: "unknown" },
     ]);
     expect(result.models.find((model) => model.id === "unknown")).toMatchObject({
-      inference: { chat: false },
       api: "openai-completions",
       baseUrl: OPENAI_URL,
     });
+    expect(result.models.find((model) => model.id === "unknown")?.inference?.chat).not.toBe(false);
+    for (const id of ["future-embedding", "denied"]) {
+      expect(result.models.find((model) => model.id === id)).toMatchObject({
+        inference: { chat: false },
+      });
+    }
     const listingRequest = fetchGuard.mock.calls.find(
       ([request]) => request.url === "https://opencode.ai/inference/go/v1/models",
     )?.[0];
