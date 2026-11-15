@@ -24,16 +24,18 @@ import { dispatchChannelMessageAction } from "../message-action-dispatch.js";
 import { getBundledChannelPluginAsync } from "./test-helpers/bundled-channel-plugin-loader.js";
 
 const preparation = vi.hoisted(() => ({ afterLookup: undefined as (() => void) | undefined }));
-vi.mock("node:dns/promises", async (original) => {
-  const actual = await original<typeof import("node:dns/promises")>();
-  return {
-    ...actual,
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("node:dns/promises") & { default: typeof import("node:dns/promises") }
+  >();
+  const overrides = {
     lookup: async (...args: Parameters<typeof actual.lookup>) => {
       const result = await actual.lookup(...args);
       preparation.afterLookup?.();
       return result;
     },
   };
+  return { ...actual, ...overrides, default: { ...actual.default, ...overrides } };
 });
 
 const CURRENT = "aaaaaaaaaaaaaaaaaaaaaaaaaa";

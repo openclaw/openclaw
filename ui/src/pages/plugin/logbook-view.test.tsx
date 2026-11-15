@@ -117,22 +117,26 @@ it("keeps action focus and capture toggle state current across refreshes", async
     throw new Error(`Unexpected Logbook request: ${method}`);
   });
   const view = mountLogbook(request);
-  await waitForSolid(() => expect(view.queryByRole("button", { name: "Pause" })).not.toBeNull());
-  const toggle = view.getByRole("button", { name: "Pause" }) as HTMLButtonElement;
+  await waitForSolid(() =>
+    expect(view.queryByRole("button", { name: "Pause capture" })).not.toBeNull(),
+  );
+  const toggle = view.getByRole("button", { name: "Pause capture" }) as HTMLButtonElement;
   expect(toggle.disabled).toBe(true);
   const analyze = view.getByRole("button", { name: "Analyze now" });
   analyze.focus();
 
   serverStatus = { ...serverStatus, captureEnabled: true };
   await advance(30_000);
-  expect(view.getByRole("button", { name: "Pause" })).toBe(toggle);
+  expect(view.getByRole("button", { name: "Pause capture" })).toBe(toggle);
   expect(toggle.disabled).toBe(false);
   expect(document.activeElement).toBe(analyze);
 
   for (const paused of [true, false]) {
     toggle.click();
     await advance();
-    expect(view.getByRole("button", { name: paused ? "Resume" : "Pause" })).toBe(toggle);
+    expect(view.getByRole("button", { name: paused ? "Resume capture" : "Pause capture" })).toBe(
+      toggle,
+    );
     expect(toggle.disabled).toBe(false);
   }
 

@@ -75,7 +75,7 @@ export function respondChatSendAdmissionError(
     return respondError(
       respond,
       ErrorCodes.UNAVAILABLE,
-      "session transcript is rebuilding; retry shortly",
+      "Chat history is rebuilding. Try again shortly.",
       {
         details: { method: "chat.send" },
         retryable: true,

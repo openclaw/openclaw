@@ -12,6 +12,7 @@ const cameraOutput = vi.hoisted(() => ({ root: "" }));
 vi.mock("./cli-utils.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./cli-utils.js")>()),
   runNodesCommand: async (_label: string, action: () => Promise<void>) => action(),
+  runNodesReadCommand: async (_label: string, action: () => Promise<void>) => action(),
 }));
 
 vi.mock("../nodes-camera.js", async () => {

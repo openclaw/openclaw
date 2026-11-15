@@ -179,6 +179,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
       try {
         const profiles = await prepareSessionSharingProfiles(client);
         let readSharingFacts: () => PreparedSessionMutationFacts;
+        let followRegistration: Parameters<typeof companion.ask>[0]["followRegistration"];
         if (actorFacts) {
           readSharingFacts = actorFacts.readCurrent;
         } else {
@@ -188,6 +189,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
             allowMissing: true,
           });
           releaseSharing = preparedFacts.release;
+          followRegistration = preparedFacts.followRegistration;
           readSharingFacts = () => preparedFacts.readCurrent(context.getRuntimeConfig());
         }
         const initialSharingFacts = readSharingFacts();
@@ -312,6 +314,7 @@ export const sessionCompanionHandlers: GatewayRequestHandlers = {
           connId,
           ownerId: resolveSessionCompanionOwnerId(client),
           assertSourceCurrent,
+          followRegistration,
           ...(assertInputCurrent ? { assertInputCurrent } : {}),
           ...(capturedOperator ? { operatorAuthority: capturedOperator.authority } : {}),
           ...(signal ? { signal } : {}),

@@ -493,8 +493,8 @@ async function handleInternalSourceReplySendAction(
   // have no viewer here, so claim no visible delivery.
   const receipt = input.sourceReplyTranscriptOnly
     ? payload.dryRun
-      ? "Prepared reply for the current session transcript."
-      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+      ? "Prepared reply for the current chat history."
+      : `Recorded reply in the current chat history${sink}. This send did not deliver it to an external channel.`
     : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.

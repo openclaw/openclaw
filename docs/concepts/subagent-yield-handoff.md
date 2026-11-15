@@ -42,6 +42,13 @@ registry replacement operation; it does not create a second delegated task.
 Adoption clears a child-only pause notice instead of carrying it into completion.
 Actual requester completion batches keep their frozen membership and generation.
 
+A yield can also await wake-armed background commands that the yielding run
+started. Their exit becomes an ordinary exec wake turn in the child session. Like a
+tool handoff result, it names the run that started the command, and reply
+admission continues the paused task only when that run is the paused one. Any
+other exec wake stays a separate follow-up, and a hidden child that did not yield
+gets only a passive notice.
+
 Before admitting another turn in a yielded requester, the recovery owner transfers
 its ended execution's fence to the current durable child batch. The batch is
 revalidated before the write commits; absent or adopted batches, unrelated run

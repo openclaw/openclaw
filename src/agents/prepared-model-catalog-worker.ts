@@ -66,6 +66,35 @@ import {
 import type { AuthStorageData } from "./sessions/auth-storage.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
+const WATCHDOG_TICK_MS = 1_000;
+
+/**
+ * Calls `expire` once the catalog budget of running time passes without `refresh`. A tick that
+ * arrives long after it was due means the host slept or the process was stopped. Nothing could
+ * progress while frozen, so that time does not count toward the budget.
+ */
+function startCatalogWatchdog(expire: () => void) {
+  let idleMs = 0;
+  let lastTickAt = performance.now();
+  const tick = () => {
+    const now = performance.now();
+    idleMs += Math.min(now - lastTickAt, 2 * WATCHDOG_TICK_MS);
+    lastTickAt = now;
+    if (idleMs >= PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS) {
+      expire();
+    } else {
+      timer = setTimeout(tick, WATCHDOG_TICK_MS);
+    }
+  };
+  let timer = setTimeout(tick, WATCHDOG_TICK_MS);
+  return {
+    refresh: () => {
+      idleMs = 0;
+      lastTickAt = performance.now();
+    },
+    stop: () => clearTimeout(timer),
+  };
+}
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 // Acknowledgements contain no payloads and expire with the physical singleton pool.
 const acknowledgedContexts = new WeakMap<CatalogPool, Map<string | undefined, string>>();
@@ -409,7 +438,7 @@ export function createPreparedModelCatalogWorker(
     const controller = new AbortController();
     let progress: NativeReferenceProgress | undefined;
     let expire = () => controller.abort(new WorkerTaskError("worker task timed out", "timeout"));
-    const timeout = setTimeout(() => expire(), PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS);
+    const watchdog = startCatalogWatchdog(() => expire());
     try {
       assertCurrent();
       releaseProcessLifetime ??= registerPreparedModelRuntimeClose(stop);
@@ -503,7 +532,7 @@ export function createPreparedModelCatalogWorker(
               .close(failure)
               .catch((error: unknown) => process.emitWarning(String(error)));
           };
-          timeout.refresh();
+          watchdog.refresh();
           task.onRecovery = onRecovery;
           const workerRequest = {
             ...value,
@@ -537,12 +566,12 @@ export function createPreparedModelCatalogWorker(
             // SAFETY: The native verifier is the sole producer on this task's private channel.
             const next = notification as NativeReferenceProgress;
             if (!progress || next.completed > progress.completed) {
-              timeout.refresh();
+              watchdog.refresh();
             }
             progress = next;
           },
           onRequest: async () => {
-            clearTimeout(timeout);
+            watchdog.stop();
             return {
               input: !stoppedError && params.isCurrent(),
               timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
@@ -595,7 +624,7 @@ export function createPreparedModelCatalogWorker(
       if (pending) {
         tasks.delete(pending);
       }
-      clearTimeout(timeout);
+      watchdog.stop();
     }
     if (message.status === "failed") {
       throw new Error(message.error);

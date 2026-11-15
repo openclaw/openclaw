@@ -7,6 +7,10 @@ import {
   createOAuthRefreshCredential,
 } from "./auth-profiles/credential-fixtures.test-support.js";
 import { parseLegacyCredentialEntry } from "./auth-profiles/legacy-flat-credential.js";
+import {
+  createFailedOAuthRefreshFence,
+  createOAuthRefreshFence,
+} from "./auth-profiles/oauth-refresh-marker.js";
 import type { AuthProfileCredential, OAuthCredential } from "./auth-profiles/types.js";
 import type { ProviderAuthAliasLookupParams } from "./provider-auth-aliases.js";
 
@@ -138,6 +142,20 @@ describe("buildAuthHealthSummary", () => {
     ],
     ["out-of-range OAuth expiry", oauth(MAX_DATE_TIMESTAMP_MS + 1), "missing"],
     ["expired OAuth without refresh", oauth(now - 10_000, "google-antigravity", ""), "expired"],
+    [
+      "pending OAuth refresh fence",
+      createOAuthRefreshFence({ profileId: "openai:default", credential: oauth(now - 10_000) }),
+      "expired",
+      "expired",
+    ],
+    [
+      "failed OAuth refresh fence",
+      createFailedOAuthRefreshFence(
+        createOAuthRefreshFence({ profileId: "openai:default", credential: oauth(now - 10_000) }),
+      ),
+      "expired",
+      "refresh_failed",
+    ],
   ])("classifies %s", (_name, credential, status, reasonCode) => {
     const summary = health({ [`${credential.provider}:default`]: credential });
     expect(summary.profiles[0]?.status).toBe(status);

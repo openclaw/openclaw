@@ -48,7 +48,8 @@ import { createPluginSourceAdmissionPublisher } from "./plugin-source-admission-
 import { resolvePluginSourceCaptureStorage } from "./plugin-source-capture-context.js";
 import { createPluginSourceCaptureRoot } from "./plugin-source-capture-directory.js";
 import { subscribePluginNativeLoads } from "./plugin-source-capture-native-loads.js";
-import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-artifact.js";
+import { preparePluginSourceSnapshotAdmission } from "./plugin-source-snapshot-artifact.js";
+import { PluginSourceSnapshotValidationError } from "./plugin-source-snapshot-payload.js";
 import type {
   PluginSourceSnapshotBinding,
   PluginSourceSnapshotDescriptor,
@@ -489,6 +490,16 @@ async function prepareOwnedPluginGeneration(params: OwnedPreparationParameters) 
     pending++;
     let task: ReturnType<typeof pool.startTask> | undefined;
     try {
+      if (command.operation === "capture" && command.sourceSnapshot) {
+        await preparePluginSourceSnapshotAdmission({
+          ...command.sourceSnapshot,
+          assertCurrent: () => {
+            if (closing || owner.closing) {
+              throw new Error("Plugin preparation worker has closed");
+            }
+          },
+        });
+      }
       task = shared.startTask(
         { ...command, nativeLoads: [...pendingNativeLoads] },
         {

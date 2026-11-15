@@ -182,7 +182,7 @@ it.each(["assistant", "user"])("separates all heading levels in %s messages", (r
   const { container, draw } = mount(390, "light");
   for (const textSize of [14, 20]) {
     document.documentElement.style.setProperty("--chat-text-size", `${textSize}px`);
-    for (const level of [1, 2, 3, 4]) {
+    for (const level of [1, 2, 3, 4, 5, 6]) {
       const heading = "#".repeat(level);
       const markdown = `${heading} First\n\nFirst paragraph.\n\nSecond paragraph.\n\n${heading} Section\n\nFollowing paragraph.\n\n- Item\n\n> Quote\n\n\`\`\`text\nCode\n\`\`\``;
       draw(markdown, false, role);
@@ -198,7 +198,9 @@ it.each(["assistant", "user"])("separates all heading levels in %s messages", (r
       for (const block of root.querySelectorAll(
         ":scope > p, :scope > ul, :scope > blockquote, :scope > .code-block-wrapper",
       )) {
-        expectMargins(block, `${textSize}px`);
+        // A heading stays close to the block it introduces.
+        const introduced = block.previousElementSibling?.matches("h1, h2, h3, h4, h5, h6");
+        expectMargins(block, `${introduced ? (textSize * 2) / 5 : textSize}px`);
       }
     }
   }
