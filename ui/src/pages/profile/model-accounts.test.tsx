@@ -253,6 +253,10 @@ it.each(["identity", "write", "profile", "disconnected"] as const)(
       h.emit({ phase: "reconnecting" });
     }
     await waitForSolid(() => expect(h.text()).toContain(copy(`unavailable.${reason}`)));
+    if (reason === "profile") {
+      expect.soft(h.text()).toContain("Use Refresh at the top of this page to try again.");
+      expect.soft(h.text()).not.toContain("Set identity");
+    }
     for (const other of ["identity", "write", "profile", "disconnected"]) {
       if (other !== reason) {
         expect(h.text()).not.toContain(copy(`unavailable.${other}`));
