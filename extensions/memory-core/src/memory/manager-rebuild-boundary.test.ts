@@ -114,7 +114,7 @@ describe("large memory rebuild boundary", () => {
   it.each([true, false])(
     "rebuilds multipage vectors through real workers (cache=%s)",
     async (cacheEnabled) => {
-      // Separate long lines yield >256 unique chunks, crossing the 8 MiB/4096-dimension read page.
+      // Separate long lines yield >256 unique chunks, crossing multiple bounded read pages.
       await fs.writeFile(
         path.join(root, "memory", "large.md"),
         Array.from(
@@ -163,7 +163,7 @@ describe("large memory rebuild boundary", () => {
       expect(calls).toBe(0);
       // This release can reuse published vectors even when the embedding cache is disabled.
       expect(pages.length).toBeGreaterThan(1);
-      expect(Math.max(...pages)).toBeLessThanOrEqual(256);
+      expect(Math.max(...pages)).toBeLessThanOrEqual(128);
       console.log(
         "REBUILD_BOUNDARY",
         JSON.stringify({
