@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs, { lstat, mkdir, readFile, readdir, rename, symlink, writeFile } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { dirname, join, sep } from "node:path";
 import * as tar from "tar";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
@@ -203,6 +204,39 @@ You triage incidents.
     expect(validated.template.templateMarkdownBody?.toString()).toContain(
       "purpose-built OpenClaw agent",
     );
+  });
+
+  it.each([
+    { file: "package.json", existing: false },
+    { file: "CLAW.md", existing: true },
+  ])("cleans up a failed $file write so creation can be retried", async ({ file, existing }) => {
+    const root = join(tempDirs.make("openclaw-template-create-failed-"), "project");
+    if (existing) {
+      await mkdir(root);
+    }
+    const originalWriteFile = fs.writeFile;
+    const failedWrite = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
+      const [target, data, options] = args;
+      if (typeof data === "string" && data.startsWith(file === "package.json" ? "{" : "---")) {
+        await originalWriteFile(target, data.slice(0, 8), options);
+        throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+      }
+      return originalWriteFile(...args);
+    });
+    syncBuiltinESMExports();
+    try {
+      await expect(createTemplateProject(root)).rejects.toMatchObject({ code: "ENOSPC" });
+    } finally {
+      failedWrite.mockRestore();
+      syncBuiltinESMExports();
+    }
+    if (existing) {
+      await expect(readdir(root)).resolves.toEqual([]);
+    } else {
+      await expect(lstat(root)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    await createTemplateProject(root);
+    await expect(validateTemplateProject(root)).resolves.toMatchObject({ ok: true });
   });
 
   it("keeps one concurrent creator's completed project", async () => {

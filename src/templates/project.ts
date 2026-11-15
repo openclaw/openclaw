@@ -1,5 +1,15 @@
 import { createHash } from "node:crypto";
-import { lstat, mkdir, readdir, realpath, rmdir, stat, unlink, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  open,
+  readdir,
+  realpath,
+  rmdir,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { basename, dirname, parse, resolve } from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -207,13 +217,14 @@ export async function createTemplateProject(
   const createdPaths: string[] = [];
   await mkdir(root, { recursive: true });
   try {
-    await writeFile(packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`, {
-      encoding: "utf8",
-      flag: "wx",
-    });
-    createdPaths.push(packageJsonPath);
-    await writeFile(templateMarkdownPath, templateMarkdown, { encoding: "utf8", flag: "wx" });
-    createdPaths.push(templateMarkdownPath);
+    for (const [filePath, contents] of [
+      [packageJsonPath, `${JSON.stringify(packageJson, null, 2)}\n`],
+      [templateMarkdownPath, templateMarkdown],
+    ] as const) {
+      await using file = await open(filePath, "wx");
+      createdPaths.push(filePath);
+      await writeFile(file, contents, "utf8");
+    }
   } catch (error) {
     await Promise.allSettled(createdPaths.map((path) => unlink(path)));
     if (initialState === "missing") {
