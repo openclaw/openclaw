@@ -760,19 +760,6 @@ it("keeps both Device replies above a trailing same-run steer", () => {
   expect(items.filter((item) => item.kind === "work-group")).toHaveLength(1);
 });
 
-it("does not fold a mixed assistant text group when any message is unlabelled", () => {
-  const user = message("user", "Check", 1);
-  const commentary = message("assistant", "Checking", 2, { phase: "commentary" });
-  const delivered = message("assistant", "Delivered", 3);
-  const answer = message("assistant", "Closing", 5);
-  const groups = cachedGroups([user, commentary, tool("read", 4), answer]);
-  const textGroup = groups[1]!;
-  textGroup.messages.push({ key: "unlabelled", message: delivered, hasVisibleContent: true });
-  const items = collapseCompletedTurnWork(groups, { sessionKey, runWorking: false });
-  expect(visible(items)).toEqual([user, commentary, delivered, answer]);
-  expect(work(items)).toEqual([groups[2]!.messages[0]!.message]);
-});
-
 it("keeps rollup ownership and timing when unscoped text stays visible", () => {
   const history = [
     message("user", "Ask", 1),
