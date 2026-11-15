@@ -458,6 +458,11 @@ async function updateCommandInternal(
       const installKey = captureUpdateCommandExecutorAuthority(fence).installKey;
       assertUpdatePackageActivationAdmission(installKey, { serviceRoot: managedServiceRoot });
       preUpdatePluginInstallRecords = await prepareMutableUpdateRuntime(env, fence);
+      // A Git release update never rewrites the tree this updater runs from.
+      if (updateInstallKind === "git" && !switchToGit && process.platform !== "win32") {
+        mutableUpdatePrepared = true;
+        return;
+      }
       // Retention can walk the full dependency tree before the first staging step.
       // Record that work so the completed capacity check does not look stalled.
       const retentionStep = {

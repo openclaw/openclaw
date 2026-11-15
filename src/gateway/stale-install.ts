@@ -127,6 +127,15 @@ export function registerGatewayInstallationReplacementHandler(
   };
 }
 
+/** A ready Gateway ends the trial of the Git release it runs; the launcher stops counting. */
+export async function settleGatewayReleaseTrial(): Promise<void> {
+  const root = installationState.observer?.installationRoot;
+  if (root) {
+    const { settleGitReleaseTrial } = await import("../infra/git-release.js");
+    await settleGitReleaseTrial(root);
+  }
+}
+
 export function getGatewayInstallationReplacement(): GatewayInstallationReplacement | undefined {
   return installationState.observer?.replacement;
 }

@@ -20,6 +20,7 @@ import {
   readCurrentGitUpdateRecovery,
   recordGitRollbackOutcome,
 } from "./update-runner-git-recovery.js";
+import { updateGitRelease } from "./update-runner-git-release.js";
 import {
   createGitRuntimeTransaction,
   prepareGitRuntimePromotion,
@@ -57,6 +58,10 @@ export async function updateGitCheckout(params: {
   startedAt: number;
 }): Promise<UpdateRunResult> {
   const { opts, timeoutMs, startedAt } = params;
+  // POSIX checkouts update by switching a release link; the checkout is never written.
+  if (process.platform !== "win32" && !opts.prepareGitExposure && !opts.publishGitCheckout) {
+    return await updateGitRelease(params);
+  }
   const defaultCommandEnv = resolveGitUpdateCommandEnv(params.defaultCommandEnv);
   let gitRoot = params.gitRoot;
   const runCommand: CommandRunner = (argv, options) =>

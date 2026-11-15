@@ -34,6 +34,7 @@ import {
 } from "../../infra/update-managed-service-handoff.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import { looksLikeGitCheckout } from "../../infra/update-runner-install-surface.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { formatInstallationTargetCommand } from "../installation-target-format.js";
@@ -171,7 +172,9 @@ export async function handoffUpdateFromGateway(params: {
 }): Promise<boolean> {
   if (
     process.env.OPENCLAW_UPDATE_RUN_HANDOFF === "1" ||
-    (process.platform !== "linux" && process.platform !== "darwin")
+    (process.platform !== "linux" && process.platform !== "darwin") ||
+    // A Git checkout updates by switching releases; its Gateway keeps serving.
+    (params.mode === "git" && (await looksLikeGitCheckout(params.root)))
   ) {
     return false;
   }
