@@ -864,7 +864,9 @@ it(
       });
     } finally {
       await runQaGatewayFixture(
-        () => client?.stopAndWait(),
+        async () => {
+          await client?.stopAndWait();
+        },
         () => instance.cleanup(),
       );
     }
