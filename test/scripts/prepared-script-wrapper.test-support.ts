@@ -39,10 +39,10 @@ export function preparedScriptWrapperPreload(
 `
     : "";
   return `import { readFileSync } from "node:fs";
-import { registerHooks } from "node:module";
+import nodeModule from "node:module";
 const modules = ${JSON.stringify(modules)};
 const sources = new Map(Object.entries(modules).map(([source, prepared]) => [prepared, source]));
-registerHooks({
+nodeModule.registerHooks({
   resolve(specifier, context, nextResolve) {
 ${resolveVirtual}    const prepared = modules[context.parentURL];
     const resolved = nextResolve(specifier, prepared && specifier.startsWith(".")

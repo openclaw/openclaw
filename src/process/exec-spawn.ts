@@ -589,6 +589,8 @@ type SpawnCommandOptions = CommandSpawnOptions & {
   executionIntent?: ProcessExecutionIntent;
   executionScopeKey?: string;
   baseEnv?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv; no ambient environment is merged again. */
+  preparedEnv?: NodeJS.ProcessEnv;
   executionTimeoutMs?: number;
   /** The command runner routes scope cancellation through its termination owner. */
   inheritScopeCancellation?: boolean;
@@ -648,10 +650,10 @@ export function spawnCommandWithInvocation<
   if (scope?.signal.aborted) {
     throw new Error("Command process scope is closed");
   }
-  const sourceOptions: SpawnCommandOptions = options;
   const {
     baseEnv,
     env,
+    preparedEnv,
     windowsVerbatimArguments,
     cancelSignal,
     executionTimeoutMs,
@@ -659,8 +661,8 @@ export function spawnCommandWithInvocation<
     executionIntent = "gateway-internal",
     executionScopeKey,
     ...execaOptions
-  } = sourceOptions;
-  const commandEnv = resolveCommandEnv({ argv, baseEnv, env });
+  }: SpawnCommandOptions = options;
+  const commandEnv = preparedEnv ?? resolveCommandEnv({ argv, baseEnv, env });
   const invocation = resolveSafeChildProcessInvocation({
     argv,
     cwd: execaOptions.cwd,

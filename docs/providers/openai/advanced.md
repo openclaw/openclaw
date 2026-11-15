@@ -317,7 +317,11 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     the checkpoint and retained context and sends `store: false`, without a stored
     `previous_response_id`. This also lets an already-affected session recover on
     its next turn without editing its history. Requests without checkpoints retain
-    stored continuation. Azure and custom endpoint storage policies are unchanged.
+    stored continuation. The transport enforces stateless checkpoint replay after
+    payload hooks, so a hook cannot re-enable storage or retain a stale
+    `previous_response_id` for that input. This prevents a conflict without
+    replaying a request after output or tool work has started. Azure and custom
+    endpoint storage policies are unchanged.
 
     On the native ChatGPT sign-in route, the built-in runtime instead uses
     **Codex V2 compaction** by default for context-budget pressure before a model

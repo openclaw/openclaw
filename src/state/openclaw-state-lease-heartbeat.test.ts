@@ -390,8 +390,8 @@ it("defers SQLite activation until renewal commits without PostgreSQL runtime", 
     "activation-worker.mts",
     `
       import { parentPort, workerData } from "node:worker_threads";
-      import { registerHooks } from "node:module";
-      registerHooks({
+      import nodeModule from "node:module";
+      nodeModule.registerHooks({
         resolve(specifier, context, nextResolve) {
           if (specifier.includes("openclaw-state-db-engine.")) {
             const gate = new Int32Array(workerData.fixtureLoadGate);

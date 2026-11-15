@@ -335,6 +335,26 @@ describe("runCommandWithTimeout", () => {
 });
 
 describe("runCommandBuffered", () => {
+  it("passes a prepared environment to each child without changing its bytes", async () => {
+    const parentToken = process.env.GH_TOKEN;
+    const argv = nodeCommand(
+      'console.log(require("node:crypto").createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort())).digest("hex"))',
+    );
+    const baseEnv = { PATH: process.env.PATH, SystemRoot: process.env.SystemRoot, REMOVE: "base" };
+    const env = { GH_TOKEN: "synthetic-child-only", REMOVE: undefined, EMPTY: "", TEXT: "λ=x" };
+    const preparedEnv = resolveCommandEnv({ argv, baseEnv, env });
+    const ordinary = await runCommandBuffered(argv, { baseEnv, env, timeoutMs: 10_000 });
+    expect(ordinary.code).toBe(0);
+    for (let i = 0; i < 2; i++) {
+      const prepared = await runCommandBuffered(argv, { preparedEnv, timeoutMs: 10_000 });
+      expect(prepared.code).toBe(0);
+      expect(prepared.stdout.toString()).toBe(ordinary.stdout.toString());
+    }
+    expect(process.env.GH_TOKEN === parentToken).toBe(true);
+    expect(env.REMOVE).toBeUndefined();
+    expect(baseEnv.REMOVE).toBe("base");
+  });
+
   it.each([
     {
       name: "preserves ordinary nonzero exit and output",

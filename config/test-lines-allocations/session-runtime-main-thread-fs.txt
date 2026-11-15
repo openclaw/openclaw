@@ -1,4 +1,4 @@
-# 13,242 net test LF against main 802573f8 minus the single 400-line PR allowance.
+# 13,357 net test LF against main 36a0209f minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -22,4 +22,4 @@
 # startup census and visible-pane geometry fixtures retain their existing assertions.
 # Workspace first-writer FIFO, interrupted process cleanup, explicit late-PID stop,
 # and font-ready geometry reuse existing owning regressions and their assertions.
-12842
+12957

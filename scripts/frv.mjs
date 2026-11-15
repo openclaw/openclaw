@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { execFile } from "node:child_process";
+import childProcess from "node:child_process";
 import {
   appendFileSync,
   mkdirSync,
@@ -69,7 +69,7 @@ import {
   tryReadReleaseDecisionArtifact,
 } from "./release-ci-summary.mjs";
 
-const execFileAsync = promisify(execFile);
+const execFileAsync = promisify(childProcess.execFile);
 const DEFAULT_REPOSITORY = "openclaw/openclaw";
 const DEFAULT_POLL_MS = 30_000;
 const DEFAULT_TIMEOUT_MS = 12 * 60 * 60_000;

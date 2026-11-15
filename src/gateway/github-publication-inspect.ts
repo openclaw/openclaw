@@ -10,6 +10,7 @@ import {
   resolveConfiguredGitHubApiBaseUrl,
 } from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   currentGitHubPublicationConfig,
@@ -217,6 +218,7 @@ export async function readOwnGitHubPullRequest(params: {
   };
   const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId, assertRequester);
   const config = currentGitHubPublicationConfig();
+  const configRevision = getRuntimeConfigSnapshotMetadata();
   const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
   const hasReadEndpoint =
     host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
@@ -224,7 +226,8 @@ export async function readOwnGitHubPullRequest(params: {
     params.reader.assertCurrent();
     if (
       (identity.host ?? "github.com") !== host ||
-      resolveConfiguredGitHubApiBaseUrl(currentGitHubPublicationConfig()) !== apiBaseUrl ||
+      currentGitHubPublicationConfig() !== config ||
+      getRuntimeConfigSnapshotMetadata() !== configRevision ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity }) ||
       (publicContinuation &&
         (!publication || !matchesGitHubPublicationIdentityRow(publication.publisher, identity)))

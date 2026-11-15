@@ -266,6 +266,8 @@ export type BufferedCommandOptions = {
   input?: string | Uint8Array;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   maxOutputBytes?: number | { stdout?: number; stderr?: number };
   maxCombinedOutputBytes?: number;
@@ -344,6 +346,7 @@ export async function runCommandBuffered(
       executionIntent: options.executionIntent,
       executionScopeKey: options.executionScopeKey,
       baseEnv: options.baseEnv,
+      preparedEnv: options.preparedEnv,
       cwd: options.cwd,
       env: options.env,
       input: options.input,

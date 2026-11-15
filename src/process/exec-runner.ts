@@ -77,6 +77,8 @@ export type CommandOptions = {
   prepareInput?: (pid: number, argv?: readonly string[]) => Promise<void>;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
+  /** Operation-owned output of resolveCommandEnv. */
+  preparedEnv?: NodeJS.ProcessEnv;
   windowsVerbatimArguments?: boolean;
   noOutputTimeoutMs?: number;
   signal?: AbortSignal;
@@ -258,6 +260,7 @@ async function runCommandWithOutputEncoding(
     executionTimeoutMs: resolvedTimeoutMs,
     baseEnv,
     env,
+    preparedEnv: options.preparedEnv,
     forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput && !guardedInput ? { input } : {}),
