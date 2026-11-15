@@ -10,6 +10,7 @@ import {
 } from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
+import { nativeEmbedHost } from "../../app/native-web-chrome.ts";
 import { UI_APPEARANCE_DEFAULTS } from "../../app/settings.ts";
 import type { CatalogTheme } from "../../app/theme-catalog.ts";
 import type { ThemeName } from "../../app/theme.ts";
@@ -278,7 +279,13 @@ export function AppearanceSection(props: ConfigProps) {
     <SettingsPage>
       <section id={APPEARANCE_SETTINGS_TARGET_IDS.theme} class="settings-section">
         <SettingsSectionHeader title={t("configView.appearance.theme")} />
-        <p class="settings-section__desc">{t("configView.appearance.chooseTheme")}</p>
+        <p class="settings-section__desc">
+          {t(
+            nativeEmbedHost()?.platform === "ios"
+              ? "configView.appearance.nativeIOSThemeHint"
+              : "configView.appearance.chooseTheme",
+          )}
+        </p>
         {themeUnavailable() ? (
           <p class="settings-section__desc" role="status">
             {t("configView.appearance.themeUnavailable", {

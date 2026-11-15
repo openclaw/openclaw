@@ -1901,6 +1901,8 @@ const enSettings = {
       languageAndText: "Language and text",
       theme: "Theme",
       chooseTheme: "Choosing a different theme resets its fonts and accent colors.",
+      nativeIOSThemeHint:
+        "Theme, color, and font choices customize the web Dashboard. This app follows Device → Appearance instead. Choosing a different theme resets its fonts and accent colors.",
       themeUnavailable: "{id} is unavailable. Using Claw for now.",
       background: {
         title: "Background",

@@ -79,6 +79,14 @@
                   : "other";
         document.documentElement.setAttribute("data-openclaw-boot-route", bootRoute);
         document.documentElement.toggleAttribute("data-openclaw-boot-chat", bootRoute === "chat");
+        // The native host injects this capability before the document runs.
+        // Embedded iOS pages follow device appearance even before app startup.
+        var nativeHost = window.__OPENCLAW_NATIVE_EMBED__;
+        var nativeIOS =
+          nativeHost &&
+          nativeHost.platform === "ios" &&
+          (nativeHost.formFactor === "phone" || nativeHost.formFactor === "pad");
+        if (nativeIOS) document.documentElement.classList.add("openclaw-native-ios");
         var THEMES = {
           claw: 1,
           knot: 1,
@@ -140,8 +148,8 @@
           if (s && s.chatSendShortcut === "modifier-enter") {
             document.documentElement.setAttribute("data-openclaw-boot-send-shortcut", "modifier");
           }
-          var t = s && s.theme;
-          var m = s && s.themeMode;
+          var t = nativeIOS ? "claw" : s && s.theme;
+          var m = nativeIOS ? "system" : s && s.themeMode;
           if (typeof t !== "string") t = "";
           if (typeof m !== "string") m = "";
           var legacy = LEGACY[t];
@@ -294,6 +302,14 @@
 
       html[data-theme="miami-light"] {
         background: #f2eef1;
+      }
+
+      html.openclaw-native-ios {
+        background: #0b0c11;
+      }
+
+      html.openclaw-native-ios[data-theme-mode="light"] {
+        background: #f6f7f9;
       }
 
       body {
