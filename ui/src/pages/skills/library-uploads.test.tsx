@@ -101,7 +101,9 @@ function savedReceipt(read: SkillsLibraryReadResult): SkillsLibraryReceipt {
 it("derives unsaved changes from the complete skill bundle rather than edit history", async () => {
   const { library, draft, read, request } = await openSkill();
   const confirm = vi.mocked(showConfirmDialog).mockClear().mockResolvedValue(false);
-  onTestFinished(() => confirm.mockReset());
+  onTestFinished(() => {
+    confirm.mockReset();
+  });
   expect(library.isDirty()).toBe(false);
   draft.content += " changed";
   expect(library.isDirty()).toBe(true);
