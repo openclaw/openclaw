@@ -100,6 +100,12 @@ credentials, or private URLs, and the links suppress the browser referrer. Revie
 anything you add before submitting publicly. Use [official support](https://community.openclaw.ai/)
 for setup help and [private security reporting](https://github.com/openclaw/openclaw/security/policy) for security concerns.
 
+## Answer an agent question
+
+Agent questions appear above the message box. You can keep writing or queue a
+follow-up while the question is expanded; sending a chat message does not answer
+the question. Use its choices and **Submit**, or **Skip**, to resolve it.
+
 ## Edit a failed message
 
 If a model rejects a message (for example, because it contains too many images),
