@@ -26,6 +26,7 @@ export type SessionBoundaryAttempt = Pick<
   | "operation"
   | "prompt"
   | "promptCacheKey"
+  | "replayCurrentTranscript"
   | "sessionId"
   | "sessionKey"
   | "skipPreparedUserTurnMessage"

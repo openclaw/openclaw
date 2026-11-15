@@ -8,7 +8,6 @@
  * Submission growth is covered by attempt-prompt-submit.test.ts through the real session.
  */
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { Session } from "node:inspector/promises";
 import { loadavg } from "node:os";
@@ -60,6 +59,19 @@ const settleRewrites = stateDir
   ? (await source("src/config/sessions/session-transcript-reconcile.ts"))
       .waitForSessionTranscriptIndexReconcilesInStateDir
   : async () => {};
+if (stateDir) {
+  // Complete verification before warm-up, so a cold integrity scan cannot
+  // contaminate the measured recovery CPU or leave an unverified close.
+  const { openOpenClawAgentDatabase } = await source("src/state/openclaw-agent-db.js");
+  const { readSqliteDatabaseIntegrityVerification } = await source(
+    "src/infra/sqlite-database-admission.js",
+  );
+  const { assertSqliteIntegrity } = await source("src/infra/sqlite-integrity.js");
+  const database = openOpenClawAgentDatabase({ agentId: "main" });
+  if (!readSqliteDatabaseIntegrityVerification(database.db)) {
+    assertSqliteIntegrity(database.db, "synthetic overflow fixture", { check: "full" });
+  }
+}
 const history = Array.from({ length: 768 }, (_, index) => ({
   role: "user",
   content: `Synthetic history ${index}: ${"retain the current task ".repeat(180)}`,
@@ -75,6 +87,7 @@ const projected = {
 };
 const messages = [...history, projected];
 const budgets = { contextWindowTokens: 1_000_000, maxCharsOverride: 64_000 };
+let nextRun = 0;
 const makeRun = async () => {
   let sessionManager;
   if (stateDir) {
@@ -82,7 +95,8 @@ const makeRun = async () => {
     const { replaceTranscriptEvents } = await source(
       "src/config/sessions/session-accessor.sqlite-transcript-write.test-support.ts",
     );
-    const sessionId = randomUUID();
+    // Replace the same task-owned slots across processes, keeping fixture size fixed.
+    const sessionId = `overflow-measure-${nextRun++}`;
     const target = {
       agentId: "main",
       sessionId,
@@ -201,6 +215,10 @@ if (values.mode === "allocation") {
   inspector.disconnect();
 }
 if (stateDir) {
+  const { closeOpenClawAgentDatabasesAsync } = await source("src/state/openclaw-agent-db.js");
+  const { closeOpenClawStateDatabaseAsync } = await source("src/state/openclaw-state-db.js");
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   const { drainGlobalSingletonLifecycleState } = await source("src/shared/global-singleton.ts");
   await drainGlobalSingletonLifecycleState();
 }
