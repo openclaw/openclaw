@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import { isPidAlive } from "../shared/pid-alive.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { observeMainThreadFs } from "../test-utils/main-thread-fs-spies.test-support.js";
 import {
   registerOneShotExecScopeCleanup,
   stopSessionExecProcesses,
@@ -16,22 +18,24 @@ import { resetProcessRegistryForTests } from "./bash-process-registry.test-suppo
 import { createExecTool } from "./bash-tools.exec-run.js";
 import { createProcessTool } from "./bash-tools.process.js";
 
-vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => supervisor,
-}));
-const identityFault = vi.hoisted<{ unavailablePid?: number }>(() => ({}));
+const nativeIdentity = vi.hoisted(
+  (): { observe?: () => void; reject?: (pid: number) => void } => ({}),
+);
 vi.mock("@openclaw/proc-safe/identity", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@openclaw/proc-safe/identity")>();
   return {
     ...actual,
-    readProcessIdentity: (pid: number) => {
-      if (pid === identityFault.unavailablePid) {
-        throw new Error("Process identity is temporarily unavailable");
-      }
-      return actual.readProcessIdentity(pid);
+    readProcessIdentity: (...args: Parameters<typeof actual.readProcessIdentity>) => {
+      nativeIdentity.observe?.();
+      nativeIdentity.reject?.(args[0]);
+      return actual.readProcessIdentity(...args);
     },
   };
 });
+
+vi.mock("../process/supervisor/index.js", () => ({
+  getProcessSupervisor: () => supervisor,
+}));
 const memoryOwner = vi.hoisted(() => ({ resetBudget: () => {} }));
 vi.mock("../shared/global-singleton.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/global-singleton.js")>();
@@ -69,11 +73,52 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
+/** Fail only fresh identity inspection after the real adopted birth has been captured. */
+function observeIdentityFailure() {
+  let unavailablePid: number | undefined;
+  const failed = vi.fn(() => {
+    throw Object.assign(new Error("synthetic identity read failure"), { code: "EIO" });
+  });
+  nativeIdentity.reject = (pid) => {
+    if (pid === unavailablePid) {
+      failed();
+    }
+  };
+  const readFile = fs.readFile.bind(fs);
+  const reads = vi
+    .spyOn(fs, "readFile")
+    .mockImplementation(async (...args: Parameters<typeof readFile>) => {
+      if (unavailablePid !== undefined && args[0] === `/proc/${unavailablePid}/stat`) {
+        failed();
+      }
+      return await readFile(...args);
+    });
+  return {
+    failed,
+    async fail(pid: number) {
+      if (process.platform === "linux") {
+        const capture =
+          reads.mock.results[reads.mock.calls.findIndex(([file]) => file === `/proc/${pid}/stat`)];
+        expect(capture?.type).toBe("return");
+        await expect(capture?.value).resolves.toEqual(expect.any(String));
+      }
+      unavailablePid = pid;
+    },
+    recover() {
+      unavailablePid = undefined;
+    },
+    [Symbol.dispose]() {
+      delete nativeIdentity.reject;
+      reads.mockRestore();
+    },
+  };
+}
+
+const MAX_SERVICES_PER_SESSION = 16;
 const byNumber = (left: number | undefined, right: number | undefined) =>
   (left ?? 0) - (right ?? 0);
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 const node = quote(process.execPath);
-const SESSION_SERVICE_LIMIT = 16;
 const sleeper = `${node} -e 'setTimeout(() => {}, 60000)'`;
 
 async function waitFor(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
@@ -173,7 +218,7 @@ child.once("spawn", () => {
         ).toBe(true);
         started.push(survivor!);
         // Every survivor is reported with its pid and what happened to it.
-        if (call < SESSION_SERVICE_LIMIT) {
+        if (call < MAX_SERVICES_PER_SESSION) {
           expect(output).toMatch(
             new RegExp(`pid ${survivor} .*keeps running as background session`),
           );
@@ -181,7 +226,7 @@ child.once("spawn", () => {
         } else {
           expect(output).toMatch(
             new RegExp(
-              `Stopped 1 process .*pid ${survivor} .*${SESSION_SERVICE_LIMIT} allowed services`,
+              `Stopped 1 process .*pid ${survivor} .*${MAX_SERVICES_PER_SESSION} allowed services`,
             ),
           );
           stopped.push(survivor!);
@@ -314,6 +359,7 @@ it.skipIf(process.platform === "win32")(
     const cleanups: Array<(reason: string) => Promise<void>> = [];
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     await withEnvAsync(testEnv(cwd), async () => {
+      using identity = observeIdentityFailure();
       registerOneShotExecScopeCleanup(
         { oneShotCliRun: true, registerRunCleanup: (cleanup) => cleanups.push(cleanup) },
         scopeKey,
@@ -343,7 +389,9 @@ it.skipIf(process.platform === "win32")(
       const servicePid = await outputPid(service.details);
       const inFlightPid = await outputPid(inFlight.details);
       expect(cleanups).toHaveLength(1);
+      await identity.fail(leftRunningPid);
       await cleanups[0]!("run-end");
+      identity.recover();
       expect(await waitFor(() => !isPidAlive(inFlightPid))).toBe(true);
       const printed = stderr.mock.calls.map(([chunk]) => String(chunk)).join("");
       expect(printed).toContain(`pid ${servicePid}`);
@@ -414,6 +462,43 @@ it.skipIf(process.platform === "win32")(
   async () => {
     const cwd = tempDirs.make("exec-cap-");
     const scopeKey = "agent:main:exec-cap";
+    let reap: (() => unknown) | undefined;
+    let drivingReaper = false;
+    const ownerReads: Promise<unknown>[] = [];
+    let completedReads = 0;
+    const readFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation((...args: Parameters<typeof readFile>) => {
+      const owned = (new Error().stack ?? "").includes("supervisor/released-processes");
+      const pending = readFile(...args);
+      if (owned) {
+        ownerReads.push(pending);
+        const complete = () => {
+          completedReads++;
+        };
+        void pending.then(complete, complete);
+      }
+      return pending;
+    });
+    const drainReaper = async () => {
+      await vi.waitFor(async () => {
+        const reads = [...ownerReads];
+        await Promise.allSettled(reads);
+        await setImmediate();
+        expect(ownerReads).toHaveLength(reads.length);
+      });
+    };
+    const interval = globalThis.setInterval;
+    vi.spyOn(globalThis, "setInterval").mockImplementation((callback, delay, ...args) => {
+      if ((new Error().stack ?? "").includes("supervisor/released-processes")) {
+        reap = () => callback(...args);
+        return interval(() => {
+          if (!drivingReaper) {
+            return callback(...args);
+          }
+        }, delay);
+      }
+      return interval(callback, delay, ...args);
+    });
     await withEnvAsync(testEnv(cwd, "exec-cap-test"), async () => {
       const exec = hostExec(cwd, scopeKey, true);
       const fill = await exec.execute("fill", {
@@ -424,7 +509,46 @@ it.skipIf(process.platform === "win32")(
       started.push(...pids);
       expect(pids).toHaveLength(20);
       const tracked = runningIn(scopeKey).map((session) => session.pid!);
-      expect(tracked).toHaveLength(SESSION_SERVICE_LIMIT);
+      expect(tracked).toHaveLength(MAX_SERVICES_PER_SESSION);
+      expect(reap).toBeTypeOf("function");
+      // Twelve real owner callbacks represent one minute at the five-second interval.
+      // Pause only this timer's automatic delivery; the OS and process identities stay real.
+      drivingReaper = true;
+      reap!();
+      await drainReaper();
+      let syncCalls = 0;
+      let nativeIdentityCalls = 0;
+      nativeIdentity.observe = () => {
+        if ((new Error().stack ?? "").includes("supervisor/released-processes")) {
+          nativeIdentityCalls++;
+        }
+      };
+      try {
+        using filesystem = observeMainThreadFs();
+        for (let tick = 0; tick < 12; tick++) {
+          const nativeBefore = nativeIdentityCalls;
+          const asyncBefore = completedReads;
+          reap!();
+          await drainReaper();
+          const linux = process.platform === "linux" || process.platform === "android";
+          expect(
+            nativeIdentityCalls - nativeBefore === tracked.length * (linux ? 1 : 2) ||
+              completedReads - asyncBefore === tracked.length * 2,
+          ).toBe(true);
+        }
+        syncCalls = filesystem
+          .stacks()
+          .filter(({ stack }) => stack.includes("supervisor/released-processes"))
+          .reduce((total, { calls }) => total + calls, 0);
+      } finally {
+        delete nativeIdentity.observe;
+        drivingReaper = false;
+      }
+      expect({
+        syncCalls,
+        nativeIdentityCalls:
+          process.platform === "linux" || process.platform === "android" ? nativeIdentityCalls : 0,
+      }).toEqual({ syncCalls: 0, nativeIdentityCalls: 0 });
       expect(output).toContain(`Stopped 4 processes`);
       // No survivor escapes: each one is either tracked or confirmed gone, and named.
       expect(
@@ -459,12 +583,12 @@ it.skipIf(process.platform === "win32")(
     await withEnvAsync(testEnv(cwd, "exec-reserve-test"), async () => {
       const exec = hostExec(cwd, scopeKey, true);
       const fill = await exec.execute("fill", {
-        command: `for i in $(seq ${SESSION_SERVICE_LIMIT - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
+        command: `for i in $(seq ${MAX_SERVICES_PER_SESSION - 1}); do ${sleeper} >/dev/null 2>&1 & echo PID=$!; done`,
       });
       started.push(
         ...[...aggregated(fill.details).matchAll(/PID=(\d+)/g)].map((m) => Number(m[1])),
       );
-      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT - 1);
+      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION - 1);
       const starts = await Promise.allSettled(
         ["a", "b"].map((id) =>
           exec.execute(`start-${id}`, {
@@ -476,7 +600,7 @@ it.skipIf(process.platform === "win32")(
       expect(starts.filter((start) => start.status === "fulfilled")).toHaveLength(1);
       expect(starts.filter((start) => start.status === "rejected")).toHaveLength(1);
       started.push(...runningIn(scopeKey).flatMap((session) => session.pid ?? []));
-      expect(runningIn(scopeKey)).toHaveLength(SESSION_SERVICE_LIMIT);
+      expect(runningIn(scopeKey)).toHaveLength(MAX_SERVICES_PER_SESSION);
     });
   },
   60_000,
@@ -535,23 +659,34 @@ it.skipIf(process.platform !== "linux")(
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "keeps an adopted process tracked and reports uncertainty when its stop is not confirmed",
-  async () => {
+it.skipIf(process.platform === "win32").each(["signal-denied", "identity-unavailable"])(
+  "keeps an adopted process tracked and reports uncertainty when its stop is not confirmed (%s)",
+  async (failure) => {
     const cwd = tempDirs.make("exec-unconfirmed-");
     const scopeKey = "agent:main:exec-unconfirmed";
     await withEnvAsync(testEnv(cwd, "exec-unconfirmed-test"), async () => {
       const exec = hostExec(cwd, scopeKey);
+      using identity = observeIdentityFailure();
       const result = await exec.execute("survivor", {
         command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
       });
       const pid = firstPid(aggregated(result.details));
       const session = runningIn(scopeKey).find((candidate) => candidate.pid === pid)!;
       expect(session).toBeDefined();
+      const processTool = createProcessTool({ scopeKey });
+      if (failure === "identity-unavailable") {
+        await identity.fail(pid);
+        // Let the actual periodic reaper inspect the unavailable identity before Stop.
+        await vi.waitFor(() => expect(identity.failed).toHaveBeenCalled(), { timeout: 6_000 });
+        await setImmediate();
+        expect(
+          (await processTool.execute("observe", { action: "poll", sessionId: session.id })).details,
+        ).toMatchObject({ status: "running" });
+      }
       const realKill = process.kill.bind(process);
       // Signals to this process are denied, as for a process that changed user.
       const denied = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-        if (target === pid && signal !== 0 && signal !== undefined) {
+        if (failure === "signal-denied" && target === pid && signal !== 0 && signal !== undefined) {
           throw Object.assign(new Error("denied"), { code: "EPERM" });
         }
         return realKill(target, signal);
@@ -562,71 +697,22 @@ it.skipIf(process.platform === "win32")(
       expect(isPidAlive(pid)).toBe(true);
       expect(session.exited).toBe(false);
       expect(session.cleanupUncertain).toBe(true);
+      expect(
+        (await processTool.execute("confirm", { action: "poll", sessionId: session.id })).details,
+      ).toMatchObject({ status: "running" });
       expect(session.aggregated).toContain(`could not confirm that pid ${pid} stopped`);
       expect(runningIn(scopeKey).map((candidate) => candidate.pid)).toContain(pid);
-      // Once signals work again, a retry stops it and settles the record.
+      if (failure === "identity-unavailable") {
+        expect(
+          denied.mock.calls.filter(([target, signal]) => target === pid && signal !== 0),
+        ).toEqual([]);
+      }
+      // Once inspection and signals work again, retry stops it and settles the record.
+      identity.recover();
       denied.mockRestore();
       await stopSessionExecProcesses([scopeKey], () => {});
       expect(await waitFor(() => !isPidAlive(pid) && session.exited)).toBe(true);
     });
-  },
-  30_000,
-);
-
-it.skipIf(process.platform === "win32")(
-  "retains an adopted process when its identity cannot be read, then retries its stop",
-  async () => {
-    const cwd = tempDirs.make("exec-identity-unavailable-");
-    const scopeKey = "agent:main:exec-identity-unavailable";
-    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
-    try {
-      await withEnvAsync(testEnv(cwd, "exec-identity-unavailable-test"), async () => {
-        const result = await hostExec(cwd, scopeKey).execute("survivor", {
-          command: `${sleeper} >/dev/null 2>&1 & echo PID=$!`,
-        });
-        const pid = firstPid(aggregated(result.details));
-        const session = runningIn(scopeKey).find((candidate) => candidate.pid === pid)!;
-        expect(session).toBeDefined();
-        const processTool = createProcessTool({ scopeKey });
-        const realKill = process.kill.bind(process);
-        let signals = 0;
-        const observedKill = vi.spyOn(process, "kill").mockImplementation((target, signal) => {
-          if (target === pid && signal !== 0 && signal !== undefined) {
-            signals += 1;
-          }
-          return realKill(target, signal);
-        });
-        try {
-          identityFault.unavailablePid = pid;
-          // Exercise the ordinary reaper before requesting a stop through the public tool.
-          await vi.advanceTimersByTimeAsync(5_000);
-          const observed = await processTool.execute("observe", {
-            action: "poll",
-            sessionId: session.id,
-          });
-          await processTool.execute("stop", { action: "kill", sessionId: session.id });
-          expect(await waitFor(() => session.exited || session.cleanupUncertain === true)).toBe(
-            true,
-          );
-          const stopped = await processTool.execute("confirm", {
-            action: "poll",
-            sessionId: session.id,
-          });
-          expect(() => realKill(pid, 0)).not.toThrow();
-          expect(observed.details).toMatchObject({ status: "running" });
-          expect(stopped.details).toMatchObject({ status: "running" });
-          expect(session.cleanupUncertain).toBe(true);
-          expect(signals).toBe(0);
-        } finally {
-          identityFault.unavailablePid = undefined;
-          observedKill.mockRestore();
-        }
-        await processTool.execute("retry", { action: "kill", sessionId: session.id });
-        expect(await waitFor(() => !isPidAlive(pid) && session.exited)).toBe(true);
-      });
-    } finally {
-      vi.useRealTimers();
-    }
   },
   30_000,
 );

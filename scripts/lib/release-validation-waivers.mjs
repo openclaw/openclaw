@@ -21,6 +21,22 @@ const STABLE_114_CI_FAILURES = new Map([
 // Add an exact version, child role, job name, and reason here to grant a waiver.
 /** @type {import("./release-validation-waivers.mjs").ReleaseValidationWaiver[]} */
 const RELEASE_VALIDATION_WAIVERS = [
+  ...["Native live gateway core", "Native live test harnesses"].map((suite) => ({
+    targetVersion: "2026.11.4",
+    targetSha: "e283dccf68ba35ef1af5b3fa31571db7f4b6bc74",
+    childRole: "releaseChecksIndependent",
+    jobName: `Run repo/live E2E validation / Native live suites (${suite})`,
+    reason:
+      "Dallin Romney explicitly authorized these two native-live failures on " +
+      "2026-11-15 at 15:03 UTC for unchanged C/Q e283dccf68ba35ef1af5b3fa31571db7f4b6bc74. " +
+      "Observed child 43719709063/1 failed gateway core and test harnesses; " +
+      "the original failures remain unresolved. Retain raw failures and artifacts. " +
+      "This grant accepts only the named terminal failed jobs on this exact candidate. " +
+      "Ordinary green-only child reuse is unchanged; fresh executions of these jobs " +
+      "on this candidate may use the grant. There is no not-run exemption. Other " +
+      "jobs, versions, candidates, incomplete evidence, identity, integrity and " +
+      "publication approval remain blocking.",
+  })),
   ...[...STABLE_114_CI_FAILURES.keys()].map((jobName) => ({
     targetVersion: "2026.11.4",
     targetSha: STABLE_114_TARGET_SHA,

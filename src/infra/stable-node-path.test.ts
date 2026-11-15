@@ -1,7 +1,8 @@
 // Covers stable Node binary resolution from Homebrew Cellar paths.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { resolveLaunchableNodePath, resolveStableNodePath } from "./stable-node-path.js";
 
@@ -22,8 +23,10 @@ describe("resolveStableNodePath", () => {
       await fs.writeFile(optDefault, "", "utf8");
       await fs.writeFile(optVersioned, "", "utf8");
 
+      using stat = vi.spyOn(fsSync, "statSync");
       await expect(resolveStableNodePath(defaultNode)).resolves.toBe(optDefault);
       await expect(resolveStableNodePath(versionedNode)).resolves.toBe(optVersioned);
+      expect(stat).not.toHaveBeenCalled();
     });
   });
 

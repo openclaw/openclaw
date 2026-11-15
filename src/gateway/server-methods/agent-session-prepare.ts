@@ -7,11 +7,12 @@ import {
 } from "../../config/sessions.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { CRON_RUN_ENDED_ERROR, isEndedCronRun } from "../../infra/agent-run-registry.automation.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
-  resolveAgentSessionWorkStartError,
+  resolveAgentSessionWorkStartBlock,
 } from "../agent-turn/agent-handler-helpers.js";
 import {
   takeInProcessFreshChildSession,
@@ -123,9 +124,16 @@ async function prepareAdmittedAgentSession(
   if (deleted instanceof Promise ? await deleted : deleted) {
     return undefined;
   }
-  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
-  if (archivedSessionError) {
-    respondError(params.respond, ErrorCodes.INVALID_REQUEST, archivedSessionError);
+  const workStartBlock = resolveAgentSessionWorkStartBlock(canonicalKey, entry);
+  if (workStartBlock) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+      retryable: workStartBlock.retryable,
+    });
+    return undefined;
+  }
+  // The cron executor resumes its own yields in place; nothing else starts a turn on its run.
+  if (isEndedCronRun(canonicalKey)) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, CRON_RUN_ENDED_ERROR);
     return undefined;
   }
 

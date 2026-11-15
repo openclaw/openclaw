@@ -568,29 +568,32 @@ describe("own-run question admission", () => {
           storePath: resolveOpenClawAgentSqlitePath(sessionScope),
           factsInvalidated: true,
         });
+        // Background membership refresh shares this lane; fault only the question's row read.
         const run = sessionStoreLane.pool.run.bind(sessionStoreLane.pool);
-        let intercepted = false;
-        const spy = vi
-          .spyOn(sessionStoreLane.pool, "run")
-          .mockImplementation(async (input, options) => {
-            let exact = false;
-            const result = await run(async () => {
-              const request = typeof input === "function" ? await input() : input;
-              exact = request.kind === "session-exact-entries" && !intercepted;
-              if (exact) {
-                intercepted = true;
-                if (cause === "transient worker failure") {
-                  throw failure;
-                }
+        let injected = false;
+        const spy = vi.spyOn(sessionStoreLane.pool, "run").mockImplementation(async (...args) => {
+          let selected = false;
+          const result = await run(async () => {
+            const input = typeof args[0] === "function" ? await args[0]() : args[0];
+            if (
+              !injected &&
+              input.kind === "session-exact-entries" &&
+              input.sessionKeys?.includes(sessionScope.sessionKey)
+            ) {
+              injected = true;
+              selected = true;
+              if (cause === "transient worker failure") {
+                throw failure;
               }
-              return request;
-            }, options);
-            if (exact) {
-              entered.resolve();
-              await release.promise;
             }
-            return result;
-          });
+            return input;
+          }, args[1]);
+          if (selected) {
+            entered.resolve();
+            await release.promise;
+          }
+          return result;
+        });
         const request = f.call(
           "question.get",
           { id },

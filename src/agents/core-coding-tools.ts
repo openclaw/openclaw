@@ -225,13 +225,14 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
     options.shellTools !== "disabled" || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
     sandbox && needsReadOnlyWorkspaceSkillMounts
-      ? resolveReadOnlyWorkspaceSkillMounts({
+      ? (sandbox.fsPreparation?.readOnlyWorkspaceSkillMounts ??
+        resolveReadOnlyWorkspaceSkillMounts({
           workspaceDir: sandbox.workspaceDir,
           agentWorkspaceDir: sandbox.agentWorkspaceDir,
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
-        })
+        }))
       : [];
 
   // Older external SDK bridges predate pathMappings. Only absence selects

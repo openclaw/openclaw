@@ -40,7 +40,7 @@ import {
   emitGatewaySessionEndPluginHook,
   emitGatewaySessionStartPluginHook,
 } from "../session-lifecycle-plugin-hooks.js";
-import { resolveAgentSessionWorkStartError } from "./agent-handler-helpers.js";
+import { resolveAgentSessionWorkStartBlock } from "./agent-handler-helpers.js";
 
 export type AgentSessionPersistResult = {
   sessionEntry?: SessionEntry;
@@ -139,8 +139,12 @@ export async function persistAgentSessionPhase(
     let persisted: SessionEntry | undefined;
     let mutationError: ReturnType<typeof errorShape> | undefined;
     let creationAuthorizationError: ReturnType<typeof errorShape> | undefined;
-    function rejectMutation(code: Parameters<typeof errorShape>[0], message: string): never {
-      mutationError = errorShape(code, message);
+    function rejectMutation(
+      code: Parameters<typeof errorShape>[0],
+      message: string,
+      opts?: Parameters<typeof errorShape>[2],
+    ): never {
+      mutationError = errorShape(code, message, opts);
       throw new Error(message);
     }
     const buildEntry = async (freshEntry: SessionEntry | undefined) => {
@@ -156,12 +160,14 @@ export async function persistAgentSessionPhase(
           `Session "${params.canonicalSessionKey}" was deleted while starting work. Retry.`,
         );
       }
-      const archivedError = resolveAgentSessionWorkStartError(
+      const workStartBlock = resolveAgentSessionWorkStartBlock(
         params.canonicalSessionKey,
         freshEntry,
       );
-      if (archivedError) {
-        rejectMutation(ErrorCodes.INVALID_REQUEST, archivedError);
+      if (workStartBlock) {
+        rejectMutation(ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+          retryable: workStartBlock.retryable,
+        });
       }
       patchBuild = await params.buildSessionPatch(freshEntry);
       if (

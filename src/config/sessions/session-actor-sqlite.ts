@@ -67,6 +67,7 @@ export type SessionActorTransport = {
       grant: () => boolean,
     ) => void,
     concurrentBoardReads?: "transcript-only",
+    source?: Pick<SessionActorAuthority, "readCustody" | "workspaceEvidence">,
   ): Promise<T>;
   /** Read-only committed evidence; follow-up work runs after releasing the command FIFO. */
   afterCommitted?<Value extends SessionActorPhaseResults[SessionActorPhase]>(
@@ -190,30 +191,35 @@ export function createSqliteSessionActorExecutor(
   const read = async (authority: SessionActorAuthority) => {
     for (let attempt = 0; ; attempt += 1) {
       try {
-        return await params.transport.run(async (scope) => {
-          params.assertReadable();
-          authority.assertCurrent();
-          let snapshot = params.replica.read();
-          if (!snapshot) {
-            const install = params.replica.beginRead();
-            snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
-            install(snapshot);
-            // Disclose the immutable installed revision, including a superseding receipt.
-            snapshot = params.replica.read();
-          }
-          if (!snapshot) {
-            throw new SessionActorReadInvalidatedError();
-          }
-          fenced = undefined;
-          params.assertReadable();
-          authority.assertCurrent();
-          authority.authorize("commit", snapshot);
-          authority.assertCurrent();
-          params.assertReadable();
-          // Policy callbacks do not write session state. A synchronous bookkeeping
-          // change during authorization is visible to the next read.
-          return snapshot;
-        }, authorize(authority));
+        return await params.transport.run(
+          async (scope) => {
+            params.assertReadable();
+            authority.assertCurrent();
+            let snapshot = params.replica.read();
+            if (!snapshot) {
+              const install = params.replica.beginRead();
+              snapshot = await scope.execute({ type: "session.actor.read", input: { target } });
+              install(snapshot);
+              // Disclose the immutable installed revision, including a superseding receipt.
+              snapshot = params.replica.read();
+            }
+            if (!snapshot) {
+              throw new SessionActorReadInvalidatedError();
+            }
+            fenced = undefined;
+            params.assertReadable();
+            authority.assertCurrent();
+            authority.authorize("commit", snapshot);
+            authority.assertCurrent();
+            params.assertReadable();
+            // Policy callbacks do not write session state. A synchronous bookkeeping
+            // change during authorization is visible to the next read.
+            return snapshot;
+          },
+          authorize(authority),
+          undefined,
+          authority,
+        );
       } catch (error) {
         // No command was accepted. Reenter the physical FIFO once with fresh
         // caller authority after a newer publication revoked the read.
@@ -527,6 +533,7 @@ export function createSqliteSessionActorExecutor(
           !captured.reducers?.length
           ? "transcript-only"
           : undefined,
+        authority,
       );
     } catch (error) {
       // A transport timeout is not native settlement. The accepted callback keeps
