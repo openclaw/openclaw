@@ -28,6 +28,7 @@ const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
 
 const WhatsAppCommonShape = {
   ...accountShape,
+  messageLocale: z.enum(["en", "de"]).optional(),
   sendReadReceipts: ChannelSendReadReceiptsSchema,
   selfChatMode: z.boolean().optional(),
   groups: z.record(z.string(), WhatsAppGroupEntrySchema).optional(),

@@ -91,6 +91,7 @@ export function resolveFollowupAuthorizationKey(run: FollowupRun): string {
 
 export function resolveFollowupReplyDeliveryKey(run: FollowupRun): string {
   return JSON.stringify([
+    run.run.messageLocale ?? "en",
     channelRouteDedupeKey({
       channel: run.originatingChannel,
       to: run.originatingTo,

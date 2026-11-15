@@ -69,16 +69,18 @@ function sanitizeFinalReplyText(
   payload: ReplyPayload,
   text: string | undefined,
   conversationContext?: string,
+  locale?: string,
 ): string | undefined {
   if (!text) {
     return text;
   }
   return payload.isError
-    ? renderUserFacingText(text, { errorContext: true, conversationContext })
+    ? renderUserFacingText(text, { errorContext: true, conversationContext, locale })
     : sanitizeUserFacingText(text, { conversationContext });
 }
 
 export async function buildReplyPayloads(params: {
+  locale?: string;
   config?: OpenClawConfig;
   payloads: ReplyPayload[];
   /** Exact prompt bytes from this turn's finalized inbound owner. */
@@ -121,7 +123,7 @@ export async function buildReplyPayloads(params: {
       text = stripped.text;
     }
     const conversationContext = params.conversationContext;
-    const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext);
+    const sanitizedText = sanitizeFinalReplyText(payload, text, conversationContext, params.locale);
     const next = copyReplyPayloadMetadata(payload, {
       ...payload,
       text: sanitizedText,
@@ -131,7 +133,9 @@ export async function buildReplyPayloads(params: {
       setReplyPayloadMetadata(next, {
         sourceReplyTranscriptMirror: {
           ...mirror,
-          text: sanitizeFinalReplyText(payload, mirror.text, conversationContext) || undefined,
+          text:
+            sanitizeFinalReplyText(payload, mirror.text, conversationContext, params.locale) ||
+            undefined,
         },
       });
     }

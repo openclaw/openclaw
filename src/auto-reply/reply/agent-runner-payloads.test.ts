@@ -1,5 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  buildPayloads,
+  makePayloadAssistant,
+} from "../../agents/embedded-agent-runner/run/payloads.test-helpers.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -629,4 +633,40 @@ describe("buildReplyPayloads media filter integration", () => {
       expected: [{ text: "hello world!" }],
     });
   });
+});
+
+it("localizes host error payloads while preserving ordinary model answers", async () => {
+  const result = await buildTestReplyPayloads({
+    locale: "de",
+    payloads: [
+      ...buildPayloads({
+        messageLocale: "de",
+        lastAssistant: makePayloadAssistant({ stopReason: "error" }),
+      }),
+      { text: "This is my English answer." },
+    ],
+  });
+  expect(result.replyPayloads[0]?.text).toContain("KI-Dienst");
+  expect(result.replyPayloads[1]?.text).toBe("This is my English answer.");
+});
+
+it("keeps timeout deferral unchanged and localizes only its outgoing notice", async () => {
+  const assistant = makePayloadAssistant({
+    stopReason: "error",
+    errorMessage: "request timed out",
+    content: [],
+  });
+  expect(
+    buildPayloads({
+      messageLocale: "de",
+      lastAssistant: assistant,
+      deferAssistantTimeoutError: true,
+    }),
+  ).toEqual([]);
+  const result = await buildTestReplyPayloads({
+    locale: "de",
+    payloads: buildPayloads({ messageLocale: "de", lastAssistant: assistant }),
+  });
+  expect(result.replyPayloads[0]?.text).toContain("Die Anfrage hat zu lange gedauert");
+  expect(result.replyPayloads[0]?.text).not.toContain("LLM request timed out");
 });

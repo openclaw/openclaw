@@ -2,6 +2,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveManifestProviderAuthChoices } from "../plugins/provider-auth-choices.js";
+import { resolveMessageLocale } from "../shared/message-locale.js";
 import { resolveProviderAuthAliasMap } from "./provider-auth-aliases.js";
 
 function normalizeProviderIdForAuth(
@@ -14,6 +15,7 @@ function normalizeProviderIdForAuth(
 
 export function buildProviderAuthRecoveryHint(params: {
   provider: string;
+  locale?: string;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -28,6 +30,13 @@ export function buildProviderAuthRecoveryHint(params: {
   const loginCommand = choice
     ? formatCliCommand(`openclaw models auth login --provider ${normalized}`)
     : undefined;
+  if (resolveMessageLocale(params.locale) === "de") {
+    const commands = [loginCommand, formatCliCommand("openclaw configure")]
+      .filter(Boolean)
+      .map((command) => `\`${command}\``)
+      .join(" oder ");
+    return `Führe ${commands} aus${params.includeEnvVar ? " oder hinterlege einen API-Schlüssel als Umgebungsvariable" : ""}.`;
+  }
   const parts: string[] = [];
   if (loginCommand) {
     parts.push(`Run \`${loginCommand}\``);

@@ -54,6 +54,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
   idempotencyKey?: string;
   provenance?: InputProvenance;
   __openclaw?: Record<string, unknown> & {
+    messageLocale?: import("../shared/message-locale.js").MessageLocale;
     humanMentions?: readonly HumanMention[];
     /** Addressed to the selected people: no agent turn, and transparent to an active turn. */
     humanAddressed?: true;
@@ -77,6 +78,7 @@ export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }> &
 };
 
 export type UserTurnInput = Pick<PersistedUserTurnMessage, "display" | "excludeFromContext"> & {
+  messageLocale?: import("../shared/message-locale.js").MessageLocale;
   text?: string | null;
   /** Display receipt of shared App references; never added to model text. */
   appContext?: ChatAppContextAttachment[];

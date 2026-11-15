@@ -132,6 +132,7 @@ async function capturePendingConversationTurnReplyUnsafe(params: {
     // This is the model-facing reply returned by the tool, so its durable copy
     // must pass through the same write hook and normalization as transcripts.
     text: replyText,
+    messageLocale: params.ctx.MessageLocale,
     timestamp,
     idempotencyKey: `conversation-inbound:${conversation.conversationRef}:${messageId}`,
     ...(params.ctx.InputProvenance ? { provenance: params.ctx.InputProvenance } : {}),

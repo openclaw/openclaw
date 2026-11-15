@@ -12,6 +12,8 @@ import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
   buildPreflightCompactionFailureText,
+  markPostCompactionModelFailurePayload,
+  renderPostCompactionModelFailurePayload,
 } from "./agent-runner-failure-reply.js";
 
 const genericFailure = { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: true };
@@ -254,4 +256,15 @@ it("preserves local capacity guidance through provider-looking wrappers without 
   });
   expect(knownReply(provider)?.text).not.toContain("local workers");
   expect(knownReply(provider)).toBeDefined();
+});
+
+it("localizes the post-compaction prefix without changing the underlying failure", () => {
+  const payload = markPostCompactionModelFailurePayload(true, {
+    text: "⚠️ Beispielsfehler",
+    isError: true,
+  });
+  const german = renderPostCompactionModelFailurePayload(payload, "de");
+  expect(german.text).toContain("Die Kontextkomprimierung war erfolgreich");
+  expect(german.text).toContain("Beispielsfehler");
+  expect(german.text).not.toContain("Context compaction succeeded");
 });

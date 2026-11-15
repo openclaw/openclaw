@@ -29,6 +29,7 @@ import {
 } from "../../sessions/session-participant-input.js";
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
+import { setUserPreferences } from "../../state/user-preferences.test-support.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -77,6 +78,21 @@ function requesterProfile(text: string) {
 }
 
 describe("prepareChatSendUserTurn", () => {
+  it.each([false, true])(
+    "captures client language without inheriting a synthetic client's locale: synthetic=%s",
+    async (synthetic) => {
+      const prepared = prepareTurn({
+        session: { cfg: { messages: { locale: "en" } } },
+        client: {
+          internal: synthetic ? { syntheticClient: true } : undefined,
+          connect: { minProtocol: 1, maxProtocol: 1, client: createClientInfo(), locale: "de-DE" },
+        },
+      });
+      const input = await prepared.readInput();
+      expect(input.messageLocale).toBe(synthetic ? "en" : "de");
+      expect(prepared.ctx.MessageLocale).toBe(input.messageLocale);
+    },
+  );
   it.each([
     { profileId: "profile-ada", synthetic: false, verified: true },
     { profileId: "profile-ada", synthetic: true, verified: true },
@@ -111,11 +127,19 @@ describe("prepareChatSendUserTurn", () => {
     expect(prepared.ctx).not.toHaveProperty("SenderId");
   });
 
-  it("binds a queued human input to its exact current principal admission", () =>
-    withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {};
+  it("binds queued input to its principal and preserves language after a preference change", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg = { messages: { locale: "en" as const } };
       setRuntimeConfigSnapshot(cfg);
       const profile = ensureGatewayOwnerProfile("Queued Ada");
+      const savedMessage = buildPersistedUserTurnMessage({
+        text: "hello",
+        timestamp: 1,
+        messageLocale: "de",
+      });
+      expect(
+        setUserPreferences(profile.id, { "messages.locale": "en" }, { env: state.env }),
+      ).toMatchObject({ ok: true });
       const target = {
         agentId: "main",
         sessionKey: "agent:main:queued-requester",
@@ -153,7 +177,7 @@ describe("prepareChatSendUserTurn", () => {
             target: {
               ...target,
               runId: "run-1",
-              message: buildPersistedUserTurnMessage({ text: "hello", timestamp: 1 }),
+              message: savedMessage,
               requestHash: "request:queued-requester",
             },
             requestFingerprint: "queued-requester",
@@ -166,6 +190,9 @@ describe("prepareChatSendUserTurn", () => {
             return prepareTurn({ client, session: target });
           },
         );
+        const replayedInput = await prepared.readInput();
+        expect(replayedInput.messageLocale).toBe("de");
+        expect(prepared.ctx.MessageLocale).toBe("de");
         const ctx = finalizeInboundContext({ ...prepared.ctx });
         expect(requesterProfile(buildInboundUserContextPrefix(ctx))).toEqual({
           id: profile.id,
@@ -375,7 +402,10 @@ describe("prepareChatSendUserTurn", () => {
       expect(prepared.queuedFollowupOwnerKey).toBeUndefined();
       expect(prepared.replyOptionImages).toBeUndefined();
       await expect(prepared.pluginBoundMediaPromise).resolves.toEqual([]);
-      await expect(prepared.readInput()).resolves.toEqual(prepared.baseInput);
+      await expect(prepared.readInput()).resolves.toEqual({
+        ...prepared.baseInput,
+        messageLocale: "en",
+      });
     },
   );
 
@@ -433,7 +463,10 @@ describe("prepareChatSendUserTurn", () => {
     });
     expect(prepared.ctx).not.toHaveProperty("SenderId");
     expect(prepared.queuedFollowupOwnerKey).toBe("device:device-1");
-    await expect(prepared.readInput()).resolves.toEqual(prepared.baseInput);
+    await expect(prepared.readInput()).resolves.toEqual({
+      ...prepared.baseInput,
+      messageLocale: "en",
+    });
   });
 
   it("preserves source receipts and image hints when approval changes the user text", async () => {

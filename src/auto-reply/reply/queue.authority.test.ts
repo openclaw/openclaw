@@ -652,3 +652,17 @@ describe("followup queue authority", () => {
     );
   });
 });
+
+it("keeps collected messages with different reply languages in separate turns", async () => {
+  const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+  for (const locale of ["de", "en"] as const) {
+    q.enqueue(
+      { prompt: `request-${locale}`, originatingChannel: "webchat" },
+      { messageLocale: locale },
+    );
+  }
+  await q.drain();
+  expect(q.calls.map((run) => run.run.messageLocale)).toEqual(["de", "en"]);
+  expect(q.calls[0]?.prompt).not.toContain("request-en");
+  expect(q.calls[1]?.prompt).not.toContain("request-de");
+});

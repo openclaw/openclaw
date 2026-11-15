@@ -11,6 +11,7 @@ import {
   USER_PREFS_ENTRY_LIMIT,
   USER_PREFS_VALUE_BYTES,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { MESSAGE_LOCALE_PREFERENCE_KEY } from "../shared/message-locale.js";
 import type {
   PreparedUserPreferenceUpdate,
   UserPreferenceError,
@@ -37,6 +38,9 @@ function prepareEntries(
     if (value === null) {
       deletionKeys.push(prefKey);
       continue;
+    }
+    if (prefKey === MESSAGE_LOCALE_PREFERENCE_KEY && value !== "en" && value !== "de") {
+      return err({ code: "invalid-value", key: prefKey });
     }
     let valueJson: string | undefined;
     try {

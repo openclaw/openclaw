@@ -13,6 +13,14 @@ function config(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): 
 }
 
 describe("resolveWhatsAppAuthDir", () => {
+  it("inherits the channel message language and allows an account override", () => {
+    const cfg = config({
+      messageLocale: "de",
+      accounts: { work: { messageLocale: "en" }, personal: {} },
+    });
+    expect(resolveWhatsAppAccount({ cfg, accountId: "personal" }).messageLocale).toBe("de");
+    expect(resolveWhatsAppAccount({ cfg, accountId: "work" }).messageLocale).toBe("en");
+  });
   const base = config({ accounts: {} });
 
   it.each(["../../../etc/passwd", "foo/bar\\baz"])(

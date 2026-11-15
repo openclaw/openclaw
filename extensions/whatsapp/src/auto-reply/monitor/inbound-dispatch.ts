@@ -164,6 +164,7 @@ export function buildWhatsAppInboundTransportContext(
 }
 
 export async function prepareWhatsAppInboundContext(params: {
+  messageLocale?: string;
   bodyForAgent?: string;
   combinedBody: string;
   command?: BuildChannelInboundEventContextParams["command"];
@@ -288,6 +289,7 @@ export async function prepareWhatsAppInboundContext(params: {
     access: mentions || commands ? { mentions, commands } : undefined,
     command: params.command,
     extra: {
+      ChannelMessageLocale: params.messageLocale,
       Transcript: params.transcript,
       GroupSubject: params.msg.group?.subject ?? undefined,
       GroupMembers: formatGroupMembers({

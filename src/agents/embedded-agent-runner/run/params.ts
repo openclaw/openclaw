@@ -42,6 +42,7 @@ export type { CurrentInboundPromptContext } from "../../internal-runtime-context
 
 export type RunEmbeddedAgentParams = Pick<
   QueuedAgentRunParams,
+  | "messageLocale"
   | "toolBindings"
   | "conversationRoutePeerId"
   | "conversationToolPolicy"

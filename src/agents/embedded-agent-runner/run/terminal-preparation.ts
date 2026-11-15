@@ -247,6 +247,7 @@ export function prepareEmbeddedRunTerminal(input: {
       ? attempt.lastAssistant
       : input.currentAttemptCompletedAssistant;
   const payloads = buildEmbeddedRunPayloads({
+    messageLocale: runParams.messageLocale,
     rateLimitRetriesExhausted: input.rateLimitRetriesExhausted,
     ...attempt,
     agentTerminal: isEmbeddedRunTerminalInterrupted(input.terminalState.outcome)

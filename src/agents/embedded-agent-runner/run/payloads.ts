@@ -113,6 +113,7 @@ function renderNativeAssistantReply(
  * surfaced to the user.
  */
 export function buildEmbeddedRunPayloads(params: {
+  messageLocale?: import("../../../shared/message-locale.js").MessageLocale;
   assistantTexts: string[];
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   answerSegments?: EmbeddedAgentSubscribeState["answerSegments"];
@@ -256,10 +257,12 @@ export function buildEmbeddedRunPayloads(params: {
     const oauthRefreshFailure =
       rawErrorMessage && !repeatedToolError ? classifyOAuthRefreshFailure(rawErrorMessage) : null;
     const providerLoginRecovery = buildProviderLoginRecovery({
+      locale: params.messageLocale,
       provider: oauthRefreshFailure?.provider ?? params.provider,
       oauthReason: oauthRefreshFailure?.reason,
     });
     const errorContext = {
+      locale: params.messageLocale,
       cfg: params.config,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
@@ -277,7 +280,11 @@ export function buildEmbeddedRunPayloads(params: {
             ? repeatedToolError
               ? formatUserFacingAssistantErrorText(assistantForPayload, errorContext)
               : (providerLoginRecovery?.hint ??
-                renderRateLimitRetryExhaustion(rateLimitRetriesExhausted) ??
+                renderRateLimitRetryExhaustion(
+                  rateLimitRetriesExhausted,
+                  false,
+                  params.messageLocale,
+                ) ??
                 formatUserFacingAssistantErrorText(assistantForPayload, errorContext))
             : formatAssistantErrorText(assistantForPayload, errorContext)
         : undefined;

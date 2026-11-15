@@ -324,6 +324,7 @@ export async function processMessage(params: {
   const conversationSystemPrompt = selectedPrompt?.trim() || undefined;
 
   const prepared = await prepareWhatsAppInboundContext({
+    messageLocale: account.messageLocale,
     bodyForAgent: msgForAgent.payload.body,
     combinedBody,
     command: {

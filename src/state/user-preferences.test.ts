@@ -37,6 +37,26 @@ function openWithoutFeatureSchemas() {
 }
 
 describe("user preferences", () => {
+  it("persists a personal message language, validates it, and supports inheritance", async () => {
+    const options = stateOptions();
+    const profile = ensureProfileForEmail("language@example.test", options).id;
+    expect(setUserPreferences(profile, { "messages.locale": "de" }, options)).toEqual(success);
+    expect(
+      (await getCanonicalUserPreferences(profile, ["messages.locale"], options))?.entries,
+    ).toEqual({ "messages.locale": "de" });
+    expect(setUserPreferences(profile, { "messages.locale": "fr" }, options)).toMatchObject({
+      ok: false,
+      error: { code: "invalid-value" },
+    });
+    expect(setUserPreferences(profile, { "messages.locale": "en" }, options)).toEqual(success);
+    expect(
+      (await getCanonicalUserPreferences(profile, ["messages.locale"], options))?.entries,
+    ).toEqual({ "messages.locale": "en" });
+    expect(setUserPreferences(profile, { "messages.locale": null }, options)).toEqual(success);
+    expect(
+      (await getCanonicalUserPreferences(profile, ["messages.locale"], options))?.entries,
+    ).toEqual({});
+  });
   it.each(["git.coauthor.organization"])(
     "requires a new disclosure choice when %s replaces previously inert consent",
     (key) => {

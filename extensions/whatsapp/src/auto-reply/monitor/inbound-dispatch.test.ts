@@ -626,3 +626,8 @@ describe("WhatsApp main route", () => {
     expect(resolveWhatsAppDmRouteTarget({ msg, normalizeE164: () => null })).toBe("+15550003333");
   });
 });
+
+it("carries the configured WhatsApp message language into the inbound context", async () => {
+  const prepared = await prepare({ messageLocale: "de" });
+  expect(prepared.ctxPayload.ChannelMessageLocale).toBe("de");
+});

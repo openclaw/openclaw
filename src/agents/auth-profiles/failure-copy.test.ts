@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 
 const LOGIN_HINT_SENTINEL = "<<login-hint-for-provider>>";
 
+import { renderAuthProfileFailoverCopy } from "../failover/auth-user-copy.js";
 import { FAILOVER_REASONS, type FailoverReason } from "../failover/signal.js";
-import { renderAuthProfileFailoverCopy } from "../failover/user-copy.js";
 
 const formatAuthProfileFailureMessage = (
   params: Parameters<typeof renderAuthProfileFailoverCopy>[0],

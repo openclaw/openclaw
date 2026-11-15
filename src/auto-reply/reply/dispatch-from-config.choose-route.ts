@@ -325,7 +325,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
         suppressionReason: preparation.reason,
       };
     }
-    const payload = renderPostCompactionModelFailurePayload(preparation.payload);
+    const payload = renderPostCompactionModelFailurePayload(preparation.payload, ctx.MessageLocale);
     const payloadMetadata = getReplyPayloadMetadata(payload);
     const expectedWriterRunId = normalizeOptionalString(params.replyOptions?.runId);
     const expectedLifecycleRevision = sessionStoreEntry.entry?.lifecycleRevision;

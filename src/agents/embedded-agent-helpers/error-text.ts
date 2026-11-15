@@ -19,6 +19,7 @@ import {
   isKnownTransportErrorCode,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { resolveMessageLocale, type MessageLocale } from "../../shared/message-locale.js";
 import {
   PROVIDER_SCHEMA_REJECTION_USER_TEXT,
   renderAssistantFormatFailureCopy,
@@ -47,6 +48,7 @@ import {
   isStreamingJsonParseError,
   renderRateLimitOrOverloadedCopy,
 } from "../failover/user-copy.js";
+import { messageCopy } from "../failover/user-message-catalog.js";
 import { MODEL_REQUEST_POLICY_DENIED_TEXT } from "../harness/errors.js";
 import {
   formatSandboxToolPolicyBlockedMessage,
@@ -62,34 +64,63 @@ export const SYNTHESIZED_TIMEOUT_ERROR_TEXT = "LLM request timed out.";
 const MODEL_NOT_FOUND_USER_TEXT =
   "This model was not found. Choose another model in the OpenClaw app.";
 const RUNTIME_FAILURE_COPY: Partial<
-  Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, string>
+  Record<ReturnType<typeof classifyProviderRuntimeFailureKind>, Record<MessageLocale, string>>
 > = {
-  auth_refresh:
-    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
-  refresh_contention: OAUTH_REFRESH_CONTENTION_USER_TEXT,
-  refresh_timeout:
-    "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
-  callback_timeout:
-    "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
-  callback_validation:
-    "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
-  auth_scope:
-    "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
-  auth_html:
-    "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
-  auth_invalid_token: AUTH_INVALID_TOKEN_USER_TEXT,
-  upstream_html:
-    "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
-  proxy:
-    "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
-  tls_certificate: TLS_CERTIFICATE_ERROR_USER_TEXT,
-  model_not_found: MODEL_NOT_FOUND_USER_TEXT,
+  auth_refresh: {
+    en: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
+    de: "Die Anmeldung beim KI-Dienst ist fehlgeschlagen. Melde dich unter Modelle in der OpenClaw-App erneut an oder führe `openclaw configure` aus.",
+  },
+  refresh_contention: {
+    en: OAUTH_REFRESH_CONTENTION_USER_TEXT,
+    de: "Eine andere Anmeldung läuft noch. Warte einen Moment und versuche es erneut.",
+  },
+  refresh_timeout: {
+    en: "Signing in took too long. Try again in a moment. If it keeps happening, sign in again under Models in the OpenClaw app.",
+    de: "Die Anmeldung hat zu lange gedauert. Versuche es gleich erneut. Melde dich bei anhaltenden Problemen unter Modelle in der OpenClaw-App erneut an.",
+  },
+  callback_timeout: {
+    en: "Sign-in wasn't completed. Try signing in again. If asked for a link, paste the full link from your browser.",
+    de: "Die Anmeldung wurde nicht abgeschlossen. Versuche es erneut. Falls ein Link benötigt wird, füge den vollständigen Link aus deinem Browser ein.",
+  },
+  callback_validation: {
+    en: "The sign-in link wasn't accepted. Try signing in again. If asked for a link, paste the full link from your browser.",
+    de: "Der Anmeldelink wurde nicht akzeptiert. Versuche es erneut. Falls ein Link benötigt wird, füge den vollständigen Link aus deinem Browser ein.",
+  },
+  auth_scope: {
+    en: "This login doesn't have the access OpenClaw needs. Sign in again under Models in the OpenClaw app.",
+    de: "Dieser Anmeldung fehlen die von OpenClaw benötigten Berechtigungen. Melde dich unter Modelle in der OpenClaw-App erneut an.",
+  },
+  auth_html: {
+    en: "Couldn't sign in to the AI service. Sign in again under Models in the OpenClaw app or run `openclaw configure`.",
+    de: "Die Anmeldung beim KI-Dienst ist fehlgeschlagen. Melde dich unter Modelle in der OpenClaw-App erneut an oder führe `openclaw configure` aus.",
+  },
+  auth_invalid_token: {
+    en: AUTH_INVALID_TOKEN_USER_TEXT,
+    de: "Die Anmeldung beim KI-Dienst ist fehlgeschlagen. Melde dich unter Modelle in der OpenClaw-App erneut an oder führe `openclaw configure` aus.",
+  },
+  upstream_html: {
+    en: "Couldn't reach the AI service. Try again in a moment. If it continues, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+    de: "Der KI-Dienst ist nicht erreichbar. Versuche es gleich erneut. Details findest du bei anhaltenden Problemen unter Einstellungen → Protokolle oder mit `openclaw logs --follow`.",
+  },
+  proxy: {
+    en: "Couldn't connect to the AI service. For details, open Settings → Logs in the OpenClaw app or run `openclaw logs --follow`.",
+    de: "Die Verbindung zum KI-Dienst ist fehlgeschlagen. Details findest du unter Einstellungen → Protokolle oder mit `openclaw logs --follow`.",
+  },
+  tls_certificate: {
+    en: TLS_CERTIFICATE_ERROR_USER_TEXT,
+    de: "Die sichere Verbindung zum KI-Dienst ist fehlgeschlagen. Details findest du unter Einstellungen → Protokolle oder mit `openclaw logs --follow`.",
+  },
+  model_not_found: {
+    en: MODEL_NOT_FOUND_USER_TEXT,
+    de: "Dieses Modell wurde nicht gefunden. Wähle ein anderes Modell in der OpenClaw-App.",
+  },
 };
 const TOOL_CALL_INPUT_MISSING_RE =
   /tool_(?:use|call)\.(?:input|arguments).*?(?:field required|required)/i;
 const TOOL_CALL_INPUT_PATH_RE =
   /messages\.\d+\.content\.\d+\.tool_(?:use|call)\.(?:input|arguments)/i;
 type AssistantErrorTextOptions = {
+  locale?: string;
   cfg?: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
@@ -135,6 +166,7 @@ export function formatAssistantErrorText(
   if (providerRefusalText) {
     return providerRefusalText;
   }
+  const locale = resolveMessageLocale(opts?.locale, opts?.cfg?.messages?.locale);
   const formatCopy = renderFormatErrorCopy(raw);
   const classifiedFacts = facts ?? classifyAssistantErrorFacts(msg, opts);
   if (classifiedFacts.storageFailure) {
@@ -146,7 +178,9 @@ export function formatAssistantErrorText(
     providerRuntimeFailureKind,
   } = classifiedFacts;
   if (formatStatus === 403 && (msg.errorType ?? parseApiErrorInfo(raw)?.type) === "FreeTierError") {
-    return "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
+    return locale === "de"
+      ? "Der kostenlose Tarif dieses Modells ist auf die Anwendung des Anbieters beschränkt. Wähle ein anderes Modell oder nutze einen kostenpflichtigen Tarif."
+      : "This model's free tier is limited to the provider's own client. Choose another model or use a paid plan.";
   }
   const unknownTool =
     raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
@@ -173,12 +207,17 @@ export function formatAssistantErrorText(
   if (diskSpaceCopy) {
     return diskSpaceCopy;
   }
-  const runtimeCopy = RUNTIME_FAILURE_COPY[providerRuntimeFailureKind];
+  const runtimeCopy = RUNTIME_FAILURE_COPY[providerRuntimeFailureKind]?.[locale];
   if (runtimeCopy) {
     return runtimeCopy;
   }
   if (failoverReason === "billing") {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
+    return formatBillingErrorMessage(
+      opts?.provider,
+      opts?.model ?? msg.model,
+      opts?.authMode,
+      locale,
+    );
   }
   const transientCopy =
     failoverReason === "rate_limit" || failoverReason === "overloaded"
@@ -186,7 +225,7 @@ export function formatAssistantErrorText(
           ...classifiedFacts,
           reason: failoverReason,
           raw,
-          locale: opts?.cfg?.ui?.prefs?.locale,
+          locale,
           timeZone: opts?.cfg?.agents?.defaults?.userTimezone,
         })
       : undefined;
@@ -199,12 +238,17 @@ export function formatAssistantErrorText(
     formatCopy !== PROVIDER_SCHEMA_REJECTION_USER_TEXT &&
     !formatCopy.startsWith("LLM request rejected:")
   ) {
-    return formatCopy;
+    return renderFormatErrorCopy(raw, { locale });
   }
   if (failoverReason === "context_overflow") {
-    return CONTEXT_OVERFLOW_ERROR_MESSAGE;
+    return locale === "de"
+      ? messageCopy(locale, "CONTEXT_OVERFLOW_ERROR_USER_MESSAGE")
+      : CONTEXT_OVERFLOW_ERROR_MESSAGE;
   }
   if (isReasoningConstraintErrorMessage(raw)) {
+    if (locale === "de") {
+      return "Dieser Modell-Endpunkt erfordert Reasoning. Verwende /think minimal oder eine andere Stufe als off und versuche es erneut.";
+    }
     return (
       "Reasoning is required for this model endpoint. " +
       "Use /think minimal (or any non-off level) and try again."
@@ -212,7 +256,9 @@ export function formatAssistantErrorText(
   }
 
   if (isInvalidStreamingEventOrderError(raw)) {
-    return "LLM request failed: provider returned an invalid streaming response. Please try again.";
+    return locale === "de"
+      ? "Der Anbieter hat eine ungültige Streaming-Antwort geliefert. Bitte versuche es erneut."
+      : "LLM request failed: provider returned an invalid streaming response. Please try again.";
   }
 
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
@@ -221,6 +267,9 @@ export function formatAssistantErrorText(
       raw,
     )
   ) {
+    if (locale === "de") {
+      return "Die Reihenfolge der Nachrichten ist ungültig. Versuche es erneut oder starte bei anhaltenden Problemen mit /new ein neues Gespräch.";
+    }
     return (
       "Message ordering conflict - please try again. " +
       "If this persists, use /new to start a fresh session."
@@ -228,6 +277,9 @@ export function formatAssistantErrorText(
   }
 
   if (raw && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))) {
+    if (locale === "de") {
+      return "Der Gesprächsverlauf ist offenbar beschädigt: Die Eingabe eines Werkzeugaufrufs fehlt. Starte mit /new ein neues Gespräch. Setze bei erneutem Auftreten die Sitzung zurück oder lösche den beschädigten Verlauf.";
+    }
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +
@@ -236,6 +288,9 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "replay_invalid") {
+    if (locale === "de") {
+      return "Der Gesprächsverlauf oder sein Wiederherstellungszustand ist ungültig. Starte mit /new ein neues Gespräch und versuche es erneut.";
+    }
     return (
       "Session history or replay state is invalid. " +
       "Use /new to start a fresh session and try again."
@@ -257,6 +312,7 @@ export function formatAssistantErrorText(
 
   const transportCopy = formatTransportErrorCopy(
     msg.errorCode && isKnownTransportErrorCode(msg.errorCode) ? `${raw} ${msg.errorCode}` : raw,
+    locale,
   );
   if (transportCopy) {
     return transportCopy;
@@ -279,8 +335,10 @@ export function formatAssistantErrorText(
 
   if (!raw) {
     return failoverReason
-      ? renderAssistantRequestFailureCopy(classifiedFacts)
-      : "LLM request failed with an unknown error.";
+      ? renderAssistantRequestFailureCopy(classifiedFacts, locale)
+      : locale === "de"
+        ? "Die Anfrage an den KI-Dienst ist mit einem unbekannten Fehler fehlgeschlagen."
+        : "LLM request failed with an unknown error.";
   }
 
   if (isRawApiErrorPayload(raw) || isLikelyHttpErrorText(raw)) {
@@ -288,7 +346,9 @@ export function formatAssistantErrorText(
   }
 
   if (isStreamingJsonParseError(raw)) {
-    return "LLM streaming response contained a malformed fragment. Please try again.";
+    return locale === "de"
+      ? "Die Streaming-Antwort enthielt einen fehlerhaften Abschnitt. Bitte versuche es erneut."
+      : "LLM streaming response contained a malformed fragment. Please try again.";
   }
 
   // Never return raw unhandled errors - log for debugging but return safe message
@@ -344,20 +404,23 @@ export function formatUserFacingAssistantErrorText(
   if (!facts.storageFailure && rawError === MODEL_REQUEST_POLICY_DENIED_TEXT) {
     return MODEL_REQUEST_POLICY_DENIED_TEXT;
   }
+  const locale = resolveMessageLocale(opts?.locale, opts?.cfg?.messages?.locale);
   const friendlyError = formatAssistantErrorText(msg, opts, facts);
   const rawPassthrough = isRawAssistantErrorPassthrough({ friendlyError, rawError });
   const schemaFriendlyError =
     friendlyError === PROVIDER_SCHEMA_REJECTION_USER_TEXT ||
     friendlyError?.startsWith("LLM request rejected:");
+  const schemaFallback =
+    locale === "de"
+      ? renderAssistantRequestFailureCopy({ reason: "format" }, locale)
+      : PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   const safeFriendlyError =
-    (schemaFriendlyError ? renderAssistantFormatFailureCopy(msg, facts.reason) : undefined) ??
-    (rawPassthrough
-      ? schemaFriendlyError
-        ? PROVIDER_SCHEMA_REJECTION_USER_TEXT
-        : undefined
-      : friendlyError);
+    (schemaFriendlyError
+      ? renderAssistantFormatFailureCopy(msg, facts.reason, { locale })
+      : undefined) ??
+    (rawPassthrough ? (schemaFriendlyError ? schemaFallback : undefined) : friendlyError);
   if (safeFriendlyError) {
     return safeFriendlyError.trim();
   }
-  return renderAssistantRequestFailureCopy(facts) ?? GENERIC_ASSISTANT_ERROR_TEXT;
+  return renderAssistantRequestFailureCopy(facts, locale) ?? GENERIC_ASSISTANT_ERROR_TEXT;
 }

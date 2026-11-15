@@ -522,3 +522,107 @@ it("forwards sanitized generic errors on external chat channels when verbose is 
     "⚠️ Agent failed before reply: INVALID_ARGUMENT: some other failure. Please try again, or use /new to start a fresh session.",
   );
 });
+
+it.each(["de", "en"] as const)(
+  "delivers a terminal provider failure to WhatsApp in %s",
+  async (locale) => {
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      new FailoverError("429 too many requests", {
+        reason: "rate_limit",
+        status: 429,
+        rateLimitRetriesExhausted: 3,
+      }),
+    );
+    const payload = await finalPayload({
+      ...createRunAgentTurnParams(createFollowupRun({ messageLocale: locale })),
+      sessionCtx: { Provider: "whatsapp", MessageSid: "localized-message", MessageLocale: locale },
+    });
+    expect(payload.text).toContain(locale === "de" ? "3 automatische" : "3 automatic retries");
+    expect(payload.text).not.toContain("429");
+  },
+);
+
+it("keeps German retry guidance for returned failures as well as thrown failures", async () => {
+  const rawError = "429 rate limit exceeded. Please try again in 221ms.";
+  const payloads = buildPayloads({
+    messageLocale: "de",
+    provider: "external",
+    lastAssistant: makeAssistantMessageFixture({
+      stopReason: "error",
+      errorMessage: rawError,
+      content: [],
+    }),
+    rateLimitRetriesExhausted: 0,
+  });
+  state.runWithModelFallbackMock.mockResolvedValueOnce({
+    result: {
+      payloads,
+      meta: {
+        replayInvalid: true,
+        error: { kind: "incomplete_turn", message: rawError, fallbackSafe: false },
+      },
+    },
+    provider: "external",
+    model: "primary",
+    attempts: [],
+  });
+  const result = await runTurn(
+    createRunAgentTurnParams(createFollowupRun({ messageLocale: "de" })),
+  );
+  assert(result.kind === "success");
+  expect(result.runResult.payloads?.[0]?.text).toContain("deaktiviert");
+  expect(result.runResult.payloads?.[0]?.text).not.toContain("recovery is disabled");
+});
+
+it.each([
+  ["maximum context length exceeded", "Kontext"],
+  ["Compaction failed: prompt is too long: 200000 tokens > 100000 maximum", "Komprimierung"],
+])("localizes the German terminal overflow path: %s", async (message, expected) => {
+  state.isCompactionFailureErrorMock.mockReturnValue(message.startsWith("Compaction"));
+  state.runWithModelFallbackMock.mockRejectedValueOnce(new Error(message));
+  const payload = await finalPayload(
+    createRunAgentTurnParams(createFollowupRun({ messageLocale: "de" })),
+  );
+  expect(payload.text).toContain(expected);
+  expect(payload.text).not.toContain("Context overflow");
+  expect(payload.text).not.toContain("Auto-compaction could not");
+});
+
+it("localizes compaction failure returned by the model-run settlement", async () => {
+  state.isContextOverflowErrorMock.mockReturnValue(true);
+  state.runWithModelFallbackMock.mockResolvedValueOnce({
+    result: {
+      payloads: [],
+      meta: {
+        error: {
+          kind: "incomplete_turn",
+          message: "Compaction failed: prompt is too long: 200000 tokens > 100000 maximum",
+          fallbackSafe: false,
+        },
+      },
+    },
+    provider: "external",
+    model: "primary",
+    attempts: [],
+  });
+  const payload = await finalPayload(
+    createRunAgentTurnParams(createFollowupRun({ messageLocale: "de" })),
+  );
+  expect(payload.text).toContain("Komprimierung");
+  expect(payload.text).toContain("/compact");
+  expect(payload.text).toContain("/new");
+});
+
+it("preserves connection recovery guidance for German thrown transport errors", async () => {
+  state.runWithModelFallbackMock.mockRejectedValueOnce(
+    new FailoverError("ENOTFOUND", { reason: "timeout" }),
+  );
+  const payload = await finalPayload({
+    ...createRunAgentTurnParams(createFollowupRun({ messageLocale: "de" })),
+    sessionCtx: { Provider: "whatsapp", MessageLocale: "de" },
+  });
+  expect(payload.text).toContain("Prüfe deine Verbindung");
+  expect(payload.text).toContain("openclaw logs --follow");
+  expect(payload.text).toContain("Gespräch");
+  expect(payload.text).not.toContain("zu lange gedauert");
+});

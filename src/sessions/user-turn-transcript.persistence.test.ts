@@ -99,6 +99,20 @@ describe("persistUserTurnTranscript", () => {
 
   afterEach(resetGlobalHookRunner);
 
+  it("persists the captured reply language without rewriting the user's text", async () => {
+    await writeInput({
+      text: "Hello, hallo!",
+      timestamp: 1,
+      idempotencyKey: "locale-input",
+      messageLocale: "de",
+    });
+    const persisted = await readMessage();
+    expect(persisted).toMatchObject({
+      content: "Hello, hallo!",
+      __openclaw: { messageLocale: "de" },
+    });
+  });
+
   it("does not resume a cold transcript when its archive is missing", async () => {
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
     await writeInput({ text: "Original history", timestamp: 1 }, { updateMode: "none" });
@@ -193,6 +207,7 @@ describe("persistUserTurnTranscript", () => {
   it("does not restore original display text after a runtime hook or continuation rewrites it", async () => {
     const input = {
       text: "original prompt",
+      messageLocale: "de" as const,
       workContext: { snapshot: { page: "chat" }, text: "original words" },
       requesterOrigin: { sessionKey: "agent:main:requesters", operatorProfileId: "original" },
     };
@@ -207,6 +222,7 @@ describe("persistUserTurnTranscript", () => {
         __openclaw: {
           ...prepared["__openclaw"],
           chatRequestIdentity: "forged-request",
+          messageLocale: "en",
           requesterOrigin: { sessionKey: "agent:main:forged", operatorProfileId: "forged" },
         },
       },
@@ -216,6 +232,7 @@ describe("persistUserTurnTranscript", () => {
     const operational = {
       chatRequestIdentity: "original-request",
       requesterOrigin: input.requesterOrigin,
+      messageLocale: "de",
     };
     expect(runtime["__openclaw"]).toMatchObject(operational);
     const written = preparePersistedUserTurnMessageForTranscriptWrite(runtime, {
@@ -228,6 +245,7 @@ describe("persistUserTurnTranscript", () => {
     });
     expect(unprepared).not.toHaveProperty("__openclaw.requesterOrigin");
     expect(unprepared).not.toHaveProperty("__openclaw.chatRequestIdentity");
+    expect(unprepared).not.toHaveProperty("__openclaw.messageLocale");
     recorder.replaceTextBeforePersistence?.("approved continuation");
     await recorder.persistApproved();
     const persisted = await readMessage();

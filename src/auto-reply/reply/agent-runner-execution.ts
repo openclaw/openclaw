@@ -504,6 +504,7 @@ async function executeAgentTurnInternalLoop(
     const formattedErrorCandidate =
       candidateReason === "rate_limit" || candidateReason === "overloaded"
         ? renderRateLimitOrOverloadedCopy({
+            locale: params.followupRun.run.messageLocale,
             reason: candidateReason,
             raw: errorCandidate,
             rateLimitRetriesExhausted: providerFailure?.rateLimitRetriesExhausted,

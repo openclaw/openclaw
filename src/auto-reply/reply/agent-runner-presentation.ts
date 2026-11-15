@@ -84,7 +84,12 @@ export function createAgentTurnPresentation(params: {
     const conversationContext =
       params.turn.sessionCtx.agentText ?? params.turn.sessionCtx.BodyForAgent;
     const sanitized = errorContext
-      ? renderUserFacingText(text, { errorContext: true, conversationContext, streaming: true })
+      ? renderUserFacingText(text, {
+          errorContext: true,
+          conversationContext,
+          streaming: true,
+          locale: params.turn.followupRun.run.messageLocale,
+        })
       : sanitizeUserFacingText(text, {
           conversationContext,
           streaming: true,

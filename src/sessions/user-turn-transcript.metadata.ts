@@ -67,6 +67,7 @@ export function buildPersistedUserTurnMetadata(
     : undefined;
   return {
     ...(requesterOrigin ? { requesterOrigin } : {}),
+    ...(input.messageLocale ? { messageLocale: input.messageLocale } : {}),
     // Privileged synthetic handoffs may execute owner tools but never author trusted memory.
     ...(input.senderIsOwner === undefined
       ? {}
@@ -171,6 +172,10 @@ export function restorePreparedUserTurnOperationalMetaForRuntime<
       requesterOrigin: preparedMeta.requesterOrigin,
     });
   }
+  delete runtimeMeta.messageLocale;
+  if (preparedMeta?.messageLocale) {
+    runtimeMeta.messageLocale = preparedMeta.messageLocale;
+  }
   delete runtimeMeta.intent;
   if (preparedMeta?.intent) {
     runtimeMeta.intent = preparedMeta.intent;
@@ -248,6 +253,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(Reflect.get(message, "provenance"));
   const originalMeta = message["__openclaw"];
   const chatRequestIdentity = originalMeta?.chatRequestIdentity;
+  const messageLocale = originalMeta?.messageLocale;
   const requesterOrigin = originalMeta?.requesterOrigin
     ? captureRequesterOrigin({ requesterOrigin: originalMeta.requesterOrigin })
     : undefined;
@@ -301,6 +307,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const protectedMeta: Record<string, unknown> = {
     ...nextUserMessage["__openclaw"],
     ...(typeof chatRequestIdentity === "string" ? { chatRequestIdentity } : {}),
+    ...(messageLocale ? { messageLocale } : {}),
     ...(typeof senderIsOwner === "boolean" ? { senderIsOwner } : {}),
     ...(replyToId ? { replyToId } : {}),
     ...(replyToPreview ? { replyToPreview } : {}),

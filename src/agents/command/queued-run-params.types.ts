@@ -22,6 +22,7 @@ import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 /** Prepared execution inputs retained by queued turns, without live attempt ownership. */
 export type QueuedAgentRunParams = {
+  messageLocale?: import("../../shared/message-locale.js").MessageLocale;
   requesterOrigin?: RequesterOrigin;
   operatorProfileId?: string;
   conversationId?: string | null;

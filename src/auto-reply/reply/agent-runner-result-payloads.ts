@@ -328,6 +328,7 @@ export async function prepareReplyAgentPayloads(state: {
   };
   const buildFinalPayloads = async (payloads: ReplyPayload[]) => {
     const result = await buildReplyPayloads({
+      locale: followupRun.run.messageLocale,
       config: cfg,
       payloads,
       conversationContext: sessionCtx.agentText ?? sessionCtx.BodyForAgent,

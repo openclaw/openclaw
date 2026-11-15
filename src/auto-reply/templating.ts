@@ -116,6 +116,12 @@ export type CanonicalInboundText = {
 
 /** Raw inbound message context accepted from channels before finalization. */
 export type MsgContext = Partial<CanonicalInboundText> & {
+  /** Captured language for host-authored notices; never injected into model instructions. */
+  MessageLocale?: import("../shared/message-locale.js").MessageLocale;
+  /** Language advertised by the client that submitted this input. */
+  ClientLocale?: string;
+  /** Default supplied by the originating channel's account owner. */
+  ChannelMessageLocale?: string;
   Body?: string;
   InboundEventKind?: InboundEventKind;
   /**

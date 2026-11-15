@@ -14,8 +14,8 @@ import { renderAgentHarnessPreflightUserMessage } from "../../embedded-agent-hel
 import type { MessagingToolSend } from "../../embedded-agent-messaging.types.js";
 import { isToolAuthoredSourceReplyForAssistant } from "../../embedded-agent-tool-authored-source-reply.js";
 import { renderAssistantRequestFailureCopy } from "../../failover/assistant-request-failure-copy.js";
+import { renderAuthProfileFailoverCopy } from "../../failover/auth-user-copy.js";
 import { resolveReplyFailoverFacts } from "../../failover/request-error-facts.js";
-import { renderAuthProfileFailoverCopy } from "../../failover/user-copy.js";
 import { buildProviderAuthRecoveryHint } from "../../provider-auth-recovery-hint.js";
 import {
   MISSING_REPLY_NOTICE_TEXT,
