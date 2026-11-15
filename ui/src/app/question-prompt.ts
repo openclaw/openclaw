@@ -174,7 +174,6 @@ function scheduleExpiry(state: QuestionPromptState): void {
       state.expiryTimer = null;
       const now = Date.now();
       let changed = false;
-      const expired: string[] = [];
       for (const prompt of state.prompts.values()) {
         if (
           prompt.status === "pending" &&
@@ -184,19 +183,16 @@ function scheduleExpiry(state: QuestionPromptState): void {
           prompt.status = "expired";
           clearSecretQuestionDrafts(prompt.questions, prompt.drafts);
           prompt.locallyExpired = true;
-          expired.push(prompt.id);
           prompt.submitting = false;
           prompt.error = null;
           prompt.revision = ++state.revision;
           changed = true;
+          void refreshEngagedQuestion(state, prompt.id, "question.get");
         }
       }
       scheduleExpiry(state);
       if (changed) {
         state.onChange();
-      }
-      for (const id of expired) {
-        void refreshEngagedQuestion(state, id, "question.get");
       }
     },
     resolveTimerTimeoutMs(nextExpiry - Date.now(), 0, 0),
@@ -251,7 +247,7 @@ function storeQuestionRecord(
       record.status === "answered" && !previous?.localResolutionConfirmed && !previous?.submitting,
     localResolutionConfirmed: previous?.localResolutionConfirmed ?? false,
     locallyExpired: false,
-    ...(previous?.engaged ? { engaged: true } : {}),
+    engaged: previous?.engaged,
     submitting:
       record.status === "pending" ||
       (record.status === "answered" && !(previous?.localResolutionConfirmed ?? false))
