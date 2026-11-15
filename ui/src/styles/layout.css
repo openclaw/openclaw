@@ -2367,50 +2367,11 @@ div.shell.shell--onboarding {
   background: var(--danger);
 }
 
-/* Customize section: the hub's pages, then the installed plugins. */
+/* Customize section: the hub's pages. */
 .sidebar-customize {
   display: flex;
   flex-direction: column;
   gap: 2px;
-}
-
-.sidebar-customize__group {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  margin-block-start: 10px;
-}
-
-.sidebar-customize__plugin-icon {
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 18px;
-  border-radius: 5px;
-  object-fit: cover;
-}
-
-.sidebar-customize__emoji {
-  width: 18px;
-  font-size: 14px;
-  line-height: 1;
-  text-align: center;
-}
-
-.sidebar-customize__plugin-icon--fallback {
-  background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
-  color: rgb(255 255 255 / 92%);
-  font-size: 10px;
-  font-weight: 700;
-}
-
-.sidebar-customize__heading {
-  padding: 4px 8px;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
 }
 
 /* The people list's heading matches the Sessions group headings, without a toggle. */
