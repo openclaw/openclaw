@@ -170,15 +170,15 @@ function TranscriptRows(props: {
                       // releases it in CSS to avoid restyling hidden subtrees.
                       height: active() || preparing() ? undefined : "0",
                       position: active() ? undefined : "absolute",
-                      // Rows outside the flow sit where they will land, painted or not; a
-                      // forecast row before the flow hangs above the rows between.
+                      // A forecast row before the flow hangs above the rows between, painted
+                      // or not; one after it sits at its slot once painted.
                       top: active()
                         ? undefined
-                        : !forecast()
-                          ? "0"
-                          : before()
-                            ? "auto"
-                            : `${virtualRow().start - blockStart()}px`,
+                        : before()
+                          ? "auto"
+                          : paintPreparing()
+                            ? `${virtualRow().start - blockStart()}px`
+                            : "0",
                       bottom:
                         !active() && before()
                           ? `calc(100% + ${blockStart() - virtualRow().end}px)`

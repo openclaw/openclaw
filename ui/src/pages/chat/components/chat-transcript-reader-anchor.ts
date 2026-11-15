@@ -29,6 +29,8 @@ type ReaderContent = {
   readonly from: number;
   readonly until: number;
   readonly candidates: readonly { readonly element: Element; readonly offset: number }[];
+  /** The deepest content the edge cuts, with its height when recorded. */
+  readonly inner?: { readonly element: Element; readonly offset: number; readonly height: number };
 };
 
 /** A row first measured while crossing the top edge was laid out above the reader. */
@@ -258,12 +260,21 @@ export class TranscriptReaderAnchor {
   };
 
   /** The recorded content the reader sees, while it is still in its row. */
-  readonly readerElement = (): Element | null => {
-    const content = this.readerContent;
-    return (
-      content?.candidates.find(({ element }) => content.row.contains(element))?.element ?? null
-    );
-  };
+  readonly readerElement = (): Element | null =>
+    (this.readerContent && this.anchor(this.readerContent)?.element) ?? null;
+
+  /**
+   * The recorded content marking the reader's place. Cut content that resized itself changed
+   * inside what the reader sees at the edge, so growing below the edge moves only what follows;
+   * otherwise the first recorded content still in the row.
+   */
+  private anchor({ row, inner, candidates }: ReaderContent) {
+    return inner &&
+      row.contains(inner.element) &&
+      Math.abs(inner.element.getBoundingClientRect().height - inner.height) >= 0.5
+      ? inner
+      : candidates.find(({ element }) => row.contains(element));
+  }
 
   /** How far the recorded reader content moved inside a resized row. */
   private contentShift(row: HTMLElement): number {
@@ -272,7 +283,7 @@ export class TranscriptReaderAnchor {
     if (content?.row !== row || !this.host.scrollElement?.scrollTop) {
       return 0;
     }
-    const anchor = content.candidates.find(({ element }) => row.contains(element));
+    const anchor = this.anchor(content);
     if (!anchor) {
       return 0;
     }
@@ -374,7 +385,8 @@ export class TranscriptReaderAnchor {
     if (!below.length && !cut.length) {
       return;
     }
-    this.readerContent = { row, from: edge, until, candidates: [...below, ...cut] };
+    const inner = cut[0] && { ...cut[0], height: cut[0].element.getBoundingClientRect().height };
+    this.readerContent = { row, from: edge, until, candidates: [...below, ...cut], inner };
     // Entering bubbles animate a transform that rects include and row sizes don't. Record the
     // settled layout once the row's running animations end; a size change mid-animation stays
     // approximate. Activity shimmer never ends and moves nothing; a finished animation that
