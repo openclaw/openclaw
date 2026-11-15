@@ -138,6 +138,10 @@ it("offers the edited task's models instead of the page agent's catalog", async 
       models: [
         {
           provider: "fixture",
+          thinkingLevels: [
+            { id: "low", label: "Low" },
+            { id: "xhigh", label: "Extra high" },
+          ],
           id:
             (params as { agentId?: string }).agentId === "writer"
               ? "writer-model"
@@ -174,6 +178,14 @@ it("offers the edited task's models instead of the page agent's catalog", async 
     expect(page.querySelector('[role="option"][data-value="fixture/unrelated-job"]')).toBeNull();
     page.querySelector<HTMLElement>('[role="option"][data-value="fixture/writer-model"]')!.click();
     await page.settle();
+    const thinking = page.querySelector<HTMLButtonElement>("#cron-payload-thinking")!;
+    expect(thinking.tagName).toBe("BUTTON");
+    thinking.click();
+    await waitForCronPage(() =>
+      expect(page.querySelector('[role="option"][data-value="xhigh"]')).not.toBeNull(),
+    );
+    page.querySelector<HTMLElement>('[role="option"][data-value="xhigh"]')!.click();
+    await page.settle();
     click(page, '[data-test-id="cron-submit"]');
     await waitForCronPage(() =>
       expect(request).toHaveBeenCalledWith(
@@ -182,7 +194,7 @@ it("offers the edited task's models instead of the page agent's catalog", async 
           id: job.id,
           patch: expect.objectContaining({
             agentId: "writer",
-            payload: expect.objectContaining({ model: "fixture/writer-model" }),
+            payload: expect.objectContaining({ model: "fixture/writer-model", thinking: "xhigh" }),
           }),
         }),
       ),

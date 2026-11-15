@@ -36,7 +36,7 @@ export function createCronPresentation(deps: CronPresentationDeps) {
   type ModelReceipt = { state: CronState; agentId: string | undefined; result: Promise<void> };
   const [modelReceipt, setModelReceipt] = createSignal<ModelReceipt | null>(null);
   const modelRead = createMemo(() => modelReceipt()?.result.then(() => null) ?? null);
-  const cronModelSuggestions = createMemo(
+  const cronModels = createMemo(
     () => {
       const state = deps.readState();
       const agentId = resolveCronModelAgentId(state);
@@ -44,9 +44,9 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       if (receipt?.state !== state || receipt.agentId !== agentId) {
         return [];
       }
-      return readModelCatalog(state.client, { agentId })
-        .models.filter((entry) => entry.manualSelectionAllowed !== false)
-        .map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider));
+      return readModelCatalog(state.client, { agentId }).models.filter(
+        (entry) => entry.manualSelectionAllowed !== false,
+      );
     },
     { lazy: true },
   );
@@ -274,7 +274,9 @@ export function createCronPresentation(deps: CronPresentationDeps) {
       stopModelSuggestions?.();
       modelSuggestionsRequest = null;
     },
-    modelSuggestions: cronModelSuggestions,
+    models: cronModels,
+    modelSuggestions: () =>
+      cronModels().map((entry) => buildQualifiedChatModelValue(entry.id, entry.provider)),
     get modelRequest() {
       return modelSuggestionsRequest;
     },

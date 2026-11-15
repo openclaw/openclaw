@@ -89,7 +89,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     runsSortDir: "desc",
     agentSuggestions: [],
     modelSuggestions: [],
-    thinkingSuggestions: [],
+    thinkingOptions: [],
     timezoneSuggestions: [],
     deliveryToSuggestions: [],
     failureAlertToSuggestions: [],
