@@ -160,11 +160,11 @@ export function subscribeFilteredSidebarSessions(
     owner.sessionListError = snapshot.error;
     owner.requestSessionDataUpdate();
   };
-  const unsubscribe = sessions.subscribeList(scope, apply);
-  apply(sessions.listSnapshot(scope));
+  // Personal all-agent fallback has no owner predicate, but still owns its membership.
+  const observation = sessions.observeList(scope, apply);
   const stop = () => {
     bootstrap?.cancelQueued(stop);
-    unsubscribe();
+    observation.dispose();
     owner.sessionsStartupPending = false;
     owner.sessionListError = null;
   };
@@ -229,6 +229,7 @@ export function refreshSidebarSessionList(
   }
   return owner.context.sessions.refreshList({
     ...query,
+    independent: query.agentId === undefined,
     ...(append && typeof offset === "number" ? { offset, append: true } : {}),
     force: true,
   });

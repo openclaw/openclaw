@@ -112,6 +112,7 @@ export function createSessionOwnerFilterQuery(
   getHost: () => {
     isConnected: boolean;
     sidebarSessionOwnerFilter(): SidebarSessionOwnerFilter;
+    sidebarSessionsAcrossAgents?(): boolean;
     sessionData: {
       resetSessionList(): void;
       refreshSidebarSessions(): Promise<void>;
@@ -126,7 +127,13 @@ export function createSessionOwnerFilterQuery(
       const query = host.sidebarSessionOwnerFilter();
       return {
         host,
-        current: JSON.stringify([query.ownerId, query.involvingMe, filter.read().scope]),
+        // Solo fallback can keep the owner null while roster arrival changes query scope.
+        current: JSON.stringify([
+          query.ownerId,
+          query.involvingMe,
+          filter.read().scope,
+          Boolean(host.sidebarSessionsAcrossAgents?.()),
+        ]),
       };
     },
     ({ host, current }) => {
