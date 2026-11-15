@@ -41,8 +41,14 @@ export function createStandingNavigationPolicy() {
     }
   };
   return {
-    set(next: BrowserNavigationPolicyOptions) {
-      policy = next;
+    /** Takes an invocation's standing policy; its invocation-scoped grants stay out. */
+    set({ standingSsrfPolicy, browserProxyMode }: BrowserNavigationPolicyOptions) {
+      if (standingSsrfPolicy) {
+        policy = {
+          ssrfPolicy: standingSsrfPolicy,
+          ...(browserProxyMode ? { browserProxyMode } : {}),
+        };
+      }
     },
     frameCommitted,
     seed,
