@@ -59,10 +59,10 @@ const nativeQualificationFixtures = vi.hoisted(() => ({
 }));
 
 vi.mock("../../scripts/lib/ci-test-native-bun-qualification.json", async () => {
-  const { createHash } = await import("node:crypto");
+  const { createHash: createSourceHash } = await import("node:crypto");
   const { readFileSync: readQualificationSource } = await import("node:fs");
   const hash = (file: string) =>
-    createHash("sha256").update(readQualificationSource(file)).digest("hex");
+    createSourceHash("sha256").update(readQualificationSource(file)).digest("hex");
   const { first, second, helperTest, helper, setup } = nativeQualificationFixtures;
   return {
     default: {

@@ -4548,7 +4548,9 @@ export function createSelectedNodeTestShardBundles(
         options.volumeContext,
       )
     : undefined;
-  if (describeVolume) options.onVolumePrepared?.(describeVolume);
+  if (describeVolume) {
+    options.onVolumePrepared?.(describeVolume);
+  }
   const isWholeToolingPair = (group: NodeTestShardGroup) =>
     group.shard_name === "core-tooling-isolated" &&
     group.configs.length === 2 &&

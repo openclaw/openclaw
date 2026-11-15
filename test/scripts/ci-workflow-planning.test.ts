@@ -13400,14 +13400,18 @@ describe("ci workflow guards", () => {
   );
 
   it("keeps the volume-enabled PR manifest within bounds and aligned through warm runtime admission", async () => {
-    const config = "test/vitest/vitest.gateway-database-workers.config.ts";
-    const targets = listNodeTestConfigFiles(config)!;
+    const databaseConfig = "test/vitest/vitest.gateway-database-workers.config.ts";
+    const targets = listNodeTestConfigFiles(databaseConfig)!;
     const planner = pathToFileURL(path.resolve("scripts/lib/ci-changed-node-test-plan.mts")).href;
     const sourceRoot = process.cwd();
     const normalEnv = {
       CI: "true",
       GITHUB_ACTIONS: "true",
       OPENCLAW_CI_TEST_RUNTIME_POLICY: "node",
+      // The enclosing test runner owns these filters; ordinary CI shards do not inherit them.
+      OPENCLAW_VITEST_INCLUDE_FILE: "",
+      OPENCLAW_VITEST_POST_SHARD_INCLUDE_FILE: "",
+      OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: "[]",
     };
     const manifest = runCiManifestFixture({
       bundledPlanner: true,
@@ -13456,7 +13460,9 @@ describe("ci workflow guards", () => {
       const groups = row.groups_pool
         ? decodeNodeTestGroups(pools[row.groups_pool])[row.groups_index]
         : row.groups;
-      if (row.groups_pool && !Array.isArray(groups)) throw new Error("Missing pooled groups");
+      if (row.groups_pool && !Array.isArray(groups)) {
+        throw new Error("Missing pooled groups");
+      }
       const plans = resolveShardPlans({
         OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: row.groups_pool
           ? encodeNodeTestGroups(groups)
@@ -13468,7 +13474,9 @@ describe("ci workflow guards", () => {
         runtimeRows.push({ row, plans });
       }
       for (const plan of plans) {
-        if (plan.kind !== "group") continue;
+        if (plan.kind !== "group") {
+          continue;
+        }
         for (const entry of plan.plan.volume?.entries ?? []) {
           const owner = new Set(listNodeTestConfigFiles(entry.config));
           const selected = (plan.plan.includePatterns ?? [])
@@ -13490,7 +13498,9 @@ describe("ci workflow guards", () => {
     }
     expect(measured).toBeGreaterThan(0);
     expect([...denominators.values()].some((ids) => ids.length > 1)).toBe(true);
-    for (const ids of denominators.values()) expect(new Set(ids).size).toBe(1);
+    for (const ids of denominators.values()) {
+      expect(new Set(ids).size).toBe(1);
+    }
 
     const output: string[] = [];
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
@@ -13521,7 +13531,7 @@ describe("ci workflow guards", () => {
               );
               for (const config of args.slice(
                 0,
-                args.indexOf("--") < 0 ? args.length : args.indexOf("--"),
+                args.includes("--") ? args.indexOf("--") : args.length,
               )) {
                 const owner = new Set(listNodeTestConfigFiles(config));
                 const selected = files.filter((file) => owner.has(file)).toSorted();
@@ -13537,37 +13547,30 @@ describe("ci workflow guards", () => {
               }
               return 0;
             });
-          const code = await runShardPlans(
-            plans.map((plan) =>
-              plan.kind === "group"
-                ? {
-                    ...plan,
-                    plan: {
-                      ...plan.plan,
-                      fallbackMaxWorkers: workers,
-                      minTotalMemoryBytes: Number.MAX_SAFE_INTEGER,
-                    },
-                  }
-                : plan,
-            ),
-            {
-              concurrency: 1,
-              scratchDir: tempDirs.make("openclaw-volume-runtime-"),
-              env: {
-                ...process.env,
-                ...normalEnv,
-                RUNNER_ENVIRONMENT: "self-hosted",
-                FROZEN_TARGET: "false",
-                NODE_OPTIONS: "--max-old-space-size=8192",
-                OPENCLAW_VITEST_MAX_WORKERS: "6",
-                OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
-                OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(row.env ?? {}),
-                OPENCLAW_VITEST_WORKER_CACHE: warm ? "1" : undefined,
-                ...(scenario ? { OPENCLAW_TEST_VOLUME_SCENARIO: "different" } : {}),
-              },
-              runChild,
+          const admittedPlans = structuredClone(plans);
+          for (const plan of admittedPlans) {
+            if (plan.kind === "group") {
+              plan.plan.fallbackMaxWorkers = workers;
+              plan.plan.minTotalMemoryBytes = Number.MAX_SAFE_INTEGER;
+            }
+          }
+          const code = await runShardPlans(admittedPlans, {
+            concurrency: 1,
+            scratchDir: tempDirs.make("openclaw-volume-runtime-"),
+            env: {
+              ...process.env,
+              ...normalEnv,
+              RUNNER_ENVIRONMENT: "self-hosted",
+              FROZEN_TARGET: "false",
+              NODE_OPTIONS: "--max-old-space-size=8192",
+              OPENCLAW_VITEST_MAX_WORKERS: "6",
+              OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "300000",
+              OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(row.env ?? {}),
+              OPENCLAW_VITEST_WORKER_CACHE: warm ? "1" : undefined,
+              ...(scenario ? { OPENCLAW_TEST_VOLUME_SCENARIO: "different" } : {}),
             },
-          );
+            runChild,
+          });
           expect(code).toBe(0);
           const records = output
             .filter((line) => line.startsWith("[shard:volume] "))

@@ -62,7 +62,9 @@ export function nodeTestVolumeEnvironment(
     )
     .toSorted(([a], [b]) => a.localeCompare(b));
   const semantic = entries.flatMap(([key, value]) => {
-    if (volumeResourceEnv.has(key)) return [];
+    if (volumeResourceEnv.has(key)) {
+      return [];
+    }
     // Preserve quoted option values; remove only the known heap option and its separator.
     const normalized =
       key === "NODE_OPTIONS"
