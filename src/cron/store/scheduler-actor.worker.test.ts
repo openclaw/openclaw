@@ -529,13 +529,22 @@ it("observes future deadlines without SQL wakes and retries an unacknowledged du
 });
 
 it.each([
-  { name: "on-time long deadline", due: 10, elapsed: 10, accepted: 7 },
-  { name: "missed work after sleep", due: 1, elapsed: 60, accepted: 5 },
-])("bounds catch-up only for $name", ({ name, due, elapsed, accepted }) => {
+  { name: "on-time long deadline", due: 10, elapsed: 10, skip: undefined, accepted: 7 },
+  { name: "missed work after sleep", due: 1, elapsed: 60, skip: undefined, accepted: 5 },
+  { name: "a late wake", due: 1, elapsed: 1.05, skip: "late", accepted: 5 },
+  { name: "a clock jump", due: 1, elapsed: 1.05, skip: "jump", accepted: 0 },
+  { name: "a refreshed clock jump", due: 1, elapsed: 1.05, skip: "refreshed jump", accepted: 0 },
+] as const)("bounds catch-up only for $name", ({ name, due, elapsed, skip, accepted }) => {
   const scheduler = storedScheduler(
     name,
     jobSeries("job", 7, () => now + due * minute),
   );
-  scheduler.start();
-  expect(scheduler.tick(now + elapsed * minute, elapsed * minute).accepted).toHaveLength(accepted);
+  const config = { ...snapshot.config, cronConfig: { skipMissedJobs: skip !== undefined } };
+  scheduler.start(now, { snapshot: { ...snapshot, config } });
+  // A late wake moves both clocks together; a clock jump moves only wall time.
+  const atMs = now + (skip?.endsWith("jump") ? 60 : elapsed) * minute;
+  if (skip === "refreshed jump") {
+    scheduler.refresh({ nowMs: atMs, monotonicMs: elapsed * minute });
+  }
+  expect(scheduler.tick(atMs, elapsed * minute).accepted).toHaveLength(accepted);
 });

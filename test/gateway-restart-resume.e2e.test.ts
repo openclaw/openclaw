@@ -7,9 +7,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { stageSessionPendingInput } from "../src/config/sessions/session-accessor.pending-inputs.js";
+import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope-helpers.js";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
+import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { openOpenClawAgentDatabase } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -683,7 +687,7 @@ it.skipIf(process.platform === "win32").for([true, false])(
         await client.request("sessions.create", { key: crashKey, agentId: "main" });
         await send(crashKey, marker(2, "stream"));
         await provider.wait("ready:2:stream");
-        await send(crashKey, CRASH_QUEUED, "followup");
+        const crashQueued = await send(crashKey, CRASH_QUEUED, "followup");
         await race(
           vi.waitFor(
             async () => {
@@ -708,6 +712,15 @@ it.skipIf(process.platform === "win32").for([true, false])(
         expect(
           provider.calls.filter((call) => call.cycle === 2 && call.current.includes(RESUME)),
         ).toEqual([]);
+        const crashReceipt = await client.request<{ inputReceipts?: unknown[] }>("chat.history", {
+          sessionKey: crashKey,
+          inputRunIds: [crashQueued.runId],
+        });
+        expect(crashReceipt.inputReceipts).toContainEqual({
+          runId: crashQueued.runId,
+          state: "pending",
+          cancelled: true,
+        });
         const crashHistory = await history(crashKey);
         expect(
           crashHistory.messages
@@ -750,5 +763,110 @@ it.skipIf(process.platform === "win32").for([true, false])(
       () => instance.cleanup(),
       provider.close,
     );
+  },
+);
+
+it(
+  "settles a prior-process queued receipt in a fresh Gateway process without a provider",
+  { timeout: 180_000 },
+  async ({ signal }) => {
+    const profile = "cold-receipt-probe";
+    const instance = await createOpenClawTestInstance({
+      name: "gateway-cold-receipt",
+      entrypoint: ["dist/index.js", "--profile", profile],
+      signal,
+      startTimeoutMs: 120_000,
+      config: {
+        update: { checkOnStart: false },
+        browser: { enabled: false },
+        discovery: { mdns: { mode: "off" } },
+        plugins: { enabled: false },
+        cron: { enabled: false },
+        agents: { defaults: { model: "unit-test/model", utilityModel: "" }, entries: { main: {} } },
+      },
+      env: {
+        ...restartEnv,
+        OPENCLAW_PROFILE: profile,
+        OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+        OPENCLAW_NO_RESPAWN: "1",
+      },
+    });
+    let client: GatewayClient | undefined;
+    const target = {
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:cold-process-probe",
+      sessionId: "cold-process-probe",
+    };
+    try {
+      await instance.startGateway();
+      client = await connectRestartClient(instance, {}, signal);
+      const created = await client.request<{ key: string; sessionId: string }>("sessions.create", {
+        key: target.sessionKey,
+        agentId: target.agentId,
+        visibility: "shared",
+      });
+      expect(created.key).toBe(target.sessionKey);
+      expect(created.sessionId).toBeTruthy();
+      target.sessionId = created.sessionId;
+      await client.stopAndWait();
+      client = undefined;
+      await instance.stopGateway();
+      instance.state.applyEnv();
+      const receipt = await stageSessionPendingInput(target, {
+        runId: "cold-process-probe",
+        message: {
+          role: "user",
+          content: "Synthetic queued input",
+          timestamp: 1,
+          idempotencyKey: "cold-process-probe",
+        },
+        assertCurrent() {},
+      });
+      if (!receipt) {
+        throw new Error("Synthetic queued input was not admitted");
+      }
+      receipt.finish("interrupted");
+      await receipt.settled?.();
+      // Release the fixture owner before a separate process discovers this durable row.
+      const database = openOpenClawAgentDatabase({ agentId: "main" });
+      executeSqliteQuerySync(
+        database.db,
+        getSessionKysely(database.db)
+          .updateTable("session_pending_inputs")
+          .set({ state: "queued", lifecycle_generation: "previous-process" })
+          .where("input_id", "=", receipt.inputId),
+      );
+      await instance.state.restoreEnv();
+      const offline = new DatabaseSync(
+        instance.state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        { readOnly: true },
+      );
+      try {
+        expect(
+          offline
+            .prepare("SELECT state, consumed_event_id FROM session_pending_inputs WHERE run_id = ?")
+            .get("cold-process-probe"),
+        ).toMatchObject({ state: "queued", consumed_event_id: null });
+      } finally {
+        offline.close();
+      }
+      await instance.startGateway();
+      client = await connectRestartClient(instance, {}, signal);
+      expect(
+        await client.request("chat.history", {
+          sessionKey: target.sessionKey,
+          inputRunIds: ["cold-process-probe"],
+          limit: 10,
+        }),
+        instance.logs(),
+      ).toMatchObject({
+        inputReceipts: [{ runId: "cold-process-probe", state: "pending", cancelled: true }],
+      });
+    } finally {
+      await runQaGatewayFixture(
+        () => client?.stopAndWait(),
+        () => instance.cleanup(),
+      );
+    }
   },
 );

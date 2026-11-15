@@ -2376,6 +2376,7 @@
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
+    "@homebridge/ciao",
     "chrome-devtools-mcp",
     "playwright-core"
   ],

@@ -1,6 +1,7 @@
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { executeOpenClawStateWorker } from "../../state/openclaw-state-worker-store.js";
 import { getCronJobsStoreRevision } from "../store.js";
+import { listLiveCronRunReceiptIds } from "./run-queue.js";
 import { emitInterruptedCronRun } from "./run-recovery-events.js";
 import { applyCronRuntimeRowsToState } from "./runtime-publication.js";
 import type { CronServiceState } from "./state.js";
@@ -15,6 +16,8 @@ export async function recoverCronRuns(state: CronServiceState): Promise<Set<stri
       storeKey,
       nowMs: state.deps.nowMs(),
       cronConfig: state.deps.cronConfig,
+      // A reload replacement must not recover runs still held by its predecessor.
+      liveReceiptIds: listLiveCronRunReceiptIds(state),
       failureRepairTimeoutMs: state.deps.failureRepairTimeoutMs,
     },
   });

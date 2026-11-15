@@ -6,6 +6,8 @@ export type CronRunRecoveryInput = {
   storeKey: string;
   nowMs: number;
   cronConfig?: CronConfig;
+  /** Receipts a cron owner in this process still holds; that owner settles them. */
+  liveReceiptIds?: string[];
   failureRepairTimeoutMs?: number;
 };
 

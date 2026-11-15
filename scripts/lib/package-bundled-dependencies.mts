@@ -160,9 +160,20 @@ export function collectBundledDependencyErrors({
   const errors: string[] = [];
   const dependencies = isRecord(packageJson.dependencies) ? packageJson.dependencies : {};
   const bundledDependencies = new Set(listBundleDependencies(packageJson));
-  const required = new Map<string, string>([
-    [PATCHED_MCP_NAME, "its patched runtime must not be replaced by the registry package"],
-  ]);
+  const patchedRuntime = "its patched runtime must not be replaced by the registry package";
+  const required = new Map<string, string>([[PATCHED_MCP_NAME, patchedRuntime]]);
+  // Bonjour's patch-only @homebridge/ciao/native.js entry is absent from registry
+  // Ciao. Frozen releases that import the package root keep their unbundled pin.
+  if (
+    !bundledDependencies.has("@homebridge/ciao") &&
+    runtime.files.some(
+      (file) =>
+        /^dist\/.*\.(?:cjs|js|mjs)$/u.test(file) &&
+        runtime.readText(file).includes("@homebridge/ciao/native.js"),
+    )
+  ) {
+    required.set("@homebridge/ciao", patchedRuntime);
+  }
   if (requireBundledWorkspaceDeps) {
     required.set("@openclaw/ai", "it is private to the OpenClaw workspace");
   }

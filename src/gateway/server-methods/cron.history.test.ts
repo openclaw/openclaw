@@ -112,16 +112,17 @@ function expectMessages(page: { payload?: CronHistoryResult }, ...contents: stri
 
 async function withCronTranscript(
   run: (fixture: Awaited<ReturnType<typeof setup>>) => Promise<void>,
+  agentId = "main",
 ) {
   let registry: ReturnType<typeof captureActivePluginRegistrySnapshot> | undefined;
   try {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
+      setRuntimeConfigSnapshot({ agents: { entries: { main: {}, [agentId]: {} } } });
       registry = captureActivePluginRegistrySnapshot();
       setActivePluginRegistry(createEmptyPluginRegistry());
       let fixture: Awaited<ReturnType<typeof setup>> | undefined;
       try {
-        fixture = await setup();
+        fixture = await setup(agentId);
         await run(fixture);
       } finally {
         fixture?.cron.stop();
@@ -135,10 +136,10 @@ async function withCronTranscript(
   }
 }
 
-async function setup() {
+async function setup(agentId = "main") {
   const profile = ensureProfileForEmail("cron-reader@example.test");
-  const baseKey = "agent:main:cron:history-job";
-  const oldScope = { agentId: "main", sessionKey: baseKey, sessionId: "old-cron" };
+  const baseKey = `agent:${agentId}:cron:history-job`;
+  const oldScope = { agentId, sessionKey: baseKey, sessionId: "old-cron" };
   await upsertSessionEntryCore(oldScope, {
     sessionId: oldScope.sessionId,
     updatedAt: 1,
@@ -149,15 +150,15 @@ async function setup() {
   }
   const alias = `${baseKey}:run:${oldScope.sessionId}`;
   await upsertSessionEntryCore(
-    { agentId: "main", sessionKey: alias },
+    { agentId, sessionKey: alias },
     {
       sessionId: oldScope.sessionId,
       updatedAt: 1,
     },
   );
   await deleteSessionEntryLifecycle({
-    agentId: "main",
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+    agentId,
+    storePath: resolveSessionStorePathCore(undefined, { agentId }),
     target: { canonicalKey: alias, storeKeys: [alias] },
     archiveTranscript: false,
     expectedSessionId: oldScope.sessionId,
@@ -178,12 +179,12 @@ async function setup() {
   );
   const cron = createReadService({
     storePath,
-    defaultAgentId: "main",
+    defaultAgentId: agentId,
     cronEnabled: false,
     enqueueSystemEvent() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
-  const created = await cron.add(createHistoryJob("main", baseKey, "History job"), {
+  const created = await cron.add(createHistoryJob(agentId, baseKey, "History job"), {
     scheduledToolPolicy: { version: 1, mode: "trusted" },
   });
   const job = "job" in created ? created.job : created;
@@ -199,7 +200,7 @@ async function setup() {
       status: "ok",
     },
     storePath,
-    "main",
+    agentId,
     "internal-old-run",
   );
   const detail = expectDefined(record.detail, "record detail");
@@ -453,6 +454,29 @@ it("refuses ambiguous timestamps and cursors moved to another recorded run", () 
     ]);
     expect((await query({ runId: "public-old-run" })).ok).toBe(false);
   }));
+
+it.each(["main", "probe"])(
+  "retains the recorded Cron transcript for %s when its current generation rotates during the read",
+  (agentId) =>
+    withCronTranscript(async ({ cron, storePath, baseKey, query }) => {
+      const onRead = vi.fn(async () => {
+        await upsertSessionEntryCore(
+          { agentId, sessionKey: baseKey },
+          { sessionId: "next-cron", updatedAt: 3, visibility: "shared" },
+        );
+        return undefined;
+      });
+      const context = await createHistoryReadContext({
+        cron,
+        cronStorePath: storePath,
+        readChatStartupProjection: onRead,
+      });
+      const result = await query({ runId: "public-old-run" }, {}, context);
+      expect(onRead).toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+      expectMessages(result, "Old first", "Old second", "Old last");
+    }, agentId),
+);
 
 it.each(["sharing", "binding", "retention", "transcript owner"] as const)(
   "rechecks %s before publishing a retained Cron transcript",
