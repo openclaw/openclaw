@@ -117,7 +117,7 @@ function showJoinRequestPrompt(initial: readonly JoinRequest[]): {
 export function bindJoinRequestPrompt(
   context: Pick<ApplicationContext, "gateway" | "sidebarAttention" | "navigate">,
 ): () => void {
-  // Covers a profile whose prompts cannot be stored.
+  // Covers a profile whose prompts cannot be stored, keyed like the stored prompts.
   const shown = new Set<string>();
   let disposed = false;
   let prompt: {
@@ -126,30 +126,36 @@ export function bindJoinRequestPrompt(
     view: ReturnType<typeof showJoinRequestPrompt>;
   } | null = null;
   const sync = () => {
-    const requests = joinRequests(context.sidebarAttention.entries);
     const key = promptedKey(context.gateway);
-    if (prompt) {
-      if (requests.length === 0 || prompt.key !== key) {
-        prompt.view.close();
-      } else {
-        prompt.requests = requests;
-        prompt.view.update(requests);
-      }
+    if (prompt && prompt.key !== key) {
+      prompt.view.close();
       return;
     }
-    if (requests.length === 0 || !key) {
-      return;
-    }
+    const requests = key ? joinRequests(context.sidebarAttention.entries) : [];
     const current = requests.map((request) => request.signature);
     const stored = loadPrompted(key);
     const kept = stored.filter((signature) => current.includes(signature));
-    if (kept.length !== stored.length) {
+    // An empty Inbox may still be loading; prune only against a listed set.
+    if (current.length > 0 && kept.length !== stored.length) {
       savePrompted(key, kept);
     }
-    if (current.every((signature) => kept.includes(signature) || shown.has(signature))) {
+    // The prompt shows only requests this profile has not been shown; the Inbox lists them all.
+    const fresh = requests.filter(
+      (request) => !kept.includes(request.signature) && !shown.has(`${key}\n${request.signature}`),
+    );
+    if (prompt) {
+      if (fresh.length === 0) {
+        prompt.view.close();
+      } else {
+        prompt.requests = fresh;
+        prompt.view.update(fresh);
+      }
       return;
     }
-    const opened = { key, requests, view: showJoinRequestPrompt(requests) };
+    if (!key || fresh.length === 0) {
+      return;
+    }
+    const opened = { key, requests: fresh, view: showJoinRequestPrompt(fresh) };
     prompt = opened;
     void opened.view.outcome.then((outcome) => {
       if (prompt === opened) {
@@ -164,7 +170,7 @@ export function bindJoinRequestPrompt(
         return;
       }
       const signatures = opened.requests.map((request) => request.signature);
-      signatures.forEach((signature) => shown.add(signature));
+      signatures.forEach((signature) => shown.add(`${opened.key}\n${signature}`));
       savePrompted(opened.key, [...new Set([...loadPrompted(opened.key), ...signatures])]);
       const action = opened.requests[0]?.action;
       if (outcome === "review" && action?.kind === "navigate") {

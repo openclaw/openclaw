@@ -274,6 +274,11 @@ it("prompts once per new request and clears when requests resolve or expire", as
   await waitForFast(() => expect(promptTitle()).toBe("Cy asked to join"));
   // Cy's request expires without a Gateway event.
   await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "Ada asked to join" }]));
+  // Ada was already shown to this profile, so the prompt closes rather than falling back to her.
+  await waitForFast(() => expect(promptTitle()).toBeNull());
+
+  // Another owner profile on this browser has not been shown Ada.
+  h.update({ selfUser: { id: "bob", name: "Bob" } });
   await waitForFast(() => expect(promptTitle()).toBe("Ada asked to join"));
   h.requestsChanged({ invites: [] });
   await waitForFast(() => expect(store?.entries).toEqual([]));
