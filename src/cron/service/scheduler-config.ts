@@ -1,5 +1,5 @@
 import { DEFAULT_CRON_MAX_CONCURRENT_RUNS } from "../../config/cron-limits.js";
-import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
+import { readCgroupMemoryHeadroomBytes, readHostFreeMemoryBytes } from "../../infra/host-memory.js";
 import { readHostExecMemory } from "../../process/child-memory.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
@@ -47,10 +47,12 @@ const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
  * runs that just started, whose commands have not shown up as used yet, cannot use up the other
  * half however many times the queue is drained before they do.
  *
- * Host memory counts reclaimable cache as free. Under a container or cgroup limit, open memory is
- * that limit minus the Gateway's own: the cgroup's usage includes page cache the kernel would
- * reclaim, so on a long-running Gateway it reads as nearly full. Commands also stay within the
- * exec memory budget, past which the exec guard kills them.
+ * Host memory counts reclaimable cache as free. Under a cgroup v2 memory limit, open memory is
+ * what the cgroup has left, so processes sharing the Gateway's container count against it too;
+ * inactive file cache counts as free, since the kernel reclaims it before killing anything. Where
+ * those files cannot be read, as on cgroup v1, the limit minus the Gateway's own memory stands in,
+ * which does not see other processes. Commands also stay within the exec memory budget, past
+ * which the exec guard kills them.
  *
  * Accepted edge case: after a quiet period no recent command sets the figure, so a burst whose
  * commands are much larger than 256 MiB can still exceed the exec budget. The exec guard then
@@ -59,10 +61,15 @@ const RUN_MEMORY_BYTES = 256 * 1024 * 1024;
 function resolveCronMemoryRunSlots(): number {
   const exec = readHostExecMemory();
   const commands = exec?.usedBytes ?? 0;
+  const cgroupHeadroom = readCgroupMemoryHeadroomBytes();
   const limit = process.constrainedMemory();
   const open = Math.min(
     readHostFreeMemoryBytes() + commands,
-    limit > 0 ? limit - process.memoryUsage.rss() : Infinity,
+    cgroupHeadroom !== undefined
+      ? cgroupHeadroom + commands
+      : limit > 0
+        ? limit - process.memoryUsage.rss()
+        : Infinity,
     exec ? exec.budgetBytes : Infinity,
   );
   const perRun = Math.max(RUN_MEMORY_BYTES, exec?.largestCommandBytes ?? 0);
