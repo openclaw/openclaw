@@ -22,6 +22,7 @@ import {
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
 import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
@@ -212,6 +213,10 @@ export async function runCliFallbackCandidate(
             activeSessionEntry: sessionEntry,
           });
         const scheduledInference = params.scheduledInference;
+        // Only session pins follow cross-provider fallback; configured accounts stay provider-scoped.
+        const sessionPinned =
+          params.candidateRun.authProfileId?.trim() === sessionEntry?.authProfileOverride?.trim() &&
+          resolveCollapsedSessionAuthPinSource(sessionEntry) === "user";
         // The CLI owner must see explicit pins before provider scoping can discard them.
         // A recorded account runs only when this backend forwards exactly that account.
         const authProfileId = scheduledInference
@@ -233,7 +238,11 @@ export async function runCliFallbackCandidate(
                 authProfileProvider: params.provider,
                 config: params.runtimeConfig,
                 agentDir: params.candidateRun.agentDir,
-                selected: params.candidateRun,
+                selected: sessionPinned
+                  ? params.candidateRun
+                  : resolveRunAuthProfile(params.candidateRun, params.provider, {
+                      config: params.runtimeConfig,
+                    }),
                 sessionBinding: cliSessionBinding,
               })
             : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
