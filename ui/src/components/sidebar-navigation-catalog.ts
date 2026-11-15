@@ -31,10 +31,10 @@ export function createSidebarNavigationCatalog(
     if (!ready() || scope[0] === undefined) {
       return null;
     }
-    // Opening Pages retains its catalog until the connection or agent changes.
+    // Opening Dashboards retains its catalog until the connection or agent changes.
     return previous && sameScope(previous, scope)
       ? previous
-      : navigationView() === "pages"
+      : navigationView() === "dashboards"
         ? scope
         : null;
   });

@@ -394,6 +394,21 @@
   user-select: none;
 }
 
+/* The rail's "more" menu lists pages with the Pages row styles beside the rail. */
+.sidebar-pages-menu-popover {
+  width: 260px;
+  max-height: min(72vh, 560px);
+  padding: 6px;
+  overflow: auto;
+}
+
+.sidebar-pages-menu__separator {
+  display: block;
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
 /* Page entries paint around the link and pin. Session rows extend their own
    surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {

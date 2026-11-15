@@ -50,7 +50,10 @@ export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
   readonly nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   readonly people: import("./sidebar-people.ts").SidebarPeoplePreferences;
   readonly peopleView?: ReturnType<typeof import("./sidebar-people.ts").createSidebarPeople>;
-  renderPinnedSidebarSession(session: () => SidebarRecentSession): SolidJSX.Element;
+  renderPinnedSidebarSession(
+    session: () => SidebarRecentSession,
+    fallbackSubtitle?: () => string | undefined,
+  ): SolidJSX.Element;
   toggleSection(sectionId: string): void;
 };
 

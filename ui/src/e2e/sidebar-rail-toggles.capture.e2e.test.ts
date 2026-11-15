@@ -18,11 +18,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         const sidebar = page.locator("openclaw-app-sidebar .sidebar-shell");
         const selected = page.locator('[data-navigation-view][aria-pressed="true"]');
-        const pages = page.locator('[data-navigation-view="pages"]');
+        // Rail views never close their own panel; the panel's collapse control does.
+        const collapse = page
+          .locator("openclaw-app-sidebar")
+          .getByRole("button", { name: "Collapse sidebar", exact: true });
         await sidebar.waitFor({ state: "visible" });
-        await pages.click();
-        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("pages");
-        await pages.click();
+        await page.locator('[data-navigation-view="online"]').click();
+        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");
+        await collapse.click();
         await sidebar.waitFor({ state: "hidden" });
         await page.mouse.move(600, 400);
         const frame = await takeControlUiScreenshotFrame(
@@ -36,19 +39,12 @@ suite.define(() => {
         expect(
           await page.getByRole("button", { name: "Expand sidebar", exact: true }).count(),
         ).toBe(0);
-        for (const view of ["pages", "sessions"]) {
+        for (const view of ["online", "sessions"]) {
           const button = page.locator('[data-navigation-view="' + view + '"]');
           await button.click();
           await sidebar.waitFor({ state: "visible" });
           await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe(view);
-          // While its panel is open the Sessions avatar opens the agent menu instead.
-          await (
-            view === "sessions"
-              ? page
-                  .locator("openclaw-app-sidebar")
-                  .getByRole("button", { name: "Collapse sidebar", exact: true })
-              : button
-          ).click();
+          await collapse.click();
           await sidebar.waitFor({ state: "hidden" });
           await expect.poll(() => selected.count()).toBe(0);
           await expect
@@ -71,8 +67,6 @@ suite.define(() => {
         await page.keyboard.press("ControlOrMeta+B");
         await sidebar.waitFor({ state: "visible" });
         await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");
-        await pages.click();
-        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("pages");
         expect(await sidebar.isVisible()).toBe(true);
         await page.keyboard.press("ControlOrMeta+B");
         await sidebar.waitFor({ state: "hidden" });
@@ -81,8 +75,8 @@ suite.define(() => {
         await page.setViewportSize({ width: 390, height: 844 });
         await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
         await sidebar.waitFor({ state: "visible" });
-        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("pages");
-        await pages.click();
+        await expect.poll(() => selected.getAttribute("data-navigation-view")).toBe("online");
+        await page.locator('[data-navigation-view="online"]').click();
         expect(await sidebar.isVisible()).toBe(true);
       },
     );

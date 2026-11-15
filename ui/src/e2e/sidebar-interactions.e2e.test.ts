@@ -228,7 +228,7 @@ suite.define(() => {
           ? page
               .locator('[data-sidebar-entry="route:dashboards"]')
               .getByRole("link", { name: "Dashboards", exact: true })
-          : page.locator('[data-sidebar-entry="route:systems"] .nav-item');
+          : page.locator('.sidebar-rail [data-sidebar-entry="route:systems"] .nav-item');
       await expectFocused(target);
     } finally {
       await suite.closeBrowserContext(context);

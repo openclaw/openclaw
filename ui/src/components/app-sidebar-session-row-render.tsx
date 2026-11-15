@@ -48,6 +48,7 @@ type RecentSessionParams = {
   pinReorder?: boolean;
   listItem?: boolean;
   icon?: JSX.Element;
+  fallbackSubtitle?: string;
 };
 function renderRecentSession(params: RecentSessionParams) {
   return (
@@ -130,7 +131,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       (input ? resolveSidebarSessionSubtitle(input) : { subtitle: undefined, narration: undefined })
     );
   });
-  const subtitle = createMemo(() => subtitleState().subtitle),
+  const subtitle = createMemo(() => subtitleState().subtitle ?? params.fallbackSubtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
@@ -475,6 +476,8 @@ export function renderSessionTree(params: {
   icon?: JSX.Element;
   listPosition?: { index: number; count: number };
   window?: Pick<ReturnType<typeof createSidebarSessionWindow>, "rowRef" | "item" | "focus">;
+  /** Second line shown while the row has no live activity, such as a byline. */
+  fallbackSubtitle?: string;
 }): JSX.Element {
   const host = createMemo(() => params.host),
     session = createMemo(() => params.session, {
@@ -519,6 +522,7 @@ export function renderSessionTree(params: {
         display={params.display}
         listItem={false}
         icon={icon()}
+        fallbackSubtitle={params.fallbackSubtitle}
       />
       {expanded() ? (
         <div class="sidebar-session-tree__children">

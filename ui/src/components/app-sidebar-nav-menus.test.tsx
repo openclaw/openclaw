@@ -300,14 +300,11 @@ describe("sidebar rail pin menu", () => {
       [
         ...sidebar
           .querySelector(".sidebar-rail__pins")!
-          .querySelectorAll(
-            "[data-sidebar-entry], [data-navigation-view], .sidebar-rail__separator",
-          ),
+          .querySelectorAll("[data-sidebar-entry], [data-rail-more], .sidebar-rail__separator"),
       ].map(
         (element) =>
           element.getAttribute("data-sidebar-entry") ??
-          element.getAttribute("data-navigation-view") ??
-          "separator",
+          (element.hasAttribute("data-rail-more") ? "pages" : "separator"),
       );
     await sidebar.updateComplete;
     // A new rail: Automations, Customize and Usage, then the "more" menu.

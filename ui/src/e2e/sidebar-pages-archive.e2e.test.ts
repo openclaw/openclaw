@@ -8,10 +8,10 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import { sessionsListResponse } from "./session-management.test-support.ts";
 import { openSidebarPages } from "./sidebar-customization.test-support.ts";
 
-const suite = createControlUiE2eSuite({ name: "Pages archive filtering" });
+const suite = createControlUiE2eSuite({ name: "Dashboards archive filtering" });
 
 suite.define(() => {
-  it("omits archived dashboards from Pages initially and when loading more", async () => {
+  it("omits archived dashboards from the Dashboards sidebar initially and when loading more", async () => {
     const context = await suite.newBrowserContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -47,7 +47,10 @@ suite.define(() => {
     });
     try {
       await page.goto(suite.server.baseUrl + "chat");
-      const pages = await openSidebarPages(page);
+      // Dashboards opens its own sidebar from the rail's page menu.
+      const menu = await openSidebarPages(page);
+      await menu.getByRole("link", { name: "Dashboards", exact: true }).click();
+      const pages = page.locator("openclaw-app-sidebar .sidebar-dashboards");
       const row = (key: string) => pages.locator('[data-session-key="' + key + '"]');
       await row(active.key).waitFor();
       expect(await row(archived.key).count()).toBe(0);

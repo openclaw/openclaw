@@ -131,14 +131,14 @@ it("keeps named glyphs visible and updates their kind without replacing the lead
   expect(dom.query(".session-glyph")).toBe(glyph);
 });
 
-it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
+it("restores only active dashboards in saved order in the Dashboards view", async () => {
   const { host, context, dom } = await createCachedHost();
   host.sidebarAgentsMode = "roster";
   const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
-    navigationView: "pages",
+    navigationView: "dashboards",
     pageScopeId: context.agentSelection.state.scopeId,
     pages: snapshotSessions([
       ...dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
@@ -150,25 +150,17 @@ it("restores only active dashboards in saved order after alphabetized built-in P
   await waitForSolid(() =>
     expect(
       dom.present(
-        `.sidebar-pages [data-session-key="${dashboardKeys[0]}"]`,
-        '.sidebar-pages [data-session-key="agent:main:archived"]',
-        ".sidebar-pages .sidebar-session-sort",
+        `.sidebar-dashboards [data-session-key="${dashboardKeys[0]}"]`,
+        '.sidebar-dashboards [data-session-key="agent:main:archived"]',
+        ".sidebar-dashboards .sidebar-session-sort",
       ),
     ).toEqual([true, false, false]),
   );
-  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
-  const routes = entries
-    .map((entry) => entry.getAttribute("data-sidebar-entry"))
-    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
-  const routeLabels = routes.map(
-    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
-  );
-  expect(routeLabels.length).toBeGreaterThan(4);
-  expect(routeLabels).not.toContain("");
-  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
-  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
-    dashboardKeys.map((key) => `session:${key}`),
-  );
+  expect(
+    [...dom.all(".sidebar-dashboards [data-sidebar-entry]")].map((entry) =>
+      entry.getAttribute("data-sidebar-entry"),
+    ),
+  ).toEqual(dashboardKeys.map((key) => `session:${key}`));
 });
 
 it("paints the restored roster and workspace before live data arrives", async () => {

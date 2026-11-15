@@ -80,12 +80,13 @@ suite.define(() => {
         const content = page.frameLocator(".board-website__frame");
         await content.getByText("All systems operational", { exact: true }).waitFor();
         const sidebar = page.locator("openclaw-app-sidebar");
+        // Dashboards are pinned from the Dashboards section, reached through the page menu.
+        await sidebar.locator("[data-rail-more]").click();
         await sidebar
-          .locator(".sidebar-rail")
-          .getByRole("button", { name: "Pages", exact: true })
+          .locator(".sidebar-pages-menu")
+          .getByRole("link", { name: "Dashboards", exact: true })
           .click();
-        const pages = sidebar.locator(".sidebar-pages");
-        const catalogRow = pages.locator(".sidebar-pages__entry").filter({
+        const catalogRow = sidebar.locator(".sidebar-dashboards .sidebar-pages__entry").filter({
           has: page.locator(`[data-sidebar-entry="session:${sessionKey}"]`),
         });
         await catalogRow.hover();
@@ -93,18 +94,15 @@ suite.define(() => {
         expect(await catalogRow.getByRole("button", { name: "Unpin", exact: true }).count()).toBe(
           1,
         );
-        // The agent avatar is the rail's Sessions item.
-        const showView = (name: "Pages" | "Sessions") =>
-          name === "Sessions"
-            ? sidebar.locator('.sidebar-rail [data-navigation-view="sessions"]').first().click()
-            : sidebar.locator(".sidebar-rail").getByRole("button", { name, exact: true }).click();
         // Pinned dashboards join the Sessions list's Pinned section, not the rail.
         expect(
           await sidebar
             .locator(`.sidebar-rail__pin[data-sidebar-entry="session:${sessionKey}"]`)
             .count(),
         ).toBe(0);
-        await showView("Sessions");
+        await page.goBack();
+        await content.getByText("All systems operational", { exact: true }).waitFor();
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         const pinned = sidebar
           .locator(`[data-session-section="pinned"] [data-session-key="${sessionKey}"]`)
           .locator("a.sidebar-recent-session__link");
@@ -160,10 +158,13 @@ suite.define(() => {
             "*",
           );
         });
-        await showView("Pages");
-        await pages.getByRole("link", { name: "Sessions", exact: true }).click();
+        await sidebar.locator("[data-rail-more]").click();
+        await sidebar
+          .locator(".sidebar-pages-menu")
+          .getByRole("link", { name: "Sessions", exact: true })
+          .click();
         await page.waitForURL(`${suite.server.baseUrl}sessions`);
-        await showView("Sessions");
+        await sidebar.locator('[data-navigation-view="sessions"]').click();
         await pinned.click();
         await frame.waitFor();
         await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);

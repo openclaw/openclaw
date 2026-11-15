@@ -73,9 +73,10 @@ it("loads optional sidebar views on selection without replacing the shell or ret
     await retainLink("a.sidebar-agent-roster__row");
     expect(modules.pages.started).toBe(false);
 
-    await selectSidebarView(sidebar, "pages");
+    // The Dashboards list shares its module with the rail's "more" menu.
+    sidebar.navigationView = "dashboards";
+    sidebar.invalidate();
     await loading(modules.pages);
-    await retainLink('.sidebar-pages [data-sidebar-entry="route:usage"] a');
     await selectSidebarView(sidebar, "online");
     await loading(modules.online);
     await vi.waitFor(() =>

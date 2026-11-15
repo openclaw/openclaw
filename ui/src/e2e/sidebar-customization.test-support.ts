@@ -83,9 +83,11 @@ export async function openSidebarCustomizationPage(
 
 export async function openSidebarPages(page: Page): Promise<Locator> {
   const sidebar = page.locator("openclaw-app-sidebar:visible");
-  const pages = sidebar.locator(".sidebar-pages");
-  if (!(await pages.isVisible())) {
-    await sidebar.getByRole("button", { name: "Pages", exact: true }).click();
+  const pages = sidebar.locator(".sidebar-pages-menu");
+  const more = sidebar.locator("[data-rail-more]");
+  // A choice closes the menu with an exit animation; trust the trigger's state.
+  if ((await more.getAttribute("aria-expanded")) !== "true") {
+    await more.click();
   }
   await pages.waitFor();
   return pages;
