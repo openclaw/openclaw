@@ -548,8 +548,13 @@ describe("snapshot FTS integrity", () => {
     const copy = openNodeSqliteDatabase(target, { readOnly: true });
     try {
       // The candidate's agent database admission owns the rebuild, not the snapshot.
-      expect(copy.prepare("PRAGMA integrity_check").all()).toEqual(
-        malformed.map((integrity_check) => ({ integrity_check })),
+      const findings = (
+        copy.prepare("PRAGMA integrity_check").all() as Array<{ integrity_check: string }>
+      ).toSorted((left, right) => left.integrity_check.localeCompare(right.integrity_check));
+      expect(findings).toEqual(
+        malformed
+          .map((integrity_check) => ({ integrity_check }))
+          .toSorted((left, right) => left.integrity_check.localeCompare(right.integrity_check)),
       );
       expect(copy.prepare("SELECT text FROM session_transcript_fts").all()).toEqual([
         { text: "ab\ufffecd" },

@@ -1,5 +1,9 @@
 import type { TextQuery } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
+import {
+  buildHanBigramMatchQuery,
+  isHanTerm,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type FtsCanonicalTokenizer = "unicode61" | "trigram";
@@ -130,7 +134,14 @@ export function planKeywordSearch(params: {
   includeLeadingMarks?: boolean;
   canonicalVariants?: boolean;
   matchAny?: boolean;
-}): { matchQuery: TextQuery | null; substringTerms: string[]; tokens: string[] } {
+  /** Route short Han terms to the companion bigram index. */
+  cjkBigram?: boolean;
+}): {
+  matchQuery: TextQuery | null;
+  substringTerms: string[];
+  tokens: string[];
+  cjkBigramQuery: string | null;
+} {
   const canonicalTokenizer = params.canonicalVariants
     ? (params.ftsTokenizer ?? "unicode61")
     : undefined;
@@ -153,7 +164,7 @@ export function planKeywordSearch(params: {
   }
   if (params.ftsTokenizer !== "trigram") {
     const matchQuery = buildMatchQueryFromTerms(tokens, canonicalTokenizer, params.matchAny);
-    return { matchQuery, substringTerms: [], tokens };
+    return { matchQuery, substringTerms: [], tokens, cjkBigramQuery: null };
   }
   const matchTerms: string[] = [];
   const substringTerms: string[] = [];
@@ -167,10 +178,25 @@ export function planKeywordSearch(params: {
       matchTerms.push(token);
     }
   }
+  const matchQuery = buildMatchQueryFromTerms(matchTerms, canonicalTokenizer, params.matchAny);
+  if (!params.cjkBigram || matchQuery !== null) {
+    // A query the main index can already rank keeps the current plan: the
+    // short terms stay substring filters on the ranked leg.
+    return { matchQuery, substringTerms, tokens, cjkBigramQuery: null };
+  }
+  // The main index cannot rank this query. Two-character Han terms move to
+  // the companion bigram index, which stores them as indexable tokens.
+  const cjkTerms = substringTerms.filter((term) => isHanTerm(term) && Array.from(term).length >= 2);
+  const cjkBigramQuery = buildHanBigramMatchQuery(cjkTerms, params.matchAny);
+  if (!cjkBigramQuery) {
+    return { matchQuery, substringTerms, tokens, cjkBigramQuery: null };
+  }
+  const cjkTermSet = new Set(cjkTerms);
   return {
-    matchQuery: buildMatchQueryFromTerms(matchTerms, canonicalTokenizer, params.matchAny),
-    substringTerms,
+    matchQuery,
+    substringTerms: substringTerms.filter((term) => !cjkTermSet.has(term)),
     tokens,
+    cjkBigramQuery,
   };
 }
 

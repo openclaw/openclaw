@@ -60,6 +60,10 @@ export const MemorySearchSchema = z
         fts: z
           .strictObject({
             tokenizer: z.union([z.literal("unicode61"), z.literal("trigram")]).optional(),
+            // Companion Han-bigram index. The trigram tokenizer cannot match a
+            // query shorter than three characters, so two-character Chinese
+            // terms need a second index to stay BM25-rankable.
+            cjk: z.literal("bigram").optional(),
           })
           .optional(),
         vector: z

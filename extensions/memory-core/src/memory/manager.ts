@@ -160,6 +160,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
                     cacheEnabled: effectiveSettings.cache.enabled,
                     ftsEnabled: effectiveSettings.query.hybrid.enabled,
                     ftsTokenizer: effectiveSettings.store.fts.tokenizer,
+                    cjkBigramFts: effectiveSettings.store.fts.cjk === "bigram",
                   },
                 });
                 manager = new MemoryIndexManager({

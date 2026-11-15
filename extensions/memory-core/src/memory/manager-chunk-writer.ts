@@ -5,10 +5,15 @@ import {
   type MemoryEntryProvenance,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-indexing";
+import {
+  encodeHanBigrams,
+  MEMORY_INDEX_CJK_FTS_TABLE,
+} from "openclaw/plugin-sdk/memory-core-host-engine-schema";
 import { isPostgresSqlConnection } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
+  tableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 export type IndexedMemoryChunk = MemoryChunk & {
@@ -25,6 +30,7 @@ export type MemoryChunkWrite = {
 };
 type ChunkDatabase = {
   memory_index_chunks: {
+    chunk_rowid?: number;
     id: string;
     path: string;
     source: MemorySource;
@@ -48,6 +54,16 @@ type ChunkDatabase = {
     session_kind: MemoryEntryProvenance["sessionKind"];
     observed_at: number;
     supersedes_key: string | null;
+  };
+  memory_index_chunks_cjk_fts: {
+    rowid: number;
+    text: string;
+    id: string;
+    path: string;
+    source: string;
+    model: string;
+    start_line: number;
+    end_line: number;
   };
 };
 
@@ -99,6 +115,7 @@ export function writeMemoryChunks(
           })),
         ),
     );
+    syncMemoryCjkBigramRows(database, [...written.values()]);
   }
   executeSqliteQuerySync(
     database,
@@ -165,4 +182,64 @@ export function writeMemoryChunks(
           ),
       ),
   );
+}
+
+/**
+ * Keep the optional Han-bigram companion index aligned with the canonical
+ * chunk rows this publication wrote.
+ *
+ * The companion table is derived state keyed by the canonical chunk rowid, so
+ * every canonical row replaces its own companion row. The table's presence is
+ * the switch: the schema admission creates or drops it before any write.
+ */
+function syncMemoryCjkBigramRows(
+  database: EngineConnection,
+  rows: readonly (MemoryChunkWrite & { embedding: number[] })[],
+): void {
+  if (isPostgresSqlConnection(database) || rows.length === 0) {
+    return;
+  }
+  const cjkFtsEnabled = tableExists(database, MEMORY_INDEX_CJK_FTS_TABLE);
+  if (!cjkFtsEnabled) {
+    return;
+  }
+  const db = getNodeSqliteKysely<ChunkDatabase>(database);
+  const ids = rows.map((row) => row.id);
+  const rowidRecords = executeSqliteQuerySync(
+    database,
+    db.selectFrom("memory_index_chunks").select(["id", "chunk_rowid"]).where("id", "in", ids),
+  ).rows;
+  const rowidMap = new Map<string, number>();
+  for (const record of rowidRecords) {
+    if (typeof record.chunk_rowid === "number") {
+      rowidMap.set(record.id, record.chunk_rowid);
+    }
+  }
+  const rowids: number[] = [];
+  const entries: ChunkDatabase["memory_index_chunks_cjk_fts"][] = [];
+  for (const row of rows) {
+    const chunkRowid = rowidMap.get(row.id);
+    if (typeof chunkRowid !== "number") {
+      continue;
+    }
+    rowids.push(chunkRowid);
+    entries.push({
+      rowid: chunkRowid,
+      text: encodeHanBigrams(row.chunk.text ?? ""),
+      id: row.id,
+      path: row.context.path,
+      source: row.context.source,
+      model: row.context.model,
+      start_line: row.chunk.startLine,
+      end_line: row.chunk.endLine,
+    });
+  }
+  if (rowids.length === 0) {
+    return;
+  }
+  executeSqliteQuerySync(
+    database,
+    db.deleteFrom("memory_index_chunks_cjk_fts").where("rowid", "in", rowids),
+  );
+  executeSqliteQuerySync(database, db.insertInto("memory_index_chunks_cjk_fts").values(entries));
 }
