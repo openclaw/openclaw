@@ -457,9 +457,6 @@ export function SkillsPage(props: SkillsPageProps) {
     if (route.clawhubRef && route.clawhubRef !== data.clawhubDetailRef) {
       openClawHubDetail(route.clawhubRef);
     }
-    if (route.skillKey && route.skillKey !== local.skillsDetailKey) {
-      selectSkill(route.skillKey);
-    }
   }
 
   function ensureInitialData() {

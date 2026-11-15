@@ -16,7 +16,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
     ): Promise<SkillsRouteData> => {
       const search = new URLSearchParams(options.location.search);
       const clawhubRef = search.get("clawhub") ?? undefined;
-      const skillKey = search.get("skill") ?? undefined;
       const gateway = context.gateway;
       const gatewaySnapshot = gateway.snapshot;
       const agents = context.agents;
@@ -63,7 +62,6 @@ function defineSkillsPage(routeId: "skills" | "skill-settings", surface: "discov
         reportRead,
         error,
         clawhubRef,
-        skillKey,
       };
     },
     component: () =>
