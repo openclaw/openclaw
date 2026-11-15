@@ -440,9 +440,10 @@ export function createAgentEventAuditRecorder(options: {
       }
       if (projection.input.kind === "skill_selection") {
         const start = bufferedStarts.get(runInstance);
-        if (start) {
+        // Retain the buffered start for the paired settlement path when the
+        // writer cannot accept it yet; skill observations record independently.
+        if (start && writer.record(start)) {
           bufferedStarts.delete(runInstance);
-          writer.record(start);
         }
         writer.record(projection.input);
         return;

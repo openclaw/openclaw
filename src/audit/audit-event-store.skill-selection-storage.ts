@@ -8,6 +8,7 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -57,6 +58,20 @@ const skillSelectionSchemaEstablished = new WeakSet<EngineConnection>();
 export function invalidateSkillSelectionAuditCachesForDatabase(db: EngineConnection): void {
   skillSelectionAuditRowCounts.delete(db);
   skillSelectionSchemaEstablished.delete(db);
+}
+
+/**
+ * Tentative counts stay private until their batch commits: drop the warm
+ * count when the enclosing transaction rolls back or is invalidated, as the
+ * canonical ledger does for its retention facts. Outside a transaction this
+ * is a no-op and the caller's own accounting stands.
+ */
+function bindSkillSelectionCountToTransaction(db: EngineConnection): void {
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => skillSelectionAuditRowCounts.delete(db),
+    invalidate: () => skillSelectionAuditRowCounts.delete(db),
+  });
 }
 
 function ensureSkillSelectionAuditSchema(db: EngineConnection): void {
@@ -161,6 +176,7 @@ function pruneSkillSelectionAuditEventsAfterInsert(
       : Math.max(0, cachedCount + 1 - expiredCount);
   if (rowCount <= SKILL_SELECTION_AUDIT_MAX_ROWS) {
     skillSelectionAuditRowCounts.set(db, rowCount);
+    bindSkillSelectionCountToTransaction(db);
     return;
   }
   const retainedRows = Math.max(
@@ -189,6 +205,7 @@ function pruneSkillSelectionAuditEventsAfterInsert(
     db,
     Math.max(0, rowCount - Number(pruned.numAffectedRows ?? 0n)),
   );
+  bindSkillSelectionCountToTransaction(db);
 }
 
 function normalizeSequenceHighWater(value: unknown): number {
@@ -381,6 +398,7 @@ export function pruneExpiredSkillSelectionAuditEvents(params: {
   const cachedCount = skillSelectionAuditRowCounts.get(params.db);
   if (cachedCount !== undefined) {
     skillSelectionAuditRowCounts.set(params.db, Math.max(0, cachedCount - deleted));
+    bindSkillSelectionCountToTransaction(params.db);
   }
   return deleted;
 }

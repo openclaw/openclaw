@@ -845,6 +845,63 @@ describe("agent activity audit projection", () => {
     await recorder.stop();
   });
 
+  it("retains the buffered start for paired settlement when the writer rejects it at skill time", async () => {
+    const inputs: AuditEventInput[] = [];
+    const runs: Array<{ start: AuditEventInput; finish: AuditEventInput }> = [];
+    let startAttempts = 0;
+    const writer: AuditEventWriter = {
+      ...captureAuditWriter(inputs),
+      record: (input) => {
+        if (input.kind === "agent_run" && input.action === "agent.run.started") {
+          startAttempts += 1;
+          return false; // full queue: nothing is accepted yet
+        }
+        inputs.push(input);
+        return true;
+      },
+      recordRun: (start, finish) => {
+        runs.push({ start, finish });
+        return true;
+      },
+    };
+    const recorder = createAgentEventAuditRecorder({
+      writer,
+      getConfig: () => ({}),
+      terminalSettleMs: 60_000,
+    });
+    const lifecycleGeneration = "gateway-skill-backpressure";
+
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 1 }));
+    recorder.record(
+      agentEvent({
+        lifecycleGeneration,
+        seq: 2,
+        stream: "skill_selection",
+        data: {
+          kind: "skill_selection",
+          selectedSkill: "debug-toolkit",
+          selectionSource: "observed_runtime",
+          selectionConfidence: "observed",
+          selectionRule: "tool_invocation",
+          redaction: "metadata_only",
+        },
+      }),
+    );
+    recorder.record(agentEvent({ lifecycleGeneration, seq: 3, data: { phase: "end" } }));
+
+    // The lifecycle start buffers without a write; the skill-time flush
+    // attempts it once and, rejected, retains it: the terminal still
+    // settles as one paired run instead of a lone finish.
+    expect(startAttempts).toBe(1);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      start: { action: "agent.run.started", status: "started" },
+      finish: { action: "agent.run.finished", status: "succeeded" },
+    });
+    expect(inputs.map(({ action }) => action)).toEqual(["skill.selection.observed"]);
+    await recorder.stop();
+  });
+
   it("keeps one start when a retry cancels a pending terminal", async () => {
     const inputs: AuditEventInput[] = [];
     const writer = captureAuditWriter(inputs);

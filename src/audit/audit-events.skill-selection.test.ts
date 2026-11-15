@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getOpenClawStatePredecessorSchema } from "../state/openclaw-state-schema-runtime.js";
@@ -16,6 +17,7 @@ import {
   recordAuditEventInDatabase,
 } from "./audit-event-store.js";
 import { pruneExpiredSkillSelectionAuditEvents } from "./audit-event-store.skill-selection-storage.js";
+import { recordSkillSelectionAuditEvent } from "./audit-event-store.skill-selection-storage.js";
 import type { AuditEventInput, SkillSelectionAuditEventInput } from "./audit-event-types.js";
 
 const tempDirs: string[] = [];
@@ -155,9 +157,9 @@ describe("audit event skill-selection persistence", () => {
     expect(skillOnly.events).toEqual([expect.objectContaining({ kind: "skill_selection" })]);
   });
 
-  it("loads stored rows from a pre-companion database and records skill use alongside them", async () => {
-    // Simulate an installed database from before the companion table
-    // existed: v39 layout with one stored audit row, then open it with the
+  it("upgrades a v2026.11.3 database preserving settings and audit rows", async () => {
+    // Simulate an installed v2026.11.3 database (schema v39, no companion
+    // table) with stored settings and one audit row, then open it with the
     // current build the way a real upgrade would.
     const options = {
       env: { OPENCLAW_STATE_DIR: makeTempDir(tempDirs, "openclaw-audit-upgrade-") },
@@ -181,6 +183,15 @@ describe("audit event skill-selection persistence", () => {
     }
 
     const auditDatabase = { ...options, database: openOpenClawStateDatabase(options) };
+    // The upgrade migrates 39 -> 40 while the stored settings row survives.
+    expect(auditDatabase.database.db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: 40,
+    });
+    expect(
+      auditDatabase.database.db
+        .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+        .get(),
+    ).toEqual({ schema_version: 40 });
     const legacy = await listAuditEvents({ database: options, limit: 10 });
     expect(legacy.events.map((event) => event.eventId)).toEqual(["legacy-event-1"]);
 
@@ -400,5 +411,84 @@ describe("audit event skill-selection persistence", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get()).toEqual({
       count: AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
     });
+  });
+
+  it("drops tentative companion counts when their batch rolls back", () => {
+    const database = createDatabaseOptions();
+    const occurredAt = Date.now();
+    const { db } = openOpenClawStateDatabase(database);
+    const auditDatabase = { ...database, database: openOpenClawStateDatabase(database) };
+    const countRows = () =>
+      (
+        db.prepare("SELECT COUNT(*) AS count FROM audit_skill_selection_events").get() as {
+          count: number;
+        }
+      ).count;
+    // Seed MAX - 1 fresh rows with a cold count cache, then one API insert
+    // brings ledger and cache honestly to MAX.
+    db.prepare(
+      `WITH digits(d) AS (VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9)),
+            numbers(n) AS (
+              SELECT 1 + a.d + 10*b.d + 100*c.d + 1000*d.d + 10000*e.d + 100000*f.d
+              FROM digits a, digits b, digits c, digits d, digits e, digits f
+            )
+       INSERT INTO audit_skill_selection_events (
+         sequence, event_id, source_id, source_sequence, occurred_at, action, status,
+         actor_type, actor_id, agent_id, run_id, tool_name
+       )
+       SELECT n, 'rollback-event-' || n, 'rollback-source-' || n, n, ? + n,
+              'skill.selection.observed', 'observed', 'agent', 'main', 'main',
+              'run-' || n, 'debug-toolkit'
+       FROM numbers
+       WHERE n <= ?`,
+    ).run(occurredAt, AUDIT_EVENT_MAX_ROWS_CONTRACT - 1);
+    db.prepare("UPDATE sqlite_sequence SET seq = ? WHERE name = 'audit_events'").run(
+      AUDIT_EVENT_MAX_ROWS_CONTRACT - 1,
+    );
+    expect(
+      recordAuditEventInDatabase(
+        skillSelectionInput({
+          sourceId: "rollback-api-fill",
+          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT,
+          occurredAt: Date.now(),
+        }),
+        auditDatabase,
+      ),
+    ).toBeDefined();
+    expect(countRows()).toBe(AUDIT_EVENT_MAX_ROWS_CONTRACT);
+
+    // A batch that writes then rolls back must not leave its tentative
+    // (+1 insert, overflow trim) count behind: the rows are gone.
+    const retainedAfter = Date.now() - AUDIT_EVENT_RETENTION_MS_CONTRACT;
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        recordSkillSelectionAuditEvent(
+          skillSelectionInput({
+            sourceId: "rollback-api-doomed",
+            sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 1,
+            occurredAt: Date.now(),
+          }),
+          auditDatabase.database.db,
+          retainedAfter,
+        );
+        throw new Error("simulated batch failure");
+      }, auditDatabase),
+    ).toThrow("simulated batch failure");
+    expect(countRows()).toBe(AUDIT_EVENT_MAX_ROWS_CONTRACT);
+
+    // The next insert re-derives the honest count: with the cap reached it
+    // trims to MAX - 1,024. A stale tentative count would skip the trim and
+    // store 100,001 rows.
+    expect(
+      recordAuditEventInDatabase(
+        skillSelectionInput({
+          sourceId: "rollback-api-after",
+          sourceSequence: AUDIT_EVENT_MAX_ROWS_CONTRACT + 2,
+          occurredAt: Date.now(),
+        }),
+        auditDatabase,
+      ),
+    ).toBeDefined();
+    expect(countRows()).toBe(AUDIT_EVENT_MAX_ROWS_CONTRACT - AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT);
   });
 });
