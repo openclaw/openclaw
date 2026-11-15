@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Type } from "typebox";
 import {
   bindAgentToolAvailability,
@@ -47,9 +48,9 @@ function fitsModelOutput(text: string, budget: ToolResultBudget): boolean {
 }
 
 /**
- * Fit SKILL.md text to the model output budget. An oversized document returns its
- * first lines and names the `read` call that continues it, instead of letting a
- * generic output cap remove the middle without a way to recover it.
+ * Fit SKILL.md or companion text to the model output budget. An oversized document
+ * returns its first lines and names the `read` call that continues it, instead of
+ * letting a generic output cap remove the middle without a way to recover it.
  */
 function formatSkillInstructionsForModel(
   instructions: SkillInstructionResult,
@@ -57,15 +58,21 @@ function formatSkillInstructionsForModel(
   readCallable: boolean,
 ): { text: string; whole: boolean } {
   const text = formatSkillInstructions(instructions);
-  if (!budget || instructions.relativePath !== undefined || fitsModelOutput(text, budget)) {
+  if (!budget || fitsModelOutput(text, budget)) {
     return { text, whole: true };
   }
+  // Companions are only read from local skill directories, whose location is the
+  // absolute SKILL.md path.
+  const location =
+    instructions.relativePath === undefined
+      ? instructions.location
+      : path.join(path.dirname(instructions.location), instructions.relativePath);
   const lines = instructions.content.split("\n");
   const header = formatSkillInstructions({ ...instructions, content: "" });
   const render = (shown: number) => {
     const notice = readCallable
-      ? `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest with read(${JSON.stringify({ path: instructions.location, offset: shown + 1 })}) and follow each continuation until the end.]`
-      : `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest of ${instructions.location} from line ${shown + 1} with an available file tool. If none can read it, tell the user that this skill is too large to load and should move detail into references/ files.]`;
+      ? `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest with read(${JSON.stringify({ path: location, offset: shown + 1 })}) and follow each continuation until the end.]`
+      : `[Skill instructions incomplete: showing lines 1-${shown} of ${lines.length}. Before acting, read the rest of ${location} from line ${shown + 1} with an available file tool. If none can read it, tell the user that this skill is too large to load and should move detail into references/ files.]`;
     return `${header}${lines.slice(0, shown).join("\n")}\n\n${notice}`;
   };
   // Accepted edge case: a single line larger than the budget shows no lines; read

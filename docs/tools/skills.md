@@ -948,9 +948,12 @@ For installed local Gateway skills, `skills_read({ name, relativePath })` and
 Code Mode's `await skills.read(name, relativePath)` read a companion file relative
 to the directory containing `SKILL.md`, for example `references/workflow.md`.
 Companions return plain UTF-8 text, capped at 256 KiB; invalid UTF-8 and NUL bytes
-are rejected. Reads reject traversal, symlinks, hardlinks, and replaced skill
-directories. This extends the existing skill-read grant to that skill's files;
-it does not list directories or execute scripts. Sandbox, remote workspace,
+are rejected. A companion larger than one tool result pages like `SKILL.md`: the
+`skills_read` response shows its first lines and ends with the `read` call, with
+the companion's path and the next line `offset`, that continues it. Reads reject
+traversal, symlinks, hardlinks, and replaced skill directories. This extends the
+existing skill-read grant to that skill's files; it does not list directories or
+execute scripts. Sandbox, remote workspace,
 node-hosted, and required-workspace placements remain instruction-only.
 
 For embedded runs, finite runtime tool allowlists retain the Skills catalog when

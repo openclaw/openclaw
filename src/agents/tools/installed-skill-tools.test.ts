@@ -209,22 +209,24 @@ it("bounds concurrent cold searches and retains metadata outside the body budget
   expect(reader).toHaveBeenCalledTimes(1_024);
 });
 
-it.each([true, false])(
-  "pages oversized instructions to the model budget, read=%s",
-  async (withRead) => {
+it.each([true, false].flatMap((withRead) => [[withRead], [withRead, "notes.md"]]))(
+  "pages oversized instructions to the model budget, read=%s, relativePath=%s",
+  async (withRead: boolean, relativePath?: string) => {
     const lines = Array.from({ length: 6000 }, (_, index) => `step ${index}: "quoted" detail`);
     const content = [...lines, "FINAL CANARY"].join("\n");
+    const resourceRoot = Promise.resolve({ read: async () => ({ buffer: Buffer.from(content) }) });
     const source = { filePath: guideMetadata.location, readContent: content };
-    const tools = createInstalledSkillTools([skill({ source })], {
+    const tools = createInstalledSkillTools([skill({ source, resourceRoot })], {
       modelContextWindowTokens: 128_000,
     });
     finalizeAgentToolAvailability(withRead ? [...tools, fakeTool("read", "Read files")] : tools);
-    const result = await expectDefined(tools[1], "read").execute("oversized", { name: "guide" });
+    const read = expectDefined(tools[1], "read");
+    const result = await read.execute("oversized", { name: "guide", relativePath });
     const text = (result.content[0] as { text: string }).text;
     const shown = Number(/showing lines 1-(\d+) of 6001/u.exec(text)?.[1]);
     const next = withRead
-      ? `read({"path":"/skills/guide/SKILL.md","offset":${shown + 1}})`
-      : `read the rest of /skills/guide/SKILL.md from line ${shown + 1}`;
+      ? `read({"path":"/skills/guide/${relativePath ?? "SKILL.md"}","offset":${shown + 1}})`
+      : `read the rest of /skills/guide/${relativePath ?? "SKILL.md"} from line ${shown + 1}`;
     expect(shown).toBeGreaterThan(100);
     expect(text).toContain(`\n${lines[shown - 1]}\n\n[Skill instructions incomplete:`);
     expect(text).toContain(next);
