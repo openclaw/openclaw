@@ -80,11 +80,22 @@ export function registerGoalAutomaticContinuationCases(
     },
   );
 
-  it.each(["direct", "queued"] as const)(
-    "continues a replacement created by the goal tool during a %s user turn",
-    async (route) => {
+  it.each([
+    ["direct", "before"],
+    ["queued", "before"],
+    ["direct", "during"],
+    ["queued", "during"],
+  ] as const)(
+    "continues a replacement created by the goal tool during a %s user turn (predecessor completes %s turn)",
+    async (route, completion) => {
       const previous = await createSessionGoal({ ...scope(), objective: "Finished task" });
-      await updateSessionGoalStatus({ ...scope(), status: "complete" });
+      if (completion === "before") {
+        await updateSessionGoalStatus({ ...scope(), status: "complete" });
+      }
+      const nextTask =
+        completion === "during"
+          ? "Complete the finished goal, then create a goal for the next task"
+          : "Create a goal for the next task";
       let replacementId: string | undefined;
       const createAt = route === "queued" ? 2 : 1;
       runEmbeddedAgent.mockImplementation(async (params) => {
@@ -99,12 +110,21 @@ export function registerGoalAutomaticContinuationCases(
             (
               await rpc("chat.send", {
                 sessionKey: scope().sessionKey,
-                message: "Create a goal for the next task",
+                message: nextTask,
                 idempotencyKey: randomUUID(),
               })
             ).mock.calls[0]?.[0],
           ).toBe(true);
         } else if (calls === createAt) {
+          if (completion === "during") {
+            await createUpdateGoalTool(options).execute("complete-previous", {
+              status: "complete",
+            });
+            expect(loadSessionEntry(scope())?.goal).toMatchObject({
+              id: previous.id,
+              status: "complete",
+            });
+          }
           await createCreateGoalTool(options).execute("create-next", { objective: "Next task" });
           replacementId = loadSessionEntry(scope())?.goal?.id;
           expect(replacementId).not.toBe(previous.id);
@@ -118,8 +138,7 @@ export function registerGoalAutomaticContinuationCases(
         (
           await rpc("chat.send", {
             sessionKey: scope().sessionKey,
-            message:
-              route === "queued" ? "Check the current work" : "Create a goal for the next task",
+            message: route === "queued" ? "Check the current work" : nextTask,
             idempotencyKey: randomUUID(),
           })
         ).mock.calls[0]?.[0],

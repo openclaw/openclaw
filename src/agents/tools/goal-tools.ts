@@ -1,5 +1,8 @@
 import { Type } from "typebox";
-import { bindCreatedGoalContinuation } from "../../auto-reply/reply/goal-continuation-return.js";
+import {
+  bindCreatedGoalContinuation,
+  releaseCompletedGoalContinuation,
+} from "../../auto-reply/reply/goal-continuation-return.js";
 import { SessionGoalTransitionError } from "../../config/sessions/goals-transitions.js";
 import {
   createSessionGoal,
@@ -148,6 +151,9 @@ export function createUpdateGoalTool(options: GoalToolOptions): AnyAgentTool {
           status,
           ...(note ? { note } : {}),
         });
+        if (goal.status === "complete") {
+          releaseCompletedGoalContinuation({ ...scope, runId: options.runId, goalId: goal.id });
+        }
         return jsonResult({
           status: "updated",
           goal,

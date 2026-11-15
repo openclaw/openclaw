@@ -28,6 +28,7 @@ import { createCompactionNoticePayload } from "./compaction-notice.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import { executeFollowupTurn } from "./followup-turn-execution.js";
+import { readCreatedGoalContinuationId } from "./goal-continuation-return.js";
 import { enqueueGoalContinuation, createGoalContinuationReturn } from "./goal-continuation.js";
 import { completeFollowupRunLifecycle, type FollowupRun } from "./queue.js";
 import { resolveQueueSettings } from "./queue/settings-runtime.js";
@@ -378,7 +379,10 @@ export function createFollowupRunner(
         await enqueueGoalContinuation({
           base: turn.queued,
           result: completedAccounting.runResult,
-          initialGoalId: turn.queued.goalContinuation?.goalId ?? initialGoalId,
+          initialGoalId:
+            runWithGoalReturn(() => readCreatedGoalContinuationId(turn.runId, turn.operation)) ??
+            turn.queued.goalContinuation?.goalId ??
+            initialGoalId,
           expectedSession: completedAccounting.expectedSession,
           sessionKey: turn.session.key,
           storePath: turn.session.storePath,
