@@ -322,6 +322,11 @@ export async function prepareEmbeddedAttemptSessionBoundary(
           activeSession,
           currentUserTurnMessage?.idempotencyKey,
         );
+        // A recovery resumes its admitted history, including accepted steering.
+        // Its newer user tail is not an orphan to replace with the original input.
+        if (attempt.replayCurrentTranscript) {
+          return undefined;
+        }
         // An adopted current user needs no orphan repair. Replay still refreshes at core entry.
         if (
           reader &&
@@ -523,9 +528,10 @@ export async function prepareEmbeddedAttemptSessionManager(
     attempt.model.api === "azure-openai-responses" ||
     attempt.model.api === "openai-chatgpt-responses";
 
-  const preparedUserTurnMessage = attempt.skipPreparedUserTurnMessage
-    ? undefined
-    : await attempt.userTurnTranscriptRecorder?.resolveMessage();
+  const preparedUserTurnMessage =
+    attempt.skipPreparedUserTurnMessage || attempt.replayCurrentTranscript
+      ? undefined
+      : await attempt.userTurnTranscriptRecorder?.resolveMessage();
   let latestPersistedUserMessage: AgentMessage | undefined;
   let latestRuntimeUserMessage: AgentMessage | undefined;
   let latestUserTurnTranscriptRecorder = attempt.userTurnTranscriptRecorder;
