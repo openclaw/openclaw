@@ -13,14 +13,18 @@ import type { AutomationResult } from "./agent-run-registry.types.js";
 export const CRON_RUN_ENDED_ERROR = "cron run has ended; inspect the result in its run record";
 
 /**
- * A cron run is one-shot: once no run of its session keeps an execution owner, its executor has
- * finalized and no later turn may start there. Its results stay in their durable records.
+ * A cron run is one-shot: once its executor's own run (the one carrying the job invocation) no
+ * longer owns execution, it has finalized and no later turn may start there. An accepted
+ * follow-up turn on the same session does not keep the origin alive. Results stay in their
+ * durable records.
  */
 export function isEndedCronRun(sessionKey: string, sessionId: string | undefined): boolean {
   return (
     isCronRunSessionKey(sessionKey) &&
-    !listAgentRunsForSession({ sessionKey, sessionId }).some((run) =>
-      hasAgentRunContextExecutionOwner(run.runId),
+    !listAgentRunsForSession({ sessionKey, sessionId }).some(
+      (run) =>
+        getAgentRunContext(run.runId)?.cronRunsByJobId?.size &&
+        hasAgentRunContextExecutionOwner(run.runId),
     )
   );
 }

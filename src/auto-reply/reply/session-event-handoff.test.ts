@@ -288,7 +288,12 @@ describe("session event target custody", () => {
     });
     setRuntimeConfigSnapshot({ ...cfg, session: { store: replacement.storePath } });
     // A cron run admits the event only while its executor still owns the run.
-    const runScope = { sessionKey: runKey, sessionId: target.sessionId, agentId: "main" };
+    const runScope = {
+      sessionKey: runKey,
+      sessionId: target.sessionId,
+      agentId: "main",
+      cronRunsByJobId: new Map([["nightly", { nextCheckEnabled: false }]]),
+    };
     const claim = claimAgentRunContext("captured-cron-run", runScope, { trackOwner: true });
     const receipt = enqueueEvent("Process completed", {
       agentId: "main",

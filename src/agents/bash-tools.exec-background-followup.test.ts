@@ -76,6 +76,7 @@ let reviewFactory: OpenClawPluginToolFactory<2>;
 let state: OpenClawTestState;
 let config: OpenClawConfig;
 const receipts: sessionEvents.SessionEventReceipt[] = [];
+const cronInvocation = () => new Map([["nightly", { nextCheckEnabled: false }]]);
 const enqueue = sessionEvents.enqueueSessionEventForHost;
 
 beforeAll(async () => {
@@ -290,7 +291,12 @@ test.for(["ordinary", "live cron", "queued cron", "ended cron", "cron ended duri
     await seedOrigin(sessionKey);
     const claim = claimAgentRunContext(
       "cron-run-followup",
-      { sessionKey, sessionId, agentId: "main" },
+      {
+        sessionKey,
+        sessionId,
+        agentId: "main",
+        ...(cron ? { cronRunsByJobId: cronInvocation() } : {}),
+      },
       { trackOwner: true },
     );
     const release = () => releaseAgentRunContext("cron-run-followup", claim);
@@ -401,7 +407,7 @@ test("admits every completion that arrives while its cron run is live", async ({
   await seedOrigin(sessionKey);
   const claim = claimAgentRunContext(
     "cron-run-two-live",
-    { sessionKey, sessionId, agentId: "main" },
+    { sessionKey, sessionId, agentId: "main", cronRunsByJobId: cronInvocation() },
     { trackOwner: true },
   );
   vi.spyOn(sessionEvents, "enqueueSessionEventForHost").mockImplementation((text, options) => {

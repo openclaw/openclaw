@@ -109,14 +109,21 @@ it("admits a cron run turn only while its executor owns the run", () =>
         requestedSessionKey: sessionKey,
       });
 
-    const claim = claimAgentRunContext("cron-executor", scope, { trackOwner: true });
+    const claim = claimAgentRunContext(
+      "cron-executor",
+      { ...scope, cronRunsByJobId: new Map([["nightly", { nextCheckEnabled: false }]]) },
+      { trackOwner: true },
+    );
     const live = vi.fn<RespondFn>();
     expect(await prepare(live)).toMatchObject({ canonicalKey: sessionKey });
     expect(live).not.toHaveBeenCalled();
 
+    // An accepted follow-up turn on the same session must not keep the ended origin alive.
+    const followup = claimAgentRunContext("accepted-followup", scope, { trackOwner: true });
     releaseAgentRunContext("cron-executor", claim);
     const ended = vi.fn<RespondFn>();
     expect(await prepare(ended)).toBeUndefined();
+    releaseAgentRunContext("accepted-followup", followup);
     expect(ended).toHaveBeenCalledWith(
       false,
       undefined,
