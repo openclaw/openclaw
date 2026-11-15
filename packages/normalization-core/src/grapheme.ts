@@ -81,6 +81,14 @@ export function skipWhitespaceGraphemes(
   if (!/\s/u.test(text.charAt(start))) {
     return start;
   }
+  // Two units of left context reveal a CRLF or prepend cluster that already owns this whitespace.
+  const lead = Math.min(start, 2);
+  const owner = getGraphemeSegmenter()
+    .segment(text.slice(start - lead, start + 1))
+    .containing(lead);
+  if (owner && owner.index < lead) {
+    return start;
+  }
   let cursor = start;
   let count = 0;
   // Segment a growing window so a long reply is never copied into ICU per chunk.

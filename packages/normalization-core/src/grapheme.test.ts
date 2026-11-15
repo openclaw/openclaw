@@ -37,3 +37,15 @@ describe("long text work volume", () => {
     expect(trimEndWhitespaceGraphemes(`${"x".repeat(10)}${" ".repeat(600)}`)).toBe("x".repeat(10));
   });
 });
+
+describe("skipWhitespaceGraphemes", () => {
+  it.each([
+    ["\r\nx", 1],
+    ["\u0600 x", 1],
+  ])(
+    "does not consume whitespace owned by a cluster that starts before the offset: %j",
+    (text, start) => {
+      expect(skipWhitespaceGraphemes(text, start)).toBe(start);
+    },
+  );
+});

@@ -31,3 +31,8 @@ it("keeps grapheme boundaries and progress for fractional and NaN limits in each
     }
   }
 });
+
+it("keeps whitespace that belongs to a cluster split by an oversized-cluster cut", () => {
+  expect(chunkText("\r\nx", 1)).toEqual(["\r", "\n", "x"]);
+  expect(chunkText("\u0600 x", 1)).toEqual(["\u0600", " ", "x"]);
+});
