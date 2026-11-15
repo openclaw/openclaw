@@ -27,7 +27,9 @@ describe("security audit deep probe failure", () => {
         stateDir: tempDirs.make("audit-probe-"),
         signal: controller.signal,
         probeGatewayFn: async ({ url: probeUrl }) => {
-          if (cancel) controller.abort(reason);
+          if (cancel) {
+            controller.abort(reason);
+          }
           return {
             ok: false,
             url: probeUrl,
@@ -63,9 +65,6 @@ describe("security audit deep probe failure", () => {
         detail: "failed to connect to wss://***:***@gateway.example.test/socket?client_secret=***",
       }),
     );
-    const serialized = JSON.stringify(report);
-    expect(serialized).not.toContain(user);
-    expect(serialized).not.toContain(password);
-    expect(serialized).not.toContain(querySecret);
+    expect(JSON.stringify(report)).not.toMatch(/audit-(?:user|password|query)-sentinel/u);
   });
 });
