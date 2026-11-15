@@ -1,4 +1,5 @@
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   chunkMarkdown,
   extractCuratedEntryRecallMetadata,
@@ -66,7 +67,7 @@ export function prepareMemoryIndexChunks({
   const sourceLines = source === "memory" ? content.replace(/\r\n/gu, "\n").split("\n") : [];
   const chunkOptions = { ...chunking, perEntry };
   // Match chunkMarkdown's character budget so heading repair cannot grow a chunk without bound.
-  const maxMergedChunkChars = Math.max(32, chunking.tokens * 4);
+  const maxMergedChunkEstimatedChars = Math.max(32, chunking.tokens * 4);
   const baseChunks: MemoryChunk[] = [];
   for (const chunk of source === "sessions"
     ? chunkSessionContentAtResetBoundary({
@@ -100,7 +101,7 @@ export function prepareMemoryIndexChunks({
         .split("\n")
         .slice(Math.max(0, previous.endLine - chunk.startLine + 1));
       const mergedText = [previous.text, ...following].join("\n");
-      if (mergedText.length <= maxMergedChunkChars) {
+      if (estimateStringChars(mergedText) <= maxMergedChunkEstimatedChars) {
         chunk.text = mergedText;
         chunk.startLine = previous.startLine;
         chunk.hash = hashText(chunk.text);

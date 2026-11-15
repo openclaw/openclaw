@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { serialize } from "node:v8";
+import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { expect, it } from "vitest";
 import {
   prepareMemoryIndexChunks,
@@ -82,6 +83,15 @@ it("keeps heading-only merges within the chunk character budget", () => {
   );
   expect(preparedHeadings.size).toBe(headings.length);
   expect(headings.every((heading) => preparedHeadings.has(heading))).toBe(true);
+});
+
+it("keeps heading-only merges within the weighted CJK chunk budget", () => {
+  const heading = "# 科科科科科科科";
+  const { chunks } = prepareHeading([heading, heading, heading].join("\n"));
+
+  expect(chunks.length).toBeGreaterThan(1);
+  expect(chunks.every((chunk) => estimateStringChars(chunk.text) <= 32)).toBe(true);
+  expect(chunks.flatMap((chunk) => chunk.text.split("\n"))).toEqual([heading, heading, heading]);
 });
 
 it.each(["memory", "sessions"] as const)("preserves a final heading for %s", (source) => {
