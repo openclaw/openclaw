@@ -2517,6 +2517,17 @@ async function createChatPickerScenario(
         : []),
     ],
     ...(fixture === "workboard" || fixture === "workboard-states" ? workboardUi : {}),
+    // Knowledge is enabled with its real page; the mock answers none of its data calls.
+    nativePlugins: [
+      ...(fixture === "workboard" || fixture === "workboard-states"
+        ? workboardUi.nativePlugins
+        : []),
+      {
+        pluginId: "knowledge",
+        rootDir: path.join(repoRoot, "extensions", "knowledge"),
+        source: "src/control-ui.ts",
+      },
+    ],
     controlUiWidgetKinds: [
       { pluginId: "session", kind: "session:progress", label: "Session progress" },
       ...(fixture === "workboard" || fixture === "workboard-states"

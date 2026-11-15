@@ -298,6 +298,14 @@ export function buildPluginCatalogMock(options: PluginCatalogMockOptions = {}) {
       "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
     ),
     entry({
+      id: "knowledge",
+      name: "Knowledge",
+      description: "Evidence-backed knowledge, inspectable in OpenClaw.",
+      category: "memory",
+      origin: "bundled",
+      installed: true,
+    }),
+    entry({
       id: "memory-wiki",
       name: "Memory Wiki",
       description: "Long-term wiki-style memory for people and projects.",
@@ -397,6 +405,7 @@ export function buildPluginInspectMock(options: PluginCatalogMockOptions = {}) {
         trust: { disposition: "clean", checkedAt: "2026-08-20T14:03:00Z" },
       },
     ],
+    ["knowledge", { source: { kind: "bundled" }, declared: { skills: ["knowledge-recall"] } }],
     [
       "memory-wiki",
       { source: { kind: "bundled" }, declared: { tools: ["memory_search", "memory_write"] } },
