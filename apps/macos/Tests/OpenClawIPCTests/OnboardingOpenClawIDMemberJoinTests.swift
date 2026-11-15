@@ -180,13 +180,32 @@ struct OnboardingOpenClawIDMemberJoinTests {
             #expect(store.pendingJoin() == nil)
             #expect(effects.forgotten.count == 1)
         } else {
-            await #expect(throws: URLError.self) { try await service.perform(.requestJoin) }
-            // Discovery may have accepted it: these keys stay, and reopening resumes the wait.
+            // Discovery may have accepted it: the screen waits on it, these keys stay, and
+            // reopening resumes the same wait.
+            #expect(try await service.perform(.requestJoin) == .memberPending(claw: Self.claw, device: "Fixture Mac"))
             #expect(store.pendingJoin() != nil)
             #expect(effects.forgotten.isEmpty)
             let reopened = Self.service(http: http, effects: effects, defaults: defaults)
             #expect(try await reopened.start(.connect) == .memberPending(claw: Self.claw, device: "Fixture Mac"))
         }
+    }
+
+    @Test func `a failed claw lookup keeps the pasted invite for another try`() async throws {
+        let (defaults, suite) = try Self.defaults()
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let effects = Effects()
+        effects.clipboard = try Self.link()
+        let http = MemberDiscovery(lookupFailures: 1)
+        let service = Self.service(http: http, effects: effects, defaults: defaults)
+        _ = try await service.perform(.signIn)
+        _ = try await service.perform(.joinWithInvite)
+        _ = try await service.perform(.pasteInvite)
+        await #expect(throws: URLError.self) { try await service.perform(.requestJoin) }
+        #expect(MacOpenClawIDDeviceStore(defaults: defaults, databaseURL: Self.database()).pendingJoin() == nil)
+        effects.clipboard = nil
+        // Ask to join again, without pasting: the same invite is sent once the lookup works.
+        #expect(try await service.perform(.requestJoin) == .memberPending(claw: Self.claw, device: "Fixture Mac"))
+        #expect(await http.redemptions == 1)
     }
 
     // MARK: helpers
@@ -294,10 +313,18 @@ struct OnboardingOpenClawIDMemberJoinTests {
         private(set) var claws = 0
         private(set) var recipients: [String] = []
 
-        init(account: String = "acct_bob", member: Bool = false, mailFailure: MailFailure? = nil) {
+        private var lookupFailures: Int
+
+        init(
+            account: String = "acct_bob",
+            member: Bool = false,
+            mailFailure: MailFailure? = nil,
+            lookupFailures: Int = 0)
+        {
             self.account = account
             self.member = member
             self.mailFailure = mailFailure
+            self.lookupFailures = lookupFailures
         }
 
         func approve(role: String) {
@@ -324,6 +351,9 @@ struct OnboardingOpenClawIDMemberJoinTests {
                     "online": .bool(true),
                 ])] : []
                 return json(.object(["claws": .array(claws)]))
+            case ("POST", "/v1/join-tickets") where self.lookupFailures > 0:
+                self.lookupFailures -= 1
+                throw URLError(.timedOut)
             case ("POST", "/v1/join-tickets"):
                 return json(.object([
                     "ticket": .string("dt_unused"), "origin": .string("https://unused.example.test"),

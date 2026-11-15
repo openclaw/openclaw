@@ -446,10 +446,11 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
             http: self.environment.discovery(configuration))
     }
 
-    /// Creates this Mac's member keys D and W (no node key) and sends the invite redemption.
+    /// Creates this Mac's member keys D and W (no node key) and sends the invite redemption. The
+    /// pasted invite stays usable until the request is with the claw or Discovery refused it, so a
+    /// failed lookup or refusal can be retried with Ask to join.
     private func requestJoin() async throws -> OnboardingOpenClawIDStep {
         guard let configuration, let session, var link = self.invite else { throw CocoaError(.featureUnsupported) }
-        self.invite = nil
         let deviceID = UUID()
         let client = self.memberClient(deviceID, configuration: configuration)
         let clawID: String
@@ -472,17 +473,33 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
         self.environment.saveSession(session)
         self.pending = join
         let store = self.environment.keyStore
+        let device: OpenClawIDNodeIdentity
+        let peer: OpenClawIDNodeIdentity
         do {
-            let device = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .device))
-            let peer = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .devicePeer))
+            device = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .device))
+            peer = try await OpenClawIDNodeIdentity.loadOrCreate(store: store(deviceID, .devicePeer))
+        } catch {
+            await self.forget(join)
+            throw error
+        }
+        do {
             try await client.redeem(
                 &link, clawID: clawID, session: session, device: device, peer: peer, label: self.label())
-        } catch let refused as OpenClawIDDiscoveryAccountError {
+        } catch let OpenClawIDNodeEnrollmentError.discoveryRejected(status) {
             // Discovery refused the request outright: nothing reached the claw.
             await self.forget(join)
-            if refused.status == 400 { return .problem(.inviteInvalid) }
-            throw refused
+            if status == 400 {
+                self.invite = nil
+                return .problem(.inviteInvalid)
+            }
+            throw OpenClawIDNodeEnrollmentError.discoveryRejected(status)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            // Delivery is uncertain: Discovery may have accepted the request before the answer was
+            // lost. Wait on it like any other request; Cancel request forgets it.
         }
+        self.invite = nil
         return .memberPending(claw: join.hostname, device: self.environment.deviceName())
     }
 
@@ -503,7 +520,7 @@ final class OnboardingOpenClawIDSignInService: OnboardingOpenClawIDService {
                     rootFingerprint: join.rootFingerprint,
                     session: session,
                     peer: peer)
-            } catch let refused as OpenClawIDDiscoveryAccountError where refused.status == 401 {
+            } catch OpenClawIDNodeEnrollmentError.discoveryRejected(401) {
                 self.session = nil
                 return .signIn
             }

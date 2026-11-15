@@ -46,7 +46,7 @@ public enum OpenClawIDDeviceRoute {
             do {
                 response = try await OpenClawIDDiscoveryAccount(origin: discoveryOrigin, http: http, now: now)
                     .descriptorAndSnapshot(session, clawID: previous.clawID)
-            } catch let refused as OpenClawIDDiscoveryAccountError where refused.status == 404 && admission == .member {
+            } catch OpenClawIDNodeEnrollmentError.discoveryRejected(404) where admission == .member {
                 // Discovery hides a claw from an account that no longer belongs to it: removing a
                 // member's last device removes the member.
                 throw OpenClawIDNodeEnrollmentError.notAdmitted

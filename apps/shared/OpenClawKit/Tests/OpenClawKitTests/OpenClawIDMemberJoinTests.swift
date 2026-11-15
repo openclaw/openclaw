@@ -172,7 +172,7 @@ struct OpenClawIDMemberJoinTests {
         if admission == .member {
             await #expect(throws: OpenClawIDNodeEnrollmentError.notAdmitted) { _ = try await refresh() }
         } else {
-            await #expect(throws: OpenClawIDDiscoveryAccountError(status: 404, code: "not_found")) {
+            await #expect(throws: OpenClawIDNodeEnrollmentError.discoveryRejected(404)) {
                 _ = try await refresh()
             }
         }

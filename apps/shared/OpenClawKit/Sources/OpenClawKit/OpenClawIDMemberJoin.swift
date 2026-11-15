@@ -99,7 +99,7 @@ public struct OpenClawIDMemberJoinClient: Sendable {
         }
         do {
             return try await self.discovery.joinTicketClawID(session, hostname: hostname)
-        } catch let refused as OpenClawIDDiscoveryAccountError where refused.status == 404 {
+        } catch OpenClawIDNodeEnrollmentError.discoveryRejected(404) {
             throw OpenClawIDNodeEnrollmentError.wrongHost
         }
     }
