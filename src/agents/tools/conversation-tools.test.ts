@@ -159,6 +159,22 @@ describe("conversation tools", () => {
     expect(first.params).toMatchObject(request.mock.calls[0]?.[1]);
   });
 
+  it("enforces the advertised 300-second cap on turn timeouts", async () => {
+    const callGateway = mockGateway();
+    await execute("turn", { ...message, timeoutSeconds: 300 });
+    expect(callGateway.mock.calls[0]?.[0]).toMatchObject({
+      params: { timeoutMs: 300_000 },
+      timeoutMs: 320_000,
+    });
+    await expect(execute("turn", { ...message, timeoutSeconds: 301 })).rejects.toThrow(
+      "timeoutSeconds must be an integer between 1 and 300",
+    );
+    await expect(execute("turn", { ...message, timeoutSeconds: 0 })).rejects.toThrow(
+      "timeoutSeconds must be an integer between 1 and 300",
+    );
+    expect(callGateway.mock.calls).toHaveLength(1);
+  });
+
   it("validates references and owner access before Gateway delivery", async () => {
     const callGateway = mockGateway();
     await expect(

@@ -87,7 +87,12 @@ function conversationMessageExecutor(
     }
     const message = readToolStringParam(params, "message", { required: true });
     const timeoutMs =
-      action === "turn" ? (readPositiveIntegerParam(params, "timeoutSeconds") ?? 30) * 1_000 : 0;
+      action === "turn"
+        ? (readPositiveIntegerParam(params, "timeoutSeconds", {
+            max: 300,
+            message: "timeoutSeconds must be an integer between 1 and 300",
+          }) ?? 30) * 1_000
+        : 0;
     const agentId = resolveToolAgentId(options);
     const identity = [
       agentId,
