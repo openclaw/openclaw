@@ -274,15 +274,16 @@ export async function adoptPackageReleaseSlot(params: {
 }
 
 /**
- * The first candidate launcher that is not the link the prefix already has. A
- * release switch changes nothing outside the release, so a difference needs the
- * swap, which replaces launchers.
+ * The first launcher the update manages whose candidate link is not the link the
+ * prefix already has. A release switch changes nothing outside the release, so a
+ * difference needs the swap, which replaces those launchers.
  */
 export async function findPackageReleaseLauncherDifference(
+  /** The launchers the update manages, from `resolvePackageUpdateLauncherNames`. */
+  names: readonly string[],
   releaseBinDir: string,
   binDir: string,
 ): Promise<string | null> {
-  const names = (await fs.readdir(releaseBinDir).catch(ignoreMissingPath)) ?? [];
   for (const name of names) {
     const [candidate, installed] = await Promise.all([
       fs.readlink(path.join(releaseBinDir, name)).catch(() => null),

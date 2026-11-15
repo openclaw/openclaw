@@ -359,26 +359,6 @@ export function packFirstHopUpdateFixture(candidateTarball, outputTarball, seque
   };
 }
 
-/**
- * A same-schema future fixture that adds a `bin` command, as a release that adds
- * or renames a command would. The release layout cannot switch to it, because a
- * switch changes nothing outside the release; the update takes the swap.
- */
-export function packLauncherChangeUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
-  return {
-    method: "candidate-added-launcher-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root, sourceVersion) => {
-      stampFixtureVersion(root, futureFixtureVersion(sourceVersion, sequence));
-      const manifestPath = path.join(root, "package.json");
-      const manifest = readJson(manifestPath);
-      const entry = typeof manifest.bin === "string" ? manifest.bin : manifest.bin.openclaw;
-      manifest.bin = { openclaw: entry, "openclaw-fixture": entry };
-      writeJson(manifestPath, manifest);
-      return { addedLauncher: "openclaw-fixture" };
-    }),
-  };
-}
-
 function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMissingChunk = "") {
   return {
     method: "candidate-missing-compatibility-fixture",

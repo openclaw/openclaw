@@ -22,7 +22,6 @@ import {
 import {
   packFailingDoctorUpdateFixture,
   packFirstHopUpdateFixture,
-  packLauncherChangeUpdateFixture,
   stampFixtureVersion,
 } from "../update-first-hop-package-fixtures.mjs";
 import { assertNoIncognitoArtifacts } from "./incognito-artifacts.mjs";
@@ -46,9 +45,10 @@ const ownedPrefix = process.env.OPENCLAW_PUBLISHED_DRIVER_OWNED_PREFIX === "1";
 // or fails post-switch Doctor and rolls back ("rollback").
 const followUp = process.env.OPENCLAW_PUBLISHED_DRIVER_FOLLOW_UP ?? "";
 // "rebind" checks the candidate replaces the release that a published updater bound the service
-// to, its restart rebinds the service to the package path, and the next update switches. "launcher" gives the
-// candidate an added `bin` command: the release layout cannot switch to it, so the update takes
-// the swap, and a second update adopts the layout again. "in-place" starts like "rebind" but
+// to, its restart rebinds the service to the package path, and the next update switches.
+// "launcher" replaces the prefix launcher with an absolute link the candidate does not stage: the
+// release switch would change a file outside the release, so the update takes the swap, and a
+// second update adopts the layout again. "in-place" starts like "rebind" but
 // updates with --no-restart, so the service cannot be rebound: the selected release is replaced.
 assert(
   ["", "switch", "rollback", "rebind", "launcher", "in-place"].includes(followUp),
@@ -689,10 +689,16 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       const fixture =
         followUp === "rollback"
           ? packFailingDoctorUpdateFixture(candidatePackage, second, state, 1)
-          : followUp === "launcher"
-            ? packLauncherChangeUpdateFixture(candidatePackage, second, 1)
-            : packFirstHopUpdateFixture(candidatePackage, second, 1);
+          : packFirstHopUpdateFixture(candidatePackage, second, 1);
       writeJson("follow-up-candidate", fixture);
+      const npmLauncher = "../lib/node_modules/openclaw/openclaw.mjs";
+      if (followUp === "launcher") {
+        // Another installer's absolute launcher: npm stages the relative one, so the
+        // release switch would change a file outside the release.
+        assert.equal(fs.readlinkSync(path.join(bin, "openclaw")), npmLauncher);
+        fs.rmSync(path.join(bin, "openclaw"));
+        fs.symlinkSync(path.join(packageRoot, "openclaw.mjs"), path.join(bin, "openclaw"));
+      }
       const switched = await updateTo(
         "follow-up-update",
         second,
@@ -784,7 +790,11 @@ process.exitCode = await runCancelableCommand(async (signal) => {
           /release layout was not used/u,
           "The fallback was not recorded",
         );
-        assert(fs.existsSync(path.join(bin, "openclaw-fixture")), "The added launcher is missing");
+        assert.equal(
+          fs.readlinkSync(path.join(bin, "openclaw")),
+          npmLauncher,
+          "The swap did not replace the launcher",
+        );
         // Stage cleanup removed the release directory the candidate was staged in.
         assert.deepEqual(
           Object.entries(after.releases ?? {}).filter(
@@ -797,7 +807,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         await probe("follow-up-running-version", fixture.targetVersion);
         // The next update adopts the directory and switches releases again.
         const third = path.join(runtime, "openclaw-follow-up-2.tgz");
-        const next = packLauncherChangeUpdateFixture(candidatePackage, third, 2);
+        const next = packFirstHopUpdateFixture(candidatePackage, third, 2);
         writeJson("follow-up-candidate-2", next);
         const adopted = await updateTo("follow-up-adopt", third);
         const afterAdopt = describeLinkedRoot();

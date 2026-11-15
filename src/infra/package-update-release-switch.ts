@@ -15,7 +15,10 @@ import {
   switchPackageReleaseLink,
   type PackageReleaseIdentity,
 } from "./package-release-slot.js";
-import { removePackageUpdatePath } from "./package-update-filesystem.js";
+import {
+  removePackageUpdatePath,
+  resolvePackageUpdateLauncherNames,
+} from "./package-update-filesystem.js";
 import { preparePackageSwapLocalOverrides } from "./package-update-local-overrides.js";
 import {
   PackageUpdateActivationError,
@@ -235,6 +238,7 @@ async function switchStagedPackageRelease(
   async function planSwitch() {
     // Nothing outside the release changes, so the launchers must already match.
     const launcherDifference = await findPackageReleaseLauncherDifference(
+      resolvePackageUpdateLauncherNames(params.packageName),
       params.stage.layout.binDir,
       path.join(release!.prefix, "bin"),
     );

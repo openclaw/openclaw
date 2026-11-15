@@ -293,6 +293,24 @@ describe.skipIf(process.platform === "win32")("package release switch", () => {
     expect(selected(fixture.slot)).toBe(next.stage.packageRoot);
   });
 
+  it("switches when the candidate adds a command the update does not manage", async () => {
+    const fixture = createPackageReleasePrefixFixture(dir);
+    fixture.addRelease("r1", "2026.11.3");
+    fixture.linkTo("r1");
+    const params = await stagePackageRelease(fixture, "2026.12.1");
+    // Neither the switch nor the swap publishes this launcher, so it rules out nothing.
+    fs.symlinkSync(
+      "../lib/node_modules/openclaw/openclaw.mjs",
+      path.join(params.stage.layout.binDir, "openclaw-extra"),
+    );
+
+    const result = await swapStagedPackageInstall(params);
+
+    expect(result.status).toBe("committed");
+    expect(result.step.advisory).toBeUndefined();
+    expect(selected(fixture.slot)).toBe(params.stage.packageRoot);
+  });
+
   it("takes the package swap when the previous directory cannot be adopted", async () => {
     const fixture = createPackageReleasePrefixFixture(dir);
     fixture.writePlainPackage("2026.11.3", "build-old");

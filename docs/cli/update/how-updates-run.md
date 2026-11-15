@@ -1588,7 +1588,7 @@ names it. Rename that link onto `lib/node_modules/openclaw` to restore the
 installation, then run the update again.
 
 The release layout is an optimisation, and an update never fails because it
-cannot be used. When the new release's `bin` launchers are not the links the
+cannot be used. When the new release's `openclaw` launcher is not the link the
 prefix already has, when `releases/` cannot be created or is on another
 filesystem than the package path, or when the installed package cannot be read
 as a release, the update finds this before it stops the Gateway and replaces
