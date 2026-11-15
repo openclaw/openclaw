@@ -527,7 +527,7 @@ export function projectionOperations(
         dependencies,
       });
       phases.mark(`${phase}.baseline`);
-      await replaceBaseline(initial.rawManifest, initial.manifestRef);
+      await update({ projection_fingerprints: initial.projectionFingerprints ?? null }, initial);
     }
     phases.mark(`${phase}.checkpoint`);
     return await prepareLocalWorkspaceCheckpoint({
