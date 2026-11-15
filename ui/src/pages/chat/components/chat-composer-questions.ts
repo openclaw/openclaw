@@ -65,8 +65,8 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
       merge(props, {
         queue: props.getQueue?.() ?? props.queue,
         onReopen: (itemId, scope) => {
-          state.restoreComposerFocus ||= state.questionTakeoverActive;
-          state.questionTakeoverActive = false;
+          state.restoreComposerFocus ||= state.questionFocusActive;
+          state.questionFocusActive = false;
           select(JSON.stringify([scope, itemId]));
         },
       } satisfies Partial<Parameters<typeof createAsyncQuestionPresentation>[1]>),
@@ -89,7 +89,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
               return {
                 key: `gateway:${prompt.id}`,
                 asyncIdentity: null,
-                takesOverComposer: requestedBySession === undefined,
+                restoreComposerOnClose: requestedBySession === undefined,
                 panel: (options: QuestionPanelOptions) =>
                   createGatewayQuestionPanelProps(prompt, {
                     ...options,
@@ -118,7 +118,7 @@ export function createComposerQuestions(paneId: string, readProps: () => Questio
               ? asyncQuestions.pending.map((question) => ({
                   key: JSON.stringify([asyncQuestions.scope, question.itemId]),
                   asyncIdentity: asyncIdentity(question.itemId),
-                  takesOverComposer: true,
+                  restoreComposerOnClose: false,
                   panel: (options: QuestionPanelOptions) =>
                     createAsyncQuestionPanelProps(question, asyncQuestions, options),
                 }))

@@ -51,6 +51,7 @@ const { values } = parseArgs({
     allocation: { type: "boolean" },
     "cpu-profile": { type: "boolean" },
     "seeded-history": { type: "boolean" },
+    "channel-transports": { type: "boolean" },
   },
 });
 assert(values.output);
@@ -249,6 +250,7 @@ const instance = await createOpenClawTestInstance({
   gracefulShutdownTimeoutMs: 90_000,
   env: {
     ...restartEnv,
+    OPENCLAW_SKIP_CHANNELS: values["channel-transports"] ? undefined : "1",
     OPENCLAW_SKIP_CRON: undefined,
     OPENCLAW_NO_RESPAWN: "1",
     OPENCLAW_GATEWAY_RESTART_TRACE: "1",
@@ -363,14 +365,36 @@ try {
     await closeOpenClawStateDatabaseAsync();
   }
   const pluginDir = instance.state.path("slow-cron-finalizer");
+  const channelIds = values["channel-transports"] ? ["discord", "slack", "clickclack", "x"] : [];
   await writeRestartPlugin(
     pluginDir,
     {
       id: "slow-cron-finalizer",
       activation: { onStartup: true },
       configSchema: { type: "object", properties: {} },
+      channels: channelIds,
+      channelConfigs: Object.fromEntries(
+        channelIds.map((id) => [
+          id,
+          {
+            schema: { type: "object", properties: { enabled: { type: "boolean" } } },
+          },
+        ]),
+      ),
     },
     `export default { id: "slow-cron-finalizer", register(api) {
+      for (const id of ${JSON.stringify(channelIds)}) api.registerChannel({ plugin: {
+        id, meta: { id, label: id, selectionLabel: id, docsPath: "/channels/" + id, blurb: "Synthetic shutdown transport" },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => ["default"], resolveAccount: () => ({ accountId: "default", enabled: true }) },
+        gateway: {
+          startAccount: ({ abortSignal }) => new Promise(resolve => {
+            console.log("[shutdown-fixture] transport-ready " + id);
+            abortSignal.addEventListener("abort", resolve, { once: true });
+          }),
+          stopAccount: async () => console.log("[shutdown-fixture] transport-stopped " + id),
+        },
+      }});
       api.on("agent_end", async (event, ctx) => {
         if (!event.success && ctx.sessionKey?.includes(":cron:"))
           await fetch("http://127.0.0.1:${reservation.claim.port}/finalize", { method: "POST", body: "{}" });
@@ -383,8 +407,14 @@ try {
     allow: ["openai", "slow-cron-finalizer"],
     slots: { memory: "none" },
     load: { paths: [pluginDir] },
-    entries: { "slow-cron-finalizer": { enabled: true, hooks: { allowConversationAccess: true } } },
+    entries: {
+      ...Object.fromEntries(channelIds.map((id) => [id, { enabled: false }])),
+      "slow-cron-finalizer": { enabled: true, hooks: { allowConversationAccess: true } },
+    },
   };
+  if (channelIds.length) {
+    config.channels = Object.fromEntries(channelIds.map((id) => [id, { enabled: true }]));
+  }
   await instance.state.writeConfig(config);
   await instance.startGateway();
   console.log("gateway ready");
@@ -543,6 +573,10 @@ try {
     result.agentDatabaseBytes = (await stat(databasePath)).size;
   }
   const stopLog = instance.logs();
+  for (const id of channelIds) {
+    assert(stopLog.includes(`[shutdown-fixture] transport-ready ${id}`), `${id} did not start`);
+    assert(stopLog.includes(`[shutdown-fixture] transport-stopped ${id}`), `${id} did not stop`);
+  }
   result.shutdownSteps = Object.fromEntries(
     [...stopLog.matchAll(/restart trace: ((?:restart\.close|shutdown)\.[\w.-]+) ([\d.]+)ms/g)]
       .filter((match) => !match[1]!.endsWith(".begin"))

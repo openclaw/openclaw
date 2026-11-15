@@ -47,6 +47,46 @@ function hasNoJournal(pathname: string): boolean {
   });
 }
 
+function decodeSeal(
+  bytes: string,
+  file: BigIntStats,
+  refuse: (reason: SqliteCleanCloseSealRefusal) => undefined,
+): (SealProof & { schemaIdentity: string }) | undefined {
+  const envelope: unknown = JSON.parse(bytes);
+  if (
+    !isRecord(envelope) ||
+    typeof envelope.payload !== "string" ||
+    envelope.checksum !== checksum(envelope.payload)
+  ) {
+    return refuse("malformed-proof");
+  }
+  const payload: unknown = JSON.parse(envelope.payload);
+  if (
+    !isRecord(payload) ||
+    payload.version !== 1 ||
+    typeof payload.schemaIdentity !== "string" ||
+    typeof payload.verifiedAt !== "number" ||
+    !Number.isSafeInteger(payload.verifiedAt) ||
+    !("facts" in payload) ||
+    !file.isFile()
+  ) {
+    return refuse("malformed-proof");
+  }
+  const age = Date.now() - payload.verifiedAt;
+  if (age < 0 || age > fullVerificationIntervalMs) {
+    return refuse("expired-proof");
+  }
+  if (!Object.entries(fileFields(file)).every(([key, value]) => payload[key] === value)) {
+    return refuse("file-mismatch");
+  }
+  return {
+    schemaIdentity: payload.schemaIdentity,
+    verifiedAt: payload.verifiedAt,
+    facts: payload.facts,
+    ...(payload.identity === undefined ? {} : { identity: payload.identity }),
+  };
+}
+
 /** The caller supplies fstat from its retained descriptor; closing a new one can release SQLite locks. */
 export function readSqliteCleanCloseSeal(
   pathname: string,
@@ -62,44 +102,50 @@ export function readSqliteCleanCloseSeal(
     if (!fs.lstatSync(sealPath).isFile()) {
       return refuse("malformed-proof");
     }
-    const envelope: unknown = JSON.parse(fs.readFileSync(sealPath, "utf8"));
-    if (
-      !isRecord(envelope) ||
-      typeof envelope.payload !== "string" ||
-      envelope.checksum !== checksum(envelope.payload)
-    ) {
-      return refuse("malformed-proof");
+    const proof = decodeSeal(fs.readFileSync(sealPath, "utf8"), file, refuse);
+    if (!proof) {
+      return undefined;
     }
-    const payload: unknown = JSON.parse(envelope.payload);
-    if (
-      !isRecord(payload) ||
-      payload.version !== 1 ||
-      typeof payload.schemaIdentity !== "string" ||
-      typeof payload.verifiedAt !== "number" ||
-      !Number.isSafeInteger(payload.verifiedAt) ||
-      !("facts" in payload) ||
-      !file.isFile()
-    ) {
-      return refuse("malformed-proof");
-    }
-    const age = Date.now() - payload.verifiedAt;
-    if (age < 0 || age > fullVerificationIntervalMs) {
-      return refuse("expired-proof");
-    }
-    if (!Object.entries(fileFields(file)).every(([key, value]) => payload[key] === value)) {
-      return refuse("file-mismatch");
-    }
-    if (!hasNoJournal(pathname)) {
-      return refuse("journal-present");
-    }
-    return {
-      schemaIdentity: payload.schemaIdentity,
-      verifiedAt: payload.verifiedAt,
-      facts: payload.facts,
-      ...(payload.identity === undefined ? {} : { identity: payload.identity }),
-    };
+    return hasNoJournal(pathname) ? proof : refuse("journal-present");
   } catch (error) {
     // Torn writes and unreadable seals fall back to the ordinary full validation.
+    return refuse(hasErrnoCode(error, "ENOENT") ? "no-proof" : "malformed-proof");
+  }
+}
+
+/** The descriptor remains owned by the host; only seal and journal metadata is read here. */
+export async function readSqliteCleanCloseSealAsync(
+  pathname: string,
+  file: BigIntStats,
+  onRefusal?: (reason: SqliteCleanCloseSealRefusal) => void,
+): Promise<ReturnType<typeof readSqliteCleanCloseSeal>> {
+  const refuse = (reason: SqliteCleanCloseSealRefusal) => {
+    onRefusal?.(reason);
+    return undefined;
+  };
+  try {
+    const sealPath = `${pathname}.seal`;
+    if (!(await fs.promises.lstat(sealPath)).isFile()) {
+      return refuse("malformed-proof");
+    }
+    const proof = decodeSeal(await fs.promises.readFile(sealPath, "utf8"), file, refuse);
+    if (!proof) {
+      return undefined;
+    }
+    for (const suffix of ["-wal", "-journal"]) {
+      try {
+        const journal = await fs.promises.stat(`${pathname}${suffix}`, { bigint: true });
+        if (!journal.isFile() || journal.size !== 0n) {
+          return refuse("journal-present");
+        }
+      } catch (error) {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      }
+    }
+    return proof;
+  } catch (error) {
     return refuse(hasErrnoCode(error, "ENOENT") ? "no-proof" : "malformed-proof");
   }
 }

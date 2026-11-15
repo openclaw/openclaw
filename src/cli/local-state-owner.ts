@@ -393,13 +393,16 @@ export async function runWithLocalStateOwner<T>(params: {
               assertOwnerCurrent: () => lock.assertCurrent(),
               assertDatabaseAccess: lock.assertDatabaseAccess,
             });
+      const { createAgentCleanupScope } = await import("../agents/run-cleanup-timeout.js");
+      const cleanup = createAgentCleanupScope();
       let uncertainCleanup = false;
       try {
-        return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
+        return await (resources ?? lock).run(() => cleanup.run(() => runLocal(lock.assertCurrent)));
       } catch (error) {
         uncertainCleanup = hasCommandProcessCleanupError(error);
         throw error;
       } finally {
+        uncertainCleanup ||= cleanup.outcome === "uncertain";
         // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
         await resources?.close();
         // Stop lending this owner, but keep physical custody until uncertain children exit.

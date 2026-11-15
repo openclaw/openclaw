@@ -1823,7 +1823,7 @@ describe("scripts/crabbox-wrapper", () => {
             const schemas = createStateSchemaInlinePlugin(repoRoot);
             builder.onLoad({ filter: /openclaw-(agent|state)-schema\.ts$/ }, ({ path: id }) => {
               const watchFiles: string[] = [];
-              const source = schemas.load.call(
+              const source = schemas.load.handler.call(
                 { addWatchFile: (file) => watchFiles.push(file) },
                 id,
               );

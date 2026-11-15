@@ -5,19 +5,26 @@ import { createCronRegressionState } from "../../../test/helpers/cron/service-re
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { CronService } from "../../cron/service.js";
 import { loadCronStore, saveCronStore } from "../../cron/store.js";
+import type { CronStoredJob } from "../../cron/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
 import {
   createCronCreatorAuthorityRunScope,
   mintCronCreatorAuthorityGrant,
   revokeCronCreatorAuthorityRunScope,
+  withCronManagementGrant,
 } from "../cron-creator-authority-grant.js";
 import {
   cronJobMatchesCallerScope,
   readCronCallerScope,
   resolveCronCreatorAuthorityCapture,
+  resolveCronRequesterProvenanceForJob,
 } from "./cron-caller-scope.js";
-import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
+import {
+  createCronCallerClient,
+  createCronJob,
+  cronAccountPolicy,
+} from "./cron.validation.test-support.js";
 
 function readScope(overrides: Partial<AgentRuntimeIdentity>) {
   const client = createCronCallerClient("main", "work");
@@ -92,6 +99,76 @@ it.each(["before dispatch", "after commit"] as const)(
         expect(persisted?.name).toBe(revocation === "before dispatch" ? job.name : name);
       } finally {
         stopObserving();
+        cron.stop();
+        revokeCronCreatorAuthorityRunScope(scope);
+      }
+    });
+  },
+);
+
+it.each([
+  ["an external channel", { kind: "external", channel: "whatsapp" }, "whatsapp"],
+  ["an unknown", { kind: "unknown" }, undefined],
+] as const)(
+  "keeps %s origin when the owner edits an account-scoped job through management",
+  async (_label, turnOrigin, turnSourceChannel) => {
+    await withOpenClawTestState({ label: "cron-management-origin" }, async (fixture) => {
+      const storePath = fixture.statePath("cron", "jobs.json");
+      const ownerSessionKey = "agent:main:whatsapp:work:direct:owner";
+      const job = createCronJob({
+        owner: { agentId: "main", sessionKey: ownerSessionKey, accountId: "work" },
+        sessionKey: ownerSessionKey,
+        payload: { kind: "agentTurn", message: "creator", toolsAllow: ["message"] },
+        scheduledToolPolicy: cronAccountPolicy(ownerSessionKey, "work"),
+      });
+      // Created from that chat: the stored origin is the external channel.
+      const created: CronStoredJob = {
+        ...job,
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          callerOrigin: { kind: "external", channel: "whatsapp" },
+        },
+      };
+      await saveCronStore(storePath, { version: 1, jobs: [created] });
+      const cron = new CronService(
+        createCronRegressionState({
+          storePath,
+          cronEnabled: false,
+          defaultAgentId: "main",
+          runIsolatedAgentJob: async () => ({ status: "ok" }),
+        }).deps,
+      );
+      const client = createCronCallerClient("main", "work", ownerSessionKey);
+      const identity = client.internal!.agentRuntimeIdentity!;
+      if (turnSourceChannel) {
+        identity.turnSourceChannel = turnSourceChannel;
+      }
+      const { kind: _kind, ...authority } = identity.delegatedAuthority;
+      const scope = createCronCreatorAuthorityRunScope(
+        identity.operationalRunInstance.runId,
+        turnOrigin,
+        { source: "channel-owner", isCurrent: () => true },
+      );
+      try {
+        const grant = mintCronCreatorAuthorityGrant(scope, undefined, undefined, {
+          method: "cron.update",
+          authority,
+        });
+        await withCronManagementGrant(grant, identity, "cron.update", async () => {
+          const callerScope = readCronCallerScope(client);
+          await cron.update(
+            job.id,
+            { payload: { kind: "agentTurn", message: "edited" } },
+            { toolsAllowProvenance: resolveCronRequesterProvenanceForJob(job, callerScope) },
+          );
+        });
+        const persisted = (await loadCronStore(storePath)).jobs.find((j) => j.id === job.id);
+        expect(persisted?.payload).toMatchObject({ message: "edited" });
+        expect(persisted?.toolsAllowProvenance?.callerOrigin).toEqual(
+          turnSourceChannel ? turnOrigin : undefined,
+        );
+      } finally {
         cron.stop();
         revokeCronCreatorAuthorityRunScope(scope);
       }

@@ -45,6 +45,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 
     Link previews are on by default. `channels.telegram.linkPreview: false` disables automatic entity detection for rich text. OpenClaw explicitly marks bare URLs so they remain tappable, except URLs containing `&`, which stay plain to avoid Telegram's query-separator encoding issue. Use a labeled Markdown link for those URLs.
 
+    `<tg-time unix="1647531900" format="wDT">22:45 tomorrow</tg-time>` becomes a native rich date-time that Telegram shows in the reader's time zone and language: `r` relative, `w` weekday, `d`/`D` short/long date, `t`/`T` short/long time; without `format` the text shows as-is, and the reader can still see the date in their local format. `unix` is in seconds and must fit Telegram's 32-bit time (up to 2038-01-19). Telegram rejects dates more than about three years ahead, and such a message falls back to plain text. The tag text stays plain: it is the fallback for clients that cannot format the date and for plain-text recovery, so formatting inside a valid tag is dropped. A tag with a missing or invalid `unix` or `format` is sent as its ordinary content, without the markup.
+
   </Accordion>
 
   <Accordion title="Inline buttons">
@@ -137,6 +139,8 @@ Rich Telegram surfaces: formatted messages, inline keyboards, agent message acti
 ```
 
     Mini App buttons only work in private chats between a user and the bot.
+
+    Buttons with `disabled: true` never send a callback to the agent. With `richMessages` on, they render as Telegram disabled buttons: the label stays in the keyboard and tapping it does nothing. With `richMessages` off, the label moves to the message text instead (a buttons-only edit leaves it out of the keyboard), because older clients show a whole message containing a disabled button as unsupported.
 
     Callback action values from `message` sends that no registered plugin interactive handler claims are passed to the agent as text: `callback_data: <value>`. Other typed callback controls belong to the plugin that sent them; when no handler claims a tap, Telegram removes the controls and replies "This action is no longer available."
 

@@ -739,7 +739,7 @@ describe("sessions transcript search view", () => {
       );
       const trigger = transcriptTrigger();
       expect(rosterFilter?.value).toBe("agent label");
-      expect(rosterFilter?.getAttribute("aria-label")).toBe("Filter by key, agent, label, kind…");
+      expect(rosterFilter?.getAttribute("aria-label")).toBe("Search sessions…");
       expect(trigger?.getAttribute("aria-label")).toBe(
         available ? "Search transcripts" : unavailable,
       );

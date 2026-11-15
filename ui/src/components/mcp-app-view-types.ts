@@ -9,6 +9,7 @@ export type McpAppViewPayload = {
   sandboxUrl: string;
   sandboxPort: number;
   sandboxOrigin?: string;
+  sandboxShellHtml?: string;
   html: string;
   csp?: McpAppHostSandboxCsp;
   toolInput: unknown;

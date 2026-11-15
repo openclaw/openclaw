@@ -3622,7 +3622,10 @@
       "test/vitest-unit-paths.test.ts": 1,
       "test/vitest/vitest.pattern-file.test.ts": 1,
       "bun-all:test/scripts/ci-changed-node-test-plan.config-fallback.test.ts": 1,
-      "bun-all:test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts": 1
+      "bun-all:test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts": 1,
+      "bun-all:test/scripts/pr-merge-prior-ci-artifact-build.test.ts": 16,
+      "bun-all:test/scripts/pr-merge-prior-ci.test.ts": 67,
+      "bun-all:test/vitest-pr-exempt-retention.test.ts": 23
     },
     "github": {},
     "boat": {}

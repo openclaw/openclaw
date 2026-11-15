@@ -1,23 +1,12 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentActivityItem } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { summarizeAgentActivity } from "../../../../src/agents/agent-activity-presentation.js";
 import { t } from "../../i18n/index.ts";
 import { registerChatToolLabelsEnglish } from "../../i18n/locales/en-chat-tool-labels.ts";
-import { isAgentActivityItem } from "../protocol-validators.generated/activity.js";
 import { resolveToolDisplayIdentity } from "./tool-display-identity.ts";
 
+export { readPreparedActivity, hasVisiblePreparedActivity } from "./prepared-activity.ts";
+
 registerChatToolLabelsEnglish();
-
-export function readPreparedActivity(message: unknown): AgentActivityItem[] {
-  const activity = asOptionalRecord(message)?.activity;
-  return Array.isArray(activity) ? activity.filter(isAgentActivityItem) : [];
-}
-
-export function hasVisiblePreparedActivity(message: unknown): boolean {
-  return readPreparedActivity(message).some(
-    (activity) => !activity.hideFromChannelProgress && !activity.suppressChannelProgress,
-  );
-}
 
 type ToolGroupOptions = {
   /** Calls of launches that opened a session in its own right, not a subagent. */
@@ -63,7 +52,10 @@ export function describeToolGroup(
   const waits = current.filter(
     (item) => !item.hideFromChannelProgress && item.name === "agents_wait",
   );
-  const semanticItems = new Set([...skillSearches, ...skillReads, ...waits]);
+  const questions = current.filter(
+    (item) => !item.hideFromChannelProgress && item.name === "ask_user",
+  );
+  const semanticItems = new Set([...skillSearches, ...skillReads, ...waits, ...questions]);
   const ordinary = current.filter(
     (item) => !codeIds.has(item.toolCallId ?? item.itemId) && !semanticItems.has(item),
   );
@@ -74,6 +66,7 @@ export function describeToolGroup(
     skillSearches: skillSearches.length,
     skillReads: skillReads.length,
     waits: waits.length,
+    questions: questions.length,
     other,
     subagents,
   };
@@ -134,9 +127,20 @@ export function describeToolGroup(
     .filter(([, count]) => count > 0)
     .map(([kind], index) => {
       const continuation = index > 0 ? "Continuation" : "";
-      if (kind === "skillSearches" || kind === "skillReads" || kind === "waits") {
+      if (
+        kind === "skillSearches" ||
+        kind === "skillReads" ||
+        kind === "waits" ||
+        kind === "questions"
+      ) {
         const actions =
-          kind === "skillSearches" ? skillSearches : kind === "skillReads" ? skillReads : waits;
+          kind === "skillSearches"
+            ? skillSearches
+            : kind === "skillReads"
+              ? skillReads
+              : kind === "waits"
+                ? waits
+                : questions;
         const phase = actions.some((item) => item.status === "running")
           ? "Running"
           : actions.some((item) => item.status === "completed")

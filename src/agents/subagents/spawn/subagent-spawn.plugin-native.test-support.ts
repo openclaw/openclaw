@@ -83,6 +83,7 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
           const requested = {
             model: "custom/requested-model",
             thinking: "high",
+            cyberAccessProgram: "standard" as const,
             fastMode: "ultrafast" as const,
           };
           const request = {
@@ -138,10 +139,18 @@ export function registerNativePluginSpawnCases(options: NativePluginSpawnTestOpt
             completionMode: "collect",
             selection: {
               requested,
-              resolved: { model: "custom/test-model", thinking: "low", fastMode: false },
+              resolved: {
+                model: "custom/test-model",
+                thinking: "low",
+                cyberAccessProgram: "standard",
+                fastMode: false,
+              },
             },
           });
           expect(await native.spawn(request)).toEqual(accepted);
+          await expect(
+            native.spawn({ ...request, cyberAccessProgram: "daybreak_blue" }),
+          ).rejects.toThrow("replay does not match");
           const unreadableChild = vi
             .spyOn(subagentSessionReconciliation, "loadSubagentSessionEntry")
             .mockRejectedValueOnce(new Error("child metadata unavailable"));

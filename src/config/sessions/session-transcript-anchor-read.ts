@@ -19,7 +19,7 @@ import {
   withSessionTranscriptReadSource,
   type SessionTranscriptWorkerReadSource,
 } from "./session-transcript-read-source.js";
-import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
+import { sessionStoreLane } from "./session-transcript-worker-resources.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 import {
   getOwnedSessionTranscriptReader,
@@ -153,7 +153,7 @@ export async function readSessionTranscriptAnchorsAsync(
     },
     signal,
     // Callback acceptance retains writer admission through reader failure and cleanup.
-    onRead ? targetDiscoveryLane : undefined,
+    onRead ? sessionStoreLane : undefined,
   );
 }
 

@@ -47,10 +47,14 @@ function conversationText(messages: unknown[]): string | undefined {
     const trimmed = text.trim();
     return trimmed ? [{ role: message.role, text: trimmed.slice(-2_000) }] : [];
   });
-  if (turns.at(-1)?.role !== "assistant" || !turns.some((turn) => turn.role === "user")) {
+  const lastReply = turns.at(-1);
+  if (lastReply?.role !== "assistant") {
     return undefined;
   }
-  return JSON.stringify(turns.slice(-8));
+  // The user's own messages carry the most signal per token. Earlier assistant text is
+  // mostly progress narration between tool calls, so only the final reply is kept.
+  const userTurns = turns.filter((turn) => turn.role === "user").slice(-16);
+  return userTurns.length ? JSON.stringify([...userTurns, lastReply]) : undefined;
 }
 
 export const chatPredictionHandlers: GatewayRequestHandlers = {
@@ -191,10 +195,10 @@ export const chatPredictionHandlers: GatewayRequestHandlers = {
           storePath,
           sessionAgentId: agentId,
           canonicalKey,
-          // Tool calls and results share this window; read past them to reach recent dialogue.
-          max: 100,
-          maxHistoryBytes: 200_000,
-          responseHistoryBytes: 200_000,
+          // Tool calls and results share this window; read past them to reach recent user turns.
+          max: 500,
+          maxHistoryBytes: 1_000_000,
+          responseHistoryBytes: 1_000_000,
           effectiveMaxChars: 8_000,
           toolResultMaxChars: 0,
           offset: undefined,
