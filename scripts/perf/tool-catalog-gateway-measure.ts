@@ -130,7 +130,7 @@ async function main() {
   const configPath = path.join(root, "openclaw.json");
   const marker = path.join(root, "catalog-fixture.json");
   let env: NodeJS.ProcessEnv;
-  let fixture: unknown;
+  let fixture: Awaited<ReturnType<typeof generateTeamShapeFixture>>["summary"];
   if (values.reuse) {
     assert(existsSync(marker), "Reuse only this harness's fixture");
     fixture = JSON.parse(readFileSync(marker, "utf8"));
@@ -165,6 +165,10 @@ async function main() {
     writeFileSync(marker, JSON.stringify(fixture));
   }
   const config = JSON.parse(readFileSync(configPath, "utf8"));
+  const workspace = fixture.projectWorktrees[0]?.path;
+  if (workspace) {
+    config.agents.entries.main.workspace = workspace;
+  }
   applyMockOpenAiModelConfig(config, { mockPort: port + 1, modelRef: "openai/catalog-primary" });
   config.models.providers.openai.api = "openai-completions";
   const model = config.models.providers.openai.models[0];
@@ -382,6 +386,10 @@ async function main() {
     assert(
       isRecord(history) && Array.isArray(history.entries) && history.entries.length > 0,
       "Cron did not finish",
+    );
+    assert(
+      isRecord(history.entries[0]) && history.entries[0].status === "ok",
+      `Cron failed: ${JSON.stringify(history)}`,
     );
     assert(
       requests.some((request) => request.scenario === "child"),
