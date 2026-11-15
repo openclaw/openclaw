@@ -283,6 +283,8 @@ export type GetReplyOptions = {
   fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
+  /** One-shot public input: no history, workspace/context hooks or tools. Unsupported runtimes fail closed. */
+  isolatedContext?: true;
   /** If true, run the model without OpenClaw tools for this turn. */
   disableTools?: boolean;
   /** Runtime tool allow-list for this turn. Empty means no tools. */

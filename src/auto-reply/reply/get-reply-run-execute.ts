@@ -642,6 +642,7 @@ export async function executePreparedReplyRun(
       extraSystemPromptTurnContext,
       sourceReplyDeliveryMode,
       bootstrapContextMode: opts?.bootstrapContextMode,
+      isolatedContext: opts?.isolatedContext,
       taskSuggestionDeliveryMode: opts?.taskSuggestionDeliveryMode,
       silentReplyPromptMode,
       extraSystemPromptStatic,

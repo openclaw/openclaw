@@ -4,6 +4,7 @@ import { resolveCliBackendConfig } from "../../agents/cli-backends.js";
 import { resolveRunEntryCliRuntime } from "../../agents/embedded-agent-runner/run-entry-runtime.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
+import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveCandidateAgentRuntime } from "../../agents/thinking-runtime.js";
 import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
@@ -274,6 +275,13 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           sessionEntry: runtimeSessionEntry(provider),
           agentRuntime: runOptions.agentHarnessRuntimeOverride,
         });
+        if (
+          turn.opts?.isolatedContext &&
+          (runtime.useCliExecution || candidateAgentRuntime !== "openclaw")
+        ) {
+          const message = `Strictly isolated replies are not supported by runtime ${candidateAgentRuntime}; no model request was sent.`;
+          throw new AgentHarnessPreflightError(message, { userMessage: message });
+        }
         params.scheduledInference?.assertCandidate(
           provider,
           runtime.useCliExecution,

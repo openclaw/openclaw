@@ -131,6 +131,9 @@ export async function runEmbeddedFallbackCandidate(
       const embeddedRunParams: RunEmbeddedAgentInternalParams = {
         ...runBaseParams,
         beforeRecoveryCompaction: async (recovery) => {
+          if (turn.opts?.isolatedContext) {
+            return "skipped: isolated context";
+          }
           if (turn.recoveryMemoryFlushAttempted) {
             return "skipped: already attempted this turn";
           }

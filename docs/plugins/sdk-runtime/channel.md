@@ -9,6 +9,24 @@ sidebarTitle: "Channel helpers"
 
 Channel-specific runtime helpers, available when a channel plugin is loaded. Part of the [Plugin runtime helpers](/plugins/sdk-runtime) reference; [Channel plugins](/plugins/sdk-channel-plugins) is the step-by-step guide.
 
+## Isolated public replies
+
+For a one-shot public request, pass `replyOptions.isolatedContext: true` to
+channel reply dispatch. The selected agent/model remain unchanged, but the
+built-in OpenClaw runtime uses its raw model-request path: no prior transcript,
+workspace/bootstrap or prompt-hook context, custom context-engine additions,
+private memory maintenance, or model-callable tools. This is stronger than
+`disableTools` plus `bootstrapContextMode: "lightweight"`, which alone do not
+exclude configured context extensions. The flag is retained for queued turns.
+
+Only the built-in OpenClaw runtime is currently qualified for this mode. Native
+CLI and custom harness selections fail before inference, without falling back
+to a different runtime or billing path. Channels still own caller authorization,
+a separate conversation identity, output limits, and their transport lifecycle.
+If explicit public replies differ from ordinary ambient-group policy, declare
+`sourceReplyDeliveryMode: "automatic"` for that authorized interaction rather
+than changing the global group setting.
+
 ## Queued source replies
 
 A channel with a task-correlated reply destination can pass

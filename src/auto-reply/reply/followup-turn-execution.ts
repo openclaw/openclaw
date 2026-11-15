@@ -207,6 +207,7 @@ export async function executeFollowupTurn(params: {
     cronCreatorAuthorityCapability: undefined,
     sourceReplyDeliveryMode: turn.queued.run.sourceReplyDeliveryMode,
     bootstrapContextMode: turn.queued.run.bootstrapContextMode,
+    isolatedContext: turn.queued.run.isolatedContext,
     cleanupBundleMcpOnRunEnd: undefined,
     scheduledAutomation: turn.queued.run.scheduledAutomation,
     internalEventExecution: turn.queued.run.internalEventExecution,
