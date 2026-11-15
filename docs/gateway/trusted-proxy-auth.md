@@ -393,8 +393,18 @@ audit entry. The hello reply reports the resulting scopes, so a newly approved
 device learns its grant on its first connection. The TUI also receives a device
 token, as the CLI already does. The setting applies only to operator devices
 whose paired key matches and that send no browser `Origin`; browser clients and
-new device enrollment keep their existing behavior. If the request and the grant
-share no scope, the Gateway files the upgrade request as before.
+new device enrollment keep their existing behavior. A connection never receives
+more than the grant. Because `operator.admin` implies every operator scope, a
+request that includes it always overlaps the grant and connects within it. Only a
+request that shares no scope with the grant, such as `operator.pairing` alone
+against a session-only grant, files the upgrade request as before.
+
+The TUI's device token, like the CLI's, authenticates a direct Gateway
+connection without the proxy identity until the device or token is revoked.
+`openclaw security audit` reports the warn-level
+`gateway.trusted_proxy_narrow_to_device_grant` finding while the option is on.
+Keep the proxy as the only Gateway ingress, and remove a guest's device with
+`openclaw devices remove <deviceId>` when their access ends.
 
 ## Control UI pairing behavior
 
@@ -684,6 +694,7 @@ The audit checks for:
 - Empty `allowUsers` (allows any authenticated user).
 - Enabled `allowLoopback` for same-host proxy sources.
 - Enabled operator device auto-approval (delegates new browser and native UI device pairing to the proxy identity).
+- Enabled `narrowToDeviceGrant` (the TUI holds a durable device token, as the CLI does).
 
 Separate, non-trusted-proxy-specific findings also apply whenever Control UI is exposed: wildcard or missing `gateway.controlUi.allowedOrigins`, and Host-header origin fallback.
 
