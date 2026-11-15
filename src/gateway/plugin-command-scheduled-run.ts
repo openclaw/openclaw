@@ -11,6 +11,7 @@ import {
   withGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { isCommandsAllowFromAuthorized } from "../auto-reply/command-auth.js";
+import type { CommandsAllowFromRequester } from "../auto-reply/commands-allow-from.js";
 import { withRequesterNativeSubagents } from "../auto-reply/reply/request-native-subagent.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../config/sessions/session-entry-current-check.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -59,10 +60,6 @@ import type { GatewayContextResolver } from "./server-methods/types.js";
 type ScheduledRequest = Parameters<CronServiceDeps["runIsolatedAgentJob"]>[0];
 type ScheduledResult = Awaited<ReturnType<CronServiceDeps["runIsolatedAgentJob"]>>;
 
-type ScheduledCommandRequester = NonNullable<
-  Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>>["requester"]
-> & { commandSenderId?: string };
-
 /**
  * The requester an occurrence rechecks: a channel identity re-derived from its link, or a
  * Gateway person's live profile command sender kept store-private beside the envelope.
@@ -74,7 +71,7 @@ export function resolveScheduledCommandRequester(params: {
     Awaited<ReturnType<typeof restoreGatewayQueuedOperatorRecovery>>,
     "authority" | "requester"
   >;
-}): ScheduledCommandRequester | undefined {
+}): CommandsAllowFromRequester | undefined {
   const { storedSender: sender, operatorSource, restored } = params;
   if (sender === undefined) {
     return restored.requester;
@@ -92,7 +89,7 @@ export function resolveScheduledCommandRequester(params: {
 /** External-origin Gateway requesters keep admission: live used an account the recovery lacks. */
 export function isScheduledOccurrenceCommandAuthorized(
   cfg: OpenClawConfig,
-  requester: ScheduledCommandRequester | undefined,
+  requester: CommandsAllowFromRequester | undefined,
   scheduleChannel: string,
 ): boolean {
   if (!requester) {

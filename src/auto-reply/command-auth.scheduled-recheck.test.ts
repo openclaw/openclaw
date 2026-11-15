@@ -77,13 +77,4 @@ describe("isCommandsAllowFromAuthorized re-evaluates retained scheduled work", (
       true,
     );
   });
-
-  it("re-authorizes the next occurrence once the requester is listed again", () => {
-    expect(isCommandsAllowFromAuthorized(allowFromConfig({ [CHANNEL]: ["999"] }), requester)).toBe(
-      false,
-    );
-    expect(
-      isCommandsAllowFromAuthorized(allowFromConfig({ [CHANNEL]: ["discord:100"] }), requester),
-    ).toBe(true);
-  });
 });

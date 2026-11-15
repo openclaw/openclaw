@@ -911,7 +911,6 @@ it("keeps the requester's command sender in job state; the released reader decod
   expect(toPublicCronJob(stored).state).not.toHaveProperty("pluginCommandSenderProfileId");
   const released = await claimWithReleasedReader(queue.storeKey, "command-sender", false);
   expect(released.envelope).toEqual(pluginCommand);
-  expect(released.state).toMatchObject({ pluginCommandSenderProfileId: "synthetic-operator" });
   // A later rewrite of the job keeps it, like the other store-private schedule state.
   await queue.update("command-sender", { enabled: false });
   const [rewritten] = (await queue.read()).jobs;

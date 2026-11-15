@@ -12,7 +12,6 @@ export type CommandsAllowFromRequester = {
   channel: string;
   accountId?: string;
   senderId?: string;
-  senderE164?: string;
   commandSenderId?: string;
 };
 
@@ -51,7 +50,6 @@ export function isCommandsAllowFromListed(
   const senderCandidates = resolveSenderCandidates({
     ...providerContext,
     senderId: requester.senderId,
-    senderE164: requester.senderE164,
     commandSenderId: requester.commandSenderId,
   });
   return list.some((entry) => isWildcardAllowFromEntry(entry) || senderCandidates.includes(entry));
