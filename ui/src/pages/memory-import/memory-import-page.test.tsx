@@ -808,23 +808,37 @@ describe("MemoryImportPage", () => {
     expect(page.textContent).not.toContain("3 staged; promotion happens via dreaming");
   });
 
-  it("confirms rollback and surfaces gateway errors", async () => {
-    const request = createRequest({
-      "migrations.memory.plan": () => createPlan(),
-      "memory.sessionBackfill.rollback": () => {
-        throw new Error("rollback unavailable");
-      },
-    });
-    const page = await mountPage(createContext(request));
-    await waitForButton(page, "backfill-rollback");
-    findButton(page, "backfill-rollback")?.click();
-    await waitForButton(page, "backfill-rollback-confirm");
-    findButton(page, "backfill-rollback-confirm")?.click();
+  it.each([false, true])(
+    "shows rollback errors in the confirmation (failed preview: %s)",
+    async (failedPreview) => {
+      const request = createRequest({
+        "migrations.memory.plan": () => createPlan(),
+        "memory.sessionBackfill.preview": () => {
+          throw new Error("preview unavailable");
+        },
+        "memory.sessionBackfill.rollback": () => {
+          throw new Error("rollback unavailable");
+        },
+      });
+      const page = await mountPage(createContext(request));
+      await waitForButton(page, "backfill-rollback");
+      if (failedPreview) {
+        findButton(page, "backfill-preview")?.click();
+        await waitForMemoryImport(() => expect(page.textContent).toContain("preview unavailable"));
+      }
+      findButton(page, "backfill-rollback")?.click();
+      await waitForButton(page, "backfill-rollback-confirm");
+      findButton(page, "backfill-rollback-confirm")?.click();
 
-    await waitForMemoryImport(() => expect(page.textContent).toContain("rollback unavailable"));
-    expect(request.mock.calls.at(-1)).toEqual([
-      "memory.sessionBackfill.rollback",
-      { agentId: "research" },
-    ]);
-  });
+      await waitForMemoryImport(() =>
+        expect(page.querySelector(".memory-import__confirm [role=alert]")?.textContent).toContain(
+          "rollback unavailable",
+        ),
+      );
+      expect(request.mock.calls.at(-1)).toEqual([
+        "memory.sessionBackfill.rollback",
+        { agentId: "research" },
+      ]);
+    },
+  );
 });

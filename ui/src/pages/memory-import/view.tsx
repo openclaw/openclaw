@@ -388,11 +388,15 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
                     : "memoryImport.confirmBackup",
               )}
             </div>
-            <Show when={!props.backfill && props.view.applyError}>
-              <InlineAlert tone="danger" role="alert">
-                <div>{t("memoryImport.importFailed")}</div>
-                {props.view.applyError}
-              </InlineAlert>
+            <Show when={props.backfill ? props.view.backfillError : props.view.applyError}>
+              {(error) => (
+                <InlineAlert tone="danger" role="alert">
+                  <Show when={!props.backfill}>
+                    <div>{t("memoryImport.importFailed")}</div>
+                  </Show>
+                  {error()}
+                </InlineAlert>
+              )}
             </Show>
           </div>
           <openclaw-modal-actions class="oc-dialog__footer">
@@ -548,7 +552,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
               </div>
             }
           />
-          <Show when={props.view.backfillError}>
+          <Show when={props.view.backfillError && !props.view.backfillRollbackPending}>
             <InlineAlert tone="danger" role="alert">
               <div>{t("memoryImport.backfillFailed")}</div>
               {props.view.backfillError}
