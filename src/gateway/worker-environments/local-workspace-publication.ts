@@ -116,7 +116,6 @@ export function readLocalWorkspaceCommit(
               ...(mutation.manifest.treeRoot
                 ? { tree_root_digest: localWorkspaceDigestBytes(mutation.manifest.treeRoot) }
                 : {}),
-              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
             }
           : {}),
         worktree_id: id,

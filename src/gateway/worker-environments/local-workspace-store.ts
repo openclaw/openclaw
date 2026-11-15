@@ -22,7 +22,10 @@ import {
   localWorkspaceDigestBytes,
   prepareLocalWorkspaceSourcePathSet,
 } from "./local-workspace-cas.js";
-import { readLocalWorkspaceCommit } from "./local-workspace-publication.js";
+import {
+  localWorkspaceFingerprintPatch,
+  readLocalWorkspaceCommit,
+} from "./local-workspace-publication.js";
 import type {
   LocalWorkspaceBaselineDocument,
   LocalWorkspaceManifestAction,
@@ -206,13 +209,19 @@ export function withLocalWorkspaceStore<T>(
                   assertCurrent();
                   if (mutation.kind === "update" && mutation.manifest) {
                     // Checkpoints also carry recovery documents; the writer only publishes roots.
-                    const { previousRoot, resultingRoot, treeRoot, fingerprints } =
-                      mutation.manifest;
+                    const {
+                      previousRoot,
+                      resultingRoot,
+                      treeRoot,
+                      fingerprints,
+                      fingerprintsFromCheckpoint,
+                    } = mutation.manifest;
                     mutation.manifest = {
                       previousRoot,
                       resultingRoot,
                       treeRoot,
                       fingerprints,
+                      fingerprintsFromCheckpoint,
                       records: [],
                       removed: [],
                     };
@@ -242,12 +251,35 @@ export function withLocalWorkspaceStore<T>(
                       };
                     }
                   }
+                  if (
+                    !(wireMutation instanceof Uint8Array) &&
+                    wireMutation.kind === "update" &&
+                    wireMutation.manifest?.fingerprintsFromCheckpoint
+                  ) {
+                    wireMutation = {
+                      ...wireMutation,
+                      manifest: { ...wireMutation.manifest, fingerprints: undefined },
+                    };
+                  }
+                  // Commit receipts and acknowledgement reuse the same decoded fingerprint bytes.
                   let pending:
                     | {
                         mutation: LocalWorkspaceMutation;
                         previous: LocalWorkspaceProjection | undefined;
                       }
-                    | undefined = { mutation, previous: row };
+                    | undefined = {
+                    mutation:
+                      mutation.kind === "update" && mutation.manifest?.fingerprints
+                        ? {
+                            ...mutation,
+                            patch: {
+                              ...mutation.patch,
+                              ...localWorkspaceFingerprintPatch(mutation.manifest.fingerprints),
+                            },
+                          }
+                        : mutation,
+                    previous: row,
+                  };
                   // Projection owns mutation bytes through settlement; authority is captured separately.
                   const predicates = structuredClone(guard.predicates);
                   // Compress large inventories to fit the broker's existing queue budget.
