@@ -356,10 +356,12 @@ invokes the exact command an operator configures. Resolved edge-auth headers are
 sent only when the target matches the configured `gateway.remote.url` scope,
 only over `wss://`, and never across redirects.
 
-The proxy authenticates these connections, so a CLI or TUI behind it needs no
-Gateway token or password. Its first `openclaw tui` connection sends a device
-pairing request; after an administrator approves it, the stored device token
-serves later CLI and TUI connections.
+When the Gateway uses [trusted-proxy auth](/gateway/trusted-proxy-auth), the
+proxy identity authenticates these connections, so a CLI or TUI behind it needs
+no Gateway token or password: its first `openclaw tui` connection sends a device
+pairing request for an administrator to approve. A Gateway on token or password
+auth still requires that credential; edgeAuth only gets the connection through
+the proxy.
 
 ## Credential precedence
 
