@@ -142,65 +142,110 @@ suite.define(() => {
     });
   });
 
-  it("shows a storage failure without claiming there are messages missing destinations", async () => {
+  it("keeps a storage failure stable across refreshes and clears it after recovery", async () => {
     await suite.withPage(
-      { locale: "en-US", serviceWorkers: "block", viewport: { width: 1000, height: 700 } },
+      {
+        locale: "en-US",
+        colorScheme: "light",
+        serviceWorkers: "block",
+        viewport: { width: 1280, height: 820 },
+      },
       async ({ page }) => {
-        await installMockGateway(page);
-        // The shell opens the Control UI database at startup.
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              role: "assistant",
+              content: "Your conversation stays available while browser storage is unavailable.",
+            },
+          ],
+        });
         await page.addInitScript(() => {
-          IDBFactory.prototype.open = () => {
-            throw new DOMException("Storage unavailable", "UnknownError");
+          const open = indexedDB.open.bind(indexedDB);
+          let hold = false;
+          let recovered = false;
+          const pending: EventTarget[] = [];
+          window.addEventListener("test:hold-storage", () => {
+            hold = true;
+          });
+          window.addEventListener("test:recover-storage", () => {
+            recovered = true;
+          });
+          window.addEventListener("test:release-storage", () => {
+            hold = false;
+            for (const request of pending.splice(0)) {
+              request.dispatchEvent(new Event("error"));
+            }
+          });
+          // Inject only the browser I/O outcome; the real chat owns every refresh and render.
+          Object.defineProperty(IDBFactory.prototype, "open", {
+            value(...args: Parameters<typeof open>) {
+              if (recovered) {
+                return open(...args);
+              }
+              const request = new EventTarget();
+              Object.defineProperty(request, "error", {
+                value: new DOMException("Storage unavailable", "UnknownError"),
+              });
+              if (hold) {
+                pending.push(request);
+                window.dispatchEvent(new Event("test:storage-requested"));
+              } else {
+                queueMicrotask(() => request.dispatchEvent(new Event("error")));
+              }
+              return request;
+            },
+          });
+        });
+        await page.goto(`${suite.server.baseUrl}chat/main`);
+        await waitForControlUiGatewayReady(page);
+        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const notice = page.locator(".chat-outbox-recovery");
+        const alert = notice.getByRole("alert");
+        await alert.waitFor();
+        expect(await alert.textContent()).toContain("Couldn’t access your saved messages.");
+        expect(await notice.textContent()).not.toContain("Free browser storage");
+        expect(await notice.textContent()).not.toContain("older browser");
+        expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
+        const original = await alert.elementHandle();
+        const hold = await page.evaluateHandle(() => {
+          window.dispatchEvent(new Event("test:hold-storage"));
+          return {
+            requested: new Promise<void>((resolve) => {
+              window.addEventListener("test:storage-requested", () => resolve(), { once: true });
+            }),
           };
         });
-        await page.goto(`${suite.server.baseUrl}settings`);
-        const recoveryModule = await page.evaluateHandle<
-          typeof import("../pages/chat/chat-outbox-recovery.tsx")
-        >('import("/src/pages/chat/chat-outbox-recovery.tsx")');
-        const solidModule = await page.evaluateHandle<
-          typeof import("../test-helpers/solid-render.tsx")
-        >('import("/src/test-helpers/solid-render.tsx")');
-        await page.evaluate(
-          ({ recovery, solid }) => {
-            const stage = document.createElement("main");
-            stage.id = "storage-error-recovery";
-            stage.style.cssText = "position:fixed;inset:0;z-index:100;background:var(--bg)";
-            document.body.append(stage);
-            solid.mountSolid(
-              recovery.PaneOutboxRecovery,
-              {
-                state: {
-                  settings: { gatewayUrl: "ws://recovery-error.test" },
-                  connected: true,
-                  client: { recoveryScopeReady: true, recoveryScope: "owner" },
-                  sessionKey: "agent:main:main",
-                  chatMessage: "",
-                  chatAttachments: [],
-                  chatQueue: [],
-                  chatMessages: [],
-                },
-                identity: "storage-error",
-                onRestored: () => {},
-              },
-              stage,
-            );
-          },
-          { recovery: recoveryModule, solid: solidModule },
+        await composer.fill("Keep this draft while I type.");
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new StorageEvent("storage", {
+              key: "openclaw.control.chatComposer.v4:changed",
+              storageArea: sessionStorage,
+            }),
+          ),
         );
-        const notice = page.locator("#storage-error-recovery .chat-outbox-recovery");
-        await notice.getByRole("alert").waitFor();
+        await hold.evaluate(({ requested }) => requested);
         if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
-          const artifacts = createControlUiE2eArtifactDir("recovery-error");
-          await page.screenshot({ path: `${artifacts}/expanded.png`, animations: "disabled" });
-          await page.setViewportSize({ width: 390, height: 700 });
-          await page.screenshot({ path: `${artifacts}/mobile.png`, animations: "disabled" });
+          const artifacts = createControlUiE2eArtifactDir("recovery-refresh");
+          await page.screenshot({ path: `${artifacts}/pending.png`, animations: "disabled" });
         }
-        expect(await notice.getByRole("alert").textContent()).toContain(
-          "Couldn’t access your saved messages.",
+        expect(await original!.evaluate((node) => node.isConnected)).toBe(true);
+        await page.evaluate(() => window.dispatchEvent(new Event("test:release-storage")));
+        await alert.waitFor();
+        expect(await original!.evaluate((node) => node.isConnected)).toBe(true);
+        await page.evaluate(() => window.dispatchEvent(new Event("test:recover-storage")));
+        await page.evaluate(() =>
+          window.dispatchEvent(
+            new StorageEvent("storage", {
+              key: "openclaw.control.chatComposer.v4:changed",
+              storageArea: sessionStorage,
+            }),
+          ),
         );
-        expect(await notice.textContent()).not.toContain("older browser");
-        expect(await notice.textContent()).not.toContain("Free browser storage");
-        expect(await notice.getByRole("button", { name: "Restore", exact: true }).count()).toBe(0);
+        await alert.waitFor({ state: "detached" });
+        expect(await composer.inputValue()).toBe("Keep this draft while I type.");
+        await composer.fill("Draft after storage recovered.");
+        expect(await composer.inputValue()).toBe("Draft after storage recovered.");
       },
     );
   });
