@@ -391,7 +391,13 @@ With this setting, a connection from an approved device whose request exceeds
 its grant receives the intersection of the two, with no pairing request and no
 audit entry. The hello reply reports the resulting scopes, so a newly approved
 device learns its grant on its first connection. The TUI also receives a device
-token, as the CLI already does. The setting applies only to operator devices
+token, as the CLI already does, and stores the grant for later starts. The
+option is off by default, and without it a trusted-proxy Gateway issues the TUI
+no device token. When [named operator roles](/gateway/operator-scopes#named-operator-roles)
+are enforced, a human operator identified by the proxy receives no device token
+either way; that device's CLI and TUI still connect within the grant without
+storing it.
+The setting applies only to operator devices
 whose paired key matches and that send no browser `Origin`; browser clients and
 new device enrollment keep their existing behavior. A connection never receives
 more than the grant. Because `operator.admin` implies every operator scope, a
