@@ -122,6 +122,7 @@ for (let index = 0; index < 4_300; index++) {
         batchRunIds,
         rearmGeneration: 1,
       }).runId;
+  parent.entry.lifecycleRunId = parent.entry.lastRunId;
 }
 function classify() {
   let waiting = 0;
