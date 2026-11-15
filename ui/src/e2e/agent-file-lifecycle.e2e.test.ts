@@ -129,13 +129,11 @@ suite.define(() => {
       async ({ page, gateway, editor }) => {
         await gateway.waitForRequest("agents.files.list");
         await page.getByRole("heading", { name: "Core files", exact: true }).waitFor();
-        await page.screenshot({ path: suite.artifactDir + "/inventory-pending.png" });
         const manualHints = await page
           .getByText("Load the agent workspace files to edit core instructions.", { exact: true })
           .count();
         await gateway.resolveDeferred("agents.files.list", fileList("main"));
         await expect.poll(() => editor.inputValue()).toBe("# Synthetic agent instructions");
-        await page.screenshot({ path: suite.artifactDir + "/inventory-ready.png" });
         expect(manualHints).toBe(0);
       },
       { deferredMethods: ["agents.files.list"] },
