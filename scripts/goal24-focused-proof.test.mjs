@@ -122,3 +122,48 @@ for (const version of ["6.3", "6.4", "7.0", "6.2", "unknown"]) {
     }
   });
 }
+
+// Exercise the actual receipt gate without loading product code or codecs.
+for (const scenario of ["baseline", "fixed", "zero", "setup-failure", "partial", "no-cleanup"]) {
+  test("native receipt gate: " + scenario, () => {
+    const source = fs.readFileSync(driver, "utf8");
+    const start = source.indexOf(
+      '      assert.equal(records.length, 1, "exactly one native case receipt required");',
+    );
+    const end = source.indexOf("      receipts.push(native);", start);
+    assert.ok(start >= 0 && end > start);
+    const variant = scenario === "baseline" || scenario === "setup-failure" ? "baseline" : "fixed";
+    const native = {
+      variant,
+      audioSha: "pinned",
+      expectedFrames: 1_153_775,
+      cleanupVerified: true,
+      ok: variant === "fixed",
+      stage: "frame-preservation",
+      actualFrames: 79_440,
+      segments: Array.from({ length: 10 }, () => ({})),
+    };
+    if (scenario === "setup-failure") {
+      native.stage = "preflight";
+    }
+    if (scenario === "partial") {
+      native.segments.pop();
+    }
+    if (scenario === "no-cleanup") {
+      native.cleanupVerified = false;
+    }
+    const check = () =>
+      vm.runInNewContext(source.slice(start, end), {
+        assert,
+        records: scenario === "zero" ? [] : [native],
+        variant,
+        targets: { audio: "pinned" },
+        status: variant === "baseline" ? 1 : 0,
+      });
+    if (["baseline", "fixed"].includes(scenario)) {
+      assert.doesNotThrow(check);
+    } else {
+      assert.throws(check);
+    }
+  });
+}

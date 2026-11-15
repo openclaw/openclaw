@@ -163,66 +163,70 @@ try {
     );
   } else if (proof === "audio") {
     assert.equal(process.platform, "darwin");
-    const filter = "shares one budget across decode, encode and probe";
-    const fixed = vitest("audio-budget", "src/media/audio-transcode.test.ts", filter);
-    assert.equal(fixed.executed.length, 2);
-    const target = path.join(source, "src/media/audio-transcode.ts");
-    const original = fs.readFileSync(target, "utf8");
-    const before = "const ms = Math.floor(deadline - performance.now());";
-    const after = "const ms = params.timeoutMs ?? 5000;";
-    assert.equal(original.split(before).length, 2, "mutation must match exactly once");
-    fs.writeFileSync(target, original.replace(before, after));
-    const patch = capture("git", ["diff", "--", "src/media/audio-transcode.ts"]);
-    fs.writeFileSync(path.join(output, "mutation.patch"), patch + "\n");
-    summary.mutationSha256 = createHash("sha256").update(patch).digest("hex");
-    try {
-      const mutant = vitest(
-        "audio-budget-mutant",
-        "src/media/audio-transcode.test.ts",
-        filter,
-        true,
-      );
-      assert.notEqual(mutant.status, 0, "timeout-removal mutant survived");
-      assert.equal(mutant.executed.length, 2);
-      assert.ok(
-        mutant.executed.some(
-          (test) =>
-            test.status === "failed" &&
-            test.failureMessages.some(
-              (message) =>
-                message.includes("to deeply equal") &&
-                message.includes("5000") &&
-                message.includes("2000"),
-            ),
-        ),
-        "mutation failed for something other than the budget assertion",
-      );
-    } finally {
-      fs.writeFileSync(target, original);
-    }
+    const baselineSha = "e80a6dd9fdb4c7ce724472dd5d1b216afb4e70a7";
+    const baseline = path.join(root, "baseline");
+    assert.equal(
+      spawnSync("git", ["rev-parse", "HEAD"], {
+        cwd: baseline,
+        env,
+        encoding: "utf8",
+      }).stdout.trim(),
+      baselineSha,
+    );
+    const baselineModule = fs.readFileSync(path.join(baseline, "src/media/audio-transcode.ts"));
+    assert.equal(
+      createHash("sha256").update(baselineModule).digest("hex"),
+      "867e5fd7ad1b477b1f4ab1023e15d440873c6f9d3d98253bfa6ac4240f6b370d",
+    );
+    fs.writeFileSync(path.join(source, "src/media/goal24-audio-baseline.ts"), baselineModule);
     fs.copyFileSync(
       path.join(root, "tooling/scripts/goal24-audio-native-proof.mts"),
       path.join(source, "scripts/goal24-audio-native-proof.mts"),
     );
-    run(
-      "audio-native",
-      "node",
-      ["--import", "tsx", "scripts/goal24-audio-native-proof.mts"],
-      120000,
-    );
-    const records = fs
-      .readFileSync(path.join(output, "audio-native.log"), "utf8")
-      .split("\n")
-      .flatMap((line) => {
-        try {
-          return [JSON.parse(line)];
-        } catch {
-          return [];
-        }
-      });
-    const native = records.find((record) => record.proof === "goal24-audio-native");
-    assert.equal(native?.ok, true, "native harness did not produce a passing receipt");
-    summary.native = native;
+    const receipts = [];
+    for (const variant of ["baseline", "fixed"]) {
+      env.GOAL24_AUDIO_CASE = variant;
+      const name = "audio-native-" + variant;
+      const status = run(
+        name,
+        "node",
+        ["--import", "tsx", "scripts/goal24-audio-native-proof.mts"],
+        120000,
+        variant === "baseline",
+      );
+      const records = fs
+        .readFileSync(path.join(output, name + ".log"), "utf8")
+        .split("\n")
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line)];
+          } catch {
+            return [];
+          }
+        })
+        .filter((record) => record.proof === "goal24-audio-native");
+      assert.equal(records.length, 1, "exactly one native case receipt required");
+      const native = records[0];
+      assert.equal(native.variant, variant);
+      assert.equal(native.audioSha, targets.audio);
+      assert.equal(native.expectedFrames, 1_153_775);
+      assert.equal(native.cleanupVerified, true);
+      if (variant === "baseline") {
+        assert.equal(status, 1, "original converter must fail the preservation assertion");
+        assert.equal(native.ok, false);
+        assert.equal(native.stage, "frame-preservation");
+        assert.ok(
+          native.actualFrames > 0 && native.actualFrames < native.expectedFrames / 2,
+          "baseline must exhibit substantial native truncation",
+        );
+      } else {
+        assert.equal(native.ok, true);
+        assert.equal(native.segments?.length, 10, "all ten segment signals required");
+      }
+      receipts.push(native);
+    }
+    delete env.GOAL24_AUDIO_CASE;
+    summary.native = receipts;
   } else {
     assert.equal(process.platform, "darwin");
     summary.outcome = "setup-failure";

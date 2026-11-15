@@ -14,10 +14,18 @@ import { fileURLToPath } from "node:url";
 const audioSha = "a9a084486e3df10193dfa9ac5ab9faa9f53a4619";
 const commandTimeoutMs = 10_000;
 const conversionTimeoutMs = 5_000;
-const tinyTimeoutMs = 0.001;
+const baselineSha = "e80a6dd9fdb4c7ce724472dd5d1b216afb4e70a7";
+const baselineModuleSha256 = "867e5fd7ad1b477b1f4ab1023e15d440873c6f9d3d98253bfa6ac4240f6b370d";
+const variant = process.env.GOAL24_AUDIO_CASE;
+assert.ok(variant === "baseline" || variant === "fixed", "explicit native case required");
 let stage = "preflight";
 let workspace: string | undefined;
-const evidence: Record<string, unknown> = { proof: "goal24-audio-native", audioSha };
+const evidence: Record<string, unknown> = {
+  proof: "goal24-audio-native",
+  audioSha,
+  variant,
+  baselineSha,
+};
 
 function command(binary: string, args: string[]): Buffer {
   return execFileSync(binary, args, {
@@ -80,7 +88,21 @@ try {
   await mkdir(process.env.OPENCLAW_STATE_DIR, { mode: 0o700 });
 
   // Load the real source only after OS, checkout, and disposable state checks.
-  const { transcodeAudioBuffer } = await import("../src/media/audio-transcode.js");
+  const modulePath =
+    variant === "baseline"
+      ? "../src/media/goal24-audio-baseline.js"
+      : "../src/media/audio-transcode.js";
+  if (variant === "baseline") {
+    assert.equal(
+      createHash("sha256")
+        .update(await readFile(new URL("../src/media/goal24-audio-baseline.ts", import.meta.url)))
+        .digest("hex"),
+      baselineModuleSha256,
+    );
+  }
+  const { transcodeAudioBuffer }: typeof import("../src/media/audio-transcode.js") = await import(
+    modulePath
+  );
   const { resolveFfmpegBin } = await import("../src/media/ffmpeg-exec.js");
   const { resolvePreferredOpenClawTmpDir } = await import("../src/infra/tmp-openclaw-dir.js");
   const ffmpeg = resolveFfmpegBin();
@@ -119,53 +141,41 @@ try {
     ),
   );
 
-  stage = "synthetic-fixture";
+  stage = "ten-segment-fixture";
   const input = path.join(workspace, "synthetic.mp3");
   const output = path.join(workspace, "converted.caf");
-  command(ffmpeg, [
-    "-nostdin",
-    "-v",
-    "error",
-    "-y",
-    "-f",
-    "lavfi",
-    "-i",
-    "sine=frequency=440:sample_rate=44100:duration=2",
-    "-ac",
-    "2",
-    "-c:a",
-    "libmp3lame",
-    "-b:a",
-    "128k",
-    input,
-  ]);
-  const fixture = await readFile(input);
-  assert.ok(fixture.length > 0);
-  const pcm = command(ffmpeg, [
-    "-nostdin",
-    "-v",
-    "error",
-    "-i",
-    input,
-    "-vn",
-    "-sn",
-    "-dn",
-    "-ac",
-    "1",
-    "-ar",
-    "24000",
-    "-c:a",
-    "pcm_s16le",
-    "-f",
-    "s16le",
-    "-",
-  ]);
+  const fixture = await readFile(
+    new URL("../src/media/fixtures/tts-ten-segment.mp3", import.meta.url),
+  );
+  const fixtureSha256 = createHash("sha256").update(fixture).digest("hex");
+  assert.equal(fixtureSha256, "7b2d8a3b1244383a4cfc3beaa57ba756c0d76c7d485fa80f927a458bdb60c0f0");
+  assert.equal(fixture.length, 166176);
+  await writeFile(input, fixture, { mode: 0o600 });
+  const decode = (file: string): Buffer =>
+    command(ffmpeg, [
+      "-nostdin",
+      "-v",
+      "error",
+      "-i",
+      file,
+      "-vn",
+      "-sn",
+      "-dn",
+      "-ac",
+      "1",
+      "-ar",
+      "24000",
+      "-c:a",
+      "pcm_s16le",
+      "-f",
+      "s16le",
+      "-",
+    ]);
+  const pcm = decode(input);
   assert.ok(pcm.length > 0 && pcm.length % 2 === 0);
   const expectedFrames = pcm.length / 2;
-  assert.ok(
-    expectedFrames >= 47_000 && expectedFrames <= 49_000,
-    "fixture must decode to about two seconds",
-  );
+  assert.equal(expectedFrames, 1_153_775, "canonical fixture decoded frame count");
+  Object.assign(evidence, { fixtureSha256, inputBytes: fixture.length, expectedFrames });
 
   stage = "production-conversion";
   const started = performance.now();
@@ -184,41 +194,69 @@ try {
   stage = "independent-afinfo";
   const info = command("/usr/bin/afinfo", [output]).toString();
   assert.match(info, /Data format:\s+1 ch,\s+24000 Hz/);
-  const actualFrames = Number(info.match(/audio (\d+) valid frames/)?.[1]);
-  const toleranceFrames = Math.max(2, Math.ceil(expectedFrames * 0.001));
-  assert.ok(Number.isSafeInteger(actualFrames) && actualFrames > 0);
-  assert.ok(
-    Math.abs(actualFrames - expectedFrames) <= toleranceFrames,
-    "CAF exceeds production frame tolerance",
-  );
+  const validFrames = Number(info.match(/audio (\d+) valid frames/)?.[1]);
+  const decoded = decode(output);
+  const actualFrames = decoded.length / 2;
   Object.assign(evidence, {
-    inputBytes: fixture.length,
     outputBytes: result.buffer.length,
-    expectedFrames,
     actualFrames,
-    toleranceFrames,
+    validFrames,
+    expectedSeconds: expectedFrames / 24000,
+    actualSeconds: actualFrames / 24000,
+    toleranceFrames: 480,
     channels: 1,
     sampleRateHz: 24_000,
-  });
-
-  stage = "tiny-timeout";
-  // Sub-millisecond budget deterministically exercises the production deadline
-  // failure and finally cleanup, not a mocked clock or subprocess-kill proof.
-  const timedOut = await transcodeAudioBuffer({
-    audioBuffer: fixture,
-    sourceExtension: "mp3",
-    targetExtension: "caf",
-    timeoutMs: tinyTimeoutMs,
-  });
-  await checkCleanup();
-  assert.equal(timedOut.ok, false);
-  assert.ok(!timedOut.ok && timedOut.reason === "transcoder-failed");
-  assert.match(timedOut.detail ?? "", /timeout budget exhausted/);
-  Object.assign(evidence, {
-    tinyTimeoutMs,
-    tinyTimeoutReason: timedOut.reason,
     cleanupVerified: true,
   });
+  stage = "frame-preservation";
+  assert.ok(Number.isSafeInteger(validFrames) && validFrames > 0);
+  assert.ok(Math.abs(actualFrames - expectedFrames) <= 480, "decoded PCM lost frames");
+  assert.ok(
+    Math.abs(validFrames - expectedFrames) <= Math.max(2, Math.ceil(expectedFrames * 0.001)),
+  );
+
+  // Independently check the center of every synthetic segment. Duration alone
+  // could pass with silence, repeated first-segment audio, or shifted content.
+  stage = "segment-signal";
+  const durations = [3.3, 5.3, 5.475, 5.2, 4.9, 4.075, 6.55, 4.125, 4.025, 4.375];
+  const frequencies = durations.map((_, index) => 440 + 37 * index);
+  function peak(buffer: Buffer, seconds: number): number {
+    const start = Math.floor((seconds - 0.125) * 24000);
+    assert.ok((start + 6000) * 2 <= buffer.length);
+    const powers = frequencies.map((frequency) => {
+      const coefficient = 2 * Math.cos((2 * Math.PI * frequency) / 24000);
+      let previous = 0;
+      let beforePrevious = 0;
+      let energy = 0;
+      for (let index = 0; index < 6000; index++) {
+        const sample = buffer.readInt16LE((start + index) * 2);
+        energy += sample * sample;
+        const current = sample + coefficient * previous - beforePrevious;
+        beforePrevious = previous;
+        previous = current;
+      }
+      assert.ok(Math.sqrt(energy / 6000) > 100, "silent segment");
+      return (
+        previous * previous +
+        beforePrevious * beforePrevious -
+        coefficient * previous * beforePrevious
+      );
+    });
+    const frequency = frequencies[powers.indexOf(Math.max(...powers))];
+    assert.ok(frequency !== undefined);
+    return frequency;
+  }
+  let elapsed = 0;
+  const segments = durations.map((duration, index) => {
+    const center = elapsed + duration / 2;
+    elapsed += duration;
+    const sourceHz = peak(pcm, center);
+    const outputHz = peak(decoded, center);
+    assert.equal(sourceHz, frequencies[index], "source segment identity");
+    assert.equal(outputHz, sourceHz, "converted segment identity");
+    return { segment: index + 1, sourceHz, outputHz };
+  });
+  evidence.segments = segments;
   stage = "cleanup";
   await rm(workspace, { recursive: true, force: true });
   workspace = undefined;

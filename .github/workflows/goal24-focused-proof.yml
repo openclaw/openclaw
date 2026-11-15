@@ -21,10 +21,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - proof: history
-            runner: ubuntu-24.04
+          - proof: audio
+            runner: xcode-27
             deadline: 30
-            sha: eb919fb0d0b19dfa86c3e7055145b5a83ae27ef9
+            sha: a9a084486e3df10193dfa9ac5ab9faa9f53a4619
     runs-on: ${{ matrix.runner }}
     timeout-minutes: ${{ matrix.deadline }}
     steps:
@@ -39,6 +39,12 @@ jobs:
         with:
           ref: ${{ matrix.sha }}
           path: source
+          persist-credentials: false
+      - name: Checkout immutable pre-fix module
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: e80a6dd9fdb4c7ce724472dd5d1b216afb4e70a7
+          path: baseline
           persist-credentials: false
       - name: Install pinned Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
