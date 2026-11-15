@@ -298,7 +298,8 @@ describe("dashboard action ownership", () => {
                 return { targetInfo: { targetId, title: tab.title } };
               }
               // Hold the actual document-fence preparation, including on a retried navigation.
-              if (method === "Fetch.enable") {
+              // Interception stays on for the tab, so each attempt's claim starts tracking.
+              if (method === "Network.enable") {
                 preparations += 1;
                 if (preparations === (retry ? 2 : 1)) {
                   await ready.block();

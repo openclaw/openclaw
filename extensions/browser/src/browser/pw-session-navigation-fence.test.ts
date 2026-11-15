@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTick } from "node:timers/promises";
+import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as navigationGuard from "./navigation-guard.js";
@@ -16,6 +17,7 @@ async function fence(
     detach?: () => Promise<void>;
     isClosed?: () => boolean;
     assertCurrent?: () => void;
+    standingSsrfPolicy?: SsrFPolicy;
     handleDocument?: Parameters<typeof installNavigationAuthorityFence>[3];
   } = {},
 ) {
@@ -40,12 +42,19 @@ async function fence(
   const errors: unknown[] = [];
   const dispose = await installNavigationAuthorityFence(
     page as unknown as Page,
-    { assertNavigationCurrent: options.assertCurrent ?? (() => {}) },
+    {
+      assertNavigationCurrent: options.assertCurrent ?? (() => {}),
+      standingSsrfPolicy: options.standingSsrfPolicy,
+    },
     (error) => errors.push(error),
     options.handleDocument,
   );
   const pause = (requestId: string, url = "http://127.0.0.1/target") =>
-    session.emit("Fetch.requestPaused", { requestId, resourceType: "Document", request: { url } });
+    session.emit("Fetch.requestPaused", {
+      requestId,
+      resourceType: "Document",
+      request: { url, headers: {} },
+    });
   return { send, detach, session, page, errors, dispose, pause };
 }
 
@@ -80,7 +89,11 @@ describe("navigation authority fence lifecycle", () => {
     });
     releaseBarrier.resolve();
     await expect(cleanup).resolves.toBeUndefined();
-    expect(send).toHaveBeenCalledWith("Fetch.disable", undefined);
+    expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+      requestId: "interception",
+      errorReason: "Aborted",
+    });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
   });
 
   it("settles a document completed by the operation-owned interceptor", async () => {
@@ -195,24 +208,43 @@ describe("navigation authority fence lifecycle", () => {
     expect(detach).not.toHaveBeenCalled();
   });
 
-  it("starts the next invocation's interception after the last release is acknowledged", async () => {
-    // As the extension relay does: Fetch.enable is refused until Fetch.disable is answered.
+  it("returns the tab to its standing policy when the invocation releases its claim", async () => {
+    const { send, dispose, pause } = await fence({
+      standingSsrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      handleDocument: async (route) => {
+        await route.continue();
+      },
+    });
+    pause("granted", "http://127.0.0.1/during");
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "granted" }),
+    );
+    expect(await dispose()).toBeUndefined();
+    pause("private", "http://127.0.0.1/after");
+    pause("public", "http://93.184.216.34/after");
+    await vi.waitFor(() => {
+      expect(send).toHaveBeenCalledWith("Fetch.failRequest", {
+        requestId: "private",
+        errorReason: "BlockedByClient",
+      });
+      expect(send).toHaveBeenCalledWith("Fetch.continueRequest", { requestId: "public" });
+    });
+  });
+
+  it("starts the next invocation's document tracking after the last release is acknowledged", async () => {
+    // A transport that applies the release when it answers it.
     const disabled = Promise.withResolvers<void>();
     let releasing = false;
-    let intercepting = false;
-    const { page, dispose } = await fence({
+    let tracking = false;
+    const { send, page, dispose } = await fence({
       send: async (method) => {
-        if (method === "Fetch.enable") {
-          if (releasing) {
-            throw new Error("Fetch interception is being released");
-          }
-          intercepting = true;
+        if (method === "Network.enable") {
+          tracking = true;
         }
-        if (method === "Fetch.disable") {
+        if (method === "Network.disable") {
           releasing = true;
           await disabled.promise;
-          releasing = false;
-          intercepting = false;
+          tracking = false;
         }
       },
     });
@@ -227,25 +259,26 @@ describe("navigation authority fence lifecycle", () => {
     disabled.resolve();
     expect(await released).toBeUndefined();
     await next;
-    expect({ returnedBeforeAcknowledged, intercepting }).toEqual({
+    expect({ returnedBeforeAcknowledged, tracking }).toEqual({
       returnedBeforeAcknowledged: false,
-      intercepting: true,
+      tracking: true,
     });
+    expect(send).not.toHaveBeenCalledWith("Fetch.disable", undefined);
   });
 
   it("fails the next invocation when the last release is never acknowledged", async () => {
     vi.useFakeTimers();
     const { send, page, dispose } = await fence({
       send: async (method) => {
-        if (method === "Fetch.disable") {
+        if (method === "Network.disable") {
           await new Promise(() => {});
         }
       },
     });
-    const enables = () => send.mock.calls.filter(([method]) => method === "Fetch.enable").length;
+    const enables = () => send.mock.calls.filter(([method]) => method === "Network.enable").length;
     const enabledBefore = enables();
     const released = dispose();
-    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Fetch.disable", undefined));
+    await vi.waitFor(() => expect(send).toHaveBeenCalledWith("Network.disable", undefined));
     let outcome: unknown = "pending";
     void installNavigationAuthorityFence(page as unknown as Page, {}, () => {}).then(
       () => {
@@ -262,18 +295,18 @@ describe("navigation authority fence lifecycle", () => {
     });
     // It started nothing, so it leaves the tab as it found it.
     expect(send).not.toHaveBeenCalledWith("Page.stopLoading", undefined);
-    expect(send.mock.calls.filter(([method]) => method === "Fetch.disable")).toHaveLength(1);
+    expect(send.mock.calls.filter(([method]) => method === "Network.disable")).toHaveLength(1);
     expect(await released).toEqual(
       new Error("Browser navigation did not settle before authority cleanup"),
     );
   });
 
-  it("fails an invocation whose interception does not start", async () => {
+  it("fails an invocation whose document tracking does not start", async () => {
     let refused = false;
     const { page, dispose } = await fence({
       send: async (method) => {
-        if (refused && method === "Fetch.enable") {
-          throw new Error("interception refused");
+        if (refused && method === "Network.enable") {
+          throw new Error("tracking refused");
         }
       },
     });
@@ -281,7 +314,7 @@ describe("navigation authority fence lifecycle", () => {
     refused = true;
     await expect(
       installNavigationAuthorityFence(page as unknown as Page, {}, () => {}),
-    ).rejects.toThrow("interception refused");
+    ).rejects.toThrow("tracking refused");
   });
 
   it("retains interception until target close when revoked loading cannot be stopped", async () => {
