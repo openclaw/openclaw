@@ -34,6 +34,14 @@ async function fixture(root: string, pluginPath: string, graphPath: string) {
     path.join(rootDir, "index.ts"),
     'import "./style.css"; import { events } from "./shared.js"; import { value } from "dependency"; export async function observe() { const a = await import("./a.js"); const b = await import("./b.js"); return { events, value, lazyValues: [a.value, b.value], distinct: a.identity !== b.identity }; }',
   );
+  await fs.appendFile(
+    path.join(rootDir, "index.ts"),
+    'export function loadLongExpression() { return import("./long.js"); }',
+  );
+  await fs.writeFile(
+    path.join(rootDir, "long.js"),
+    `export function read(value) { return value${".next".repeat(8000)}; }`,
+  );
   await fs.writeFile(path.join(rootDir, "style.css"), ".fixture { color: red; }");
   await fs.writeFile(path.join(rootDir, "shared.js"), "export const events = [];");
   // Separate modules have intentionally identical bytes but distinct activation identity.
