@@ -1,4 +1,5 @@
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
@@ -9,24 +10,27 @@ import {
   getRpcSourceLifecycleGeneration,
   type RpcSourceRef,
 } from "../../sessions/session-controller.rpc-sources.js";
-import {
-  buildRunUserTurnIdempotencyKey,
-  createUserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { collectRealtimeVoiceAgentConsultVisibleText } from "../../talk/agent-consult-tool.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 
 const loadTalkAgentExecution = createLazyRuntimeModule(async () => {
-  const [embeddedAgent, admission] = await Promise.all([
+  const [embeddedAgent, admission, sessions, context, transcript] = await Promise.all([
     import("../../agents/embedded-agent.js"),
     import("../../agents/admitted-run-context.js"),
+    import("../../agents/sessions/session-manager.js"),
+    import("../../agents/embedded-agent-runner/run/session-context-limits.js"),
+    import("../../config/sessions/session-accessor.js"),
   ]);
   return {
     runEmbeddedAgent: embeddedAgent.runEmbeddedAgent,
     createOperationalRunInstanceRef: admission.createOperationalRunInstanceRef,
     prepareAgentRunAdmission: admission.prepareAgentRunAdmission,
+    SessionManager: sessions.SessionManager,
+    resolveContextLimits: context.resolveEmbeddedSessionContextLimits,
+    appendResult: transcript.persistSessionTranscriptTurn,
   };
 });
 
@@ -115,8 +119,8 @@ export function createTalkClientAgentRuntime(params: {
         controllerInput: source?.input,
         abortSignal: requestedParams.abortSignal,
       },
-      async (_operation, abortSignal) => {
-        const runParams = { ...requestedParams, abortSignal };
+      async (replyOperation, abortSignal) => {
+        const runParams = { ...requestedParams, replyOperation, abortSignal };
         runParams.abortSignal?.throwIfAborted();
         const config = runParams.config ?? params.config;
         params.assertCurrent?.();
@@ -159,34 +163,65 @@ export function createTalkClientAgentRuntime(params: {
           runParams.abortSignal?.addEventListener("abort", close, { once: true });
           try {
             runParams.abortSignal?.throwIfAborted();
-            // Provider-owned work can outlive or replace its audio transport. Unlike
-            // chat-backed Talk, it has no independent Chat terminal delivery; hiding
-            // its final transcript would lose the answer when no spoken replacement arrives.
-            return await execution.runEmbeddedAgent({
+            // The consult reads the conversation, but its generated input and tool loop
+            // belong to this detached context. Only its completed answer joins the source.
+            const sessionManager = await execution.SessionManager.openModelContextAsync(
+              { agentId, sessionId, sessionKey, storePath },
+              {
+                cwd: runParams.workspaceDir,
+                signal: runParams.abortSignal,
+                limits: execution.resolveContextLimits(runParams),
+              },
+            );
+            const result = await execution.runEmbeddedAgent({
               ...runParams,
               preparedRunAdmission,
-              // Speech is mirrored separately. Keep generated input in current-turn custody,
-              // but never display it or replay it as a later user request.
-              userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
-                input: {
-                  text: runParams.prompt,
-                  display: false,
-                  excludeFromContext: true,
-                  idempotencyKey: buildRunUserTurnIdempotencyKey(runParams.runId),
-                },
-                target: {
-                  agentId,
-                  sessionId,
-                  sessionKey,
-                  storePath,
-                  expectedSessionId: sessionId,
-                  sessionEntry: undefined,
-                  config,
-                  cwd: runParams.workspaceDir,
-                },
-              }),
+              sessionManager,
+              sessionPersistence: "detached",
+              promptCacheKey: `${sessionKey}:talk-consult:${runParams.runId}`,
             });
+            if (!runParams.abortSignal?.aborted && !result.meta.aborted && !result.meta.yielded) {
+              const text = collectRealtimeVoiceAgentConsultVisibleText(
+                (result.payloads ?? []).filter(
+                  (payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer !== true,
+                ),
+              );
+              if (text) {
+                const appended = await execution.appendResult(
+                  { agentId, sessionId, sessionKey, storePath },
+                  {
+                    expectedSessionId: sessionId,
+                    config,
+                    assertCurrent: assertSourceCurrent,
+                    runId: runParams.runId,
+                    updateMode: "inline",
+                    touchSessionEntry: true,
+                    messages: [
+                      {
+                        message: {
+                          role: "assistant",
+                          content: [{ type: "text", text }],
+                          timestamp: Date.now(),
+                          stopReason: "stop",
+                          provider: result.meta.agentMeta?.provider,
+                          model: result.meta.agentMeta?.model,
+                          usage: result.meta.agentMeta?.usage,
+                          idempotencyKey: `talk-consult-result:${runParams.runId}`,
+                        },
+                        idempotencyLookup: "scan-assistant",
+                        useRawWhenLinear: true,
+                      },
+                    ],
+                  },
+                );
+                if (appended.rejectedReason) {
+                  throw new Error(
+                    `Talk consult result could not be saved: ${appended.rejectedReason}`,
+                  );
+                }
+              }
+            }
+            return result;
           } finally {
             // Accepted terminal writes commit under this admission; abort still closes it immediately.
             try {

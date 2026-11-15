@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { getActiveNativeAttempt } from "../../../agents/embedded-agent-runner/run-state.js";
@@ -45,6 +46,7 @@ import {
   withParkedNativeTask,
 } from "./client-native-control.test-support.js";
 import { withRegisteredNativeEmbeddedRun } from "./client-native-run.test-support.js";
+import { flushNativeTranscript } from "./client-native-transcript.test-support.js";
 
 const transcriptEvents = (storePath?: string) =>
   readSessionTranscriptMessageEvents({ agentId: AGENT_ID, sessionId: SESSION_ID, storePath });
@@ -447,6 +449,12 @@ describe("native Talk through the public OpenAI plugin registration", () => {
               socket.serverEvent(transcript);
             }
             await settleNativeBackend(finishModel.resolve);
+            if (control !== "cancel") {
+              // The source commits the detached answer after the embedded runner settles.
+              await socket.waitForSent((frame) =>
+                frame.includes('"delegation_item_id":"real-runner-request"'),
+              );
+            }
             const frames = socket.sent.map((frame): unknown => JSON.parse(frame));
             if (control === "cancel") {
               expect(frames).not.toContainEqual(
@@ -579,5 +587,111 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       );
       expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
     });
+  });
+
+  it("isolates consult input while carrying conversation context and appending only answers", async () => {
+    const model = buildMockOpenAiResponsesProvider("https://native-isolated.example.invalid/v1");
+    const inputs: string[][] = [];
+    const nativeFetch = upstream.fetch.getMockImplementation()!;
+    upstream.fetch.mockImplementation(async (input, init) => {
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (url !== model.config.baseUrl + "/responses") {
+        return nativeFetch(input, init);
+      }
+      const body: unknown = await new Response(init?.body).json();
+      if (!isRecord(body) || !Array.isArray(body.input)) {
+        throw new Error("Expected a Responses input array");
+      }
+      inputs.push(
+        body.input.flatMap((item: unknown) =>
+          isRecord(item) && Array.isArray(item.content)
+            ? item.content.flatMap((part: unknown) =>
+                isRecord(part) && typeof part.text === "string" ? [part.text] : [],
+              )
+            : [],
+        ),
+      );
+      const item = {
+        type: "message",
+        id: `isolated-answer-${inputs.length}`,
+        role: "assistant",
+        status: "completed",
+        content: [
+          { type: "output_text", text: `Consult answer ${inputs.length}.`, annotations: [] },
+        ],
+      };
+      const events = [
+        {
+          type: "response.output_item.added",
+          item: { ...item, status: "in_progress", content: [] },
+        },
+        { type: "response.output_item.done", item },
+        {
+          type: "response.completed",
+          response: {
+            status: "completed",
+            usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
+          },
+        },
+      ];
+      return new Response(
+        events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("") + "data: [DONE]\n\n",
+        { headers: { "content-type": "text/event-stream" } },
+      );
+    });
+    const actualRunner = await vi.importActual<typeof import("../../../agents/embedded-agent.js")>(
+      "../../../agents/embedded-agent.js",
+    );
+    upstream.runEmbeddedAgent.mockImplementation(actualRunner.runEmbeddedAgent);
+    await withNativePlugin(
+      async (fixture) => {
+        const { result, socket } = await connectNativeSession(fixture);
+        const context = "Remember that the synthetic launch color is violet.";
+        await flushNativeTranscript(result, () => socket.serverEvent(nativeTranscript(context)));
+        let earlier = transcriptEvents();
+        for (const [index, question] of [
+          "Private consult alpha",
+          "Private consult beta",
+        ].entries()) {
+          const id = `isolated-${index}`;
+          socket.serverEvent(nativeDelegation(id, question));
+          await socket.waitForSent((frame) => frame.includes(`"delegation_item_id":"${id}"`));
+          await settleNativeBackend(() => {});
+          expect(socket.sent.map((frame): unknown => JSON.parse(frame))).toContainEqual(
+            expect.objectContaining({
+              delegation_item_id: id,
+              content: [expect.objectContaining({ text: `Consult answer ${index + 1}.` })],
+            }),
+          );
+          expect(inputs).toHaveLength(index + 1);
+          const prompt = upstream.runEmbeddedAgent.mock.calls[index]![0].prompt;
+          expect(inputs[index]!.join("\n")).toContain(prompt);
+          expect(inputs[index]!.join("\n")).toContain(context);
+          const after = transcriptEvents();
+          expect(after.slice(0, earlier.length)).toEqual(earlier);
+          expect(after).toHaveLength(earlier.length + 1);
+          expect(after.at(-1)?.event).toMatchObject({
+            message: {
+              role: "assistant",
+              content: [{ type: "text", text: `Consult answer ${index + 1}.` }],
+            },
+          });
+          expect(JSON.stringify(after)).not.toContain("Private consult");
+          earlier = after;
+        }
+        expect(inputs[1]!.join("\n")).toContain("Consult answer 1.");
+        expect(inputs[1]!.join("\n")).not.toContain("Private consult alpha");
+      },
+      {
+        configure: (config) => {
+          config.agents!.defaults = {
+            model: { primary: model.modelRef },
+            models: { [model.modelRef]: { params: { transport: "sse", openaiWsWarmup: false } } },
+          };
+          config.models = { mode: "replace", providers: { [model.providerId]: model.config } };
+        },
+      },
+    );
   });
 });
