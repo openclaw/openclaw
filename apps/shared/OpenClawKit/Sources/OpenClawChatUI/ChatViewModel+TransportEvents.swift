@@ -159,8 +159,8 @@ extension OpenClawChatViewModel {
         // refetch it, since this pass also stands in for health recovery's fetch.
         if !history.applied { self.scheduleProgressCardFetch(for: session) }
         async let catalogs: Void = self.refreshCatalogsAfterRecovery(session: session)
-        // A forced load clears the capability catalog until it answers; a kept catalog stays.
-        async let composer: Void = self.loadComposerCapabilities(force: !keepsCatalogs)
+        // The new socket may carry changed capabilities; a kept catalog stays shown until replaced.
+        async let composer: Void = self.loadComposerCapabilities(force: true, keepingLoaded: keepsCatalogs)
         await self.pollHealthIfNeeded(force: true, sessionSnapshot: session)
         _ = await (catalogs, composer)
     }

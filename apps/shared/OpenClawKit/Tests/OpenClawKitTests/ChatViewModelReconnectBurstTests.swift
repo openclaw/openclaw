@@ -11,6 +11,7 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
     private var holdsHistory = false
     private var failsHistory = false
     private var heldHistory: [CheckedContinuation<Void, Never>] = []
+    private var skillsEnabled = false
     private var waiters: [(String, CheckedContinuation<Void, Never>)] = []
     private let stream: AsyncStream<OpenClawChatTransportEvent>
 
@@ -28,6 +29,11 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
             self.holdsHistory = holdingHistory
             self.failsHistory = failingHistory
         }
+    }
+
+    /// The Gateway's skills setting, as the next capability read reports it.
+    func setSkillsEnabled(_ enabled: Bool) {
+        self.lock.withLock { self.skillsEnabled = enabled }
     }
 
     func releaseHistory(keepingHeld: Bool = false) {
@@ -112,7 +118,10 @@ private final class ReconnectBurstTransport: @unchecked Sendable, OpenClawChatTr
         agentID _: String?) async -> OpenClawChatComposerCapabilityCatalog
     {
         self.record("composer")
-        return OpenClawChatComposerCapabilityCatalog(sessionSettingsAvailable: true, permissionMutationAvailable: true)
+        return OpenClawChatComposerCapabilityCatalog(
+            sessionSettingsAvailable: true,
+            skillsAvailable: self.lock.withLock { self.skillsEnabled },
+            permissionMutationAvailable: true)
     }
 
     func isSwarmEnabled(sessionKey _: String) async throws -> Bool {
@@ -269,6 +278,9 @@ struct ChatViewModelReconnectBurstTests {
         await waitForObservedState { vm.composerCapabilityControlsAvailable }
         #expect(vm.composerInlineModelLabel == "gpt-test")
         #expect(vm.composerCapabilityControlsAvailable)
+        #expect(!vm.composerCapabilityCatalog.skillsAvailable)
+        // Skills are enabled on the Gateway while the app is away.
+        transport.setSkillsEnabled(true)
         transport.reset(holdingHistory: true)
 
         vm.recoverAfterReconnect()
@@ -283,8 +295,13 @@ struct ChatViewModelReconnectBurstTests {
         transport.releaseHistory()
         await transport.waitFor("source")
         await waitForObservedState { vm.healthOK }
+        // Bounded: without the refresh nothing changes the catalog, and the test must fail, not hang.
+        for _ in 0..<200 where !vm.composerCapabilityCatalog.skillsAvailable {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
 
         #expect(transport.requests.count(where: { $0 == "history" }) == 1)
+        #expect(vm.composerCapabilityCatalog.skillsAvailable, "the kept catalog is refreshed, not reused")
         #expect(!vm.isLoading)
     }
 }
