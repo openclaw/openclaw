@@ -2,7 +2,7 @@ import path from "node:path";
 import { toUSVString } from "node:util";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { BackupEngine } from "./database-engine/physical-store.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
 import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {

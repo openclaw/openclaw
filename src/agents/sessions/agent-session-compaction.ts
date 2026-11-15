@@ -34,9 +34,11 @@ import {
   estimateCompactedRequestTokens,
   projectCompactionReplacement,
   resolveCompactionRetentionBudget,
-  type CompactionRequestBudget,
-  type CompactionRequestConstraints,
 } from "./compaction/request-budget.js";
+import type {
+  CompactionRequestBudget,
+  CompactionRequestConstraints,
+} from "./compaction/request-budget.types.js";
 import { createCompactionRuntime } from "./compaction/runtime.js";
 import { SAFETY_MARGIN, estimateCompactionHistoryTokens } from "./context-token-pressure.js";
 import { preflightManualSessionCompaction } from "./manual-compaction-preflight.js";
@@ -261,19 +263,18 @@ export abstract class AgentSessionCompaction extends AgentSessionInspection {
     this.autoCompactionAbortController?.abort();
   }
 
-  private async runCompactionWork(options: {
-    itemId: string;
-    settings: ReturnType<SettingsManager["getCompactionSettings"]>;
-    signal: AbortSignal;
-    customInstructions?: string;
-    mode: "manual" | "auto";
-    requestState?: "unresolved";
-    summaryOutputPolicy: SummaryOutputPolicy;
-    requestBudget?: CompactionRequestBudget;
-    requestFromEntryId?: string;
-    pendingUserEntryId?: string;
-    onSummaryReady?: () => void;
-  }): Promise<CompactionWorkOutcome> {
+  private async runCompactionWork(
+    options: CompactionRequestConstraints & {
+      itemId: string;
+      settings: ReturnType<SettingsManager["getCompactionSettings"]>;
+      signal: AbortSignal;
+      customInstructions?: string;
+      mode: "manual" | "auto";
+      requestState?: "unresolved";
+      summaryOutputPolicy: SummaryOutputPolicy;
+      onSummaryReady?: () => void;
+    },
+  ): Promise<CompactionWorkOutcome> {
     const isManual = options.mode === "manual";
     const assertContextReplacementActive = this.assertContextReplacementActive;
     const onContextReplaced = this.onContextReplaced;

@@ -3,7 +3,6 @@ import type { SessionEntryCohortRequest } from "../../config/sessions/session-en
 import type { SessionTranscriptContextSelection } from "../../config/sessions/session-history-read.types.js";
 import type { PreparedSessionTranscriptHydration } from "../../config/sessions/session-transcript-worker.types.js";
 import type { SessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
-import type { SessionManager } from "./session-manager.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptTargetBinding;
 export type SessionManagerBoundedContextLimits = SessionTranscriptContextSelection;
@@ -32,8 +31,8 @@ export const sessionManagerFromCompactionSource: unique symbol = Symbol.for(
   "openclaw.session-manager.from-compaction-source",
 );
 
-export type ReadonlySessionManager = Pick<
-  SessionManager,
+/** Public read-only methods; the facade supplies their exact signatures. */
+export type SessionManagerReadMethod =
   | "getCwd"
   | "getSessionId"
   | "getSessionTarget"
@@ -47,5 +46,4 @@ export type ReadonlySessionManager = Pick<
   | "getHeader"
   | "getEntries"
   | "getTree"
-  | "getSessionName"
->;
+  | "getSessionName";

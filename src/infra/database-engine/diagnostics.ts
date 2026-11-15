@@ -18,10 +18,10 @@ import {
   createDatabaseStoreDiagnostic,
   type DatabaseStoreDiagnostic,
 } from "./diagnostic-record.js";
-import { readBackupEngineImage, type BackupEngine } from "./physical-store.js";
+import { readBackupEngineImage } from "./physical-store.js";
 import type { PortDescriptor } from "./port-types.js";
 import { readPostgresStoreMetadata, withPostgresConnection } from "./postgres-store-metadata.js";
-import type { DatabaseEngineInput } from "./types.js";
+import type { BackupEngine, DatabaseEngineInput } from "./types.js";
 
 export type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
 

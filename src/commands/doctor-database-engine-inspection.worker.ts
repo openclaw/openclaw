@@ -8,11 +8,10 @@ import {
   type DatabaseStoreDiagnostic,
 } from "../infra/database-engine/diagnostics.js";
 import { listLocalDatabaseDiagnosticStores } from "../infra/database-engine/local-diagnostics.js";
-import type { BackupEngine } from "../infra/database-engine/physical-store.js";
 import { databasePortProviders } from "../infra/database-engine/port-provider.js";
 import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { resolveStatePortRoots } from "../infra/database-engine/state-port.js";
-import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import type { BackupEngine, DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { serveWorkerTasks } from "../infra/worker-task-server.js";
 import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-build.js";

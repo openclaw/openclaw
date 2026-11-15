@@ -14,7 +14,7 @@ import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { prepareSafeguardMessage } from "../../agents/agent-hooks/compaction-safeguard-source.js";
 import { sanitizeCompactionMessages } from "../../agents/compaction-planning.js";
-import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestBudget } from "../../agents/sessions/compaction/request-budget.types.js";
 import { estimateCompactionHistoryTokens } from "../../agents/sessions/context-token-pressure.js";
 import type { TranscriptContextSnapshot } from "./session-accessor.sqlite-model-context.js";
 

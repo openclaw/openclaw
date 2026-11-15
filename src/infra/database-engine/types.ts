@@ -2,6 +2,11 @@ export type DatabaseEngineInput =
   | Readonly<{ connection: string; schemaPrefix: string }>
   | undefined;
 export type DatabaseEngineId = "sqlite" | "postgres";
+
+/** Engine identity transported by snapshot workers without importing native openers. */
+export type BackupEngine =
+  | { engine: "sqlite" }
+  | { engine: "postgres"; storeId: string; namespace: string };
 export type DatabaseEngineFamily =
   | "state"
   | "agent"

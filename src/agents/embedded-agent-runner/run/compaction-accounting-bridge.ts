@@ -2,7 +2,7 @@ import type { ConversationRecord } from "../../../config/sessions/conversation-r
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { ContextEngineRuntimeContext } from "../../../context-engine/types.js";
-import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../../sessions/compaction/request-budget.types.js";
 import type { CompactionAppendPersistenceAsync } from "../../sessions/session-compaction-persistence.js";
 import type { SessionManager } from "../../sessions/session-manager.js";
 import type { NormalizedUsage } from "../../usage.js";

@@ -74,6 +74,7 @@ import type {
 } from "./session-manager-types.js";
 import { sessionManagerFromCompactionSource } from "./session-manager-view-types.js";
 import type {
+  SessionManagerReadMethod,
   SessionManagerBoundedContext,
   SessionManagerBoundedContextLimits,
   SessionManagerPersistenceTarget,
@@ -758,4 +759,4 @@ export class SessionManager extends SessionManagerBranching {
   }
 }
 
-export type { ReadonlySessionManager } from "./session-manager-view-types.js";
+export type ReadonlySessionManager = Pick<SessionManager, SessionManagerReadMethod>;

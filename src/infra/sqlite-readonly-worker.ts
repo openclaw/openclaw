@@ -15,7 +15,7 @@ import {
   classifyChildRuntimeFailure,
   observeChildRuntime,
 } from "./child-runtime-viability.js";
-import type { BackupEngine } from "./database-engine/physical-store.js";
+import type { BackupEngine } from "./database-engine/types.js";
 import { hasErrnoCode } from "./errno.js";
 import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";

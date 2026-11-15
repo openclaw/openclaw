@@ -3,7 +3,7 @@ import type {
   SessionCompactionSourceConsumer,
   SessionCompactionSourceName,
 } from "./session-compaction-source.types.js";
-import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker-readers.js";
+import type { SessionHistoryWorkerRequestRunner } from "./session-transcript-worker.types.js";
 
 type PlanInput = Omit<SessionCompactionPlanRequest, "kind" | "database" | "phase">;
 

@@ -12,9 +12,7 @@ import { SqliteSnapshotCleanupError } from "../sqlite-readonly-location-cleanup.
 import { prepareSqliteReadOnlyCopyInProcess } from "../sqlite-readonly-location.js";
 import { runSqliteReadOnlyWorkerSync } from "../sqlite-readonly-worker.js";
 import { readEngineAnchor } from "./open.js";
-export type BackupEngine =
-  | { engine: "sqlite" }
-  | { engine: "postgres"; storeId: string; namespace: string };
+import type { BackupEngine } from "./types.js";
 
 /** Reads an already captured private image without reacquiring its live source. */
 export function readBackupEngineImage(imagePath: string, sourcePath: string): BackupEngine {

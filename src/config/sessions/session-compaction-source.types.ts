@@ -4,7 +4,7 @@ import type {
   PreparedConversationMessage,
 } from "../../../packages/agent-core/src/harness/compaction/utils.js";
 import type { SessionTreeEntry } from "../../../packages/agent-core/src/harness/types.js";
-import type { CompactionRequestConstraints } from "../../agents/sessions/compaction/request-budget.js";
+import type { CompactionRequestConstraints } from "../../agents/sessions/compaction/request-budget.types.js";
 import type {
   PreparedCompaction,
   PreparedCompactionFacts,

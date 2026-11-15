@@ -16,10 +16,9 @@ import {
 import {
   readBackupEngine,
   readBackupEngineImage,
-  type BackupEngine,
 } from "../infra/database-engine/physical-store.js";
 import type { DatabasePortPluginOwners } from "../infra/database-engine/port-descriptor.js";
-import type { DatabaseEngineSelection } from "../infra/database-engine/types.js";
+import type { BackupEngine, DatabaseEngineSelection } from "../infra/database-engine/types.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
