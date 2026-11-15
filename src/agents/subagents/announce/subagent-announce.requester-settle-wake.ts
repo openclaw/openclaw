@@ -26,6 +26,7 @@ import {
   listSubagentRunsForRequester,
 } from "../registry/subagent-registry-read.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { observeSubagentRequesterDelivery } from "../registry/subagent-requester-delivery.js";
 import {
   buildRequesterSettleWakeIdentity,
   hasRequesterCompletionCohort,
@@ -508,6 +509,18 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
     if (controllerInput.custody.rpcAdopted) {
       return false;
     }
+    let waitForRequesterDelivery: (() => Promise<void>) | undefined;
+    if (!pauseNotice && params.recordRequesterDelivery) {
+      waitForRequesterDelivery = await observeSubagentRequesterDelivery(
+        controllerInput,
+        directIdempotencyKey,
+        (fact) =>
+          params.recordRequesterDelivery!(settledBatch, {
+            ...fact,
+            ...(parentOnly ? { private: true as const } : {}),
+          }),
+      );
+    }
     const retireUnadoptedInput = () => {
       if (controllerInput && !controllerInput.custody.rpcAdopted) {
         retireSessionControllerInput(controllerInput);
@@ -629,18 +642,22 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
           },
         );
       };
-      delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
-        followup
-          ? withFollowupSuccessor(
-              followup.successor(settledBatch, directIdempotencyKey, () => {
-                if (!isSourceSessionEffectsAllowed()) {
-                  throw new Error("Followup completion cohort changed.");
-                }
-              }),
-              dispatch,
-            )
-          : dispatch(),
-      );
+      try {
+        delivery = await withSubagentProgressDraft(settledBatch, directIdempotencyKey, () =>
+          followup
+            ? withFollowupSuccessor(
+                followup.successor(settledBatch, directIdempotencyKey, () => {
+                  if (!isSourceSessionEffectsAllowed()) {
+                    throw new Error("Followup completion cohort changed.");
+                  }
+                }),
+                dispatch,
+              )
+            : dispatch(),
+        );
+      } finally {
+        await waitForRequesterDelivery?.();
+      }
     } catch (error) {
       retireUnadoptedInput();
       if (!dispatchPrepared) {

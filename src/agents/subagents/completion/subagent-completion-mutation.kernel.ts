@@ -22,6 +22,7 @@ import {
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
   markRequesterSettleWakePending,
+  recordRequesterDelivery,
 } from "../registry/subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_KILLED } from "../registry/subagent-lifecycle-events.js";
 import {
@@ -187,11 +188,13 @@ function prepareBlockedSubagentCompletion(
     delivery.enqueuedAt ??= params.enqueuedAt;
   }
   Object.assign(delivery, {
+    requesterDelivery:
+      delivery.requesterDelivery?.state === "consumed" ? delivery.requesterDelivery : undefined,
     status: params.suspendedReason ? ("suspended" as const) : ("failed" as const),
     disposition:
       params.suspendedReason || params.storeReplaced
         ? ("permanent_failure" as const)
-        : (params.disposition ?? delivery.disposition),
+        : (params.disposition ?? delivery.disposition ?? "permanent_failure"),
     lastError: params.reason,
     deliveredAt: undefined,
     announcedAt: undefined,
@@ -304,6 +307,10 @@ function mutateRequesterBatch(
   const mutations = prepareRequesterBatch(database, params).map(
     ({ expected, subagent }): CompletionMutation => {
       if (params.kind === "requesterWake") {
+        if (params.operation.kind === "requesterDelivery") {
+          recordRequesterDelivery(subagent, params.operation.fact);
+          return { subagent };
+        }
         if (params.operation.kind === "complete") {
           return { subagent, retire: completeRequesterSettleWakeState(subagent) };
         }

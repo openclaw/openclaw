@@ -10,6 +10,7 @@ import {
   clearSubagentPendingDelivery,
   completeRequesterSettleWakeState,
   transitionRequesterSettleWakeState,
+  recordRequesterDelivery,
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -84,7 +85,8 @@ function blockedPolicyDraft(
     entry.requesterSettleWake ??= { status: "pending", attemptCount: 0 };
   } else {
     entry.delivery.status = "failed";
-    entry.delivery.disposition = params.disposition ?? entry.delivery.disposition;
+    entry.delivery.disposition =
+      params.disposition ?? entry.delivery.disposition ?? "permanent_failure";
     entry.suppressCompletionDelivery = true;
   }
 }
@@ -103,6 +105,10 @@ function createRequesterSettleWakeMutationFixture(
     return mutatePolicyBatch(owners, params, (next) => {
       if (operation.kind === "transition") {
         transitionRequesterSettleWakeState(next, operation.state);
+        return next;
+      }
+      if (operation.kind === "requesterDelivery") {
+        recordRequesterDelivery(next, operation.fact);
         return next;
       }
       return completeRequesterSettleWakeState(next) ? null : next;
@@ -237,6 +243,70 @@ export function registerPrivateCompletionSettlementTests({
     blockSubagentCompletionDelivery: Mock<typeof blockSubagentCompletionDelivery>;
   };
 }): void {
+  it.each([false, true])(
+    "settles consumed requester cancellation (visible final: %s)",
+    async (yieldedFinalDeliverable) => {
+      const entry = createRunEntry({
+        endedAt: 4_000,
+        expectsCompletionMessage: true,
+        completionTarget: "parent",
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-1"],
+          rearmGeneration: 1,
+          yieldedFinalDeliverable: yieldedFinalDeliverable || undefined,
+        },
+      });
+      entry.requesterSettleWake!.batchRunIds = [entry.runId];
+      let wake:
+        | Parameters<SubagentLifecycleOptions["maybeWakeRequesterAfterAllChildrenSettled"]>[0]
+        | undefined;
+      const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async (params) => {
+        wake = params;
+        return false;
+      });
+      const controller = createLifecycleController({
+        entry,
+        maybeWakeRequesterAfterAllChildrenSettled,
+      });
+      controller.resumeRequesterSettleWake(entry.runId, entry);
+      await waitForLifecycleState(() => expect(wake).toBeDefined());
+      await wake!.recordRequesterDelivery!([entry], {
+        state: "waiting",
+        runId: "continuation",
+        blockingRunId: "settle-run",
+        at: 5_000,
+      });
+      expect(readLifecycleRun(entry).delivery).toMatchObject({
+        status: "pending",
+        requesterDelivery: { state: "waiting", blockingRunId: "settle-run" },
+      });
+      await wake!.recordRequesterDelivery!([readLifecycleRun(entry)], {
+        state: "consumed",
+        runId: "continuation",
+        at: 6_000,
+        private: true,
+      });
+      await wake!.completeBatch([readLifecycleRun(entry)], 1, {
+        delivered: false,
+        path: "direct",
+        reason: "delivery_suppressed",
+        disposition: "intentional_non_delivery",
+        error: "private requester continuation was cancelled",
+      });
+      expect(readLifecycleRun(entry).delivery).toMatchObject({
+        status: yieldedFinalDeliverable ? "failed" : "delivered",
+        disposition: yieldedFinalDeliverable ? "intentional_non_delivery" : "delivered",
+        deliveredAt: yieldedFinalDeliverable ? undefined : 6_000,
+        requesterDelivery: { state: "consumed", runId: "continuation" },
+      });
+      expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
+      controller.resumeRequesterSettleWake(entry.runId, readLifecycleRun(entry));
+      expect(maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([false, true])(
     "delivers private results held past the individual deadline until requester settlement (yielded: %s)",
     async (requesterYielded) => {

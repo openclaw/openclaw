@@ -29,11 +29,12 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 it
   .skipIf(process.platform === "win32")
-  .for(["nested", "captured", "announcing", "announcing-crash"] as const)(
+  .for(["nested", "captured", "announcing", "announcing-crash", "private-announcing"] as const)(
   "recovers session completion custody through a real Gateway restart (%s)",
   { timeout: 180_000 },
   async (kind, { signal, onTestFailed }) => {
-    const interruptAnnounce = kind.startsWith("announcing");
+    const interruptAnnounce = kind.includes("announcing");
+    const privateContinuation = kind === "private-announcing";
     const rootKey = "agent:main:dashboard:restart-hub";
     let childKey: string | undefined;
     let siblingKey: string | undefined;
@@ -128,7 +129,11 @@ it
                 message: "CUSTODY_SIBLING_TASK",
                 timeoutSeconds: 0,
               });
-            } else if (text.includes("already_pending") || text.includes("nothing_pending")) {
+            } else if (
+              privateContinuation ||
+              text.includes("already_pending") ||
+              text.includes("nothing_pending")
+            ) {
               reply("HUB_WAITING_FOR_OWNED_RESULTS");
             } else {
               call("sessions_yield", {});
@@ -235,14 +240,18 @@ it
         sessionKey: rootKey,
         sessionId: session.sessionId,
         storePath: path.join(agentDir, "openclaw-agent.sqlite"),
-      })?.events.filter(
-        (event) =>
-          isRecord(event) &&
-          event.type === "message" &&
-          isRecord(event.message) &&
-          event.message.role === "user" &&
-          JSON.stringify(event.message.content).includes("CAPTURED_CUSTODY_RESULT"),
-      );
+      })?.events.filter((event) => {
+        if (!isRecord(event)) {
+          return false;
+        }
+        // Direct results are persisted in their runtime carrier, yielded batches in the input.
+        const message = privateContinuation
+          ? event.type === "custom_message" && event
+          : event.type === "message" && isRecord(event.message) && event.message.role === "user"
+            ? event.message
+            : undefined;
+        return message && JSON.stringify(message.content).includes("CAPTURED_CUSTODY_RESULT");
+      });
     };
     let client: GatewayClient | undefined;
     let phase = "startup";
@@ -302,7 +311,15 @@ it
         }
         expect(
           await client.request("agent.wait", { runId: root.runId, timeoutMs: 15_000 }),
-        ).toMatchObject({ status: "ok", yielded: true });
+        ).toMatchObject({ status: "ok", ...(privateContinuation ? {} : { yielded: true }) });
+        if (privateContinuation) {
+          assert(finishChild);
+          finishChild();
+          await vi.waitFor(
+            () => expect(readRun(childRunId!)).toMatchObject({ delivery: { status: "delivered" } }),
+            { timeout: 15_000 },
+          );
+        }
         phase = "captured result awaiting requester cohort";
         finishCaptured();
         await vi.waitFor(
@@ -318,12 +335,30 @@ it
         const before = await client.request<{ messages: unknown[] }>("chat.history", {
           sessionKey: rootKey,
         });
-        expect(JSON.stringify(before.messages)).not.toContain("CAPTURED_CUSTODY_RESULT");
+        if (!privateContinuation) {
+          expect(JSON.stringify(before.messages)).not.toContain("CAPTURED_CUSTODY_RESULT");
+        }
         if (interruptAnnounce) {
           phase = "requester announce in flight";
           assert(finishChild);
-          finishChild();
+          if (!privateContinuation) {
+            finishChild();
+          }
           await vi.waitFor(() => expect(announcing).toBe(true), { timeout: 15_000 });
+          await vi.waitFor(
+            () =>
+              expect(readRun(capturedRunId!)).toMatchObject({
+                delivery: {
+                  status: "pending",
+                  requesterDelivery: {
+                    state: "consumed",
+                    runId: expect.any(String),
+                    ...(privateContinuation ? { private: true } : {}),
+                  },
+                },
+              }),
+            { timeout: 15_000 },
+          );
         }
         phase = "restart";
         if (kind === "nested") {
@@ -338,8 +373,13 @@ it
         client = undefined;
         expect(readRun(capturedRunId)).toMatchObject({
           completion: { resultText: "CAPTURED_CUSTODY_RESULT" },
-          delivery: { status: "pending" },
+          delivery: { status: privateContinuation ? "delivered" : "pending" },
         });
+        if (interruptAnnounce) {
+          expect(readRun(capturedRunId)).toMatchObject({
+            delivery: { requesterDelivery: { state: "consumed" } },
+          });
+        }
         if (kind === "captured") {
           expect(readRun(childRunId)).toMatchObject({
             execution: { outcome: { status: "error", error: "Gateway stopped" } },
@@ -364,7 +404,7 @@ it
             expect(readCapturedInputs()).toHaveLength(1);
             if (interruptAnnounce) {
               expect(completedReplies).toBe(1);
-              expect(rootReceivedRecovery).toBe(false);
+              expect(rootReceivedRecovery).toBe(privateContinuation);
             }
           },
           { timeout: 30_000 },

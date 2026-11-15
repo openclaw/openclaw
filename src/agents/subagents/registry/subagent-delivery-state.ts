@@ -12,6 +12,7 @@ import type {
   SubagentRunMaintenanceRecord,
   SubagentRunRecord,
 } from "./subagent-registry.types.js";
+import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
 
 export function resetRequesterSettleWakeRetry(
   wake?: RequesterSettleWakeState,
@@ -86,6 +87,9 @@ export function projectSubagentRunForSessionList(entry: SubagentRunRecord): Suba
       ? {
           delivery: {
             status: entry.delivery.status,
+            ...(entry.delivery.requesterDelivery
+              ? { requesterDelivery: { ...entry.delivery.requesterDelivery } }
+              : {}),
             ...(entry.delivery.disposition ? { disposition: entry.delivery.disposition } : {}),
             ...(entry.delivery.suspendedAt !== undefined
               ? { suspendedAt: entry.delivery.suspendedAt }
@@ -226,6 +230,38 @@ export function clearDeliveryState(entry: SubagentRunRecord): void {
   };
 }
 
+export function recordRequesterDelivery(
+  entry: SubagentRunRecord,
+  fact: NonNullable<SubagentCompletionDeliveryState["requesterDelivery"]>,
+): void {
+  const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state !== "consumed") {
+    delivery.requesterDelivery = fact;
+  }
+  if (delivery.status === "pending" || delivery.status === "in_progress") {
+    delivery.disposition = undefined;
+    delivery.lastError = undefined;
+  }
+}
+
+export function recordRequesterHandoff(entry: SubagentRunRecord): void {
+  const wake = entry.requesterSettleWake;
+  recordRequesterDelivery(entry, {
+    state: "waiting",
+    runId:
+      wake?.privateInput?.runId ??
+      buildRequesterSettleWakeIdentity({
+        requesterSessionKey: entry.requesterSessionKey,
+        requesterAgentId: entry.requesterAgentId,
+        batchRunIds: wake?.batchRunIds ?? [entry.runId],
+        rearmGeneration: wake?.rearmGeneration,
+        retainedWake: wake,
+        hasPrivateCompletion: entry.completionTarget === "parent",
+      }).runId,
+    at: Date.now(),
+  });
+}
+
 export function isDeliverySuspended(entry: Pick<SubagentRunRecord, "delivery">): boolean {
   return entry.delivery?.status === "suspended" && typeof entry.delivery.suspendedAt === "number";
 }
@@ -264,6 +300,9 @@ export const markRequesterSettleWakePending = (
 
 export const clearSubagentPendingDelivery = (entry: SubagentRunRecord) => {
   const delivery = ensureDeliveryState(entry);
+  if (delivery.requesterDelivery?.state === "waiting") {
+    delivery.requesterDelivery = undefined;
+  }
   delivery.payload = undefined;
   delivery.createdAt = undefined;
   delivery.lastAttemptAt = undefined;

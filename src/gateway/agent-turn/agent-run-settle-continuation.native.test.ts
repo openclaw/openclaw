@@ -321,8 +321,11 @@ describe("requester-settle processing survives later user turns", () => {
 
   it("reopens the same consumed settle input after the shutdown owner interrupts it", async () => {
     const controller = new AbortController();
-    const original = await prepare({ abortSignal: controller.signal });
+    const onTranscriptCommitted = vi.fn();
+    const original = await prepare({ abortSignal: controller.signal, onTranscriptCommitted });
+    expect(onTranscriptCommitted).not.toHaveBeenCalled();
     await original.recorder!.persistApproved();
+    expect(onTranscriptCommitted).toHaveBeenCalledExactlyOnceWith(runId);
     controller.abort(createAgentRunRestartAbortError());
     await original.recorder!.waitForPendingInputSettlement!();
     expect(completion(original)).toMatchObject({ reason: "cancelled", stopReason: "restart" });
@@ -498,7 +501,9 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
     sourceTool: "subagent_announce",
   };
   const message = "Continue the OpenClaw runtime event.";
+  const onTranscriptCommitted = vi.fn();
   const params = makeTurnParams(target, message, "announce:completion-handoff", {
+    onTranscriptCommitted,
     inputProvenance: provenance,
     request: {
       internalEvents: [
@@ -520,6 +525,7 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
   // The completion's runtime context is saved after this turn; replay needs the turn itself.
   await withTurn(params, async (recorder) => {
     expect(await recorder.persistApproved()).toMatchObject({ appended: true });
+    expect(onTranscriptCommitted).not.toHaveBeenCalled();
   });
   const messages = (await loadTranscriptEvents(target)).filter(
     (event) => isIndexedSessionEntry(event) && event.type === "message",

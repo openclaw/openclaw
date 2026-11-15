@@ -178,12 +178,31 @@ export function createRequesterWakeSettlement(params: {
     scope,
     batch,
     rearmGeneration,
-    outcome,
+    outcome: observedOutcome,
     onCommitted,
     stateContext,
     admittedWake,
     release,
   } = params;
+  let consumedAt = 0;
+  const outcome =
+    observedOutcome &&
+    !observedOutcome.delivered &&
+    admittedWake?.yieldedFinalDeliverable !== true &&
+    batch.every((member) => {
+      const fact = context.options.runs.get(member.runId)?.delivery?.requesterDelivery;
+      if (!fact?.private || fact.state !== "consumed") {
+        return false;
+      }
+      consumedAt = Math.max(consumedAt, fact.at);
+      return true;
+    })
+      ? {
+          delivered: true,
+          path: "direct" as const,
+          deliveredAt: consumedAt,
+        }
+      : observedOutcome;
   // Retry bookkeeping with the observed outcome, never by replaying delivery or inventing failure.
   const receipt: RequesterWakeMutationReceipt = {};
   const retireInputs = batch.map(captureSubagentControllerInputRetirement);

@@ -406,6 +406,16 @@ export function scheduleRequesterSettleWake(
                   settledEntry: entry,
                   isSourceCurrent,
                   onAccepted: releasePreparation,
+                  recordRequesterDelivery: async (batch, fact) => {
+                    await mutateRequesterSettleWakeBatch(
+                      context,
+                      batch,
+                      admittedWake?.rearmGeneration,
+                      { kind: "requesterDelivery", fact },
+                      stateContext,
+                      {},
+                    );
+                  },
                   onDescendantsPending: (deadline) => {
                     if (isSourceCurrent()) {
                       descendantWait = { entry, deadline };

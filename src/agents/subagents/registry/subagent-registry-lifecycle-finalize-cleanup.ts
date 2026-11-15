@@ -12,6 +12,7 @@ import {
   ensureDeliveryState,
   clearSubagentPendingDelivery,
   loadPendingFinalDeliveryPayload,
+  recordRequesterHandoff,
 } from "./subagent-delivery-state.js";
 import {
   SUBAGENT_ENDED_REASON_COMPLETE,
@@ -235,7 +236,11 @@ export const finalizeSubagentCleanup = async (
           : isCronRunSessionKey(draft.requesterSessionKey)
             ? "not_required"
             : "pending";
-        delivery.disposition = "intentional_non_delivery";
+        delivery.disposition =
+          delivery.status === "pending" ? undefined : "intentional_non_delivery";
+        if (delivery.status === "pending") {
+          recordRequesterHandoff(draft);
+        }
         delivery.payload = undefined;
         delivery.createdAt = undefined;
         delivery.attemptCount = undefined;

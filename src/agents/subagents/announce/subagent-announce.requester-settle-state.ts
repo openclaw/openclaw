@@ -61,6 +61,10 @@ export function resolveRequesterSettleRetryState(params: {
 }
 
 type RequesterSettleWakeBatchCallbacks = {
+  recordRequesterDelivery?: (
+    batch: readonly SubagentRunRecord[],
+    fact: NonNullable<NonNullable<SubagentRunRecord["delivery"]>["requesterDelivery"]>,
+  ) => Promise<void>;
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,
