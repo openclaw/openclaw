@@ -510,20 +510,6 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       return false;
     }
     let waitForRequesterDelivery: (() => Promise<void>) | undefined;
-    if (!pauseNotice && params.recordRequesterDelivery) {
-      waitForRequesterDelivery = await observeSubagentRequesterDelivery(
-        controllerInput,
-        directIdempotencyKey,
-        (fact) =>
-          params.recordRequesterDelivery!(
-            settledBatch,
-            { ...fact, ...(parentOnly ? { private: true as const } : {}) },
-            (entries) => {
-              settledBatch = entries;
-            },
-          ),
-      );
-    }
     const retireUnadoptedInput = () => {
       if (controllerInput && !controllerInput.custody.rpcAdopted) {
         retireSessionControllerInput(controllerInput);
@@ -586,6 +572,20 @@ async function maybeWakeRequesterAfterAllChildrenSettledBound(
       state.status === "dispatching" ? state.attemptCount : Math.max(1, state.attemptCount + 1);
     let delivery: Awaited<ReturnType<typeof deliverSubagentAnnouncement>>;
     try {
+      if (!pauseNotice && params.recordRequesterDelivery) {
+        waitForRequesterDelivery = await observeSubagentRequesterDelivery(
+          controllerInput,
+          directIdempotencyKey,
+          (fact) =>
+            params.recordRequesterDelivery!(
+              settledBatch,
+              { ...fact, ...(parentOnly ? { private: true as const } : {}) },
+              (entries) => {
+                settledBatch = entries;
+              },
+            ),
+        );
+      }
       const dispatch = () => {
         const deliver = () =>
           deliverSubagentAnnouncement({
