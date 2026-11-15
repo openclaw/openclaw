@@ -1,4 +1,4 @@
-# 13,020 net test LF against main eb1a21da minus the single 400-line PR allowance.
+# 13,087 net test LF against main 5025db61 minus the single 400-line PR allowance.
 # Real worker identity/alias refusal, async capture retirement, FIFO and settlement,
 # auth commit publication, Talk/trajectory lifecycle, and periodic maintenance FS proof.
 # Repairs retain real queued-custody, completion-context, and immediate-retirement proof.
@@ -18,4 +18,6 @@
 # Hermes source-IO refusal targets the owned skills root without consuming runtime admission stats.
 # Failed cold Talk discovery aborts its test wait and joins accepted writes and real reads.
 # Concurrent bootstrap publication uses the same workspace FIFO as every production caller.
-12620
+# ACP control survives pending run ownership but refuses owner/membership changes;
+# startup census and visible-pane geometry fixtures retain their existing assertions.
+12687
