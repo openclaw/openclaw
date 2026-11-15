@@ -138,6 +138,22 @@ it("lands a due member on a new session once, and only from the default landing"
   expect(untouched).not.toHaveBeenCalled();
 });
 
+it("offers the composer when the member's own profile cannot be read", async () => {
+  document.documentElement.setAttribute("data-openclaw-id-enabled", "true");
+  document.documentElement.setAttribute("data-openclaw-control-ui-base-path", "");
+  window["__openclawTransport"] = {} as never;
+  const { owner, gateway } = arrive("sam.rivera");
+  expect(owner.state.kind).toBe("pending");
+  // The store leaves the self user unresolved when its profile read fails.
+  const loadSelfProfile = vi.fn(async () => {
+    throw new Error("closed");
+  });
+  Object.assign(gateway.snapshot, { selfUser: undefined });
+  Object.assign(gateway, { loadSelfProfile });
+  await vi.waitFor(() => expect(owner.state.kind).toBe("none"));
+  expect(loadSelfProfile).toHaveBeenCalledOnce();
+});
+
 it("asks again after a reconnect when the first status read was lost", async () => {
   let listener = () => {};
   let statusReads = 0;

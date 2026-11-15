@@ -107,11 +107,17 @@ function createMemberWelcomeOwner(gateway: ApplicationGateway) {
     );
     listeners.forEach((listener) => listener());
   };
+  // The member's profile, read here when the store has not resolved it. A failed read throws.
+  const resolveSelf = async (): Promise<AuthenticatedUser | null> => {
+    if (!gateway.snapshot.selfUser) {
+      await gateway.loadSelfProfile();
+    }
+    return gateway.snapshot.selfUser ?? null;
+  };
   const reconcile = () => {
     const snapshot = gateway.snapshot;
-    const self = snapshot.phase === "connected" ? snapshot.selfUser : null;
-    const next = self ? snapshot.client : null;
-    if (!next || !self) {
+    const next = snapshot.phase === "connected" ? snapshot.client : null;
+    if (!next) {
       // The store reconnects on the same client: ask again then, unless a welcome is in progress.
       if (state.kind !== "due") {
         client = null;
@@ -126,16 +132,19 @@ function createMemberWelcomeOwner(gateway: ApplicationGateway) {
       .request<OpenClawIdStatusResult>("openclawId.status", {})
       .then(async (status) => {
         const welcome = memberWelcomeFor(status);
-        const due =
+        const pending =
           welcome !== null &&
           !storage?.getItem(ANSWERED_KEY_PREFIX + welcome.accountId) &&
           !(await answeredInProfile(next));
+        const self = pending ? await resolveSelf() : null;
         if (client === next) {
-          publish(due ? { kind: "due", client: next, self, welcome } : { kind: "none" });
+          publish(
+            pending && self ? { kind: "due", client: next, self, welcome } : { kind: "none" },
+          );
         }
       })
       .catch(() => {
-        // A connection that cannot read its status gets the ordinary composer.
+        // A connection that cannot read its status or profile gets the ordinary composer.
         if (client === next) {
           state = { kind: "none" };
           listeners.forEach((listener) => listener());
