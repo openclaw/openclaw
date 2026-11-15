@@ -227,32 +227,39 @@ it.each(["caller", "service"] as const)(
         ? await useFileBackedConfigIO()
         : (await import("../config/io.js")).createConfigIO;
     readFrom(createConfigIO);
+    // The candidate check is stateless: it receives the owning profile, not a config.
+    // Doctor reads that profile's config after activation, where rollback owns failure.
+    let ownerState = stateDir;
     if (owner === "service") {
-      const serviceState = f.profileStateDir("work");
-      await writeProfile(serviceState, { gateway: { mode: "local", bind: "lan" } });
-      primeManagedProfile(root, serviceState);
+      ownerState = f.profileStateDir("work");
+      await writeProfile(ownerState, { gateway: { mode: "local", bind: "lan" } });
+      primeManagedProfile(root, ownerState);
     }
     // The candidate refuses through its real result contract while the authored bytes are intact.
     const refusal = `candidate refused the ${owner} config`;
-    mocks.candidateCheck.mockImplementationOnce(async ({ root: candidateRoot }) => {
-      expect(await fs.readFile(configPath, "utf8")).toBe(before);
-      return {
-        status: "error",
-        steps: [
-          {
-            name: "candidate-recovery",
-            command: "--check",
-            cwd: candidateRoot,
-            durationMs: 1,
-            exitCode: 1,
-            stderrTail: refusal,
-            failureFacts: [
-              { check: "runtime", code: "candidate-runtime-failed", message: refusal },
-            ],
-          },
-        ],
-      };
-    });
+    mocks.candidateCheck.mockImplementationOnce(
+      async ({ root: candidateRoot, stateDir: checkedState, env }) => {
+        expect(checkedState).toBe(ownerState);
+        expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join(ownerState, "openclaw.json"));
+        expect(await fs.readFile(configPath, "utf8")).toBe(before);
+        return {
+          status: "error",
+          steps: [
+            {
+              name: "candidate-recovery",
+              command: "--check",
+              cwd: candidateRoot,
+              durationMs: 1,
+              exitCode: 1,
+              stderrTail: refusal,
+              failureFacts: [
+                { check: "runtime", code: "candidate-runtime-failed", message: refusal },
+              ],
+            },
+          ],
+        };
+      },
+    );
     await withConfig(
       configPath,
       () => expectUpdateFailure({ channel: "beta", yes: true, restart: false, json: true }),
