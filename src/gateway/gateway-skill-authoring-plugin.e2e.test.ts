@@ -187,6 +187,7 @@ const WORKSHOP_DESCRIPTION = "WORKSHOP_SKILL_DESCRIPTION use when proving core W
  */
 function skillRefreshShape(
   description: string,
+  runtimeContextCount: number,
   ...raw: [
     ProviderPrefixSnapshot,
     ProviderPrefixSnapshot,
@@ -200,29 +201,49 @@ function skillRefreshShape(
   const nextTurn = withLeadingSystemMessage(raw[3]);
   // Within the write's turn the cacheable prefix stays byte-identical; history only appends.
   assertStableProviderPrefix(before, sameTurn, { label: "same turn after skill write" });
-  // The next turn keeps tools, cache key and every earlier history item byte-identical...
-  // The latest turn's runtime-context message is turn-scoped and never replayed (existing
-  // contract), so the replayed prefix is the write turn's history without it.
-  const replayed = turnEnd.history.filter(
-    (item) => !item.includes('"text":"OpenClaw runtime context:'),
-  );
-  expect(turnEnd.history.length - replayed.length).toBe(1);
-  assertStableProviderPrefix({ ...turnEnd, history: replayed, system: nextTurn.system }, nextTurn, {
-    label: "next turn after skill write",
-  });
-  // ...and the system prompt changes only by the new skill's skills-list entry.
-  const next = nextTurn.system;
+  // Every route now pins the system prompt and retains earlier runtime context (#198100).
+  assertStableProviderPrefix(turnEnd, nextTurn, { label: "next turn after skill write" });
+  expect(
+    turnEnd.history.filter((item) => item.includes('"text":"OpenClaw runtime context:')),
+  ).toHaveLength(runtimeContextCount);
+  expect(
+    nextTurn.history.filter((item) => item.includes('"text":"OpenClaw runtime context:')),
+  ).toHaveLength(runtimeContextCount + 1);
+
+  // Skills refresh in one appended section update; earlier rendered sections remain the baseline.
+  const messageText = (item: string) => {
+    const message = JSON.parse(item) as { content?: string | Array<{ text?: string }> };
+    return typeof message.content === "string"
+      ? message.content
+      : (message.content?.map((block) => block.text ?? "").join("") ?? "");
+  };
+  const updateHeading =
+    "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.\n\n";
+  const previous = [turnEnd.system, ...turnEnd.history]
+    .map(messageText)
+    .filter((text, index) => index === 0 || text.startsWith(updateHeading))
+    .flatMap((text) => text.split(/(?=^## )/m))
+    .findLast((section) => section.startsWith("## Skills\n"));
+  expect(previous).toBeDefined();
+  const updates = nextTurn.history
+    .slice(turnEnd.history.length)
+    .map(messageText)
+    .filter((text) => text.startsWith(updateHeading));
+  expect(updates).toHaveLength(1);
+  const next = updates[0]!.slice(updateHeading.length);
+  expect(next.startsWith("## Skills\n")).toBe(true);
+  expect(next.split(/(?=^## )/m)).toHaveLength(1);
   const at = next.indexOf(description);
   const entryStart = next.lastIndexOf("<skill>", at);
   const entryEnd = next.indexOf("</skill>", at) + "</skill>".length;
-  // Entries are newline-indented; in JSON bytes the separator reads as an escaped newline.
-  const separator = "\\n  ";
+  // Removing the new entry must restore the entire previous Skills section byte for byte.
+  const separator = "\n  ";
   const withoutEntry = [
     next.slice(0, entryStart) + next.slice(entryEnd + separator.length),
     next.slice(0, entryStart - separator.length) + next.slice(entryEnd),
   ];
   return {
-    onlyEntryAdded: at > 0 && withoutEntry.includes(turnEnd.system),
+    onlyEntryAdded: at > 0 && withoutEntry.includes(previous ?? ""),
     entry: next.slice(entryStart, entryEnd),
   };
 }
@@ -467,6 +488,7 @@ it(
           snapshotProviderPrefix("openai-responses", JSON.parse(requests[index]?.raw ?? "{}"));
         const pluginShape = skillRefreshShape(
           SKILL_DESCRIPTION,
+          1,
           prefix(0),
           prefix(1),
           prefix(3),
@@ -474,6 +496,7 @@ it(
         );
         const workshopShape = skillRefreshShape(
           WORKSHOP_DESCRIPTION,
+          3,
           prefix(5),
           prefix(6),
           prefix(6),
