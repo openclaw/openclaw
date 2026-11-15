@@ -11,7 +11,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import {
   respondDeletedAgentSession,
-  resolveAgentSessionWorkStartError,
+  resolveAgentSessionWorkStartBlock,
 } from "../agent-turn/agent-handler-helpers.js";
 import {
   takeInProcessFreshChildSession,
@@ -123,9 +123,11 @@ async function prepareAdmittedAgentSession(
   if (deleted instanceof Promise ? await deleted : deleted) {
     return undefined;
   }
-  const archivedSessionError = resolveAgentSessionWorkStartError(canonicalKey, entry);
-  if (archivedSessionError) {
-    respondError(params.respond, ErrorCodes.INVALID_REQUEST, archivedSessionError);
+  const workStartBlock = resolveAgentSessionWorkStartBlock(canonicalKey, entry);
+  if (workStartBlock) {
+    respondError(params.respond, ErrorCodes.INVALID_REQUEST, workStartBlock.message, {
+      retryable: workStartBlock.retryable,
+    });
     return undefined;
   }
 
