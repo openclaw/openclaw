@@ -63,6 +63,7 @@ it("retains the original eligible denominator across selected subsets and runtim
         count: expected.length,
         digest: createHash("sha256").update(JSON.stringify(expected.toSorted())).digest("hex"),
       });
+      expect(entry.selected?.count).toBe(1);
     }
   }
   for (const runtime of ["node", "bun"]) {
