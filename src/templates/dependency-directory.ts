@@ -15,7 +15,7 @@ import {
 } from "./source-limits.js";
 
 export type TemplateDirectorySnapshot = {
-  files: Array<{ path: string; byteLength: number; digest: string; executable: boolean }>;
+  files: Array<{ path: string; byteLength: number; digest: string; executable?: true }>;
   byteLength: number;
   digest: string;
 };
@@ -97,7 +97,7 @@ export async function snapshotTemplateDependencyDirectory(params: {
       path,
       byteLength: read.buffer.byteLength,
       digest: digestTemplateBytes(read.buffer),
-      executable: (read.stat.mode & 0o111) !== 0,
+      ...((read.stat.mode & 0o111) !== 0 ? { executable: true as const } : {}),
     });
   }
   return { files, byteLength, digest: digestTemplateValue(files) };
