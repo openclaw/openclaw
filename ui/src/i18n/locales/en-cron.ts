@@ -356,7 +356,7 @@ const enCron = {
       deliverySuppression: "Delivery suppression: {reason}",
       runAt: "Started at",
       transcript: "Conversation",
-      viewTranscript: "View transcript",
+      viewTranscript: "View chat",
       transcriptScope:
         "This is the conversation used by the selected run. Shared conversations can include messages from before and after that run.",
       transcriptEmpty: "No messages in this conversation yet.",

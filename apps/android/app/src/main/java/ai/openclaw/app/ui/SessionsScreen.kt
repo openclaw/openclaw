@@ -515,7 +515,7 @@ internal fun SessionsScreen(
   deleteSessionTarget?.let { session ->
     SessionDeleteDialog(
       title = nativeString("Delete thread?"),
-      text = nativeString("This permanently deletes the thread and its transcript."),
+      text = nativeString("This permanently deletes the chat."),
       onDismiss = { deleteSessionTarget = null },
       onConfirm = {
         deleteSessionTarget = null

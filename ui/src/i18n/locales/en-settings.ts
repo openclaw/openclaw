@@ -2029,7 +2029,7 @@ const enSettings = {
       devices: "Microphone and camera",
       messageWidth: "Message width",
       messageWidthHint:
-        "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
+        "Optional CSS width for the centered chat, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
       showTaskProgress: "Show task progress cards",
@@ -2150,8 +2150,8 @@ const enSettings = {
     },
     sessionStorage: {
       title: "Session storage",
-      description: "Transcript counts and disk usage across agent databases.",
-      transcripts: "Transcripts",
+      description: "Chat counts and disk usage across agent databases.",
+      transcripts: "Chats",
       transcriptCounts: "{hot} uncompressed · {cold} archived",
       database: "Databases",
       walSize: "Write-ahead logs: {size}",
@@ -2163,29 +2163,28 @@ const enSettings = {
       agentCounts:
         "{hot} uncompressed · {cold} archived · Database {database} · WAL {wal} · Archive files {archives} · Compressed in database {embedded}",
       worker: "Background maintenance",
-      completed: "Last completed {time} · {count} transcripts archived",
+      completed: "Last completed {time} · {count} chats archived",
       notRun: "No maintenance batches completed yet.",
       running: "Running",
-      runningProgress: "{archived} transcripts archived · {externalized} archives moved to files",
+      runningProgress: "{archived} chats archived · {externalized} archives moved to files",
       externalized: "{count} compressed archives moved from the database to files.",
       idle: "Idle",
       failed: "Needs attention",
       adminRequired: "You need admin access to inspect session storage.",
       disconnected: "Reconnect to inspect session storage.",
       automatic: "Automatic archival",
-      enabled: "Archive older transcripts",
+      enabled: "Archive older chats",
       enabledHint:
-        "Inactive transcripts move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
+        "Inactive chats move into compressed JSONL files. Active sessions stay in the database; archived history is restored before use.",
       afterDays: "Archive after (days)",
-      afterDaysHint:
-        "Days since the transcript last changed. Changes apply without a Gateway restart.",
+      afterDaysHint: "Days since the chat last changed. Changes apply without a Gateway restart.",
       backupHint:
         "OpenClaw backups capture archived history with the database. Direct database copies also need the archive files. Missing or damaged archives require recovery from a backup.",
       advanced: "Advanced session settings",
       runNow: "Run now",
       runHint: "Start one maintenance batch using the saved, applied policy.",
       runStarted: "Maintenance batch started. You can leave this page while it runs.",
-      runCompleted: "Maintenance batch completed. {count} transcripts archived.",
+      runCompleted: "Maintenance batch completed. {count} chats archived.",
     },
   },
   memoryPage: {
