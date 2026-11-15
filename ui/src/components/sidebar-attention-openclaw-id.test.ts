@@ -39,6 +39,7 @@ afterEach(() => {
   unbindPrompt();
   endFeature();
   store?.dispose();
+  vi.useRealTimers();
   localStorage.clear();
   document.body.innerHTML = "";
   vi.restoreAllMocks();
@@ -244,6 +245,8 @@ it("tells an owner about join requests and a non-owner nothing", async () => {
 });
 
 it("prompts once per new request and clears when requests resolve or expire", async () => {
+  // Expiry and the countdown run on this clock; the test advances it explicitly.
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["Date", "setTimeout", "clearTimeout"] });
   const navigate = vi.fn();
   const ada = memberRequest("ada", "Ada");
   const h = setup(async () => tunnelOwner, { invites: [ada] });
@@ -270,10 +273,15 @@ it("prompts once per new request and clears when requests resolve or expire", as
     }),
   );
 
-  h.requestsChanged({ invites: [memberRequest("cy", "Cy", Date.now() + 150), ada] });
+  h.requestsChanged({ invites: [memberRequest("cy", "Cy", Date.now() + 3_600_000), ada] });
   await waitForFast(() => expect(promptTitle()).toBe("Cy asked to join"));
   // Cy's request expires without a Gateway event.
-  await waitForFast(() => expect(store?.entries).toMatchObject([{ label: "Ada asked to join" }]));
+  vi.advanceTimersByTime(3_600_000);
+  await waitForFast(() =>
+    expect(store?.entries).toMatchObject([
+      { label: "Ada asked to join", meta: { status: "2d left to decide" } },
+    ]),
+  );
   // Ada was already shown to this profile, so the prompt closes rather than falling back to her.
   await waitForFast(() => expect(promptTitle()).toBeNull());
 
@@ -283,4 +291,21 @@ it("prompts once per new request and clears when requests resolve or expire", as
   h.requestsChanged({ invites: [] });
   await waitForFast(() => expect(store?.entries).toEqual([]));
   await waitForFast(() => expect(promptTitle()).toBeNull());
+});
+
+it("schedules the next time-left change, not only the expiry", async () => {
+  const now = Date.now();
+  const ada = memberRequest("ada", "Ada", now + 216_000_000);
+  const gateway = client(
+    vi.fn(async (method: string) =>
+      method === "openclawId.status" ? tunnelOwner : { link: { invites: [ada] } },
+    ),
+  );
+  const attention = await readOpenClawIdAttention(gateway, () => true);
+  // Days left: the Inbox re-renders hourly, so an idle row's time left stays current.
+  expect(attention?.nextChangeAt(now)).toBe(now + 3_600_000);
+  // The last hour counts down every few seconds, then the row expires.
+  const lastHour = now + 216_000_000 - 1_800_000;
+  expect(attention?.nextChangeAt(lastHour)).toBe(lastHour + 5_000);
+  expect(attention?.nextChangeAt(now + 216_000_000)).toBeUndefined();
 });
