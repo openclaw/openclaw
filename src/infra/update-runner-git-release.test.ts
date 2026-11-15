@@ -121,6 +121,51 @@ describe.skipIf(process.platform === "win32")("Git release updates", () => {
     expect(await fs.realpath(gitReleaseSlot(prefix))).not.toBe(await fs.realpath(running));
   });
 
+  it("reports a current release as prepared so finalization never regenerates it", async () => {
+    target.runtimeVerified = true;
+    const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-current-")));
+    roots.push(dir);
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(dir, "state"));
+    const checkout = path.join(dir, "checkout");
+    await fs.mkdir(checkout);
+    await git(checkout, "init", "-q", "--initial-branch=main");
+    await git(checkout, "config", "user.email", "test@example.com");
+    await git(checkout, "config", "user.name", "Test");
+    await fs.writeFile(
+      path.join(checkout, "package.json"),
+      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
+    );
+    await git(checkout, "add", ".");
+    await git(checkout, "commit", "-qm", "base");
+    const prefix = path.join(dir, "state", "git-install");
+    const running = (await createGitReleaseDirs(prefix)).releaseRoot;
+    await git(checkout, "worktree", "add", "--detach", running, "HEAD");
+    await publishGitRelease({ prefix, releaseRoot: running, trial: false });
+    const runCommand: CommandRunner = (argv, options) =>
+      argv[1]?.endsWith("openclaw.mjs")
+        ? Promise.resolve({ code: 0, stdout: "1.0.0\n", stderr: "" })
+        : runCommandWithTimeout(argv, options);
+
+    const result = await updateGitRelease({
+      gitRoot: gitReleaseSlot(prefix),
+      runCommand,
+      defaultCommandEnv: undefined,
+      timeoutMs: 10_000,
+      startedAt: Date.now(),
+      opts: {
+        channel: "dev",
+        inspectGitTarget: async () => {},
+        validateCandidate: async () => [],
+        beforeGitMutation: async () => {},
+        runGitDoctor: async () => null,
+      },
+    });
+
+    expect(target.beforeRuntimeVerified).toEqual([true]);
+    // Post-core finalization would otherwise run build scripts inside the release.
+    expect(result).toMatchObject({ status: "skipped", sourceRuntimePrepared: true });
+  });
+
   it("builds the first release from the serving worktree's commit, not the checkout's HEAD", async () => {
     target.runtimeVerified = true;
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "git-release-conv-")));

@@ -96,6 +96,8 @@ export async function updateGitRelease(params: {
     ...(reason ? { reason } : {}),
     before,
     recovery,
+    // A release is built where it stays; nothing regenerates runtime inside it later.
+    sourceRuntimePrepared: true,
     steps,
     durationMs: Date.now() - startedAt,
   });
@@ -284,7 +286,6 @@ export async function updateGitRelease(params: {
     ...result("ok"),
     root: slot,
     gitRuntime: await readGitRuntimeArtifactIdentity(releaseRoot),
-    sourceRuntimePrepared: true,
     after: {
       sha: afterSha,
       version,
