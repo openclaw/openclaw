@@ -1047,7 +1047,13 @@ function buildConfigMocks(
   const config = {
     logging: { level: "info", consoleTimestamps: true },
     messages: { queueLimit: 5, responsePrefix: "" },
-    gateway: { port: 18789, bind: "127.0.0.1", publicOrigin: "https://gateway.example" },
+    gateway: {
+      port: 18789,
+      bind: "127.0.0.1",
+      publicOrigin: "https://gateway.example",
+      // Templates is experimental; the mock turns it on so Customize shows it.
+      controlUi: { experimental: { templates: true } },
+    },
     agents: { defaults: { thinkingDefault: "medium" } },
     commands: { native: "auto", nativeSkills: "auto" },
     models: { mode: "merge" },
