@@ -413,7 +413,10 @@ export function PluginSettingsEditor(props: PluginSettingsEditorProps) {
           </label>
           <PluginSettingsReadStatus
             model={props.model}
-            loading={props.model.configSchemaLoading || !props.model.configValue}
+            loading={
+              props.model.configSchemaLoading ||
+              (!props.model.configValue && props.model.configBusy)
+            }
             rows={2}
             renderError={(error, retry) => (
               <InlineAlert tone="danger" role="alert">

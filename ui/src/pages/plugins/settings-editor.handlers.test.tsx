@@ -143,3 +143,59 @@ it("shows a later write failure after a caught configuration read failure", asyn
   expect(writeRetry).toHaveBeenCalledOnce();
   expect(readRetry).not.toHaveBeenCalled();
 });
+
+it("ends first-read loading at failure and restores it only for retry", async () => {
+  const client = createTestGatewayClient(vi.fn());
+  const state = createInitialConfigState({ client, phase: "connected" });
+  const first = beginConfigRead(state, client);
+  const retry = vi.fn();
+  const [model, setModel] = createSignal<PluginSettingsEditorModel>(
+    createPluginSettingsDetailProps(createResult(), {
+      pluginId: "fixture",
+      configValue: null,
+      configSchema: { type: "object", properties: { label: { type: "string" } } },
+      configRead: first,
+      configBusy: true,
+      configError: null,
+      onConfigReadRetry: retry,
+    }),
+  );
+  const { container } = mountSolid(() => <PluginSettingsEditor model={model()} />);
+  const skeleton = () => container.querySelector('.settings-loading-skeleton[aria-busy="true"]');
+  await waitForSolid(() => expect(skeleton()).not.toBeNull());
+  first.completion.resolve({ ok: false, error: "Configuration unavailable" });
+  setModel((previous) => ({
+    ...previous,
+    configBusy: false,
+    configError: "Configuration unavailable",
+  }));
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Configuration unavailable",
+    ),
+  );
+  expect.soft(skeleton(), "a settled error is not an active read").toBeNull();
+  container.querySelector<HTMLButtonElement>('[role="alert"] button')!.click();
+  expect(retry).toHaveBeenCalledOnce();
+  const second = beginConfigRead(state, client);
+  setModel((previous) => ({
+    ...previous,
+    configRead: second,
+    configBusy: true,
+    configError: null,
+  }));
+  await waitForSolid(() => expect(skeleton()).not.toBeNull());
+  second.completion.resolve({ ok: true, value: undefined });
+  setModel((previous) => ({
+    ...previous,
+    configBusy: false,
+    configValue: { plugins: { entries: { fixture: { config: { label: "Ready" } } } } },
+  }));
+  await waitForSolid(() =>
+    expect(container.querySelector<HTMLInputElement>('input[type="text"]')?.value).toBe("Ready"),
+  );
+  expect(skeleton()).toBeNull();
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="alert"]:not([hidden])')).toBeNull(),
+  );
+});
