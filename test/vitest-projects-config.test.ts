@@ -57,7 +57,7 @@ const scopedGatewayMethodsIsolatedTestFiles = `chat-metadata-runtime.cache agent
   agent.followup-owner agent.visitor-access board.runtime-boundaries chat.reset-visible-yield
   environments.pairing-snapshot health.owner-routing sessions.send-yield-resume
   system-agent-nested-inference.integration system-agent-setup-control-ui transcripts
-  users-preferences users-role.worker usage usage.sessions-usage`
+  users-role.worker usage usage.sessions-usage`
   .split(/\s+/u)
   .map((name) => `server-methods/${name}.test.ts`);
 
@@ -295,7 +295,7 @@ describe("projects vitest config", () => {
   ] as const)(
     "limits %s include files to the project's owned tests",
     (_, createConfig, owned, expected?: readonly string[]) => {
-      const unrelated = "src/gateway/worker-environments/workspace-sync-scripts.test.ts";
+      const unrelated = "src/gateway/worker-environments/workspace-sync.test.ts";
       const mixed = includeEnv([
         ...owned,
         "src/plugin-sdk/text-chunking.test.ts",
