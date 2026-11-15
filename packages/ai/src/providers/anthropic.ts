@@ -267,6 +267,7 @@ export const streamSimpleAnthropic: StreamFunction<
       authProfileId?: string;
       toolChoice?: AnthropicCompactionOptions["toolChoice"];
       thinkingDisplay?: AnthropicOptions["thinkingDisplay"];
+      onClaudeCodeVersionRequired?: AnthropicOptions["onClaudeCodeVersionRequired"];
     }
 > = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
@@ -277,6 +278,7 @@ export const streamSimpleAnthropic: StreamFunction<
     anthropicCompactThreshold: options?.anthropicCompactThreshold,
     cacheTtlPruning: options?.cacheTtlPruning,
     onCompactionRejected: options?.onCompactionRejected,
+    onClaudeCodeVersionRequired: options?.onClaudeCodeVersionRequired,
     authProfileId: options?.authProfileId,
     maxTokens: clampMaxTokensToModel(model, options?.maxTokens ?? model.maxTokens),
     toolChoice: options?.toolChoice,

@@ -268,9 +268,12 @@ OpenClaw release:
     Direct Messages API requests using a setup token advertise a maintained
     Claude Code client version, or the installed CLI version when newer.
     Anthropic uses that identity to gate newer models. A missing, older, or
-    failed CLI check uses OpenClaw's maintained version floor. Discovery is
-    shared with the CLI backend and cached until process restart; API-key
-    requests do not run the check.
+    failed CLI check uses OpenClaw's maintained version floor. When Anthropic
+    rejects an OAuth request with a newer required version, OpenClaw adopts that
+    version and retries once before streaming. The Anthropic plugin stores the
+    requirement for later requests and restarts; storage failures do not prevent
+    the current process from using it. Discovery is shared with the CLI backend
+    and cached until process restart; API-key requests do not run the check.
 
     ### Config example
 
