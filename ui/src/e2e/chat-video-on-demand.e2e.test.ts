@@ -120,6 +120,9 @@ suite.define(() => {
             expect(mediaRequests).toEqual([]);
           }
           const capture = async (name: string) => {
+            if (process.env.OPENCLAW_CAPTURE_UI_PROOF !== "1") {
+              return;
+            }
             const frame = await takeControlUiScreenshotFrame(page, pane, [tile], {
               animations: "disabled",
             });
@@ -176,9 +179,13 @@ suite.define(() => {
           await expectBrowser(tile.getByRole("button", { name: /Play/ })).toBeVisible();
           await page.setViewportSize({ width: 390, height: 844 });
           await capture("mobile-idle");
-          const bounds = await tile.boundingBox();
-          expect(bounds!.x).toBeGreaterThanOrEqual(0);
-          expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(391);
+          // Wait for responsive layout even when proof capture is disabled.
+          await expect
+            .poll(async () => {
+              const bounds = await tile.boundingBox();
+              return bounds !== null && bounds.x >= 0 && bounds.x + bounds.width <= 391;
+            })
+            .toBe(true);
         },
       );
     },
