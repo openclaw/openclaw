@@ -109,10 +109,33 @@
   background: var(--border);
 }
 
+/* While a pin is dragged, a faint fill marks the zone and a short line marks where it lands. */
 .sidebar-rail__pins--drag-active {
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);
-  outline-offset: -1px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before,
+.sidebar-rail__pin.sidebar-zone-entry--drop-after {
+  box-shadow: none;
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before::before,
+.sidebar-rail__pin.sidebar-zone-entry--drop-after::before {
+  content: "";
+  position: absolute;
+  inset-inline: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-before::before {
+  top: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
+}
+
+.sidebar-rail__pin.sidebar-zone-entry--drop-after::before {
+  bottom: calc(var(--sidebar-rail-item-gap) / -2 - 1px);
 }
 
 .sidebar-rail__monogram {
