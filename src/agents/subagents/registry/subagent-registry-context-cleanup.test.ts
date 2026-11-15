@@ -15,6 +15,7 @@ import {
 } from "../../../context-engine/registry.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import { getPluginInstance } from "../../../plugins/plugin-instance-scope.js";
+import { createOwnedTestInstance } from "../../../plugins/plugin-instance.test-support.js";
 import { PluginInvocationScope } from "../../../plugins/plugin-invocation-scope.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { PluginRegistryInspectionResources } from "../../../plugins/registry-inspection-resources.js";
@@ -92,6 +93,30 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(loadSubagentSessionEntry).mockReset();
+  });
+
+  it("loads the post-turn registry outside the finished requester turn's scope", async () => {
+    const instance = createOwnedTestInstance("post-turn-tools");
+    const turn = new PluginInvocationScope(instance.owner!.registry!, [instance], {
+      retained: true,
+    });
+    const { registry, cleanup, warn } = createCleanup({ async onSubagentEnded() {} });
+    // The real loader reads plugin registrations through their instances.
+    vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(() =>
+      instance.run(() => registry),
+    );
+    const resume = createDeferred<void>();
+    const ended = turn.run(async () => {
+      await resume.promise;
+      await cleanup.notifyContextEngineSubagentEnded(
+        { childSessionKey: "agent:main:subagent:after-turn", reason: "completed" },
+        { prepareCurrent: async () => true },
+      );
+    });
+    turn.release();
+    resume.resolve();
+    await ended;
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it.each(["registry", "resolve", "authority", "notify", "dispose"] as const)(
