@@ -39,7 +39,7 @@ const STATUS: Record<ScribeStatus, [string, string]> = {
   starting: ["Starting", ""],
   on: ["On", "scribe-chip-on"],
   attention: ["Needs attention", "scribe-chip-warn"],
-  paused: ["Paused", ""],
+  paused: ["Disabled", ""],
   failing: ["Failing", "scribe-chip-warn"],
   done: ["Done", "scribe-chip-on"],
   missing: ["Conversation not found", "scribe-chip-warn"],
@@ -137,7 +137,7 @@ function activeMeta(snapshot: ScribeSnapshot) {
         : "Its conversation was deleted. Repair starts a new one.",
     );
   } else if (status === "paused") {
-    parts.push("Paused");
+    parts.push("Disabled");
   } else if (firstRunPending(snapshot)) {
     parts.push("First run in progress");
   }
@@ -528,23 +528,25 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
     const paused = !job.enabled;
     actions.append(
       control(
-        paused ? "Resume" : "Pause",
+        paused ? "Enable" : job.state.runningAtMs ? "Stop and disable" : "Disable",
         () => setScribePaused(host, job, !paused),
-        paused ? `${scribe.title} resumed.` : `${scribe.title} paused.`,
+        paused
+          ? `Automation enabled for ${scribe.title}.`
+          : `Automation disabled for ${scribe.title}.`,
       ),
     );
   }
   if (job) {
     const turnOff = button(
-      "Turn off…",
+      "Remove automation…",
       () =>
         openConfirmDialog(
-          `Turn off ${scribe.title}?`,
-          `Its automation is removed and it stops running. The conversation ${scribeLabel(scribe)} is kept, so you can still read what it did.`,
-          "Turn off",
+          `Remove the automation for ${scribe.title}?`,
+          `Its automation is removed and any active run is asked to stop. The conversation ${scribeLabel(scribe)} is kept, so you can still read what it did.`,
+          "Remove automation",
           async () => {
             await turnOffScribe(host, job);
-            ui.announce(`${scribe.title} turned off.`);
+            ui.announce(`Automation removed for ${scribe.title}.`);
             void ui.load();
           },
         ),
@@ -580,7 +582,7 @@ function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[], detection
         job.state.runningAtMs
           ? "Running now"
           : !job.enabled
-            ? "Paused"
+            ? "Disabled"
             : job.state.nextRunAtMs
               ? when(job.state.nextRunAtMs)
               : "Not scheduled",
