@@ -5,6 +5,7 @@ import {
   SESSION_ICON_SVG_DATA_URL_PREFIX,
 } from "../../../packages/gateway-protocol/src/session-agent-status.ts";
 import {
+  isRailSectionPin,
   normalizeSidebarEntries,
   parseSidebarEntry,
   serializeSidebarEntry,
@@ -52,15 +53,56 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       (entry) => !entry.startsWith("session:"),
     ),
   );
-  // The agent avatar above is the Sessions item.
-  const views = ["pages", "online"] as const;
-  const viewLabel = (view: (typeof views)[number]) =>
-    view === "pages" ? t("nav.pages") : t("presence.usersTitle");
-  const viewPressed = (view: (typeof views)[number]) =>
+  // Saved order is kept; the rail shows native sections first, then everything else.
+  const sectionPins = createMemo(() => pins().filter(isRailSectionPin));
+  const otherPins = createMemo(() => pins().filter((entry) => !isRailSectionPin(entry)));
+  // The agent avatar above is the Sessions item; Pages is the "more" control below the sections.
+  type View = "pages" | "online";
+  const viewLabel = (view: View) => (view === "pages" ? t("nav.pages") : t("presence.usersTitle"));
+  const viewPressed = (view: View) =>
     host.navigationVisible &&
     !host.onExitSettings &&
     !host.navigationCollapsed &&
     host.navigationView === view;
+  const ViewButton = (props: { view: View }) => (
+    <openclaw-tooltip prop:content={viewLabel(props.view)}>
+      <button
+        ref={[
+          elementRef((element: HTMLButtonElement) => {
+            host.navigationViewElements.set(props.view, element);
+            return () => {
+              if (host.navigationViewElements.get(props.view) === element) {
+                host.navigationViewElements.delete(props.view);
+              }
+            };
+          }),
+        ]}
+        type="button"
+        class="sidebar-rail__button"
+        data-navigation-view={props.view}
+        aria-label={viewLabel(props.view)}
+        aria-pressed={viewPressed(props.view) ? "true" : "false"}
+        onClick={() => {
+          const active = host.navigationView === props.view;
+          host.navigationView = props.view;
+          if (host.onExitSettings) {
+            host.onExitSettings();
+          } else if (
+            !isMobileNavLayout() &&
+            ((active && props.view !== "online") || host.navigationCollapsed)
+          ) {
+            host.onToggleSidebar?.();
+          }
+          host.invalidate();
+        }}
+      >
+        <Icon
+          name={props.view === "pages" ? "moreHorizontal" : "users"}
+          filled={viewPressed(props.view)}
+        />
+      </button>
+    </openclaw-tooltip>
+  );
   return (
     <nav
       class="sidebar-rail"
@@ -84,49 +126,7 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         />
       </div>
       <div class="sidebar-rail__views">
-        <For each={views}>
-          {(view) => {
-            return (
-              <openclaw-tooltip prop:content={viewLabel(view)}>
-                <button
-                  ref={[
-                    elementRef((element: HTMLButtonElement) => {
-                      host.navigationViewElements.set(view, element);
-                      return () => {
-                        if (host.navigationViewElements.get(view) === element) {
-                          host.navigationViewElements.delete(view);
-                        }
-                      };
-                    }),
-                  ]}
-                  type="button"
-                  class="sidebar-rail__button"
-                  data-navigation-view={view}
-                  aria-label={viewLabel(view)}
-                  aria-pressed={viewPressed(view) ? "true" : "false"}
-                  onClick={() => {
-                    const active = host.navigationView === view;
-                    host.navigationView = view;
-                    if (host.onExitSettings) {
-                      host.onExitSettings();
-                    } else if (
-                      !isMobileNavLayout() &&
-                      ((active && view !== "online") || host.navigationCollapsed)
-                    ) {
-                      host.onToggleSidebar?.();
-                    }
-                    host.invalidate();
-                  }}
-                >
-                  <Icon
-                    name={view === "pages" ? "layoutGrid" : "users"}
-                    filled={viewPressed(view)}
-                  />
-                </button>
-              </openclaw-tooltip>
-            );
-          }}
-        </For>
+        <ViewButton view="online" />
       </div>
       <openclaw-tooltip>
         <span slot="content">
@@ -165,7 +165,8 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
               .composedPath()
               .some(
                 (target) =>
-                  target instanceof Element && target.matches("a[href], button:not([disabled])"),
+                  target instanceof Element &&
+                  target.matches("a[href], button:not([disabled], [data-navigation-view])"),
               )
           ) {
             host.onToggleSidebar?.();
@@ -175,7 +176,14 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         onDragLeave={(event) => host.sessionOrganizer.handleSidebarZoneDragLeave(event)}
         onDrop={(event) => host.sessionOrganizer.handleSidebarZoneDrop(event)}
       >
-        <For each={pins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
+        <For each={sectionPins()}>
+          {(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}
+        </For>
+        <ViewButton view="pages" />
+        <Show when={otherPins().length > 0}>
+          <span class="sidebar-rail__separator" aria-hidden="true" />
+        </Show>
+        <For each={otherPins()}>{(key) => renderRailPin(host, parseSidebarEntry(key)!, zone)}</For>
       </div>
       <div class="sidebar-rail__bottom">{renderAppSidebarFooterBar(host)}</div>
     </nav>

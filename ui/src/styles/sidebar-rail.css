@@ -102,6 +102,13 @@
   border-radius: var(--radius-md);
 }
 
+/* Separates native section pins and the Pages control from plugin and personal pins. */
+.sidebar-rail__separator {
+  flex: 0 0 1px;
+  width: 24px;
+  background: var(--border);
+}
+
 .sidebar-rail__pins--drag-active {
   background: color-mix(in srgb, var(--accent) 8%, transparent);
   outline: 1px dashed color-mix(in srgb, var(--accent) 60%, transparent);

@@ -154,9 +154,11 @@ suite.define(() => {
           });
           await seedChatSettings(page, suite.server.baseUrl, {
             sidebarAgentsMode: "roster",
+            // Workboard moves up within the pins below the rail separator.
             railShortcuts: [
               "route:sessions",
               "route:systems",
+              "person:ada",
               "plugin:workboard/workboard",
               "route:cron",
             ],

@@ -313,6 +313,32 @@ describe("sidebar rail pin menu", () => {
     expect(online().querySelector('[fill-rule="evenodd"]')).not.toBeNull();
   });
 
+  it("keeps section pins above Pages and the separator, and every other pin below", async () => {
+    const { sidebar } = await mountSidebar(
+      createGateway(createTestGatewayClient(createGatewayRequestMock())),
+      createSessions("main", []),
+    );
+    const order = () =>
+      [
+        ...sidebar
+          .querySelector(".sidebar-rail__pins")!
+          .querySelectorAll(
+            "[data-sidebar-entry], [data-navigation-view], .sidebar-rail__separator",
+          ),
+      ].map(
+        (element) =>
+          element.getAttribute("data-sidebar-entry") ??
+          element.getAttribute("data-navigation-view") ??
+          "separator",
+      );
+    sidebar.sidebarEntries = ["person:ada", "route:usage", "route:cron"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "route:cron", "pages", "separator", "person:ada"]);
+    sidebar.sidebarEntries = ["route:usage"];
+    await sidebar.updateComplete;
+    expect(order()).toEqual(["route:usage", "pages"]);
+  });
+
   it("opens Sessions, then the sidebar, then the agent menu from the rail avatar", async () => {
     const { sidebar } = await mountSidebar(
       createGateway(createTestGatewayClient(createGatewayRequestMock())),
@@ -354,9 +380,11 @@ describe("sidebar rail pin menu", () => {
     expect(state()).toEqual(["Molty · Switch agent", "true", "sessions", false, true]);
   });
 
+  // Section pins and person pins sit on either side of the rail separator, so
+  // moves never cross it: route:sessions cannot move down, person:ada cannot move up.
   it.each([
     ["before", 1, "route:usage"],
-    ["after", 1, "person:ada"],
+    ["after", 0, "route:sessions"],
     ["remove", 0, "route:usage"],
     ["remove", 2, "person:ada"],
   ] as const)(
@@ -423,10 +451,10 @@ describe("sidebar rail pin menu", () => {
       await waitForSolid(() => expect(view.queryByRole("menu", { hidden: true })).not.toBeNull());
       const menu = view.getByRole("menu", { hidden: true });
       expect(menu.querySelector('[data-value="before"]')?.hasAttribute("disabled")).toBe(
-        index === 0,
+        index !== 1,
       );
       expect(menu.querySelector('[data-value="after"]')?.hasAttribute("disabled")).toBe(
-        index === 2,
+        index !== 0,
       );
       expect(menus.triggers.get("railPin")).toBe(trigger);
       menu.querySelector<HTMLButtonElement>(`[data-value="${action}"]`)!.click();
@@ -440,7 +468,7 @@ describe("sidebar rail pin menu", () => {
         expect(remove).toHaveBeenCalledExactlyOnceWith(target);
         expect(move).not.toHaveBeenCalled();
       } else {
-        expect(move).toHaveBeenCalledExactlyOnceWith("route:sessions", target, action);
+        expect(move).toHaveBeenCalledExactlyOnceWith(entries[index], target, action);
         expect(remove).not.toHaveBeenCalled();
       }
     },
