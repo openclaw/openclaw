@@ -71,6 +71,8 @@ struct CommandSessionRow: View {
 }
 
 struct CommandSessionActionsModifier: ViewModifier {
+    @Environment(NodeAppModel.self) private var appModel
+
     typealias Mutation = (any OpenClawChatTransport) async throws -> Void
 
     private enum Editor {
@@ -114,7 +116,10 @@ struct CommandSessionActionsModifier: ViewModifier {
                             : OpenClawTextValue.localized("Pin"),
                         systemImage: self.session.pinned == true ? "pin.slash" : "pin")
                     {
-                        self.patch(pinned: self.session.pinned != true)
+                        self.performMutation(nil) { _ in
+                            try await self.appModel.setPersonalSessionPin(
+                                self.session.pinned != true, key: self.session.key)
+                        }
                     }
                     if self.canSnooze {
                         self.snoozeMenu
@@ -197,7 +202,6 @@ struct CommandSessionActionsModifier: ViewModifier {
         label: String?? = nil,
         category: String?? = nil,
         color: String?? = nil,
-        pinned: Bool? = nil,
         archived: Bool? = nil,
         unread: Bool? = nil)
     {
@@ -208,7 +212,7 @@ struct CommandSessionActionsModifier: ViewModifier {
                 label: label,
                 category: category,
                 color: color,
-                pinned: pinned,
+                pinned: nil,
                 archived: archived,
                 unread: unread)
         }

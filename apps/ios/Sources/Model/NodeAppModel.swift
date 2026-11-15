@@ -1719,11 +1719,75 @@ final class NodeAppModel {
 
     private static let apnsDeviceTokenUserDefaultsKey = "push.apns.deviceTokenHex"
 
+    private var brandingReadRevision: UInt64 = 0
+    private var personalPinReadRevision: UInt64 = 0
+    private var personalPinKeys: Set<String> = []
+    private var personalPinIdentity: String?
+    private var personalPinAuthorityGeneration: UInt64?
+
+    /// Project only personal pins; never fall back to shared session.pinned metadata.
+    func personallyPinnedSessions(_ sessions: [OpenClawChatSessionEntry]) -> [OpenClawChatSessionEntry] {
+        guard !self.isLocalChatFixtureEnabled else { return sessions }
+        let pins = self.personalPinIdentity == self.chatViewModelOwnerID &&
+            self.personalPinAuthorityGeneration == self.operatorAuthorityGeneration ? self.personalPinKeys : []
+        return sessions.map { session in
+            var projected = session
+            projected.pinned = pins.contains(session.key)
+            return projected
+        }
+    }
+
+    func setPersonalSessionPin(_ pinned: Bool, key: String) async throws {
+        guard let key = key.trimmedNonEmpty else { throw URLError(.badURL) }
+        guard let gatewayID = chatTranscriptCacheGatewayID,
+              let route = await operatorGateway.currentRoute(ifGatewayID: gatewayID)
+        else { throw URLError(.notConnectedToInternet) }
+        let identity = self.chatViewModelOwnerID
+        let authority = self.operatorAuthorityGeneration
+        let data = try await operatorGateway.request(
+            method: "users.prefs.get",
+            paramsJSON: #"{"keys":["ui.railShortcuts"]}"#,
+            timeoutSeconds: 8,
+            ifCurrentRoute: route)
+        guard try GatewayUserPreferences.decodeRailShortcuts(data) != nil,
+              identity == self.chatViewModelOwnerID,
+              authority == self.operatorAuthorityGeneration
+        else { throw URLError(.cannotParseResponse) }
+        guard let params = try GatewayUserPreferences.personalPinWriteParams(data, pinned: pinned, key: key)
+        else { throw URLError(.cannotParseResponse) }
+        let result = try await operatorGateway.request(
+            method: "users.prefs.set",
+            paramsJSON: params,
+            timeoutSeconds: 8,
+            ifCurrentRoute: route)
+        let response = try JSONSerialization.jsonObject(with: result) as? [String: Any]
+        guard response?["status"] as? String == "ok" else {
+            throw NSError(domain: "PersonalSessionPin", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    localized: "Personal pins changed or are unavailable. Refresh and try again."),
+            ])
+        }
+        guard authority == self.operatorAuthorityGeneration,
+              identity == self.chatViewModelOwnerID,
+              await self.operatorGateway.currentRoute() == route
+        else { throw CancellationError() }
+        // Re-read after commit; a preference event may already have refreshed a newer snapshot.
+        guard await self.fetchProfileAccentHex(ifCurrentRoute: route).pinsLoaded else {
+            throw NSError(domain: "PersonalSessionPin", code: 2, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    localized: "Your pin was saved, but could not be refreshed. Reconnect to refresh personal pins."),
+            ])
+        }
+    }
+
     private func refreshBrandingFromGateway(shouldApply: () -> Bool = { true }) async {
+        self.brandingReadRevision &+= 1
+        let brandingRevision = self.brandingReadRevision
         do {
-            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
+            guard let sourceGatewayID = chatTranscriptCacheGatewayID,
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
+            let profileAccentHex = await fetchProfileAccentHex(ifCurrentRoute: sourceRoute)
             let res = try await operatorGateway.request(
                 method: "config.get",
                 paramsJSON: "{}",
@@ -1735,40 +1799,55 @@ final class NodeAppModel {
             let mainKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             let scope = (session?["scope"] as? String) ?? "per-sender"
             let accentHex = ColorHexSupport.gatewayUserAccentHex(configUI: config["ui"] as? [String: Any])
-            let profileAccentHex = await self.fetchProfileAccentHex(ifCurrentRoute: sourceRoute)
-            guard shouldApply(),
+            guard shouldApply(), brandingRevision == self.brandingReadRevision,
                   GatewayStableIdentifier.matches(self.chatTranscriptCacheGatewayID, sourceGatewayID)
             else { return }
             self.mainSessionBaseKey = mainKey
             self.gatewaySessionScope = scope
-            self.gatewayAccentColorHex = profileAccentHex ?? accentHex
-            self.synchronizeTalkSessionKey()
+            self.gatewayAccentColorHex = profileAccentHex.accent ?? accentHex
+            synchronizeTalkSessionKey()
         } catch {
             // Best-effort only.
         }
     }
 
-    /// Caller's per-profile accent (users.prefs.get). nil covers every
+    /// Refresh personal navigation alongside the caller's accent through the same authenticated route.
+    /// For accents, nil covers every
     /// non-authoritative outcome — profile-less connections
     /// (no_durable_identity), older gateways without the method, and malformed
     /// stored values — so the gateway accent stays the fallback.
-    private func fetchProfileAccentHex(ifCurrentRoute sourceRoute: GatewayNodeSessionRoute) async -> String? {
+    private func fetchProfileAccentHex(ifCurrentRoute sourceRoute: GatewayNodeSessionRoute) async
+    -> (accent: String?, pinsLoaded: Bool) {
+        self.personalPinReadRevision &+= 1
+        let revision = self.personalPinReadRevision
+        let identity = self.chatViewModelOwnerID
+        let authority = self.operatorAuthorityGeneration
         do {
             let res = try await operatorGateway.request(
                 method: "users.prefs.get",
-                paramsJSON: #"{"keys":["ui.accent"]}"#,
+                paramsJSON: #"{"keys":["ui.accent","ui.railShortcuts"]}"#,
                 timeoutSeconds: 8,
                 ifCurrentRoute: sourceRoute)
-            return try GatewayUserPreferences.decodeProfileAccentHex(res)
+            guard identity == self.chatViewModelOwnerID,
+                  authority == self.operatorAuthorityGeneration,
+                  await self.operatorGateway.currentRoute() == sourceRoute
+            else { return (nil, false) }
+            let accent = try GatewayUserPreferences.decodeProfileAccentHex(res)
+            guard revision == self.personalPinReadRevision else { return (accent, false) }
+            let entries = try GatewayUserPreferences.decodeRailShortcuts(res)
+            self.personalPinIdentity = identity
+            self.personalPinAuthorityGeneration = authority
+            self.personalPinKeys = entries.map(GatewayUserPreferences.personalSessionPinKeys) ?? []
+            return (accent, entries != nil)
         } catch {
-            return nil
+            return (nil, false)
         }
     }
 
     private func refreshAgentsFromGateway(shouldApply: () -> Bool = { true }) async {
         do {
-            guard let sourceGatewayID = self.chatTranscriptCacheGatewayID,
-                  let sourceStore = self.makeChatOfflineStore(),
+            guard let sourceGatewayID = chatTranscriptCacheGatewayID,
+                  let sourceStore = makeChatOfflineStore(),
                   GatewayStableIdentifier.matches(sourceStore.gatewayID, sourceGatewayID),
                   let sourceRoute = await operatorGateway.currentRoute(ifGatewayID: sourceGatewayID)
             else { return }
@@ -1904,9 +1983,8 @@ final class NodeAppModel {
         guard shouldContinue(), let payload = evt.payload else { return }
         switch evt.event {
         case "config.changed", "users.prefs.changed":
-            // Persisted config writes (accent, session routing) must reach an
-            // already-connected app; the protocol directs clients to re-read via
-            // config.get, which the guarded branding refresh already does.
+            // Re-read both config and current-profile preferences so personal pins
+            // and branding update while the app remains connected.
             await self.refreshBrandingFromGateway(shouldApply: shouldContinue)
         case "voicewake.changed":
             struct Payload: Decodable { var triggers: [String] }
