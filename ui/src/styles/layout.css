@@ -4425,13 +4425,7 @@ html.openclaw-native-web-chrome
   height: 26px;
 }
 
-/* While connecting, the rail's create and current controls step back to placeholders. */
-.sidebar:has(.sidebar-connection-skeleton) .sidebar-rail__create .sidebar-new-session {
-  background: color-mix(in srgb, var(--muted) 12%, transparent);
-  color: var(--sidebar-rail-control-color);
-  opacity: 1;
-}
-
+/* While connecting, the rail's current controls step back to placeholders. */
 .sidebar:has(.sidebar-connection-skeleton)
   .sidebar-rail__button:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
   background: color-mix(in srgb, var(--sidebar-rail-selected-surface) 50%, transparent);

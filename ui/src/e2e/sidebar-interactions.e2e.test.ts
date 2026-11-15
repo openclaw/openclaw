@@ -97,8 +97,8 @@ suite.define(() => {
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
-      const railAction = {
-        selector: ".sidebar-rail .sidebar-new-session",
+      const headerAction = {
+        selector: ".sidebar-session-toolbar .sidebar-new-session",
         params: { agent: agentId },
       };
       const sectionAction = (section: string, params: Record<string, string> = {}) => ({
@@ -112,7 +112,7 @@ suite.define(() => {
         params: Record<string, string>;
         newTab?: "middle" | "modified";
       }> = [
-        railAction,
+        headerAction,
         { ...sectionAction(`category:${group}`, { group }), newTab: "middle" },
         sectionAction("ungrouped"),
         {
@@ -121,12 +121,9 @@ suite.define(() => {
           params: { agent: agentId, catalog: catalogId },
           newTab: "modified",
         },
-        railAction,
       ];
+      // The header action closes with its panel, so every action runs with Sessions open.
       for (const [index, action] of actions.entries()) {
-        if (index === actions.length - 1) {
-          await page.locator('[data-navigation-view][aria-pressed="true"]').click();
-        }
         if (action.section) {
           await page
             .locator(`[data-session-section="${action.section}"] .sidebar-recent-sessions__head`)
@@ -185,7 +182,7 @@ suite.define(() => {
         }
       }
 
-      await page.locator(".sidebar-rail .sidebar-new-session").click();
+      await page.locator(".sidebar-session-toolbar .sidebar-new-session").click();
       await waitForControlUiRoute(page, {
         routeId: "new-session",
         pathname: `${basePath}/new`,

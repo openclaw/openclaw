@@ -366,7 +366,7 @@ suite.define(() => {
     const toolbar = page.locator(".macos-titlebar-controls");
     await visible(toolbar);
     await visible(page.locator(".shell-chrome-controls"), false);
-    const newThread = page.locator(".sidebar-rail .sidebar-new-session");
+    const newThread = page.locator(".sidebar-session-toolbar .sidebar-new-session");
     await visible(newThread);
     await attr(newThread, "aria-disabled", null);
     await page.keyboard.press("Tab");
@@ -382,7 +382,8 @@ suite.define(() => {
 
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed");
-    await visible(newThread);
+    // New session lives in the Sessions panel header, so it closes with the panel.
+    await visible(newThread, false);
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button").waitFor();
     await page.locator(".sidebar-rail__bottom .sidebar-issues-button__count").waitFor();
     await page.evaluate(() => document.fonts.ready);
@@ -466,10 +467,11 @@ suite.define(() => {
         .toEqual([!canGoBack, canGoBack]);
     }
 
-    await newThread.click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
+    // New session lives in the Sessions panel header, so the titlebar reopens the panel first.
     await page.locator(".macos-titlebar-controls__sidebar").click();
     await expectShellClass(page, "shell--nav-collapsed", false);
+    await newThread.click();
+    await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
 
     for (const view of ["sessions", "pages", "online"]) {
       await rail.locator(".sidebar-identity-card").click();

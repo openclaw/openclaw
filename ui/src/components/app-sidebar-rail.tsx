@@ -32,7 +32,6 @@ import { personActivityLink, personActivityRouting } from "./person-activity-lin
 import { SessionIconGraphic } from "./session-icon-glyph-solid.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { ShortcutHint } from "./solid/kbd.tsx";
-import { renderNewSessionLink as NewSessionLink } from "./solid/new-session-link.tsx";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { SessionGlyph, renderSessionUnreadBadge } from "./solid/session-presentation.tsx";
 
@@ -46,7 +45,6 @@ type RailPinTouchPress = {
 };
 
 export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
-  const newSessionAccess = createMemo(() => host.readNewSessionAccess());
   const zone = createMemo(() => host.reconciledSidebarZone());
   const pins = createMemo(() =>
     (normalizeSidebarEntries(host.sidebarSnapshot?.entries ?? host.sidebarEntries) ?? []).filter(
@@ -111,20 +109,6 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
       onMouseDown={beginNativeWindowDragFromTopInset}
     >
       {renderSidebarAgentCard(host)}
-      <div class="sidebar-rail__create">
-        <NewSessionLink
-          basePath={host.basePath}
-          agentId={host.expandedAgentId()}
-          class="sidebar-rail__button sidebar-new-session"
-          label={t("agentChip.newConversation")}
-          showShortcut
-          disabledReason={(() => {
-            const access = newSessionAccess();
-            return access.allowed ? undefined : access.reason;
-          })()}
-          onOpen={(agentId, target) => host.requestOpenNewSession(agentId, target)}
-        />
-      </div>
       <div class="sidebar-rail__views">
         <ViewButton view="online" />
       </div>
