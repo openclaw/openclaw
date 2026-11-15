@@ -2471,6 +2471,13 @@ div.shell.shell--onboarding {
   object-fit: cover;
 }
 
+.sidebar-customize__emoji {
+  width: 18px;
+  font-size: 14px;
+  line-height: 1;
+  text-align: center;
+}
+
 .sidebar-customize__plugin-icon--fallback {
   background: linear-gradient(135deg, var(--plugins-art-a), var(--plugins-art-b));
   color: rgb(255 255 255 / 92%);
