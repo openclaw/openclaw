@@ -273,6 +273,36 @@ If a single message is too large, shorten it or load the model with a larger con
 earlier history cannot shrink that message. Server-side truncation without an overflow error
 does not trigger this recovery.
 
+### Embedding model fails to load on a small host
+
+Memory indexing fails with `Model is unloaded` when LM Studio cannot allocate the embedding model's
+context. With no `models.providers.lmstudio.models` entry for it, OpenClaw requests 64,000 tokens,
+capped to the model's maximum, so a 32,768-token embedding model can exhaust a 16 GB host. Add an
+entry with a small `contextTokens` and OpenClaw requests that instead:
+
+```json5
+{
+  models: {
+    providers: {
+      lmstudio: {
+        models: [
+          {
+            id: "text-embedding-qwen3-embedding-0.6b",
+            name: "Qwen3 Embedding 0.6B",
+            input: ["text"],
+            contextWindow: 32768,
+            contextTokens: 1024,
+          },
+        ],
+      },
+    },
+  },
+}
+```
+
+To skip LM Studio for embeddings, [llmman](/providers/llmman#advanced-configuration) sizes the
+embedding context per daemon with `LLMMAN_CONTEXT_LENGTH`.
+
 ### Model discovery failures
 
 When a configured server cannot list models, OpenClaw reports an unavailable catalog or a
