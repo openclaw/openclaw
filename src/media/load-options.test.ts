@@ -78,9 +78,7 @@ describe("media load options", () => {
       localRoots: ["/tmp/w"],
       ssrfPolicy: { blockedHostnames: ["blocked.example"] },
     });
-    expect(resolveOutboundMediaAccessForConfig({}, { localRoots: ["/tmp/w"] })).toEqual({
-      localRoots: ["/tmp/w"],
-    });
+    expect(resolveOutboundMediaAccessForConfig({})).toBeUndefined();
   });
 
   it("rejects host read capability without explicit local roots", () => {

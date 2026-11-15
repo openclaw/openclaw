@@ -15,15 +15,14 @@ export type OutboundMediaAccess = {
 };
 
 /**
- * Adds the operator's `tools.web.fetch.ssrfPolicy.blockedHostnames` to outbound media access.
+ * Resolves outbound media access from the operator's `tools.web.fetch.ssrfPolicy.blockedHostnames`.
  * Only the deny list applies; web_fetch's private-network opt-ins stay out of outbound media.
  */
 export function resolveOutboundMediaAccessForConfig(
   cfg: OpenClawConfig | undefined,
-  mediaAccess?: OutboundMediaAccess,
 ): OutboundMediaAccess | undefined {
   const blockedHostnames = cfg?.tools?.web?.fetch?.ssrfPolicy?.blockedHostnames;
-  return blockedHostnames?.length ? { ...mediaAccess, blockedHostnames } : mediaAccess;
+  return blockedHostnames?.length ? { blockedHostnames } : undefined;
 }
 
 /** Legacy and current knobs accepted by outbound media loaders before normalization. */
