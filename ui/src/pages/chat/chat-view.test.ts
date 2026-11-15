@@ -1503,9 +1503,9 @@ describe("chat slash menu accessibility", () => {
     const modifierEnter = keydownComposer(container, "Enter", { ctrlKey: true });
 
     expect(modifierEnter.defaultPrevented).toBe(true);
-    expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
-    expect(onSend).not.toHaveBeenCalled();
-    expect(readDraft()).toBe("hello ");
+    expect(onSlashCommand).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledOnce();
+    expect(readDraft()).toBe("hello /think high");
   });
 
   it("preserves typed inline argument mode across command hydration", async () => {

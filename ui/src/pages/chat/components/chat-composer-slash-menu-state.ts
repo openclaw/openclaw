@@ -13,7 +13,6 @@ import {
 import { paneDomId } from "./chat-composer-dom.ts";
 import {
   beginInlineFreeformSlashArguments,
-  findDirectInlineSlashArgumentInvocation,
   hasActiveInlineSlashArgumentPrefix,
   removeInlineSlashSelection,
   replaceSlashToken,
@@ -441,22 +440,6 @@ export function createSlashMenu() {
     return true;
   }
 
-  function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-    if (!host.runInlineCommand || (state.slashMenuOpen && state.slashMenuCompletion?.inline)) {
-      return false;
-    }
-    const current = host.getTextarea()?.value ?? host.getDraft();
-    const caret = host.getTextarea()?.selectionStart ?? current.length;
-    const invocation = findDirectInlineSlashArgumentInvocation(current, caret);
-    if (!invocation) {
-      return false;
-    }
-    state.slashMenuMode = "freeform-args";
-    state.slashMenuCommand = invocation.command;
-    state.slashMenuCompletion = invocation.completion;
-    return true;
-  }
-
   function handleInlineSlashArgKeydown(
     event: KeyboardEvent,
     state: SlashMenuState,
@@ -475,10 +458,7 @@ export function createSlashMenu() {
     if (event.key !== "Enter" || event.shiftKey || !sendShortcutMatches) {
       return false;
     }
-    if (
-      (state.slashMenuMode !== "freeform-args" || !state.slashMenuCompletion?.inline) &&
-      !beginDirectInlineSlashArgument(state, host)
-    ) {
+    if (state.slashMenuMode !== "freeform-args" || !state.slashMenuCompletion?.inline) {
       return false;
     }
     if (!state.slashMenuCommand || !executesInlineImmediately(state.slashMenuCommand)) {
@@ -506,7 +486,7 @@ export function createSlashMenu() {
     },
     handleKeydown(event: KeyboardEvent, host: SlashMenuHost, sendShortcut?: ChatSendShortcut) {
       let handled = false;
-      // Inline detection can change mode before normal menu handling in this keypress.
+      // Only an explicitly selected inline command owns argument submission.
       setState((draft) => {
         handled =
           sendShortcut !== undefined &&

@@ -66,6 +66,34 @@ suite.define(() => {
     }
   };
 
+  it.each([
+    "Please explain /goal prompt",
+    "Please explain\n/goal prompt",
+    "Please explain\t/goal prompt",
+  ])("sends %j as one ordinary message without extracting a command", async (draft) => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const { gateway, composer } = await openComposer(page);
+      await composer.fill(draft);
+      await screenshot(
+        page,
+        `inline-slash-${draft.includes("\n") ? "newline" : draft.includes("\t") ? "tab" : "prose"}-draft.png`,
+        composer,
+      );
+      await composer.press("Enter");
+      const sent = await gateway.waitForRequest("chat.send");
+      await screenshot(
+        page,
+        `inline-slash-${draft.includes("\n") ? "newline" : draft.includes("\t") ? "tab" : "prose"}-submitted.png`,
+        composer,
+      );
+      expect(sent.params).toMatchObject({ message: draft });
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.goal")).toHaveLength(0);
+      expect(await page.locator(".agent-chat__goal-mode").count()).toBe(0);
+      await composer.fill("");
+    });
+  });
+
   it("completes a leading command typed in front of pasted prose", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const { gateway, composer } = await openComposer(page);
