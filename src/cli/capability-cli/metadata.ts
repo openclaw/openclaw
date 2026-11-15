@@ -269,7 +269,7 @@ export const CAPABILITY_METADATA: {
     id: "web.fetch",
     description: "Fetch URL content directly or through a selected web fetch provider.",
     transports: ["local"],
-    flags: ["--url", "--provider", "--format", "--json"],
+    flags: ["--url", "--provider", "--format", "--max-chars", "--json"],
     resultShape: "page content with fetch metadata",
   },
   {
