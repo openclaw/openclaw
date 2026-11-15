@@ -125,6 +125,22 @@ function createTabFence(page: Page, session: CDPSession) {
     target.send("Fetch.enable", {
       patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }],
     });
+  // What the current claimed period started on each target, once, for every claim to await.
+  let claimStarts = new Map<NavigationTargetSession, Promise<unknown>>();
+  const start = (target: NavigationTargetSession) => {
+    const starting =
+      claimStarts.get(target) ??
+      Promise.all([target.send("Network.enable"), interceptDocuments(target)]).catch(
+        (error: unknown) => {
+          // A frame target lost meanwhile has nothing left to intercept.
+          if (states.has(target)) {
+            throw error;
+          }
+        },
+      );
+    claimStarts.set(target, starting);
+    return starting;
+  };
   const initialize = async (target: NavigationTargetSession) => {
     const documents = new Map<string, string | undefined>();
     const finishedDocuments = new Set<string>();
@@ -306,7 +322,7 @@ function createTabFence(page: Page, session: CDPSession) {
     notify();
     await target.send("Page.enable");
     if (invocations.size > 0) {
-      await Promise.all([target.send("Network.enable"), interceptDocuments(target)]);
+      await start(target);
     }
   };
   const detachedTarget = (target: NavigationTargetSession) => {
@@ -553,21 +569,9 @@ function createTabFence(page: Page, session: CDPSession) {
       });
     },
     /** Starts what only a claimed tab runs. */
-    claim: async () => {
-      await Promise.all(
-        [...states.keys()].flatMap((target) =>
-          [target.send("Network.enable"), interceptDocuments(target)].map((enabled) =>
-            enabled.catch((error: unknown) => {
-              // A frame target lost meanwhile has nothing left to intercept.
-              if (states.has(target)) {
-                throw error;
-              }
-            }),
-          ),
-        ),
-      );
-    },
+    claim: () => Promise.all([...states.keys()].map(start)),
     release: () => {
+      claimStarts = new Map();
       released = Promise.allSettled(
         [...states.keys()].flatMap((target) => [
           target.send("Fetch.disable"),
