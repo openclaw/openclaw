@@ -1,14 +1,9 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { CronCompactJob } from "../api/types.ts";
 import { pathForRoute } from "../app-route-paths.ts";
-import { mobileNavLayoutMediaQuery } from "../app/mobile-nav-layout.ts";
 import { registerCronEnglish } from "../i18n/locales/en-cron.ts";
-import {
-  automationsFilter,
-  openedCronJob,
-  setAutomationsSidebarShown,
-} from "../lib/cron/automations-navigation.ts";
+import { automationsFilter } from "../lib/cron/automations-filter.ts";
 import { isCronInventoryInvalidation } from "../lib/cron/inventory-connection.ts";
 import { readCronInventory } from "../lib/cron/inventory.ts";
 import { formatCompactMs } from "../lib/format.ts";
@@ -18,7 +13,7 @@ import { formatCronSchedule } from "../lib/presenter.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
-import { createMediaQuery } from "../lib/reactive/platform.ts";
+import { createSectionSidebarPresence, sectionLocation } from "../lib/section-navigation.ts";
 import type { AppSidebarRenderHost } from "./app-sidebar-render.tsx";
 import { Icon } from "./solid/icon.tsx";
 
@@ -63,18 +58,7 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
     }).catch(() => null);
     return result?.jobs ?? [];
   });
-  // The mobile drawer and a collapsed or peeking sidebar do not stand beside the page.
-  const mobileNav = createMediaQuery(
-    mobileNavLayoutMediaQuery(),
-    globalThis.matchMedia?.(mobileNavLayoutMediaQuery()).matches ?? false,
-  );
-  createEffect(
-    () => !props.host.navigationCollapsed && !mobileNav(),
-    (shown) => {
-      setAutomationsSidebarShown(shown);
-    },
-  );
-  onSettled(() => () => setAutomationsSidebarShown(false));
+  createSectionSidebarPresence("automations", () => props.host.navigationCollapsed);
   // The header's filter narrows and orders the list; sorting stays local to the loaded rows.
   const shown = createMemo(() => {
     const filter = automationsFilter();
@@ -97,7 +81,9 @@ export function SidebarAutomations(props: { host: AppSidebarRenderHost }): JSX.E
   const [pausedOpen, setPausedOpen] = createSignal(false);
   // The sidebar learns the route, not its query, so it keeps the job it last opened.
   const [selected, setSelected] = createSignal(
-    new URLSearchParams(window.location.search).get("job") ?? openedCronJob(app.gateway),
+    new URLSearchParams(
+      window.location.search || sectionLocation(app.gateway, "automations")?.options.search,
+    ).get("job"),
   );
   const cronPath = () => pathForRoute("cron", props.host.basePath);
   const Row = (row: { job: CronCompactJob }) => {

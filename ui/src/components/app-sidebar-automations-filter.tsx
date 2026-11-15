@@ -6,7 +6,7 @@ import {
   DEFAULT_AUTOMATIONS_FILTER,
   setAutomationsFilter,
   type AutomationsFilter,
-} from "../lib/cron/automations-navigation.ts";
+} from "../lib/cron/automations-filter.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../lib/reactive/platform.ts";
 import type { PickerFocusHandle } from "./select-picker-types.ts";

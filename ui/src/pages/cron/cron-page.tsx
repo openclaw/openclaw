@@ -5,16 +5,16 @@ import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import {
-  automationsSidebarShown,
-  openedCronJob,
-  setOpenedCronJob,
-} from "../../lib/cron/automations-navigation.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { profileDirectory } from "../../lib/profile-directory.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { createMediaQuery } from "../../lib/reactive/platform.ts";
+import {
+  rememberSectionLocation,
+  sectionLocation,
+  sectionSidebarShown,
+} from "../../lib/section-navigation.ts";
 import { createCronPage } from "./cron-page-state.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscriptView } from "./run-transcript.tsx";
@@ -117,12 +117,12 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       <SettingsWorkspace>
         <CronView
           {...viewProps()}
-          sidebarListsJobs={!pageHeader().filtered && automationsSidebarShown()}
+          sidebarListsJobs={!pageHeader().filtered && sectionSidebarShown("automations")}
           onClosePanel={() => {
             // Closing the automation leaves Automations on its empty state for this tab.
             viewProps().onClosePanel();
             const context = props.page.context();
-            setOpenedCronJob(context.gateway, null);
+            rememberSectionLocation(context.gateway, "automations", null);
             context.replace("cron", { search: "" });
           }}
           canManageJob={canPresentJob}
@@ -149,12 +149,18 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
     (search) => {
       const route = resolveCronRouteData(search);
       // Returning to Automations in this tab reopens the automation left open.
-      const opened = openedCronJob(context.gateway);
+      const opened = sectionLocation(context.gateway, "automations");
       if (!search && opened) {
-        context.replace("cron", { search: `?job=${encodeURIComponent(opened)}` });
+        context.replace(opened.route, opened.options);
         return;
       }
-      setOpenedCronJob(context.gateway, route.jobId);
+      rememberSectionLocation(
+        context.gateway,
+        "automations",
+        route.jobId
+          ? { route: "cron", options: { search: `?job=${encodeURIComponent(route.jobId)}` } }
+          : null,
+      );
       page.setRouteSearch(search);
       // `?new` is the sidebar's New automation entry.
       if (route.create) {
