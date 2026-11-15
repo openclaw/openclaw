@@ -1,7 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import {
   bindCronManagementToolConstruction,
@@ -502,7 +506,9 @@ it("keeps requester grant minting at execution when management needs a construct
 });
 
 // A listener must cancel cooperating tools before waiting for their response sockets.
-it("cancels an in-flight tool before waiting for its response socket to drain", async () => {
+it("cancels an in-flight tool before waiting for its response socket to drain", async ({
+  signal: testSignal,
+}) => {
   const started = createDeferred();
   const aborted = createDeferred();
   const released = createDeferred();
@@ -522,7 +528,14 @@ it("cancels an in-flight tool before waiting for its response socket to drain", 
   await started.promise;
   const closing = closeMcpLoopbackServer();
   try {
-    await withTestTimeout(aborted.promise, 1_000, "MCP shutdown cancellation timed out");
+    await withinTest(
+      awaitGateBeforeSettlement(
+        aborted.promise,
+        closing,
+        "MCP shutdown settled before cancelling its in-flight tool",
+      ),
+      testSignal,
+    );
   } finally {
     released.resolve();
     await response;
