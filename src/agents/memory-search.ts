@@ -152,7 +152,20 @@ export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: str
       ...(defaults?.extraPaths ?? []),
       ...(overrides?.extraPaths ?? []),
     ]),
-    excludePaths: [...(defaults?.excludePaths ?? []), ...(overrides?.excludePaths ?? [])],
+    // Agent patterns add to the global list. Accept gitignore-style spellings
+    // ("./dir/", "/dir/**", "dir\\") as the workspace-relative globs the matcher expects.
+    excludePaths: [
+      ...new Set(
+        [...(defaults?.excludePaths ?? []), ...(overrides?.excludePaths ?? [])].flatMap((entry) => {
+          const pattern = entry
+            .trim()
+            .replaceAll("\\", "/")
+            .replace(/^\.?\//, "")
+            .replace(/\/$/, "/**");
+          return pattern ? [pattern] : [];
+        }),
+      ),
+    ],
     query: {
       maxResults:
         overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
