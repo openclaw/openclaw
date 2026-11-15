@@ -388,7 +388,39 @@ const shouldDeferRootHelpToRuntimeEntry = () => {
   for (const configPath of resolveLauncherConfigPaths()) {
     try {
       const raw = readFileSync(configPath, "utf8");
-      return /\bplugins\b|\$include\b/.test(raw);
+      if (!/\bplugins\b|\$include\b/.test(raw)) {
+        return false;
+      }
+      let config;
+      try {
+        config = JSON.parse(raw);
+      } catch {
+        return true;
+      }
+      // Only the standalone empty block is known to leave cached help unchanged.
+      const plugins = config?.plugins;
+      if (
+        !plugins ||
+        typeof plugins !== "object" ||
+        Array.isArray(plugins) ||
+        Object.keys(plugins).length > 0 ||
+        Object.keys(config).length !== 1
+      ) {
+        return true;
+      }
+      // Config loading owns dotenv side effects that can change plugin help.
+      const homeDir = resolveLauncherHomeDir();
+      const dotenvPaths = [
+        path.join(process.cwd(), ".env"),
+        path.join(path.dirname(configPath), ".env"),
+        path.join(homeDir, ".openclaw", ".env"),
+        path.join(homeDir, ".config", "openclaw", "gateway.env"),
+      ];
+      const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+      if (stateOverride) {
+        dotenvPaths.push(path.join(resolveLauncherUserPath(stateOverride), ".env"));
+      }
+      return dotenvPaths.some((dotenvPath) => existsSync(dotenvPath));
     } catch {
       continue;
     }

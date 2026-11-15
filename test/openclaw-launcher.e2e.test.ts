@@ -815,6 +815,85 @@ describe("openclaw launcher", () => {
     },
   );
 
+  it.each([["--help"], ["nodes", "--help"]])(
+    "serves cached help without runtime owners for an empty plugins config: %s",
+    async (...args) => {
+      await helpFixture(
+        { rootHelpText: "PRECOMPUTED help\n", nodesHelpText: "PRECOMPUTED help\n" },
+        "throw new Error('inert plugins must not import runtime resource owners');\n",
+      );
+      const home = path.join(root, "home");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, '{"plugins":{}}\n');
+      const result = runLauncher(args, { env: { HOME: home, OPENCLAW_HOME: home } });
+      expectOutput(result, "PRECOMPUTED help\n");
+    },
+  );
+
+  it.each([
+    '{"plugins":{"enabled":false}}',
+    '{"plugins":[]}',
+    "{ plugins: {} }",
+    '{"plugins":{},"env":{"OPENCLAW_DISABLE_BUNDLED_PLUGINS":"1"}}',
+    '{"plugins":{},"$include":"plugins.json"}',
+    String.raw`{"plugins":{},"\u0024include":"plugins.json"}`,
+    '{"plugins":{},"gateway":{"auth":{"token":"${TOKEN}"}}}',
+  ])("keeps dynamic or meaningful plugin config on runtime help: %s", async (config) => {
+    await helpFixture(
+      { rootHelpText: "PRECOMPUTED help\n" },
+      "process.stdout.write('RUNTIME ENTRY\\n');\n",
+    );
+    const configPath = path.join(root, "openclaw.json");
+    await fs.writeFile(configPath, config);
+    expectOutput(
+      runLauncher(["--help"], { env: { OPENCLAW_CONFIG_PATH: configPath } }),
+      "RUNTIME ENTRY\n",
+    );
+  });
+
+  it.each(["cwd", "state", "home", "adjacent", "gateway"])(
+    "keeps empty plugins on runtime help with %s dotenv",
+    async (location) => {
+      await helpFixture(
+        { rootHelpText: "PRECOMPUTED help\n" },
+        "process.stdout.write('RUNTIME ENTRY\\n');\n",
+      );
+      const home = path.join(root, "home");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const stateDir = path.join(root, "state");
+      const dotenvPath =
+        location === "cwd"
+          ? path.join(root, ".env")
+          : location === "state"
+            ? path.join(stateDir, ".env")
+            : location === "gateway"
+              ? path.join(home, ".config", "openclaw", "gateway.env")
+              : location === "adjacent"
+                ? path.join(root, "custom", ".env")
+                : path.join(home, ".openclaw", ".env");
+      const selectedConfigPath =
+        location === "adjacent" ? path.join(root, "custom", "openclaw.json") : configPath;
+      await fs.mkdir(path.dirname(selectedConfigPath), { recursive: true });
+      await fs.writeFile(selectedConfigPath, '{"plugins":{}}\n');
+      await fs.mkdir(path.dirname(dotenvPath), { recursive: true });
+      await fs.writeFile(dotenvPath, "OPENCLAW_DISABLE_BUNDLED_PLUGINS=1\n");
+      expectOutput(
+        runLauncher(["--help"], {
+          env: {
+            HOME: home,
+            OPENCLAW_HOME: home,
+            ...(location === "adjacent" || location === "state"
+              ? { OPENCLAW_CONFIG_PATH: selectedConfigPath }
+              : {}),
+            ...(location === "state" ? { OPENCLAW_STATE_DIR: stateDir } : {}),
+          },
+        }),
+        "RUNTIME ENTRY\n",
+      );
+    },
+  );
+
   it.each([
     { args: ["tasks", "--help"], env: {}, echoArgs: false },
     ...[["--help"], ["nodes", "--help"]].map((args) => ({
